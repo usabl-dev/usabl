@@ -22,8 +22,9 @@ Early development for Innovation Days 2026.
 
 ## Design
 
-See [docs/design.md](docs/design.md) for the full product design: architecture,
-contracts, scan layers, surfaces, adoption model, design intake, and docs output.
+See [docs/ground-truth.md](docs/ground-truth.md) for the complete project ground truth:
+architecture, contracts, scan layers, surfaces, adoption model, design intake, docs
+output, WCAG coverage map, demo strategy, and team plan.
 
 ## Commits
 
