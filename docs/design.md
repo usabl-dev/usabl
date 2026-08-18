@@ -1231,3 +1231,161 @@ finds it. Disclosing it proactively reinforces the honesty claim.
 | Verified-verdict-rate target to state on stage | Vishali + Ed | After measurement |
 | CI host for branch protection (private repo needs Team plan) | Ed | Week 2 |
 | Real bug sample for rule validation | Nitin + Vishali | Week 1 |
+
+---
+
+## 28. WCAG 2.2 coverage map
+
+This section maps every WCAG 2.2 Level A and Level AA success criterion (56 total)
+to what Usabl does about it. This is the honest answer to "how much accessibility
+does this tool ensure?"
+
+Categories:
+
+- **Contest (deterministic):** Usabl checks this now, mechanically, and can produce
+  `verified` or `regression`.
+- **Stretch (deterministic):** Built during the contest if time allows, to prove the
+  architecture.
+- **Post-contest (deterministic):** Easy to add as a provider. The Page capabilities
+  and provider interface support it. We just have not built the provider yet.
+- **Advisory (model-judgment):** Usabl can surface a suggestion via the advisory lane
+  but cannot verify it mechanically. A person decides.
+- **Not applicable:** The criterion does not apply to a rendered web UI component check
+  (e.g. time-based media for a PatternFly admin console).
+- **Never:** Usabl will never satisfy this. The criterion requires something outside
+  the tool's scope (human judgment, application logic, or signal analysis).
+
+### Principle 1: Perceivable
+
+| SC | Name | Level | Usabl | How |
+|---|---|---|---|---|
+| 1.1.1 | Non-text Content | A | Contest (axe) + Advisory (quality) | axe checks presence of alt/aria-label (deterministic). Advisory lane judges whether the text is actually useful (model-judgment). Design intake can assert exact approved alt text (deterministic). |
+| 1.2.1 | Audio-only/Video-only (Prerecorded) | A | Not applicable | PatternFly admin consoles rarely have prerecorded media. If present, this is a content decision outside the component library. |
+| 1.2.2 | Captions (Prerecorded) | A | Post-contest | Check for `<track kind="captions">` on video elements. Simple DOM query. |
+| 1.2.3 | Audio Description or Media Alternative | A | Not applicable | Same as 1.2.1. |
+| 1.2.4 | Captions (Live) | AA | Never | Live captioning is a runtime service decision, not a component property. |
+| 1.2.5 | Audio Description (Prerecorded) | AA | Not applicable | Same as 1.2.1. |
+| 1.3.1 | Info and Relationships | A | Contest (axe + PF rulepack) | axe checks semantic structure. PF rulepack checks table header association, toolbar labeling, live regions. |
+| 1.3.2 | Meaningful Sequence | A | Contest (axe) | axe checks reading order against DOM order. |
+| 1.3.3 | Sensory Characteristics | A | Advisory | Requires understanding whether instructions rely on shape/color/location. Model-judgment. |
+| 1.3.4 | Orientation | AA | Post-contest | Set viewport to portrait/landscape, assert no content loss. Uses `setViewport`. |
+| 1.3.5 | Identify Input Purpose | AA | Contest (axe) | axe checks autocomplete attributes on common input types. |
+| 1.4.1 | Use of Color | A | Contest (PF rulepack) | `pf-status-color-only` detects status conveyed by color alone with no text equivalent. axe also partially covers this. |
+| 1.4.2 | Audio Control | A | Not applicable | PatternFly admin consoles do not auto-play audio. |
+| 1.4.3 | Contrast (Minimum) | AA | Contest (axe) | axe owns color contrast checking. Usabl does not reimplement it. |
+| 1.4.4 | Resize Text | AA | Stretch | Set zoom to 200%, assert no content loss or overlap. Uses `setZoom`. One of the two stretch-goal checks. |
+| 1.4.5 | Images of Text | AA | Contest (axe) | axe flags images used as text. |
+| 1.4.10 | Reflow | AA | Post-contest | Set viewport to 320px CSS width, assert no horizontal scroll. Uses `setViewport`. |
+| 1.4.11 | Non-text Contrast | AA | Contest (axe) | axe checks UI component and graphical object contrast. |
+| 1.4.12 | Text Spacing | AA | Post-contest | Inject increased spacing via CSS, assert no content loss. Uses `getComputedStyle` + `setViewport`. |
+| 1.4.13 | Content on Hover or Focus | AA | Post-contest | Trigger hover/focus content, assert dismissable + hoverable + persistent. Declarative probe. |
+
+### Principle 2: Operable
+
+| SC | Name | Level | Usabl | How |
+|---|---|---|---|---|
+| 2.1.1 | Keyboard | A | Contest (keyboard walk + PF rulepack) | The keyboard walk tabs through every interactive element. `row-action-reachable` flags clickable-but-unreachable elements. Any interactive element not on the Tab path is reported. |
+| 2.1.2 | No Keyboard Trap | A | Contest (keyboard walk) | Cycle detection in the walk. If Tab never escapes a region, the walk reports it. |
+| 2.1.4 | Character Key Shortcuts | A | Never | Requires knowing whether single-character shortcuts exist in application logic. |
+| 2.2.1 | Timing Adjustable | A | Never | Time limits are application logic. Usabl does not run over time. |
+| 2.2.2 | Pause, Stop, Hide | A | Post-contest | Detect auto-updating/moving content and assert a pause mechanism exists. Partially possible with animation detection. |
+| 2.3.1 | Three Flashes or Below | A | Never | Seizure detection requires frame-by-frame photosensitivity analysis. A different tool. |
+| 2.4.1 | Bypass Blocks | A | Contest (axe) | axe checks for skip links and landmark regions. |
+| 2.4.2 | Page Titled | A | Contest (axe) | axe checks document title presence. |
+| 2.4.3 | Focus Order | A | Contest (keyboard walk) | The walk records focus order. Focus that jumps illogically is observable in the transcript. PF rulepack checks focus-into-dialog and focus-return. |
+| 2.4.4 | Link Purpose (In Context) | A | Advisory | Whether link text is descriptive requires understanding intent. Model-judgment. |
+| 2.4.5 | Multiple Ways | AA | Never | Whether there are multiple ways to find a page is an IA decision, not testable per screen. |
+| 2.4.6 | Headings and Labels | AA | Contest (axe) + Advisory | axe checks heading structure exists. Whether headings are descriptive is model-judgment. |
+| 2.4.7 | Focus Visible | AA | Stretch | Tab through, compare focused vs unfocused computed styles for visible indicator. The second stretch-goal check. |
+| 2.4.11 | Focus Not Obscured (Minimum) | AA | Post-contest | At each focus stop, check whether the element is obscured by sticky/fixed positioned elements. Uses `getComputedStyle` + position checks. |
+| 2.5.1 | Pointer Gestures | A | Never | Whether multi-point or path-based gestures have single-pointer alternatives is application logic. |
+| 2.5.2 | Pointer Cancellation | A | Never | Up-event firing behavior is application logic. |
+| 2.5.3 | Label in Name | A | Contest (axe) | axe checks that visible label text is included in the accessible name. |
+| 2.5.4 | Motion Actuation | A | Never | Whether motion-triggered actions have alternatives is application logic. |
+| 2.5.7 | Dragging Movements | AA | Never | Whether drag operations have non-dragging alternatives is application logic. |
+| 2.5.8 | Target Size (Minimum) | AA | Post-contest | Measure bounding boxes of interactive elements, flag below 24x24 CSS px. Uses `getComputedStyle`/bounding box. |
+
+### Principle 3: Understandable
+
+| SC | Name | Level | Usabl | How |
+|---|---|---|---|---|
+| 3.1.1 | Language of Page | A | Contest (axe) | axe checks for `lang` attribute on `<html>`. |
+| 3.1.2 | Language of Parts | AA | Contest (axe) | axe checks `lang` on elements with different language content. |
+| 3.2.1 | On Focus | A | Contest (keyboard walk) | The walk observes whether focusing an element triggers unexpected changes. |
+| 3.2.2 | On Input | A | Post-contest | Declarative probe: change an input value, assert no unexpected context change. |
+| 3.2.3 | Consistent Navigation | AA | Post-contest | Compare nav landmarks across surfaces, flag structural differences. Multi-page check. |
+| 3.2.4 | Consistent Identification | AA | Post-contest | Same function = same label across surfaces. Multi-page comparison. |
+| 3.2.6 | Consistent Help | A | Post-contest | Check that help mechanisms appear in the same relative order. Multi-page. |
+| 3.3.1 | Error Identification | A | Advisory | Whether errors are identified clearly requires semantic understanding of error states. Partially checkable via aria-invalid + aria-describedby. |
+| 3.3.2 | Labels or Instructions | A | Contest (axe) | axe checks that form inputs have labels. |
+| 3.3.3 | Error Suggestion | AA | Advisory | Whether error messages suggest a fix requires understanding content. Model-judgment. |
+| 3.3.4 | Error Prevention (Legal/Financial) | AA | Never | Whether a submission is legal/financial is application context. |
+| 3.3.7 | Redundant Entry | A | Never | Whether previously entered info is auto-populated is application logic. |
+| 3.3.8 | Accessible Authentication (Minimum) | AA | Never | Authentication flow design is application architecture. |
+
+### Principle 4: Robust
+
+| SC | Name | Level | Usabl | How |
+|---|---|---|---|---|
+| 4.1.2 | Name, Role, Value | A | Contest (axe + PF rulepack + walk) | The core of what Usabl checks. axe validates ARIA usage. PF rulepack checks PF-specific name/role/value patterns. The walk reads actual name, role, and state from the accessibility tree. |
+| 4.1.3 | Status Messages | A | Contest (PF rulepack) | `pf-toast-live-region` checks that status updates reach assistive technology via live regions. |
+
+### Summary
+
+| Category | Count | Percentage of Level A+AA |
+|---|---|---|
+| **Contest (deterministic)** | 24 | 43% |
+| **Stretch (deterministic, if time)** | 2 | 4% |
+| **Post-contest (deterministic, buildable)** | 12 | 21% |
+| **Advisory (model-judgment, never verified)** | 5 | 9% |
+| **Not applicable** (media in admin consoles) | 4 | 7% |
+| **Never** (application logic, human judgment) | 9 | 16% |
+
+**What we can say:**
+
+- At contest time: Usabl mechanically verifies 24 of 56 Level A+AA criteria (43%).
+  With the two stretch goals, 26 (46%).
+- With the post-contest providers built: 38 of 56 (68%).
+- With advisory included (surfaced, person decides): 43 of 56 (77%).
+- The remaining 13 (23%) are either not applicable to admin consoles (4) or
+  fundamentally require application logic or human judgment the tool will never
+  replace (9).
+
+**What we do NOT say:**
+
+- "Usabl makes your app WCAG compliant." It does not. Compliance requires all
+  criteria including the ones only a human can judge.
+- "Usabl covers X% of accessibility." WCAG is not the whole of accessibility.
+  The tool verifies what its checks cover, on the screens it checked.
+
+### Stretch goals (prove the architecture)
+
+Two checks built during the contest to prove the provider interface extends without
+touching the gate:
+
+1. **Visible focus indicator** (`focus-indicator` provider, WCAG 2.4.7)
+
+   Tab through the page. At each stop, compare computed styles (outline, box-shadow,
+   border) between focused and unfocused state. Flag any interactive element where
+   focus produces no visible style change. Uses the keyboard walk + `getComputedStyle`.
+
+   Why this one: it is genuinely non-trivial (not just a DOM query), it combines two
+   Page capabilities (walk + style inspection), and it catches a WCAG AA criterion
+   that axe handles poorly (axe only checks `outline: none` statically).
+
+2. **Reduced motion** (`motion` provider, related to WCAG 2.3.3/2.2.2)
+
+   Enable `prefers-reduced-motion: reduce` via `setReducedMotion(true)`. Inspect
+   computed `animation-name` and `transition-duration` on all elements. Flag any
+   element with active animation under the reduced-motion preference.
+
+   Why this one: it exercises preference injection (proving the tool can test
+   user-preference scenarios), it catches a real user harm (vestibular disorders),
+   and it is deterministic (no screenshots, no timing).
+
+Rules for stretch goals:
+- Only attempt if the core vertical slice is solid by end of week 2.
+- Do NOT add them to the demo fixture oracle. Run on the real-repo smoke pass.
+- If they cause any instability, delete them. They are never on the "never cut" list.
+- One slide, one sentence in the demo: "We added these in week 3 without touching
+  the gate."
