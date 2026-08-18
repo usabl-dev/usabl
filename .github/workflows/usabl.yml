@@ -1,0 +1,20 @@
+# Usabl CI
+
+name: usabl
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  accessibility:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: CI placeholder
+        run: echo "Usabl CI placeholder — replace when the check pipeline is added."

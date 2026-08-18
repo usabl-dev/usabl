@@ -1,5 +1,8 @@
 # Usabl
 
+![Status](https://img.shields.io/badge/status-early%20development-orange?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.0.0-blue?style=flat-square)
+
 **Usable by default.**
 
 Usabl is a proof engine for accessibility in product development workflows. It checks whether a screen is truly usable by a screen reader before work can be called done, and gives one of four clear answers: verified, regression, not covered, or approval required.
@@ -15,6 +18,10 @@ The AI can suggest fixes. It does not get to grade its own work.
 ## Status
 
 Early development for Innovation Days 2026.
+
+## Commits
+
+Follow [Conventional Commits](CONTRIBUTING.md#commits).
 
 ## Slogan
 
