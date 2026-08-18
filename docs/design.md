@@ -215,7 +215,7 @@ Result (the whole serializable output)
     ├── Overlay (show)
     ├── CI/PR comment (block merge)
     ├── Playwright helper (return Result)
-    ├── MCP tool (return findings)
+    ├── MCP tool (present verdict; caller never decides)
     └── Docs output (publish artifacts)
 ```
 
@@ -928,7 +928,7 @@ Keep Settings identical in both variants to prove no false positives.
 - **Ed** builds the verdict core, AI loop, and intake/output interfaces (lead).
 - **Patrick** owns performance, behavior tests, demo capture, CI infra.
 - **Vishali** owns real-reader validation, honesty audit, adversarial security suite.
-- **Jim** makes the demo and presentation (week 2, when back).
+- **Jim** makes the demo and presentation (week 4).
 
 ### Pairings
 
@@ -941,15 +941,20 @@ Keep Settings identical in both variants to prove no false positives.
 The detection engine (Nitin) and the gate (Ed) integrate around day 6-8. Before
 that they work apart against the frozen contracts.
 
-### Schedule
+### Schedule (4 weeks total, week 4 is demo polish)
 
 - Day 1: contracts, primitives, deps, fakes, oracle. Lock by end of day.
 - Days 2-5: parallel build (providers, rulepack, walk vs. coverage, gate, guard).
 - End of week 1: working vertical slice with all four verdicts reachable.
 - Days 6-8: integration, surfaces, security controls, intake/output interfaces.
 - Days 9-11: harden, measure, real-repo smoke pass, overlay, docs output.
-- Day 12: demo-ready freeze.
-- Days 13-14: rehearsal and buffer.
+- Days 12-14: full loop working end to end; all surfaces wired.
+- Week 3: polish, fix real-repo findings, performance tuning, demo asset capture.
+- Week 4: demo production, rehearsal, deck, and buffer. No new features.
+
+The MVP and the demo are the same artifact. We are building what we demo the
+entire time. Week 4 is for Jim to produce the polished video, the team to
+rehearse the live segment, and everyone to practice the narrative.
 
 ### Cut line (dropped first)
 
@@ -1028,3 +1033,201 @@ output, transcript diff, and the recorded hero loop.
 ```
 
 Note: `"notCovered": "block"` (not "advise"). Usabl is on or off.
+
+---
+
+## 23. Rule validation and prioritization
+
+### Data sources
+
+- PatternFly GitHub issues labeled accessibility or a11y.
+- Product bugs in Jira or Bugzilla (Red Hat internal, anonymized).
+- The PatternFly accessibility team's known problems list.
+- WCAG failure patterns from public audits of PatternFly-based products.
+
+A sample of 20 to 50 real bugs is enough to start. Use only public or
+explicitly allowed data. No customer names in the repo.
+
+### Method
+
+1. Collect the sample of real accessibility bugs.
+2. For each bug, determine which Usabl rule (or rules) would have caught it.
+3. Run the current rule set against reproductions of the bugs where possible.
+4. Count: of N real bugs, the rules catch M. Report that number honestly.
+
+### Why this matters
+
+"We ran these rules against 30 real PatternFly bugs and caught 22 of them" is
+evidence for the judges. It validates the rule set against real pain, not
+contrived fixtures. It also prioritizes: if a class of bug appears ten times in
+the sample and no rule catches it, that rule goes to the top of the backlog.
+
+### Rule selection rationale
+
+The eight PF rules were chosen because they represent composition mistakes that:
+- axe cannot detect (they require interaction or multi-element awareness).
+- Real screen-reader users encounter regularly in PatternFly apps.
+- Are demonstrable in a short demo (visible to judges, audible in the transcript).
+
+The five focus/interaction rules (1-5) carry the demo. The three structural rules
+(6-8) add breadth. The cut line drops structural rules first.
+
+---
+
+## 24. Discovery improvement roadmap
+
+### Current limits (contest)
+
+- Only relative import paths are followed.
+- Bundler aliases (`@/`, `~/`, tsconfig paths) are not resolved.
+- Computed import specifiers (`import(variable)`) are not resolved.
+- Routes built from a data table or registered dynamically are not extracted.
+- Comment stripping is regex-based and imperfect.
+
+These produce honest `not_covered`, never silent passes.
+
+### Improvement path (post-contest, in priority order)
+
+1. **tsconfig/vite alias resolution.** Read `tsconfig.json` paths and
+   `vite.config` resolve.alias, then resolve non-relative specifiers against
+   them. This covers the majority of alias patterns in real PF apps.
+2. **Runtime route dump.** Start the app, extract the full route list from the
+   running router (React Router exposes this), and use it instead of (or to
+   supplement) the static parser. Handles dynamic and data-driven routes.
+3. **Discovery diagnostics.** When a file lands in `unresolvedFiles`, emit a
+   structured reason: "could not resolve `@/components/Foo` because no alias
+   configuration was found." Give the developer a clear fix path.
+4. **Storybook surface generation.** Auto-generate surface-map entries from
+   Storybook stories, removing the mapping tax for teams that already use
+   Storybook.
+
+### The trust cliff
+
+If too many files are `not_covered`, teams lose trust in the tool. Mitigations:
+
+- Discovery diagnostics (above) tell the developer exactly what to fix.
+- Wide-blast ensures shell/CSS/config changes always check all known routes.
+- Manual surface globs in config let teams bridge gaps immediately.
+- The verified-verdict-rate metric (section 25) makes coverage visible, so the
+  team can see it improving over time.
+- The product never hides the gap. `not_covered` is loud on purpose.
+
+---
+
+## 25. Metrics and success criteria
+
+### Verified-verdict-rate
+
+The fraction of UI-touching changes the tool can actually verify (versus marking
+`not_covered`). Measured on a real PatternFly surface, not the fixture app.
+
+- **Target for demo:** state whatever the number is, honestly. A rate above 70%
+  on a real surface is strong. Below 50% needs explanation.
+- **Measured by:** Vishali, on the real-repo smoke pass.
+- **Shown in demo:** one slide, one number, cited honestly.
+
+### Other metrics to track
+
+| Metric | What it shows | Target |
+|---|---|---|
+| Time to first finding (new repo) | Adoption friction | Under 5 minutes |
+| Violations prevented per PR | Value delivered | Track, report whatever it is |
+| Fix verification time (block to verified) | The "verify the fix" claim | Under 2 minutes for one screen |
+| False positive rate (clean screen findings) | Trust | Zero on clean PatternFly markup |
+| Rule coverage vs real bugs | Rule quality | Track against the sample (section 23) |
+
+### How we report coverage to teams
+
+The Result object includes `coverage.unresolvedFiles`. The overlay and PR comment
+surface these as "files Usabl could not map to a screen." The fleet view (later)
+can aggregate coverage percentage across surfaces. The tool never hides a gap.
+
+---
+
+## 26. Demo strategy
+
+### Timeline
+
+The contest runs 4 weeks. Week 4 is demo polish and rehearsal. The MVP and the
+demo are the same artifact. We build what we demo.
+
+- Weeks 1-2: core engine, surfaces, and the vertical slice working end to end.
+- Week 3: real-repo smoke pass, performance tuning, asset capture, overlay polish.
+- Week 4: Jim produces the polished video from raw captures. Team rehearses the
+  live segment. Deck finalized. No new features.
+
+### AI coding assistant
+
+Claude Code (Claude's stop hook lifecycle event). Confirmed.
+
+### Storyline
+
+1. Open cold on sound. Several seconds of the broken spoken announcement before
+   any UI appears. A screen-reader user lives with this across release cycles.
+2. Cut to the AI assistant mid-task on a real PatternFly screen. It thinks it is
+   done.
+3. The stop hook blocks. The four verdicts render plainly, with `not_covered`
+   shown on purpose. The seeded bug is a focus or interaction defect that a
+   screen-reader user feels, not contrived missing alt text.
+4. The assistant fixes it, calling the on-demand check mid-task. The hook re-runs
+   and passes. A receipt is shown once.
+5. Replay the clean announcement. Start and end on sound. The before/after
+   announcement diff is the empathy payload.
+6. One live reveal at the end: type a fresh broken change and watch the hook
+   block it live.
+7. Supporting and fast: one PR-comment screenshot, one short overlay clip, one
+   sentence each on the waiver, the differential, and the fleet roadmap.
+
+### Asset strategy
+
+Hybrid. A recorded, polished hero loop is the spine. Pure-live is too fragile for
+an agent, browser, and hook chain on contest hardware. One short live reveal at
+the end, because pure-recorded reads as staged.
+
+### Audio and honesty
+
+Record a real Orca pass (Vishali, week 1) of the broken and clean demo flows. Use
+it as the hero audio. If text-to-speech is used as a fallback, label it
+"synthesized from the announcement transcript" and never imply it is live
+screen-reader output.
+
+Disclose any attribute-read exception (aria-sort) on a slide. In an accessibility
+honesty demo, an undisclosed "we read the DOM here" is a fatal gotcha if a judge
+finds it. Disclosing it proactively reinforces the honesty claim.
+
+### Demo roles
+
+- Patrick captures raw tool runs and sets up the live-reveal machine.
+- Vishali records the real Orca pass in week 1.
+- Jim produces the polished video and deck in week 4.
+- Ed presents.
+
+---
+
+## 27. Settled decisions
+
+| Decision | Answer |
+|---|---|
+| Product name | Usabl |
+| AI coding assistant for stop hook | Claude Code (Stop lifecycle event) |
+| Target design system | PatternFly v6 |
+| Repo | github.com/usabl-dev/usabl (private, Apache-2.0) |
+| Stack | TypeScript on Node 22, Vitest, Playwright, axe-core |
+| On/off vs observe/advise/gate | On or off. No product modes. |
+| notCovered behavior | Block (not advise). Usabl is on or off. |
+| Contest timeline | 4 weeks. Week 4 = demo polish. |
+| How many PF rules | Eight, with a cut line. |
+| Who records real reader | Vishali (Orca on Fedora) |
+| Evidence labels | On every Draft from day 1. Contest = all deterministic. |
+| Design intake in scope | Interface design yes. Full implementation is a seam. |
+| Docs output in scope | Interface design yes. Full generation is a seam. |
+
+### Still to decide
+
+| Decision | Who decides | When |
+|---|---|---|
+| The demo PatternFly app and the hero bug | Ed + Nitin | Day 1 |
+| Real PatternFly repo for smoke pass | Ed | Week 2 |
+| Verified-verdict-rate target to state on stage | Vishali + Ed | After measurement |
+| CI host for branch protection (private repo needs Team plan) | Ed | Week 2 |
+| Real bug sample for rule validation | Nitin + Vishali | Week 1 |
