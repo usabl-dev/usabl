@@ -2,6 +2,7 @@
 
 ![Status](https://img.shields.io/badge/status-early%20development-orange?style=flat-square)
 ![Version](https://img.shields.io/badge/version-0.0.0-blue?style=flat-square)
+![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)
 
 **Usable by default.**
 
@@ -22,6 +23,10 @@ Early development for Innovation Days 2026.
 ## Commits
 
 Follow [Conventional Commits](CONTRIBUTING.md#commits).
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
 
 ## Slogan
 
