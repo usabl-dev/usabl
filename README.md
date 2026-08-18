@@ -20,6 +20,11 @@ The AI can suggest fixes. It does not get to grade its own work.
 
 Early development for Innovation Days 2026.
 
+## Design
+
+See [docs/design.md](docs/design.md) for the full product design: architecture,
+contracts, scan layers, surfaces, adoption model, design intake, and docs output.
+
 ## Commits
 
 Follow [Conventional Commits](CONTRIBUTING.md#commits).
