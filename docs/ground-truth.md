@@ -45,15 +45,21 @@ enforces only when the check is a required status (branch protection). On GitHub
 Free private that requirement cannot be set yet; CI still runs and comments.
 
 **One check, several places it shows up.** The same engine runs behind all of these.
-Overlay, MCP, and docs output are in contest scope, not optional extras.
+Every surface is a thin wrapper over one CLI entry point that returns `Result`.
 
-1. Inside the AI coding assistant (the stop hook). The headline. Enforces.
-2. In the browser while coding by hand (the dev-server overlay). Advises, does not block.
-3. On the pull request (the CI check). Comments always; blocks merge when the check is
-   required.
-4. On demand from the assistant (MCP). Transport only; the caller never decides.
-5. As published docs after a verified run (alt-text, announcements, keyboard paths).
-6. In the team's existing tests (a Playwright helper). A seam.
+| Surface | Value (why it exists) |
+|---|---|
+| **CLI** | Run the full engine on demand: baseline a brownfield app, debug locally, CI invokes this, and the agent mid-task self-check (`usabl check` via Bash). Scanner-shaped entry, proof-engine semantics. |
+| **Stop hook** | Block the AI from calling work done without proof. The headline. |
+| **Overlay** | Show findings while hand-coding in the browser. Advises only. |
+| **CI / PR comment** | Team-visible gate on merge. Tamper-proof policy read. |
+| **Mid-task self-check** | Let the agent check itself while context is warm, before Stop. **CLI is sufficient** (Bash); MCP is an optional transport for discoverability (section 11.5). Stop still decides. |
+| **Docs output** | Publish approved artifacts bound to verified evidence. |
+| **Playwright helper** | Same check inside tests teams already run. |
+
+Contest builds CLI, stop hook, overlay, CI, docs output, and mid-task self-check via
+CLI. An MCP wrapper is optional contest scope (section 11.5); ship after the hero
+loop is solid if discoverability matters.
 
 ---
 
@@ -85,9 +91,12 @@ The specific things that are new, each against what exists today:
    and required checks, policy tampering is blocked before merge.
 
 What is honestly not new: general scanning exists, and blocking only new problems
-against a baseline exists. The new part is putting all of it into one loop that gates
-an AI on evidence you can re-check and that is grounded in what a screen reader
-actually hears. That combination does not exist today.
+against a baseline exists. The CLI can be invoked like a scanner on an existing
+codebase (`usabl check`), but that is adoption plumbing, not the product claim. A
+scanner reports findings; Usabl decides a verdict, diffs against a floor, and can
+stop work from being called done. The new part is putting all of that into one loop
+that gates an AI on evidence you can re-check and that is grounded in what a screen
+reader actually hears. That combination does not exist today.
 
 ---
 
@@ -98,7 +107,9 @@ actually hears. That combination does not exist today.
 - The check-agnostic core (gate, coverage, guard, receipts, evidence labels).
 - Three scan layers behind one provider interface: axe-core, PatternFly rulepack,
   pattern-aware keyboard walk.
-- Surfaces: stop hook, overlay, CI/PR comment, Playwright helper, MCP on-demand tool.
+- Surfaces: CLI, stop hook, overlay, CI/PR comment, Playwright helper, mid-task
+  self-check (CLI; MCP wrapper optional). CI, overlay, hooks, and MCP all call the
+  same CLI core.
 - Accessible docs output: generate alt-text manifests, announcement snippets, and
   keyboard paths, bound to the receipt.
 - Evidence labels on every Draft (`evidenceClass`). During the contest everything is
@@ -108,7 +119,21 @@ actually hears. That combination does not exist today.
 - Page capabilities wired in the deps interface (viewport, zoom, reduced motion,
   computed style, screenshot) even though default contest checks do not use them.
 
-Overlay, MCP, and docs output are in contest scope. They are not on the cut line.
+Overlay and docs output are in contest scope. They are not on the cut line. Mid-task
+self-check is in contest via CLI. The MCP wrapper is optional: add it only if agent
+discoverability in Claude Code matters more than protecting hero-loop time (section
+11.5).
+
+### Bloat-proof rule
+
+Add a surface or provider only when it solves a problem nothing else solves. Every
+surface wraps `run()` → `Result`; it does not reimplement gate logic. If two surfaces
+would show the same Result the same way, keep one. Post-contest seams are documented
+so the architecture is extensible; they are not a commitment to build everything.
+
+**Explicitly out:** IDE extensions and LSP diagnostics. The dev-server overlay covers
+hand-coding in the browser; the CLI covers on-demand runs. A separate editor plugin
+duplicates both without a new verdict path.
 
 ### Stretch (deterministic, contest if the core is solid)
 
@@ -236,11 +261,12 @@ Gate (the single verdict authority)
     ▼
 Result (the whole serializable output)
     │
+    ├── CLI (run on demand; all other surfaces call this)
     ├── Stop hook (block/allow)
     ├── Overlay (show; same engine, does not block)
     ├── CI/PR comment (comment; block merge when required)
     ├── Playwright helper (return Result)
-    ├── MCP tool (present verdict; caller never decides)
+    ├── Mid-task self-check (CLI; optional MCP transport)
     └── Docs output (publish artifacts)
 ```
 
@@ -601,8 +627,9 @@ These are honest `not_covered` outcomes, not silent passes.
 
 ## 9. Gate (verdict authority)
 
-The single module that constructs a Verdict. No other module can. Overlay, MCP, CI,
-and the Playwright helper present the Result; they never mint a verdict of their own.
+The single module that constructs a Verdict. No other module can. Overlay, mid-task
+check, CI, and the Playwright helper present the Result; they never mint a verdict of
+their own.
 
 ### Verdict computation
 
@@ -723,7 +750,31 @@ but cannot be a required check.
 
 ## 11. Surfaces
 
-### 11.1 Stop hook (headline)
+Every surface calls the same CLI core (`usabl check` or equivalent library export).
+Surfaces differ only in **when** they run, **who** sees the output, and **whether**
+they enforce. See the bloat-proof rule in section 3.
+
+### 11.1 CLI (foundation)
+
+The canonical entry point. Runs coverage → providers → gate → `Result`. Prints or
+exits with `exitCode`. Everything else is a wrapper.
+
+**Why it exists.** Brownfield adoption: a team can run `usabl check` against an
+existing PatternFly app the same way they would run axe or Lighthouse — get findings,
+establish an evidence floor, then turn on the stop hook and CI. It is scanner-shaped
+invocation, not scanner semantics: output is a full `Result` with verdict, differential,
+coverage honesty, and optional receipt minting.
+
+**Typical uses:**
+
+- Local: `usabl check` on changed files or named surfaces.
+- CI: workflow invokes CLI with `--trusted-ref`.
+- Library: stop hook, overlay, and optional MCP server import `run()` directly.
+
+Does not replace the stop hook for the AI-gating story. It enables the baseline pass
+that makes the ratchet meaningful.
+
+### 11.2 Stop hook (headline)
 
 Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
@@ -746,14 +797,14 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - A findable single-run bypass (env var) so a wrong block means "bypass once and
   file it," not "delete the hook."
 
-### 11.2 Overlay (dev-server)
+### 11.3 Overlay (dev-server)
 
 On save, the overlay client requests a scan from the same engine as the stop hook
 (single-flight per repo so hook and overlay do not storm browsers). It renders
 `Result`. It never constructs a Verdict and never blocks the page. Oracle-preserving:
 mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
 
-### 11.3 CI/PR comment (tamper-proof)
+### 11.4 CI/PR comment (tamper-proof)
 
 Reads policy from the protected branch (or the trusted ref), never the working tree.
 Refuses to run without a base ref. The comment leads with the receipt, groups findings
@@ -762,16 +813,64 @@ noise budget. All page-derived text passes through `neutralize()`. Sticky commen
 matched only among bot-authored comments. The check blocks merge only when it is a
 required status; otherwise it comments.
 
-### 11.4 MCP on-demand check
+### 11.5 Mid-task self-check (CLI; MCP optional)
 
-A voluntary tool the agent can call during work so it self-corrects while context is
-warm. MCP is transport only. The gate stays at the Stop event and is never an optional
-tool the agent can decline. Page-derived text is framed as untrusted data.
+**What problem this solves.** The agent can verify its own work while context is warm,
+before the Stop hook fires. The value is self-correction mid-task. The value is **not**
+"MCP."
 
-### 11.5 Playwright helper (seam)
+**How it works (contest default).** The agent runs `usabl check` through the host's
+shell (Bash in Claude Code). Same `run()` → `Result` as every other surface. The Stop
+hook remains the gate; this path only advises the agent. The demo storyline (step 4)
+works with a CLI call on screen just as well as an MCP call — MCP is not load-bearing
+for the narrative.
+
+**MCP wrapper (optional transport).** Same engine, thin protocol adapter. Decide MCP
+vs Bash-only on discoverability, not capability.
+
+| | **CLI via Bash** | **MCP tool** |
+|---|---|---|
+| **Pros** | No server, protocol, or registration work. Same Result. Zero extra transport to test. No page text flowing into agent context as structured tool output (lower prompt-injection surface than MCP). | First-class tool with description in Claude Code; model more likely to call at the right moment. Structured content the model handles natively instead of stdout to parse. |
+| **Cons** | Model may forget to self-check without prompting. Parses CLI text output. | Fourth transport over one engine (integration + test surface). Page-derived text (aria-labels, headings, errors) returns as tool output — prompt-injection surface the Stop hook does not open. Requires `neutralize()` and untrusted-data framing (section 17). |
+
+**Contest sequencing.** Ship CLI mid-task check with the hero loop. Add the MCP wrapper
+in the same window as stretch goals if reliable agent self-correction in the demo
+matters more than hero-loop time. If MCP stays, it stays for discoverability, not
+because the story requires it.
+
+The gate stays at Stop. Neither path lets the agent grade its own work.
+
+### 11.6 Playwright helper (seam)
 
 A documented entry point that returns the core Result. Teams can call the same check
 from the tests they already run. A starting point, not a focus for the contest.
+
+### 11.7 Other coding assistants (seam, not contest)
+
+The contest demo uses Claude Code's Stop lifecycle event. The architecture does not
+depend on Claude specifically. Any assistant that can run a subprocess or call MCP
+can integrate the same gate:
+
+| Assistant | Integration shape | What we ship |
+|---|---|---|
+| **Claude Code** | Stop hook → `usabl check`; mid-task via Bash (contest) or MCP wrapper (optional) | Contest |
+| **Cursor** | Hook on agent completion or pre-commit; mid-task via Bash or MCP | Seam documented |
+| **GitHub Copilot** | Extension calls CLI on save or on "agent done" if/when that event exists | Seam documented |
+| **Any MCP host** | Optional on-demand tool; gate stays at task-complete lifecycle event | MCP wrapper if contest scope includes it |
+
+Implementation is always the same three pieces: (1) detect UI-touching diff or
+surface list, (2) invoke `run()` → `Result`, (3) enforce or display per that host's
+rules. No second gate, no forked rulepack. A new assistant is a new **surface
+adapter**, not a new product.
+
+### 11.8 Post-contest surfaces (documented, not built)
+
+**Storybook addon.** Run `usabl check` per story URL; pairs with discovery item 4
+(section 24) that auto-generates surface-map entries from stories. Value: component-level
+checks without booting the full app router. Same `Result`, story URL as `screenId`.
+
+Not in contest. Add only if teams using Storybook ask for it and discovery from routes
+is insufficient.
 
 ---
 
@@ -779,23 +878,26 @@ from the tests they already run. A starting point, not a focus for the contest.
 
 ### On or off
 
-Usabl is installed (stop hook + CI + overlay + MCP + docs output, one standard) or
-the team is not using Usabl. There is no "partial" mode, no per-surface strictness, no
-lasting observe mode.
+Usabl is installed (CLI + stop hook + CI + overlay + docs output, one standard) or
+the team is not using Usabl. Mid-task self-check uses the CLI; an MCP wrapper is
+optional. There is no "partial" mode, no per-surface strictness, no lasting observe
+mode.
 
 ### Brownfield adoption (prove what you touch)
 
 A team in year four of a 400-screen console adopts Usabl on Monday without mapping 400
 screens on Monday.
 
-1. Install Usabl (on): stop hook, CI, overlay, MCP, docs output. One standard.
-2. Most PRs that do not touch UI: non-blocking "nothing to check" outcome.
-3. First UI PR on a page discovery cannot map: `not_covered` until a surface map
+1. Install Usabl (on): CLI, stop hook, CI, overlay, docs output. One standard.
+2. Optional first step: `usabl check` on a surface to see findings and accept an
+   evidence floor before the stop hook blocks anyone.
+3. Most PRs that do not touch UI: non-blocking "nothing to check" outcome.
+4. First UI PR on a page discovery cannot map: `not_covered` until a surface map
    entry or a parseable route exists. Pages the router already lists do not need a
    hand-written map entry.
-4. First check of that page: likely a pile of existing findings. A code owner accepts
+5. First check of that page: likely a pile of existing findings. A code owner accepts
    the evidence floor (and maybe a few waivers). That is one `approval_required` commit.
-5. Next PR on that page: full default stack. New problems block. Old ones are visible
+6. Next PR on that page: full default stack. New problems block. Old ones are visible
    debt that burns down when fixed or when a waiver expires.
 
 Coverage grows as the team works. It does not require Design to declare epic scope.
@@ -963,7 +1065,9 @@ not blocking).
 6. Localhost-only binds by default.
 7. Pinned scanner versions; unreadable version degrades to `not_covered`.
 8. Sticky-comment bot-author filter and NUL-delimited git plumbing.
-9. Untrusted-data framing in MCP tool output.
+9. Untrusted-data framing on MCP tool output when the MCP wrapper ships. The Stop
+   hook does not return page-derived text to the agent; MCP does. `neutralize()` at
+   every egress (section 17).
 10. Requirement files (design intake) added to the guarded set.
 
 ### Documented seams
@@ -971,6 +1075,8 @@ not blocking).
 - Cryptographic receipt signing via CI OIDC identity.
 - Structural identity tier.
 - Local tamper-proofing (impossible by design; keep the disclosure).
+- MCP mid-task wrapper: optional transport over CLI; adds discoverability and
+  prompt-injection surface the Bash path avoids (section 11.5).
 
 ---
 
@@ -1073,13 +1179,16 @@ rehearse the live segment, and everyone to practice the narrative.
 
 ### Cut line (dropped first)
 
-Detection breadth only. Overlay, MCP, and docs output stay.
+Detection breadth only. Overlay and docs output stay. Mid-task self-check via CLI
+stays; MCP wrapper is optional (section 11.5).
 
 1. `pf-toolbar-labeled-when-repeated`.
 2. `pf-row-action-name-unique` and `pf-table-header-assoc`.
+3. MCP wrapper (if hero loop is not solid yet).
 
 Never cut: the gate, receipt fast-path, config-guards-itself, CODEOWNERS, four-verdict
-output, transcript diff, the recorded hero loop, overlay, MCP, and docs output.
+output, transcript diff, the recorded hero loop, overlay, docs output, CLI mid-task
+self-check.
 
 ---
 
@@ -1214,7 +1323,8 @@ These produce honest `not_covered`, never silent passes.
    configuration was found." Give the developer a clear fix path.
 4. **Storybook surface generation.** Auto-generate surface-map entries from
    Storybook stories, removing the mapping tax for teams that already use
-   Storybook.
+   Storybook. A post-contest **Storybook addon** (section 11.8) would run the same
+   CLI check per story URL.
 
 ### Candidate pull-in for contest
 
@@ -1301,8 +1411,8 @@ Claude Code (Claude's stop hook lifecycle event). Confirmed.
 3. The stop hook blocks. The four verdicts render plainly, with `not_covered`
    shown on purpose. The seeded bug is a focus or interaction defect that a
    screen-reader user feels, not contrived missing alt text.
-4. The assistant fixes it, calling the on-demand check mid-task. The hook re-runs
-   and passes. A receipt is shown once.
+4. The assistant fixes it, running `usabl check` mid-task (CLI via Bash; MCP wrapper
+   if shipped). The hook re-runs and passes. A receipt is shown once.
 5. Replay the clean announcement. Start and end on sound. The before/after
    announcement diff is the empathy payload.
 6. One live reveal at the end: type a fresh broken change and watch the hook
@@ -1359,7 +1469,13 @@ Credibility preflight before recording:
 | Idle vs not_covered | Nothing to check is explicit informational allow, not `not_covered`. |
 | Partial scans | Forbidden for `verified`. Full affected set or `not_covered`. |
 | notCovered behavior | Not a config knob. Default hard block; recalibrate from week-2 real-repo `not_covered` rate. |
-| Overlay / MCP / docs output | In contest. Not on the cut line. |
+| Overlay / docs output | In contest. Not on the cut line. |
+| CLI | In contest. Foundation; all surfaces call it. |
+| Mid-task self-check | In contest via CLI (Bash). Same Result as MCP. |
+| MCP wrapper | Optional. Discoverability vs hero-loop time (section 11.5). |
+| IDE / LSP extension | Out. Overlay + CLI cover hand-coding. |
+| Other assistants (Cursor, Copilot) | Seam: same CLI + hook/MCP adapter. Claude Code for demo. |
+| Storybook addon | Post-contest seam (section 11.8). |
 | Contest timeline | 4 weeks. Week 4 = demo polish. |
 | How many PF rules | Eight, with a cut line (structural rules first). |
 | Who records real reader | Vishali (Orca on Fedora), after the hero bug is locked. |
@@ -1376,6 +1492,7 @@ Credibility preflight before recording:
 | Verified-verdict-rate target to state on stage | Vishali + Ed | After measurement |
 | CI host for branch protection (private repo needs Team plan) | Ed | Week 2 |
 | Real bug sample for rule validation | Nitin + Vishali | Week 1 |
+| MCP wrapper vs Bash-only mid-task check | Ed | After hero loop works; before demo polish |
 
 ---
 
