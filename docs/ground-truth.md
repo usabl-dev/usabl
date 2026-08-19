@@ -2,7 +2,7 @@
 
 Status: working draft. Author: eparenti. August 2026.
 
-This is the single source of truth for the Usabl product. It replaces shared-design.md,
+This is the project ground truth for the Usabl product. It replaces shared-design.md,
 contest-build-plan.md, and team-work-plan.md with one document that includes the
 check-agnostic core, evidence labels, design intake, docs output, and the on/off
 adoption model.
@@ -22,33 +22,48 @@ and waits releases for fixes. Priya builds the UI with great intentions but miss
 things because it is hard to know everything.
 
 **What Usabl is.** A proof engine for accessibility in product development workflows.
-It checks whether a screen is truly usable by a screen reader before work can be
-called done. It gives one of four clear answers:
+It checks whether touched surfaces have any new machine-checkable accessibility
+barriers before work can be called done. It gives one of four clear answers:
 
 | Verdict | Meaning |
 |---|---|
-| `verified` | Touched surfaces were checked; no new problems. |
+| `verified` | No new machine-checkable barriers on touched surfaces. |
 | `regression` | A new problem appeared. |
 | `not_covered` | Could not identify or exercise what the change touched. |
 | `approval_required` | Policy changed; the tool will not judge itself. |
 
 The AI can suggest fixes. It does not get to grade its own work.
 
-**One check, four places it shows up.** The same engine runs behind all of these:
+Idle is not a fifth verdict. When there is no UI-touching change, Usabl allows with
+an explicit informational outcome: `Result.verdict` is `null`, exit 0, no findings,
+and `summary` says "nothing to check." `not_covered` means there *was* something to
+prove and the tool could not. A docs-only PR is idle, not `not_covered`.
 
-1. Inside the AI coding assistant (the stop hook). The headline.
+**The gate always decides. Surfaces choose whether to enforce.** Overlay and the
+advisory lane display the Result without blocking. The stop hook enforces. CI
+enforces only when the check is a required status (branch protection). On GitHub
+Free private that requirement cannot be set yet; CI still runs and comments.
+
+**One check, several places it shows up.** The same engine runs behind all of these.
+Overlay, MCP, and docs output are in contest scope, not optional extras.
+
+1. Inside the AI coding assistant (the stop hook). The headline. Enforces.
 2. In the browser while coding by hand (the dev-server overlay). Advises, does not block.
-3. On the pull request (the CI check). Blocks the merge if accessibility got worse.
-4. In the team's existing tests (a Playwright helper). A seam for later.
+3. On the pull request (the CI check). Comments always; blocks merge when the check is
+   required.
+4. On demand from the assistant (MCP). Transport only; the caller never decides.
+5. As published docs after a verified run (alt-text, announcements, keyboard paths).
+6. In the team's existing tests (a Playwright helper). A seam.
 
 ---
 
 ## 2. What is new
 
 The core new idea: almost every accessibility tool, including the new AI ones, scans
-and gives advice a human may or may not read. Usabl does not advise. It decides, and
-it can stop the AI from calling work done until a screen reader could actually use the
-screen.
+and gives advice a human may or may not read. Usabl's gate decides, and the stop hook
+can stop the AI from calling work done until no new machine-checkable barrier remains
+on the touched surfaces. The overlay and the advisory lane still show findings without
+blocking. That is display, not a second decision-maker.
 
 The specific things that are new, each against what exists today:
 
@@ -65,8 +80,9 @@ The specific things that are new, each against what exists today:
 5. It has rules for our design system. There is a tool like this for one design system
    (Microsoft built one for FluentUI) and none for PatternFly. Usabl fills an empty
    slot.
-6. The rules cannot be gamed. The AI cannot quietly weaken the checks to pass, because
-   the rules are protected.
+6. The rules cannot be silently weakened. Locally, policy edits are tamper-evident and
+   leave a reviewable commit trail (`approval_required`). In CI with trusted-ref reads
+   and required checks, policy tampering is blocked before merge.
 
 What is honestly not new: general scanning exists, and blocking only new problems
 against a baseline exists. The new part is putting all of it into one loop that gates
@@ -82,22 +98,31 @@ actually hears. That combination does not exist today.
 - The check-agnostic core (gate, coverage, guard, receipts, evidence labels).
 - Three scan layers behind one provider interface: axe-core, PatternFly rulepack,
   pattern-aware keyboard walk.
-- Four surfaces: stop hook, overlay, CI/PR comment, Playwright helper (seam).
+- Surfaces: stop hook, overlay, CI/PR comment, Playwright helper, MCP on-demand tool.
+- Accessible docs output: generate alt-text manifests, announcement snippets, and
+  keyboard paths, bound to the receipt.
 - Evidence labels on every Draft (`evidenceClass`). During the contest everything is
   `deterministic`.
-- Design intake interface (RequirementBundle schema and normalization).
-- Accessible docs output interface (DocArtifact schema and generation).
+- Design intake: RequirementBundle schema and YAML normalize. Wiring intake-derived
+  providers is in contest; ingesting Figma/CSV is a seam.
 - Page capabilities wired in the deps interface (viewport, zoom, reduced motion,
-  computed style, screenshot) even though contest checks do not use them.
+  computed style, screenshot) even though default contest checks do not use them.
+
+Overlay, MCP, and docs output are in contest scope. They are not on the cut line.
+
+### Stretch (deterministic, contest if the core is solid)
+
+- Visible focus indicator (WCAG 2.4.7).
+- Reduced motion respected (preference injection; not a 2.2 A+AA row of its own).
+
+Do not add these to the fixture oracle. Delete them if they destabilize the loop.
 
 ### Easy to add after the contest (deterministic checks we can call verified)
 
 - Text resize and reflow at 200 percent.
 - Target size for touch and pointer.
-- Visible focus indicator.
 - Consistent navigation across screens.
 - Captions present.
-- Reduced motion respected.
 
 Each is a new provider returning `Draft[]` with `evidenceClass: 'deterministic'`.
 The page capabilities are already wired; adding a check never touches the gate.
@@ -212,8 +237,8 @@ Gate (the single verdict authority)
 Result (the whole serializable output)
     │
     ├── Stop hook (block/allow)
-    ├── Overlay (show)
-    ├── CI/PR comment (block merge)
+    ├── Overlay (show; same engine, does not block)
+    ├── CI/PR comment (comment; block merge when required)
     ├── Playwright helper (return Result)
     ├── MCP tool (present verdict; caller never decides)
     └── Docs output (publish artifacts)
@@ -228,14 +253,16 @@ sorted by a stable key before it is hashed or snapshotted.
 
 ```ts
 export type Severity = 'critical' | 'serious' | 'moderate' | 'minor';
+// `human-confirmed` is reserved. Contest produces only `deterministic`.
 export type EvidenceClass = 'deterministic' | 'model-judgment' | 'human-confirmed';
 export type Verdict = 'verified' | 'regression' | 'not_covered' | 'approval_required';
 export type FactSource = 'ax-tree' | 'attribute';
+export type IdentityBasis = 'name' | 'structural' | 'count';
 
 export interface Fact<T = string | null> {
   value: T;
   source: FactSource;
-  verified: boolean;
+  fromTree: boolean;              // not the verdict word `verified`
 }
 
 export interface EvidenceFacts {
@@ -247,7 +274,7 @@ export interface EvidenceFacts {
 
 export interface Draft {
   rule: string;
-  layer: string;                  // open, not a closed union
+  layer: string;                  // open; contest uses `axe` | `pf` | `walk`
   severity: Severity;
   evidenceClass: EvidenceClass;   // the seam
   screenId: string;
@@ -262,14 +289,15 @@ export interface Draft {
 }
 
 export interface Finding extends Draft {
-  elementKey: string;
+  elementKey: string | null;      // null when identityBasis is `count`
+  identityBasis: IdentityBasis;
   status: 'new' | 'carried' | 'fixed' | 'waived';
 }
 
 export interface AnnouncementToken {
   kind: 'name' | 'role' | 'state';
   text: string | null;
-  verified: boolean;
+  fromTree: boolean;
   source: FactSource;
 }
 
@@ -282,7 +310,6 @@ export interface TranscriptStop {
 export interface ScreenScan {
   screenId: string;
   url: string;
-  variant?: 'clean' | 'broken';
   stops: TranscriptStop[];
   drafts: Draft[];
 }
@@ -298,6 +325,7 @@ export interface Coverage {
   changedFiles: string[];
   affected: AffectedScreen[];
   unresolvedFiles: string[];
+  nothingToCheck: boolean;        // no UI-touching files; not a verdict
 }
 
 export interface Receipt {
@@ -316,8 +344,8 @@ export interface Receipt {
 }
 
 export interface Result {
-  verdict: Verdict;
-  summary: string;
+  verdict: Verdict | null;        // null iff coverage.nothingToCheck
+  summary: string;                // for idle: "nothing to check"
   screens: ScreenScan[];
   coverage: Coverage;
   findings: Finding[];
@@ -325,6 +353,9 @@ export interface Result {
   dirtyGuardedPaths: string[];
   exitCode: 0 | 1 | 2 | 3 | 4;
 }
+
+// exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
+// 3 not_covered; 4 unhandled error (fail open with disclosure).
 
 // Design intake
 export type RequirementKind = 'content' | 'flow' | 'doc';
@@ -536,6 +567,22 @@ Given a set of changed files, discover which surfaces they affect:
 5. Manual surface globs in config are an additive fallback, never a replacement.
 6. Anything resolving to nothing stays in `unresolvedFiles` and forces `not_covered`.
 
+### Nothing to check vs not covered
+
+Coverage answers two different questions.
+
+**Nothing to check** (`coverage.nothingToCheck === true`): no changed files match
+`uiFileGlobs`. There was no UI change to prove. `Result.verdict` is `null`, exit 0,
+and an explicit "nothing to check" message. A docs-only PR, a backend-only PR, and a clean tree with no UI diff
+are this path. This is not `not_covered`.
+
+**`not_covered`:** UI files changed, and the tool could not identify or exercise what
+they touched (unmapped file, unresolved import, screen failed to load, check
+incomplete). That blocks. Idle and unmapped must never share a verdict.
+
+If some UI files map and others do not, the run is `not_covered`. Partial proof is
+not `verified`.
+
 ### Prove what you touch
 
 Only changed files trigger checks. A file you did not touch is not a Usabl problem
@@ -554,26 +601,68 @@ These are honest `not_covered` outcomes, not silent passes.
 
 ## 9. Gate (verdict authority)
 
-The single module that constructs a Verdict. No other module can.
+The single module that constructs a Verdict. No other module can. Overlay, MCP, CI,
+and the Playwright helper present the Result; they never mint a verdict of their own.
 
 ### Verdict computation
 
-1. **Filter by evidenceClass.** Only Drafts with `evidenceClass === 'deterministic'`
+1. **Guard check first.** If any guarded path differs from the trust anchor, the
+   verdict is `approval_required` and the harness never runs.
+2. **Coverage.** If `nothingToCheck`, return `verdict: null`, exit 0, no browser, and
+   a summary like "nothing to check (no UI-touching files)."
+3. **Run checks.** For every affected surface, run providers, collect Drafts. Do not
+   sample. If any affected surface cannot be fully exercised, `not_covered` — never
+   mint a `verified` receipt on a partial scan.
+4. **Filter by evidenceClass.** Only Drafts with `evidenceClass === 'deterministic'`
    participate in the verdict. Model-judgment and human-confirmed findings are
    surfaced in the Result but do not block or enable `verified`.
-2. **Guard check.** If any guarded path differs from the trust anchor, the verdict is
-   `approval_required` and the harness never runs.
-3. **Run checks.** For each affected surface, run providers, collect Drafts, apply
-   identity, run differential against evidence floor and waivers.
-4. **Verdict priority order:**
-   - Any new deterministic failure: `regression`.
-   - Anything unverifiable (unreachable surface, incomplete check, unmapped file):
-     `not_covered`.
+5. **Identity, dedup, differential, waivers.**
+6. **Verdict priority order:**
+   - Any new deterministic failure (`confidence: 'fail'`): `regression`.
+   - Anything unverifiable (unreachable surface, incomplete check, unmapped file,
+     `confidence: 'unverified'`): `not_covered`. Unverified is not a silent pass and
+     is not a regression.
    - Everything else: `verified`.
+
+### Identity
+
+Every Finding gets `{ screenId, layer, rule, elementKey, identityBasis }`.
+
+Priority:
+
+1. **name** — a stable accessible name from evidence (survives markup churn).
+2. **structural** — role plus ordinal among same-role elements in the nearest labelled
+   region. Weaker than a name; stronger than a full CSS path.
+3. **count** — identity-weak. No per-element key. Compare `{screenId, layer, rule}` by
+   count.
+
+Identity-weak rules are an allow-list of "this element has no accessible name" checks
+(`button-name` from axe, `pf-icon-button-name`). You cannot honestly key an unnamed
+element by name. A count increase is a regression. Named rules still catch a swap
+(one fixed, one newly broken, count unchanged).
+
+Contest layer ids are stable (`axe`, `pf`, `walk`) so dedup and identity do not churn.
+The field stays `string` so a later provider can add a layer without a gate change.
+
+### Dedup
+
+Collapse Drafts that share `rule` + identity across layers. Keep one Finding. Prefer
+the PatternFly why/fix when both axe and the rulepack fire on the same control.
+
+### Evidence floor
+
+`.usabl-evidence.json` is the accepted deterministic finding set for a surface. A code
+owner writes it in an `approval_required` accept commit. The floor never grows
+silently: new identities (or a higher identity-weak count) are `regression`;
+disappeared identities are `fixed`. Advisory findings are never written to the floor.
+The accept loop converges: after the acceptance commit lands, the next unchanged run
+sees the same floor and settles to `verified` (or `not_covered` only if coverage
+cannot be re-established).
 
 ### Failure taxonomy
 
-- No changed files or no mapped screen: `not_covered`.
+- No UI-touching files: nothing to check (`verdict: null`, exit 0). Not `not_covered`.
+- UI files changed that do not map to a screen: `not_covered`.
 - A screen fails to load or CDP disconnects: `not_covered` with reason.
 - A change edits rules, config, evidence, or waivers: `approval_required`.
 - A scanner version cannot be read: `not_covered`.
@@ -597,7 +686,7 @@ edit.
 
 CI requires `--trusted-ref` (a forge-supplied base revision). Config, evidence,
 waivers, and rules are read via `git show <ref>:<path>` from the trusted base, never
-from the PR working tree. Combined with CODEOWNERS + branch protection, a PR author
+from the PR working tree. Combined with CODEOWNERS + branch protection (when the host allows it), a PR author
 cannot influence what policy they are judged against.
 
 ### Config-guards-itself
@@ -624,9 +713,11 @@ Any file change or committed policy change invalidates the receipt.
 
 ### CODEOWNERS + branch protection
 
-Every guarded path and the CI workflow require code-owner review before merge. Admins
-can bypass in an emergency (enforce_admins: false). This is the single highest-value
-security item.
+Every guarded path and the CI workflow require code-owner review before merge, once
+branch protection exists. Admins can bypass in an emergency (`enforce_admins: false`).
+This is the single highest-value security item **when it can be turned on**. A GitHub
+Free private repo cannot enable it; until Team or public, CI still runs and comments
+but cannot be a required check.
 
 ---
 
@@ -637,12 +728,17 @@ security item.
 Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
 - Unconfigured repo: allow silently.
-- No UI change in the diff: silent allow.
+- Nothing to check (no UI files in the diff): allow with explicit "nothing to check"
+  message. Not `not_covered`.
 - Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser.
-- `verified` on a fresh scan: mint receipt and allow.
+- `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
+  surface was scanned. Never mint on a sample. Surface the meaning explicitly as
+  "verified: no new machine-checkable barriers on touched surfaces," with advisory
+  findings shown adjacent when present.
 - `regression`: block.
 - `approval_required`: block.
-- `not_covered`: block (Usabl is on or off; not_covered is not done).
+- `not_covered`: default block. Recalibrate after week-2 real-repo measurement
+  (section 25) if this drives persistent bypass behavior.
 - Policy mismatch against git anchor: block.
 - One-continuation escape: at most one forced continuation, then a loud disclosed
   allow marked "NOT verified."
@@ -652,17 +748,19 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
 ### 11.2 Overlay (dev-server)
 
-A thin renderer over Result in the dev server. Shows findings as you save, right next
-to the screen you are building. Advises, does not block. Oracle-preserving: mounts
-only when `navigator.webdriver` is false and `?usabl=off` is not present.
+On save, the overlay client requests a scan from the same engine as the stop hook
+(single-flight per repo so hook and overlay do not storm browsers). It renders
+`Result`. It never constructs a Verdict and never blocks the page. Oracle-preserving:
+mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
 
 ### 11.3 CI/PR comment (tamper-proof)
 
-Reads policy from the protected branch, never the working tree. Refuses to run without
-a base ref. The comment leads with the receipt, groups findings as new/known/unverified,
-shows a before-and-after announcement diff, and applies a noise budget. All page-derived
-text passes through `neutralize()`. Sticky comment matched only among bot-authored
-comments.
+Reads policy from the protected branch (or the trusted ref), never the working tree.
+Refuses to run without a base ref. The comment leads with the receipt, groups findings
+as new/known/unverified, shows a before-and-after announcement diff, and applies a
+noise budget. All page-derived text passes through `neutralize()`. Sticky comment
+matched only among bot-authored comments. The check blocks merge only when it is a
+required status; otherwise it comments.
 
 ### 11.4 MCP on-demand check
 
@@ -681,18 +779,20 @@ from the tests they already run. A starting point, not a focus for the contest.
 
 ### On or off
 
-Usabl is installed (hooks + CI + overlay, one standard) or the team is not using
-Usabl. There is no "partial" mode, no per-surface strictness, no lasting observe mode.
+Usabl is installed (stop hook + CI + overlay + MCP + docs output, one standard) or
+the team is not using Usabl. There is no "partial" mode, no per-surface strictness, no
+lasting observe mode.
 
 ### Brownfield adoption (prove what you touch)
 
 A team in year four of a 400-screen console adopts Usabl on Monday without mapping 400
 screens on Monday.
 
-1. Install Usabl (on).
-2. Most PRs that do not touch UI: silent allow (no UI files changed).
-3. First UI PR on an unmapped page: `not_covered` until someone adds a surface map
-   entry.
+1. Install Usabl (on): stop hook, CI, overlay, MCP, docs output. One standard.
+2. Most PRs that do not touch UI: non-blocking "nothing to check" outcome.
+3. First UI PR on a page discovery cannot map: `not_covered` until a surface map
+   entry or a parseable route exists. Pages the router already lists do not need a
+   hand-written map entry.
 4. First check of that page: likely a pile of existing findings. A code owner accepts
    the evidence floor (and maybe a few waivers). That is one `approval_required` commit.
 5. Next PR on that page: full default stack. New problems block. Old ones are visible
@@ -813,10 +913,10 @@ What makes them cheap to add:
 |---|---|---|---|
 | Text resize | `resize` | Set viewport to 320px width or zoom to 200%, assert no content loss or overlap | `setViewport`, `setZoom`, `screenshot` |
 | Target size | `target-size` | Measure interactive element bounding boxes, flag anything below 24x24 CSS px | `getComputedStyle`, `queryAll` |
-| Visible focus | `focus-indicator` | Tab through, at each stop assert a visible focus ring (contrast, area) | `tab`, `screenshot`, `getComputedStyle` |
+| Visible focus | `focus-indicator` | Tab through; at each stop compare focused vs unfocused outline/box-shadow/border | `tab`, `getComputedStyle` |
 | Consistent navigation | `nav-consistency` | Compare navigation landmarks across surfaces, flag structural differences | `axAt` across multiple pages |
 | Captions | `media-captions` | Find video/audio elements, assert track[kind=captions] present | `queryAll` |
-| Reduced motion | `motion` | Enable prefers-reduced-motion, assert no animation runs | `setReducedMotion`, `screenshot` (before/after) |
+| Reduced motion | `motion` | Enable prefers-reduced-motion; flag elements with active animation/transition | `setReducedMotion`, `getComputedStyle` |
 
 ---
 
@@ -854,7 +954,8 @@ not blocking).
 
 ### Must ship
 
-1. CODEOWNERS + branch protection on every guarded path and the workflow.
+1. CODEOWNERS on every guarded path and the workflow. Branch protection / required
+   checks when the host allows them (not on GitHub Free private).
 2. Config-guards-itself (integrity check before reading contents).
 3. CI reads policy from trusted ref, refuses without base ref.
 4. Receipt binding (three hashes, receipt store excluded from version control).
@@ -881,10 +982,13 @@ not blocking).
 - Receipt fast-path before any browser work.
 - Per-screen cache keyed on (screen id, content hash), version-stamped.
 - Page-ready: bounded network-idle wait capped at 2-3 seconds.
-- Fan-out: cap affected-screen count, scan a deterministic sample in the fast loop,
-  defer the tail to CI.
-- Tiered short-circuit: receipt, then axe, then rulepack, then walk. Stop early on a
-  blocking failure.
+- Fan-out: parallelize affected screens. Do not subsample. If the hook cannot finish
+  every affected surface inside the budget, the verdict is `not_covered`, not a sampled
+  `verified`. Never mint a receipt on a partial scan. CI scans the same full set and
+  may take longer.
+- Tiered short-circuit: receipt, then axe, then rulepack, then walk. The hook may stop
+  early once a blocking `regression` is known. CI still collects a complete finding
+  set for the comment when practical.
 - Single-flight per repo so the hook and overlay do not storm contexts.
 - Block fonts, images, and analytics during scans.
 
@@ -916,7 +1020,17 @@ Planted defects on the broken Clusters page:
 4. A success toast with no live region (catches `pf-toast-live-region`).
 5. Every row's action button named "Actions" (catches `pf-row-action-name-unique`).
 
-Keep Settings identical in both variants to prove no false positives.
+Planted defects on the broken Workloads page (so rules 3, 6, and 8 have an oracle):
+
+6. A dialog or menu that does not move focus inside on open (catches
+   `pf-focus-into-dialog`).
+7. A table whose headers are not associated, or an empty/loading state that is not
+   announced (catches `pf-table-header-assoc`).
+8. Two repeated toolbars with no distinguishing accessible name (catches
+   `pf-toolbar-labeled-when-repeated`).
+
+Keep Settings identical in both variants to prove no false positives. The `?variant=`
+switch lives in the fixture app, not on `ScreenScan`.
 
 ---
 
@@ -934,7 +1048,8 @@ Keep Settings identical in both variants to prove no false positives.
 
 - Nitin builds accessibility, Vishali reviews accessibility.
 - Ed builds the loop and surfaces, Patrick reviews and hardens them.
-- Ed owns intake/output interface design; Nitin wires intake-derived providers.
+- Ed owns intake schema, YAML normalize, and docs output; Nitin wires intake-derived
+  providers.
 
 ### Integration
 
@@ -958,13 +1073,13 @@ rehearse the live segment, and everyone to practice the narrative.
 
 ### Cut line (dropped first)
 
+Detection breadth only. Overlay, MCP, and docs output stay.
+
 1. `pf-toolbar-labeled-when-repeated`.
-2. The overlay clip.
-3. MCP on-demand tool.
-4. `pf-row-action-name-unique` and `pf-table-header-assoc`.
+2. `pf-row-action-name-unique` and `pf-table-header-assoc`.
 
 Never cut: the gate, receipt fast-path, config-guards-itself, CODEOWNERS, four-verdict
-output, transcript diff, and the recorded hero loop.
+output, transcript diff, the recorded hero loop, overlay, MCP, and docs output.
 
 ---
 
@@ -1000,7 +1115,6 @@ output, transcript diff, and the recorded hero loop.
 {
   "appBaseUrl": "http://127.0.0.1:5173",
   "uiFileGlobs": ["fixtures/app/src/**"],
-  "notCovered": "block",
   "discovery": {
     "routerFile": "fixtures/app/src/App.tsx",
     "wideBlastGlobs": [
@@ -1032,7 +1146,8 @@ output, transcript diff, and the recorded hero loop.
 }
 ```
 
-Note: `"notCovered": "block"` (not "advise"). Usabl is on or off.
+There is no `notCovered` mode key. When Usabl is on, `not_covered` blocks. Idle
+(nothing to check) is an explicit informational allow. That is code, not a config dial.
 
 ---
 
@@ -1101,6 +1216,12 @@ These produce honest `not_covered`, never silent passes.
    Storybook stories, removing the mapping tax for teams that already use
    Storybook.
 
+### Candidate pull-in for contest
+
+If week-2 real-repo `not_covered` is high, pull runtime route dump (item 2 above)
+into contest scope. It is the single highest-leverage coverage improvement and has
+more impact on trust than adding another deterministic rule.
+
 ### The trust cliff
 
 If too many files are `not_covered`, teams lose trust in the tool. Mitigations:
@@ -1118,13 +1239,24 @@ If too many files are `not_covered`, teams lose trust in the tool. Mitigations:
 
 ### Verified-verdict-rate
 
-The fraction of UI-touching changes the tool can actually verify (versus marking
-`not_covered`). Measured on a real PatternFly surface, not the fixture app.
+The fraction of **UI-touching** changes the tool can actually verify (versus marking
+`not_covered`). Idle / nothing-to-check runs are not in the denominator. Measured on
+a real PatternFly surface, not the fixture app.
 
 - **Target for demo:** state whatever the number is, honestly. A rate above 70%
   on a real surface is strong. Below 50% needs explanation.
 - **Measured by:** Vishali, on the real-repo smoke pass.
 - **Shown in demo:** one slide, one number, cited honestly.
+
+### Stop-hook policy gate for `not_covered`
+
+Do not lock this by philosophy alone. Tie behavior to the week-2 real-repo number:
+
+- If `not_covered` is rare (for example, <=10% of UI-touching runs), keep hard block.
+- If `not_covered` is common, switch to the existing one-continuation loud allow path
+  for `not_covered` while discovery hardening lands.
+
+Either way, keep `not_covered` loud, visible, and tracked in PR comment and overlay.
 
 ### Other metrics to track
 
@@ -1186,19 +1318,29 @@ the end, because pure-recorded reads as staged.
 
 ### Audio and honesty
 
-Record a real Orca pass (Vishali, week 1) of the broken and clean demo flows. Use
-it as the hero audio. If text-to-speech is used as a fallback, label it
-"synthesized from the announcement transcript" and never imply it is live
+Record a real Orca pass (Vishali) of the broken and clean demo flows. Use it as the
+hero audio. Lock the demo surface and the planted interaction bug **before** that
+recording; the audio cannot be the wrong bug. If text-to-speech is used as a fallback,
+label it "synthesized from the announcement transcript" and never imply it is live
 screen-reader output.
 
 Disclose any attribute-read exception (aria-sort) on a slide. In an accessibility
 honesty demo, an undisclosed "we read the DOM here" is a fatal gotcha if a judge
 finds it. Disclosing it proactively reinforces the honesty claim.
 
+Credibility preflight before recording:
+
+- Verify AX-tree preview text is a fair approximation of what Orca says for the hero
+  bug and the fixed state.
+- Sweep for any other CDP serialization gaps so `aria-sort` is truly the only
+  disclosed attribute-read exception.
+- Listen to how a real screen reader pronounces "Usabl" and note the intended spoken
+  form in the presenter notes.
+
 ### Demo roles
 
 - Patrick captures raw tool runs and sets up the live-reveal machine.
-- Vishali records the real Orca pass in week 1.
+- Vishali records the real Orca pass after the hero bug is locked.
 - Jim produces the polished video and deck in week 4.
 - Ed presents.
 
@@ -1214,19 +1356,22 @@ finds it. Disclosing it proactively reinforces the honesty claim.
 | Repo | github.com/usabl-dev/usabl (private, Apache-2.0) |
 | Stack | TypeScript on Node 22, Vitest, Playwright, axe-core |
 | On/off vs observe/advise/gate | On or off. No product modes. |
-| notCovered behavior | Block (not advise). Usabl is on or off. |
+| Idle vs not_covered | Nothing to check is explicit informational allow, not `not_covered`. |
+| Partial scans | Forbidden for `verified`. Full affected set or `not_covered`. |
+| notCovered behavior | Not a config knob. Default hard block; recalibrate from week-2 real-repo `not_covered` rate. |
+| Overlay / MCP / docs output | In contest. Not on the cut line. |
 | Contest timeline | 4 weeks. Week 4 = demo polish. |
-| How many PF rules | Eight, with a cut line. |
-| Who records real reader | Vishali (Orca on Fedora) |
+| How many PF rules | Eight, with a cut line (structural rules first). |
+| Who records real reader | Vishali (Orca on Fedora), after the hero bug is locked. |
 | Evidence labels | On every Draft from day 1. Contest = all deterministic. |
-| Design intake in scope | Interface design yes. Full implementation is a seam. |
-| Docs output in scope | Interface design yes. Full generation is a seam. |
+| Design intake in scope | Schema + YAML normalize in contest. Figma/CSV ingest is a seam. |
+| Docs output in scope | Generate the three artifacts, bound to receipt. |
 
 ### Still to decide
 
 | Decision | Who decides | When |
 |---|---|---|
-| The demo PatternFly app and the hero bug | Ed + Nitin | Day 1 |
+| The demo PatternFly app and the hero bug | Ed + Nitin | Before Orca recording |
 | Real PatternFly repo for smoke pass | Ed | Week 2 |
 | Verified-verdict-rate target to state on stage | Vishali + Ed | After measurement |
 | CI host for branch protection (private repo needs Team plan) | Ed | Week 2 |
@@ -1236,9 +1381,9 @@ finds it. Disclosing it proactively reinforces the honesty claim.
 
 ## 28. WCAG 2.2 coverage map
 
-This section maps every WCAG 2.2 Level A and Level AA success criterion (56 total)
-to what Usabl does about it. This is the honest answer to "how much accessibility
-does this tool ensure?"
+This section maps every WCAG 2.2 Level A and Level AA success criterion (55 total;
+4.1.1 Parsing was removed in 2.2) to what Usabl does about it. This is the honest
+answer to "how much accessibility does this tool ensure?"
 
 Categories:
 
@@ -1270,10 +1415,10 @@ Categories:
 | 1.3.3 | Sensory Characteristics | A | Advisory | Requires understanding whether instructions rely on shape/color/location. Model-judgment. |
 | 1.3.4 | Orientation | AA | Post-contest | Set viewport to portrait/landscape, assert no content loss. Uses `setViewport`. |
 | 1.3.5 | Identify Input Purpose | AA | Contest (axe) | axe checks autocomplete attributes on common input types. |
-| 1.4.1 | Use of Color | A | Contest (PF rulepack) | `pf-status-color-only` detects status conveyed by color alone with no text equivalent. axe also partially covers this. |
+| 1.4.1 | Use of Color | A | Contest (axe, partial) | axe flags some color-only information. The contest eight PF rules do not include a status-color-only check; do not cite a rule that is not in §7.2. |
 | 1.4.2 | Audio Control | A | Not applicable | PatternFly admin consoles do not auto-play audio. |
 | 1.4.3 | Contrast (Minimum) | AA | Contest (axe) | axe owns color contrast checking. Usabl does not reimplement it. |
-| 1.4.4 | Resize Text | AA | Stretch | Set zoom to 200%, assert no content loss or overlap. Uses `setZoom`. One of the two stretch-goal checks. |
+| 1.4.4 | Resize Text | AA | Post-contest | Set zoom to 200%, assert no content loss or overlap. Uses `setZoom`. Not a stretch goal. |
 | 1.4.5 | Images of Text | AA | Contest (axe) | axe flags images used as text. |
 | 1.4.10 | Reflow | AA | Post-contest | Set viewport to 320px CSS width, assert no horizontal scroll. Uses `setViewport`. |
 | 1.4.11 | Non-text Contrast | AA | Contest (axe) | axe checks UI component and graphical object contrast. |
@@ -1284,7 +1429,7 @@ Categories:
 
 | SC | Name | Level | Usabl | How |
 |---|---|---|---|---|
-| 2.1.1 | Keyboard | A | Contest (keyboard walk + PF rulepack) | The keyboard walk tabs through every interactive element. `row-action-reachable` flags clickable-but-unreachable elements. Any interactive element not on the Tab path is reported. |
+| 2.1.1 | Keyboard | A | Contest (keyboard walk + PF rulepack) | The keyboard walk tabs through interactive elements. Any interactive element not on the Tab path is reported. PF rules cover dialog focus, kebabs, and row actions. |
 | 2.1.2 | No Keyboard Trap | A | Contest (keyboard walk) | Cycle detection in the walk. If Tab never escapes a region, the walk reports it. |
 | 2.1.4 | Character Key Shortcuts | A | Never | Requires knowing whether single-character shortcuts exist in application logic. |
 | 2.2.1 | Timing Adjustable | A | Never | Time limits are application logic. Usabl does not run over time. |
@@ -1292,11 +1437,11 @@ Categories:
 | 2.3.1 | Three Flashes or Below | A | Never | Seizure detection requires frame-by-frame photosensitivity analysis. A different tool. |
 | 2.4.1 | Bypass Blocks | A | Contest (axe) | axe checks for skip links and landmark regions. |
 | 2.4.2 | Page Titled | A | Contest (axe) | axe checks document title presence. |
-| 2.4.3 | Focus Order | A | Contest (keyboard walk) | The walk records focus order. Focus that jumps illogically is observable in the transcript. PF rulepack checks focus-into-dialog and focus-return. |
+| 2.4.3 | Focus Order | A | Contest (keyboard walk) | The walk records focus order. PF rulepack checks focus-into-dialog and focus-return. "Illogical" order is visible in the transcript; the contest check does not judge meaning. |
 | 2.4.4 | Link Purpose (In Context) | A | Advisory | Whether link text is descriptive requires understanding intent. Model-judgment. |
 | 2.4.5 | Multiple Ways | AA | Never | Whether there are multiple ways to find a page is an IA decision, not testable per screen. |
 | 2.4.6 | Headings and Labels | AA | Contest (axe) + Advisory | axe checks heading structure exists. Whether headings are descriptive is model-judgment. |
-| 2.4.7 | Focus Visible | AA | Stretch | Tab through, compare focused vs unfocused computed styles for visible indicator. The second stretch-goal check. |
+| 2.4.7 | Focus Visible | AA | Stretch | Tab through, compare focused vs unfocused computed styles. The stretch-goal check that *is* a 2.2 A+AA criterion. |
 | 2.4.11 | Focus Not Obscured (Minimum) | AA | Post-contest | At each focus stop, check whether the element is obscured by sticky/fixed positioned elements. Uses `getComputedStyle` + position checks. |
 | 2.5.1 | Pointer Gestures | A | Never | Whether multi-point or path-based gestures have single-pointer alternatives is application logic. |
 | 2.5.2 | Pointer Cancellation | A | Never | Up-event firing behavior is application logic. |
@@ -1311,7 +1456,7 @@ Categories:
 |---|---|---|---|---|
 | 3.1.1 | Language of Page | A | Contest (axe) | axe checks for `lang` attribute on `<html>`. |
 | 3.1.2 | Language of Parts | AA | Contest (axe) | axe checks `lang` on elements with different language content. |
-| 3.2.1 | On Focus | A | Contest (keyboard walk) | The walk observes whether focusing an element triggers unexpected changes. |
+| 3.2.1 | On Focus | A | Contest (keyboard walk) | The walk flags observable context changes on focus (document URL change, or focus moving to a different control than the one just focused). It does not judge "unexpected" in the WCAG sense. |
 | 3.2.2 | On Input | A | Post-contest | Declarative probe: change an input value, assert no unexpected context change. |
 | 3.2.3 | Consistent Navigation | AA | Post-contest | Compare nav landmarks across surfaces, flag structural differences. Multi-page check. |
 | 3.2.4 | Consistent Identification | AA | Post-contest | Same function = same label across surfaces. Multi-page comparison. |
@@ -1332,24 +1477,29 @@ Categories:
 
 ### Summary
 
+WCAG 2.2 Level A+AA is **55** criteria (4.1.1 was removed). Counts below match the
+tables, not a rounded marketing total.
+
 | Category | Count | Percentage of Level A+AA |
 |---|---|---|
-| **Contest (deterministic)** | 24 | 43% |
-| **Stretch (deterministic, if time)** | 2 | 4% |
-| **Post-contest (deterministic, buildable)** | 12 | 21% |
-| **Advisory (model-judgment, never verified)** | 5 | 9% |
+| **Contest (deterministic)** | 21 | 38% |
+| **Stretch (deterministic, if time)** | 1 (2.4.7) | 2% |
+| **Post-contest (deterministic, buildable)** | 13 | 24% |
+| **Advisory (model-judgment, never verified)** | 4 | 7% |
 | **Not applicable** (media in admin consoles) | 4 | 7% |
-| **Never** (application logic, human judgment) | 9 | 16% |
+| **Never** (application logic, human judgment) | 12 | 22% |
+
+Reduced motion is a stretch **provider** (preference injection). It is not a 2.2 A+AA
+row, so it is not in the 55.
 
 **What we can say:**
 
-- At contest time: Usabl mechanically verifies 24 of 56 Level A+AA criteria (43%).
-  With the two stretch goals, 26 (46%).
-- With the post-contest providers built: 38 of 56 (68%).
-- With advisory included (surfaced, person decides): 43 of 56 (77%).
-- The remaining 13 (23%) are either not applicable to admin consoles (4) or
-  fundamentally require application logic or human judgment the tool will never
-  replace (9).
+- At contest time: Usabl mechanically verifies 21 of 55 Level A+AA criteria (38%).
+  With visible-focus stretch, 22 (40%).
+- With the post-contest providers built: 35 of 55 (64%).
+- With advisory included (surfaced, person decides): 39 of 55 (71%).
+- The remaining 16 (29%) are not applicable to admin consoles (4) or require
+  application logic or human judgment the tool will never replace (12).
 
 **What we do NOT say:**
 
@@ -1361,7 +1511,7 @@ Categories:
 ### Stretch goals (prove the architecture)
 
 Two checks built during the contest to prove the provider interface extends without
-touching the gate:
+touching the gate. Only 2.4.7 counts in the 55. Reduced motion is extra.
 
 1. **Visible focus indicator** (`focus-indicator` provider, WCAG 2.4.7)
 
