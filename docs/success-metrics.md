@@ -1,7 +1,5 @@
 # Success metrics
 
-Status: working draft. Author: eparenti. August 2026.
-
 Metrics are defined before the demo so we can report numbers we actually measured, not
 aspirations. Each metric has a definition, measurement method, target, and where the
 number will appear.
@@ -16,7 +14,7 @@ For product framing see [positioning.md](./positioning.md). For demo script see
 **Definition:** Elapsed time from `npm install` (or equivalent) through first
 actionable finding on a clean clone, with zero custom config beyond documented defaults.
 
-**Why it matters:** Judges and adopters need proof that Usabl delivers value in one
+**Why it matters:** Judges and adopters need proof that usabl delivers value in one
 sitting, not after a mapping sprint.
 
 **Measurement:**
@@ -39,7 +37,7 @@ test not run yet.
 ## 2. Violations prevented per week
 
 **Definition:** Count of new accessibility regressions blocked before merge in a repo
-running Usabl CI in gate or advise mode, measured as ratchet-blocked PRs or stop-hook
+running usabl CI, measured as ratchet-blocked PRs or stop-hook
 blocks that would have introduced a new violation against the floor.
 
 **Why it matters:** "At scale" in the challenge title means the loop changes team
@@ -64,8 +62,8 @@ filmed demo. Quantitative weekly rate is a post-contest pilot metric.
 
 ## 3. Verified-verdict rate on real surfaces
 
-**Definition:** Of mapped surfaces in **observe** mode (no gate), what percentage
-receive a `verified` outcome (no findings, full coverage) on first full pass?
+**Definition:** Of mapped surfaces checked in a full pass, what percentage
+receive a `verified` outcome (no findings, full coverage) on first run?
 
 Formula: `verified_surfaces / mapped_surfaces` on the probe set.
 
@@ -74,7 +72,7 @@ planted demo violations.
 
 **Measurement:**
 
-1. Run observe mode against OpenShift console (or agreed PF OSS surface).
+1. Run usabl against OpenShift console (or agreed PF OSS surface).
 2. Log verdict per mapped surface; record `not_covered` separately (coverage gap, not
    quality fail).
 3. Do **not** measure only the demo app (circular).
@@ -114,28 +112,28 @@ industry benchmark.
 
 ## 5. False positive rate
 
-**Definition:** Of findings surfaced in gate or advise mode, what percentage are
+**Definition:** Of findings surfaced by usabl, what percentage are
 incorrect (the flagged issue does not actually exist, or the fix guidance is wrong)?
 
 **Why it matters:** False blocks are the #1 adoption killer for any quality gate. One
-wrong block erodes a week of trust. This is the metric Morgan watches before flipping
-from observe to gate.
+wrong block erodes a week of trust. This is the metric Morgan watches before trusting
+the gate to block.
 
 **Measurement:**
 
-1. Run observe mode on real PF surface; human-review each finding as true positive,
+1. Run usabl on real PF surface; human-review each finding as true positive,
    false positive, or debatable.
 2. Calculate `false_positives / total_findings`.
 3. Separately track `not_covered` verdicts (honest "don't know") - these are not false
    positives; they are correctly scoped uncertainty.
 
 **Target:** Under 5% false positive rate on the demo set (planted violations only).
-Under 10% on a real PF surface in observe mode. Report the real number on the proof
+Under 10% on a real PF surface. Report the real number on the proof
 slide regardless.
 
 **Where reported:** Build-week log, proof slide footnote, judge Q&A prep.
 
-**Status:** Open - requires observe pass on real surface.
+**Status:** Open - requires a measurement pass on a real surface.
 
 ---
 

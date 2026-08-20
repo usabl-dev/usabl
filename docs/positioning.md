@@ -1,12 +1,10 @@
-# Usabl: product positioning
+# usabl: product positioning
 
-Status: working draft. Author: eparenti. August 2026.
-
-This is Usabl's **positioning document** (also called a *positioning brief* in product
+This is usabl's **positioning document** (also called a *positioning brief* in product
 management). It states what we deliver, how we compare to alternatives, and how to
 talk about the product with users, judges, and the open-source community.
 
-Usabl is an open-source project (Apache-2.0). There is no paid tier. Adoption is
+usabl is an open-source project (Apache-2.0). There is no paid tier. Adoption is
 self-serve: install, run, integrate. Community contribution is part of the product
 strategy, not a nice-to-have.
 
@@ -15,24 +13,23 @@ For pitch lines by audience, see [message-house.md](./message-house.md).
 For competitor Q&A, see [battlecards.md](./battlecards.md).
 For a technical competitor-by-competitor research pass, see
 [market-landscape-2026-08.md](../../research/market-landscape-2026-08.md).
-Full PM index: [README.md](./README.md).
 
 ---
 
 ## Category
 
-**Usabl is an accessibility proof engine for AI-assisted UI development.**
+**usabl is an accessibility proof engine for AI-assisted UI development.**
 
-Tagline: *Usable by default.* Supporting line: *Don't ship until it's Usabl.*
+Tagline: *usable by default.* Supporting line: *Don't ship until it's usabl.*
 
-Scanners report findings. Usabl runs a full proof loop on every change, verifies fixes,
+Scanners report findings. usabl runs a full proof loop on every change, verifies fixes,
 and gates completion until proof passes.
 
 ---
 
 ## What users get
 
-Usabl is an end-to-end accessibility proof system for AI-assisted UI work. Install it,
+usabl is an end-to-end accessibility proof system for AI-assisted UI work. Install it,
 point it at your dev server, and get a full check on every change - with fix
 verification before work is marked done and one clear answer across the whole workflow:
 CLI, AI assistant, browser overlay, CI, and docs.
@@ -55,7 +52,7 @@ CLI, AI assistant, browser overlay, CI, and docs.
 Strong tools exist on every axis. No one ships the full integrated loop as a single
 product today.
 
-| Category | Examples | What they do well | Where Usabl goes further |
+| Category | Examples | What they do well | Where usabl goes further |
 |---|---|---|---|
 | **Accessibility scanners** | axe, Lighthouse, Pa11y, WAVE | Fast issue lists on a page | Verify the fix, gate completion, cover the full change set |
 | **CI regression tools** | Chromatic, Pa11y CI, MFA11y | Block new violations vs baseline | Same ratchet idea, plus AI gate, keyboard walk, SR evidence, PF rules |
@@ -85,7 +82,7 @@ Four pillars, ranked. Each is an integrated capability no single competitor ship
 
 ### 1. End-to-end proof loop
 
-Most tools find problems. Usabl closes the loop: scan -> fix -> re-verify -> gate -> ship.
+Most tools find problems. usabl closes the loop: scan -> fix -> re-verify -> gate -> ship.
 The AI cannot declare victory until proof passes on what changed. One pass combines
 axe-core, PatternFly composition rules, live keyboard walk, and screen reader
 announcement preview with before/after diff.
@@ -133,21 +130,21 @@ enforceable as the codebase evolves.
 
 ### Elevator
 
-> Usabl makes every UI change complete accessibility proof before it ships, from the
+> usabl makes every UI change complete accessibility proof before it ships, from the
 > AI session to the PR to CI.
 
 ### Vs scanners
 
-> Scanners tell you what's wrong. Usabl checks the full change, verifies the fix, and
+> Scanners tell you what's wrong. usabl checks the full change, verifies the fix, and
 > won't let work close until proof passes.
 
 ### Vs AI tools
 
-> Your AI can write the UI. Usabl decides when it's actually usable.
+> Your AI can write the UI. usabl decides when it's actually usable.
 
 ### Vs screen reader simulation tools
 
-> Tactual and Speakable preview announcements. Usabl runs that preview inside the full
+> Tactual and Speakable preview announcements. usabl runs that preview inside the full
 > proof loop that gates your AI and your merge.
 
 ### Innovation / contest angle

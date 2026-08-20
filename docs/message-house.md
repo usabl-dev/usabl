@@ -1,8 +1,6 @@
 # Message house
 
-Status: working draft. Author: eparenti. August 2026.
-
-One line per audience for pitch, deck, and community communication. Usabl is an
+One line per audience for pitch, deck, and community communication. usabl is an
 open-source project - messaging reflects that: no paid tier, no vendor lock, community
 contribution is part of the value.
 
@@ -13,9 +11,9 @@ Expanded messaging in [positioning.md](./positioning.md). Competitive positionin
 
 ## Core promise (all audiences)
 
-**Usabl makes every UI change complete accessibility proof before it ships.**
+**usabl makes every UI change complete accessibility proof before it ships.**
 
-Supporting: *Usable by default.* / *Don't ship until it's Usabl.*
+Supporting: *usable by default.* / *Don't ship until it's usabl.*
 
 **Lead order for pitch:** Open with the tagline (outcome, emotional), then explain with
 the mechanism ("AI suggests, rules decide, done waits for proof"). Tagline sets the
@@ -33,7 +31,7 @@ promise; differentiator #1 message explains how we keep it.
 | **Judge (accessibility expert)** | Mechanical layers handle the repeatable checks; your expertise stays on judgment calls, with repro scripts attached. |
 | **Priya (engineer)** | Real-time findings with fix guidance, and the assistant cannot say done until the harness verifies the change. |
 | **James (AT user)** | Barriers become audible to the team before merge, and fixes are verified in the same workflow that introduced them. |
-| **Morgan (eng lead)** | Start in observe mode, gate when ready - ratchet blocks only new debt, with a waiver ledger for the rest. |
+| **Morgan (eng lead)** | Install it, gate from day one - ratchet blocks only new debt, with a waiver ledger for the rest. |
 | **Alex (a11y SME)** | Fewer repeated audits; escalations arrive with evidence, not "please test the whole page." |
 | **Riley (compliance)** | Receipt-backed findings on each change for evidence packs - the tool states human review is still required. |
 | **PatternFly / upstream** | An open rulepack that encodes your guidance inside the proof loop teams already run. Proposed upstream, co-maintained. |
@@ -62,7 +60,7 @@ Teaching artifact supports #3; not a fourth pillar.
 | AI does not judge | Proof slide: verdict source list |
 | Policy integrity | Skeptic tries unmap/exempt - guard holds |
 | We eat our own cooking | Deck failed harness; finding fixed |
-| Real code | OpenShift observe pass (verified-verdict rate) |
+| Real code | OpenShift measurement pass (verified-verdict rate) |
 
 ---
 
@@ -86,7 +84,7 @@ that more than a feature list.
 - [x] Differentiators mapped to judge types (entry-spec "Why this wins")
 - [x] Compressed to one line per audience (this doc)
 - [x] Lead order declared: tagline opens, mechanism supports
-- [ ] Edgar voice and taste pass on deck narration
+- [ ] Voice and taste pass on deck narration
 - [ ] Limitation slide phrased as confidence (see demo arc in entry-spec)
 
 ---

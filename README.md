@@ -1,12 +1,12 @@
-# Usabl
+# usabl
 
 ![Status](https://img.shields.io/badge/status-early%20development-orange?style=flat-square)
 ![Version](https://img.shields.io/badge/version-0.0.0-blue?style=flat-square)
 ![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)
 
-**Usable by default.**
+**usable by default.**
 
-Usabl is a proof engine for accessibility in product development workflows. It checks whether a screen is truly usable by a screen reader before work can be called done, and gives one of four clear answers: verified, regression, not covered, or approval required.
+usabl is an accessibility proof engine for product development workflows. It verifies that a change introduces no new machine-checkable accessibility barriers on the surfaces it touched before work can be called done, and gives one of four clear answers: verified, regression, not covered, or approval required. Accessibility, aligned with WCAG 2.2 AA, is the scope; screen-reader announcement is the differentiating layer, not the whole claim.
 
 The AI can suggest fixes. It does not get to grade its own work.
 
@@ -36,4 +36,4 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
 
 ## Slogan
 
-Don't ship until it's Usabl.
+Don't ship until it's usabl.

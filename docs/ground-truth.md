@@ -1,8 +1,8 @@
-# Usabl: consolidated design
+# usabl: consolidated design
 
 Status: working draft. Author: eparenti. August 2026.
 
-This is the project ground truth for the Usabl product. It replaces shared-design.md,
+This is the project ground truth for the usabl product. It replaces shared-design.md,
 contest-build-plan.md, and team-work-plan.md with one document that includes the
 check-agnostic core, evidence labels, design intake, docs output, and the on/off
 adoption model.
@@ -11,8 +11,8 @@ adoption model.
 
 ## 1. Product thesis and name
 
-**Name:** Usabl. Tagline: "Usable by default." Supporting line: "Don't ship until
-it's Usabl."
+**Name:** usabl. Tagline: "usable by default." Supporting line: "don't ship until
+it's usabl."
 
 **Problem.** AI tools now write a large share of UI screens, and they often build
 things a screen reader cannot use. Today's tools point out problems, but they do
@@ -21,7 +21,7 @@ when a screen reader still cannot use it. Meanwhile, James uses a screen reader 
 and waits releases for fixes. Priya builds the UI with great intentions but misses
 things because it is hard to know everything.
 
-**What Usabl is.** A proof engine for accessibility in product development workflows.
+**What usabl is.** A proof engine for accessibility in product development workflows.
 It checks whether touched surfaces have any new machine-checkable accessibility
 barriers before work can be called done. It gives one of four clear answers:
 
@@ -34,7 +34,7 @@ barriers before work can be called done. It gives one of four clear answers:
 
 The AI can suggest fixes. It does not get to grade its own work.
 
-Idle is not a fifth verdict. When there is no UI-touching change, Usabl allows with
+Idle is not a fifth verdict. When there is no UI-touching change, usabl allows with
 an explicit informational outcome: `Result.verdict` is `null`, exit 0, no findings,
 and `summary` says "nothing to check." `not_covered` means there *was* something to
 prove and the tool could not. A docs-only PR is idle, not `not_covered`.
@@ -66,7 +66,7 @@ loop is solid if discoverability matters.
 ## 2. What is new
 
 The core new idea: almost every accessibility tool, including the new AI ones, scans
-and gives advice a human may or may not read. Usabl's gate decides, and the stop hook
+and gives advice a human may or may not read. usabl's gate decides, and the stop hook
 can stop the AI from calling work done until no new machine-checkable barrier remains
 on the touched surfaces. The overlay and the advisory lane still show findings without
 blocking. That is display, not a second decision-maker.
@@ -74,7 +74,7 @@ blocking. That is display, not a second decision-maker.
 The specific things that are new, each against what exists today:
 
 1. It verifies the fix, not just finds the problem. The field's own reviews say most
-   tools find issues and almost none confirm the fix actually worked. Usabl closes
+   tools find issues and almost none confirm the fix actually worked. usabl closes
    that gap.
 2. It proves it checked everything. It reports "we could not check this" as a real
    answer instead of quietly passing. Reporting unknown as unknown is rare.
@@ -84,7 +84,7 @@ The specific things that are new, each against what exists today:
    screen-reader output is a gap the field names itself, and using that
    before-and-after as evidence on a code change is new.
 5. It has rules for our design system. There is a tool like this for one design system
-   (Microsoft built one for FluentUI) and none for PatternFly. Usabl fills an empty
+   (Microsoft built one for FluentUI) and none for PatternFly. usabl fills an empty
    slot.
 6. The rules cannot be silently weakened. Locally, policy edits are tamper-evident and
    leave a reviewable commit trail (`approval_required`). In CI with trusted-ref reads
@@ -93,7 +93,7 @@ The specific things that are new, each against what exists today:
 What is honestly not new: general scanning exists, and blocking only new problems
 against a baseline exists. The CLI can be invoked like a scanner on an existing
 codebase (`usabl check`), but that is adoption plumbing, not the product claim. A
-scanner reports findings; Usabl decides a verdict, diffs against a floor, and can
+scanner reports findings; usabl decides a verdict, diffs against a floor, and can
 stop work from being called done. The new part is putting all of that into one loop
 that gates an AI on evidence you can re-check and that is grounded in what a screen
 reader actually hears. That combination does not exist today.
@@ -611,7 +611,7 @@ not `verified`.
 
 ### Prove what you touch
 
-Only changed files trigger checks. A file you did not touch is not a Usabl problem
+Only changed files trigger checks. A file you did not touch is not a usabl problem
 this PR. Coverage grows as the team works, not as a boil-the-ocean inventory.
 
 ### Documented limits
@@ -878,17 +878,16 @@ is insufficient.
 
 ### On or off
 
-Usabl is installed (CLI + stop hook + CI + overlay + docs output, one standard) or
-the team is not using Usabl. Mid-task self-check uses the CLI; an MCP wrapper is
-optional. There is no "partial" mode, no per-surface strictness, no lasting observe
-mode.
+usabl is installed (CLI + stop hook + CI + overlay + docs output, one standard) or
+the team is not using usabl. Mid-task self-check uses the CLI; an MCP wrapper is
+optional. There is no "partial" mode and no per-surface strictness.
 
 ### Brownfield adoption (prove what you touch)
 
-A team in year four of a 400-screen console adopts Usabl on Monday without mapping 400
+A team in year four of a 400-screen console adopts usabl on Monday without mapping 400
 screens on Monday.
 
-1. Install Usabl (on): CLI, stop hook, CI, overlay, docs output. One standard.
+1. Install usabl (on): CLI, stop hook, CI, overlay, docs output. One standard.
 2. Optional first step: `usabl check` on a surface to see findings and accept an
    evidence floor before the stop hook blocks anyone.
 3. Most PRs that do not touch UI: non-blocking "nothing to check" outcome.
@@ -917,9 +916,9 @@ nothing; the finding becomes a regression again. Debt burns down by default.
 ### What adoption is NOT
 
 - Per-surface severity dials.
-- "Legacy stays at observe until a team claims it."
+- "Legacy surfaces are exempt from checks until a team claims them."
 - Design declaring in-scope epics or journeys.
-- A way to make Usabl quieter on some screens.
+- A way to make usabl quieter on some screens.
 
 ---
 
@@ -983,7 +982,7 @@ approved content requirements:
 
 ### AI drafts, humans approve
 
-AI can propose alt text or doc copy. Usabl publishes only entries with
+AI can propose alt text or doc copy. usabl publishes only entries with
 `status: 'approved'`. Draft entries are visible but clearly labeled.
 
 ### Bound to evidence
@@ -1194,7 +1193,7 @@ self-check.
 
 ## 21. Honest limits
 
-### What Usabl cannot do
+### What usabl cannot do
 
 - Certify compliance. It supports the work, it does not sign it off.
 - Detect seizure-risk flashing. Frame-by-frame signal analysis is a different tool.
@@ -1255,7 +1254,7 @@ self-check.
 }
 ```
 
-There is no `notCovered` mode key. When Usabl is on, `not_covered` blocks. Idle
+There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 (nothing to check) is an explicit informational allow. That is code, not a config dial.
 
 ---
@@ -1275,7 +1274,7 @@ explicitly allowed data. No customer names in the repo.
 ### Method
 
 1. Collect the sample of real accessibility bugs.
-2. For each bug, determine which Usabl rule (or rules) would have caught it.
+2. For each bug, determine which usabl rule (or rules) would have caught it.
 3. Run the current rule set against reproductions of the bugs where possible.
 4. Count: of N real bugs, the rules catch M. Report that number honestly.
 
@@ -1381,7 +1380,7 @@ Either way, keep `not_covered` loud, visible, and tracked in PR comment and over
 ### How we report coverage to teams
 
 The Result object includes `coverage.unresolvedFiles`. The overlay and PR comment
-surface these as "files Usabl could not map to a screen." The fleet view (later)
+surface these as "files usabl could not map to a screen." The fleet view (later)
 can aggregate coverage percentage across surfaces. The tool never hides a gap.
 
 ---
@@ -1428,11 +1427,28 @@ the end, because pure-recorded reads as staged.
 
 ### Audio and honesty
 
-Record a real Orca pass (Vishali) of the broken and clean demo flows. Use it as the
-hero audio. Lock the demo surface and the planted interaction bug **before** that
-recording; the audio cannot be the wrong bug. If text-to-speech is used as a fallback,
-label it "synthesized from the announcement transcript" and never imply it is live
-screen-reader output.
+**Hero demo recording (NVDA).** The cold-open and bookend that contest judges hear is
+recorded using NVDA on Windows. Capture this once via a one-time Windows VM on the
+host (nested KVM from a toolbox container is typically blocked) or a hosted session
+such as Assistiv Labs. NVDA is chosen because it is the most widely used screen
+reader and judges recognize it. Lock the demo surface and the planted interaction bug
+**before** that recording; the audio cannot be the wrong bug.
+
+**Validation harness and dogfood reader (Orca on Fedora).** Orca is the team's native
+reader on Fedora. It is the validation-harness target and the team's dogfood reader.
+Because guidepup automates VoiceOver and NVDA only (not Orca), the harness cannot
+drive Orca programmatically. Instead, Vishali captures Orca's spoken output via a
+speech-dispatcher log module or a manual transcription pass, then compares it offline
+to the Virtual Screen Reader transcript.
+
+The in-loop announcement provider is `@guidepup/virtual-screen-reader` (headless,
+pure-JS, cross-platform). Its output is honesty-class "preview, not real AT." The
+demo voice (NVDA) differs from the validated reader (Orca); this is the accepted seam.
+The engine is screen-reader-agnostic; the harness measures Virtual-SR fidelity to a
+real reader, not to NVDA specifically.
+
+If text-to-speech is used as a fallback, label it "synthesized from the announcement
+transcript" and never imply it is live screen-reader output.
 
 Disclose any attribute-read exception (aria-sort) on a slide. In an accessibility
 honesty demo, an undisclosed "we read the DOM here" is a fatal gotcha if a judge
@@ -1440,17 +1456,22 @@ finds it. Disclosing it proactively reinforces the honesty claim.
 
 Credibility preflight before recording:
 
-- Verify AX-tree preview text is a fair approximation of what Orca says for the hero
-  bug and the fixed state.
+- Verify AX-tree preview text is a fair approximation of what NVDA announces for the
+  hero bug and the fixed state (demo recording); compare separately with Orca output
+  for the validation pass.
 - Sweep for any other CDP serialization gaps so `aria-sort` is truly the only
   disclosed attribute-read exception.
-- Listen to how a real screen reader pronounces "Usabl" and note the intended spoken
+- Listen to how a real screen reader pronounces "usabl" and note the intended spoken
   form in the presenter notes.
 
 ### Demo roles
 
-- Patrick captures raw tool runs and sets up the live-reveal machine.
-- Vishali records the real Orca pass after the hero bug is locked.
+- Patrick captures raw tool runs, sets up the live-reveal machine, and coordinates
+  the NVDA hero recording session (Windows VM or Assistiv Labs) after the hero bug is
+  locked.
+- Vishali runs the Orca validation pass on Fedora (speech-dispatcher capture or
+  manual transcription) and compares the output against the Virtual Screen Reader
+  transcript.
 - Jim produces the polished video and deck in week 4.
 - Ed presents.
 
@@ -1460,12 +1481,12 @@ Credibility preflight before recording:
 
 | Decision | Answer |
 |---|---|
-| Product name | Usabl |
+| Product name | usabl |
 | AI coding assistant for stop hook | Claude Code (Stop lifecycle event) |
 | Target design system | PatternFly v6 |
 | Repo | github.com/usabl-dev/usabl (private, Apache-2.0) |
 | Stack | TypeScript on Node 22, Vitest, Playwright, axe-core |
-| On/off vs observe/advise/gate | On or off. No product modes. |
+| Adoption model | On or off. No modes. Advisory findings surface and never block (advisory lane, not a mode). |
 | Idle vs not_covered | Nothing to check is explicit informational allow, not `not_covered`. |
 | Partial scans | Forbidden for `verified`. Full affected set or `not_covered`. |
 | notCovered behavior | Not a config knob. Default hard block; recalibrate from week-2 real-repo `not_covered` rate. |
@@ -1478,7 +1499,8 @@ Credibility preflight before recording:
 | Storybook addon | Post-contest seam (section 11.8). |
 | Contest timeline | 4 weeks. Week 4 = demo polish. |
 | How many PF rules | Eight, with a cut line (structural rules first). |
-| Who records real reader | Vishali (Orca on Fedora), after the hero bug is locked. |
+| Hero demo recording | NVDA (Windows VM or Assistiv Labs), captured once after hero bug is locked; Patrick coordinates. |
+| Validation / dogfood reader | Orca on Fedora; Vishali captures spoken output and compares offline to Virtual Screen Reader transcript. |
 | Evidence labels | On every Draft from day 1. Contest = all deterministic. |
 | Design intake in scope | Schema + YAML normalize in contest. Figma/CSV ingest is a seam. |
 | Docs output in scope | Generate the three artifacts, bound to receipt. |
@@ -1487,7 +1509,7 @@ Credibility preflight before recording:
 
 | Decision | Who decides | When |
 |---|---|---|
-| The demo PatternFly app and the hero bug | Ed + Nitin | Before Orca recording |
+| The demo PatternFly app and the hero bug | Ed + Nitin | Before NVDA hero recording |
 | Real PatternFly repo for smoke pass | Ed | Week 2 |
 | Verified-verdict-rate target to state on stage | Vishali + Ed | After measurement |
 | CI host for branch protection (private repo needs Team plan) | Ed | Week 2 |
@@ -1499,27 +1521,27 @@ Credibility preflight before recording:
 ## 28. WCAG 2.2 coverage map
 
 This section maps every WCAG 2.2 Level A and Level AA success criterion (55 total;
-4.1.1 Parsing was removed in 2.2) to what Usabl does about it. This is the honest
+4.1.1 Parsing was removed in 2.2) to what usabl does about it. This is the honest
 answer to "how much accessibility does this tool ensure?"
 
 Categories:
 
-- **Contest (deterministic):** Usabl checks this now, mechanically, and can produce
+- **Contest (deterministic):** usabl checks this now, mechanically, and can produce
   `verified` or `regression`.
 - **Stretch (deterministic):** Built during the contest if time allows, to prove the
   architecture.
 - **Post-contest (deterministic):** Easy to add as a provider. The Page capabilities
   and provider interface support it. We just have not built the provider yet.
-- **Advisory (model-judgment):** Usabl can surface a suggestion via the advisory lane
+- **Advisory (model-judgment):** usabl can surface a suggestion via the advisory lane
   but cannot verify it mechanically. A person decides.
 - **Not applicable:** The criterion does not apply to a rendered web UI component check
   (e.g. time-based media for a PatternFly admin console).
-- **Never:** Usabl will never satisfy this. The criterion requires something outside
+- **Never:** usabl will never satisfy this. The criterion requires something outside
   the tool's scope (human judgment, application logic, or signal analysis).
 
 ### Principle 1: Perceivable
 
-| SC | Name | Level | Usabl | How |
+| SC | Name | Level | usabl | How |
 |---|---|---|---|---|
 | 1.1.1 | Non-text Content | A | Contest (axe) + Advisory (quality) | axe checks presence of alt/aria-label (deterministic). Advisory lane judges whether the text is actually useful (model-judgment). Design intake can assert exact approved alt text (deterministic). |
 | 1.2.1 | Audio-only/Video-only (Prerecorded) | A | Not applicable | PatternFly admin consoles rarely have prerecorded media. If present, this is a content decision outside the component library. |
@@ -1534,7 +1556,7 @@ Categories:
 | 1.3.5 | Identify Input Purpose | AA | Contest (axe) | axe checks autocomplete attributes on common input types. |
 | 1.4.1 | Use of Color | A | Contest (axe, partial) | axe flags some color-only information. The contest eight PF rules do not include a status-color-only check; do not cite a rule that is not in §7.2. |
 | 1.4.2 | Audio Control | A | Not applicable | PatternFly admin consoles do not auto-play audio. |
-| 1.4.3 | Contrast (Minimum) | AA | Contest (axe) | axe owns color contrast checking. Usabl does not reimplement it. |
+| 1.4.3 | Contrast (Minimum) | AA | Contest (axe) | axe owns color contrast checking. usabl does not reimplement it. |
 | 1.4.4 | Resize Text | AA | Post-contest | Set zoom to 200%, assert no content loss or overlap. Uses `setZoom`. Not a stretch goal. |
 | 1.4.5 | Images of Text | AA | Contest (axe) | axe flags images used as text. |
 | 1.4.10 | Reflow | AA | Post-contest | Set viewport to 320px CSS width, assert no horizontal scroll. Uses `setViewport`. |
@@ -1544,12 +1566,12 @@ Categories:
 
 ### Principle 2: Operable
 
-| SC | Name | Level | Usabl | How |
+| SC | Name | Level | usabl | How |
 |---|---|---|---|---|
 | 2.1.1 | Keyboard | A | Contest (keyboard walk + PF rulepack) | The keyboard walk tabs through interactive elements. Any interactive element not on the Tab path is reported. PF rules cover dialog focus, kebabs, and row actions. |
 | 2.1.2 | No Keyboard Trap | A | Contest (keyboard walk) | Cycle detection in the walk. If Tab never escapes a region, the walk reports it. |
 | 2.1.4 | Character Key Shortcuts | A | Never | Requires knowing whether single-character shortcuts exist in application logic. |
-| 2.2.1 | Timing Adjustable | A | Never | Time limits are application logic. Usabl does not run over time. |
+| 2.2.1 | Timing Adjustable | A | Never | Time limits are application logic. usabl does not run over time. |
 | 2.2.2 | Pause, Stop, Hide | A | Post-contest | Detect auto-updating/moving content and assert a pause mechanism exists. Partially possible with animation detection. |
 | 2.3.1 | Three Flashes or Below | A | Never | Seizure detection requires frame-by-frame photosensitivity analysis. A different tool. |
 | 2.4.1 | Bypass Blocks | A | Contest (axe) | axe checks for skip links and landmark regions. |
@@ -1569,7 +1591,7 @@ Categories:
 
 ### Principle 3: Understandable
 
-| SC | Name | Level | Usabl | How |
+| SC | Name | Level | usabl | How |
 |---|---|---|---|---|
 | 3.1.1 | Language of Page | A | Contest (axe) | axe checks for `lang` attribute on `<html>`. |
 | 3.1.2 | Language of Parts | AA | Contest (axe) | axe checks `lang` on elements with different language content. |
@@ -1587,9 +1609,9 @@ Categories:
 
 ### Principle 4: Robust
 
-| SC | Name | Level | Usabl | How |
+| SC | Name | Level | usabl | How |
 |---|---|---|---|---|
-| 4.1.2 | Name, Role, Value | A | Contest (axe + PF rulepack + walk) | The core of what Usabl checks. axe validates ARIA usage. PF rulepack checks PF-specific name/role/value patterns. The walk reads actual name, role, and state from the accessibility tree. |
+| 4.1.2 | Name, Role, Value | A | Contest (axe + PF rulepack + walk) | The core of what usabl checks. axe validates ARIA usage. PF rulepack checks PF-specific name/role/value patterns. The walk reads actual name, role, and state from the accessibility tree. |
 | 4.1.3 | Status Messages | A | Contest (PF rulepack) | `pf-toast-live-region` checks that status updates reach assistive technology via live regions. |
 
 ### Summary
@@ -1611,7 +1633,7 @@ row, so it is not in the 55.
 
 **What we can say:**
 
-- At contest time: Usabl mechanically verifies 21 of 55 Level A+AA criteria (38%).
+- At contest time: usabl mechanically verifies 21 of 55 Level A+AA criteria (38%).
   With visible-focus stretch, 22 (40%).
 - With the post-contest providers built: 35 of 55 (64%).
 - With advisory included (surfaced, person decides): 39 of 55 (71%).
@@ -1620,9 +1642,9 @@ row, so it is not in the 55.
 
 **What we do NOT say:**
 
-- "Usabl makes your app WCAG compliant." It does not. Compliance requires all
+- "usabl makes your app WCAG compliant." It does not. Compliance requires all
   criteria including the ones only a human can judge.
-- "Usabl covers X% of accessibility." WCAG is not the whole of accessibility.
+- "usabl covers X% of accessibility." WCAG is not the whole of accessibility.
   The tool verifies what its checks cover, on the screens it checked.
 
 ### Stretch goals (prove the architecture)
