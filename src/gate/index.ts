@@ -1,4 +1,4 @@
-import type { Draft, Finding, GateInput, GateOutput } from '../contracts/index.js';
+import type { Draft, Finding, FloorEntry, GateInput, GateOutput } from '../contracts/index.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { computeIdentity } from '../primitives/identity.js';
 
@@ -33,12 +33,65 @@ export function gate(input: GateInput): GateOutput {
   return { verdict: 'verified', findings, exitCode: 0, summary: verdictSummary('verified', gating) };
 }
 
-/** Task 8 replaces the body with identity + dedup + differential; Task 9 adds waivers. */
+/** Prefer pf over axe when both fire on the same defect. */
+function preferLayer(a: Finding, b: Finding): Finding {
+  if (a.layer === 'pf') return a;
+  if (b.layer === 'pf') return b;
+  return a;
+}
+
+/** Layer-independent key for cross-layer dedup and floor comparison. */
+function identityKey(f: { screenId: string; rule: string; elementKey: string | null }): string {
+  return `${f.screenId}|${f.rule}|${f.elementKey ?? 'count'}`;
+}
+
 export function buildFindings(input: GateInput): Finding[] {
-  const findings = input.drafts.map((draft): Finding => {
+  // 1. Draft -> Finding with identity.
+  const raw = input.drafts.map((draft: Draft): Finding => {
     const { elementKey, identityBasis } = computeIdentity(draft);
     return { ...draft, elementKey, identityBasis, status: 'new' };
   });
+
+  // 2. Dedup across layers by identity, preferring the pf why/fix.
+  const byIdentity = new Map<string, Finding>();
+  const countByGroup = new Map<string, number>();
+  for (const f of raw) {
+    const key = identityKey(f);
+    if (f.identityBasis === 'count') {
+      countByGroup.set(key, (countByGroup.get(key) ?? 0) + 1);
+    }
+    const existing = byIdentity.get(key);
+    byIdentity.set(key, existing ? preferLayer(existing, f) : f);
+  }
+
+  // 3. Differential vs the evidence floor.
+  const floorByKey = new Map<string, FloorEntry>();
+  for (const e of input.floor.entries) floorByKey.set(identityKey(e), e);
+
+  const findings: Finding[] = [];
+  for (const [key, f] of byIdentity) {
+    const floor = floorByKey.get(key);
+    if (!floor) { findings.push({ ...f, status: 'new' }); continue; }
+    if (f.identityBasis === 'count') {
+      const now = countByGroup.get(key) ?? 0;
+      findings.push({ ...f, status: now > floor.count ? 'new' : 'carried' });
+    } else {
+      findings.push({ ...f, status: 'carried' });
+    }
+  }
+
+  // 4. Floor entries with no current match are fixed (surfaced, never gate).
+  for (const [key, e] of floorByKey) {
+    if (!byIdentity.has(key)) {
+      findings.push({
+        rule: e.rule, layer: e.layer, severity: 'minor', evidenceClass: 'deterministic',
+        screenId: e.screenId, elementPath: '', elementName: null, role: null,
+        whatUserExperiences: '', why: '', fix: '', evidence: {}, confidence: 'fail',
+        elementKey: e.elementKey, identityBasis: e.identityBasis, status: 'fixed',
+      });
+    }
+  }
+
   return sortBy(findings, findingKey);
 }
 
