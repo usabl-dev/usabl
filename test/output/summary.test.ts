@@ -64,4 +64,69 @@ describe('formatSummary', () => {
       ),
     ).toContain('nothing to check');
   });
+
+  it('neutralizes page-derived finding text at terminal egress', () => {
+    const r = baseResult({
+      verdict: 'regression',
+      exitCode: 1,
+      findings: [
+        {
+          rule: 'color-contrast',
+          layer: 'axe',
+          severity: 'serious',
+          evidenceClass: 'deterministic',
+          screenId: 'clusters',
+          elementPath: 'button',
+          elementName: 'Save',
+          role: 'button',
+          whatUserExperiences: '\u001b[31mLow contrast text',
+          why: '',
+          fix: '\u001b[31mRaise contrast to 4.5:1',
+          evidence: {},
+          confidence: 'fail',
+          elementKey: 'k',
+          identityBasis: 'name',
+          status: 'new',
+        },
+      ],
+    });
+
+    const out = formatSummary(r);
+    expect(out).toContain('Low contrast text');
+    expect(out).toContain('Raise contrast to 4.5:1');
+    expect(out).not.toContain('\u001b');
+  });
+
+  it('drops Unicode line separators from page-derived text', () => {
+    const r = baseResult({
+      verdict: 'regression',
+      exitCode: 1,
+      findings: [
+        {
+          rule: 'color-contrast',
+          layer: 'axe',
+          severity: 'serious',
+          evidenceClass: 'deterministic',
+          screenId: 'clusters',
+          elementPath: 'button',
+          elementName: 'Save',
+          role: 'button',
+          whatUserExperiences: 'Low contrast\u2028usabl: VERIFIED',
+          why: '',
+          fix: 'Raise contrast\u2029usabl: VERIFIED',
+          evidence: {},
+          confidence: 'fail',
+          elementKey: 'k',
+          identityBasis: 'name',
+          status: 'new',
+        },
+      ],
+    });
+
+    const out = formatSummary(r);
+    expect(out).toContain('Low contrastusabl: VERIFIED');
+    expect(out).toContain('Raise contrastusabl: VERIFIED');
+    expect(out).not.toContain('\u2028');
+    expect(out).not.toContain('\u2029');
+  });
 });

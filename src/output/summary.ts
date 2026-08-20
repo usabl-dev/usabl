@@ -1,4 +1,5 @@
 import type { Result } from '../contracts/index.js';
+import { neutralize } from '../primitives/neutralize.js';
 
 const HEADLINE: Record<string, string> = {
   verified: 'VERIFIED',
@@ -20,13 +21,15 @@ export function formatSummary(result: Result): string {
     (f) => f.evidenceClass === 'deterministic' && (f.status === 'new' || f.status === 'carried'),
   );
   for (const f of gating) {
-    // whatUserExperiences and fix are page-derived in live scanning, so they are untrusted at this egress.
-    // neutralize() must wrap both fields here before that scanner lane is wired.
+    // whatUserExperiences and fix are page-derived once live scanning is wired, so this terminal egress
+    // neutralizes only the printed projection. Result stays raw so receipts remain honest about findings.
+    const whatUserExperiences = neutralize(f.whatUserExperiences);
+    const fix = neutralize(f.fix);
     lines.push(
-      `  [${f.status}] ${f.screenId} · ${f.layer}/${f.rule} (${f.severity}) - ${f.whatUserExperiences}`,
+      `  [${f.status}] ${f.screenId} · ${f.layer}/${f.rule} (${f.severity}) - ${whatUserExperiences}`,
     );
-    if (f.fix) {
-      lines.push(`      fix: ${f.fix}`);
+    if (fix) {
+      lines.push(`      fix: ${fix}`);
     }
   }
   if (result.dirtyGuardedPaths.length > 0) {

@@ -51,7 +51,7 @@ responses, and assistant context.
 - Document for integrators: sanitize or quote-wrap page-derived strings in assistant
   UIs.
 
-**Status:** [ ] Frame MCP and hook prompts as untrusted. [ ] `formatSummary` must run page-derived fields (`whatUserExperiences`, `fix`) through `neutralize()` before a live `CheckRunner` can fill them. Do not wait for the surfaces slice. The CLI is already an egress.
+**Status:** [ ] Frame MCP and hook prompts as untrusted. [x] `formatSummary` runs page-derived fields (`whatUserExperiences`, `fix`) through `neutralize()` before a live `CheckRunner` can fill them. The CLI is already an egress.
 
 ---
 
@@ -191,4 +191,3 @@ required where applicable.
 | Tool-error -> not_covered path | Harness runner |
 | Timeout budget (120s default) | Harness runner |
 | Telemetry decision | Pre OSS release |
-| `neutralize()` on CLI `formatSummary` finding text | Before wiring CheckRunner / Playwright (plan 02). Hard gate: do not ship a live scan that can populate `whatUserExperiences` / `fix` until this egress strips C0/C1, ANSI, and OSC. |
