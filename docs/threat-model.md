@@ -1,8 +1,6 @@
 # Threat model
 
-Status: working draft. Author: eparenti. August 2026.
-
-Security and trust analysis for Usabl beyond gate-tamper (covered in ground-truth and
+Security and trust analysis for usabl beyond gate-tamper (covered in ground-truth and
 entry-spec). Gate-tamper controls: committed base config, `approval_required` on policy
 diffs, CODEOWNERS in CI.
 
@@ -122,7 +120,7 @@ comments.
 ## Threat 7: Tool failure producing false trust
 
 **Attack:** Playwright crash, page timeout, render failure, or network error causes
-Usabl to silently succeed - producing a `verified` verdict on a check that never
+usabl to silently succeed - producing a `verified` verdict on a check that never
 actually ran.
 
 **Exposure:** Teams over-trust "green" and ship unchecked UI. CI stays green because
@@ -167,7 +165,7 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
 | PatternFly | MIT | Rulepack data only |
 | Guidepup (if adopted) | MIT | Optional phrasing validation |
 
-**Usabl release license:** Apache-2.0 (repo `LICENSE`). MPL boundary: do not vendor
+**usabl release license:** Apache-2.0 (repo `LICENSE`). MPL boundary: do not vendor
 axe-core source; depend via npm.
 
 **Status:** [x] Repo license set; [ ] file-boundary check if vendoring added.
@@ -185,12 +183,12 @@ required where applicable.
 
 ## Open actions
 
-| Item | Owner | Target |
-|---|---|---|
-| MCP untrusted-data framing | Build | MCP wrapper slice |
-| Localhost default bind | Build | MCP server |
-| Findings provenance fields | Build | Receipt v1 |
-| axe/playwright version in JSON | Build | Harness output |
-| Tool-error -> not_covered path | Build | Harness runner |
-| Timeout budget (120s default) | Build | Harness runner |
-| Telemetry decision | Edgar | Pre OSS release |
+| Item | Target |
+|---|---|
+| MCP untrusted-data framing | MCP wrapper slice |
+| Localhost default bind | MCP server |
+| Findings provenance fields | Receipt v1 |
+| axe/playwright version in JSON | Harness output |
+| Tool-error -> not_covered path | Harness runner |
+| Timeout budget (120s default) | Harness runner |
+| Telemetry decision | Pre OSS release |

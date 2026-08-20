@@ -1,9 +1,7 @@
 # Why now
 
-Status: working draft. Author: eparenti. August 2026.
-
 Evidence sheet for pitch, deck, and judge Q&A. Every claim has a citation or primary
-source. Legal-safe framing: Usabl supports evidence for accessibility work; it does not
+source. Legal-safe framing: usabl supports evidence for accessibility work; it does not
 claim compliance.
 
 ---
@@ -16,7 +14,7 @@ claim compliance.
   to EU consumers to meet accessibility requirements; EN 301 549 (WCAG 2.1 AA) is the
   harmonized technical standard.
 - **When:** Application date **28 June 2025** - enforcement is live, not upcoming.
-- **Why Usabl:** Teams need continuous proof of accessibility work on shipped UI, not
+- **Why usabl:** Teams need continuous proof of accessibility work on shipped UI, not
   annual audit snapshots.
 
 **Sources:**
@@ -30,7 +28,7 @@ claim compliance.
 - **What:** US federal ICT must meet Section 508; enterprise vendors routinely provide
   VPAT/ACR evidence in procurement.
 - **When:** Ongoing; federal refresh and buyer scrutiny continue through 2025–2026 cycles.
-- **Why Usabl:** Receipt-backed, re-checkable findings on each change support VPAT
+- **Why usabl:** Receipt-backed, re-checkable findings on each change support VPAT
   evidence packs without claiming certification.
 
 **Sources:**
@@ -56,7 +54,7 @@ claim compliance.
 
 - **Finding:** Developers using AI assistants often skip accessibility prompts, omit
   manual steps (labels, alt text), and **cannot verify compliance** after generation.
-- **Quote use:** "Inability to verify compliance" is the gap Usabl closes mechanically.
+- **Quote use:** "Inability to verify compliance" is the gap usabl closes mechanically.
 
 **Source:** [CodeA11y, CHI 2025 (arXiv:2502.10884)](https://arxiv.org/abs/2502.10884)
 
@@ -93,7 +91,7 @@ From market research and vendor comparisons (August 2026):
 
 > "Most tools find issues. Almost none verify the fix actually worked."
 
-Usabl's timing: the advisory MCP layer commoditized in under a year; the **proof loop**
+usabl's timing: the advisory MCP layer commoditized in under a year; the **proof loop**
 is the next layer teams will ask for.
 
 **Source:** [research/market-landscape-2026-08.md](../../research/market-landscape-2026-08.md)

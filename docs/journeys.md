@@ -1,7 +1,5 @@
 # User journeys
 
-Status: working draft. Author: eparenti. August 2026.
-
 Formal journey maps for each daily moment. Stages, emotions, friction points, and
 rip-out prevention.
 
@@ -13,7 +11,7 @@ Personas: [personas.md](./personas.md). Daily-moments inventory: `entry-spec.md`
 ## Journey 1: Priya - assistant loop
 
 **Persona:** Priya (UI engineer with AI assistant).  
-**Mode:** Gate enabled on UI paths.
+**usabl installed:** Yes (CLI + stop hook + CI + overlay).
 
 | Stage | What happens | Emotion | Friction risk |
 |---|---|---|---|
@@ -32,15 +30,15 @@ Personas: [personas.md](./personas.md). Daily-moments inventory: `entry-spec.md`
 - **Gate trust:** Proof slide + guarded config; skeptic demo on camera.
 
 **Rip-out moment:** Assistant disabled or hook bypassed after one false block.  
-**Prevention:** Accurate findings on demo set; `not_covered` only with reason; observe mode
-for teams not ready to gate.
+**Prevention:** Accurate findings on demo set; `not_covered` only with reason; ratchet
+ensures existing debt does not block.
 
 ---
 
 ## Journey 2: Manual coder - dev-server overlay
 
 **Persona:** Engineer coding by hand without assistant.  
-**Mode:** Advise (overlay); optional gate in CI only.
+**usabl installed:** Yes (overlay active in dev server).
 
 | Stage | What happens | Emotion | Friction risk |
 |---|---|---|---|
@@ -58,7 +56,7 @@ kill switch; same severity order as CLI.
 ## Journey 3: Reviewer - PR evidence bundle
 
 **Persona:** Peer reviewer or Morgan (lead).  
-**Mode:** CI comment + optional required check.
+**usabl installed:** Yes (CI comment on PRs).
 
 | Stage | What happens | Emotion | Friction risk |
 |---|---|---|---|
@@ -73,23 +71,23 @@ link to receipt; ratchet blocks only when team enables required check.
 
 ---
 
-## Journey 4: Team onboarding - observe -> advise -> gate
+## Journey 4: Team onboarding - brownfield adoption
 
 **Persona:** Morgan (engineering lead).
 
 | Stage | What happens | Emotion | Friction risk |
 |---|---|---|---|
-| 1. Observe | CI runs, comments only, no block | Curious | "Another bot" |
-| 2. Advise | Overlay + assistant self-check enabled | Cautious optimism | Noise without dedupe |
-| 3. Gate | Required check on default branch | Nervous | Legacy debt blocks all PRs |
-| 4. Steady | Ratchet + waiver ledger for debt | Trust | Policy tamper suspicion |
+| 1. Install | usabl on: CLI, hook, CI, overlay. One standard. | Curious | "Another bot" |
+| 2. First run | usabl runs against existing surfaces; evidence floor accepted for known debt | Cautious | Legacy debt pile visible for first time |
+| 3. Waivers | Known issues get waivers with expiry; new violations block | Cautious optimism | Waiver ceremony feels heavy |
+| 4. Steady state | Ratchet burns debt via waiver expiry; fleet tile shows trend | Trust | Policy tamper suspicion |
 
 **Who flips each switch:** Morgan + Alex (SME) agree; Riley informed for release evidence.
 
-**Needs to feel safe:** Debt in baseline/waiver ledger; observe metrics before gate;
-CODEOWNERS on policy files.
+**Needs to feel safe:** Debt in evidence floor/waiver ledger; ratchet blocks only new
+violations; CODEOWNERS on policy files.
 
-**Rip-out moment:** Gate turned off after one bad Monday.  
+**Rip-out moment:** Tool turned off after one bad Monday.  
 **Prevention:** Ratchet (new only); waiver with expiry; fleet tile shows trend not shame.
 
 ---
@@ -119,7 +117,7 @@ CODEOWNERS on policy files.
 | Assistant loop | False block, slow check | Oracle demo set; latency budget; proof slide |
 | Overlay | Clutter, flapping | Dedupe; single-flight; severity cap |
 | PR reviewer | Bot fatigue | Comment only on touched surfaces + regressions |
-| Onboarding | Debt wall | Observe ladder; ratchet; waivers |
+| Onboarding | Debt wall | Evidence floor; ratchet; waivers |
 | James | Empty "fixed" | Verified + transcript evidence |
 
 ---

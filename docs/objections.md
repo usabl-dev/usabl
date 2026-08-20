@@ -1,7 +1,5 @@
 # Objection handlers
 
-Status: working draft. Author: eparenti. August 2026.
-
 Prepared responses for skeptic questions about the product itself - not competitors
 (see [battlecards.md](./battlecards.md)) but pushback on our claims, scope, and
 approach. Use in judge Q&A, demo rehearsal, and alliance conversations.
@@ -12,7 +10,7 @@ approach. Use in judge Q&A, demo rehearsal, and alliance conversations.
 
 **Acknowledge:** axe-core is one of our check layers - we build on it, not against it.
 
-**Redirect:** axe finds issues on a page snapshot. Usabl adds what axe cannot do alone:
+**Redirect:** axe finds issues on a page snapshot. usabl adds what axe cannot do alone:
 keyboard interaction walk, PatternFly composition rules, screen reader announcement
 diff, fix re-verification, and a gate that stops the AI from calling work done. One
 finding from axe becomes a verified fix in the same session.
@@ -27,11 +25,11 @@ finding from axe becomes a verified fix in the same session.
 **Acknowledge:** This is the real adoption risk. Every quality gate dies if it blocks
 incorrectly.
 
-**Redirect:** Three defenses: (1) unknown patterns produce findings with `not_covered`
-confidence and a reason - honest "I don't know" rather than a false fail; (2) we
-measure false positive rate on a real PF surface before submission and report the
-number honestly; (3) the observe -> advise -> gate ladder lets teams build trust before
-enforcement bites.
+**Redirect:** Three defenses: (1) if usabl cannot identify which screens changed, it
+says `not_covered` with a reason - honest "I don't know" rather than a false pass or
+a false fail; (2) we measure false positive rate on a real PF surface before submission
+and report the number honestly; (3) the ratchet and waiver system lets teams manage
+existing debt without being punished for history.
 
 **Proof point:** Verified-verdict rate and false positive rate on the proof slide,
 measured on OpenShift console, not our planted demo.
@@ -88,12 +86,13 @@ passing. We say "configured workflows" and "CI for everyone" before a judge asks
 legacy code is useless.
 
 **Redirect:** Three mechanisms: (1) ratchet - only new violations block, existing debt
-is in the baseline; (2) waiver ledger - known debt tracked with expiry, not hidden;
-(3) observe mode - run for weeks, see findings, build confidence before any blocking.
-The ladder exists so teams can start without being punished for history.
+is in the evidence floor; (2) waiver ledger - known debt tracked with expiry, not hidden;
+(3) brownfield adoption path - install, accept the floor for legacy surfaces, and the
+tool gates only new regressions from day one. Teams are not punished for history.
 
-**Proof point:** Onboarding journey in personas: Morgan runs observe, sees the noise
-level, decides when to gate. Legacy surfaces stay at observe until claimed.
+**Proof point:** Onboarding journey in personas: Morgan installs usabl, accepts the
+evidence floor on legacy surfaces, and ratchets from there. No legacy surface blocks
+on day one.
 
 ---
 
@@ -101,7 +100,7 @@ level, decides when to gate. Legacy surfaces stay at observe until claimed.
 
 **Acknowledge:** The CI/PR evidence surface looks similar from the reviewer's chair.
 
-**Redirect:** A PR bot comments after the code is written. Usabl prevents the defect
+**Redirect:** A PR bot comments after the code is written. usabl prevents the defect
 in the assistant loop before the PR exists, then the same verdict becomes PR evidence.
 Upstream prevention + downstream proof, same engine.
 
@@ -115,7 +114,7 @@ regression to comment on because it was caught and fixed before commit.
 **Acknowledge:** Never. The accessibility team's guidance is our rulepack source. Their
 judgment is our escalation path.
 
-**Redirect:** Usabl handles the mechanical, repeatable checks - the same audit Alex
+**Redirect:** usabl handles the mechanical, repeatable checks - the same audit Alex
 does 50 times a quarter on icon-only buttons. Alex gets escalations with repro scripts
 and evidence instead of "please test the whole page." Integration-and-acceleration,
 not replacement.
@@ -133,11 +132,11 @@ next?
 **Redirect:** (1) Findings include full evidence - the developer can see exactly what
 triggered the block and verify it's real. (2) Waiver path exists for known issues
 that cannot be fixed this cycle. (3) Tool errors produce `not_covered` with a clear
-message, never a false block. (4) The observe ladder means gate is only enabled when
-the team already trusts the signal.
+message, never a false block. (4) The ratchet means the tool only gates new violations,
+so teams already trust the signal before it blocks anything they did not just introduce.
 
 **Proof point:** Error UX policy: tool crashes -> `not_covered`, not a false red.
-Waiver ledger with expiry. Observe-first adoption model.
+Waiver ledger with expiry. Brownfield adoption model.
 
 ---
 
@@ -146,5 +145,5 @@ Waiver ledger with expiry. Observe-first adoption model.
 When a new objection surfaces in rehearsal or Q&A, add it here with:
 
 1. **Acknowledge** - never dismiss; name what's true.
-2. **Redirect** - where does Usabl's design already address this?
+2. **Redirect** - where does usabl's design already address this?
 3. **Proof point** - what artifact or demo beat proves the redirect?

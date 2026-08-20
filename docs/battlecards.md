@@ -1,7 +1,5 @@
 # Competitive battlecards
 
-Status: working draft. Author: eparenti. August 2026.
-
 One card per rival **class** - not a feature matrix. Use in pitch Q&A, community
 conversations, and judge follow-ups. This is competitive positioning for an OSS
 project: we acknowledge what others do well, explain where we go further, and note
@@ -21,7 +19,7 @@ findings; Deque adds remediate guidance and training content.
 reader evidence, differential ratchet, and a stop gate that blocks "done" until proof
 passes on the change.
 
-**Complementary?** Yes - Deque's remediate guidance and Usabl's proof gate can coexist.
+**Complementary?** Yes - Deque's remediate guidance and usabl's proof gate can coexist.
 axe-core is one of our check layers.
 
 **One-liner:** "They advise from the chat. We verify the fix and gate completion."
@@ -53,7 +51,7 @@ Tactual and Speakable add diff and CI-friendly workflows.
 fix verification, PatternFly rules, and team enforcement on one Result.
 
 **Complementary?** Yes - Tactual or Speakable could be adopted as a provider behind the
-Usabl gate for richer phrasing validation. Guidepup is a candidate too.
+usabl gate for richer phrasing validation. Guidepup is a candidate too.
 
 **One-liner:** "They let you hear the UI. We prove the change is ready to ship."
 
@@ -68,7 +66,7 @@ enterprises with budget and procurement process.
 before enterprise process, on the engineer's machine and in the PR.
 
 **Complementary?** Different audience and lifecycle stage. Enterprise tools govern
-programs; Usabl prevents regressions at creation. They can coexist - Usabl reduces
+programs; usabl prevents regressions at creation. They can coexist - usabl reduces
 the findings enterprise dashboards eventually report.
 
 **One-liner:** "They govern the program. We prove each change in the workflow where it's
@@ -84,7 +82,7 @@ written."
 evidence the developer and the AI already saw.
 
 **Complementary?** Yes - Lighthouse and WAVE remain useful for ad-hoc audits and
-broader page health. Usabl covers the change-level proof they don't.
+broader page health. usabl covers the change-level proof they don't.
 
 **One-liner:** "They report after the fact. We complete the check before done."
 
@@ -97,7 +95,7 @@ broader page health. Usabl covers the change-level proof they don't.
 **What we add:** Prevent upstream in the assistant loop and produce the same PR
 evidence bundle from a stronger verdict source.
 
-**Complementary?** Partially - if a team already has a PR bot, Usabl's CI leg replaces
+**Complementary?** Partially - if a team already has a PR bot, usabl's CI leg replaces
 it with a stronger signal. The upstream prevention in the assistant loop is additive.
 
 **One-liner:** "They comment on the PR. We stop the defect before the PR."
@@ -114,7 +112,7 @@ PatternFly-native, integrated with MCP-capable assistants and CI. No subscriptio
 vendor lock.
 
 **Complementary?** No - different philosophical bets. Jeikin is closed-source SaaS;
-Usabl is open and local-first.
+usabl is open and local-first.
 
 **One-liner:** "They verify fixes in a dashboard. We verify in the dev loop and ship
 the receipt."

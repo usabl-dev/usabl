@@ -1,7 +1,5 @@
 # UX policy: findings and first-run
 
-Status: working draft. Author: eparenti. August 2026.
-
 Design policies for finding fatigue, noise budget, and first-run experience. Implements
 checklist section 5 items that are spec-ready before code ships.
 
@@ -37,7 +35,7 @@ identical cards.
 Display and block order:
 
 1. **Blockers** - violations that fail gate (`regression` layer findings at error severity).
-2. **Serious** - WCAG AA failures not yet blocking (advise mode).
+2. **Serious** - WCAG AA failures surfaced by the advisory lane (never gates).
 3. **Moderate / minor** - visible in full report; collapsed in overlay by default.
 4. **Needs human AT review** - escalations to Alex; never silent.
 
@@ -51,7 +49,7 @@ Within a tier: sort by rule id for stable diffs across runs.
 run on a typical touched surface. Full list available via CLI `--verbose` and PR
 comment expand.
 
-**Calibration:** Initial target; calibrate on OpenShift observe pass in build week. If
+**Calibration:** Initial target; calibrate on an OpenShift measurement pass in build week. If
 real surfaces routinely produce >5 findings, raise the threshold or tighten collapse
 rules - do not ship a budget that fires on every run.
 
@@ -59,7 +57,7 @@ rules - do not ship a budget that fires on every run.
 JSON.
 
 **Measurement:** Demo app clean pass = 0 findings. Demo broken = exactly 3 (one per
-layer). OpenShift observe: track findings per surface for calibration.
+layer). OpenShift measurement pass: track findings per surface for calibration.
 
 **Rip-out tie-in:** Exceeding budget without collapse is a top disable trigger (see
 [journeys.md](./journeys.md)).
@@ -107,7 +105,7 @@ Same bar as production demo surfaces.
 
 ---
 
-## Accessibility of Usabl surfaces
+## Accessibility of usabl surfaces
 
 Every shipped surface (HUD, fleet, PR comment, docs output) must meet:
 
@@ -121,7 +119,7 @@ Every shipped surface (HUD, fleet, PR comment, docs output) must meet:
 
 ## Error and failure UX
 
-When Usabl itself breaks (Playwright crash, page timeout, render failure, network
+When usabl itself breaks (Playwright crash, page timeout, render failure, network
 error), the developer must see a clear, honest outcome - never a false `verified` or a
 silent pass.
 
@@ -129,7 +127,7 @@ silent pass.
 
 1. **Tool failure -> `not_covered`**, never `verified`. The receipt explicitly states
    `reason: "tool_error"` with the error class.
-2. **Message to the developer:** "Usabl could not complete the check: [reason]. The
+2. **Message to the developer:** "usabl could not complete the check: [reason]. The
    change is not verified. Run again or check manually."
 3. **CI timeout budget:** Maximum 120s per surface check. If exceeded, verdict is
    `not_covered` with `reason: "timeout"`. CI reports the timeout but does not block
@@ -144,28 +142,32 @@ noisy failures. Teams disable tools that lie about success.
 
 ---
 
-## Adoption ladder: observe -> advise -> gate
+## Adoption: brownfield path (on/off, not modes)
 
-Teams adopt at their own pace. Each step has a trigger, an owner, and a rollback.
+usabl is on or off. There are no partial modes, no per-surface strictness, and no
+lasting observe mode. Teams adopt on brownfield codebases using the ratchet and waivers,
+not by weakening the tool.
 
-| Step | What's active | Who decides | Trigger to advance | Rollback |
-|---|---|---|---|---|
-| **Observe** | CI runs, comments only, no block | Morgan enables | Install complete; first run green or manageable | Remove CI step |
-| **Advise** | Overlay + assistant self-check; no enforcement | Morgan + Priya opt in | 1–2 sprints of observe with low noise, false positive rate < 10% | Disable overlay; remove hook |
-| **Gate** | Stop hook enforces; CI required check on default branch | Morgan + Alex agree; Riley informed | Advise period stable; waiver ledger handles existing debt; team confidence | Downgrade to advise; keep ratchet running |
+### How brownfield adoption works
 
-**Criteria for each transition:**
+| Step | What happens | Who decides | Rollback |
+|---|---|---|---|
+| **Install** | usabl on: CLI, stop hook, CI, overlay, docs output. One standard. | Morgan enables | Remove usabl |
+| **First run** | Check existing surfaces; accept evidence floor for known debt | Morgan + Alex agree | Re-run with updated floor |
+| **Waivers** | Known issues get waivers with owner and expiry. New violations block. | Code owner per waiver | Remove waiver (finding becomes regression again) |
+| **Steady state** | Ratchet burns debt via waiver expiry. Fleet tile shows trend. Policy changes require `approval_required`. | Team | - |
 
-- **Observe -> Advise:** Team has seen findings, trusts accuracy, wants real-time signal.
-  False positive rate measured and acceptable.
-- **Advise -> Gate:** Existing debt is in the waiver ledger or baseline. No surprise
-  blocks on legacy surfaces. Alex has reviewed escalation volume and confirms it is
-  manageable.
-- **Gate -> Steady state:** Ratchet burns down debt over time via waiver expiry. Fleet
-  tile shows trend. Policy changes still require `approval_required`.
+### Key points
 
-**Who flips each switch:** Config change in repo (observe/advise/gate mode in
-`.usabl/config.yml`). Config changes trigger `approval_required` - the tool's own
-guard prevents silent mode changes.
-
-**Status:** Policy defined; implementation in guard kernel phase.
+- **No observe mode.** When usabl is on, `not_covered` blocks and regressions block.
+  Existing known debt is in the evidence floor, not silently passing.
+- **Advisory lane is not an advise mode.** The advisory lane is real: model-judgment
+  findings that never block, only inform. An advise mode (a switch that turns gating
+  off) does not exist.
+- **Waivers are the debt path.** One finding, one owner, one expiry. Not "this page
+  is advisory." An expired waiver covers nothing; the finding becomes a regression again.
+- **Config changes are guarded.** Changing policy triggers `approval_required` - the
+  tool's own guard prevents silent weakening.
+- **Coverage grows as the team works.** It does not require Design to declare epic scope.
+  Most PRs that do not touch UI get "nothing to check" (idle). First UI PR on an
+  unmapped page gets `not_covered` until the surface is discoverable.

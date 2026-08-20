@@ -1,6 +1,6 @@
-# Contributing to Usabl
+# Contributing to usabl
 
-Thanks for helping build Usabl — accessibility proof built into how teams ship software.
+Thanks for helping build usabl, accessibility proof built into how teams ship software.
 
 ## Getting started
 
@@ -23,7 +23,7 @@ cd usabl
 
 ## Commits
 
-Usabl uses [Conventional Commits](https://www.conventionalcommits.org/).
+usabl uses [Conventional Commits](https://www.conventionalcommits.org/).
 
 ```
 type(scope): short description

@@ -1,13 +1,8 @@
 # Adoption model
 
-Status: working draft. Author: eparenti. August 2026.
-
-How developers and teams discover, try, integrate, and expand Usabl - and how
+How developers and teams discover, try, integrate, and expand usabl - and how
 contributors join the project. This is an open-source adoption funnel, not a sales
 pipeline.
-
-For adoption ladder mechanics (observe -> advise -> gate), see
-[ux-policy.md](./ux-policy.md) § Adoption ladder.
 
 ---
 
@@ -29,7 +24,7 @@ README from a search, or sees the rulepack referenced in a PatternFly issue.
 **Trigger:** Pain (accessibility audit surprise, failed 508 review, broken screen
 reader report) or curiosity (saw the demo, read the research).
 
-**Goal:** Understand what Usabl is in 30 seconds.
+**Goal:** Understand what usabl is in 30 seconds.
 
 **What they need:**
 
@@ -69,8 +64,8 @@ as "useful open tool" not "contest entry."
 - No finding on their app because the default check set is too narrow -> feels useless
 - Too many findings on a legacy app -> feels noisy before they trust it
 
-**Mitigation:** First run defaults to observe (report, never block). Noise budget
-applies from run one.
+**Mitigation:** Ratchet means only new violations block - existing debt is the
+evidence floor. Noise budget applies from run one.
 
 **Success signal:** Reads a finding and says "yeah, that's real."
 
@@ -96,7 +91,7 @@ applies from run one.
 **Friction risk:**
 
 - Surface map required for full coverage -> initial mapping tax
-- CI blocks on legacy debt -> configure observe or baseline first
+- CI blocks on legacy debt -> accept evidence floor first, use waivers for known debt
 - Hook config is assistant-specific -> document for top 2–3 assistants
 
 **Mitigation:** Storybook auto-discovery reduces mapping tax. Ratchet starts from
@@ -114,25 +109,25 @@ assistant loop.
 
 **Trigger:** Signal is trusted; want enforcement or wider coverage.
 
-**Goal:** Move from observe -> advise -> gate; add more surfaces; onboard teammates.
+**Goal:** Roll out to more repos; onboard teammates; manage existing debt.
 
 **What they need:**
 
-- Adoption ladder with clear triggers (see ux-policy.md)
 - Fleet evidence view across repos (even static seed for now)
-- Waiver ledger for debt management during transition
-- Team documentation: what each mode means, who can change policy
+- Waiver ledger for debt management during rollout
+- Team documentation: what the verdicts mean, who can change policy
+- Clear evidence floor acceptance path for legacy surfaces
 
 **Friction risk:**
 
-- Gate on legacy surfaces -> immediate noise revolt
+- Legacy surfaces block immediately -> noise revolt
 - Policy change unclear -> someone disables quietly
 - No executive visibility -> "why are we doing this?"
 
 **Mitigation:** Ratchet (new only); `approval_required` on policy changes; fleet tile
-shows blocked regressions as positive signal.
+shows blocked regressions as positive signal; waivers with expiry for known debt.
 
-**Success signal:** Multiple repos in gate mode; false positive rate stable; debt
+**Success signal:** Multiple repos running; false positive rate stable; debt
 burning down via waiver expiry.
 
 ---
@@ -190,7 +185,7 @@ No paid tier, no freemium gate, no telemetry-gated features. Apache-2.0.
 | Discover | README views, clone count | GitHub Insights |
 | Try | First `usabl check` run (anon, opt-in only) | None in contest; future opt-in telemetry decision |
 | Integrate | Repos with `.usabl/` config or CI workflow | GitHub search (public), self-reported (private) |
-| Expand | Repos in gate mode, fleet size | Fleet evidence, self-reported |
+| Expand | Repos gating (usabl on), fleet size | Fleet evidence, self-reported |
 | Contribute | PRs from non-core contributors | GitHub |
 
 **Contest scope:** Adoption metrics are defined for post-contest pilot. Contest
@@ -201,7 +196,6 @@ submission demonstrates the funnel works on the demo app and one real PF surface
 ## Relationship to other docs
 
 - **Try** stage requirements -> [ux-policy.md](./ux-policy.md) § First-run experience
-- **Integrate** stage ladder -> [ux-policy.md](./ux-policy.md) § Adoption ladder
 - **Contribute** stage -> `CONTRIBUTING.md` in repo root (engineering deliverable)
 - **Discover** stage README -> Quickstart README (engineering §7)
 - **Expand** -> [journeys.md](./journeys.md) § Journey 4 (team onboarding)
