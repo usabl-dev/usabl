@@ -7,3 +7,4 @@ export { computeIdentity, IDENTITY_WEAK } from './primitives/identity.js';
 export { canonicalize, sha256, canonicalHash } from './primitives/canonical.js';
 export { sortBy } from './primitives/sortKey.js';
 export { makeFakeDeps } from './deps/fakes.js';
+export { formatSummary } from './output/summary.js';
