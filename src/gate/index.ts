@@ -1,3 +1,14 @@
+/**
+ * The gate is the only module that constructs a verdict.
+ * Providers return Drafts. Overlays, CLI, and CI project the Result. They never mint one.
+ *
+ * Only `evidenceClass === 'deterministic'` participates in the verdict.
+ * Preview and model-judgment findings stay on the Result for humans; they cannot
+ * produce `verified` or a receipt.
+ *
+ * Idle (`verdict: null`, exit 0) means nothing UI-touching changed.
+ * `not_covered` means there was something to prove and we could not.
+ */
 import type { Draft, Finding, FloorEntry, GateInput, GateOutput, Waiver } from '../contracts/index.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { computeIdentity } from '../primitives/identity.js';
@@ -5,7 +16,8 @@ import { computeIdentity } from '../primitives/identity.js';
 const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
 
 export function gate(input: GateInput): GateOutput {
-  // 1. Guard first: any diverged guarded path forces approval_required; harness never runs.
+  // Policy edits cannot be self-graded. Any dirty guarded path is approval_required
+  // and the harness never runs.
   if (input.guardDivergedPaths.length > 0) {
     return {
       verdict: 'approval_required',
@@ -14,14 +26,14 @@ export function gate(input: GateInput): GateOutput {
       summary: `approval required: ${input.guardDivergedPaths.length} guarded path(s) changed`,
     };
   }
-  // 2. Coverage: nothing to check is an idle non-verdict.
+  // Idle is not a fifth verdict and not not_covered.
   if (input.coverage.nothingToCheck) {
     return { verdict: null, findings: [], exitCode: 0, summary: 'nothing to check (no UI-touching files)' };
   }
-  // 3. Build findings (identity + differential + waivers added in Tasks 8-9).
+
   const findings = buildFindings(input);
 
-  // 4. Verdict is computed only from deterministic, still-active findings.
+  // Waived and fixed stay visible. They do not block and they do not mint verified.
   const gating = findings.filter((f) => GATES(f.evidenceClass) && f.status !== 'waived' && f.status !== 'fixed');
   const hasNewFail = gating.some((f) => f.confidence === 'fail' && f.status === 'new');
   const hasUnverified = gating.some((f) => f.confidence === 'unverified') || input.coverage.unresolvedFiles.length > 0;
@@ -33,19 +45,19 @@ export function gate(input: GateInput): GateOutput {
   return { verdict: 'verified', findings, exitCode: 0, summary: verdictSummary('verified', gating) };
 }
 
-/** Prefer pf over axe when both fire on the same defect. */
+/** Prefer PatternFly why/fix when axe and pf fire on the same identity. */
 function preferLayer(a: Finding, b: Finding): Finding {
   if (a.layer === 'pf') return a;
   if (b.layer === 'pf') return b;
   return a;
 }
 
-/** Layer-independent key for cross-layer dedup and floor comparison. */
+/** Cross-layer / floor key. Layer is omitted so axe and pf can collapse. */
 function identityKey(f: { screenId: string; rule: string; elementKey: string | null }): string {
   return `${f.screenId}|${f.rule}|${f.elementKey ?? 'count'}`;
 }
 
-// Apply active, unexpired waivers to already-differential findings.
+/** Expired waivers are inert. Fixed findings are never rewritten to waived. */
 function applyWaivers(findings: Finding[], waivers: Waiver[], now: string): Finding[] {
   const active = waivers.filter((w) => w.expires > now);
   return findings.map((f) => {
@@ -58,13 +70,11 @@ function applyWaivers(findings: Finding[], waivers: Waiver[], now: string): Find
 }
 
 export function buildFindings(input: GateInput): Finding[] {
-  // 1. Draft -> Finding with identity.
   const raw = input.drafts.map((draft: Draft): Finding => {
     const { elementKey, identityBasis } = computeIdentity(draft);
     return { ...draft, elementKey, identityBasis, status: 'new' };
   });
 
-  // 2. Dedup across layers by identity, preferring the pf why/fix.
   const byIdentity = new Map<string, Finding>();
   const countByGroup = new Map<string, number>();
   for (const f of raw) {
@@ -76,7 +86,6 @@ export function buildFindings(input: GateInput): Finding[] {
     byIdentity.set(key, existing ? preferLayer(existing, f) : f);
   }
 
-  // 3. Differential vs the evidence floor.
   const floorByKey = new Map<string, FloorEntry>();
   for (const e of input.floor.entries) floorByKey.set(identityKey(e), e);
 
@@ -84,6 +93,7 @@ export function buildFindings(input: GateInput): Finding[] {
   for (const [key, f] of byIdentity) {
     const floor = floorByKey.get(key);
     if (!floor) { findings.push({ ...f, status: 'new' }); continue; }
+    // Count-based rules have no per-element key. A higher count than the floor is a regression.
     if (f.identityBasis === 'count') {
       const now = countByGroup.get(key) ?? 0;
       findings.push({ ...f, status: now > floor.count ? 'new' : 'carried' });
@@ -92,7 +102,7 @@ export function buildFindings(input: GateInput): Finding[] {
     }
   }
 
-  // 4. Floor entries with no current match are fixed (surfaced, never gate).
+  // Disappeared identities are `fixed`: shown, never gating, never a silent pass.
   for (const [key, e] of floorByKey) {
     if (!byIdentity.has(key)) {
       findings.push({
