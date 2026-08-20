@@ -19,15 +19,36 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history so gitleaks can scan commits, not only the checkout snapshot.
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
           cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Install
         run: npm ci
+
+      - name: Gitleaks
+        run: |
+          version=8.30.1
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz" | tar -xz gitleaks
+          ./gitleaks detect --verbose --redact --exit-code 1
+
+      - name: Pre-commit
+        # Skip the pre-commit gitleaks hook: it scans the index, and CI has nothing staged.
+        # The Gitleaks step above scans git history and is the merge gate.
+        run: |
+          python -m pip install --quiet pre-commit
+          SKIP=gitleaks pre-commit run --all-files
 
       - name: Typecheck and test
         run: npm run check

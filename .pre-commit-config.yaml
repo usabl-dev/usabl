@@ -3,13 +3,19 @@
 #   pip install pre-commit
 #   pre-commit install
 #   pre-commit install --hook-type commit-msg
+#
+# This clone may use core.hooksPath=.githooks. Wrappers there call this file.
+# CI re-runs these hooks so --no-verify cannot land on main.
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
+        exclude: ^docs/
       - id: end-of-file-fixer
+        # Same docs carve-out: do not restyle the product corpus as a side effect of CI.
+        exclude: ^docs/
       - id: check-merge-conflict
       - id: check-yaml
       - id: check-json
@@ -18,6 +24,11 @@ repos:
       - id: detect-private-key
       - id: mixed-line-ending
         args: [--fix=lf]
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
 
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.7
@@ -29,6 +40,16 @@ repos:
     hooks:
       - id: prettier
         types_or: [markdown, yaml]
+        # Product docs are founder-owned prose. Auto-reflow would rewrite the corpus.
+        exclude: ^docs/
+
+  - repo: local
+    hooks:
+      - id: strip-ai-coauthor
+        name: strip AI co-author trailers
+        language: script
+        entry: scripts/strip-ai-coauthor.sh
+        stages: [commit-msg]
 
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.2.0

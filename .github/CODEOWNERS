@@ -1,5 +1,5 @@
 # Code owners for repo governance files.
-# Expand this file as Usabl's protected paths are defined in this repository.
+# Expand this file as usabl's protected paths are defined in this repository.
 
 .github/workflows/usabl.yml                     @usabl-dev/eparenti @usabl-dev/nitin-dhevar @usabl-dev/vishsanghishetty
 .github/CODEOWNERS                              @usabl-dev/eparenti @usabl-dev/nitin-dhevar @usabl-dev/vishsanghishetty
