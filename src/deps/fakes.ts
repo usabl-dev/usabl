@@ -1,3 +1,8 @@
+/**
+ * In-memory Deps so tests can run the whole engine without git, a browser, or a network.
+ * Scripted maps are the only source of truth. `browser.open` ignores the URL.
+ * Unused Page methods throw: a test that hits them is lying about coverage, not passing.
+ */
 import type { Deps, ScreenScan, Page } from '../contracts/index.js';
 
 export interface FakeDepsSpec {
@@ -55,6 +60,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     clock: () => spec.now,
     runnerVersion: spec.runnerVersion,
     scannerVersions: spec.scannerVersions,
+    // URL is config for later Playwright wiring. Fakes never fetch it.
     browser: { open: async (_url: string) => fakePage() },
     git: {
       writeTree: async () => spec.writeTree,
@@ -76,7 +82,10 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
   };
 }
 
-/** Minimal glob matcher for fakes: supports '**' and '*'. */
+/**
+ * Tiny glob for tests: `*` is one path segment, `**` is any depth.
+ * Encode `**` first so a lone `*` cannot swallow slashes.
+ */
 function matchGlob(pattern: string, path: string): boolean {
   const rx = new RegExp(
     '^' +

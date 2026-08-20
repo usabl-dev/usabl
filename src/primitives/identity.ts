@@ -1,10 +1,19 @@
 import type { Draft, IdentityBasis } from '../contracts/index.js';
 import { slug } from './slug.js';
 
-/** Rules that assert "this element has no accessible name" - never keyable by name. */
+/**
+ * Finding identity is how the gate tells "this control, this rule" from markup churn.
+ * The key excludes `layer` so axe and PatternFly reports of the same defect can dedup.
+ *
+ * Priority:
+ * 1. name - accessible name from evidence. Survives class and DOM reshuffles.
+ * 2. structural - role plus a path with nth-child indexes stripped. Weaker than a name.
+ * 3. count - identity-weak rules. An unnamed control cannot honestly be keyed by name.
+ *    The floor then compares how many such findings exist, not which node they were.
+ */
 export const IDENTITY_WEAK = new Set<string>(['button-name', 'pf-icon-button-name']);
 
-/** Strip volatile positional detail from an elementPath into a stable structural token. */
+/** Drop volatile positional selectors so the same control keeps the same structural key. */
 function neutralizePath(path: string): string {
   return path
     .replace(/:nth-of-type\(\d+\)/g, '')
@@ -14,8 +23,8 @@ function neutralizePath(path: string): string {
 }
 
 /**
- * Layer-independent identity for a Draft. elementKey excludes the layer so dedup can
- * collapse the same defect across axe/pf/walk. Returns null key for count-based rules.
+ * Layer-independent identity for a Draft.
+ * Returns `elementKey: null` for count-based rules; callers must not invent a name key.
  */
 export function computeIdentity(draft: Draft): { elementKey: string | null; identityBasis: IdentityBasis } {
   const base = `${draft.screenId}|${draft.rule}`;
