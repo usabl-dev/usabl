@@ -2,28 +2,38 @@
 
 Thanks for helping build usabl, accessibility proof built into how teams ship software.
 
+The product name is **usabl** (lowercase). Pronounced "usable."
+
 ## Getting started
 
-1. Clone the repository.
-2. Create a branch from `main`.
-3. Make your changes.
-4. Open a pull request.
+You need Node.js 22 and [pre-commit](https://pre-commit.com/).
 
 ```bash
 git clone https://github.com/usabl-dev/usabl.git
 cd usabl
+pip install pre-commit
+npm install
 ```
 
-## Pull requests
+`npm install` runs `prepare`, which installs the team's git hooks into `.git/hooks`. Every clone does this. The tracked source of truth is `.pre-commit-config.yaml`.
 
-- Open PRs against `main`.
-- Use the pull request template. Fill in **Summary** and **Test plan** before requesting review.
-- Leave the **AI assistance** note in place if AI tools helped create or edit the changes.
-- Prefer small, focused PRs when you can.
+If `pre-commit` is missing, install it and run `npm install` again. Do not skip hooks with `--no-verify`. CI still runs the same checks and will block merge.
+
+Create a branch from current `main`. Open a pull request against `main`.
+
+## Build
+
+The suggested build is tsup through npm, targeting Node 22, ESM, with types. It writes `dist/` for the library and the `usabl` CLI.
+
+```bash
+npm run build
+```
+
+Do not add another bundler. Typecheck and tests are `npm run check`. Write a failing test first, then the code that makes it true.
 
 ## Commits
 
-usabl uses [Conventional Commits](https://www.conventionalcommits.org/).
+usabl uses [Conventional Commits](https://www.conventionalcommits.org/). The commit-msg hook enforces the subject line.
 
 ```
 type(scope): short description
@@ -37,42 +47,73 @@ fix(ci): validate workflow on pull requests
 docs: clarify contributing workflow
 ```
 
+Do not add `Co-authored-by` trailers for AI tools.
+
 ## Local checks
 
-Install [pre-commit](https://pre-commit.com/) once per clone:
+On every commit, hooks run:
 
-```bash
-pip install pre-commit
-pre-commit install
-pre-commit install --hook-type commit-msg
-```
-
-Hooks run on commit and check:
-
-- file hygiene (whitespace, EOF, merge conflicts, secrets)
-- YAML/JSON syntax
+- file hygiene (whitespace, EOF, merge conflicts, private keys)
+- gitleaks on staged changes
+- YAML and JSON syntax
 - GitHub Actions workflow linting
-- Markdown/YAML formatting
+- Markdown and YAML formatting (not `docs/`, which is product prose)
 - conventional commit messages
 
-Run manually on all files:
+Run the same file hooks on the tree:
 
 ```bash
 pre-commit run --all-files
 ```
 
+Typecheck and tests (this is also CI):
+
+```bash
+npm run check
+```
+
+Scan git history for secrets (this is also CI):
+
+```bash
+gitleaks detect --verbose --redact --exit-code 1
+```
+
+Static analysis (this is also CI):
+
+```bash
+semgrep scan --config p/typescript --config p/javascript --config p/github-actions --config p/security-audit --error
+```
+
+## Pull requests
+
+- Open PRs against `main`. Direct pushes to `main` are blocked.
+- Squash-merge only. The branch must be up to date with `main`.
+- The GitHub Actions check named **`check`** must be green. That is a ruleset requirement, including for admins.
+- Use the pull request template. Fill in **Summary** and **Test plan**.
+- Leave the **AI assistance** note in place if AI tools helped create or edit the changes.
+- Prefer small, focused PRs.
+
+## CI
+
+Pull requests and pushes to `main` run the `usabl` workflow. The required status check name is **`check`**.
+
+CI runs, in order:
+
+1. gitleaks on git history
+2. the pre-commit suite (the staged-only gitleaks hook is skipped here; step 1 is the history scan)
+3. Semgrep (`p/typescript`, `p/javascript`, `p/github-actions`, `p/security-audit`)
+4. `npm run check`
+
 ## Code owners
 
-Changes to these files require review from a code owner:
+These paths list owners in `.github/CODEOWNERS`:
 
 - `.github/workflows/usabl.yml`
 - `.github/CODEOWNERS`
 
-Current owners: `@usabl-dev/eparenti`, `@usabl-dev/nitin-dhevar`, `@usabl-dev/vishsanghishetty`.
+Owners: `@usabl-dev/eparenti`, `@usabl-dev/nitin-dhevar`, `@usabl-dev/vishsanghishetty`.
 
-## CI
-
-Pull requests run the `usabl` GitHub Actions workflow. The required status check name is **`usabl / accessibility`**.
+Code-owner review is not a merge requirement unless the repository ruleset says so.
 
 ## Security
 
@@ -82,4 +123,4 @@ Pull requests run the `usabl` GitHub Actions workflow. The required status check
 
 ## Questions
 
-Open a discussion or talk to the team in your usual channel before large design changes.
+Open a discussion or talk to the team before large design changes.
