@@ -286,7 +286,7 @@ export interface UsablConfig {
   discovery: { routerFile: string; wideBlastGlobs: string[] };
   surfaces: SurfaceConfig[];
   requirements?: string;
-  guardedPaths: string[];
+  guardedPaths: string[]; // file paths only; directories are not expanded by guard divergence
   promotedObligations?: string[]; // empty by default; promotion is not wired yet
 }
 

@@ -23,4 +23,9 @@ describe('computeGuardDivergence', () => {
     const deps = makeFakeDeps({ files: { 'new.json': '{}' }, headContents: {} });
     expect(await computeGuardDivergence(deps, ['new.json'])).toEqual(['new.json']);
   });
+
+  it('does not diverge when an optional guarded ledger is absent in both places', async () => {
+    const deps = makeFakeDeps({ files: {}, headContents: {} });
+    expect(await computeGuardDivergence(deps, ['.usabl-evidence.json'])).toEqual([]);
+  });
 });

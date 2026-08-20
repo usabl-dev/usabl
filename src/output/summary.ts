@@ -20,6 +20,8 @@ export function formatSummary(result: Result): string {
     (f) => f.evidenceClass === 'deterministic' && (f.status === 'new' || f.status === 'carried'),
   );
   for (const f of gating) {
+    // whatUserExperiences and fix are page-derived in live scanning, so they are untrusted at this egress.
+    // neutralize() must wrap both fields here before that scanner lane is wired.
     lines.push(
       `  [${f.status}] ${f.screenId} · ${f.layer}/${f.rule} (${f.severity}) - ${f.whatUserExperiences}`,
     );

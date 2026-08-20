@@ -9,6 +9,6 @@
     { "id": "clusters", "url": "http://127.0.0.1:5173/clusters", "files": ["fixtures/app/src/ClustersPage.tsx"] }
   ],
   "requirements": "requirements/",
-  "guardedPaths": ["usabl.config.json", "src/gate", "src/guard", ".usabl-evidence.json", ".usabl-waivers.json"],
+  "guardedPaths": ["usabl.config.json", "src/gate/index.ts", "src/guard/index.ts", ".usabl-evidence.json", ".usabl-waivers.json"],
   "promotedObligations": []
 }
