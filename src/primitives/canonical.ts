@@ -12,20 +12,22 @@ export function canonicalize(value: unknown): string {
 
 function serialize(v: unknown): string {
   if (v === null) return 'null';
-  const t = typeof v;
-  if (t === 'boolean') return v ? 'true' : 'false';
-  if (t === 'number') {
-    if (!Number.isFinite(v as number)) throw new Error('canonicalize: non-finite number');
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) throw new Error('canonicalize: non-finite number');
     return JSON.stringify(v);
   }
-  if (t === 'string') return JSON.stringify(v);
-  if (Array.isArray(v)) return '[' + v.map((x) => serialize(x === undefined ? null : x)).join(',') + ']';
-  if (t === 'object') {
+  if (typeof v === 'string') return JSON.stringify(v);
+  if (Array.isArray(v)) {
+    return '[' + v.map((x) => serialize(x === undefined ? null : x)).join(',') + ']';
+  }
+  if (typeof v === 'object') {
+    // `object` has no index signature; this is the JSON object case after null/array.
     const obj = v as Record<string, unknown>;
     const keys = Object.keys(obj).filter((k) => obj[k] !== undefined).sort();
     return '{' + keys.map((k) => JSON.stringify(k) + ':' + serialize(obj[k])).join(',') + '}';
   }
-  throw new Error('canonicalize: unserializable value of type ' + t);
+  throw new Error('canonicalize: unserializable value of type ' + typeof v);
 }
 
 export function sha256(text: string): string {
