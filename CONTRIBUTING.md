@@ -31,6 +31,18 @@ npm run build
 
 Do not add another bundler. Typecheck and tests are `npm run check`. Write a failing test first, then the code that makes it true.
 
+## How we build
+
+A human owns product and UX. Ask before pushing a branch and before merging a pull request.
+
+Implementation, review, and security review use **three different model families**. The family that writes the patch does not review it, does not own the merge security gate, and does not grade its own work. For example: Codex implements, Opus reviews, Gemini does security review.
+
+- **Implement** with one family. TDD. Commit. Report. Do not push. Do not freelance product language.
+- **Review** with a second family after every task. Correctness, honesty (providers return drafts, the gate is the only verdict), and would you staff this. That family does not write the product code in review.
+- **Security review** with a third family on every pull request versus `main` before merge. Independent of the code review. Do not merge on Critical or Important findings. Do not paste that review into the pull request.
+
+CI green does not skip review or security review. Other teammates should use this split even if they pick different families than the example.
+
 ## Commits
 
 usabl uses [Conventional Commits](https://www.conventionalcommits.org/). The commit-msg hook enforces the subject line.
