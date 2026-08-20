@@ -22,6 +22,14 @@ describe('neutralize', () => {
     expect(neutralize('a\nb')).toBe('ab');
   });
 
+  it('strips Unicode line separator bytes', () => {
+    expect(neutralize('a\u2028b')).toBe('ab');
+  });
+
+  it('strips Unicode paragraph separator bytes', () => {
+    expect(neutralize('a\u2029b')).toBe('ab');
+  });
+
   it('strips C1 controls including 8-bit CSI', () => {
     expect(neutralize('\u009b31mRED')).toBe('31mRED');
   });

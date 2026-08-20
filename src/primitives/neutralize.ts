@@ -69,7 +69,14 @@ export function neutralize(text: string): string {
       continue;
     }
 
-    if ((code >= 0x00 && code <= 0x1f) || (code >= 0x80 && code <= 0x9f)) {
+    // U+2028 and U+2029 are not C0 or C1 controls, but terminals render them as line breaks.
+    // Strip them here so page-derived text cannot forge extra CLI lines at this egress.
+    if (
+      (code >= 0x00 && code <= 0x1f) ||
+      (code >= 0x80 && code <= 0x9f) ||
+      code === 0x2028 ||
+      code === 0x2029
+    ) {
       i += 1;
       continue;
     }
