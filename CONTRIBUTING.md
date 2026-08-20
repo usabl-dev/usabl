@@ -21,6 +21,16 @@ If `pre-commit` is missing, install it and run `npm install` again. Do not skip 
 
 Create a branch from current `main`. Open a pull request against `main`.
 
+## Build
+
+The suggested build is tsup through npm, targeting Node 22, ESM, with types. It writes `dist/` for the library and the `usabl` CLI.
+
+```bash
+npm run build
+```
+
+Do not add another bundler. Typecheck and tests are `npm run check`. Write a failing test first, then the code that makes it true.
+
 ## Commits
 
 usabl uses [Conventional Commits](https://www.conventionalcommits.org/). The commit-msg hook enforces the subject line.
@@ -68,6 +78,12 @@ Scan git history for secrets (this is also CI):
 gitleaks detect --verbose --redact --exit-code 1
 ```
 
+Static analysis (this is also CI):
+
+```bash
+semgrep scan --config p/typescript --config p/javascript --config p/github-actions --config p/security-audit --error
+```
+
 ## Pull requests
 
 - Open PRs against `main`. Direct pushes to `main` are blocked.
@@ -85,7 +101,8 @@ CI runs, in order:
 
 1. gitleaks on git history
 2. the pre-commit suite (the staged-only gitleaks hook is skipped here; step 1 is the history scan)
-3. `npm run check`
+3. Semgrep (`p/typescript`, `p/javascript`, `p/github-actions`, `p/security-audit`)
+4. `npm run check`
 
 ## Code owners
 
