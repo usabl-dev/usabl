@@ -1,0 +1,1 @@
+{"coverage":{"affected":[],"changedFiles":["fixtures/app/src/Orphan.tsx"],"gaps":[],"nothingToCheck":false,"unresolvedFiles":["fixtures/app/src/Orphan.tsx"]},"dirtyGuardedPaths":[],"exitCode":3,"findings":[],"receipt":null,"schemaVersion":"usabl.result.v1","screens":[],"summary":"not_covered: 0 gating finding(s)","verdict":"not_covered"}

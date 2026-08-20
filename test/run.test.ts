@@ -1,0 +1,84 @@
+import { describe, it, expect } from 'vitest';
+import { run } from '../src/run.js';
+import { makeFakeDeps } from '../src/deps/fakes.js';
+import type { Draft, ScreenScan, UsablConfig } from '../src/contracts/index.js';
+
+const config: UsablConfig = {
+  appBaseUrl: 'http://127.0.0.1:5173',
+  uiFileGlobs: ['fixtures/app/src/**'],
+  discovery: { routerFile: 'fixtures/app/src/App.tsx', wideBlastGlobs: [] },
+  surfaces: [{ id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['fixtures/app/src/ClustersPage.tsx'] }],
+  guardedPaths: ['usabl.config.json'],
+};
+const failDraft: Draft = {
+  rule: 'color-contrast',
+  layer: 'axe',
+  severity: 'serious',
+  evidenceClass: 'deterministic',
+  screenId: 'clusters',
+  elementPath: 'button',
+  elementName: 'Save',
+  role: 'button',
+  whatUserExperiences: '',
+  why: '',
+  fix: '',
+  evidence: { name: { value: 'Save', source: 'ax-tree', fromTree: true } },
+  confidence: 'fail',
+};
+const scanWith = (drafts: Draft[]): ScreenScan => ({ screenId: 'clusters', url: config.surfaces[0]!.url, stops: [], drafts });
+const guardOk = { files: { 'usabl.config.json': '{}' }, headContents: { 'usabl.config.json': '{}' } };
+
+describe('run', () => {
+  it('is idle (verdict null, exit 0) when no UI files changed', async () => {
+    const deps = makeFakeDeps({ ...guardOk, changed: [{ code: 'M', path: 'README.md' }] });
+    const r = await run(deps, config);
+    expect(r.verdict).toBeNull();
+    expect(r.exitCode).toBe(0);
+    expect(r.coverage.nothingToCheck).toBe(true);
+  });
+
+  it('verifies and mints a receipt when an affected surface is clean', async () => {
+    const deps = makeFakeDeps({
+      ...guardOk,
+      writeTree: 'tree-1',
+      changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
+      scans: { clusters: scanWith([]) },
+    });
+    const r = await run(deps, config);
+    expect(r.verdict).toBe('verified');
+    expect(r.receipt?.sourceTree).toBe('tree-1');
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('regresses (exit 1) and mints no receipt on a new failure', async () => {
+    const deps = makeFakeDeps({
+      ...guardOk,
+      changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
+      scans: { clusters: scanWith([failDraft]) },
+    });
+    const r = await run(deps, config);
+    expect(r.verdict).toBe('regression');
+    expect(r.receipt).toBeNull();
+    expect(r.exitCode).toBe(1);
+  });
+
+  it('is not_covered (exit 3) when a UI file maps to no surface', async () => {
+    const deps = makeFakeDeps({ ...guardOk, changed: [{ code: 'M', path: 'fixtures/app/src/Orphan.tsx' }], scans: {} });
+    const r = await run(deps, config);
+    expect(r.verdict).toBe('not_covered');
+    expect(r.coverage.unresolvedFiles).toContain('fixtures/app/src/Orphan.tsx');
+    expect(r.exitCode).toBe(3);
+  });
+
+  it('is approval_required (exit 2) when a guarded path diverged', async () => {
+    const deps = makeFakeDeps({
+      files: { 'usabl.config.json': '{"tampered":true}' },
+      headContents: { 'usabl.config.json': '{}' },
+      changed: [{ code: 'M', path: 'usabl.config.json' }],
+    });
+    const r = await run(deps, config);
+    expect(r.verdict).toBe('approval_required');
+    expect(r.dirtyGuardedPaths).toEqual(['usabl.config.json']);
+    expect(r.exitCode).toBe(2);
+  });
+});

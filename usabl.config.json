@@ -1,0 +1,14 @@
+{
+  "appBaseUrl": "http://127.0.0.1:5173",
+  "uiFileGlobs": ["fixtures/app/src/**"],
+  "discovery": {
+    "routerFile": "fixtures/app/src/App.tsx",
+    "wideBlastGlobs": ["fixtures/app/src/main.tsx", "fixtures/app/src/App.tsx", "fixtures/app/index.html"]
+  },
+  "surfaces": [
+    { "id": "clusters", "url": "http://127.0.0.1:5173/clusters", "files": ["fixtures/app/src/ClustersPage.tsx"] }
+  ],
+  "requirements": "requirements/",
+  "guardedPaths": ["usabl.config.json", "src/gate/index.ts", "src/guard/index.ts", ".usabl-evidence.json", ".usabl-waivers.json"],
+  "promotedObligations": []
+}
