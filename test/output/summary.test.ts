@@ -64,4 +64,36 @@ describe('formatSummary', () => {
       ),
     ).toContain('nothing to check');
   });
+
+  it('neutralizes page-derived finding text at terminal egress', () => {
+    const r = baseResult({
+      verdict: 'regression',
+      exitCode: 1,
+      findings: [
+        {
+          rule: 'color-contrast',
+          layer: 'axe',
+          severity: 'serious',
+          evidenceClass: 'deterministic',
+          screenId: 'clusters',
+          elementPath: 'button',
+          elementName: 'Save',
+          role: 'button',
+          whatUserExperiences: '\u001b[31mLow contrast text',
+          why: '',
+          fix: '\u001b[31mRaise contrast to 4.5:1',
+          evidence: {},
+          confidence: 'fail',
+          elementKey: 'k',
+          identityBasis: 'name',
+          status: 'new',
+        },
+      ],
+    });
+
+    const out = formatSummary(r);
+    expect(out).toContain('Low contrast text');
+    expect(out).toContain('Raise contrast to 4.5:1');
+    expect(out).not.toContain('\u001b');
+  });
 });
