@@ -290,6 +290,26 @@ export interface UsablConfig {
   promotedObligations?: string[]; // empty by default; promotion is not wired yet
 }
 
+export type Capability = 'live' | 'network' | 'secrets' | 'filesystem-write';
+
+export interface ProviderContext {
+  page: Page;
+  screen: { id: string; url: string };
+  config: UsablConfig;
+}
+
+export interface Provider {
+  id: string;
+  layer: string;
+  capabilities: Capability[];
+  run(ctx: ProviderContext): Promise<Draft[]>;
+}
+
+export interface ProviderRunResult {
+  drafts: Draft[];
+  gaps: CoverageGap[];
+}
+
 // ---- gate I/O ----
 export interface GateInput {
   coverage: Coverage;
