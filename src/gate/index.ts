@@ -1,4 +1,4 @@
-import type { Draft, Finding, FloorEntry, GateInput, GateOutput } from '../contracts/index.js';
+import type { Draft, Finding, FloorEntry, GateInput, GateOutput, Waiver } from '../contracts/index.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { computeIdentity } from '../primitives/identity.js';
 
@@ -43,6 +43,18 @@ function preferLayer(a: Finding, b: Finding): Finding {
 /** Layer-independent key for cross-layer dedup and floor comparison. */
 function identityKey(f: { screenId: string; rule: string; elementKey: string | null }): string {
   return `${f.screenId}|${f.rule}|${f.elementKey ?? 'count'}`;
+}
+
+// Apply active, unexpired waivers to already-differential findings.
+function applyWaivers(findings: Finding[], waivers: Waiver[], now: string): Finding[] {
+  const active = waivers.filter((w) => w.expires > now);
+  return findings.map((f) => {
+    if (f.status === 'fixed') return f;
+    const matched = active.some((w) =>
+      w.rule === f.rule && w.surface === f.screenId && (w.scope === '*' || w.scope === f.elementKey),
+    );
+    return matched ? { ...f, status: 'waived' } : f;
+  });
 }
 
 export function buildFindings(input: GateInput): Finding[] {
@@ -92,7 +104,7 @@ export function buildFindings(input: GateInput): Finding[] {
     }
   }
 
-  return sortBy(findings, findingKey);
+  return sortBy(applyWaivers(findings, input.waivers, input.now), findingKey);
 }
 
 export function findingKey(f: Finding): string {
