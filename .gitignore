@@ -10,4 +10,5 @@ out/
 
 # Local-only tooling (not published to the remote)
 .cursor/
+.githooks/
 .superpowers/

@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "build": "tsup",
-    "check": "npm run typecheck && npm run test"
+    "check": "npm run typecheck && npm run test",
+    "prepare": "bash scripts/install-git-hooks.sh"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

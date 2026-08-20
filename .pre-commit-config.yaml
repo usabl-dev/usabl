@@ -1,11 +1,6 @@
 # See https://pre-commit.com for usage.
-# Install:
-#   pip install pre-commit
-#   pre-commit install
-#   pre-commit install --hook-type commit-msg
-#
-# This clone may use core.hooksPath=.githooks. Wrappers there call this file.
-# CI re-runs these hooks so --no-verify cannot land on main.
+# Every clone: pip install pre-commit, then npm install (prepare installs the hooks).
+# CI re-runs these hooks so a skipped local install cannot land on main.
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -42,14 +37,6 @@ repos:
         types_or: [markdown, yaml]
         # Product docs are founder-owned prose. Auto-reflow would rewrite the corpus.
         exclude: ^docs/
-
-  - repo: local
-    hooks:
-      - id: strip-ai-coauthor
-        name: strip AI co-author trailers
-        language: script
-        entry: scripts/strip-ai-coauthor.sh
-        stages: [commit-msg]
 
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.2.0
