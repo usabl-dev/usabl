@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+/**
+ * Thin CLI over `run()`. Prints `formatSummary` and exits with `result.exitCode`.
+ * Sample `usabl.config.json` URLs (`http://127.0.0.1:5173`) are the fixture app's
+ * Vite origin, not a hardcoded engine target. The engine reads config.
+ */
 import { readFile } from 'node:fs/promises';
 import { run } from './run.js';
 import { formatSummary } from './output/summary.js';
@@ -9,11 +14,12 @@ async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
 }
 
 /**
- * Build real Deps. Full implementations (Playwright browser, git plumbing, axe/pf/walk
- * CheckRunner) land in Phases 2-3. This wiring point stays stable.
+ * Real browser, git, and CheckRunner wiring is not in this slice.
+ * Tests inject `makeFakeDeps`. This must throw. A stub that returned empty scans
+ * would mint a fake `verified`.
  */
 async function buildDeps(_config: UsablConfig): Promise<Deps> {
-  throw new Error('real Deps are implemented in Phases 2-3; use makeFakeDeps in tests until then');
+  throw new Error('real Deps are not wired; use makeFakeDeps in tests until the browser and git adapters exist');
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -34,6 +40,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   main()
     .then((code) => process.exit(code))
     .catch((err) => {
+      // Same fail-open contract as `run()`: disclose, exit 4, never a silent 0.
       process.stderr.write(`usabl: ${(err as Error).message}\n`);
       process.exit(4);
     });

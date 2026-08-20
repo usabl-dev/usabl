@@ -1,3 +1,4 @@
+/** Public library surface. Callers project a Result; they do not mint a verdict. */
 export * from './contracts/index.js';
 export { run } from './run.js';
 export { gate } from './gate/index.js';

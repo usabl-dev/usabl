@@ -3,9 +3,10 @@ import type { ConformanceSummary, Finding, Result } from '../contracts/index.js'
 const isDeterministic = (f: Finding): boolean => f.evidenceClass === 'deterministic';
 
 /**
- * Pure projection of Result into the non-gating conformance summary (Fork 1b).
- * Never re-derives findings, never collapses to a single score, never hides
- * not-evaluated. The gate verdict (result.verdict) remains the authority.
+ * Read-only three-bucket view of an already-gated Result.
+ * Never re-derives findings. Never a single score. Never hides not-evaluated.
+ * `blocked` is true only for new deterministic failures. Judged findings never block.
+ * Echoes `result.verdict`: the gate remains the authority.
  */
 export function computeConformance(result: Result): ConformanceSummary {
   const det = result.findings.filter(isDeterministic);

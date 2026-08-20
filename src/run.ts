@@ -1,3 +1,10 @@
+/**
+ * `run(deps, config)` is the whole engine: cover, guard, scan, gate, maybe receipt.
+ * It never decides a verdict. The gate does. This file only sequences injected I/O.
+ *
+ * No hidden filesystem, git, or browser. Callers pass Deps (real or `makeFakeDeps`).
+ * Sampling is forbidden: every affected surface is scanned, or we do not claim verified.
+ */
 import type {
   Coverage,
   Deps,
@@ -15,6 +22,7 @@ import { mintReceipt } from './evidence/receipt.js';
 
 const EMPTY_FLOOR: EvidenceFloor = { version: 1, entries: [] };
 
+/** `*` is one path segment. `**` is encoded first so it can span directories. */
 function matchGlob(pattern: string, path: string): boolean {
   const rx = new RegExp(
     '^' +
@@ -28,7 +36,11 @@ function matchGlob(pattern: string, path: string): boolean {
   return rx.test(path);
 }
 
-/** Direct config-mapping coverage. Phase 3 replaces this with route-graph discovery. */
+/**
+ * Map changed UI files onto configured surfaces.
+ * Route-graph discovery is not wired. Unmapped UI files stay in `unresolvedFiles`
+ * so the gate can return `not_covered` instead of a silent pass.
+ */
 function computeCoverage(config: UsablConfig, changed: string[]): Coverage {
   const uiFiles = changed.filter((f) => config.uiFileGlobs.some((g) => matchGlob(g, f)));
   if (uiFiles.length === 0) {
@@ -54,7 +66,7 @@ export async function run(deps: Deps, config: UsablConfig): Promise<Result> {
     const coverage = computeCoverage(config, changed);
     const guardDivergedPaths = await computeGuardDivergence(deps, config.guardedPaths);
 
-    // Scan each affected surface fully (never sample).
+    // Dirty policy or idle: do not open the harness. Otherwise scan every affected surface.
     const screens: ScreenScan[] = [];
     if (guardDivergedPaths.length === 0 && !coverage.nothingToCheck) {
       for (const s of coverage.affected) {
@@ -69,6 +81,7 @@ export async function run(deps: Deps, config: UsablConfig): Promise<Result> {
 
     const gated = gate({ coverage, guardDivergedPaths, drafts, floor, waivers, now: deps.clock() });
 
+    // Receipts are reserved for verified. Preview and model-judgment cannot mint one.
     const receipt =
       gated.verdict === 'verified'
         ? await mintReceipt(deps, config, {
@@ -92,7 +105,8 @@ export async function run(deps: Deps, config: UsablConfig): Promise<Result> {
       exitCode: gated.exitCode,
     };
   } catch (err) {
-    // Fail open with disclosure (§9), never a silent pass.
+    // Crash: disclose and fail open (exit 4). verdict is null because the gate never ran.
+    // This is not idle (`nothingToCheck` is false). Never mint verified from a crash.
     return {
       schemaVersion: 'usabl.result.v1',
       verdict: null,

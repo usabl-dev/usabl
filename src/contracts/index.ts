@@ -1,4 +1,4 @@
-// ---- verdict + evidence vocabulary (ground-truth §5; preview added per A-evclass) ----
+// ---- verdict + evidence vocabulary ----
 export type Severity = 'critical' | 'serious' | 'moderate' | 'minor';
 export type EvidenceClass =
   | 'deterministic'
@@ -29,9 +29,7 @@ export interface Draft {
   rule: string;
   layer: string; // contest ids: 'axe' | 'pf' | 'walk'; stays open
   severity: Severity;
-  evidenceClass: EvidenceClass; // provenance taxonomy: only 'deterministic' (or promoted) mints
-  //   the gate verdict; model-judgment/preview feed the judgment
-  //   assessment + conformance summary (decision-log 8.2)
+  evidenceClass: EvidenceClass; // only 'deterministic' (or later promoted) mints the gate verdict; preview and model-judgment surface, they never gate
   screenId: string;
   elementPath: string;
   elementName: string | null;
@@ -48,7 +46,7 @@ export interface Finding extends Draft {
   status: 'new' | 'carried' | 'fixed' | 'waived';
 }
 
-// ---- announcement / transcript (voicing lane consumes these in Phase 4) ----
+// ---- announcement / transcript (voicing lane; unused until that lane is wired) ----
 export interface AnnouncementToken {
   kind: 'name' | 'role' | 'state';
   text: string | null;
@@ -77,18 +75,18 @@ export interface AffectedScreen {
 export interface CoverageGap {
   ref: string; // surface id, url, or file path this gap concerns
   state: 'unresolved' | 'not-covered' | 'skipped' | 'capability-denied';
-  reason: string; // why it was not exercised; never empty (eqa-core: never report coverage that was not achieved)
+  reason: string; // why it was not exercised; never empty
 }
 export interface Coverage {
   changedFiles: string[];
   affected: AffectedScreen[];
   unresolvedFiles: string[];
-  gaps: CoverageGap[]; // each in-scope surface or check that could not be exercised, each with a reason (Phase 3 populates and consumes; Phase 1 leaves it [])
+  gaps: CoverageGap[]; // in-scope surfaces or checks that could not be exercised, each with a reason
   nothingToCheck: boolean; // no UI-touching files; not a verdict
 }
-// Phase 1 note: the gate does not read coverage.gaps yet; it is a data channel that defaults to [] and is only counted by computeConformance. The gate's consumption of gaps is deferred to Phase 3.
+// The gate does not read coverage.gaps yet. Gaps stay [] and are counted only by computeConformance.
 
-// ---- receipt (ground-truth §5, §10) ----
+// ---- receipt (re-checkable proof of a verified run) ----
 export interface Receipt {
   schemaVersion: 1;
   sourceTree: string;
@@ -101,14 +99,14 @@ export interface Receipt {
   verdict: 'verified';
   findingsSummary: { new: number; carried: number; fixed: number; unverified: number };
   activeWaivers: number;
-  signature?: string; // slot only; OIDC signing is a clean seam (A8)
+  signature?: string; // reserved for later signed attestation; unused today
   mintedAt: string;
 }
 
 // ---- the whole serializable output ----
 export interface Result {
-  schemaVersion: 'usabl.result.v1'; // versioned contract; every projection echoes it (ta borrow)
-  verdict: Verdict | null; // null iff coverage.nothingToCheck
+  schemaVersion: 'usabl.result.v1'; // versioned contract; every projection echoes it
+  verdict: Verdict | null; // null when idle (nothing to check) or when run() failed open (exit 4)
   summary: string;
   screens: ScreenScan[];
   coverage: Coverage;
@@ -119,10 +117,9 @@ export interface Result {
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);
-// 5 RESERVED for the opt-in judgment soft-gate (off by default; Phase 3+; decision-log 8.2).
-//   The default install never emits 5; the deterministic gate stays exactly as above.
+// 5 reserved for an opt-in judgment soft-gate (off by default). The default install never emits 5.
 
-// ---- conformance summary (Fork 1b): a NON-GATING projection of Result, never a single score ----
+// ---- conformance summary: a NON-GATING projection of Result, never a single score ----
 // Always shows every bucket side by side; never hides the not-evaluated denominator. The gate
 // verdict stays the authority; this is a read-only view for CI comments and the ACCESSIBILITY.md row.
 export interface ConformanceSummary {
@@ -133,7 +130,7 @@ export interface ConformanceSummary {
   notEvaluated: { unresolvedFiles: number; gaps: number };
 }
 
-// ---- evidence floor + waivers (A2, A3) ----
+// ---- evidence floor + waivers ----
 export interface FloorEntry {
   screenId: string;
   layer: string; // contest: 'axe' | 'pf' | 'walk'
@@ -161,7 +158,7 @@ export interface WaiverLedger {
   waivers: Waiver[];
 }
 
-// ---- interaction contracts (Phase 4 consumes; frozen day 1 per A-contract) ----
+// ---- interaction contracts (frozen now; voicing lane consumes later) ----
 export interface Step {
   do: string;
   [key: string]: unknown;
@@ -182,7 +179,7 @@ export interface InteractionContract {
   maxTabPath?: number;
 }
 
-// ---- design intake + docs output (Phase 6 consumes) ----
+// ---- design intake + docs output (types frozen; producers not wired yet) ----
 export type RequirementKind = 'content' | 'flow' | 'doc';
 export interface ContentAssertion {
   type: 'content';
@@ -225,7 +222,7 @@ export interface DocArtifact {
   boundToReceipt?: string;
 }
 
-// ---- injected dependencies (ground-truth §6) ----
+// ---- injected dependencies (all I/O enters here; run() has none of its own) ----
 export interface AxNode {
   name: string | null;
   role: string | null;
@@ -277,7 +274,7 @@ export interface Deps {
   scannerVersions: { axeCore: string; playwright: string; chromium: string };
 }
 
-// ---- config (ground-truth §22) ----
+// ---- config (operator file; engine does not hardcode origins) ----
 export interface SurfaceConfig {
   id: string;
   url: string;
@@ -290,7 +287,7 @@ export interface UsablConfig {
   surfaces: SurfaceConfig[];
   requirements?: string;
   guardedPaths: string[];
-  promotedObligations?: string[]; // empty by default (A-evclass)
+  promotedObligations?: string[]; // empty by default; promotion is not wired yet
 }
 
 // ---- gate I/O ----
@@ -305,6 +302,6 @@ export interface GateInput {
 export interface GateOutput {
   verdict: Verdict | null;
   findings: Finding[];
-  exitCode: 0 | 1 | 2 | 3 | 4 | 5; // 5 reserved for the opt-in judgment soft-gate (Phase 3+)
+  exitCode: 0 | 1 | 2 | 3 | 4 | 5; // 5 reserved; default install never emits it
   summary: string;
 }

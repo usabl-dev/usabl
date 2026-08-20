@@ -1,9 +1,9 @@
 import type { Deps } from '../contracts/index.js';
 
 /**
- * Local tamper-evident guard: a guarded path diverges when its working-tree content
- * does not exactly equal its HEAD content (including being absent from HEAD).
- * Config-guards-itself ordering and session pinning are added in Phase 3.
+ * Local tamper-evident guard, not tamper-proof. CI is the tamper-proof tier.
+ * A path diverges when working-tree bytes are not exactly HEAD bytes (including
+ * a file that exists only on one side). Byte compare, no parse, no "looks safe."
  */
 export async function computeGuardDivergence(deps: Deps, guardedPaths: string[]): Promise<string[]> {
   const diverged: string[] = [];

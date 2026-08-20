@@ -7,7 +7,10 @@ const HEADLINE: Record<string, string> = {
   approval_required: 'APPROVAL REQUIRED',
 };
 
-/** Pure projection of a Result to a human summary. Never re-derives findings. */
+/**
+ * Human CLI projection of a Result. Never re-derives findings or a verdict.
+ * `verdict === null` prints IDLE (nothing to check), not NOT COVERED.
+ */
 export function formatSummary(result: Result): string {
   const lines: string[] = [];
   const head = result.verdict === null ? 'IDLE' : HEADLINE[result.verdict] ?? result.verdict;
