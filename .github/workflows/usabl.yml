@@ -5,6 +5,8 @@ name: usabl
 on:
   pull_request:
     branches: [main]
+    # Default types omit `edited`. Retargeting a PR onto main must still run check.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
