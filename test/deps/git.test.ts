@@ -1,0 +1,62 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { makeGitReader } from '../../src/deps/git.js';
+
+const execFileAsync = promisify(execFile);
+
+async function runGit(repoPath: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, { cwd: repoPath, encoding: 'utf8' });
+  return stdout.trimEnd();
+}
+
+async function setupTempRepo(): Promise<string> {
+  const repoPath = await mkdtemp(join(tmpdir(), 'usabl-git-test-'));
+  await runGit(repoPath, ['init', '--initial-branch=main']);
+  await runGit(repoPath, ['config', 'user.name', 'Test User']);
+  await runGit(repoPath, ['config', 'user.email', 'test@example.com']);
+
+  await writeFile(join(repoPath, 'screen.tsx'), 'first version\n', 'utf8');
+  await runGit(repoPath, ['add', 'screen.tsx']);
+  await runGit(repoPath, ['commit', '-m', 'seed']);
+
+  await writeFile(join(repoPath, 'screen.tsx'), 'second version\n', 'utf8');
+  return repoPath;
+}
+
+describe('makeGitReader', () => {
+  let repoPath = '';
+
+  beforeEach(async () => {
+    repoPath = await setupTempRepo();
+  });
+
+  afterEach(async () => {
+    await rm(repoPath, { recursive: true, force: true });
+  });
+
+  it('reads status and head file content from a temp repository', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+
+    await expect(git.statusZ()).resolves.toContainEqual({ code: 'M', path: 'screen.tsx' });
+    await expect(git.show('HEAD', 'screen.tsx')).resolves.toBe('first version\n');
+    await expect(git.show('HEAD', 'missing.tsx')).resolves.toBeNull();
+  });
+
+  it('returns stable tree metadata for the index', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+
+    const firstTree = await git.writeTree();
+    const secondTree = await git.writeTree();
+    const head = await git.headRef();
+    const blobs = await git.lsTree('HEAD', ['screen.tsx', 'missing.tsx']);
+
+    expect(secondTree).toBe(firstTree);
+    expect(head).toMatch(/^[0-9a-f]{40}$/);
+    expect(blobs['screen.tsx']).toMatch(/^[0-9a-f]{40}$/);
+    expect(blobs).not.toHaveProperty('missing.tsx');
+  });
+});
