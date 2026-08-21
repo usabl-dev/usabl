@@ -1,12 +1,25 @@
 import type { Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 
+/**
+ * CLI summary output for a Result.
+ * It must never re-derive findings, mint verdicts, or mutate raw Result data.
+ */
 const HEADLINE: Record<string, string> = {
   verified: 'VERIFIED',
   regression: 'REGRESSION',
   not_covered: 'NOT COVERED',
   approval_required: 'APPROVAL REQUIRED',
 };
+
+/**
+ * Page and scanner strings are untrusted at terminal egress.
+ * Neutralize only the printed projection so the stored Result stays raw and receipt checks stay honest.
+ * When gap.reason or finding.why is printed in the future, route it through this helper too.
+ */
+export function neutralizePrintedText(text: string): string {
+  return neutralize(text);
+}
 
 /**
  * Human CLI projection of a Result. Never re-derives findings or a verdict.
@@ -21,12 +34,11 @@ export function formatSummary(result: Result): string {
     (f) => f.evidenceClass === 'deterministic' && (f.status === 'new' || f.status === 'carried'),
   );
   for (const f of gating) {
-    // whatUserExperiences and fix are page-derived once live scanning is wired, so this terminal egress
-    // neutralizes only the printed projection. Result stays raw so receipts remain honest about findings.
-    const whatUserExperiences = neutralize(f.whatUserExperiences);
-    const fix = neutralize(f.fix);
+    const rule = neutralizePrintedText(f.rule);
+    const whatUserExperiences = neutralizePrintedText(f.whatUserExperiences);
+    const fix = neutralizePrintedText(f.fix);
     lines.push(
-      `  [${f.status}] ${f.screenId} · ${f.layer}/${f.rule} (${f.severity}) - ${whatUserExperiences}`,
+      `  [${f.status}] ${f.screenId} · ${f.layer}/${rule} (${f.severity}) - ${whatUserExperiences}`,
     );
     if (fix) {
       lines.push(`      fix: ${fix}`);

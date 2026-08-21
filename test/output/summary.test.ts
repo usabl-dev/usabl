@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatSummary } from '../../src/output/summary.js';
+import { formatSummary, neutralizePrintedText } from '../../src/output/summary.js';
 import type { Result } from '../../src/contracts/index.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
@@ -128,5 +128,42 @@ describe('formatSummary', () => {
     expect(out).toContain('Raise contrastusabl: VERIFIED');
     expect(out).not.toContain('\u2028');
     expect(out).not.toContain('\u2029');
+  });
+
+  it('neutralizes rule text before terminal output', () => {
+    const r = baseResult({
+      verdict: 'regression',
+      exitCode: 1,
+      findings: [
+        {
+          rule: '\u001b[31mcolor-contrast',
+          layer: 'axe',
+          severity: 'serious',
+          evidenceClass: 'deterministic',
+          screenId: 'clusters',
+          elementPath: 'button',
+          elementName: 'Save',
+          role: 'button',
+          whatUserExperiences: 'Low contrast text',
+          why: '',
+          fix: 'Raise contrast to 4.5:1',
+          evidence: {},
+          confidence: 'fail',
+          elementKey: 'k',
+          identityBasis: 'name',
+          status: 'new',
+        },
+      ],
+    });
+
+    const out = formatSummary(r);
+    expect(out).toContain('color-contrast');
+    expect(out).not.toContain('\u001b');
+  });
+
+  it('strips control bytes from gap-shaped printed text helper input', () => {
+    const text = 'screen gap: \u001b[31mcheck did not run';
+
+    expect(neutralizePrintedText(text)).toBe('screen gap: check did not run');
   });
 });
