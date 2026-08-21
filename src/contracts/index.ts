@@ -48,7 +48,7 @@ export interface Finding extends Draft {
 
 // ---- announcement / transcript (voicing lane; unused until that lane is wired) ----
 export interface AnnouncementToken {
-  kind: 'name' | 'role' | 'state';
+  kind: 'name' | 'role' | 'state' | 'live';
   text: string | null;
   fromTree: boolean;
   source: FactSource;
@@ -162,6 +162,9 @@ export interface WaiverLedger {
 export interface Step {
   do: string;
   [key: string]: unknown;
+}
+export interface StepRunner {
+  run(page: Page, steps: Step[]): Promise<TranscriptStop[]>;
 }
 export interface SpeechObligation {
   class: string; // promotion keys on this
