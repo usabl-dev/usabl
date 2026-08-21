@@ -10,6 +10,7 @@ import { makeCheckRunner } from './providers/check-runner.js';
 import { makeKeyboardWalkProvider } from './providers/keyboard-walk/index.js';
 import { makeStepRunner } from './providers/keyboard-walk/steps.js';
 import { makeRulepackProvider } from './providers/rulepack/index.js';
+import { formatIntegrationSmokeEgress } from './output/integration-smoke.js';
 
 async function main(): Promise<number> {
   if (process.env.USABL_INTEGRATION !== '1') {
@@ -41,13 +42,7 @@ async function main(): Promise<number> {
 
   try {
     const scan = await runner.scan({ id: 'integration-smoke', url });
-    process.stdout.write(`stops: ${scan.stops.length} drafts: ${scan.drafts.length} gaps: ${scan.gaps.length}\n`);
-    for (const draft of scan.drafts) {
-      process.stdout.write(`  [${draft.layer}] ${draft.rule} (${draft.confidence}) @ ${draft.elementPath}\n`);
-    }
-    for (const gap of scan.gaps) {
-      process.stdout.write(`  GAP ${gap.state}: ${gap.reason}\n`);
-    }
+    process.stdout.write(`${formatIntegrationSmokeEgress(scan)}\n`);
     return 0;
   } finally {
     await browser.close();
