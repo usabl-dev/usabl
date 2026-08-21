@@ -61,6 +61,26 @@ describe('computeCoverage', () => {
     expect(cov.affected.every((s) => s.provenance === 'wide-blast')).toBe(true);
   });
 
+  it('keeps manual surfaces additive when wide-blast already queued discovered routes', async () => {
+    const cfg: UsablConfig = {
+      ...baseConfig,
+      surfaces: [{ id: 'admin', url: '/admin', files: ['src/App.tsx'] }],
+    };
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+      }),
+      'src/App.tsx': `export default function App() {}`,
+      'src/Home.tsx': `export default function Home() {}`,
+    });
+    const cov = await computeCoverage(fs, cfg, ['src/App.tsx']);
+    expect(cov.affected).toHaveLength(2);
+    expect(cov.affected.some((s) => s.screenId === 'home' && s.provenance === 'wide-blast')).toBe(true);
+    expect(cov.affected.some((s) => s.screenId === 'admin' && s.provenance === 'manual')).toBe(true);
+    expect(cov.unresolvedFiles).toEqual([]);
+    expect(cov.gaps).toEqual([]);
+  });
+
   it('records unresolved coverage when wide-blast matches and no routes exist', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({ routes: [] }),

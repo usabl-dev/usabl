@@ -39,6 +39,10 @@ function addAffected(target: Map<string, AffectedScreen>, candidate: AffectedScr
   }
 }
 
+function hasAffectedUrl(target: Map<string, AffectedScreen>, url: string): boolean {
+  return [...target.values()].some((screen) => screen.url === url);
+}
+
 function addGap(gaps: CoverageGap[], file: string): void {
   gaps.push({
     ref: file,
@@ -107,9 +111,23 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
 
   for (const file of uiFiles) {
     const isWideBlastMatch = isWideBlastFile(file, config.discovery.wideBlastGlobs);
-    // Skip file-level mapping only when wide-blast actually queued at least one
-    // discovered route. An empty route list is not coverage evidence.
+    // Wide-blast already covered discovered routes for this file, so per-file
+    // route-graph matching adds no new evidence.
+    // Manual surfaces are still additive because operators can declare URLs that
+    // discovery did not find and those URLs still need scans.
+    // An empty route list is not coverage evidence, so this branch only applies
+    // when wide-blast actually attributed at least one discovered route.
     if (isWideBlastMatch && wideBlastAttributedAnyScreen) {
+      for (const surface of config.surfaces) {
+        if (!surface.files.includes(file) || hasAffectedUrl(affectedByScreen, surface.url)) {
+          continue;
+        }
+        addAffected(affectedByScreen, {
+          screenId: surface.id,
+          url: surface.url,
+          provenance: 'manual',
+        });
+      }
       continue;
     }
 
