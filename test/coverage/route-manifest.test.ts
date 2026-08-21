@@ -5,6 +5,16 @@ import { makeFakeDeps } from '../../src/deps/fakes.js';
 const fsOf = (files: Record<string, string>) => makeFakeDeps({ files }).fs;
 
 describe('parseRouteManifest', () => {
+  it('rejects sidecar routes whose url contains @', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'x', url: '@169.254.169.254/latest', entryFile: 'src/X.tsx' }],
+      }),
+    });
+
+    await expect(parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] })).rejects.toThrow(/url/i);
+  });
+
   it('rejects sidecar routes that reuse a screenId for different URLs', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({
@@ -44,6 +54,7 @@ describe('parseRouteManifest', () => {
     const manifest = await parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] });
     expect(manifest.routes).toHaveLength(1);
     expect(manifest.routes[0]!.screenId).toBe('clusters');
+    expect(manifest.routes[0]!.url).toBe('/clusters');
     expect(manifest.routes[0]!.entryFile).toBe('src/ClustersPage.tsx');
   });
 

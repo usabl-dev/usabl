@@ -27,6 +27,16 @@ function expectString(value: unknown, field: string): string {
   return value;
 }
 
+function expectRoutePathUrl(value: unknown, field: string): string {
+  const url = expectString(value, field);
+  // Sidecar route urls are path suffixes under appBaseUrl. Accepting a second
+  // origin here would let discovery steer scans away from the operator app.
+  if (!url.startsWith('/') || url.includes('@')) {
+    throw new Error(`usabl.routes.json ${field} must start with "/" and must not contain "@"`);
+  }
+  return url;
+}
+
 function expectEntryFile(value: unknown): string | null {
   if (value === null) return null;
   if (typeof value === 'string') return value;
@@ -53,7 +63,7 @@ function parseSidecar(raw: string): RouteManifest {
       }
       return {
         screenId: expectString(entry['screenId'], `routes[${index}].screenId`),
-        url: expectString(entry['url'], `routes[${index}].url`),
+        url: expectRoutePathUrl(entry['url'], `routes[${index}].url`),
         entryFile: expectEntryFile(entry['entryFile']),
       };
     }),

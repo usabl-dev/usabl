@@ -34,6 +34,17 @@ describe('computeCoverage', () => {
     expect(cov.gaps).toHaveLength(0);
   });
 
+  it('rejects sidecar routes that point at a different origin', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'clusters', url: 'https://evil.example/p', entryFile: 'src/ClustersPage.tsx' }],
+      }),
+      'src/ClustersPage.tsx': `export default function ClustersPage() {}`,
+    });
+
+    await expect(computeCoverage(fs, baseConfig, ['src/ClustersPage.tsx'])).rejects.toThrow(/url/i);
+  });
+
   it('populates a gap with a reason for a UI file that maps to no screen', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({ routes: [] }),

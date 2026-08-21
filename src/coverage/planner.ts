@@ -30,7 +30,15 @@ function isWideBlastFile(file: string, globs: string[]): boolean {
 }
 
 function routeUrl(baseUrl: string, routePath: string): string {
-  return baseUrl.replace(/\/$/, '') + routePath;
+  const joinBaseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+  const expectedOrigin = new URL(baseUrl).origin;
+  const resolved = new URL(routePath, joinBaseUrl);
+  // Route paths must remain on the operator app origin. A sidecar entry that
+  // changes origin would mint dishonest scan targets outside declared scope.
+  if (resolved.origin !== expectedOrigin) {
+    throw new Error(`route url must stay on app origin: ${routePath}`);
+  }
+  return resolved.toString();
 }
 
 function addAffected(target: Map<string, AffectedScreen>, candidate: AffectedScreen): void {
