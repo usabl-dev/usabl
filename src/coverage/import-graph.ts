@@ -11,6 +11,9 @@ interface ImportGraphView {
   unresolvable: string[];
 }
 
+// This pattern stays single-line by design. A multiline static import can be missed,
+// which under-reports edges. Under-reporting is safer here because discovery must
+// never invent import edges that were not proven by concrete source text and files.
 const FROM_IMPORT_RE = /\bimport\s+(?:type\s+)?[^"'`;\n]+?\sfrom\s*["'`]([^"'`]+)["'`]/g;
 const DYNAMIC_IMPORT_RE = /\bimport\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
 const PROBE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts'];
