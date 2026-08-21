@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>usabl live fixture</title>
+  </head>
+  <body>
+    <main>
+      <h1>Accessibility fixture</h1>
+      <span id="trigger-label">Launch report</span>
+      <button id="labelledby-button" type="button" aria-labelledby="trigger-label">
+        <span aria-hidden="true">*</span>
+      </button>
+      <button id="announce-button" type="button">Create toast</button>
+      <div id="live-region" role="status" aria-live="polite"></div>
+      <div id="hidden-ignored" style="display: none" aria-label="Hidden action"></div>
+    </main>
+    <script>
+      (() => {
+        const announceButton = document.getElementById('announce-button');
+        const liveRegion = document.getElementById('live-region');
+        let count = 0;
+        announceButton?.addEventListener('click', () => {
+          count += 1;
+          if (liveRegion) {
+            liveRegion.textContent = `Saved successfully ${count}`;
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
