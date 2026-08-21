@@ -84,6 +84,16 @@ function parseRouterFallback(rawRouter: string): RouteManifest {
   return { routes };
 }
 
+function assertUniqueScreenIds(routes: RouteEntry[]): void {
+  const seen = new Set<string>();
+  for (const route of routes) {
+    if (seen.has(route.screenId)) {
+      throw new Error(`Duplicate screenId in route manifest: "${route.screenId}"`);
+    }
+    seen.add(route.screenId);
+  }
+}
+
 export async function parseRouteManifest(
   fs: FsGlob,
   discovery: UsablConfig['discovery'],
@@ -92,7 +102,11 @@ export async function parseRouteManifest(
   // Sidecar wins whenever present, even if routes is intentionally empty.
   // Do not fall through to regex and invent a second incompatible manifest.
   if (sidecar !== null) {
-    return parseSidecar(sidecar);
+    const manifest = parseSidecar(sidecar);
+    // screenId is the planner's scan identity. Duplicate ids on different URLs
+    // can silently map one file to the wrong screen and hide real coverage gaps.
+    assertUniqueScreenIds(manifest.routes);
+    return manifest;
   }
 
   const router = await fs.readFile(discovery.routerFile);
@@ -100,5 +114,7 @@ export async function parseRouteManifest(
     return { routes: [] };
   }
 
-  return parseRouterFallback(router);
+  const manifest = parseRouterFallback(router);
+  assertUniqueScreenIds(manifest.routes);
+  return manifest;
 }

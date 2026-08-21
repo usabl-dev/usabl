@@ -5,6 +5,36 @@ import { makeFakeDeps } from '../../src/deps/fakes.js';
 const fsOf = (files: Record<string, string>) => makeFakeDeps({ files }).fs;
 
 describe('parseRouteManifest', () => {
+  it('rejects sidecar routes that reuse a screenId for different URLs', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [
+          { screenId: 'main', url: '/decoy', entryFile: 'src/Decoy.tsx' },
+          { screenId: 'main', url: '/real', entryFile: 'src/Real.tsx' },
+        ],
+      }),
+    });
+
+    await expect(parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] })).rejects.toThrow(
+      /screenId/i,
+    );
+  });
+
+  it('accepts sidecar routes when each screenId is unique', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [
+          { screenId: 'decoy', url: '/decoy', entryFile: 'src/Decoy.tsx' },
+          { screenId: 'real', url: '/real', entryFile: 'src/Real.tsx' },
+        ],
+      }),
+    });
+
+    const manifest = await parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] });
+    expect(manifest.routes).toHaveLength(2);
+    expect(manifest.routes.map((route) => route.screenId).sort()).toEqual(['decoy', 'real']);
+  });
+
   it('loads a JSON sidecar when present', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({
