@@ -279,6 +279,7 @@ export interface GitReader {
   show(ref: string, path: string): Promise<string | null>;
   statusZ(): Promise<Array<{ code: string; path: string }>>;
   lsTree(ref: string, paths: string[]): Promise<Record<string, string>>;
+  lsFiles(ref: string, prefix: string): Promise<string[]>;
   headRef(): Promise<string>;
 }
 export interface FsGlob {
@@ -310,7 +311,9 @@ export interface UsablConfig {
   discovery: { routerFile: string; wideBlastGlobs: string[] };
   surfaces: SurfaceConfig[];
   requirements?: string;
-  guardedPaths: string[]; // compared as listed today; directory expansion is not wired yet
+  // Guarded paths can be files or directories. The trust guard expands directories so
+  // edits cannot hide in newly added files under a listed prefix.
+  guardedPaths: string[];
   promotedObligations?: string[]; // empty by default; promotion is not wired yet
 }
 
