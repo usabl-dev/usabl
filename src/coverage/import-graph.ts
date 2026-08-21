@@ -2,7 +2,9 @@
  * Import graph discovery for coverage planning.
  * It follows only files that can be proven to exist on disk.
  * It must never guess alias config or unresolved file extensions.
+ * `unresolvable` records incomplete graph evidence, not a coverage gap by itself.
  */
+// Use POSIX paths so coverage keys stay stable across operating systems.
 import { posix as path } from 'node:path';
 import type { FsGlob } from '../contracts/index.js';
 
@@ -16,6 +18,7 @@ interface ImportGraphView {
 // never invent import edges that were not proven by concrete source text and files.
 const FROM_IMPORT_RE = /\bimport\s+(?:type\s+)?[^"'`;\n]+?\sfrom\s*["'`]([^"'`]+)["'`]/g;
 const DYNAMIC_IMPORT_RE = /\bimport\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
+// Probe in a deterministic order. First existing file wins and nothing else is inferred.
 const PROBE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts'];
 
 function extractSpecifiers(source: string): string[] {
@@ -40,6 +43,7 @@ function isRelativeSpecifier(specifier: string): boolean {
 }
 
 function isAliasSpecifier(specifier: string): boolean {
+  // This module has no alias config source. @/ and ~/ stay unresolved on purpose.
   return specifier.startsWith('@/') || specifier.startsWith('~/');
 }
 
@@ -94,15 +98,19 @@ export async function buildImportGraph(fs: FsGlob, entryFiles: string[]): Promis
       }
 
       if (!isRelativeSpecifier(specifier)) {
+        // Bare package imports are not app-surface files, so they are ignored.
         continue;
       }
 
       const resolved = await resolveRelativeImport(fs, file, specifier);
       if (resolved === null) {
+        // Missing relative files stay explicit as file:specifier evidence.
+        // Guessing would create fake closure edges.
         pushUnique(unresolvable, `${file}:${specifier}`);
         continue;
       }
 
+      // Record the edge first, then let visited checks stop cycle re-traversal.
       pushUnique(fileEdges, resolved);
       queue.push(resolved);
     }

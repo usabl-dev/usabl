@@ -1,6 +1,7 @@
 /**
  * Route manifest discovery for coverage planning.
- * It prefers the sidecar because only that source can truthfully attribute entry files.
+ * Sidecar metadata is preferred because only authored entry files can be
+ * attributed honestly. Router text fallback can recover paths, not ownership.
  * It must never invent entry-file attribution from router text.
  */
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
@@ -33,6 +34,8 @@ function expectEntryFile(value: unknown): string | null {
 }
 
 function parseSidecar(raw: string): RouteManifest {
+  // Corrupt sidecar data is a hard failure here so callers can fail open later.
+  // Pretending parse failures mean "no routes" would silently rewrite the story.
   const parsed: unknown = JSON.parse(raw);
   if (!isRecord(parsed)) {
     throw new Error('usabl.routes.json must be an object');
@@ -58,12 +61,15 @@ function parseSidecar(raw: string): RouteManifest {
 }
 
 function screenIdFromUrl(url: string): string {
+  // Stable id from URL path only. This is not a guessed source-file identity.
   const trimmed = url.startsWith('/') ? url.slice(1) : url;
   if (trimmed.length === 0) return 'root';
   return trimmed.replace(/\//g, '-');
 }
 
 function parseRouterFallback(rawRouter: string): RouteManifest {
+  // Fallback only reads literal path="..." fragments from route declarations.
+  // It cannot prove rendered component files, so entryFile remains null.
   const re = /path=["'`](\/[^"'`]*)["'`]/g;
   const routes: RouteEntry[] = [];
   for (const match of rawRouter.matchAll(re)) {
@@ -83,6 +89,8 @@ export async function parseRouteManifest(
   discovery: UsablConfig['discovery'],
 ): Promise<RouteManifest> {
   const sidecar = await fs.readFile('usabl.routes.json');
+  // Sidecar wins whenever present, even if routes is intentionally empty.
+  // Do not fall through to regex and invent a second incompatible manifest.
   if (sidecar !== null) {
     return parseSidecar(sidecar);
   }

@@ -1,6 +1,8 @@
 /**
  * Coverage planning maps changed UI files to affected screens and explicit gaps.
- * It must never decide a verdict, and it must never invent route attribution.
+ * It feeds the gate with evidence only. It must never mint or imply a verdict.
+ * `run()` still uses a stub mapper today, so this planner stays strict now so
+ * wiring the real mapper later cannot silently turn missing coverage into a pass.
  * Unmapped UI becomes a written gap so the gate can return not_covered.
  */
 import type { AffectedScreen, Coverage, CoverageGap, FsGlob, UsablConfig } from '../contracts/index.js';
@@ -8,6 +10,9 @@ import { buildImportGraph } from './import-graph.js';
 import { parseRouteManifest } from './route-manifest.js';
 
 function matchGlob(pattern: string, file: string): boolean {
+  // Encode ** first so the later * replacement cannot consume path separators.
+  // The **/? form is treated as "zero or more directories", which lets
+  // src/**/*.tsx match src/App.tsx and deeper files.
   const rx = new RegExp(
     '^' +
       pattern
@@ -60,6 +65,7 @@ function importClosure(graph: { get(file: string): string[] }, entryFile: string
 
 export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFiles: string[]): Promise<Coverage> {
   const uiFiles = changedFiles.filter((file) => config.uiFileGlobs.some((glob) => matchGlob(glob, file)));
+  // No UI-touching files means idle. That is not the same claim as "covered".
   if (uiFiles.length === 0) {
     return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
   }
@@ -72,6 +78,8 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
   const hasWideBlast = uiFiles.some((file) => isWideBlastFile(file, config.discovery.wideBlastGlobs));
   let wideBlastAttributedAnyScreen = false;
   if (hasWideBlast) {
+    // A shell or global file can influence any route, so queue every discovered
+    // route instead of pretending we can prove a single-screen blast radius.
     const affectedCountBeforeWideBlast = affectedByScreen.size;
     for (const route of manifest.routes) {
       addAffected(affectedByScreen, {
@@ -84,10 +92,14 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
   }
 
   const attributedRoutes = manifest.routes.filter(
+    // Regex fallback routes have entryFile: null, so they cannot truthfully
+    // participate in route-graph closure matching.
     (route): route is { screenId: string; url: string; entryFile: string } => route.entryFile !== null,
   );
   const routeEntries = [...new Set(attributedRoutes.map((route) => route.entryFile))];
   const graph = await buildImportGraph(fs, routeEntries);
+  // Graph unresolvable entries are diagnostics about discovery fidelity.
+  // They are not coverage gaps unless a changed UI file maps to no screen.
   const routeClosures = new Map<string, Set<string>>();
   for (const route of attributedRoutes) {
     routeClosures.set(route.screenId, importClosure(graph, route.entryFile));
@@ -95,8 +107,8 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
 
   for (const file of uiFiles) {
     const isWideBlastMatch = isWideBlastFile(file, config.discovery.wideBlastGlobs);
-    // Skip file-level mapping only when wide-blast already queued every known route.
-    // If no route was attributed, this file must still fall through to manual or unresolved.
+    // Skip file-level mapping only when wide-blast actually queued at least one
+    // discovered route. An empty route list is not coverage evidence.
     if (isWideBlastMatch && wideBlastAttributedAnyScreen) {
       continue;
     }
@@ -121,6 +133,8 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
     }
 
     let manualMatch = false;
+    // Manual surfaces are additive fallback after discovery. They can rescue
+    // known files, but they never replace route discovery or hide unmapped UI.
     for (const surface of config.surfaces) {
       if (!surface.files.includes(file)) {
         continue;
@@ -134,6 +148,8 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
     }
 
     if (!manualMatch) {
+      // A changed UI file with no route-graph, wide-blast, or manual mapping is a
+      // real coverage gap. Silent empties would let the gate misread this as safe.
       unresolvedFiles.push(file);
       addGap(gaps, file);
     }
