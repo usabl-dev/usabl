@@ -36,7 +36,10 @@ export function gate(input: GateInput): GateOutput {
   // Waived and fixed stay visible. They do not block and they do not mint verified.
   const gating = findings.filter((f) => GATES(f.evidenceClass) && f.status !== 'waived' && f.status !== 'fixed');
   const hasNewFail = gating.some((f) => f.confidence === 'fail' && f.status === 'new');
-  const hasUnverified = gating.some((f) => f.confidence === 'unverified') || input.coverage.unresolvedFiles.length > 0;
+  const hasUnverified =
+    gating.some((f) => f.confidence === 'unverified') ||
+    input.coverage.unresolvedFiles.length > 0 ||
+    input.coverage.gaps.length > 0;
 
   if (hasNewFail) return { verdict: 'regression', findings, exitCode: 1, summary: verdictSummary('regression', gating) };
   if (hasUnverified) {

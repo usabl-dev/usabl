@@ -77,6 +77,16 @@ describe('gate verdict', () => {
     expect(out.verdict).toBe('not_covered');
   });
 
+  it('returns not_covered when coverage reports a scan gap', () => {
+    const coverage: Coverage = {
+      ...covered,
+      gaps: [{ ref: 'http://x/clusters', state: 'not-covered', reason: 'screen failed to open: timeout' }],
+    };
+    const out = gate({ ...base, coverage, drafts: [] });
+    expect(out.verdict).toBe('not_covered');
+    expect(out.exitCode).toBe(3);
+  });
+
   it('verifies when there are no gating problems', () => {
     const out = gate({ ...base, coverage: covered, drafts: [] });
     expect(out.verdict).toBe('verified');
