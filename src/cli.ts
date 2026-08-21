@@ -2,7 +2,7 @@
 /**
  * Thin CLI over `run()`. Prints `formatSummary` and exits with `result.exitCode`.
  * Sample `usabl.config.json` URLs (`http://127.0.0.1:5173`) are the fixture app's
- * Vite origin, not a hardcoded engine target. The engine reads config.
+ * Vite origin, not a hardcoded engine target. The engine always reads operator config.
  */
 import { readFile } from 'node:fs/promises';
 import { run } from './run.js';
@@ -72,6 +72,7 @@ function parseConfig(raw: string): UsablConfig {
 }
 
 async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
+  // Targets come from config so the same engine can run in local, CI, and preview environments.
   return parseConfig(await readFile(path, 'utf8'));
 }
 
@@ -88,6 +89,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stdout.write(formatSummary(result) + '\n');
     return result.exitCode;
   } finally {
+    // Always close browser resources, even when run() throws before returning a Result.
     await deps.browser.close();
   }
 }
@@ -97,7 +99,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   main()
     .then((code) => process.exit(code))
     .catch((err) => {
-      // Same fail-open contract as `run()`: disclose, exit 4, never a silent 0.
+      // CLI entrypoint keeps run() fail-open semantics: disclose and exit 4, never silent green.
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`usabl: ${message}\n`);
       process.exit(4);

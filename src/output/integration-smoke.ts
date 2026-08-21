@@ -1,3 +1,8 @@
+/**
+ * Integration smoke egress formatter for ScreenScan.
+ * This unit projects live scan output for humans and debugging.
+ * It must never alter scan data or print untrusted text without neutralization.
+ */
 import type { ScreenScan } from '../contracts/index.js';
 import { neutralizePrintedText } from './summary.js';
 

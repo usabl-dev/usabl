@@ -1,3 +1,8 @@
+/**
+ * Guard divergence checker for policy-sensitive files.
+ * This unit reports byte-level drift only.
+ * It must never waive differences, infer safety, or decide a verdict.
+ */
 import type { Deps } from '../contracts/index.js';
 
 /**

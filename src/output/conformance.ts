@@ -1,3 +1,8 @@
+/**
+ * Non-gating conformance projection for reporting surfaces.
+ * This unit summarizes an already-gated Result.
+ * It must never recompute findings, collapse into one score, or mint a verdict.
+ */
 import type { ConformanceSummary, Finding, Result } from '../contracts/index.js';
 
 const isDeterministic = (f: Finding): boolean => f.evidenceClass === 'deterministic';
