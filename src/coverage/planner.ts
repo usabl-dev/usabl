@@ -70,7 +70,9 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
   const gaps: CoverageGap[] = [];
 
   const hasWideBlast = uiFiles.some((file) => isWideBlastFile(file, config.discovery.wideBlastGlobs));
+  let wideBlastAttributedAnyScreen = false;
   if (hasWideBlast) {
+    const affectedCountBeforeWideBlast = affectedByScreen.size;
     for (const route of manifest.routes) {
       addAffected(affectedByScreen, {
         screenId: route.screenId,
@@ -78,6 +80,7 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
         provenance: 'wide-blast',
       });
     }
+    wideBlastAttributedAnyScreen = affectedByScreen.size > affectedCountBeforeWideBlast;
   }
 
   const attributedRoutes = manifest.routes.filter(
@@ -91,7 +94,10 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
   }
 
   for (const file of uiFiles) {
-    if (isWideBlastFile(file, config.discovery.wideBlastGlobs)) {
+    const isWideBlastMatch = isWideBlastFile(file, config.discovery.wideBlastGlobs);
+    // Skip file-level mapping only when wide-blast already queued every known route.
+    // If no route was attributed, this file must still fall through to manual or unresolved.
+    if (isWideBlastMatch && wideBlastAttributedAnyScreen) {
       continue;
     }
 

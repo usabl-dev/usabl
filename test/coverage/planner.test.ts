@@ -61,6 +61,35 @@ describe('computeCoverage', () => {
     expect(cov.affected.every((s) => s.provenance === 'wide-blast')).toBe(true);
   });
 
+  it('records unresolved coverage when wide-blast matches and no routes exist', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({ routes: [] }),
+      'src/App.tsx': `export default function App() {}`,
+    });
+    const cov = await computeCoverage(fs, baseConfig, ['src/App.tsx']);
+    expect(cov.nothingToCheck).toBe(false);
+    expect(cov.affected).toEqual([]);
+    expect(cov.unresolvedFiles).toEqual(['src/App.tsx']);
+    expect(cov.gaps).toHaveLength(1);
+    expect(cov.gaps[0]!.state).toBe('unresolved');
+    expect(cov.gaps[0]!.reason).not.toBe('');
+  });
+
+  it('uses manual surfaces when wide-blast matches and no routes exist', async () => {
+    const cfg: UsablConfig = {
+      ...baseConfig,
+      surfaces: [{ id: 'login', url: '/login', files: ['src/App.tsx'] }],
+    };
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({ routes: [] }),
+      'src/App.tsx': `export default function App() {}`,
+    });
+    const cov = await computeCoverage(fs, cfg, ['src/App.tsx']);
+    expect(cov.affected.some((s) => s.screenId === 'login' && s.provenance === 'manual')).toBe(true);
+    expect(cov.unresolvedFiles).toEqual([]);
+    expect(cov.gaps).toEqual([]);
+  });
+
   it('manual surface config is an additive fallback', async () => {
     const cfg: UsablConfig = {
       ...baseConfig,
