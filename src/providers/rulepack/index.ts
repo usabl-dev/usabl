@@ -1,5 +1,5 @@
 /**
- * PatternFly rulepack provider for deterministic static checks.
+ * PatternFly rulepack provider for deterministic static checks and interaction probes.
  * This unit must never mint a verdict. It returns Drafts so the gate stays the only authority.
  */
 import type { Draft, Provider, ProviderContext } from '../../contracts/index.js';
@@ -9,6 +9,7 @@ import { checkPfRowActionNameUnique } from './pf-row-action-name-unique.js';
 import { checkPfTableHeaderAssoc } from './pf-table-header-assoc.js';
 import { checkPfToastLiveRegion } from './pf-toast-live-region.js';
 import { checkPfToolbarLabeledWhenRepeated } from './pf-toolbar-labeled-when-repeated.js';
+import { probeDialogs, probeMenus } from './probes.js';
 
 type RulepackCheck = (ctx: ProviderContext) => Promise<Draft[]>;
 
@@ -33,6 +34,8 @@ export function makeRulepackProvider(extraChecks: RulepackCheck[] = []): Provide
       for (const check of STATIC_CHECKS) {
         drafts.push(...(await check(ctx)));
       }
+      drafts.push(...(await probeDialogs(ctx)));
+      drafts.push(...(await probeMenus(ctx)));
       for (const check of extraChecks) {
         drafts.push(...(await check(ctx)));
       }

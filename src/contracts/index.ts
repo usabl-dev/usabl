@@ -236,6 +236,11 @@ export interface Page {
   focusBody(): Promise<void>;
   tab(): Promise<void>;
   press(key: string): Promise<void>;
+  click(selector: string): Promise<void>;
+  activeElementIs(selector: string): Promise<boolean>;
+  activeElementWithin(selector: string): Promise<boolean>;
+  armAnnouncementCapture(): Promise<void>;
+  drainAnnouncements(): Promise<string[]>;
   activeNode(): Promise<AxNode | null>;
   activePath(): Promise<string>;
   axAt(selector: string): Promise<AxNode | null>;
