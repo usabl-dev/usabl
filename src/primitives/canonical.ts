@@ -1,3 +1,8 @@
+/**
+ * Canonical serialization and hashing primitives for receipts and stable comparisons.
+ * This unit provides deterministic byte output only.
+ * It must never decide verdicts or hide non-serializable data behind silent coercion.
+ */
 import { createHash } from 'node:crypto';
 
 /**

@@ -12,7 +12,8 @@ import type { AxeIssue } from '../providers/axe/index.js';
 const READY_TIMEOUT_MS = 15_000;
 const CLICK_TIMEOUT_MS = 3_000;
 
-// The observer is injected before document scripts run so the first live update is not lost.
+// Inject before app scripts run so the first live update is observable and not lost.
+// Late injection would under-report announcements and create a false sense of coverage.
 const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
   const LIVE = '[aria-live],[role="status"],[role="alert"],[role="log"]';
   const buffer = [];
@@ -202,6 +203,8 @@ async function backendNodeIdForActiveElement(cdp: CDPSession): Promise<number | 
 }
 
 async function axFromBackendId(cdp: CDPSession, backendNodeId: number): Promise<AxNode | null> {
+  // Name and role come from the browser accessibility tree, not DOM text fallbacks.
+  // `aria-label || innerText` can diverge from assistive-tech output and would be dishonest.
   const partialTree: unknown = await cdp.send('Accessibility.getPartialAXTree', {
     backendNodeId,
     fetchRelatives: false,

@@ -1,3 +1,8 @@
+/**
+ * Terminal summary projection for Result.
+ * This unit renders operator-facing text only.
+ * It must never mutate Result, mint a verdict, or pass through untrusted text unsanitized.
+ */
 import type { Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 

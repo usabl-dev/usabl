@@ -38,8 +38,10 @@ function matchGlob(pattern: string, path: string): boolean {
 
 /**
  * Map changed UI files onto configured surfaces.
- * Route-graph discovery is not wired. Unmapped UI files stay in `unresolvedFiles`
- * so the gate can return `not_covered` instead of a silent pass.
+ * This is a local conservative stub that maps only configured surfaces.
+ * `src/coverage/planner.ts` exists, but planner discovery is not wired here yet.
+ * Unmapped UI files stay in `unresolvedFiles` so the gate can return `not_covered`.
+ * Sampling is forbidden - if a file cannot map to a surface, the run discloses the gap.
  */
 function computeCoverage(config: UsablConfig, changed: string[]): Coverage {
   const uiFiles = changed.filter((f) => config.uiFileGlobs.some((g) => matchGlob(g, f)));

@@ -1,10 +1,21 @@
+/**
+ * usabl kernel vocabulary for verdicts, evidence, coverage, and injected seams.
+ * This unit defines shared shapes only.
+ * It must never mint a verdict, infer a pass, or hide not-covered work.
+ * Layers project a Result, but the gate remains the only verdict authority.
+ */
+
 // ---- verdict + evidence vocabulary ----
 export type Severity = 'critical' | 'serious' | 'moderate' | 'minor';
+// Evidence class is provenance, not authority. Deterministic can gate today (or later by promotion).
+// Preview and model-judgment stay visible for operator context and never mint a gate verdict.
 export type EvidenceClass =
   | 'deterministic'
   | 'preview'
   | 'model-judgment'
   | 'human-confirmed';
+// Verdict is the gate output when gating ran. `verdict: null` is intentional disclosure for idle
+// or fail-open runs, not a fifth verdict and not a synonym for not_covered.
 export type Verdict =
   | 'verified'
   | 'regression'
@@ -25,6 +36,7 @@ export interface EvidenceFacts {
   state?: Record<string, Fact<unknown>>;
   extra?: Record<string, unknown>;
 }
+// Providers emit Draft only. They report observations and confidence, but never set status or verdict.
 export interface Draft {
   rule: string;
   layer: string; // contest ids: 'axe' | 'pf' | 'walk'; stays open
@@ -40,6 +52,7 @@ export interface Draft {
   evidence: EvidenceFacts;
   confidence: 'fail' | 'unverified';
 }
+// Finding is gate-owned enrichment. The gate adds identity and lifecycle status to each Draft.
 export interface Finding extends Draft {
   elementKey: string | null; // null when identityBasis is 'count'
   identityBasis: IdentityBasis;
@@ -76,7 +89,7 @@ export interface AffectedScreen {
 export interface CoverageGap {
   ref: string; // surface id, url, or file path this gap concerns
   state: 'unresolved' | 'not-covered' | 'skipped' | 'capability-denied';
-  reason: string; // why it was not exercised; never empty
+  reason: string; // why it was not exercised; never empty because unresolved is evidence, not idle
 }
 export interface Coverage {
   changedFiles: string[];
@@ -88,6 +101,7 @@ export interface Coverage {
 // The gate treats unresolved files and coverage gaps as not-covered evidence.
 
 // ---- receipt (re-checkable proof of a verified run) ----
+// Receipts exist only for verified deterministic outcomes. Preview and model-judgment never mint one.
 export interface Receipt {
   schemaVersion: 1;
   sourceTree: string;
@@ -107,7 +121,7 @@ export interface Receipt {
 // ---- the whole serializable output ----
 export interface Result {
   schemaVersion: 'usabl.result.v1'; // versioned contract; every projection echoes it
-  verdict: Verdict | null; // null when idle (nothing to check) or when run() failed open (exit 4)
+  verdict: Verdict | null; // null when idle or fail-open disclosure; never a hidden extra verdict
   summary: string;
   screens: ScreenScan[];
   coverage: Coverage;
@@ -296,7 +310,7 @@ export interface UsablConfig {
   discovery: { routerFile: string; wideBlastGlobs: string[] };
   surfaces: SurfaceConfig[];
   requirements?: string;
-  guardedPaths: string[]; // file paths only; directories are not expanded by guard divergence
+  guardedPaths: string[]; // compared as listed today; directory expansion is not wired yet
   promotedObligations?: string[]; // empty by default; promotion is not wired yet
 }
 
