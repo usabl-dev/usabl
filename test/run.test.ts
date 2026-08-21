@@ -25,7 +25,13 @@ const failDraft: Draft = {
   evidence: { name: { value: 'Save', source: 'ax-tree', fromTree: true } },
   confidence: 'fail',
 };
-const scanWith = (drafts: Draft[]): ScreenScan => ({ screenId: 'clusters', url: config.surfaces[0]!.url, stops: [], drafts });
+const scanWith = (drafts: Draft[], gaps: ScreenScan['gaps'] = []): ScreenScan => ({
+  screenId: 'clusters',
+  url: config.surfaces[0]!.url,
+  stops: [],
+  drafts,
+  gaps,
+});
 const guardOk = { files: { 'usabl.config.json': '{}' }, headContents: { 'usabl.config.json': '{}' } };
 
 describe('run', () => {
@@ -67,6 +73,22 @@ describe('run', () => {
     const r = await run(deps, config);
     expect(r.verdict).toBe('not_covered');
     expect(r.coverage.unresolvedFiles).toContain('fixtures/app/src/Orphan.tsx');
+    expect(r.exitCode).toBe(3);
+  });
+
+  it('is not_covered (exit 3) when the scan returns coverage gaps', async () => {
+    const deps = makeFakeDeps({
+      ...guardOk,
+      changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
+      scans: {
+        clusters: scanWith([], [{ ref: config.surfaces[0]!.url, state: 'not-covered', reason: 'screen failed to open: timeout' }]),
+      },
+    });
+    const r = await run(deps, config);
+    expect(r.verdict).toBe('not_covered');
+    expect(r.coverage.gaps).toEqual([
+      { ref: config.surfaces[0]!.url, state: 'not-covered', reason: 'screen failed to open: timeout' },
+    ]);
     expect(r.exitCode).toBe(3);
   });
 

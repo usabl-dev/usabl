@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import type { ScreenScan } from '../../src/contracts/index.js';
 
-const scan: ScreenScan = { screenId: 'clusters', url: 'http://x/clusters', stops: [], drafts: [] };
+const scan: ScreenScan = { screenId: 'clusters', url: 'http://x/clusters', stops: [], drafts: [], gaps: [] };
 
 describe('makeFakeDeps', () => {
   it('provides a fixed clock and version metadata', () => {

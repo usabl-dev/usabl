@@ -63,6 +63,7 @@ export interface ScreenScan {
   url: string;
   stops: TranscriptStop[];
   drafts: Draft[];
+  gaps: CoverageGap[];
 }
 
 // ---- coverage ----
@@ -84,7 +85,7 @@ export interface Coverage {
   gaps: CoverageGap[]; // in-scope surfaces or checks that could not be exercised, each with a reason
   nothingToCheck: boolean; // no UI-touching files; not a verdict
 }
-// The gate does not read coverage.gaps yet. Gaps stay [] and are counted only by computeConformance.
+// The gate treats unresolved files and coverage gaps as not-covered evidence.
 
 // ---- receipt (re-checkable proof of a verified run) ----
 export interface Receipt {
@@ -257,6 +258,7 @@ export interface Page {
 }
 export interface BrowserDriver {
   open(url: string): Promise<Page>;
+  close(): Promise<void>;
 }
 export interface GitReader {
   writeTree(): Promise<string>;

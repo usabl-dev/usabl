@@ -66,7 +66,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     runnerVersion: spec.runnerVersion,
     scannerVersions: spec.scannerVersions,
     // URL is config for later Playwright wiring. Fakes never fetch it.
-    browser: { open: async (_url: string) => fakePage() },
+    browser: { open: async (_url: string) => fakePage(), close: async () => {} },
     git: {
       writeTree: async () => spec.writeTree,
       show: async (_ref, path) => spec.headContents[path] ?? null,
@@ -82,7 +82,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
       glob: async (patterns) => Object.keys(spec.files).filter((f) => patterns.some((p) => matchGlob(p, f))),
     },
     checkRunner: {
-      scan: async ({ id, url }) => spec.scans[id] ?? { screenId: id, url, stops: [], drafts: [] },
+      scan: async ({ id, url }) => spec.scans[id] ?? { screenId: id, url, stops: [], drafts: [], gaps: [] },
     },
   };
 }

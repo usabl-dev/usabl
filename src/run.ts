@@ -63,16 +63,20 @@ async function readJson<T>(deps: Deps, path: string): Promise<T | null> {
 export async function run(deps: Deps, config: UsablConfig): Promise<Result> {
   try {
     const changed = (await deps.git.statusZ()).map((c) => c.path);
-    const coverage = computeCoverage(config, changed);
+    const discoveredCoverage = computeCoverage(config, changed);
     const guardDivergedPaths = await computeGuardDivergence(deps, config.guardedPaths);
 
     // Dirty policy or idle: do not open the harness. Otherwise scan every affected surface.
     const screens: ScreenScan[] = [];
-    if (guardDivergedPaths.length === 0 && !coverage.nothingToCheck) {
-      for (const s of coverage.affected) {
+    if (guardDivergedPaths.length === 0 && !discoveredCoverage.nothingToCheck) {
+      for (const s of discoveredCoverage.affected) {
         screens.push(await deps.checkRunner.scan({ id: s.screenId, url: s.url }));
       }
     }
+    const coverage: Coverage = {
+      ...discoveredCoverage,
+      gaps: [...discoveredCoverage.gaps, ...screens.flatMap((screen) => screen.gaps)],
+    };
     const drafts = screens.flatMap((s) => s.drafts);
 
     const floor = (await readJson<EvidenceFloor>(deps, '.usabl-evidence.json')) ?? EMPTY_FLOOR;
@@ -105,12 +109,13 @@ export async function run(deps: Deps, config: UsablConfig): Promise<Result> {
       exitCode: gated.exitCode,
     };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     // Crash: disclose and fail open (exit 4). verdict is null because the gate never ran.
     // This is not idle (`nothingToCheck` is false). Never mint verified from a crash.
     return {
       schemaVersion: 'usabl.result.v1',
       verdict: null,
-      summary: `unhandled error: ${(err as Error).message}`,
+      summary: `unhandled error: ${message}`,
       screens: [],
       coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
       findings: [],
