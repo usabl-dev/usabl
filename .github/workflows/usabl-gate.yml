@@ -1,0 +1,95 @@
+# usabl PR gate comment
+name: usabl-gate
+
+on:
+  pull_request:
+    branches: [main]
+    # Retargeting onto main must re-run trusted-ref policy checks.
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  gate-comment:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      BASE_REF: ${{ github.base_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install and build
+        run: npm ci && npm run build
+
+      - name: Fetch trusted base ref when absent
+        run: |
+          if ! git rev-parse --verify --quiet "origin/${BASE_REF}" > /dev/null; then
+            git fetch origin "${BASE_REF}" --depth=1
+          fi
+
+      - name: Run usabl check
+        run: |
+          code=0; node dist/cli.js check --ci --trusted-ref "origin/${BASE_REF}" --json > usabl-result.json || code=$?
+
+      - name: Read gate exit code
+        id: read_exit
+        run: |
+          exit_code="$(node -e "const fs = require('node:fs'); try { const raw = fs.readFileSync('usabl-result.json', 'utf8'); if (raw.trim().length === 0) { process.stdout.write(''); process.exit(0); } const parsed = JSON.parse(raw); if (typeof parsed.exitCode === 'number') { process.stdout.write(String(parsed.exitCode)); } } catch { process.stdout.write(''); }")"
+          if [ -z "$exit_code" ]; then
+            echo "usabl-result.json did not include exitCode"
+            exit 1
+          fi
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+
+      - name: Build PR comment markdown
+        run: node dist/cli.js comment < usabl-result.json > usabl-comment.md
+
+      - name: Upsert sticky PR comment
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const marker = '<!-- usabl-report -->';
+            const body = fs.readFileSync('usabl-comment.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
+
+      - name: Fail when gate exits nonzero
+        run: |
+          if [ "${{ steps.read_exit.outputs.exit_code }}" != "0" ]; then
+            exit "${{ steps.read_exit.outputs.exit_code }}"
+          fi

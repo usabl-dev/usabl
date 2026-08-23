@@ -1,0 +1,158 @@
+/**
+ * Pull request comment projection for a gated Result.
+ * This unit renders markdown only.
+ * It must never recompute findings, mint a verdict, or act as a second gate.
+ */
+import type { Finding, Result, TranscriptStop, Verdict } from '../contracts/index.js';
+import { neutralize } from '../primitives/neutralize.js';
+import { computeConformance } from '../output/conformance.js';
+import { frameUntrusted, scrubResult } from './scrub.js';
+
+const COMMENT_MARKER = '<!-- usabl-report -->';
+const STOP_CAP = 20;
+
+const HEADLINE: Record<Verdict, string> = {
+  verified: 'VERIFIED',
+  regression: 'REGRESSION',
+  not_covered: 'NOT COVERED',
+  approval_required: 'APPROVAL REQUIRED',
+};
+
+function projectHeadline(verdict: Verdict | null): string {
+  // `verdict: null` is explicit idle disclosure from the gate, not a fallback verdict.
+  const headline = verdict === null ? 'IDLE' : HEADLINE[verdict];
+  return `## usabl report: ${headline}`;
+}
+
+function renderReceipt(result: Result): string[] {
+  if (result.receipt === null) {
+    // Receipts are verified-only evidence. Missing receipt must never look like a pass.
+    return ['_No receipt: run was not verified._'];
+  }
+  return [
+    '### Receipt',
+    `- sourceTree: \`${result.receipt.sourceTree}\``,
+    `- policyHash: \`${result.receipt.policyHash}\``,
+    `- runnerVersion: \`${result.receipt.runnerVersion}\``,
+    `- mintedAt: \`${result.receipt.mintedAt}\``,
+  ];
+}
+
+function renderConformance(result: Result): string[] {
+  // This is a read-only three-bucket projection and never a score.
+  const summary = computeConformance(result);
+  return [
+    '### Conformance summary',
+    `- deterministic: new ${summary.deterministic.newFailures}, carried ${summary.deterministic.carried}, waived ${summary.deterministic.waived}, fixed ${summary.deterministic.fixed}`,
+    `- judged: model-judgment ${summary.judged.modelJudgment}, preview ${summary.judged.preview}`,
+    `- not evaluated: unresolved files ${summary.notEvaluated.unresolvedFiles}, gaps ${summary.notEvaluated.gaps}`,
+    `- blocked: ${summary.blocked ? 'yes' : 'no'}`,
+  ];
+}
+
+function formatFinding(finding: Finding): string[] {
+  const rule = neutralize(finding.rule);
+  const layer = neutralize(finding.layer);
+  const screenId = neutralize(finding.screenId);
+  const severity = neutralize(finding.severity);
+  const fix = neutralize(finding.fix);
+  const why = neutralize(finding.why);
+  const framed = frameUntrusted(finding.whatUserExperiences).split('\n');
+  return [
+    `- [${severity}] \`${screenId}\` - \`${layer}/${rule}\``,
+    ...framed.map((line) => `  ${line}`),
+    `  - why: ${why}`,
+    `  - fix: ${fix}`,
+  ];
+}
+
+function renderFindingGroup(title: string, findings: Finding[]): string[] {
+  if (findings.length === 0) {
+    return [`### ${title}`, '- none'];
+  }
+  return [`### ${title}`, ...findings.flatMap((finding) => formatFinding(finding))];
+}
+
+function renderCoverageGaps(result: Result): string[] {
+  if (result.coverage.gaps.length === 0) {
+    return ['### Coverage gaps', '- none'];
+  }
+  return [
+    '### Coverage gaps',
+    ...result.coverage.gaps.map(
+      (gap) =>
+        `- \`${neutralize(gap.ref)}\` (${neutralize(gap.state)}): ${neutralize(gap.reason)}`,
+    ),
+  ];
+}
+
+function formatStop(stop: TranscriptStop): string {
+  const nonLiveTokens = stop.announcement
+    .filter((token) => token.kind !== 'live' && token.text !== null)
+    .map((token) => neutralize(token.text ?? ''));
+  const liveTokens = stop.announcement
+    .filter((token) => token.kind === 'live' && token.text !== null)
+    .map((token) => `[announced] ${neutralize(token.text ?? '')}`);
+  const pieces = [...nonLiveTokens, ...liveTokens].filter((token) => token.length > 0);
+  return pieces.length > 0 ? pieces.join(', ') : neutralize(stop.elementPath);
+}
+
+function renderAnnouncements(result: Result): string[] {
+  const lines = [
+    '### Announcements (current run; base diff arrives with the base-run artifact)',
+    '_current run only. base diff arrives when the base artifact is available._',
+  ];
+
+  for (const screen of result.screens) {
+    if (screen.stops.length === 0) {
+      continue;
+    }
+    lines.push(`#### \`${neutralize(screen.screenId)}\``);
+    const capped = screen.stops.slice(0, STOP_CAP);
+    for (const stop of capped) {
+      lines.push(`${stop.index + 1}. ${formatStop(stop)}`);
+    }
+    if (screen.stops.length > STOP_CAP) {
+      lines.push(`- showing first ${STOP_CAP} of ${screen.stops.length} stops`);
+    }
+  }
+
+  if (lines.length === 2) {
+    lines.push('- none');
+  }
+
+  return lines;
+}
+
+export function projectPrComment(result: Result): string {
+  // Scrub first because PR comments are public egress for page-derived text.
+  const safe = scrubResult(result);
+  const deterministicNew = safe.findings.filter(
+    (finding) => finding.evidenceClass === 'deterministic' && finding.status === 'new',
+  );
+  const deterministicCarried = safe.findings.filter(
+    (finding) => finding.evidenceClass === 'deterministic' && finding.status === 'carried',
+  );
+  const advisory = safe.findings.filter(
+    (finding) => finding.evidenceClass === 'preview' || finding.evidenceClass === 'model-judgment',
+  );
+
+  return [
+    COMMENT_MARKER,
+    projectHeadline(safe.verdict),
+    '',
+    ...renderReceipt(safe),
+    '',
+    ...renderConformance(safe),
+    '',
+    ...renderFindingGroup('New barriers', deterministicNew),
+    '',
+    ...renderFindingGroup('Known (carried)', deterministicCarried),
+    '',
+    ...renderFindingGroup('Advisory (non-gating)', advisory),
+    '',
+    ...renderCoverageGaps(safe),
+    '',
+    ...renderAnnouncements(safe),
+  ].join('\n');
+}
