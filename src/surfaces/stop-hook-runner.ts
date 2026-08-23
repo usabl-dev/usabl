@@ -5,13 +5,13 @@
  * It must never block via exit code or mint a verdict outside the gate.
  */
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { verifyReceipt } from '../evidence/receipt.js';
 import { run } from '../run.js';
-import { computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
+import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
 import { loadConfig } from '../cli.js';
 import { evaluateStopDecision, type HookContext } from './stop-hook.js';
 import { BYPASS_ONCE_PATH, loadReceipt, saveReceipt, type ReceiptFs } from './receipt-store.js';
@@ -59,6 +59,27 @@ function isSessionPins(value: unknown): value is SessionPins {
 
 function sessionPinPath(tmpDirPath: string, sessionId: string): string {
   return join(tmpDirPath, `usabl-pins-${sessionId}.json`);
+}
+
+function parseSessionId(raw: string | null): { sessionId: string | null; warning: string | null } {
+  if (raw === null) {
+    return { sessionId: null, warning: null };
+  }
+  const candidate = raw.trim();
+  const safePattern = /^[A-Za-z0-9._-]{1,128}$/;
+  if (!safePattern.test(candidate) || candidate.includes('..')) {
+    return {
+      sessionId: null,
+      warning: `NOT verified - ignored unsafe session_id: ${JSON.stringify(raw)}.`,
+    };
+  }
+  return { sessionId: candidate, warning: null };
+}
+
+function isWithinDir(baseDir: string, path: string): boolean {
+  const resolvedBase = resolve(baseDir);
+  const resolvedPath = resolve(path);
+  return resolvedPath === resolvedBase || resolvedPath.startsWith(resolvedBase + sep);
 }
 
 async function writeStderr(ports: StopHookRunnerPorts, text: string): Promise<void> {
@@ -176,15 +197,25 @@ export async function runStopHook(input: StopHookInput, ports: StopHookRunnerPor
 
     const config = await ports.loadConfig();
     deps = await ports.buildDeps(config);
-
-    const receiptCheck = await verifyStoredReceipt(ports, deps, config);
-    if (receiptCheck.verified) {
-      await writeStderr(ports, receiptCheck.details);
-      return 0;
+    const dirtyGuardedPaths = await checkGuard(deps, config);
+    if (dirtyGuardedPaths.length === 0) {
+      // Receipt trust binds committed state, while checkGuard catches local guarded edits before any fast allow.
+      const receiptCheck = await verifyStoredReceipt(ports, deps, config);
+      if (receiptCheck.verified) {
+        await writeStderr(ports, receiptCheck.details);
+        return 0;
+      }
     }
 
-    if (input.sessionId !== null) {
-      const pinsPath = sessionPinPath(ports.tmpDir(), input.sessionId);
+    const parsedSession = parseSessionId(input.sessionId);
+    if (parsedSession.warning !== null) {
+      await writeStderr(ports, parsedSession.warning);
+    }
+    if (parsedSession.sessionId !== null) {
+      const pinsPath = sessionPinPath(ports.tmpDir(), parsedSession.sessionId);
+      if (!isWithinDir(ports.tmpDir(), pinsPath)) {
+        await writeStderr(ports, `NOT verified - ignored unsafe session_id: ${JSON.stringify(parsedSession.sessionId)}.`);
+      } else {
       const [previousPins, nextPins] = await Promise.all([
         readSessionPins(ports.fs, pinsPath),
         computeSessionPins(deps, config),
@@ -207,6 +238,7 @@ export async function runStopHook(input: StopHookInput, ports: StopHookRunnerPor
           return 0;
         }
         await writeSessionPins(ports.fs, pinsPath, nextPins);
+      }
       }
     }
 

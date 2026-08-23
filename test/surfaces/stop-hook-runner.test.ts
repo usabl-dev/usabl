@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Deps, Result, UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
+import { mintReceipt } from '../../src/evidence/receipt.js';
 import { BYPASS_ONCE_PATH } from '../../src/surfaces/receipt-store.js';
 import { evaluateStopDecision } from '../../src/surfaces/stop-hook.js';
 import { runStopHookFromStdin } from '../../src/surfaces/stop-hook-runner.js';
@@ -8,12 +9,14 @@ import { runStopHookFromStdin } from '../../src/surfaces/stop-hook-runner.js';
 class MemoryRunnerFs {
   private readonly files = new Map<string, string>();
   readonly deleted: string[] = [];
+  readonly writes: string[] = [];
 
   async readFile(path: string): Promise<string | null> {
     return this.files.get(path) ?? null;
   }
 
   async writeFile(path: string, contents: string): Promise<void> {
+    this.writes.push(path);
     this.files.set(path, contents);
   }
 
@@ -59,6 +62,8 @@ const baseResult = (over: Partial<Result>): Result => ({
 function makePorts(overrides: {
   runEngine?: (deps: Deps, config: UsablConfig) => Promise<Result>;
   loadConfig?: () => Promise<UsablConfig>;
+  buildDeps?: (config: UsablConfig) => Promise<Deps>;
+  tmpDir?: () => string;
 } = {}) {
   const fs = new MemoryRunnerFs();
   const stdout: string[] = [];
@@ -71,7 +76,7 @@ function makePorts(overrides: {
     stderr,
     ports: {
       fs,
-      tmpDir: () => '/tmp',
+      tmpDir: overrides.tmpDir ?? (() => '/tmp'),
       writeTree: () => deps.git.writeTree(),
       stdoutWrite: async (text: string) => {
         stdout.push(text);
@@ -80,7 +85,7 @@ function makePorts(overrides: {
         stderr.push(text);
       },
       loadConfig: overrides.loadConfig ?? (async () => configFixture),
-      buildDeps: async (_config: UsablConfig) => deps,
+      buildDeps: overrides.buildDeps ?? (async (_config: UsablConfig) => deps),
       runEngine: overrides.runEngine ?? (async () => baseResult({ verdict: 'verified' })),
       evaluateDecision: evaluateStopDecision,
     },
@@ -214,5 +219,70 @@ describe('stop-hook-runner protocol', () => {
     expect(stderr.join('')).toContain('NOT verified');
     expect(stderr.join('')).toContain('continuation already active');
     await expect(fs.readFile('/tmp/usabl-pins-session-b.json')).resolves.toBe(JSON.stringify(previousPins, null, 2));
+  });
+
+  it('skips receipt fast path when guarded files are dirty', async () => {
+    const config: UsablConfig = {
+      ...configFixture,
+      guardedPaths: ['usabl.config.json'],
+    };
+    const deps = makeFakeDeps({
+      writeTree: 'tree-clean',
+      runnerVersion: '0.1.0',
+      files: {
+        'usabl.config.json': '{"guardedPaths":["usabl.config.json"],"appBaseUrl":"http://dirty"}',
+      },
+      headContents: {
+        'usabl.config.json': '{"guardedPaths":["usabl.config.json"],"appBaseUrl":"http://clean"}',
+      },
+      headBlobs: {
+        'usabl.config.json': 'blob-config',
+        '.usabl-evidence.json': 'blob-evidence',
+        '.usabl-waivers.json': 'blob-waivers',
+        'usabl.routes.json': 'blob-routes',
+      },
+    });
+    const receipt = await mintReceipt(deps, config, {
+      surfaces: ['cli'],
+      checked: ['clusters'],
+      notCovered: [],
+      findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 },
+      activeWaivers: 0,
+    });
+
+    const { ports, fs, stderr } = makePorts({
+      loadConfig: async () => config,
+      buildDeps: async () => deps,
+    });
+    fs.set('.usabl/receipt.json', JSON.stringify(receipt, null, 2));
+    let runEngineCalled = false;
+    ports.runEngine = async () => {
+      runEngineCalled = true;
+      return baseResult({ verdict: 'verified', receipt: null });
+    };
+
+    const exitCode = await runStopHookFromStdin('{}', ports);
+
+    expect(exitCode).toBe(0);
+    expect(runEngineCalled).toBe(true);
+    expect(stderr.join('')).not.toContain('verified receipt sourceTree');
+  });
+
+  it('ignores unsafe session ids and avoids unsafe writes', async () => {
+    const { ports, fs, stderr } = makePorts({
+      tmpDir: () => '/tmp/safe-root',
+      runEngine: async () => baseResult({ verdict: 'verified', receipt: null }),
+    });
+
+    const exitCode = await runStopHookFromStdin(
+      JSON.stringify({ session_id: '../../etc/passwd', stop_hook_active: false }),
+      ports,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stderr.join('')).toContain('NOT verified');
+    expect(stderr.join('')).toContain('session_id');
+    expect(fs.writes.every((path) => !path.includes('..'))).toBe(true);
+    expect(fs.writes.every((path) => !path.includes('/etc/passwd'))).toBe(true);
   });
 });
