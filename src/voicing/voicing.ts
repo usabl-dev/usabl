@@ -1,7 +1,8 @@
 /**
  * Word-level voicing advisory checks for interaction contract windows.
- * This unit emits preview Draft observations only.
- * It must never mint a verdict, write a receipt, or promote evidence classes.
+ * This unit emits preview Draft observations by default and deterministic misses
+ * only when the caller passes a promoted obligation class list.
+ * It must never mint a verdict, write a receipt, or write promotion config.
  * Gate remains the only verdict authority.
  */
 import type { AnnouncementToken, Draft, InteractionContract, SpeechObligation, TranscriptStop } from '../contracts/index.js';
@@ -35,6 +36,7 @@ function makeMissingAnnouncementDraft(
   obligation: SpeechObligation,
   screenId: string,
   elementPath: string,
+  promoted: boolean,
   stop?: TranscriptStop,
 ): Draft {
   const roleToken = stop ? firstNonEmptyToken(stop.announcement, 'role') : null;
@@ -44,8 +46,9 @@ function makeMissingAnnouncementDraft(
     rule: 'voicing/missing-announcement',
     layer: 'voicing',
     severity: 'moderate',
-    // Preview evidence can guide humans but cannot gate a verdict.
-    evidenceClass: 'preview',
+    // Promotion flips only classes the caller listed in config. This tier still never
+    // decides verdicts and never writes config state.
+    evidenceClass: promoted ? 'deterministic' : 'preview',
     screenId,
     elementPath,
     elementName: nameToken?.text ?? null,
@@ -61,23 +64,30 @@ function makeMissingAnnouncementDraft(
         ? { role: { value: roleToken.text, fromTree: roleToken.fromTree, source: roleToken.source } }
         : {}),
     },
-    // Unverified keeps preview misses out of verified receipts and gate authority.
-    confidence: 'unverified',
+    // Unverified keeps advisory misses out of gate authority unless caller promotion says otherwise.
+    confidence: promoted ? 'fail' : 'unverified',
   };
 }
 
-export function runVoicingTier(contract: InteractionContract, stops: TranscriptStop[], screenId: string): Draft[] {
+export function runVoicingTier(
+  contract: InteractionContract,
+  stops: TranscriptStop[],
+  screenId: string,
+  promotedObligations: readonly string[] = [],
+): Draft[] {
   const drafts: Draft[] = [];
-  // Promotion is a config decision in later assembly. This tier does not read
-  // `promotedObligations` and cannot silently flip preview misses into gating data.
+  // Promotion is caller-provided policy. This unit may emit deterministic misses only
+  // for listed classes, and it never writes promotion config.
+  const promoted = new Set(promotedObligations);
 
   for (const obligation of contract.obligations) {
     const windowStop = stops.find((stop) => stop.index === obligation.afterStep);
+    const isPromoted = promoted.has(obligation.class);
 
     if (!windowStop) {
       // Structural checks already report unreachable focus. This advisory draft records that
       // the obligation's word-level evidence is absent because the expected window was missing.
-      drafts.push(makeMissingAnnouncementDraft(obligation, screenId, `step-${obligation.afterStep}`));
+      drafts.push(makeMissingAnnouncementDraft(obligation, screenId, `step-${obligation.afterStep}`, isPromoted));
       continue;
     }
 
@@ -87,7 +97,7 @@ export function runVoicingTier(contract: InteractionContract, stops: TranscriptS
 
     // Matching may normalize punctuation for comparison, but findings still quote raw text so
     // operators can read exactly what assistive technology announced.
-    drafts.push(makeMissingAnnouncementDraft(obligation, screenId, windowStop.elementPath, windowStop));
+    drafts.push(makeMissingAnnouncementDraft(obligation, screenId, windowStop.elementPath, isPromoted, windowStop));
   }
 
   return drafts;
