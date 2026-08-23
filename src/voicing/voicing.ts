@@ -1,7 +1,8 @@
 /**
  * Word-level voicing advisory checks for interaction contract windows.
  * This unit emits preview Draft observations only.
- * It must never mint a verdict, perform promotion, or rewrite display text.
+ * It must never mint a verdict, write a receipt, or promote evidence classes.
+ * Gate remains the only verdict authority.
  */
 import type { AnnouncementToken, Draft, InteractionContract, SpeechObligation, TranscriptStop } from '../contracts/index.js';
 import { obligationSatisfied } from './normalize.js';
@@ -20,6 +21,8 @@ function observedTextQuote(stop?: TranscriptStop): string {
     return 'none';
   }
 
+  // Keep operator-facing evidence as raw transcript text. Normalization belongs to
+  // comparator matching only, and showing normalized tokens would hide what AT said.
   const observed = stop.announcement
     .map((token) => token.text)
     .filter(nonEmptyText)
@@ -41,14 +44,13 @@ function makeMissingAnnouncementDraft(
     rule: 'voicing/missing-announcement',
     layer: 'voicing',
     severity: 'moderate',
+    // Preview evidence can guide humans but cannot gate a verdict.
     evidenceClass: 'preview',
     screenId,
     elementPath,
     elementName: nameToken?.text ?? null,
     role: roleToken?.text ?? null,
     whatUserExperiences: `After step ${obligation.afterStep}, the expected announcement words were missing. Observed announcement text: ${observed}.`,
-    // Word misses are advisory here because normalized comparison can suggest a gap, but only
-    // reproducible deterministic evidence can gate a verdict.
     why: `Obligation "${obligation.class}" requires tokens "${obligation.requiredTokens.join(', ')}" in this window, but they were not all present in the raw observed announcement text: ${observed}.`,
     fix: 'Ensure this interaction announces the required words in the same window, using visible naming and live-region updates where needed.',
     evidence: {
@@ -59,12 +61,15 @@ function makeMissingAnnouncementDraft(
         ? { role: { value: roleToken.text, fromTree: roleToken.fromTree, source: roleToken.source } }
         : {}),
     },
+    // Unverified keeps preview misses out of verified receipts and gate authority.
     confidence: 'unverified',
   };
 }
 
 export function runVoicingTier(contract: InteractionContract, stops: TranscriptStop[], screenId: string): Draft[] {
   const drafts: Draft[] = [];
+  // Promotion is a config decision in later assembly. This tier does not read
+  // `promotedObligations` and cannot silently flip preview misses into gating data.
 
   for (const obligation of contract.obligations) {
     const windowStop = stops.find((stop) => stop.index === obligation.afterStep);
