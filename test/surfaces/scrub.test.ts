@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { Finding, Result } from '../../src/contracts/index.js';
 import { frameUntrusted, redactSecrets, scrubResult } from '../../src/surfaces/scrub.js';
 
+function buildJwtLikeValue(): string {
+  const header = Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url');
+  const payload = Buffer.from('{"sub":"1234"}').toString('base64url');
+  return `${header}.${payload}.signaturepart`;
+}
+
 const baseFinding = (over: Partial<Finding>): Finding => ({
   rule: 'color-contrast',
   layer: 'axe',
@@ -56,6 +62,13 @@ describe('redactSecrets', () => {
 
   it('keeps normal status text unchanged', () => {
     expect(redactSecrets('verified: 0 new findings')).toBe('verified: 0 new findings');
+  });
+
+  it('redacts bare JWT-shaped tokens', () => {
+    const jwt = buildJwtLikeValue();
+    const scrubbed = redactSecrets(jwt);
+
+    expect(scrubbed).toBe('[REDACTED]');
   });
 });
 
@@ -142,6 +155,64 @@ describe('scrubResult', () => {
 
     expect(finding.whatUserExperiences).toBe('HACK');
     expect(finding.whatUserExperiences).not.toContain('\u001b');
+  });
+
+  it('redacts accessToken and api_key nested in evidence.extra', () => {
+    const jwt = buildJwtLikeValue();
+    const raw = baseResult({
+      findings: [
+        baseFinding({
+          evidence: {
+            extra: {
+              accessToken: jwt,
+              api_key: 'do-not-leak-key',
+              html: '<main>safe evidence</main>',
+            },
+          },
+        }),
+      ],
+    });
+
+    const json = JSON.stringify(scrubResult(raw));
+    expect(json).not.toContain(jwt);
+    expect(json).not.toContain('do-not-leak-key');
+    expect(json).toContain('<main>safe evidence</main>');
+  });
+
+  it('keeps receipt policyHash and sourceTree unchanged', () => {
+    const raw = baseResult({
+      receipt: {
+        schemaVersion: 1,
+        sourceTree: 'tree-fixed',
+        baseRevision: null,
+        policyHash: '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+        runnerVersion: '0.0.0-test',
+        scannerVersions: {
+          axeCore: '0.0.0',
+          chromium: '0.0.0',
+          playwright: '0.0.0',
+        },
+        surfaces: ['cli'],
+        coverage: { checked: ['clusters'], notCovered: [] },
+        verdict: 'verified',
+        findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 },
+        activeWaivers: 0,
+        mintedAt: '2026-08-19T00:00:00.000Z',
+      },
+    });
+
+    const scrubbed = scrubResult(raw);
+    const receipt = scrubbed.receipt;
+
+    expect(receipt).toBeDefined();
+    if (!receipt) {
+      throw new Error('baseResult receipt test requires a receipt');
+    }
+
+    expect(receipt.policyHash).toBe(
+      '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+    );
+    expect(receipt.sourceTree).toBe('tree-fixed');
   });
 });
 

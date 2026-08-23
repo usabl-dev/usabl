@@ -6,7 +6,8 @@
 import type { Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 
-const SECRET_KEY_PATTERN = /^(storageState|authorization|password|secret|token|cookie|cookies|apiKey)$/i;
+const SECRET_KEY_PATTERN =
+  /^(storageState|authorization|password|secret|token|cookie|cookies|apiKey|accessToken|refreshToken|idToken|api_key|api-key|session|credentials|privateKey|private_key|clientSecret|client_secret|bearer)$/i;
 
 const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   // Authorization headers often carry bearer credentials that should never leave the raw Result.
@@ -15,6 +16,8 @@ const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: /(token[=:]\s*["']?)[A-Za-z0-9+/=_.-]{8,}(["']?)/gi, replacement: '$1[REDACTED]$2' },
   { pattern: /(password[=:]\s*["']?)\S+(["']?)/gi, replacement: '$1[REDACTED]$2' },
   { pattern: /(secret[=:]\s*["']?)\S+(["']?)/gi, replacement: '$1[REDACTED]$2' },
+  // JWTs are common access-token payloads and can appear as bare values.
+  { pattern: /\b(eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b/g, replacement: '[REDACTED]' },
   { pattern: /(storage[sS]tate:?\s*)\S.*/g, replacement: '$1[REDACTED]' },
 ];
 
