@@ -1,29 +1,13 @@
 /**
  * Coverage planning maps changed UI files to affected screens and explicit gaps.
  * It feeds the gate with evidence only. It must never mint or imply a verdict.
- * `run()` still uses a stub mapper today, so this planner stays strict now so
- * wiring the real mapper later cannot silently turn missing coverage into a pass.
+ * `run()` calls this planner directly, so unmapped UI must stay explicit evidence.
  * Unmapped UI becomes a written gap so the gate can return not_covered.
  */
 import type { AffectedScreen, Coverage, CoverageGap, FsGlob, UsablConfig } from '../contracts/index.js';
 import { buildImportGraph } from './import-graph.js';
 import { parseRouteManifest } from './route-manifest.js';
-
-function matchGlob(pattern: string, file: string): boolean {
-  // Encode ** first so the later * replacement cannot consume path separators.
-  // The **/? form is treated as "zero or more directories", which lets
-  // src/**/*.tsx match src/App.tsx and deeper files.
-  const rx = new RegExp(
-    '^' +
-      pattern
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*\*\/?/g, '\x00')
-        .replace(/\*/g, '[^/]*')
-        .replace(/\x00/g, '.*') +
-      '$',
-  );
-  return rx.test(file);
-}
+import { matchGlob } from '../primitives/match-glob.js';
 
 function isWideBlastFile(file: string, globs: string[]): boolean {
   return globs.some((glob) => matchGlob(glob, file));

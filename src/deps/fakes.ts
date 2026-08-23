@@ -4,6 +4,7 @@
  * Unused Page methods throw: a test that hits them is lying about coverage, not passing.
  */
 import type { Deps, ScreenScan, Page } from '../contracts/index.js';
+import { matchGlob } from '../primitives/match-glob.js';
 
 export interface FakeDepsSpec {
   now: string;
@@ -102,21 +103,4 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
       scan: async ({ id, url }) => spec.scans[id] ?? { screenId: id, url, stops: [], drafts: [], gaps: [] },
     },
   };
-}
-
-/**
- * Tiny glob for tests: `*` is one path segment, `**` is any depth.
- * Encode `**` first so a lone `*` cannot swallow slashes.
- */
-function matchGlob(pattern: string, path: string): boolean {
-  const rx = new RegExp(
-    '^' +
-      pattern
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*\*/g, '\x00')
-        .replace(/\*/g, '[^/]*')
-        .replace(/\x00/g, '.*') +
-      '$',
-  );
-  return rx.test(path);
 }

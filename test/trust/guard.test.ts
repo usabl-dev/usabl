@@ -82,6 +82,36 @@ describe('trust guard', () => {
     ]);
   });
 
+  it('checkGuard builds guarded paths from verified config bytes, not caller memory', async () => {
+    const deps = makeFakeDeps({
+      files: {
+        'usabl.config.json': '{"guardedPaths":["src/gate"]}',
+        'src/gate/index.ts': 'backdoored',
+      },
+      headContents: {
+        'usabl.config.json': '{"guardedPaths":["src/gate"]}',
+        'src/gate/index.ts': 'safe',
+      },
+    });
+
+    await expect(checkGuard(deps, { ...configFixture, guardedPaths: [] })).resolves.toEqual([
+      'src/gate/index.ts',
+    ]);
+  });
+
+  it('checkGuard treats non-object config bytes as config divergence', async () => {
+    const deps = makeFakeDeps({
+      files: {
+        'usabl.config.json': '[]',
+      },
+      headContents: {
+        'usabl.config.json': '[]',
+      },
+    });
+
+    await expect(checkGuard(deps, configFixture)).resolves.toEqual(['usabl.config.json']);
+  });
+
   it('checkGuard reports a modified file under a guarded directory', async () => {
     const deps = makeFakeDeps({
       files: {

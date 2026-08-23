@@ -15,16 +15,56 @@ const ALWAYS_GUARDED = [
 ];
 
 export type SessionPins = Record<string, string>;
+type GuardConfigSource = Pick<UsablConfig, 'guardedPaths' | 'requirements'>;
 
 function normalizePrefix(prefix: string): string {
   return prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseGuardConfigBytes(raw: string): GuardConfigSource | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      return null;
+    }
+
+    const guardedRaw = parsed['guardedPaths'];
+    const guardedPaths: string[] = [];
+    if (guardedRaw !== undefined) {
+      if (!Array.isArray(guardedRaw)) {
+        return null;
+      }
+      for (const entry of guardedRaw) {
+        if (typeof entry !== 'string') {
+          return null;
+        }
+        guardedPaths.push(entry);
+      }
+    }
+
+    const requirementsRaw = parsed['requirements'];
+    if (requirementsRaw !== undefined && typeof requirementsRaw !== 'string') {
+      return null;
+    }
+
+    if (requirementsRaw === undefined) {
+      return { guardedPaths };
+    }
+    return { guardedPaths, requirements: requirementsRaw };
+  } catch {
+    return null;
+  }
 }
 
 /**
  * The guard always includes core policy ledgers even if guardedPaths is empty.
  * `usabl.routes.json` is load-bearing because it controls scan targets.
  */
-export function buildGuardedSet(config: UsablConfig): string[] {
+export function buildGuardedSet(config: GuardConfigSource): string[] {
   const guarded = new Set<string>(ALWAYS_GUARDED);
   if (config.requirements !== undefined) {
     guarded.add(config.requirements);
@@ -79,7 +119,18 @@ export async function checkGuard(deps: Deps, config: UsablConfig): Promise<strin
     return [CONFIG_PATH];
   }
 
-  const expanded = await expandGuardedSet(deps, buildGuardedSet(config));
+  // Guard scope comes from the verified config bytes, not the caller object.
+  // After bytes match HEAD, trusting in-memory config would let a caller edit
+  // guardedPaths and self-approve in the same run.
+  if (workingConfig === null) {
+    return [CONFIG_PATH];
+  }
+  const verifiedConfig = parseGuardConfigBytes(workingConfig);
+  if (verifiedConfig === null) {
+    return [CONFIG_PATH];
+  }
+
+  const expanded = await expandGuardedSet(deps, buildGuardedSet(verifiedConfig));
   const diverged: string[] = [];
   for (const path of expanded) {
     const [working, head] = await Promise.all([deps.fs.readFile(path), deps.git.show('HEAD', path)]);
