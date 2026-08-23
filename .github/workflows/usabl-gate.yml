@@ -1,0 +1,101 @@
+# usabl PR gate comment
+name: usabl-gate
+
+on:
+  pull_request:
+    branches: [main]
+    # Retargeting onto main must re-run trusted-ref policy checks.
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  gate-comment:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      BASE_REF: ${{ github.base_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install and build
+        run: npm ci && npm run build
+
+      - name: Fetch trusted base ref when absent
+        run: |
+          if ! git rev-parse --verify --quiet "origin/${BASE_REF}" > /dev/null; then
+            git fetch origin "${BASE_REF}" --depth=1
+          fi
+
+      - name: Run usabl check against trusted base-ref policy
+        id: usabl
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          code=0
+          # Capture the command status here because a next-line `$?` becomes 0 under set -e.
+          node dist/cli.js check --ci --trusted-ref "origin/${BASE_REF}" --json > usabl-result.json || code=$?
+          echo "exit_code=${code}" >> "$GITHUB_OUTPUT"
+
+      - name: Render comment Markdown
+        run: node dist/cli.js comment < usabl-result.json > usabl-comment.md
+
+      - name: Fallback when comment markdown is empty
+        run: |
+          if [ ! -s usabl-comment.md ]; then
+            printf '%s\n%s\n' '<!-- usabl-report -->' 'NOT verified - comment renderer produced no markdown' > usabl-comment.md
+          fi
+
+      - name: Post sticky PR comment
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const marker = '<!-- usabl-report -->';
+            const body = fs.readFileSync('usabl-comment.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
+
+      - name: Enforce verdict (fail closed on missing exit code)
+        env:
+          USABL_EXIT: ${{ steps.usabl.outputs.exit_code }}
+        run: |
+          if [ -z "${USABL_EXIT}" ]; then
+            echo "usabl produced no exit code; failing closed."
+            exit 1
+          fi
+          exit "${USABL_EXIT}"
