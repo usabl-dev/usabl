@@ -314,7 +314,7 @@ export interface UsablConfig {
   // Guarded paths can be files or directories. The trust guard expands directories so
   // edits cannot hide in newly added files under a listed prefix.
   guardedPaths: string[];
-  promotedObligations?: string[]; // empty by default; promotion is not wired yet
+  promotedObligations?: string[]; // empty by default; listed classes may become deterministic voicing misses; the engine never writes this list
 }
 
 export type Capability = 'live' | 'network' | 'secrets' | 'filesystem-write';

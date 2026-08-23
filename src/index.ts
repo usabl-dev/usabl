@@ -10,3 +10,7 @@ export { sortBy } from './primitives/sortKey.js';
 export { makeFakeDeps } from './deps/fakes.js';
 export { formatSummary } from './output/summary.js';
 export { computeConformance } from './output/conformance.js';
+export { makeVirtualSrProvider } from './voicing/virtual-sr-provider.js';
+export { runStructuralTier } from './voicing/structural.js';
+export { runVoicingTier } from './voicing/voicing.js';
+export { normalizeToken, obligationSatisfied } from './voicing/normalize.js';

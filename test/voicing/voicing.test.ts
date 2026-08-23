@@ -29,6 +29,13 @@ const toastObligation: SpeechObligation = {
   mustAnnounce: false,
 };
 
+const bannerObligation: SpeechObligation = {
+  class: 'banner-announced',
+  afterStep: 2,
+  requiredTokens: ['Deployment failed'],
+  mustAnnounce: false,
+};
+
 const contract: InteractionContract = {
   contractId: 'contract-1',
   surfaceId: 'clusters-page',
@@ -95,5 +102,54 @@ describe('runVoicingTier', () => {
       expect(draft.evidenceClass).toBe('preview');
       expect(draft.confidence).toBe('unverified');
     }
+  });
+
+  it('keeps an unlisted class miss as preview and unverified', () => {
+    const drafts = runVoicingTier(contract, [stopAt(1, '/toast', [live('Loading...')])], 'screen-1', ['other-class']);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.evidenceClass).toBe('preview');
+    expect(drafts[0]?.confidence).toBe('unverified');
+  });
+
+  it('promotes a listed class miss to deterministic fail', () => {
+    const drafts = runVoicingTier(contract, [stopAt(1, '/toast', [live('Loading...')])], 'screen-1', ['toast-announced']);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.rule).toBe('voicing/missing-announcement');
+    expect(drafts[0]?.evidenceClass).toBe('deterministic');
+    expect(drafts[0]?.confidence).toBe('fail');
+  });
+
+  it('keeps raw observed text when a listed class is promoted', () => {
+    const drafts = runVoicingTier(contract, [stopAt(1, '/toast', [live('Loading...')])], 'screen-1', ['toast-announced']);
+    const draft = drafts[0];
+
+    expect(drafts).toHaveLength(1);
+    expect(`${draft?.whatUserExperiences} ${draft?.why}`).toContain('Loading...');
+  });
+
+  it('promotes only listed classes when listed and unlisted misses coexist', () => {
+    const mixedContract: InteractionContract = {
+      ...contract,
+      obligations: [toastObligation, bannerObligation],
+    };
+    const drafts = runVoicingTier(
+      mixedContract,
+      [
+        stopAt(1, '/toast', [live('Loading...')]),
+        stopAt(2, '/banner', [live('Loading...')]),
+      ],
+      'screen-1',
+      ['toast-announced'],
+    );
+
+    expect(drafts).toHaveLength(2);
+    const promoted = drafts.find((draft) => draft.elementPath === '/toast');
+    const unlisted = drafts.find((draft) => draft.elementPath === '/banner');
+    expect(promoted?.evidenceClass).toBe('deterministic');
+    expect(promoted?.confidence).toBe('fail');
+    expect(unlisted?.evidenceClass).toBe('preview');
+    expect(unlisted?.confidence).toBe('unverified');
   });
 });
