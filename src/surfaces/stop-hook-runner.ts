@@ -194,17 +194,19 @@ export async function runStopHook(input: StopHookInput, ports: StopHookRunnerPor
         await writeSessionPins(ports.fs, pinsPath, nextPins);
       } else {
         const drift = diffSessionPins(previousPins, nextPins);
-        await writeSessionPins(ports.fs, pinsPath, nextPins);
         if (drift.length > 0) {
           const message = `NOT verified - guarded policy drift during this session: ${drift.join(', ')}`;
           if (input.stopHookActive) {
             // Allow one continuation while active to avoid recursive stop-hook loops.
+            // We keep the previous pins so a retry cannot convert detected drift into a silent allow.
             await writeStderr(ports, `${message}. continuation already active.`);
             return 0;
           }
+          // Drift is a trust boundary. Overwriting pins here would let "retry stop" clear the evidence.
           await emitBlock(ports, message);
           return 0;
         }
+        await writeSessionPins(ports.fs, pinsPath, nextPins);
       }
     }
 

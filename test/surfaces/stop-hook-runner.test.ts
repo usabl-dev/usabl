@@ -166,4 +166,53 @@ describe('stop-hook-runner protocol', () => {
     expect(exitCode).toBe(0);
     expect(stdout.join('')).not.toContain('"decision":"block"');
   });
+
+  it('blocks on session pin drift and keeps previous pins unchanged', async () => {
+    const { ports, fs, stdout } = makePorts({
+      runEngine: async () => {
+        throw new Error('drift should block before engine run');
+      },
+    });
+    const previousPins = {
+      'usabl.config.json': 'pin-old',
+      '.usabl-evidence.json': 'pin-old-evidence',
+    };
+    fs.set('/tmp/usabl-pins-session-a.json', JSON.stringify(previousPins, null, 2));
+
+    const exitCode = await runStopHookFromStdin(
+      JSON.stringify({ session_id: 'session-a', stop_hook_active: false }),
+      ports,
+    );
+
+    expect(exitCode).toBe(0);
+    const payload = JSON.parse(stdout.join('').trim()) as { decision: string; reason: string };
+    expect(payload.decision).toBe('block');
+    expect(payload.reason).toContain('NOT verified');
+    expect(payload.reason).toContain('guarded policy drift');
+    await expect(fs.readFile('/tmp/usabl-pins-session-a.json')).resolves.toBe(JSON.stringify(previousPins, null, 2));
+  });
+
+  it('allows active continuation on drift and still keeps previous pins', async () => {
+    const { ports, fs, stdout, stderr } = makePorts({
+      runEngine: async () => {
+        throw new Error('active drift should not run engine');
+      },
+    });
+    const previousPins = {
+      'usabl.config.json': 'pin-old',
+      '.usabl-waivers.json': 'pin-old-waiver',
+    };
+    fs.set('/tmp/usabl-pins-session-b.json', JSON.stringify(previousPins, null, 2));
+
+    const exitCode = await runStopHookFromStdin(
+      JSON.stringify({ session_id: 'session-b', stop_hook_active: true }),
+      ports,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.join('')).not.toContain('"decision":"block"');
+    expect(stderr.join('')).toContain('NOT verified');
+    expect(stderr.join('')).toContain('continuation already active');
+    await expect(fs.readFile('/tmp/usabl-pins-session-b.json')).resolves.toBe(JSON.stringify(previousPins, null, 2));
+  });
 });
