@@ -16,6 +16,7 @@ export interface CliOptions {
   json: boolean;
   ci: boolean;
   configPath: string;
+  selfCheck: boolean;
 }
 
 function isFlag(value: string): boolean {
@@ -29,6 +30,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let json = false;
   let ci = false;
   let configPath = 'usabl.config.json';
+  let selfCheck = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -51,6 +53,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
       ci = true;
       continue;
     }
+    if (token === '--self-check') {
+      selfCheck = true;
+      continue;
+    }
     if (token === '--trusted-ref') {
       const value = argv[index + 1];
       if (value === undefined || isFlag(value)) {
@@ -70,7 +76,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
   }
 
-  return { command, staticOnly, trustedRef, json, ci, configPath };
+  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck };
 }
 
 export function ciRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {

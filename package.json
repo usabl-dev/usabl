@@ -11,6 +11,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./vite": {
+      "types": "./dist/vite-plugin.d.ts",
+      "import": "./dist/vite-plugin.js"
+    },
+    "./playwright": {
+      "types": "./dist/playwright-helper.d.ts",
+      "import": "./dist/playwright-helper.js"
     }
   },
   "files": [

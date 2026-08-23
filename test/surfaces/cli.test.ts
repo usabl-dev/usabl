@@ -37,12 +37,22 @@ describe('parseCliArgs', () => {
       json: false,
       ci: false,
       configPath: 'usabl.config.json',
+      selfCheck: false,
     });
   });
 
   it('parses all supported flags', () => {
     expect(
-      parseCliArgs(['--static-only', '--trusted-ref', 'origin/main', '--json', '--ci', '--config', 'x.json']),
+      parseCliArgs([
+        '--static-only',
+        '--trusted-ref',
+        'origin/main',
+        '--json',
+        '--ci',
+        '--config',
+        'x.json',
+        '--self-check',
+      ]),
     ).toEqual({
       command: 'check',
       staticOnly: true,
@@ -50,6 +60,7 @@ describe('parseCliArgs', () => {
       json: true,
       ci: true,
       configPath: 'x.json',
+      selfCheck: true,
     });
   });
 
@@ -69,6 +80,7 @@ describe('parseCliArgs', () => {
       json: false,
       ci: true,
       configPath: 'usabl.config.json',
+      selfCheck: false,
     });
   });
 });

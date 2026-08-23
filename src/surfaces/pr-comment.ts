@@ -43,6 +43,7 @@ function renderConformance(result: Result): string[] {
   const summary = computeConformance(result);
   return [
     '### Conformance summary',
+    `- schemaVersion: \`${result.schemaVersion}\``,
     `- deterministic: new ${summary.deterministic.newFailures}, carried ${summary.deterministic.carried}, waived ${summary.deterministic.waived}, fixed ${summary.deterministic.fixed}`,
     `- judged: model-judgment ${summary.judged.modelJudgment}, preview ${summary.judged.preview}`,
     `- not evaluated: unresolved files ${summary.notEvaluated.unresolvedFiles}, gaps ${summary.notEvaluated.gaps}`,
