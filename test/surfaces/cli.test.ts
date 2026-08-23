@@ -50,6 +50,10 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['comment']).command).toBe('comment');
   });
 
+  it('accepts bypass command', () => {
+    expect(parseCliArgs(['bypass']).command).toBe('bypass');
+  });
+
   it('accepts check command with flags after command', () => {
     expect(parseCliArgs(['check', '--ci'])).toEqual({
       command: 'check',
