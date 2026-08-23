@@ -72,4 +72,13 @@ describe('makeGitReader', () => {
     await expect(git.lsFiles('HEAD', 'src/gate')).resolves.toEqual(['src/gate/index.ts']);
     await expect(git.lsFiles('HEAD', 'src/missing')).resolves.toEqual([]);
   });
+
+  it('lists changed files from merge-base to head with diffNameOnly', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+    const firstCommit = await runGit(repoPath, ['rev-list', '--max-parents=0', 'HEAD']);
+
+    const changed = await git.diffNameOnly(firstCommit);
+    expect(changed).toContain('src/gate/index.ts');
+    expect(changed).not.toContain('src/gate/local-only.ts');
+  });
 });

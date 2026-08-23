@@ -94,6 +94,17 @@ function parseLsFiles(output: string): string[] {
   return [...files].sort();
 }
 
+function parseNameOnly(output: string): string[] {
+  const names = new Set<string>();
+  for (const line of output.split('\n')) {
+    const path = line.trim();
+    if (path.length > 0) {
+      names.add(path);
+    }
+  }
+  return [...names];
+}
+
 async function runGit(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', args, {
     cwd,
@@ -110,6 +121,11 @@ export function makeGitReader(options: { cwd?: string } = {}): GitReader {
     async statusZ() {
       const output = await runGit(cwd, ['status', '--porcelain', '-z']);
       return parseStatus(output);
+    },
+    async diffNameOnly(ref) {
+      // Triple-dot compares merge-base..HEAD so CI sees PR-impact files even when status is clean.
+      const output = await runGit(cwd, ['diff', '--name-only', `${ref}...HEAD`]);
+      return parseNameOnly(output);
     },
     async show(ref, path) {
       try {

@@ -278,6 +278,8 @@ export interface GitReader {
   writeTree(): Promise<string>;
   show(ref: string, path: string): Promise<string | null>;
   statusZ(): Promise<Array<{ code: string; path: string }>>;
+  // Triple-dot diff reports merge-base -> HEAD changes, which keeps CI coverage honest on clean checkouts.
+  diffNameOnly(ref: string): Promise<string[]>;
   lsTree(ref: string, paths: string[]): Promise<Record<string, string>>;
   lsFiles(ref: string, prefix: string): Promise<string[]>;
   headRef(): Promise<string>;

@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /**
- * Thin CLI over `run()`. Prints `formatSummary` and exits with `result.exitCode`.
+ * Thin CLI over `run()` that projects an existing Result to terminal or JSON output.
+ * The CLI never mints verdicts. It only parses args, runs the engine, and projects.
  * Sample `usabl.config.json` URLs (`http://127.0.0.1:5173`) are the fixture app's
  * Vite origin, not a hardcoded engine target. The engine always reads operator config.
  */
 import { readFile } from 'node:fs/promises';
 import { run } from './run.js';
-import { formatSummary } from './output/summary.js';
-import type { SurfaceConfig, UsablConfig } from './contracts/index.js';
+import type { Result, SurfaceConfig, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
+import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli } from './surfaces/cli.js';
 
 function expectObject(value: unknown, label: string): object {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -76,18 +77,75 @@ async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
   return parseConfig(await readFile(path, 'utf8'));
 }
 
+function expectResult(value: unknown): Result {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('comment input must be a Result object');
+  }
+  const schemaVersion = Reflect.get(value, 'schemaVersion');
+  if (schemaVersion !== 'usabl.result.v1') {
+    throw new Error('comment input must have schemaVersion usabl.result.v1');
+  }
+  return value as Result;
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: string[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
+  }
+  return chunks.join('');
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
-  const command = argv[0] ?? 'check';
-  if (command !== 'check') {
-    process.stderr.write(`unknown command: ${command}\n`);
+  let opts;
+  try {
+    opts = parseCliArgs(argv);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`usabl: ${message}\n`);
     return 2;
   }
-  const config = await loadConfig();
-  const deps = await buildDeps(config);
+
+  if (opts.command !== 'check' && opts.command !== 'comment') {
+    process.stderr.write(`unknown command: ${opts.command}\n`);
+    return 2;
+  }
+
+  if (opts.command === 'comment') {
+    // Comment mode is a pure projection from stdin so CI does not import package internals.
+    const parsed: unknown = JSON.parse(await readStdin());
+    const projected = projectCli(expectResult(parsed));
+    process.stdout.write((opts.json ? projected.json : projected.text) + '\n');
+    return projected.exitCode;
+  }
+
+  const refusal = ciRefusal(opts);
+  if (refusal !== null) {
+    process.stderr.write(`usabl: ${refusal.message}\n`);
+    return refusal.exitCode;
+  }
+
+  const config = await loadConfig(opts.configPath);
+  const deps = await buildDeps(config, {
+    // Static-only denies live checks as explicit capability gaps instead of silent omission.
+    allowedCapabilities: opts.staticOnly ? [] : ['live'],
+  });
   try {
-    const result = await run(deps, config);
-    process.stdout.write(formatSummary(result) + '\n');
-    return result.exitCode;
+    let changedFiles: string[] | undefined;
+    if (opts.trustedRef !== null) {
+      // Merge-base diff covers CI checkouts; status paths keep local dirty files in scope.
+      const diffNames = await deps.git.diffNameOnly(opts.trustedRef);
+      const statusPaths = (await deps.git.statusZ()).map((entry) => entry.path);
+      changedFiles = mergeChangedPaths(diffNames, statusPaths);
+    }
+
+    const result = await run(deps, config, {
+      ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
+      ...(changedFiles === undefined ? {} : { changedFiles }),
+    });
+    const projected = projectCli(result);
+    process.stdout.write((opts.json ? projected.json : projected.text) + '\n');
+    return projected.exitCode;
   } finally {
     // Always close browser resources, even when run() throws before returning a Result.
     await deps.browser.close();
