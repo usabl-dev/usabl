@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import type { Deps, UsablConfig } from '../contracts/index.js';
+import type { Capability, Deps, UsablConfig } from '../contracts/index.js';
 import { makeCheckRunner } from '../providers/check-runner.js';
 import { axeProvider } from '../providers/axe/index.js';
 import { makeRulepackProvider } from '../providers/rulepack/index.js';
@@ -64,7 +64,11 @@ function readChromiumVersion(): string {
   }
 }
 
-export async function buildDeps(config: UsablConfig): Promise<Deps> {
+export async function buildDeps(
+  config: UsablConfig,
+  options: { allowedCapabilities?: Capability[] } = {},
+): Promise<Deps> {
+  const allowedCapabilities = options.allowedCapabilities ?? ['live'];
   const browser = makeRealBrowserDriver();
 
   return {
@@ -87,7 +91,8 @@ export async function buildDeps(config: UsablConfig): Promise<Deps> {
         makeKeyboardWalkProvider({ wallClockMs: KEYBOARD_WALL_CLOCK_MS }),
       ],
       config,
-      allowedCapabilities: ['live'],
+      // Static-only mode denies live capability explicitly so the result records not-covered gaps.
+      allowedCapabilities,
       stepRunner: makeStepRunner(),
     }),
   };

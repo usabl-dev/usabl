@@ -11,6 +11,7 @@ export interface FakeDepsSpec {
   runnerVersion: string;
   scannerVersions: { axeCore: string; playwright: string; chromium: string };
   changed: Array<{ code: string; path: string }>;
+  diffNames?: string[];
   files: Record<string, string>; // working-tree contents by path
   headContents: Record<string, string>; // HEAD contents by path (for git.show)
   headBlobs: Record<string, string>; // blob shas by path (for git.lsTree / policyHash)
@@ -24,6 +25,7 @@ const DEFAULTS: FakeDepsSpec = {
   runnerVersion: '0.0.0-test',
   scannerVersions: { axeCore: '0.0.0', playwright: '0.0.0', chromium: '0.0.0' },
   changed: [],
+  diffNames: [],
   files: {},
   headContents: {},
   headBlobs: {},
@@ -76,6 +78,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
       writeTree: async () => spec.writeTree,
       show: async (_ref, path) => spec.headContents[path] ?? null,
       statusZ: async () => spec.changed,
+      diffNameOnly: async () => spec.diffNames ?? [],
       lsTree: async (_ref, paths) => {
         const blobs: Array<[string, string]> = [];
         for (const path of paths) {
