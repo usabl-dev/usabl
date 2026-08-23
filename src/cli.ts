@@ -11,6 +11,7 @@ import type { Result, SurfaceConfig, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
 import { ciRefusal, isDirectInvoke, mergeChangedPaths, parseCliArgs, projectCli } from './surfaces/cli.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
+import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
 
 function expectObject(value: unknown, label: string): object {
@@ -164,6 +165,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       };
       // Verified checks persist local proof so the stop-hook fast path can re-check without a browser.
       await saveReceipt(receiptFs, result.receipt);
+    }
+    if (opts.selfCheck) {
+      // Self-check is advisory and keeps exit 0 so stop-hook remains the only gate for continuation.
+      const advisory = projectSelfCheck(result);
+      process.stdout.write(advisory.message + '\n');
+      return advisory.advisoryExitCode;
     }
     const projected = projectCli(result);
     process.stdout.write((opts.json ? projected.json : projected.text) + '\n');
