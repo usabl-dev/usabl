@@ -59,6 +59,10 @@ function fakePage(): Page {
   };
 }
 
+function normalizePrefix(prefix: string): string {
+  return prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+}
+
 export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
   const spec: FakeDepsSpec = { ...DEFAULTS, ...overrides };
   return {
@@ -71,10 +75,23 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
       writeTree: async () => spec.writeTree,
       show: async (_ref, path) => spec.headContents[path] ?? null,
       statusZ: async () => spec.changed,
-      lsTree: async (_ref, paths) =>
-        Object.fromEntries(
-          paths.filter((p) => p in spec.headBlobs).map((p) => [p, spec.headBlobs[p] as string]),
-        ),
+      lsTree: async (_ref, paths) => {
+        const blobs: Array<[string, string]> = [];
+        for (const path of paths) {
+          const blob = spec.headBlobs[path];
+          if (blob !== undefined) {
+            blobs.push([path, blob]);
+          }
+        }
+        return Object.fromEntries(blobs);
+      },
+      lsFiles: async (_ref, prefix) => {
+        const normalized = normalizePrefix(prefix);
+        const childrenPrefix = normalized + '/';
+        return Object.keys(spec.headContents)
+          .filter((path) => path === normalized || path.startsWith(childrenPrefix))
+          .sort();
+      },
       headRef: async () => spec.headRef,
     },
     fs: {

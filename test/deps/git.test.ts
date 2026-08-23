@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -23,7 +23,13 @@ async function setupTempRepo(): Promise<string> {
   await runGit(repoPath, ['add', 'screen.tsx']);
   await runGit(repoPath, ['commit', '-m', 'seed']);
 
+  await mkdir(join(repoPath, 'src/gate'), { recursive: true });
+  await writeFile(join(repoPath, 'src/gate/index.ts'), 'export const gate = true;\n', 'utf8');
+  await runGit(repoPath, ['add', 'src/gate/index.ts']);
+  await runGit(repoPath, ['commit', '-m', 'add gate file']);
+
   await writeFile(join(repoPath, 'screen.tsx'), 'second version\n', 'utf8');
+  await writeFile(join(repoPath, 'src/gate/local-only.ts'), 'export const localOnly = true;\n', 'utf8');
   return repoPath;
 }
 
@@ -58,5 +64,12 @@ describe('makeGitReader', () => {
     expect(head).toMatch(/^[0-9a-f]{40}$/);
     expect(blobs['screen.tsx']).toMatch(/^[0-9a-f]{40}$/);
     expect(blobs).not.toHaveProperty('missing.tsx');
+  });
+
+  it('lists committed files by prefix and ignores working-tree-only files', async () => {
+    const git = makeGitReader({ cwd: repoPath });
+
+    await expect(git.lsFiles('HEAD', 'src/gate')).resolves.toEqual(['src/gate/index.ts']);
+    await expect(git.lsFiles('HEAD', 'src/missing')).resolves.toEqual([]);
   });
 });

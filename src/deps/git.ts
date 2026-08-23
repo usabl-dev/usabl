@@ -83,6 +83,17 @@ function parseLsTree(output: string): Record<string, string> {
   return blobs;
 }
 
+function parseLsFiles(output: string): string[] {
+  const files = new Set<string>();
+  for (const line of output.split('\n')) {
+    const path = line.trim();
+    if (path.length > 0) {
+      files.add(path);
+    }
+  }
+  return [...files].sort();
+}
+
 async function runGit(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', args, {
     cwd,
@@ -119,6 +130,10 @@ export function makeGitReader(options: { cwd?: string } = {}): GitReader {
       }
       const output = await runGit(cwd, ['ls-tree', ref, '--', ...paths]);
       return parseLsTree(output);
+    },
+    async lsFiles(ref, prefix) {
+      const output = await runGit(cwd, ['ls-tree', '-r', '--name-only', ref, '--', prefix]);
+      return parseLsFiles(output);
     },
     async writeTree() {
       return (await runGit(cwd, ['write-tree'])).trim();
