@@ -9,7 +9,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { run } from './run.js';
 import type { Result, SurfaceConfig, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
-import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli } from './surfaces/cli.js';
+import { ciRefusal, isDirectInvoke, mergeChangedPaths, parseCliArgs, projectCli } from './surfaces/cli.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
 
@@ -175,7 +175,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 }
 
 // Only run when invoked directly as the bin.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectInvoke(import.meta.url, process.argv[1])) {
   main()
     .then((code) => process.exit(code))
     .catch((err) => {

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { resolve } from 'node:path';
 import type { Result } from '../../src/contracts/index.js';
-import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli } from '../../src/surfaces/cli.js';
+import {
+  ciRefusal,
+  isDirectInvoke,
+  mergeChangedPaths,
+  parseCliArgs,
+  projectCli,
+} from '../../src/surfaces/cli.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
   schemaVersion: 'usabl.result.v1',
@@ -134,5 +141,25 @@ describe('mergeChangedPaths', () => {
       ),
     ).toEqual(['src/a.ts', 'src/b.ts', 'src/z.ts']);
     expect(mergeChangedPaths([], [])).toEqual([]);
+  });
+});
+
+describe('isDirectInvoke', () => {
+  it('returns true when argv[1] is already absolute and matches meta url path', () => {
+    expect(isDirectInvoke('file:///tmp/usabl/dist/cli.js', '/tmp/usabl/dist/cli.js')).toBe(true);
+  });
+
+  it('returns true when argv[1] is relative and resolves to meta url path', () => {
+    const relativeArgv1 = 'dist/cli.js';
+    const metaUrl = `file://${resolve(relativeArgv1)}`;
+    expect(isDirectInvoke(metaUrl, relativeArgv1)).toBe(true);
+  });
+
+  it('returns false when argv[1] is undefined', () => {
+    expect(isDirectInvoke('file:///tmp/usabl/dist/cli.js', undefined)).toBe(false);
+  });
+
+  it('returns false when argv[1] points at another file', () => {
+    expect(isDirectInvoke('file:///tmp/usabl/dist/cli.js', '/tmp/usabl/dist/other.js')).toBe(false);
   });
 });
