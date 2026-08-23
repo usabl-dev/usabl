@@ -216,29 +216,29 @@ export async function runStopHook(input: StopHookInput, ports: StopHookRunnerPor
       if (!isWithinDir(ports.tmpDir(), pinsPath)) {
         await writeStderr(ports, `NOT verified - ignored unsafe session_id: ${JSON.stringify(parsedSession.sessionId)}.`);
       } else {
-      const [previousPins, nextPins] = await Promise.all([
-        readSessionPins(ports.fs, pinsPath),
-        computeSessionPins(deps, config),
-      ]);
+        const [previousPins, nextPins] = await Promise.all([
+          readSessionPins(ports.fs, pinsPath),
+          computeSessionPins(deps, config),
+        ]);
 
-      if (previousPins === null) {
-        await writeSessionPins(ports.fs, pinsPath, nextPins);
-      } else {
-        const drift = diffSessionPins(previousPins, nextPins);
-        if (drift.length > 0) {
-          const message = `NOT verified - guarded policy drift during this session: ${drift.join(', ')}`;
-          if (input.stopHookActive) {
-            // Allow one continuation while active to avoid recursive stop-hook loops.
-            // We keep the previous pins so a retry cannot convert detected drift into a silent allow.
-            await writeStderr(ports, `${message}. continuation already active.`);
+        if (previousPins === null) {
+          await writeSessionPins(ports.fs, pinsPath, nextPins);
+        } else {
+          const drift = diffSessionPins(previousPins, nextPins);
+          if (drift.length > 0) {
+            const message = `NOT verified - guarded policy drift during this session: ${drift.join(', ')}`;
+            if (input.stopHookActive) {
+              // Allow one continuation while active to avoid recursive stop-hook loops.
+              // We keep the previous pins so a retry cannot convert detected drift into a silent allow.
+              await writeStderr(ports, `${message}. continuation already active.`);
+              return 0;
+            }
+            // Drift is a trust boundary. Overwriting pins here would let "retry stop" clear the evidence.
+            await emitBlock(ports, message);
             return 0;
           }
-          // Drift is a trust boundary. Overwriting pins here would let "retry stop" clear the evidence.
-          await emitBlock(ports, message);
-          return 0;
+          await writeSessionPins(ports.fs, pinsPath, nextPins);
         }
-        await writeSessionPins(ports.fs, pinsPath, nextPins);
-      }
       }
     }
 
