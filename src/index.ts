@@ -2,7 +2,7 @@
 export * from './contracts/index.js';
 export { run } from './run.js';
 export { gate } from './gate/index.js';
-export { mintReceipt } from './evidence/receipt.js';
+export { computePolicyHash, mintReceipt, verifyReceipt } from './evidence/receipt.js';
 export { computeGuardDivergence } from './guard/index.js';
 export { computeIdentity, IDENTITY_WEAK } from './primitives/identity.js';
 export { canonicalize, sha256, canonicalHash } from './primitives/canonical.js';
