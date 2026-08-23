@@ -1,6 +1,9 @@
 /**
- * `run(deps, config)` is the whole engine: cover, guard, scan, gate, maybe receipt.
+ * `run(deps, config)` is the whole engine sequencer: cover, guard, scan, gate, maybe receipt.
  * It never decides a verdict. The gate does. This file only sequences injected I/O.
+ *
+ * Coverage mapping comes from the planner shared by tests and production code.
+ * A local fallback mapper is forbidden because it could hide unmapped UI as idle.
  *
  * No hidden filesystem, git, or browser. Callers pass Deps (real or `makeFakeDeps`).
  * Sampling is forbidden: every affected surface is scanned, or we do not claim verified.
@@ -9,6 +12,7 @@ import type {
   Coverage,
   Deps,
   EvidenceFloor,
+  FloorEntry,
   Finding,
   Result,
   ScreenScan,
@@ -16,57 +20,113 @@ import type {
   Waiver,
   WaiverLedger,
 } from './contracts/index.js';
-import { computeGuardDivergence } from './guard/index.js';
+import { computeCoverage } from './coverage/planner.js';
 import { gate } from './gate/index.js';
 import { mintReceipt } from './evidence/receipt.js';
+import { checkGuard } from './trust/guard.js';
 
 const EMPTY_FLOOR: EvidenceFloor = { version: 1, entries: [] };
 
-/** `*` is one path segment. `**` is encoded first so it can span directories. */
-function matchGlob(pattern: string, path: string): boolean {
-  const rx = new RegExp(
-    '^' +
-      pattern
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*\*/g, '\x00')
-        .replace(/\*/g, '[^/]*')
-        .replace(/\x00/g, '.*') +
-      '$',
-  );
-  return rx.test(path);
+export interface RunOptions {
+  changedFiles?: string[];
+  trustedRef?: string;
 }
 
-/**
- * Map changed UI files onto configured surfaces.
- * This is a local conservative stub that maps only configured surfaces.
- * `src/coverage/planner.ts` exists, but planner discovery is not wired here yet.
- * Unmapped UI files stay in `unresolvedFiles` so the gate can return `not_covered`.
- * Sampling is forbidden - if a file cannot map to a surface, the run discloses the gap.
- */
-function computeCoverage(config: UsablConfig, changed: string[]): Coverage {
-  const uiFiles = changed.filter((f) => config.uiFileGlobs.some((g) => matchGlob(g, f)));
-  if (uiFiles.length === 0) {
-    return { changedFiles: changed, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function parseFloorEntry(value: unknown): FloorEntry {
+  if (!isRecord(value)) {
+    throw new Error('evidence floor entry must be an object');
   }
-  const affected = config.surfaces
-    .filter((s) => s.files.some((sf) => uiFiles.includes(sf)))
-    .map((s) => ({ screenId: s.id, url: s.url, provenance: 'manual' as const }));
-  const mapped = new Set(config.surfaces.flatMap((s) => s.files));
-  const unresolvedFiles = uiFiles.filter((f) => !mapped.has(f));
-  return { changedFiles: changed, affected, unresolvedFiles, gaps: [], nothingToCheck: false };
+
+  const screenId = value['screenId'];
+  const layer = value['layer'];
+  const rule = value['rule'];
+  const elementKey = value['elementKey'];
+  const identityBasis = value['identityBasis'];
+  const count = value['count'];
+
+  if (typeof screenId !== 'string') throw new Error('evidence floor entry screenId must be a string');
+  if (typeof layer !== 'string') throw new Error('evidence floor entry layer must be a string');
+  if (typeof rule !== 'string') throw new Error('evidence floor entry rule must be a string');
+  if (elementKey !== null && typeof elementKey !== 'string') {
+    throw new Error('evidence floor entry elementKey must be a string or null');
+  }
+  if (identityBasis !== 'name' && identityBasis !== 'structural' && identityBasis !== 'count') {
+    throw new Error('evidence floor entry identityBasis must be name, structural, or count');
+  }
+  if (typeof count !== 'number') throw new Error('evidence floor entry count must be a number');
+
+  return { screenId, layer, rule, elementKey, identityBasis, count };
 }
 
-async function readJson<T>(deps: Deps, path: string): Promise<T | null> {
-  const raw = await deps.fs.readFile(path);
+function parseEvidenceFloor(value: unknown): EvidenceFloor {
+  if (!isRecord(value)) {
+    throw new Error('evidence floor must be an object');
+  }
+  if (value['version'] !== 1) {
+    throw new Error('evidence floor version must be 1');
+  }
+  const entriesRaw = value['entries'];
+  if (!Array.isArray(entriesRaw)) {
+    throw new Error('evidence floor entries must be an array');
+  }
+  return { version: 1, entries: entriesRaw.map((entry) => parseFloorEntry(entry)) };
+}
+
+function parseWaiver(value: unknown): Waiver {
+  if (!isRecord(value)) {
+    throw new Error('waiver entry must be an object');
+  }
+
+  const rule = value['rule'];
+  const surface = value['surface'];
+  const scope = value['scope'];
+  const reason = value['reason'];
+  const owner = value['owner'];
+  const approvedBy = value['approvedBy'];
+  const created = value['created'];
+  const expires = value['expires'];
+
+  if (typeof rule !== 'string') throw new Error('waiver rule must be a string');
+  if (typeof surface !== 'string') throw new Error('waiver surface must be a string');
+  if (typeof scope !== 'string') throw new Error('waiver scope must be a string');
+  if (typeof reason !== 'string') throw new Error('waiver reason must be a string');
+  if (typeof owner !== 'string') throw new Error('waiver owner must be a string');
+  if (typeof approvedBy !== 'string') throw new Error('waiver approvedBy must be a string');
+  if (typeof created !== 'string') throw new Error('waiver created must be a string');
+  if (typeof expires !== 'string') throw new Error('waiver expires must be a string');
+
+  return { rule, surface, scope, reason, owner, approvedBy, created, expires };
+}
+
+function parseWaiverLedger(value: unknown): WaiverLedger {
+  if (!isRecord(value)) {
+    throw new Error('waiver ledger must be an object');
+  }
+  if (value['version'] !== 1) {
+    throw new Error('waiver ledger version must be 1');
+  }
+  const waiversRaw = value['waivers'];
+  if (!Array.isArray(waiversRaw)) {
+    throw new Error('waiver ledger waivers must be an array');
+  }
+  return { version: 1, waivers: waiversRaw.map((waiver) => parseWaiver(waiver)) };
+}
+
+async function readJson(read: (path: string) => Promise<string | null>, path: string): Promise<unknown | null> {
+  const raw = await read(path);
   if (raw === null) return null;
-  return JSON.parse(raw) as T;
+  return JSON.parse(raw);
 }
 
-export async function run(deps: Deps, config: UsablConfig): Promise<Result> {
+export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}): Promise<Result> {
   try {
-    const changed = (await deps.git.statusZ()).map((c) => c.path);
-    const discoveredCoverage = computeCoverage(config, changed);
-    const guardDivergedPaths = await computeGuardDivergence(deps, config.guardedPaths);
+    const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
+    const discoveredCoverage = await computeCoverage(deps.fs, config, changed);
+    const guardDivergedPaths = await checkGuard(deps, config);
 
     // Dirty policy or idle: do not open the harness. Otherwise scan every affected surface.
     const screens: ScreenScan[] = [];
@@ -81,9 +141,18 @@ export async function run(deps: Deps, config: UsablConfig): Promise<Result> {
     };
     const drafts = screens.flatMap((s) => s.drafts);
 
-    const floor = (await readJson<EvidenceFloor>(deps, '.usabl-evidence.json')) ?? EMPTY_FLOOR;
-    const ledger = await readJson<WaiverLedger>(deps, '.usabl-waivers.json');
-    const waivers: Waiver[] = ledger?.waivers ?? [];
+    const readTrustFile = (path: string): Promise<string | null> => {
+      // Floor and waivers can be pinned to a trusted ref so a PR cannot claim
+      // verified against acceptance bytes it just changed in the working tree.
+      if (opts.trustedRef !== undefined) {
+        return deps.git.show(opts.trustedRef, path);
+      }
+      return deps.fs.readFile(path);
+    };
+    const floorValue = await readJson(readTrustFile, '.usabl-evidence.json');
+    const floor = floorValue === null ? EMPTY_FLOOR : parseEvidenceFloor(floorValue);
+    const ledgerValue = await readJson(readTrustFile, '.usabl-waivers.json');
+    const waivers: Waiver[] = ledgerValue === null ? [] : parseWaiverLedger(ledgerValue).waivers;
 
     const gated = gate({ coverage, guardDivergedPaths, drafts, floor, waivers, now: deps.clock() });
 
