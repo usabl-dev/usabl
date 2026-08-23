@@ -5,11 +5,12 @@
  * Sample `usabl.config.json` URLs (`http://127.0.0.1:5173`) are the fixture app's
  * Vite origin, not a hardcoded engine target. The engine always reads operator config.
  */
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { run } from './run.js';
 import type { Result, SurfaceConfig, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
 import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli } from './surfaces/cli.js';
+import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
 
 function expectObject(value: unknown, label: string): object {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -72,7 +73,7 @@ function parseConfig(raw: string): UsablConfig {
   };
 }
 
-async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
+export async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
   return parseConfig(await readFile(path, 'utf8'));
 }
@@ -106,9 +107,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 2;
   }
 
-  if (opts.command !== 'check' && opts.command !== 'comment') {
+  if (opts.command !== 'check' && opts.command !== 'comment' && opts.command !== 'bypass') {
     process.stderr.write(`unknown command: ${opts.command}\n`);
     return 2;
+  }
+
+  if (opts.command === 'bypass') {
+    await mkdir(RECEIPT_DIR, { recursive: true });
+    await writeFile(BYPASS_ONCE_PATH, `${new Date().toISOString()}\n`, 'utf8');
+    process.stdout.write('NOT verified - BYPASS set for the next stop only.\n');
+    return 0;
   }
 
   if (opts.command === 'comment') {
@@ -143,6 +151,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
       ...(changedFiles === undefined ? {} : { changedFiles }),
     });
+    if (result.verdict === 'verified' && result.receipt !== null) {
+      const receiptFs: ReceiptFs = {
+        readFile: async () => null,
+        writeFile: async (path, contents) => {
+          await writeFile(path, contents, 'utf8');
+        },
+        mkdir: async (path) => {
+          await mkdir(path, { recursive: true });
+        },
+      };
+      // Verified checks persist local proof so the stop-hook fast path can re-check without a browser.
+      await saveReceipt(receiptFs, result.receipt);
+    }
     const projected = projectCli(result);
     process.stdout.write((opts.json ? projected.json : projected.text) + '\n');
     return projected.exitCode;
