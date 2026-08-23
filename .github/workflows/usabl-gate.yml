@@ -39,24 +39,20 @@ jobs:
             git fetch origin "${BASE_REF}" --depth=1
           fi
 
-      - name: Run usabl check
+      - name: Run usabl check against trusted base-ref policy
+        id: usabl
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          code=0; node dist/cli.js check --ci --trusted-ref "origin/${BASE_REF}" --json > usabl-result.json || code=$?
+          code=0
+          # Capture the command status here because a next-line `$?` becomes 0 under set -e.
+          node dist/cli.js check --ci --trusted-ref "origin/${BASE_REF}" --json > usabl-result.json || code=$?
+          echo "exit_code=${code}" >> "$GITHUB_OUTPUT"
 
-      - name: Read gate exit code
-        id: read_exit
-        run: |
-          exit_code="$(node -e "const fs = require('node:fs'); try { const raw = fs.readFileSync('usabl-result.json', 'utf8'); if (raw.trim().length === 0) { process.stdout.write(''); process.exit(0); } const parsed = JSON.parse(raw); if (typeof parsed.exitCode === 'number') { process.stdout.write(String(parsed.exitCode)); } } catch { process.stdout.write(''); }")"
-          if [ -z "$exit_code" ]; then
-            echo "usabl-result.json did not include exitCode"
-            exit 1
-          fi
-          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
-
-      - name: Build PR comment markdown
+      - name: Render comment Markdown
         run: node dist/cli.js comment < usabl-result.json > usabl-comment.md
 
-      - name: Upsert sticky PR comment
+      - name: Post sticky PR comment
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
@@ -88,8 +84,12 @@ jobs:
               });
             }
 
-      - name: Fail when gate exits nonzero
+      - name: Enforce verdict (fail closed on missing exit code)
+        env:
+          USABL_EXIT: ${{ steps.usabl.outputs.exit_code }}
         run: |
-          if [ "${{ steps.read_exit.outputs.exit_code }}" != "0" ]; then
-            exit "${{ steps.read_exit.outputs.exit_code }}"
+          if [ -z "${USABL_EXIT}" ]; then
+            echo "usabl produced no exit code; failing closed."
+            exit 1
           fi
+          exit "${USABL_EXIT}"
