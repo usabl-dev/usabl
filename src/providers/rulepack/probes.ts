@@ -3,8 +3,12 @@
  * This unit emits Drafts only. It must never mint a verdict, and it must never treat a dead click as coverage.
  * Focus checks stay inside Page predicates so selector strings are never compared to DOM path strings.
  */
+import { setTimeout as delay } from 'node:timers/promises';
 import type { AxNode, Draft, ProviderContext } from '../../contracts/index.js';
 import { SEL } from './selectors.js';
+
+const FOCUS_SETTLE_TIMEOUT_MS = 750;
+const FOCUS_POLL_INTERVAL_MS = 25;
 
 function evidenceFromNode(node: AxNode | null): Draft['evidence'] {
   if (node === null) {
@@ -44,6 +48,19 @@ function draft(
   };
 }
 
+async function waitFor(predicate: () => Promise<boolean>, timeoutMs = FOCUS_SETTLE_TIMEOUT_MS): Promise<boolean> {
+  // PatternFly can move focus into dialogs after paint, so a single sync check can race.
+  // Polling up to the settle timeout still fails closed when focus never reaches the target.
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    if (await predicate()) {
+      return true;
+    }
+    await delay(FOCUS_POLL_INTERVAL_MS);
+  }
+  return false;
+}
+
 export async function probeDialogs(ctx: ProviderContext): Promise<Draft[]> {
   const triggers = await ctx.page.queryAll(SEL.dialogTrigger);
   const drafts: Draft[] = [];
@@ -71,7 +88,7 @@ export async function probeDialogs(ctx: ProviderContext): Promise<Draft[]> {
         continue;
       }
 
-      if (!(await ctx.page.activeElementWithin(dialog.selector))) {
+      if (!(await waitFor(() => ctx.page.activeElementWithin(dialog.selector)))) {
         drafts.push(
           draft(
             ctx,
@@ -87,7 +104,7 @@ export async function probeDialogs(ctx: ProviderContext): Promise<Draft[]> {
       }
 
       await ctx.page.press('Escape');
-      if (!(await ctx.page.activeElementIs(trigger.selector))) {
+      if (!(await waitFor(() => ctx.page.activeElementIs(trigger.selector)))) {
         drafts.push(
           draft(
             ctx,
@@ -132,7 +149,7 @@ export async function probeMenus(ctx: ProviderContext): Promise<Draft[]> {
 
       const menus = await ctx.page.queryAll(SEL.menu);
       const menu = menus[0];
-      if (menu !== undefined && !(await ctx.page.activeElementWithin(menu.selector))) {
+      if (menu !== undefined && !(await waitFor(() => ctx.page.activeElementWithin(menu.selector)))) {
         drafts.push(
           draft(
             ctx,

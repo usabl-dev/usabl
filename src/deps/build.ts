@@ -68,11 +68,12 @@ function readChromiumVersion(): string {
 
 export async function buildDeps(
   config: UsablConfig,
-  options: { allowedCapabilities?: Capability[] } = {},
+  options: { cwd?: string; allowedCapabilities?: Capability[] } = {},
 ): Promise<Deps> {
+  const cwd = options.cwd ?? process.cwd();
   const allowedCapabilities = options.allowedCapabilities ?? ['live'];
   const browser = makeRealBrowserDriver();
-  const fs = makeFsGlob();
+  const fs = makeFsGlob({ cwd });
   const loadedRequirements = await loadRequirements(fs, config);
   const providers = [
     axeProvider,
@@ -95,7 +96,7 @@ export async function buildDeps(
       chromium: readChromiumVersion(),
     },
     browser,
-    git: makeGitReader(),
+    git: makeGitReader({ cwd }),
     fs,
     checkRunner: makeCheckRunner({
       browser,
