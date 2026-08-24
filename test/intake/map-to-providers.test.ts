@@ -159,6 +159,33 @@ describe('mapRequirementsToProviders', () => {
     await expect(provider!.run(context)).resolves.toEqual([]);
   });
 
+  it('returns one deterministic fail draft when expectedText is set and node is missing', async () => {
+    const bundle = contentBundle({
+      type: 'content',
+      selector: 'h1',
+      expectedText: 'Welcome',
+    });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        axAt: vi.fn(async () => null),
+      }),
+    });
+
+    const drafts = await provider!.run(context);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      rule: 'intake:content-title',
+      layer: 'intake-content',
+      evidenceClass: 'deterministic',
+      confidence: 'fail',
+      screenId: SCREEN.id,
+      elementPath: 'h1',
+      elementName: null,
+    });
+  });
+
   it('fails when mustNotBe empty and accessible name is null', async () => {
     const bundle = contentBundle({
       type: 'content',
@@ -308,7 +335,7 @@ describe('mapRequirementsToProviders', () => {
     });
   });
 
-  it('returns zero drafts when flow announcement is heard in live region events', async () => {
+  it('returns a fail draft when flow announcement appears only as substring in live region events', async () => {
     const bundle = flowBundle({
       type: 'flow',
       steps: [{ do: 'tab' }, { do: 'activate' }],
@@ -324,10 +351,36 @@ describe('mapRequirementsToProviders', () => {
       }),
     });
 
+    const drafts = await provider!.run(context);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      rule: 'intake:flow-save',
+      layer: 'intake-flow',
+      evidenceClass: 'deterministic',
+      confidence: 'fail',
+    });
+  });
+
+  it('returns zero drafts when flow announcement exactly matches a live region event after trim', async () => {
+    const bundle = flowBundle({
+      type: 'flow',
+      steps: [{ do: 'tab' }, { do: 'activate' }],
+      expectedAnnouncement: 'Saved',
+    });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        tab: vi.fn(async () => {}),
+        press: vi.fn(async () => {}),
+        activeNode: vi.fn(async () => axNode('Save')),
+        drainAnnouncements: vi.fn(async () => ['  Saved  ']),
+      }),
+    });
+
     await expect(provider!.run(context)).resolves.toEqual([]);
   });
 
-  it('returns zero drafts when flow announcement is heard on active focus name', async () => {
+  it('returns a fail draft when flow announcement appears only as substring on active focus name', async () => {
     const bundle = flowBundle({
       type: 'flow',
       steps: [{ do: 'tab' }, { do: 'activate' }],
@@ -339,7 +392,37 @@ describe('mapRequirementsToProviders', () => {
         tab: vi.fn(async () => {}),
         press: vi.fn(async () => {}),
         activeNode: vi.fn(async () => ({
-          name: 'Saved',
+          name: 'Saved successfully',
+          role: 'status',
+          states: {},
+        })),
+        drainAnnouncements: vi.fn(async () => []),
+      }),
+    });
+
+    const drafts = await provider!.run(context);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      rule: 'intake:flow-save',
+      layer: 'intake-flow',
+      evidenceClass: 'deterministic',
+      confidence: 'fail',
+    });
+  });
+
+  it('returns zero drafts when flow announcement exactly matches active focus name after trim', async () => {
+    const bundle = flowBundle({
+      type: 'flow',
+      steps: [{ do: 'tab' }, { do: 'activate' }],
+      expectedAnnouncement: 'Saved',
+    });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        tab: vi.fn(async () => {}),
+        press: vi.fn(async () => {}),
+        activeNode: vi.fn(async () => ({
+          name: '  Saved ',
           role: 'status',
           states: {},
         })),

@@ -20,6 +20,13 @@ function hasNonEmptyName(name: string | null): boolean {
   return name !== null && name.trim().length > 0;
 }
 
+function trimEqual(actual: string | null, expected: string): boolean {
+  if (actual === null) {
+    return false;
+  }
+  return actual.trim() === expected.trim();
+}
+
 function evidenceFromNode(node: AxNode | null, extra: Record<string, unknown> = {}): Draft['evidence'] {
   const evidence: Draft['evidence'] = {};
   if (node !== null) {
@@ -202,9 +209,9 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
 
       const node = await ctx.page.activeNode();
       const announcements = await ctx.page.drainAnnouncements();
-      const heardOnFocus = (node?.name ?? '').includes(expectedAnnouncement);
+      const heardOnFocus = trimEqual(node?.name ?? null, expectedAnnouncement);
       const heardInAnnouncements = announcements.some((announcement) =>
-        announcement.includes(expectedAnnouncement),
+        trimEqual(announcement, expectedAnnouncement),
       );
 
       if (heardOnFocus || heardInAnnouncements) {
