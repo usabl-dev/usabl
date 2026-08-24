@@ -5,14 +5,22 @@ import { describe, expect, it } from 'vitest';
 import { scrubStorageStateDocument, scrubStorageStateFile } from '../../scripts/scrub-storage-state.js';
 
 describe('scrub-storage-state', () => {
-  it('scrubs only cookie values that match the token pattern', () => {
+  it('scrubs credential-shaped cookies and drops origin storage from review output', () => {
     const source = {
       cookies: [
-        { name: 'session', value: 'ABCDEF1234567890_abcdefghij' },
+        { name: 'session', value: 'abc123' },
         { name: 'locale', value: 'en-US' },
         { name: 'csrf', value: '12345678901234567890' },
       ],
-      origins: [{ origin: 'https://fleet.example.test', localStorage: [] }],
+      origins: [
+        {
+          origin: 'https://fleet.example.test',
+          localStorage: [
+            { name: 'access_token', value: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abc.def' },
+            { name: 'theme', value: 'dark' },
+          ],
+        },
+      ],
     };
 
     const result = scrubStorageStateDocument(source);
@@ -23,7 +31,7 @@ describe('scrub-storage-state', () => {
       { name: 'locale', value: 'en-US' },
       { name: 'csrf', value: '[SCRUBBED:csrf]' },
     ]);
-    expect(result.scrubbed.origins).toEqual(source.origins);
+    expect(result.scrubbed.origins).toBeUndefined();
   });
 
   it('writes a .scrubbed.json sibling file and reports counts', async () => {
@@ -44,8 +52,12 @@ describe('scrub-storage-state', () => {
       expect(result.scrubbedCookies).toBe(1);
       expect(result.outputPath).toBe(join(tempDir, 'storageState.scrubbed.json'));
 
-      const scrubbed = JSON.parse(await readFile(result.outputPath, 'utf8')) as { cookies: Array<{ value: string }> };
+      const scrubbed = JSON.parse(await readFile(result.outputPath, 'utf8')) as {
+        cookies: Array<{ value: string }>;
+        origins?: unknown;
+      };
       expect(scrubbed.cookies[0]?.value).toBe('[SCRUBBED:sso]');
+      expect(scrubbed.origins).toBeUndefined();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

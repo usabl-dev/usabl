@@ -2,12 +2,32 @@
  * Review-hygiene scrubber for Playwright storageState exports.
  * This utility prepares a review copy only.
  * It is not a secret store, and its output must never be committed.
+ * Cookie-only scrubbing overstates safety because SPA credentials can live in origin storage.
+ * The review copy is never shareable as credential-safe evidence.
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRUBBED_VALUE_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
+const SENSITIVE_COOKIE_NAME_KEYWORDS = [
+  'authorization',
+  'password',
+  'secret',
+  'token',
+  'cookie',
+  'cookies',
+  'apikey',
+  'accesstoken',
+  'refreshtoken',
+  'idtoken',
+  'session',
+  'credentials',
+  'privatekey',
+  'clientsecret',
+  'bearer',
+  'auth',
+];
 
 interface ScrubbedStorageState {
   scrubbed: Record<string, unknown>;
@@ -17,6 +37,11 @@ interface ScrubbedStorageState {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function isCredentialCookieName(name: string): boolean {
+  const normalized = name.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+  return SENSITIVE_COOKIE_NAME_KEYWORDS.some((keyword) => normalized.includes(keyword));
 }
 
 function scrubCookie(cookie: unknown): { cookie: unknown; counted: boolean; scrubbed: boolean } {
@@ -30,7 +55,8 @@ function scrubCookie(cookie: unknown): { cookie: unknown; counted: boolean; scru
     return { cookie, counted: false, scrubbed: false };
   }
 
-  if (!SCRUBBED_VALUE_PATTERN.test(value)) {
+  const shouldScrub = SCRUBBED_VALUE_PATTERN.test(value) || isCredentialCookieName(name);
+  if (!shouldScrub) {
     return { cookie, counted: true, scrubbed: false };
   }
 
@@ -43,6 +69,8 @@ function scrubCookie(cookie: unknown): { cookie: unknown; counted: boolean; scru
 
 export function scrubStorageStateDocument(document: Record<string, unknown>): ScrubbedStorageState {
   const cookies = Array.isArray(document.cookies) ? document.cookies : [];
+  // Drop origin storage from review copies - SPA auth tokens are commonly stored in localStorage or sessionStorage.
+  const { cookies: _cookies, origins: _origins, ...scrubbedBase } = document;
   const scrubbedCookies: unknown[] = [];
   let totalCookies = 0;
   let totalScrubbed = 0;
@@ -60,7 +88,7 @@ export function scrubStorageStateDocument(document: Record<string, unknown>): Sc
 
   return {
     scrubbed: {
-      ...document,
+      ...scrubbedBase,
       cookies: scrubbedCookies,
     },
     totalCookies,
