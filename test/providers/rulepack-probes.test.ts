@@ -56,7 +56,7 @@ async function makeDialogContext(options: {
       }
     },
     activeElementWithin: async (selector: string) =>
-      selector === dialog.selector && isOpen && options.focusMovesIntoDialog,
+      (selector === dialog.selector || selector === SEL.dialog) && isOpen && options.focusMovesIntoDialog,
     activeElementIs: async (selector: string) =>
       selector === trigger.selector && !isOpen && options.focusReturnsToTrigger,
   });
@@ -131,7 +131,7 @@ describe('rulepack interaction probes', () => {
     await expect(provider.run(ctx)).resolves.toEqual([]);
   });
 
-  it('emits pf-focus-into-dialog fail when opening dialog does not move focus inside', async () => {
+  it('fails closed for open and close lifecycle when opening dialog does not move focus inside', async () => {
     const provider = makeRulepackProvider();
     const ctx = await makeDialogContext({
       openOnClick: true,
@@ -141,13 +141,23 @@ describe('rulepack interaction probes', () => {
 
     const drafts = await provider.run(ctx);
 
-    expect(drafts).toHaveLength(1);
-    expect(drafts[0]).toMatchObject({
-      rule: 'pf-focus-into-dialog',
-      confidence: 'fail',
-      severity: 'serious',
-      elementPath: '#dialog-trigger',
-    });
+    expect(drafts).toHaveLength(2);
+    expect(drafts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          rule: 'pf-focus-into-dialog',
+          confidence: 'fail',
+          severity: 'serious',
+          elementPath: '#dialog-trigger',
+        }),
+        expect.objectContaining({
+          rule: 'pf-modal-focus-return',
+          confidence: 'fail',
+          severity: 'serious',
+          elementPath: '#dialog-trigger',
+        }),
+      ]),
+    );
   });
 
   it('emits pf-modal-focus-return fail when Escape does not return focus to trigger', async () => {

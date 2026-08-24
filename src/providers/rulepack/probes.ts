@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { AxNode, Draft, ProviderContext } from '../../contracts/index.js';
 import { SEL } from './selectors.js';
 
-const FOCUS_SETTLE_TIMEOUT_MS = 750;
+const FOCUS_SETTLE_TIMEOUT_MS = 2_500;
 const FOCUS_POLL_INTERVAL_MS = 25;
 
 function evidenceFromNode(node: AxNode | null): Draft['evidence'] {
@@ -70,9 +70,8 @@ export async function probeDialogs(ctx: ProviderContext): Promise<Draft[]> {
       const triggerNode = await ctx.page.axAt(trigger.selector);
       await ctx.page.click(trigger.selector);
 
-      const dialogs = await ctx.page.queryAll(SEL.dialog);
-      const dialog = dialogs[0];
-      if (dialog === undefined) {
+      const dialogAppeared = await waitFor(async () => (await ctx.page.queryAll(SEL.dialog)).length > 0);
+      if (!dialogAppeared) {
         drafts.push(
           draft(
             ctx,
@@ -88,7 +87,8 @@ export async function probeDialogs(ctx: ProviderContext): Promise<Draft[]> {
         continue;
       }
 
-      if (!(await waitFor(() => ctx.page.activeElementWithin(dialog.selector)))) {
+      const focusEnteredDialog = await waitFor(() => ctx.page.activeElementWithin(SEL.dialog));
+      if (!focusEnteredDialog) {
         drafts.push(
           draft(
             ctx,
@@ -104,6 +104,24 @@ export async function probeDialogs(ctx: ProviderContext): Promise<Draft[]> {
       }
 
       await ctx.page.press('Escape');
+      // We fail closed on close-lifecycle checks when open-lifecycle focus never established.
+      // A modal that never receives focus cannot honestly prove that close restores context.
+      if (!focusEnteredDialog) {
+        drafts.push(
+          draft(
+            ctx,
+            triggerNode,
+            'pf-modal-focus-return',
+            trigger.selector,
+            'fail',
+            'The dialog focus lifecycle is broken, so focus return on close is not reliable for keyboard users.',
+            'Focus never moved into the dialog, which means close behavior cannot restore a well-defined keyboard position.',
+            "Move focus into the modal on open, then call .focus() on the trigger in the modal's onClose handler.",
+          ),
+        );
+        continue;
+      }
+
       if (!(await waitFor(() => ctx.page.activeElementIs(trigger.selector)))) {
         drafts.push(
           draft(

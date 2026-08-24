@@ -34,6 +34,33 @@ describe('computeCoverage', () => {
     expect(cov.gaps).toHaveLength(0);
   });
 
+  it('uses manual surface url override for route-mapped screen variants', async () => {
+    const cfg: UsablConfig = {
+      ...baseConfig,
+      surfaces: [
+        {
+          id: 'clusters',
+          url: 'http://localhost:3000/clusters?variant=fixed',
+          files: ['src/ClustersPage.tsx'],
+        },
+      ],
+    };
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }],
+      }),
+      'src/ClustersPage.tsx': `export default function ClustersPage() {}`,
+    });
+    const cov = await computeCoverage(fs, cfg, ['src/ClustersPage.tsx']);
+    expect(cov.affected).toContainEqual(
+      expect.objectContaining({
+        screenId: 'clusters',
+        url: 'http://localhost:3000/clusters?variant=fixed',
+        provenance: 'route-graph',
+      }),
+    );
+  });
+
   it('rejects sidecar routes that point at a different origin', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({
