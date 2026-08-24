@@ -71,4 +71,26 @@ requirements:
       verdict: 'approval_required',
     });
   });
+
+  it('fails closed for YAML custom tags outside JSON schema', () => {
+    const raw = `
+version: 1
+requirements:
+  - id: req-custom-tag
+    kind: content
+    surface: dashboard
+    description: custom tag must be rejected
+    assertion:
+      type: content
+      selector: !!js/function "function () { return 'h1'; }"
+      expectedText: Hello
+    approved: true
+`;
+
+    const result = normalize(raw);
+    expect(result).toMatchObject({
+      ok: false,
+      verdict: 'approval_required',
+    });
+  });
 });
