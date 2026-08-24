@@ -13,3 +13,8 @@ out/
 .githooks/
 .superpowers/
 .usabl/
+
+# Fleet Insights session: never commit, scrubbed or not
+storageState*.json
+**/storageState*.json
+fleet-insights-session/
