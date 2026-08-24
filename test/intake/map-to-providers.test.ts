@@ -159,6 +159,108 @@ describe('mapRequirementsToProviders', () => {
     await expect(provider!.run(context)).resolves.toEqual([]);
   });
 
+  it('fails when mustNotBe empty and accessible name is null', async () => {
+    const bundle = contentBundle({
+      type: 'content',
+      selector: 'h1',
+      mustNotBe: 'empty',
+    });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        axAt: vi.fn(async () => axNode(null)),
+      }),
+    });
+
+    const drafts = await provider!.run(context);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      rule: 'intake:content-title',
+      layer: 'intake-content',
+      evidenceClass: 'deterministic',
+      confidence: 'fail',
+      elementPath: 'h1',
+      elementName: null,
+    });
+  });
+
+  it('fails when mustNotBe empty and accessible name is whitespace', async () => {
+    const bundle = contentBundle({
+      type: 'content',
+      selector: 'h1',
+      mustNotBe: 'empty',
+    });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        axAt: vi.fn(async () => axNode('   ')),
+      }),
+    });
+
+    const drafts = await provider!.run(context);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      rule: 'intake:content-title',
+      layer: 'intake-content',
+      evidenceClass: 'deterministic',
+      confidence: 'fail',
+      elementPath: 'h1',
+      elementName: '   ',
+    });
+  });
+
+  it('fails when mustNotBe decorative and accessible name is non-empty', async () => {
+    const bundle = contentBundle({
+      type: 'content',
+      selector: 'img.hero',
+      mustNotBe: 'decorative',
+    });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        axAt: vi.fn(async () => ({
+          name: 'Company logo',
+          role: 'img',
+          states: {},
+        })),
+      }),
+    });
+
+    const drafts = await provider!.run(context);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      rule: 'intake:content-title',
+      layer: 'intake-content',
+      evidenceClass: 'deterministic',
+      confidence: 'fail',
+      elementPath: 'img.hero',
+      elementName: 'Company logo',
+    });
+  });
+
+  it('returns zero drafts when mustNotBe decorative and accessible name is absent', async () => {
+    const bundle = contentBundle({
+      type: 'content',
+      selector: 'img.hero',
+      mustNotBe: 'decorative',
+    });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        axAt: vi.fn(async () => ({
+          name: null,
+          role: 'img',
+          states: {},
+        })),
+      }),
+    });
+
+    await expect(provider!.run(context)).resolves.toEqual([]);
+  });
+
   it('returns zero drafts for wrong screen id', async () => {
     const bundle = contentBundle({
       type: 'content',
@@ -204,5 +306,47 @@ describe('mapRequirementsToProviders', () => {
       screenId: SCREEN.id,
       elementPath: '#save-button',
     });
+  });
+
+  it('returns zero drafts when flow announcement is heard in live region events', async () => {
+    const bundle = flowBundle({
+      type: 'flow',
+      steps: [{ do: 'tab' }, { do: 'activate' }],
+      expectedAnnouncement: 'Saved',
+    });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        tab: vi.fn(async () => {}),
+        press: vi.fn(async () => {}),
+        activeNode: vi.fn(async () => axNode('Save')),
+        drainAnnouncements: vi.fn(async () => ['Status: Saved successfully']),
+      }),
+    });
+
+    await expect(provider!.run(context)).resolves.toEqual([]);
+  });
+
+  it('returns zero drafts when flow announcement is heard on active focus name', async () => {
+    const bundle = flowBundle({
+      type: 'flow',
+      steps: [{ do: 'tab' }, { do: 'activate' }],
+      expectedAnnouncement: 'Saved',
+    });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        tab: vi.fn(async () => {}),
+        press: vi.fn(async () => {}),
+        activeNode: vi.fn(async () => ({
+          name: 'Saved',
+          role: 'status',
+          states: {},
+        })),
+        drainAnnouncements: vi.fn(async () => []),
+      }),
+    });
+
+    await expect(provider!.run(context)).resolves.toEqual([]);
   });
 });
