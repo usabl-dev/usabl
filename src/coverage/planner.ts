@@ -35,6 +35,15 @@ function hasAffectedUrl(target: Map<string, AffectedScreen>, url: string): boole
   return [...target.values()].some((screen) => screen.url === url);
 }
 
+function manualUrlOverride(config: UsablConfig, file: string, screenId: string): string | null {
+  for (const surface of config.surfaces) {
+    if (surface.id === screenId && surface.files.includes(file)) {
+      return surface.url;
+    }
+  }
+  return null;
+}
+
 function addGap(gaps: CoverageGap[], file: string): void {
   gaps.push({
     ref: file,
@@ -130,9 +139,12 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
         continue;
       }
       mapped = true;
+      // Route graph decides affected screen identity. Manual surfaces may still
+      // override that screen's scan URL so query variants remain operator-controlled.
+      const url = manualUrlOverride(config, file, route.screenId) ?? routeUrl(config.appBaseUrl, route.url);
       addAffected(affectedByScreen, {
         screenId: route.screenId,
-        url: routeUrl(config.appBaseUrl, route.url),
+        url,
         provenance: 'route-graph',
         importChain: [route.entryFile, file],
       });
