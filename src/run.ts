@@ -23,6 +23,7 @@ import type {
 import { computeCoverage } from './coverage/planner.js';
 import { gate } from './gate/index.js';
 import { mintReceipt } from './evidence/receipt.js';
+import { loadRequirements } from './intake/load.js';
 import { checkGuard } from './trust/guard.js';
 
 const EMPTY_FLOOR: EvidenceFloor = { version: 1, entries: [] };
@@ -127,10 +128,17 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
     const discoveredCoverage = await computeCoverage(deps.fs, config, changed);
     const guardDivergedPaths = await checkGuard(deps, config);
+    const loadedRequirements = await loadRequirements(deps.fs, config);
+    const intakePolicyPaths =
+      loadedRequirements.ok
+        ? []
+        : [loadedRequirements.path ?? config.requirements ?? 'requirements'].filter((path) => path.length > 0);
+    const policyDivergedPaths = [...new Set([...guardDivergedPaths, ...intakePolicyPaths])].sort();
 
     // Dirty policy or idle: do not open the harness. Otherwise scan every affected surface.
+    // Malformed intake cannot self-grade. The harness must stay closed until policy is valid.
     const screens: ScreenScan[] = [];
-    if (guardDivergedPaths.length === 0 && !discoveredCoverage.nothingToCheck) {
+    if (policyDivergedPaths.length === 0 && !discoveredCoverage.nothingToCheck) {
       for (const s of discoveredCoverage.affected) {
         screens.push(await deps.checkRunner.scan({ id: s.screenId, url: s.url }));
       }
@@ -154,7 +162,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const ledgerValue = await readJson(readTrustFile, '.usabl-waivers.json');
     const waivers: Waiver[] = ledgerValue === null ? [] : parseWaiverLedger(ledgerValue).waivers;
 
-    const gated = gate({ coverage, guardDivergedPaths, drafts, floor, waivers, now: deps.clock() });
+    const gated = gate({ coverage, guardDivergedPaths: policyDivergedPaths, drafts, floor, waivers, now: deps.clock() });
 
     // Receipts are reserved for verified. Preview and model-judgment cannot mint one.
     const receipt =
@@ -176,7 +184,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       coverage,
       findings: gated.findings,
       receipt,
-      dirtyGuardedPaths: guardDivergedPaths,
+      dirtyGuardedPaths: policyDivergedPaths,
       exitCode: gated.exitCode,
     };
   } catch (err) {
