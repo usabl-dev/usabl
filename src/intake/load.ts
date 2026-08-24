@@ -19,8 +19,19 @@ function pathFailure(path: string, reason: string): LoadRequirementsResult {
     ok: false,
     verdict: 'approval_required',
     path,
-    reason: `requirement file ${path}: ${reason}`,
+    reason: `requirements path ${path}: ${reason}`,
   };
+}
+
+function isValidRequirementsRoot(root: string): boolean {
+  if (root.length === 0 || root === '.') {
+    return false;
+  }
+  return !root.split('/').includes('..');
+}
+
+function isWithinRoot(path: string, root: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
 }
 
 export async function loadRequirements(fs: FsGlob, config: UsablConfig): Promise<LoadRequirementsResult> {
@@ -32,11 +43,38 @@ export async function loadRequirements(fs: FsGlob, config: UsablConfig): Promise
   }
 
   const root = stripTrailingSlashes(config.requirements);
-  const paths = (await fs.glob([`${root}/**/*.yaml`, `${root}/**/*.yml`])).sort();
+  if (!isValidRequirementsRoot(root)) {
+    // Unanchored roots can walk outside policy scope and pull YAML from the whole tree.
+    return pathFailure(config.requirements, 'requirements root must be anchored and not use traversal segments');
+  }
+
+  let paths: string[];
+  try {
+    paths = (await fs.glob([`${root}/**/*.yaml`, `${root}/**/*.yml`])).sort();
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return pathFailure(root, `failed to glob requirement files: ${message}`);
+  }
+
+  if (paths.length === 0) {
+    // A configured requirements directory is required policy input, not optional.
+    return pathFailure(root, 'configured requirements directory had no yaml files');
+  }
+
   const requirements: RequirementBundle['requirements'] = [];
 
   for (const path of paths) {
-    const raw = await fs.readFile(path);
+    if (!isWithinRoot(path, root)) {
+      return pathFailure(path, `glob match escaped configured requirements root ${root}`);
+    }
+
+    let raw: string | null;
+    try {
+      raw = await fs.readFile(path);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return pathFailure(path, `failed to read requirement file: ${message}`);
+    }
     if (raw === null) {
       return pathFailure(path, 'file was missing when read');
     }

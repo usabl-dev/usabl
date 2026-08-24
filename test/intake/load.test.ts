@@ -70,6 +70,23 @@ requirements:
     expect(result.bundle.requirements.map((requirement) => requirement.id)).toEqual(['req-a', 'req-z']);
   });
 
+  it('fails closed when configured intake directory has no yaml files', async () => {
+    const result = await loadRequirements(
+      scriptedFs([], {}),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      verdict: 'approval_required',
+      path: 'requirements',
+    });
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('requirements');
+  });
+
   it('fails closed when a globbed requirement file is missing at read time', async () => {
     const result = await loadRequirements(
       scriptedFs(['requirements/missing.yaml'], {}),
@@ -133,6 +150,101 @@ requirements:
       return;
     }
     expect(result.reason).toContain('requirements/bad.yaml');
+  });
+
+  it('fails closed when requirements root is "."', async () => {
+    const result = await loadRequirements(scriptedFs([], {}), testConfig({ requirements: '.' }));
+
+    expect(result).toMatchObject({
+      ok: false,
+      verdict: 'approval_required',
+      path: '.',
+    });
+  });
+
+  it('fails closed when requirements root contains a traversal segment', async () => {
+    const result = await loadRequirements(
+      scriptedFs([], {}),
+      testConfig({ requirements: 'requirements/../outside' }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      verdict: 'approval_required',
+      path: 'requirements/../outside',
+    });
+  });
+
+  it('fails closed when glob returns files outside the configured root', async () => {
+    const result = await loadRequirements(
+      scriptedFs(
+        ['elsewhere/policy.yaml'],
+        {
+          'elsewhere/policy.yaml': `
+version: 1
+requirements:
+  - id: req-x
+    kind: content
+    surface: clusters
+    description: heading text
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Hello
+    approved: true
+`,
+        },
+      ),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      verdict: 'approval_required',
+      path: 'elsewhere/policy.yaml',
+    });
+  });
+
+  it('fails closed when glob throws', async () => {
+    const fs: FsGlob = {
+      glob: async () => {
+        throw new Error('boom glob');
+      },
+      readFile: async () => null,
+    };
+
+    const result = await loadRequirements(fs, testConfig({ requirements: 'requirements/' }));
+
+    expect(result).toMatchObject({
+      ok: false,
+      verdict: 'approval_required',
+      path: 'requirements',
+    });
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('boom glob');
+  });
+
+  it('fails closed when readFile throws', async () => {
+    const fs: FsGlob = {
+      glob: async () => ['requirements/a.yaml'],
+      readFile: async () => {
+        throw new Error('boom read');
+      },
+    };
+
+    const result = await loadRequirements(fs, testConfig({ requirements: 'requirements/' }));
+
+    expect(result).toMatchObject({
+      ok: false,
+      verdict: 'approval_required',
+      path: 'requirements/a.yaml',
+    });
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('boom read');
   });
 
   it('adds requirements path to the guarded policy set', () => {
