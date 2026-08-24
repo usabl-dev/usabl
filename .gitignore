@@ -17,4 +17,7 @@ out/
 # Fleet Insights session: never commit, scrubbed or not
 storageState*.json
 **/storageState*.json
+fleet-insights-session.json
+**/fleet-insights-session.json
+*.scrubbed.json
 fleet-insights-session/
