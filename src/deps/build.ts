@@ -13,6 +13,8 @@ import { axeProvider } from '../providers/axe/index.js';
 import { makeRulepackProvider } from '../providers/rulepack/index.js';
 import { makeKeyboardWalkProvider } from '../providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
+import { loadRequirements } from '../intake/load.js';
+import { mapRequirementsToProviders } from '../intake/map-to-providers.js';
 import { makeRealBrowserDriver } from './real.js';
 import { makeGitReader } from './git.js';
 import { makeFsGlob } from './fs.js';
@@ -70,6 +72,19 @@ export async function buildDeps(
 ): Promise<Deps> {
   const allowedCapabilities = options.allowedCapabilities ?? ['live'];
   const browser = makeRealBrowserDriver();
+  const fs = makeFsGlob();
+  const loadedRequirements = await loadRequirements(fs, config);
+  const providers = [
+    axeProvider,
+    makeRulepackProvider(),
+    // Wall-clock cap limits infinite focus loops while still disclosing partial evidence.
+    makeKeyboardWalkProvider({ wallClockMs: KEYBOARD_WALL_CLOCK_MS }),
+  ];
+  if (loadedRequirements.ok) {
+    providers.push(...mapRequirementsToProviders(loadedRequirements.bundle));
+  }
+  // Intake parse failure is policy input failure, not an engine crash.
+  // We keep building Deps so run() can fail closed through the gate path.
 
   return {
     clock: () => new Date().toISOString(),
@@ -81,15 +96,10 @@ export async function buildDeps(
     },
     browser,
     git: makeGitReader(),
-    fs: makeFsGlob(),
+    fs,
     checkRunner: makeCheckRunner({
       browser,
-      providers: [
-        axeProvider,
-        makeRulepackProvider(),
-        // Wall-clock cap limits infinite focus loops while still disclosing partial evidence.
-        makeKeyboardWalkProvider({ wallClockMs: KEYBOARD_WALL_CLOCK_MS }),
-      ],
+      providers,
       config,
       // Static-only mode denies live capability explicitly so the result records not-covered gaps.
       allowedCapabilities,
