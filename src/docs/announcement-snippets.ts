@@ -3,32 +3,29 @@
  * This unit creates read-only screen artifacts from Result transcript data.
  * It must never claim evidence for unchecked surfaces or stamp wall-clock time.
  */
-import type { DocArtifact, Receipt, Result, TranscriptStop } from '../contracts/index.js';
-
-function isCovered(receipt: Receipt | null, surface: string): receipt is Receipt {
-  return receipt !== null && receipt.coverage.checked.includes(surface);
-}
-
-function receiptGeneratedAt(receipt: Receipt | null): string {
-  // generatedAt mirrors receipt mint time so reruns stay deterministic.
-  return receipt === null ? '' : receipt.mintedAt;
-}
+import type { DocArtifact, Result, TranscriptStop } from '../contracts/index.js';
+import { neutralize } from '../primitives/neutralize.js';
+import { buildEvidenceBinding } from './evidence-binding.js';
 
 function stopContent(stop: TranscriptStop): string {
   const parts = stop.announcement
-    .map((token) => token.text?.trim() ?? '')
+    .map((token) => neutralize(token.text?.trim() ?? ''))
     .filter((text) => text.length > 0);
   return parts.join(', ');
 }
 
-export function generateAnnouncementSnippets(result: Result, receipt: Receipt | null): DocArtifact[] {
+export function generateAnnouncementSnippets(result: Result): DocArtifact[] {
+  // Receipt must come from Result so docs cannot claim proof for an unverified run.
   return result.screens.map((screen) => {
-    const covered = isCovered(receipt, screen.screenId);
+    const binding = buildEvidenceBinding(result, screen.screenId);
     const entries: DocArtifact['entries'] = screen.stops.map((stop) => {
       // We record evidence only when receipt coverage says this surface was checked.
-      const evidenceRef = covered ? `stop:${receipt.sourceTree}:${screen.screenId}:${stop.index}` : undefined;
+      const evidenceRef =
+        binding.covered && binding.receipt !== null
+          ? `stop:${binding.receipt.sourceTree}:${screen.screenId}:${stop.index}`
+          : undefined;
       return {
-        element: stop.elementPath,
+        element: neutralize(stop.elementPath),
         content: stopContent(stop),
         status: 'draft',
         ...(evidenceRef === undefined ? {} : { evidenceRef }),
@@ -39,8 +36,8 @@ export function generateAnnouncementSnippets(result: Result, receipt: Receipt | 
       kind: 'announcement-snippets',
       surface: screen.screenId,
       entries,
-      generatedAt: receiptGeneratedAt(receipt),
-      ...(receipt === null ? {} : { boundToReceipt: receipt.sourceTree }),
+      generatedAt: binding.generatedAt,
+      ...(binding.boundToReceipt === undefined ? {} : { boundToReceipt: binding.boundToReceipt }),
     };
   });
 }

@@ -80,7 +80,7 @@ function resultFixture(): Result {
 
 describe('generateAnnouncementSnippets', () => {
   it('creates one draft artifact per screen with covered stop evidence refs', () => {
-    const artifacts = generateAnnouncementSnippets(resultFixture(), receiptFixture);
+    const artifacts = generateAnnouncementSnippets(resultFixture());
 
     expect(artifacts).toHaveLength(2);
     expect(artifacts[0]?.kind).toBe('announcement-snippets');
@@ -100,7 +100,10 @@ describe('generateAnnouncementSnippets', () => {
   });
 
   it('omits receipt binding and stop evidence refs when receipt is null', () => {
-    const artifacts = generateAnnouncementSnippets(resultFixture(), null);
+    const result = resultFixture();
+    result.receipt = null;
+    result.verdict = null;
+    const artifacts = generateAnnouncementSnippets(result);
 
     expect(artifacts).toHaveLength(2);
     expect(artifacts[0]?.generatedAt).toBe('');
@@ -114,6 +117,44 @@ describe('generateAnnouncementSnippets', () => {
       element: '#theme',
       content: 'Theme',
       status: 'draft',
+    });
+  });
+
+  it('keeps receipt binding but omits refs for uncovered surfaces', () => {
+    const result = resultFixture();
+    result.receipt = {
+      ...receiptFixture,
+      coverage: { checked: ['clusters'], notCovered: ['settings'] },
+    };
+
+    const artifacts = generateAnnouncementSnippets(result);
+
+    expect(artifacts[1]?.boundToReceipt).toBe('tree-123');
+    expect(artifacts[1]?.entries[0]).toEqual({
+      element: '#theme',
+      content: 'Theme',
+      status: 'draft',
+    });
+  });
+
+  it('neutralizes page-derived stop paths and announcement text', () => {
+    const result = resultFixture();
+    result.screens = [
+      screenFixture('clusters', [
+        {
+          index: 0,
+          elementPath: '#save\u001b[31m',
+          announcement: [{ kind: 'name', text: 'Save\u001b[2J', fromTree: true, source: 'ax-tree' }],
+        },
+      ]),
+    ];
+
+    const artifacts = generateAnnouncementSnippets(result);
+    expect(artifacts[0]?.entries[0]).toEqual({
+      element: '#save',
+      content: 'Save',
+      status: 'draft',
+      evidenceRef: 'stop:tree-123:clusters:0',
     });
   });
 });

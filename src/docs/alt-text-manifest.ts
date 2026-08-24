@@ -3,24 +3,12 @@
  * This unit projects requirement bundle data into a doc artifact.
  * It must never invent evidence coverage, mutate Result state, or read time from the host clock.
  */
-import type { DocArtifact, Receipt, RequirementBundle, Result } from '../contracts/index.js';
+import type { DocArtifact, RequirementBundle, Result } from '../contracts/index.js';
+import { buildEvidenceBinding } from './evidence-binding.js';
 
-function isCovered(receipt: Receipt | null, surface: string): receipt is Receipt {
-  return receipt !== null && receipt.coverage.checked.includes(surface);
-}
-
-function receiptGeneratedAt(receipt: Receipt | null): string {
-  // Clock discipline keeps artifact timestamps replayable with the same receipt.
-  return receipt === null ? '' : receipt.mintedAt;
-}
-
-export function generateAltTextManifest(
-  _result: Result,
-  receipt: Receipt | null,
-  bundle: RequirementBundle,
-  surface: string,
-): DocArtifact {
-  const covered = isCovered(receipt, surface);
+export function generateAltTextManifest(result: Result, bundle: RequirementBundle, surface: string): DocArtifact {
+  // Receipt must come from Result so artifacts cannot be paired with detached proof.
+  const binding = buildEvidenceBinding(result, surface);
   const entries: DocArtifact['entries'] = [];
 
   for (const requirement of bundle.requirements) {
@@ -31,15 +19,12 @@ export function generateAltTextManifest(
       continue;
     }
 
-    // Evidence references appear only for covered surfaces, never by receipt presence alone.
-    const evidenceRef = covered
-      ? `receipt:${receipt.sourceTree}:${surface}:${requirement.assertion.selector}`
-      : undefined;
+    // Surface coverage does not prove this selector's accessible name matched.
+    // We bind the artifact to the receipt tree without minting selector-level pass evidence.
     entries.push({
       element: requirement.assertion.selector,
       content: requirement.assertion.expectedText,
       status: requirement.approved ? 'approved' : 'draft',
-      ...(evidenceRef === undefined ? {} : { evidenceRef }),
     });
   }
 
@@ -47,7 +32,7 @@ export function generateAltTextManifest(
     kind: 'alt-text-manifest',
     surface,
     entries,
-    generatedAt: receiptGeneratedAt(receipt),
-    ...(receipt === null ? {} : { boundToReceipt: receipt.sourceTree }),
+    generatedAt: binding.generatedAt,
+    ...(binding.boundToReceipt === undefined ? {} : { boundToReceipt: binding.boundToReceipt }),
   };
 }

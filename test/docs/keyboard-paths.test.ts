@@ -76,7 +76,7 @@ function resultFixture(): Result {
 
 describe('generateKeyboardPaths', () => {
   it('creates one draft artifact per screen with stop refs and token traces', () => {
-    const artifacts = generateKeyboardPaths(resultFixture(), receiptFixture);
+    const artifacts = generateKeyboardPaths(resultFixture());
 
     expect(artifacts).toHaveLength(2);
     expect(artifacts[0]?.kind).toBe('keyboard-paths');
@@ -101,7 +101,10 @@ describe('generateKeyboardPaths', () => {
   });
 
   it('omits receipt binding and evidence refs when receipt is null', () => {
-    const artifacts = generateKeyboardPaths(resultFixture(), null);
+    const result = resultFixture();
+    result.receipt = null;
+    result.verdict = null;
+    const artifacts = generateKeyboardPaths(result);
 
     expect(artifacts).toHaveLength(2);
     expect(artifacts[0]?.generatedAt).toBe('');
@@ -110,6 +113,44 @@ describe('generateKeyboardPaths', () => {
       element: '[1] #save',
       content: 'name:Save | role:button',
       status: 'draft',
+    });
+  });
+
+  it('keeps receipt binding but omits refs for uncovered surfaces', () => {
+    const result = resultFixture();
+    result.receipt = {
+      ...receiptFixture,
+      coverage: { checked: ['clusters'], notCovered: ['settings'] },
+    };
+
+    const artifacts = generateKeyboardPaths(result);
+
+    expect(artifacts[1]?.boundToReceipt).toBe('tree-123');
+    expect(artifacts[1]?.entries[0]).toEqual({
+      element: '[1] #theme',
+      content: 'name:Theme',
+      status: 'draft',
+    });
+  });
+
+  it('neutralizes page-derived stop paths and token text', () => {
+    const result = resultFixture();
+    result.screens = [
+      screenFixture('clusters', [
+        {
+          index: 0,
+          elementPath: '#save\u001b[31m',
+          announcement: [{ kind: 'name', text: 'Save\u001b[2J', fromTree: true, source: 'ax-tree' }],
+        },
+      ]),
+    ];
+
+    const artifacts = generateKeyboardPaths(result);
+    expect(artifacts[0]?.entries[0]).toEqual({
+      element: '[1] #save',
+      content: 'name:Save',
+      status: 'draft',
+      evidenceRef: 'stop:tree-123:clusters:0',
     });
   });
 });

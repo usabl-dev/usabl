@@ -105,13 +105,8 @@ function bundleFixture(): RequirementBundle {
 }
 
 describe('generateAltTextManifest', () => {
-  it('binds approved covered requirements to receipt evidence refs', () => {
-    const artifact = generateAltTextManifest(
-      makeResult(receiptFixture),
-      receiptFixture,
-      bundleFixture(),
-      'clusters',
-    );
+  it('binds approved covered requirements without selector-level evidence refs', () => {
+    const artifact = generateAltTextManifest(makeResult(receiptFixture), bundleFixture(), 'clusters');
 
     expect(artifact.kind).toBe('alt-text-manifest');
     expect(artifact.surface).toBe('clusters');
@@ -121,28 +116,21 @@ describe('generateAltTextManifest', () => {
       element: 'img.hero',
       content: 'Hero image',
       status: 'approved',
-      evidenceRef: 'receipt:tree-123:clusters:img.hero',
     });
   });
 
   it('marks unapproved requirements as draft', () => {
-    const artifact = generateAltTextManifest(
-      makeResult(receiptFixture),
-      receiptFixture,
-      bundleFixture(),
-      'clusters',
-    );
+    const artifact = generateAltTextManifest(makeResult(receiptFixture), bundleFixture(), 'clusters');
 
     expect(artifact.entries).toContainEqual({
       element: 'img.logo',
       content: 'Company logo',
       status: 'draft',
-      evidenceRef: 'receipt:tree-123:clusters:img.logo',
     });
   });
 
   it('omits receipt binding and evidence refs when receipt is null', () => {
-    const artifact = generateAltTextManifest(makeResult(null), null, bundleFixture(), 'clusters');
+    const artifact = generateAltTextManifest(makeResult(null), bundleFixture(), 'clusters');
 
     expect(artifact.generatedAt).toBe('');
     expect(artifact.boundToReceipt).toBeUndefined();
@@ -158,12 +146,7 @@ describe('generateAltTextManifest', () => {
       coverage: { checked: [], notCovered: ['clusters'] },
     };
 
-    const artifact = generateAltTextManifest(
-      makeResult(uncoveredReceipt),
-      uncoveredReceipt,
-      bundleFixture(),
-      'clusters',
-    );
+    const artifact = generateAltTextManifest(makeResult(uncoveredReceipt), bundleFixture(), 'clusters');
 
     expect(artifact.generatedAt).toBe(uncoveredReceipt.mintedAt);
     expect(artifact.boundToReceipt).toBe(uncoveredReceipt.sourceTree);
@@ -174,12 +157,7 @@ describe('generateAltTextManifest', () => {
   });
 
   it('skips requirements from other surfaces', () => {
-    const artifact = generateAltTextManifest(
-      makeResult(receiptFixture),
-      receiptFixture,
-      bundleFixture(),
-      'clusters',
-    );
+    const artifact = generateAltTextManifest(makeResult(receiptFixture), bundleFixture(), 'clusters');
 
     expect(artifact.entries).toHaveLength(2);
     expect(artifact.entries.map((entry) => entry.element)).toEqual(['img.hero', 'img.logo']);
