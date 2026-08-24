@@ -68,11 +68,13 @@ function readChromiumVersion(): string {
 
 export async function buildDeps(
   config: UsablConfig,
-  options: { cwd?: string; allowedCapabilities?: Capability[] } = {},
+  options: { cwd?: string; allowedCapabilities?: Capability[]; storageStatePath?: string } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
   const allowedCapabilities = options.allowedCapabilities ?? ['live'];
-  const browser = makeRealBrowserDriver();
+  const browser = makeRealBrowserDriver(
+    options.storageStatePath === undefined ? {} : { storageStatePath: options.storageStatePath },
+  );
   const fs = makeFsGlob({ cwd });
   const loadedRequirements = await loadRequirements(fs, config);
   const providers = [

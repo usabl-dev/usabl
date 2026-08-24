@@ -64,4 +64,18 @@ describe('buildDeps', () => {
       await rm(fixtureRepo, { recursive: true, force: true });
     }
   });
+
+  it('accepts storageStatePath and keeps browser launch lazy', async () => {
+    const launchSpy = vi.spyOn(chromium, 'launch');
+    const storageStatePath = '/tmp/fleet-insights-session.json';
+
+    try {
+      const deps = await buildDeps(testConfig(), { storageStatePath });
+      expect(launchSpy).not.toHaveBeenCalled();
+      expect(typeof deps.checkRunner.scan).toBe('function');
+      await deps.browser.close();
+    } finally {
+      launchSpy.mockRestore();
+    }
+  });
 });

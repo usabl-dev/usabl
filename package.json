@@ -33,6 +33,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsup",
     "check": "npm run typecheck && npm run test",
+    "measure:fleet-insights": "node --experimental-strip-types scripts/measure-fleet-insights.ts",
     "prepare": "bash scripts/install-git-hooks.sh"
   },
   "devDependencies": {
