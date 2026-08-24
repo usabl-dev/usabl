@@ -38,7 +38,7 @@ const notUsed = (name: string) => async (): Promise<never> => {
   throw new Error(`fake Page.${name} not used in this test`);
 };
 
-function fakePage(): Page {
+export function makeFakePage(overrides: Partial<Page> = {}): Page {
   return {
     gotoReady: async () => {},
     focusBody: async () => {},
@@ -59,6 +59,7 @@ function fakePage(): Page {
     setReducedMotion: async () => {},
     getComputedStyle: notUsed('getComputedStyle'),
     screenshot: notUsed('screenshot'),
+    ...overrides,
   };
 }
 
@@ -73,7 +74,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     runnerVersion: spec.runnerVersion,
     scannerVersions: spec.scannerVersions,
     // URL is config for later Playwright wiring. Fakes never fetch it.
-    browser: { open: async (_url: string) => fakePage(), close: async () => {} },
+    browser: { open: async (_url: string) => makeFakePage(), close: async () => {} },
     git: {
       writeTree: async () => spec.writeTree,
       show: async (_ref, path) => spec.headContents[path] ?? null,
