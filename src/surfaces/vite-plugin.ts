@@ -1,9 +1,13 @@
 /**
  * Advisory Vite overlay plugin that projects an existing Result inside host apps.
- * This unit serves read-only overlay assets and never gates a run.
+ * This unit serves read-only overlay assets and wires host config to run().
  * It must never convert advisory display state into process exits.
  */
-import type { Result } from '../contracts/index.js';
+import { resolve } from 'node:path';
+import { loadConfig } from '../cli.js';
+import type { Deps, Result, UsablConfig } from '../contracts/index.js';
+import { buildDeps } from '../deps/build.js';
+import { run } from '../run.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 import { overlayClientSource } from './overlay-client.js';
 
@@ -44,6 +48,32 @@ export interface UsablVitePlugin {
   name: string;
   configureServer?: (server: UsablServer) => void;
   transformIndexHtml?: (html: string) => string | Promise<string>;
+}
+
+export interface UsablVitePluginFromConfigOptions {
+  cwd?: string;
+  configPath?: string;
+}
+
+interface UsablVitePluginFactoryPorts {
+  cwd: () => string;
+  resolvePath: (cwd: string, configPath: string) => string;
+  loadConfig: (path: string) => Promise<UsablConfig>;
+  buildDeps: (config: UsablConfig, options: { cwd: string }) => Promise<Deps>;
+  runEngine: (deps: Deps, config: UsablConfig) => Promise<Result>;
+}
+
+function makeUsablVitePluginFactoryPorts(
+  overrides: Partial<UsablVitePluginFactoryPorts> = {},
+): UsablVitePluginFactoryPorts {
+  return {
+    cwd: overrides.cwd ?? (() => process.cwd()),
+    resolvePath: overrides.resolvePath ?? ((cwd: string, configPath: string) => resolve(cwd, configPath)),
+    loadConfig: overrides.loadConfig ?? (async (path: string) => loadConfig(path)),
+    buildDeps:
+      overrides.buildDeps ?? (async (config: UsablConfig, options: { cwd: string }) => buildDeps(config, options)),
+    runEngine: overrides.runEngine ?? (async (deps: Deps, config: UsablConfig) => run(deps, config)),
+  };
 }
 
 export function projectOverlay(result: Result): OverlayProjection {
@@ -144,4 +174,29 @@ export function usablVitePlugin(opts: { run: () => Promise<Result> }): UsablVite
       return injectLoader(html);
     },
   };
+}
+
+export function usablVitePluginFromConfig(
+  opts: UsablVitePluginFromConfigOptions = {},
+  ports: Partial<UsablVitePluginFactoryPorts> = {},
+): UsablVitePlugin {
+  const resolvedPorts = makeUsablVitePluginFactoryPorts(ports);
+  const cwd = opts.cwd ?? resolvedPorts.cwd();
+  const configPath = opts.configPath ?? 'usabl.config.json';
+  const resolvedConfigPath = resolvedPorts.resolvePath(cwd, configPath);
+
+  // Hosts should not assemble Deps. This factory keeps wiring in-package and
+  // still returns a projection-only overlay backed by the gate-owned Result.
+  return usablVitePlugin({
+    run: async () => {
+      const config = await resolvedPorts.loadConfig(resolvedConfigPath);
+      const deps = await resolvedPorts.buildDeps(config, { cwd });
+      try {
+        return await resolvedPorts.runEngine(deps, config);
+      } finally {
+        // Vite refresh waves must always close browser state, even on throw.
+        await deps.browser.close();
+      }
+    },
+  });
 }
