@@ -136,3 +136,7 @@ Code-owner review is not a merge requirement unless the repository ruleset says 
 ## Questions
 
 Open a discussion or talk to the team before large design changes.
+
+## Team preview
+
+See [docs/team-preview.md](docs/team-preview.md) for the internal demo loop and feedback process.

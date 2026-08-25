@@ -1,0 +1,51 @@
+name: Feedback
+description: Report feedback on a usabl surface
+title: "[feedback] "
+labels: ["feedback"]
+body:
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Where did you see the result?
+      options:
+        - cli
+        - overlay
+        - stop-hook
+        - ci-pr
+        - other
+    validations:
+      required: true
+  - type: input
+    id: verdict-seen
+    attributes:
+      label: Verdict seen
+      description: What answer did usabl give?
+      placeholder: "e.g. regression, verified, not_covered"
+    validations:
+      required: true
+  - type: input
+    id: verdict-expected
+    attributes:
+      label: Expected verdict
+      description: What answer did you expect?
+      placeholder: "e.g. verified"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro
+      description: Commands, URLs, or PR link to reproduce
+      placeholder: |
+        1. npx usabl check
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: honest-or-confusing
+    attributes:
+      label: Honest or confusing?
+      description: Was the output honest and clear, or was something confusing?
+    validations:
+      required: false

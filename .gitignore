@@ -13,6 +13,7 @@ out/
 .githooks/
 .superpowers/
 .usabl/
+.pre-commit-cache/
 
 # Fleet Insights session: never commit, scrubbed or not
 storageState*.json

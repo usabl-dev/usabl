@@ -1,8 +1,8 @@
 # usabl
 
-![Status](https://img.shields.io/badge/status-early%20development-orange?style=flat-square)
-![Version](https://img.shields.io/badge/version-0.0.0-blue?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.1.0-blue?style=flat-square)
 ![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)
+![Status](https://img.shields.io/badge/status-team%20preview-green?style=flat-square)
 
 **usable by default.**
 
@@ -18,7 +18,20 @@ The AI can suggest fixes. It does not get to grade its own work.
 
 ## Status
 
-Early development for Innovation Days 2026.
+Team preview (v0.1.0). Teammates can clone, run the loop, and file feedback.
+
+See [docs/team-preview.md](docs/team-preview.md) for the internal runbook.
+
+## Quick start
+
+```bash
+git clone https://github.com/usabl-dev/usabl.git
+cd usabl
+npm install
+npm run build
+```
+
+Node 22 required. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup (pre-commit, hooks, CI).
 
 ## Design
 
