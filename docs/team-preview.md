@@ -10,11 +10,18 @@ This is the internal loop for usabl v0.1.0. A teammate, without Ed in the room, 
   usabl-app/    fixture (PatternFly 6 app)
 ```
 
-Clone both as siblings. The fixture depends on the engine with `"usabl": "file:../usabl"`.
+Clone both as siblings from the `usabl-dev` org. The fixture depends on the engine with `"usabl": "file:../usabl"`.
+
+```bash
+git clone https://github.com/usabl-dev/usabl.git
+git clone https://github.com/usabl-dev/usabl-app.git
+```
+
+Both repos are private. Ask a maintainer for access if clone fails.
 
 ## Setup
 
-1. Node 22. Clone both repos as siblings. `npm install` in each.
+1. Node 22. Clone both repos as siblings (URLs above). `npm install` in each.
 2. In `usabl`: `npm run build` (produces dist/ with CLI, overlay plugin, stop-hook runner).
 3. In `usabl-app`: `npm run dev` starts on `http://127.0.0.1:5173`.
 
