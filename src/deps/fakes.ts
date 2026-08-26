@@ -14,6 +14,7 @@ export interface FakeDepsSpec {
   diffNames?: string[];
   files: Record<string, string>; // working-tree contents by path
   headContents: Record<string, string>; // HEAD contents by path (for git.show)
+  refContents?: Record<string, Record<string, string>>; // other refs by path
   headBlobs: Record<string, string>; // blob shas by path (for git.lsTree / policyHash)
   writeTree: string; // git write-tree result
   headRef: string;
@@ -77,7 +78,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     browser: { open: async (_url: string) => makeFakePage(), close: async () => {} },
     git: {
       writeTree: async () => spec.writeTree,
-      show: async (_ref, path) => spec.headContents[path] ?? null,
+      show: async (ref, path) => (spec.refContents?.[ref] ?? spec.headContents)[path] ?? null,
       statusZ: async () => spec.changed,
       diffNameOnly: async () => spec.diffNames ?? [],
       lsTree: async (_ref, paths) => {
@@ -90,10 +91,10 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
         }
         return Object.fromEntries(blobs);
       },
-      lsFiles: async (_ref, prefix) => {
+      lsFiles: async (ref, prefix) => {
         const normalized = normalizePrefix(prefix);
         const childrenPrefix = normalized + '/';
-        return Object.keys(spec.headContents)
+        return Object.keys(spec.refContents?.[ref] ?? spec.headContents)
           .filter((path) => path === normalized || path.startsWith(childrenPrefix))
           .sort();
       },

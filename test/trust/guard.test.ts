@@ -82,6 +82,26 @@ describe('trust guard', () => {
     ]);
   });
 
+  it('checkGuard rejects a committed config change against the trusted base', async () => {
+    const deps = makeFakeDeps({
+      files: {
+        'usabl.config.json': '{"guardedPaths":[]}',
+      },
+      headContents: {
+        'usabl.config.json': '{"guardedPaths":[]}',
+      },
+      refContents: {
+        'origin/main': {
+          'usabl.config.json': '{"guardedPaths":["src/gate"]}',
+        },
+      },
+    });
+
+    await expect(checkGuard(deps, { ...configFixture, guardedPaths: [] }, 'origin/main')).resolves.toEqual([
+      'usabl.config.json',
+    ]);
+  });
+
   it('checkGuard builds guarded paths from verified config bytes, not caller memory', async () => {
     const deps = makeFakeDeps({
       files: {

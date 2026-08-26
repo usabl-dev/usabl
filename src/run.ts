@@ -127,7 +127,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
   try {
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
     const discoveredCoverage = await computeCoverage(deps.fs, config, changed);
-    const guardDivergedPaths = await checkGuard(deps, config);
+    const guardDivergedPaths = await checkGuard(deps, config, opts.trustedRef ?? 'HEAD');
     const loadedRequirements = await loadRequirements(deps.fs, config);
     const intakePolicyPaths =
       loadedRequirements.ok

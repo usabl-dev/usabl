@@ -79,22 +79,26 @@ export function buildGuardedSet(config: GuardConfigSource): string[] {
  * Directory entries are expanded from committed files and working-tree files.
  * This catches new files under a guarded prefix so a self-edit cannot hide.
  */
-export async function expandGuardedSet(deps: Deps, guardedPaths: string[]): Promise<string[]> {
+export async function expandGuardedSet(
+  deps: Deps,
+  guardedPaths: string[],
+  trustedRef = 'HEAD',
+): Promise<string[]> {
   const expanded = new Set<string>();
 
   for (const entry of guardedPaths) {
     const prefix = normalizePrefix(entry);
-    const [headFiles, workingFiles] = await Promise.all([
-      deps.git.lsFiles('HEAD', prefix),
+    const [trustedFiles, workingFiles] = await Promise.all([
+      deps.git.lsFiles(trustedRef, prefix),
       deps.fs.glob([prefix, prefix + '/**']),
     ]);
 
-    if (headFiles.length === 0 && workingFiles.length === 0) {
+    if (trustedFiles.length === 0 && workingFiles.length === 0) {
       expanded.add(entry);
       continue;
     }
 
-    for (const path of headFiles) {
+    for (const path of trustedFiles) {
       expanded.add(path);
     }
     for (const path of workingFiles) {
@@ -107,20 +111,20 @@ export async function expandGuardedSet(deps: Deps, guardedPaths: string[]): Prom
 
 /**
  * Config-first ordering is an honesty boundary.
- * If config bytes diverge from HEAD, we return the config path immediately and
- * refuse to trust potentially tampered guardedPaths content from the workspace.
+ * If config bytes diverge from the trusted ref, return the config path immediately.
+ * Never trust potentially tampered guardedPaths content from the workspace.
  */
-export async function checkGuard(deps: Deps, config: UsablConfig): Promise<string[]> {
-  const [workingConfig, headConfig] = await Promise.all([
+export async function checkGuard(deps: Deps, config: UsablConfig, trustedRef = 'HEAD'): Promise<string[]> {
+  const [workingConfig, trustedConfig] = await Promise.all([
     deps.fs.readFile(CONFIG_PATH),
-    deps.git.show('HEAD', CONFIG_PATH),
+    deps.git.show(trustedRef, CONFIG_PATH),
   ]);
-  if (workingConfig !== headConfig) {
+  if (workingConfig !== trustedConfig) {
     return [CONFIG_PATH];
   }
 
   // Guard scope comes from the verified config bytes, not the caller object.
-  // After bytes match HEAD, trusting in-memory config would let a caller edit
+  // After bytes match the trusted ref, trusting in-memory config would let a caller edit
   // guardedPaths and self-approve in the same run.
   if (workingConfig === null) {
     return [CONFIG_PATH];
@@ -130,15 +134,15 @@ export async function checkGuard(deps: Deps, config: UsablConfig): Promise<strin
     return [CONFIG_PATH];
   }
 
-  const expanded = await expandGuardedSet(deps, buildGuardedSet(verifiedConfig));
+  const expanded = await expandGuardedSet(deps, buildGuardedSet(verifiedConfig), trustedRef);
   const diverged: string[] = [];
   for (const path of expanded) {
-    const [working, head] = await Promise.all([deps.fs.readFile(path), deps.git.show('HEAD', path)]);
+    const [working, trusted] = await Promise.all([deps.fs.readFile(path), deps.git.show(trustedRef, path)]);
     // Optional ledgers may be absent in both places early in a repo lifecycle.
-    if (working === null && head === null) {
+    if (working === null && trusted === null) {
       continue;
     }
-    if (working !== head) {
+    if (working !== trusted) {
       diverged.push(path);
     }
   }
