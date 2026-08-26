@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical guide to how usabl v0.1.0 proves accessibility changes.">
+  <title>How usabl works</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #101827;
+      --raised: #172033;
+      --paper: #f7f5ef;
+      --white: #fff;
+      --blue: #2457e6;
+      --blue-light: #5b7cfa;
+      --green: #177a4a;
+      --red: #c9363e;
+      --amber: #a95f00;
+      --violet: #7452b8;
+      --slate: #596579;
+      --line: #cbd1da;
+      --soft: #e9edf4;
+      --sans: Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 5.5rem; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 17px/1.58 var(--sans);
+    }
+    a {
+      color: var(--blue);
+      text-decoration-thickness: .11em;
+      text-underline-offset: .18em;
+    }
+    a:focus-visible {
+      outline: 3px solid var(--blue-light);
+      outline-offset: 4px;
+    }
+    code, pre { font-family: var(--mono); }
+    code { font-size: .9em; }
+    .skip {
+      position: fixed;
+      z-index: 100;
+      top: .75rem;
+      left: .75rem;
+      padding: .7rem 1rem;
+      background: var(--white);
+      transform: translateY(-180%);
+    }
+    .skip:focus { transform: translateY(0); }
+    .utility {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      background: var(--ink);
+      color: var(--white);
+      border-bottom: 3px solid var(--blue);
+    }
+    .utility-inner {
+      width: min(calc(100% - 3rem), 1160px);
+      min-height: 4.6rem;
+      margin: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2rem;
+    }
+    .identity {
+      display: flex;
+      align-items: baseline;
+      gap: .85rem;
+      white-space: nowrap;
+    }
+    .identity strong { font-size: 1.35rem; letter-spacing: -.04em; }
+    .identity span, .route {
+      color: #cfd8eb;
+      font-size: .74rem;
+      font-weight: 750;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .version { padding-left: .85rem; border-left: 1px solid #526079; font-family: var(--mono); }
+    .route {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.35rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .route a { color: inherit; text-decoration: none; }
+    .route a:hover { color: var(--white); }
+    .section {
+      width: min(calc(100% - 3rem), 1160px);
+      margin: auto;
+      padding: 5rem 0;
+      display: grid;
+      grid-template-columns: 4rem minmax(0, 1fr);
+      gap: 1.7rem;
+    }
+    .number {
+      padding-top: .25rem;
+      border-right: 1px solid var(--line);
+      color: var(--blue);
+      font-size: 1.35rem;
+      font-weight: 850;
+      line-height: 1;
+    }
+    .body { min-width: 0; }
+    .eyebrow {
+      margin: 0 0 .8rem;
+      color: var(--blue);
+      font-size: .76rem;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { margin-top: 0; line-height: 1.08; text-wrap: balance; }
+    h1 {
+      max-width: 850px;
+      margin-bottom: 1.4rem;
+      font-size: clamp(3rem, 5vw, 5.3rem);
+      letter-spacing: -.06em;
+    }
+    h2 { margin-bottom: 1rem; font-size: clamp(2rem, 3vw, 3rem); letter-spacing: -.045em; }
+    h3 { margin-bottom: .6rem; font-size: 1.15rem; }
+    p { margin-top: 0; }
+    .lede { max-width: 820px; color: #354156; font-size: 1.2rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: .85rem; margin-top: 2rem; }
+    .action {
+      display: inline-flex;
+      min-height: 3.2rem;
+      align-items: center;
+      padding: .72rem 1.15rem;
+      border: 2px solid var(--blue);
+      font-weight: 780;
+      text-decoration: none;
+    }
+    .primary { background: var(--blue); color: var(--white); }
+    .boundary {
+      max-width: 860px;
+      margin-top: 2.2rem;
+      padding: 1.25rem 1.45rem;
+      border-left: 5px solid var(--green);
+      background: #e3f2e9;
+      color: #0d4c2e;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      margin: 2.5rem 0 1.5rem;
+      padding: 0;
+      list-style: none;
+      counter-reset: flow;
+    }
+    .flow li {
+      position: relative;
+      min-height: 12rem;
+      padding: 3.2rem 1rem 1rem;
+      border-top: 2px solid var(--line);
+      border-right: 1px solid var(--line);
+      counter-increment: flow;
+    }
+    .flow li:last-child { border-right: 0; }
+    .flow li::before {
+      position: absolute;
+      top: -1.2rem;
+      left: 1rem;
+      display: grid;
+      width: 2.4rem;
+      height: 2.4rem;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--blue);
+      color: var(--white);
+      content: counter(flow);
+      font-weight: 850;
+    }
+    .flow strong { display: block; margin-bottom: .45rem; }
+    .flow span { color: var(--slate); font-size: .96rem; }
+    .rule {
+      max-width: 900px;
+      margin-top: 1.8rem;
+      padding: 1.2rem 1.4rem;
+      border-left: 5px solid var(--blue);
+      background: var(--soft);
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+    .card {
+      padding: 1.4rem;
+      border-top: 4px solid var(--blue);
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.55);
+    }
+    .card p { margin-bottom: 0; color: var(--slate); }
+    .dark { background: var(--ink); color: var(--white); }
+    .dark .section { padding-top: 4.6rem; padding-bottom: 4.6rem; }
+    .dark .number { border-color: #526079; color: #76a0ff; }
+    .dark .eyebrow { color: #91afff; }
+    .dark .lede { color: #d9dfeb; }
+    .dark a { color: #a9c0ff; }
+    .verdicts {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      margin-top: 2rem;
+      border: solid #526079;
+      border-width: 1px 0;
+    }
+    .verdict { min-height: 13rem; padding: 1.4rem 1.15rem; border-right: 1px solid #526079; }
+    .verdict:last-child { border: 0; }
+    .verdict strong { display: block; margin-bottom: .8rem; font-size: .82rem; text-transform: uppercase; }
+    .verdict p { margin: 0; color: #d9dfeb; font-size: .97rem; }
+    .verified { color: #49c77f; }
+    .regression { color: #ff6970; }
+    .not-covered { color: #ffb24a; }
+    .approval { color: #bb91ff; }
+    .precedence {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      margin: 2rem 0;
+      padding: 0;
+      border: 1px solid #526079;
+      list-style: none;
+    }
+    .precedence li { padding: 1rem; border-right: 1px solid #526079; color: #d9dfeb; }
+    .precedence li:last-child { border: 0; }
+    .precedence strong { display: block; color: var(--white); }
+    .idle-note { max-width: 880px; color: #d9dfeb; }
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      margin-top: 2rem;
+    }
+    .list-card { padding: 1.5rem; border: 1px solid var(--line); background: rgba(255,255,255,.5); }
+    .list-card ul { margin-bottom: 0; padding-left: 1.2rem; }
+    .list-card li { margin-bottom: .55rem; }
+    .receipt {
+      margin-top: 2rem;
+      padding: 1.5rem;
+      background: var(--white);
+      border: 1px solid #aeb7c5;
+      box-shadow: 10px 10px 0 var(--soft);
+    }
+    .receipt-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .receipt-head strong { color: var(--green); font-size: 1.25rem; }
+    .receipt-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      margin: 0;
+    }
+    .receipt-grid div { padding: 1rem; border-bottom: 1px solid var(--line); }
+    .receipt-grid dt { color: var(--slate); font-size: .78rem; font-weight: 800; text-transform: uppercase; }
+    .receipt-grid dd { margin: .25rem 0 0; overflow-wrap: anywhere; }
+    .surface-table { overflow-x: auto; margin-top: 2rem; }
+    .surface-table:focus-visible { outline: 3px solid var(--blue-light); outline-offset: 4px; }
+    table { width: 100%; min-width: 760px; border-collapse: collapse; }
+    th, td { padding: 1rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    thead th { color: var(--slate); font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; }
+    .trace {
+      display: grid;
+      grid-template-columns: 1fr 3rem 1fr;
+      margin-top: 2rem;
+      border: 1px solid var(--line);
+      background: var(--white);
+    }
+    .trace > div { padding: 1.5rem; }
+    .trace .arrow {
+      display: grid;
+      place-items: center;
+      padding: 0;
+      background: var(--soft);
+      color: var(--blue);
+      font-size: 1.8rem;
+    }
+    .trace ul { padding-left: 1.2rem; }
+    .trace .regression { color: var(--red); }
+    .trace .verified { color: var(--green); }
+    .code-map { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-top: 2rem; }
+    .code-map article { padding: 1.3rem; border-top: 3px solid var(--blue); background: rgba(255,255,255,.5); }
+    .code-map p { margin-bottom: 0; color: var(--slate); }
+    .next {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+    .next a {
+      min-height: 8rem;
+      padding: 1.2rem;
+      border: 2px solid var(--blue);
+      background: var(--white);
+      font-weight: 780;
+      text-decoration: none;
+    }
+    .next span { display: block; margin-top: .45rem; color: var(--slate); font-size: .92rem; font-weight: 500; }
+    @media (max-width: 920px) {
+      .utility { position: static; }
+      .utility-inner { padding: 1rem 0; flex-direction: column; align-items: flex-start; }
+      .section { grid-template-columns: 1fr; }
+      .number { padding-bottom: .7rem; border-right: 0; border-bottom: 1px solid var(--line); }
+      .flow, .precedence { grid-template-columns: 1fr; }
+      .flow { gap: .75rem; }
+      .flow li { min-height: 0; border-right: 0; }
+      .precedence li { border-right: 0; border-bottom: 1px solid #526079; }
+      .cards, .verdicts, .receipt-grid, .next { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 620px) {
+      body { font-size: 16px; }
+      .section, .utility-inner { width: min(calc(100% - 2rem), 1160px); }
+      .cards, .verdicts, .two-col, .receipt-grid, .trace, .code-map, .next { grid-template-columns: 1fr; }
+      .verdict { min-height: 0; border-right: 0; border-bottom: 1px solid #526079; }
+      .trace .arrow { min-height: 3rem; transform: rotate(90deg); }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print {
+      body { background: #fff; color: #000; font-size: 10pt; }
+      .utility { position: static; }
+      .route, .actions, .skip { display: none; }
+      .section { width: 100%; padding: 12mm 0; }
+      .dark { background: #fff; color: #000; border: solid #000; border-width: 2px 0; }
+      .dark .number, .dark .eyebrow, .dark .lede, .dark a, .verdict strong, .verdict p, .precedence li, .precedence strong, .idle-note { color: #000; }
+      .card, .verdict, .list-card, .receipt, .trace, .code-map article, .next a, tr { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to how usabl works</a>
+  <header class="utility">
+    <div class="utility-inner">
+      <div class="identity"><strong>usabl</strong><span>system guide</span><span class="version">v0.1.0</span></div>
+      <nav aria-label="System guide route">
+        <ol class="route">
+          <li><a href="#coverage">Coverage</a></li>
+          <li><a href="#evidence">Evidence</a></li>
+          <li><a href="#decision">Decision</a></li>
+          <li><a href="#surfaces">Surfaces</a></li>
+          <li><a href="#trace">Example</a></li>
+        </ol>
+      </nav>
+    </div>
+  </header>
+  <main id="main">
+    <section class="section" aria-labelledby="hero-title">
+      <div class="number" aria-hidden="true">01</div>
+      <div class="body">
+        <p class="eyebrow">The short answer</p>
+        <h1 id="hero-title">usabl proves an accessibility change against the code that made it.</h1>
+        <p class="lede">It finds the affected screens, collects machine-checkable accessibility evidence, makes one gate-owned decision, and shows that same result wherever the team works.</p>
+        <p>It is built for a specific risk. A developer or AI assistant can change interface code, run a scanner, and still call the work done after the scanner skipped a screen or after the code changed again. usabl keeps those gaps visible.</p>
+        <p class="boundary"><strong>The claim:</strong> a verified result means no new deterministic accessibility barrier was found in the affected screens and checks that ran. It does not mean the whole product is accessible. It does not replace testing by disabled people or an accessibility expert.</p>
+        <div class="actions">
+          <a class="action primary" href="guides/proof-loop.md">Run the accessibility proof</a>
+          <a class="action" href="team-orientation.html">Return to team orientation</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="coverage" aria-labelledby="coverage-title">
+      <div class="number" aria-hidden="true">02</div>
+      <div class="body">
+        <p class="eyebrow">From code to screens</p>
+        <h2 id="coverage-title">First, usabl decides what must be checked.</h2>
+        <p class="lede">Coverage is part of the proof. A check cannot pass a screen it never opened.</p>
+        <ol class="flow">
+          <li><strong>Read changed files</strong><span>Start with local changes or the pull request diff.</span></li>
+          <li><strong>Find interface files</strong><span>Match the configured user interface file patterns.</span></li>
+          <li><strong>Map files to screens</strong><span>Use the route manifest, import graph, broad-impact files, and manual mappings.</span></li>
+          <li><strong>Open every affected screen</strong><span>Run the required checks on the full affected set.</span></li>
+          <li><strong>Report gaps</strong><span>Keep unmapped files and checks that could not run in the result.</span></li>
+        </ol>
+        <div class="two-col">
+          <article class="list-card">
+            <h3>Idle</h3>
+            <p>No configured interface file changed. usabl reports “nothing to check,” returns exit code 0, and issues no verdict.</p>
+          </article>
+          <article class="list-card">
+            <h3>Not covered</h3>
+            <p>An interface file changed, but usabl could not map or check all required work. The gate returns <code>not_covered</code> and exit code 3.</p>
+          </article>
+        </div>
+        <p class="rule"><strong>Coverage rule:</strong> usabl checks every affected screen or says what it could not check. It does not sample a few screens and call the accessibility change verified.</p>
+      </div>
+    </section>
+
+    <section class="section" id="evidence" aria-labelledby="evidence-title">
+      <div class="number" aria-hidden="true">03</div>
+      <div class="body">
+        <p class="eyebrow">Inside each screen</p>
+        <h2 id="evidence-title">Providers collect different accessibility evidence.</h2>
+        <p class="lede">A provider is a check that returns evidence drafts. A draft describes what happened to the user, why it matters, and what may fix it. A provider cannot decide the verdict.</p>
+        <div class="cards">
+          <article class="card">
+            <h3>axe</h3>
+            <p>Checks rules that can be determined from the rendered page, including names, roles, attributes, and other WCAG-related conditions.</p>
+          </article>
+          <article class="card">
+            <h3>PatternFly rules</h3>
+            <p>Checks interaction behavior that depends on PatternFly components, such as focus entering and returning from a dialog.</p>
+          </article>
+          <article class="card">
+            <h3>Keyboard walk</h3>
+            <p>Moves through interactive controls and records focus order, accessible names, roles, states, and navigation gaps.</p>
+          </article>
+        </div>
+        <p class="rule"><strong>Authority rule:</strong> deterministic evidence can affect the v0.1.0 gate. Preview and model-based observations may be shown for review, but they cannot create a verified result or receipt.</p>
+      </div>
+    </section>
+
+    <div class="dark">
+      <section class="section" id="decision" aria-labelledby="decision-title">
+        <div class="number" aria-hidden="true">04</div>
+        <div class="body">
+          <p class="eyebrow">One verdict authority</p>
+          <h2 id="decision-title">The gate makes the accessibility decision once.</h2>
+          <p class="lede">The gate compares deterministic evidence with the accepted accessibility floor. The floor records existing findings so a team can block new barriers without pretending the old barriers are fixed.</p>
+          <ol class="precedence">
+            <li><strong>1. Policy changed?</strong> Require human approval.</li>
+            <li><strong>2. No interface change?</strong> Report Idle.</li>
+            <li><strong>3. New barrier?</strong> Report regression.</li>
+            <li><strong>4. Proof incomplete?</strong> Report not covered.</li>
+            <li><strong>5. Otherwise</strong> Report verified.</li>
+          </ol>
+          <div class="verdicts" role="list">
+            <div class="verdict" role="listitem"><strong class="verified">Verified, exit 0</strong><p>No new deterministic accessibility barrier was found in the complete affected coverage.</p></div>
+            <div class="verdict" role="listitem"><strong class="regression">Regression, exit 1</strong><p>A deterministic check found a new accessibility barrier compared with the accepted floor.</p></div>
+            <div class="verdict" role="listitem"><strong class="not-covered">Not covered, exit 3</strong><p>Required accessibility coverage or evidence could not be completed.</p></div>
+            <div class="verdict" role="listitem"><strong class="approval">Approval required, exit 2</strong><p>Trusted policy, evidence, or gate code changed and must not approve itself.</p></div>
+          </div>
+          <p class="idle-note"><strong>Errors are not a fifth verdict.</strong> An unhandled error returns no verdict, exit code 4, and an explicit “NOT verified” message. Local assistant handling discloses the error instead of presenting it as proof.</p>
+        </div>
+      </section>
+    </div>
+
+    <section class="section" aria-labelledby="trust-title">
+      <div class="number" aria-hidden="true">05</div>
+      <div class="body">
+        <p class="eyebrow">Trust and receipts</p>
+        <h2 id="trust-title">The result stays tied to its evidence.</h2>
+        <p class="lede">A verified result can mint a receipt. The receipt lets usabl check whether the proof still matches the current code and policy.</p>
+        <div class="receipt" aria-label="Fields in a verified receipt">
+          <div class="receipt-head"><strong>Verified receipt</strong><span>Only the gate can mint it</span></div>
+          <dl class="receipt-grid">
+            <div><dt>Source tree</dt><dd>The exact Git content that was checked.</dd></div>
+            <div><dt>Base revision</dt><dd>The comparison point when one was used.</dd></div>
+            <div><dt>Policy hash</dt><dd>The trusted accessibility rules and floor.</dd></div>
+            <div><dt>Runner version</dt><dd>The installed usabl engine code.</dd></div>
+            <div><dt>Scanner versions</dt><dd>axe, Playwright, and Chromium versions.</dd></div>
+            <div><dt>Coverage</dt><dd>The screens checked and any missing coverage.</dd></div>
+          </dl>
+        </div>
+        <div class="two-col">
+          <article class="list-card">
+            <h3>Local work is tamper-evident</h3>
+            <p>usabl watches its config, route map, evidence floor, waivers, and other guarded paths. A local edit to trusted material becomes <code>approval_required</code>.</p>
+          </article>
+          <article class="list-card">
+            <h3>Pull requests use a trusted base</h3>
+            <p>CI runs an isolated engine and requires a trusted base reference. The pull request cannot silently rewrite the accepted floor or waivers and then approve itself.</p>
+          </article>
+        </div>
+        <p class="rule"><strong>Receipt rule:</strong> change the code, policy, or runner and the old receipt no longer proves the new state. Run usabl again.</p>
+      </div>
+    </section>
+
+    <section class="section" id="surfaces" aria-labelledby="surfaces-title">
+      <div class="number" aria-hidden="true">06</div>
+      <div class="body">
+        <p class="eyebrow">Where the team sees it</p>
+        <h2 id="surfaces-title">Four surfaces project the same gate-owned result.</h2>
+        <p class="lede">A surface decides how to present or enforce the result. It does not recalculate accessibility findings or create its own verdict.</p>
+        <div class="surface-table" tabindex="0" role="region" aria-label="usabl product surfaces">
+          <table>
+            <thead><tr><th scope="col">Surface</th><th scope="col">When to use it</th><th scope="col">What it does</th><th scope="col">Enforcement</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Command line</th><td>While developing or debugging</td><td><code>npx usabl check</code> prints the result and returns its exit code. JSON output is available for automation.</td><td>Direct exit code</td></tr>
+              <tr><th scope="row">App overlay</th><td>While the Vite app is running</td><td>Shows the current verdict and findings after a refresh. It hides in automated browser sessions and with <code>?usabl=off</code>.</td><td>Advisory only</td></tr>
+              <tr><th scope="row">AI stop hook</th><td>When an assistant tries to finish</td><td>Blocks a regression, missing coverage, or trusted-policy change. A continuation is allowed once so the assistant does not enter a stop loop.</td><td>Blocks assistant completion</td></tr>
+              <tr><th scope="row">Pull request and CI</th><td>Before merge</td><td>Runs against trusted base policy, posts or updates one report, and returns the gate exit code to the check.</td><td>Repository check</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="rule"><strong>Consistency rule:</strong> when two surfaces disagree, that is a product defect. The gate-owned <code>Result</code> object is the source to inspect.</p>
+      </div>
+    </section>
+
+    <section class="section" id="trace" aria-labelledby="trace-title">
+      <div class="number" aria-hidden="true">07</div>
+      <div class="body">
+        <p class="eyebrow">Worked example</p>
+        <h2 id="trace-title">The modal repair shows the full accessibility proof loop.</h2>
+        <p class="lede">The fixture starts with a real focus-management defect on the Clusters screen. A keyboard user opens the dialog, presses Escape, and loses their place.</p>
+        <div class="trace">
+          <div>
+            <strong class="regression">Before repair</strong>
+            <ul>
+              <li>The default Clusters modal disables its focus trap.</li>
+              <li>Focus does not enter the dialog reliably.</li>
+              <li>Closing the dialog does not restore focus to “View cluster details.”</li>
+              <li>usabl reports <code>pf-modal-focus-return</code> as a regression.</li>
+              <li>No verified receipt is created.</li>
+            </ul>
+          </div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div>
+            <strong class="verified">After repair</strong>
+            <ul>
+              <li>Focus moves into the dialog when it opens.</li>
+              <li>Escape closes the dialog.</li>
+              <li>Focus returns to “View cluster details.”</li>
+              <li>Unit tests and a browser check confirm the behavior.</li>
+              <li>usabl can verify the new source tree and mint a receipt.</li>
+            </ul>
+          </div>
+        </div>
+        <p class="rule"><strong>Run it:</strong> follow the <a href="guides/proof-loop.md">proof-loop guide</a> for setup, exact commands, expected output, the source repair, and final checks.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="code-title">
+      <div class="number" aria-hidden="true">08</div>
+      <div class="body">
+        <p class="eyebrow">Continue from here</p>
+        <h2 id="code-title">Know where to inspect and what to do next.</h2>
+        <div class="code-map">
+          <article><h3>Coverage</h3><p><code>src/coverage/planner.ts</code> maps changed interface files to screens and records gaps.</p></article>
+          <article><h3>Providers</h3><p><code>src/providers/</code> contains axe, PatternFly, and keyboard evidence collectors.</p></article>
+          <article><h3>Gate</h3><p><code>src/gate/index.ts</code> owns finding status, verdict order, and exit codes.</p></article>
+          <article><h3>Result and receipt</h3><p><code>src/contracts/index.ts</code> defines the result. <code>src/evidence/receipt.ts</code> binds verified proof.</p></article>
+          <article><h3>Product surfaces</h3><p><code>src/surfaces/</code> contains the command line, overlay, stop-hook, and pull request projections.</p></article>
+          <article><h3>Fixture behavior</h3><p><code>usabl-app/src/components/DemoModal.tsx</code> contains the broken and fixed focus behavior.</p></article>
+        </div>
+        <div class="next">
+          <a href="guides/proof-loop.md">Run the proof loop<span>Experience, repair, and verify the accessibility defect.</span></a>
+          <a href="guides/test-and-report.md">Test and report<span>Check keyboard and screen-reader behavior, then record useful evidence.</span></a>
+          <a href="guides/make-a-contribution.md">Make a contribution<span>Take an accessibility issue or product task through review.</span></a>
+          <a href="guides/rehearse-demo.md">Rehearse the demo<span>Practice the contest proof and its recovery path.</span></a>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
