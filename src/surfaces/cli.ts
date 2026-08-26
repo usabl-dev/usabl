@@ -3,8 +3,6 @@
  * This module formats output only.
  * It must never run checks, decide a verdict, or mutate the Result.
  */
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { Result } from '../contracts/index.js';
 import { formatSummary } from '../output/summary.js';
 import { scrubResult } from './scrub.js';
@@ -109,12 +107,4 @@ export function mergeChangedPaths(diffNames: string[], statusPaths: string[]): s
     }
   }
   return [...changed].sort();
-}
-
-export function isDirectInvoke(metaUrl: string, argv1: string | undefined): boolean {
-  if (argv1 === undefined || argv1.length === 0) {
-    return false;
-  }
-  // `node dist/cli.js` passes a relative argv[1], so resolve it before path compare.
-  return fileURLToPath(metaUrl) === resolve(argv1);
 }
