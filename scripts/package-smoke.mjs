@@ -83,6 +83,10 @@ try {
   assert.equal(result.coverage.nothingToCheck, true);
   assert.equal(result.exitCode, 0);
 
+  const checkedWithNpx = run('npx', ['--no-install', 'usabl', 'check', '--json'], { cwd: consumer });
+  assert.equal(checkedWithNpx.status, 0, failure('installed npx usabl check', checkedWithNpx));
+  assert.deepEqual(JSON.parse(checkedWithNpx.stdout), result);
+
   const commented = run(process.execPath, [cli, 'comment'], {
     cwd: consumer,
     input: checked.stdout,
