@@ -1,6 +1,5 @@
-#!/usr/bin/env node
 /**
- * Thin CLI over `run()` that projects an existing Result to terminal or JSON output.
+ * CLI command implementation over `run()`.
  * The CLI never mints verdicts. It only parses args, runs the engine, and projects.
  * Sample `usabl.config.json` URLs (`http://127.0.0.1:5173`) are the fixture app's
  * Vite origin, not a hardcoded engine target. The engine always reads operator config.
@@ -9,7 +8,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { run } from './run.js';
 import type { Result, SurfaceConfig, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
-import { ciRefusal, isDirectInvoke, mergeChangedPaths, parseCliArgs, projectCli } from './surfaces/cli.js';
+import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli } from './surfaces/cli.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
@@ -179,16 +178,4 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // Always close browser resources, even when run() throws before returning a Result.
     await deps.browser.close();
   }
-}
-
-// Only run when invoked directly as the bin.
-if (isDirectInvoke(import.meta.url, process.argv[1])) {
-  main()
-    .then((code) => process.exit(code))
-    .catch((err) => {
-      // CLI entrypoint keeps run() fail-open semantics: disclose and exit 4, never silent green.
-      const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`usabl: ${message}\n`);
-      process.exit(4);
-    });
 }

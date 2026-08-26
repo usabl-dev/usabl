@@ -29,10 +29,11 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:package": "node scripts/package-smoke.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "build": "tsup",
-    "check": "npm run typecheck && npm run test",
+    "check": "npm run typecheck && npm run test && npm run build && npm run test:package",
     "measure:fleet-insights": "node --experimental-strip-types scripts/measure-fleet-insights.ts",
     "prepare": "bash scripts/install-git-hooks.sh"
   },

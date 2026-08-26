@@ -47,10 +47,24 @@ jobs:
           code=0
           # Capture the command status here because a next-line `$?` becomes 0 under set -e.
           node dist/cli.js check --ci --trusted-ref "origin/${BASE_REF}" --json > usabl-result.json || code=$?
+          if [ ! -s usabl-result.json ]; then
+            echo "usabl produced no Result JSON."
+            code=4
+          elif ! RESULT_PATH=usabl-result.json USABL_COMMAND_EXIT="${code}" node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const result = JSON.parse(readFileSync(process.env.RESULT_PATH, "utf8"));
+            const commandExit = Number(process.env.USABL_COMMAND_EXIT);
+            if (result.schemaVersion !== "usabl.result.v1") throw new Error("unexpected Result schema");
+            if (!Number.isInteger(result.exitCode)) throw new Error("Result exitCode must be an integer");
+            if (result.exitCode !== commandExit) throw new Error("Result exitCode does not match command exit");
+          '; then
+            echo "usabl produced invalid or inconsistent Result JSON."
+            code=4
+          fi
           echo "exit_code=${code}" >> "$GITHUB_OUTPUT"
 
       - name: Render comment Markdown
-        run: node dist/cli.js comment < usabl-result.json > usabl-comment.md
+        run: node dist/cli.js comment < usabl-result.json > usabl-comment.md || true
 
       - name: Fallback when comment markdown is empty
         run: |

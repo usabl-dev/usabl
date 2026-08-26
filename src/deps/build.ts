@@ -20,7 +20,12 @@ import { makeGitReader } from './git.js';
 import { makeFsGlob } from './fs.js';
 
 const require = createRequire(import.meta.url);
-const RUNNER_PACKAGE_PATH = fileURLToPath(new URL('../../package.json', import.meta.url));
+const RUNNER_PACKAGE_PATHS = [
+  // Built entries and chunks live in dist/.
+  fileURLToPath(new URL('../package.json', import.meta.url)),
+  // Source imports during Vitest live in src/deps/.
+  fileURLToPath(new URL('../../package.json', import.meta.url)),
+];
 const KEYBOARD_WALL_CLOCK_MS = 4_000;
 
 function readVersion(value: unknown): string | null {
@@ -32,16 +37,26 @@ function readVersion(value: unknown): string | null {
 }
 
 async function readRunnerVersion(): Promise<string> {
-  const raw = await readFile(RUNNER_PACKAGE_PATH, 'utf8');
-  const parsed: unknown = JSON.parse(raw);
-  if (typeof parsed !== 'object' || parsed === null) {
-    throw new Error('package.json must be a JSON object');
+  for (const path of RUNNER_PACKAGE_PATHS) {
+    try {
+      const raw = await readFile(path, 'utf8');
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed !== 'object' || parsed === null) {
+        throw new Error('package.json must be a JSON object');
+      }
+      const version = readVersion(Reflect.get(parsed, 'version'));
+      if (version === null) {
+        throw new Error('package.json missing version');
+      }
+      return version;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        continue;
+      }
+      throw error;
+    }
   }
-  const version = readVersion(Reflect.get(parsed, 'version'));
-  if (version === null) {
-    throw new Error('package.json missing version');
-  }
-  return version;
+  throw new Error('usabl package.json was not found beside the source or built package');
 }
 
 function readDependencyVersion(packageName: string): string {
