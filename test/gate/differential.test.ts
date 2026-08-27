@@ -36,6 +36,18 @@ describe('gate differential', () => {
     expect(out.verdict).toBe('verified');
   });
 
+  it('gives fixed findings honest placeholder text instead of blank strings', () => {
+    const floor: EvidenceFloor = { version: 1, entries: [
+      { screenId: 'clusters', layer: 'axe', rule: 'gone-rule', elementKey: 'clusters|gone-rule|name:save', identityBasis: 'name', count: 1 },
+    ] };
+    const out = gate({ ...base, floor, drafts: [] });
+    const fixed = find(out, 'gone-rule')[0]!;
+    expect(fixed.whatUserExperiences.length).toBeGreaterThan(0);
+    expect(fixed.why.length).toBeGreaterThan(0);
+    expect(fixed.fix.length).toBeGreaterThan(0);
+    expect(fixed.whatUserExperiences.toLowerCase()).toMatch(/no longer present|not observed|fixed/);
+  });
+
   it('dedups the same defect across axe and pf, preferring the pf why/fix', () => {
     const floor: EvidenceFloor = { version: 1, entries: [] };
     const axe = d({ layer: 'axe', why: 'axe why', fix: 'axe fix' });
@@ -45,6 +57,32 @@ describe('gate differential', () => {
     expect(kept).toHaveLength(1);
     expect(kept[0]!.why).toBe('pf why');
     expect(kept[0]!.fix).toBe('pf fix');
+  });
+
+  it('keeps axe evidence fields when PatternFly wins the same identity', () => {
+    const floor: EvidenceFloor = { version: 1, entries: [] };
+    const axe = d({
+      layer: 'axe',
+      why: 'axe why',
+      fix: 'axe fix',
+      evidence: {
+        name: { value: 'Save', source: 'ax-tree', fromTree: true },
+        extra: { axeId: 'color-contrast' },
+      },
+    });
+    const pf = d({
+      layer: 'pf',
+      why: 'pf why',
+      fix: 'pf fix',
+      evidence: {
+        name: { value: 'Save', source: 'ax-tree', fromTree: true },
+        extra: { pfToken: 'contrast' },
+      },
+    });
+    const out = gate({ ...base, floor, drafts: [axe, pf] });
+    const kept = find(out, 'color-contrast')[0]!;
+    expect(kept.layer).toBe('pf');
+    expect(kept.evidence.extra).toEqual({ axeId: 'color-contrast', pfToken: 'contrast' });
   });
 
   it('regresses when a count-based rule increases over the floor', () => {
