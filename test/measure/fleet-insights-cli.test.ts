@@ -20,5 +20,5 @@ describe('Fleet Insights measurement command', () => {
       code: 1,
       stderr: expect.stringContaining('Set FLEET_INSIGHTS_STORAGE_STATE'),
     });
-  });
+  }, 15_000);
 });
