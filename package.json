@@ -34,7 +34,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsup",
     "check": "npm run typecheck && npm run test && npm run build && npm run test:package",
-    "measure:fleet-insights": "node --experimental-strip-types scripts/measure-fleet-insights.ts",
+    "measure:fleet-insights": "vite-node scripts/measure-fleet-insights.ts",
     "prepare": "bash scripts/install-git-hooks.sh"
   },
   "devDependencies": {
@@ -42,6 +42,7 @@
     "@types/node": "^22.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.5.0",
+    "vite-node": "2.1.9",
     "vitest": "^2.0.0"
   },
   "dependencies": {
