@@ -15,6 +15,7 @@ export interface CliOptions {
   ci: boolean;
   configPath: string;
   selfCheck: boolean;
+  force: boolean;
 }
 
 function isFlag(value: string): boolean {
@@ -29,6 +30,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let ci = false;
   let configPath = 'usabl.config.json';
   let selfCheck = false;
+  let force = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -55,6 +57,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
       selfCheck = true;
       continue;
     }
+    if (token === '--force') {
+      // Init-only overwrite of draft policy files. This is not a gate bypass.
+      force = true;
+      continue;
+    }
     if (token === '--trusted-ref') {
       const value = argv[index + 1];
       if (value === undefined || isFlag(value)) {
@@ -74,7 +81,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
   }
 
-  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck };
+  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck, force };
 }
 
 export function ciRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {

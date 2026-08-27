@@ -1,6 +1,9 @@
 /**
- * CLI command implementation over `run()`.
- * The CLI never mints verdicts. It only parses args, runs the engine, and projects.
+ * CLI command implementation.
+ * Check, comment, and self-check project a gated Result from `run()`.
+ * `init` writes draft policy only and must return before `loadConfig` / `run`
+ * so this process cannot consume files it just generated.
+ * The CLI never mints verdicts.
  * Sample `usabl.config.json` URLs (`http://127.0.0.1:5173`) are the fixture app's
  * Vite origin, not a hardcoded engine target. The engine always reads operator config.
  */
@@ -8,6 +11,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { run } from './run.js';
 import type { Result, SurfaceConfig, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
+import { makeFsGlob } from './deps/fs.js';
+import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
 import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli } from './surfaces/cli.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
@@ -108,9 +113,31 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 2;
   }
 
-  if (opts.command !== 'check' && opts.command !== 'comment' && opts.command !== 'bypass') {
+  if (
+    opts.command !== 'check' &&
+    opts.command !== 'comment' &&
+    opts.command !== 'bypass' &&
+    opts.command !== 'init'
+  ) {
     process.stderr.write(`unknown command: ${opts.command}\n`);
     return 2;
+  }
+
+  if (opts.command === 'init') {
+    // Init is a generator, not a check. Returning here keeps draft writes off
+    // the verdict path and prevents a same-run consume of the new sidecar.
+    const globber = makeFsGlob();
+    const initFs: InitFs = {
+      readFile: globber.readFile,
+      glob: globber.glob,
+      writeFile: async (path, contents) => {
+        await writeFile(path, contents, 'utf8');
+      },
+    };
+    const draft = await inferInit(initFs);
+    const result = await writeInitDrafts(initFs, draft, { force: opts.force });
+    process.stdout.write(formatInitReport(draft, result));
+    return result.ok ? 0 : 2;
   }
 
   if (opts.command === 'bypass') {

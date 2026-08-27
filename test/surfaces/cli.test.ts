@@ -36,6 +36,7 @@ describe('parseCliArgs', () => {
       ci: false,
       configPath: 'usabl.config.json',
       selfCheck: false,
+      force: false,
     });
   });
 
@@ -59,6 +60,7 @@ describe('parseCliArgs', () => {
       ci: true,
       configPath: 'x.json',
       selfCheck: true,
+      force: false,
     });
   });
 
@@ -79,6 +81,7 @@ describe('parseCliArgs', () => {
       ci: true,
       configPath: 'usabl.config.json',
       selfCheck: false,
+      force: false,
     });
   });
 });
