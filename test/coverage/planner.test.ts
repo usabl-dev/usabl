@@ -14,6 +14,27 @@ const baseConfig: UsablConfig = {
 };
 
 describe('computeCoverage', () => {
+  it('ignores co-located test and spec files that match a broad UI glob', async () => {
+    const cov = await computeCoverage(fsOf({ 'src/router.tsx': '' }), baseConfig, [
+      'src/pages/Deployments.test.tsx',
+      'src/pages/Clusters.spec.tsx',
+    ]);
+
+    expect(cov.nothingToCheck).toBe(true);
+    expect(cov.unresolvedFiles).toEqual([]);
+    expect(cov.gaps).toEqual([]);
+  });
+
+  it('ignores UI files under a test directory', async () => {
+    const cov = await computeCoverage(fsOf({ 'src/router.tsx': '' }), baseConfig, [
+      'src/pages/__tests__/Deployments.tsx',
+      'src/test/fixture.tsx',
+      'test/browser/demo.tsx',
+    ]);
+
+    expect(cov.nothingToCheck).toBe(true);
+  });
+
   it('returns nothingToCheck when no UI files changed', async () => {
     const cov = await computeCoverage(fsOf({ 'src/router.tsx': '' }), baseConfig, ['docs/README.md']);
     expect(cov.nothingToCheck).toBe(true);

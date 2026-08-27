@@ -13,6 +13,10 @@ function isWideBlastFile(file: string, globs: string[]): boolean {
   return globs.some((glob) => matchGlob(glob, file));
 }
 
+function isTestFile(file: string): boolean {
+  return /(^|\/)(test|tests|__tests__)(\/|$)/u.test(file) || /\.(test|spec)\.[^/]+$/u.test(file);
+}
+
 function routeUrl(baseUrl: string, routePath: string): string {
   const joinBaseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
   const expectedOrigin = new URL(baseUrl).origin;
@@ -69,7 +73,9 @@ function importClosure(graph: { get(file: string): string[] }, entryFile: string
 }
 
 export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFiles: string[]): Promise<Coverage> {
-  const uiFiles = changedFiles.filter((file) => config.uiFileGlobs.some((glob) => matchGlob(glob, file)));
+  const uiFiles = changedFiles.filter(
+    (file) => !isTestFile(file) && config.uiFileGlobs.some((glob) => matchGlob(glob, file)),
+  );
   // No UI-touching files means idle. That is not the same claim as "covered".
   if (uiFiles.length === 0) {
     return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
