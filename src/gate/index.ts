@@ -9,7 +9,7 @@
  * Idle (`verdict: null`, exit 0) means nothing UI-touching changed.
  * `not_covered` means there was something to prove and we could not.
  */
-import type { Draft, Finding, FloorEntry, GateInput, GateOutput, Waiver } from '../contracts/index.js';
+import type { Draft, EvidenceFacts, Finding, FloorEntry, GateInput, GateOutput, Waiver } from '../contracts/index.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { computeIdentity } from '../primitives/identity.js';
 
@@ -49,10 +49,25 @@ export function gate(input: GateInput): GateOutput {
 }
 
 /** Prefer PatternFly why/fix when axe and pf fire on the same identity. */
+function mergeEvidence(winner: EvidenceFacts, loser: EvidenceFacts): EvidenceFacts {
+  // Winner fields win on collision. Loser extras stay so a pf why/fix does not
+  // erase the axe observation that identified the same control.
+  return {
+    ...loser,
+    ...winner,
+    ...(loser.state !== undefined || winner.state !== undefined
+      ? { state: { ...loser.state, ...winner.state } }
+      : {}),
+    ...(loser.extra !== undefined || winner.extra !== undefined
+      ? { extra: { ...loser.extra, ...winner.extra } }
+      : {}),
+  };
+}
+
 function preferLayer(a: Finding, b: Finding): Finding {
-  if (a.layer === 'pf') return a;
-  if (b.layer === 'pf') return b;
-  return a;
+  const winner = a.layer === 'pf' ? a : b.layer === 'pf' ? b : a;
+  const loser = winner === a ? b : a;
+  return { ...winner, evidence: mergeEvidence(winner.evidence, loser.evidence) };
 }
 
 /** Cross-layer / floor key. Layer is omitted so axe and pf can collapse. */
@@ -111,7 +126,12 @@ export function buildFindings(input: GateInput): Finding[] {
       findings.push({
         rule: e.rule, layer: e.layer, severity: 'minor', evidenceClass: 'deterministic',
         screenId: e.screenId, elementPath: '', elementName: null, role: null,
-        whatUserExperiences: '', why: '', fix: '', evidence: {}, confidence: 'fail',
+        // Surfaces render these fields. Blank strings look like a missing finding,
+        // not a paid-down identity the operator still needs to prune from the floor.
+        whatUserExperiences: 'This previously accepted finding is no longer present on the surface.',
+        why: 'The identity is on the evidence floor and was not observed in this run.',
+        fix: 'Remove this identity from the evidence floor after review so a reintroduced barrier can gate as new.',
+        evidence: {}, confidence: 'fail',
         elementKey: e.elementKey, identityBasis: e.identityBasis, status: 'fixed',
       });
     }
