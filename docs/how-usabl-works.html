@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'; script-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; upgrade-insecure-requests">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow, noarchive">
   <meta name="description" content="A practical guide to how usabl v0.1.0 proves accessibility changes.">
   <title>How usabl works</title>
   <style>
@@ -366,7 +369,7 @@
         <p>It is built for a specific risk. A developer or AI assistant can change interface code, run a scanner, and still call the work done after the scanner skipped a screen or after the code changed again. usabl keeps those gaps visible.</p>
         <p class="boundary"><strong>The claim:</strong> a verified result means no new deterministic accessibility barrier was found in the affected screens and checks that ran. It does not mean the whole product is accessible. It does not replace testing by disabled people or an accessibility expert.</p>
         <div class="actions">
-          <a class="action primary" href="guides/proof-loop.md">Run the accessibility proof</a>
+          <a class="action primary" href="https://github.com/usabl-dev/usabl/blob/main/docs/guides/proof-loop.md">Run the accessibility proof</a>
           <a class="action" href="team-orientation.html">Return to team orientation</a>
         </div>
       </div>
@@ -529,7 +532,7 @@
             </ul>
           </div>
         </div>
-        <p class="rule"><strong>Run it:</strong> follow the <a href="guides/proof-loop.md">proof-loop guide</a> for setup, exact commands, expected output, the source repair, and final checks.</p>
+        <p class="rule"><strong>Run it:</strong> follow the <a href="https://github.com/usabl-dev/usabl/blob/main/docs/guides/proof-loop.md">proof-loop guide</a> for setup, exact commands, expected output, the source repair, and final checks.</p>
       </div>
     </section>
 
@@ -547,10 +550,10 @@
           <article><h3>Fixture behavior</h3><p><code>usabl-app/src/components/DemoModal.tsx</code> contains the broken and fixed focus behavior.</p></article>
         </div>
         <div class="next">
-          <a href="guides/proof-loop.md">Run the proof loop<span>Experience, repair, and verify the accessibility defect.</span></a>
-          <a href="guides/test-and-report.md">Test and report<span>Check keyboard and screen-reader behavior, then record useful evidence.</span></a>
-          <a href="guides/make-a-contribution.md">Make a contribution<span>Take an accessibility issue or product task through review.</span></a>
-          <a href="guides/rehearse-demo.md">Rehearse the demo<span>Practice the contest proof and its recovery path.</span></a>
+          <a href="https://github.com/usabl-dev/usabl/blob/main/docs/guides/proof-loop.md">Run the proof loop<span>Experience, repair, and verify the accessibility defect.</span></a>
+          <a href="https://github.com/usabl-dev/usabl/blob/main/docs/guides/test-and-report.md">Test and report<span>Check keyboard and screen-reader behavior, then record useful evidence.</span></a>
+          <a href="https://github.com/usabl-dev/usabl/blob/main/docs/guides/make-a-contribution.md">Make a contribution<span>Take an accessibility issue or product task through review.</span></a>
+          <a href="https://github.com/usabl-dev/usabl/blob/main/docs/guides/rehearse-demo.md">Rehearse the demo<span>Practice the contest proof and its recovery path.</span></a>
         </div>
       </div>
     </section>

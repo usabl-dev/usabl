@@ -324,6 +324,8 @@ describe('usablVitePlugin', () => {
     const clientResponse = await callMiddleware(middleware, '/__usabl/client.js');
     expect(clientResponse.headers['content-type']).toContain('application/javascript');
     expect(clientResponse.body).toContain('/__usabl/result');
+    expect(clientResponse.body).toContain('createHotContext');
+    expect(clientResponse.body).toContain("import.meta.hot = __vite__createHotContext('/__usabl/client.js')");
 
     const resultResponse = await callMiddleware(middleware, '/__usabl/result');
     expect(resultResponse.headers['content-type']).toContain('application/json');
