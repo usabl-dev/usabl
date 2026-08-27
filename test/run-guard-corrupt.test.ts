@@ -141,6 +141,7 @@ describe('run refuses to crash-open on corrupt guarded policy', () => {
     expect(result.verdict).toBe('approval_required');
     expect(result.exitCode).toBe(2);
     expect(result.receipt).toBeNull();
+    expect(result.dirtyGuardedPaths).toContain('.usabl-evidence.json');
   });
 });
 
