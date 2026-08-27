@@ -3,8 +3,8 @@
  * produced `verified`. `verdict` is the literal `'verified'` (a type, not a decision).
  * Only `run()` calls this, and only after the gate returned verified.
  *
- * Three bindings: sourceTree (git write-tree), policyHash (guarded-path blobs at
- * HEAD), runnerVersion. Lists are sorted so the same inputs hash the same way.
+ * Three bindings: sourceTree (current Git working tree), policyHash (guarded-path
+ * blobs at HEAD), runnerVersion. Lists are sorted so the same inputs hash the same way.
  */
 import type { Deps, Receipt, UsablConfig } from '../contracts/index.js';
 import { sortBy } from '../primitives/sortKey.js';

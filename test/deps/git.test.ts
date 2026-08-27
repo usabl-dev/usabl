@@ -52,15 +52,22 @@ describe('makeGitReader', () => {
     await expect(git.show('HEAD', 'missing.tsx')).resolves.toBeNull();
   });
 
-  it('returns stable tree metadata for the index', async () => {
+  it('returns stable tree metadata for tracked and untracked working files without changing the real index', async () => {
     const git = makeGitReader({ cwd: repoPath });
+    const indexBefore = await runGit(repoPath, ['diff', '--cached', '--name-only']);
 
     const firstTree = await git.writeTree();
     const secondTree = await git.writeTree();
+    const headTree = await runGit(repoPath, ['rev-parse', 'HEAD^{tree}']);
+    const workingTreeFiles = await runGit(repoPath, ['ls-tree', '-r', '--name-only', firstTree]);
+    const indexAfter = await runGit(repoPath, ['diff', '--cached', '--name-only']);
     const head = await git.headRef();
     const blobs = await git.lsTree('HEAD', ['screen.tsx', 'missing.tsx']);
 
     expect(secondTree).toBe(firstTree);
+    expect(firstTree).not.toBe(headTree);
+    expect(workingTreeFiles.split('\n')).toContain('src/gate/local-only.ts');
+    expect(indexAfter).toBe(indexBefore);
     expect(head).toMatch(/^[0-9a-f]{40}$/);
     expect(blobs['screen.tsx']).toMatch(/^[0-9a-f]{40}$/);
     expect(blobs).not.toHaveProperty('missing.tsx');
