@@ -16,6 +16,7 @@ export const overlayClientSource = `(() => {
     selectedKey: null,
     error: false,
     scanning: false,
+    highlightCleanup: null,
   };
 
   function displayText(value) {
@@ -142,7 +143,8 @@ export const overlayClientSource = `(() => {
       }
 
       .launcher:focus-visible,
-      .finding-button:focus-visible {
+      .finding-button:focus-visible,
+      .locate-button:focus-visible {
         outline: 3px solid var(--cobalt);
         outline-offset: 3px;
       }
@@ -433,6 +435,41 @@ export const overlayClientSource = `(() => {
         text-wrap: pretty;
       }
 
+      .detail-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 12px;
+        margin-top: 14px;
+      }
+
+      .locate-button {
+        min-height: 40px;
+        padding: 7px 11px;
+        border: 1px solid var(--cobalt);
+        border-radius: 8px;
+        background: var(--white);
+        color: #1745bd;
+        font-size: 0.8125rem;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .locate-button:hover {
+        background: var(--cobalt-light);
+      }
+
+      .locate-button:active {
+        transform: translateY(1px);
+      }
+
+      .locate-status {
+        flex: 1 1 180px;
+        color: var(--slate);
+        font-size: 0.75rem;
+        line-height: 1.4;
+      }
+
       .detail-meta {
         margin-top: 14px;
         padding-top: 12px;
@@ -556,6 +593,91 @@ export const overlayClientSource = `(() => {
         : 'Open usabl inspector. ' + status.label + '. ' + countLabel + '.',
     );
     panel.hidden = !state.expanded;
+    if (!state.expanded) {
+      clearHighlight();
+    }
+  }
+
+  function clearHighlight() {
+    if (typeof state.highlightCleanup === 'function') {
+      state.highlightCleanup();
+      state.highlightCleanup = null;
+    }
+    const stale = document.getElementById('__usabl-highlight');
+    if (stale) stale.remove();
+  }
+
+  function locateFinding(finding, statusHost) {
+    clearHighlight();
+    const selector = displayText(finding.elementPath).trim();
+    let target = null;
+    try {
+      target = selector ? document.querySelector(selector) : null;
+    } catch (_error) {
+      target = null;
+    }
+
+    const inspector = document.getElementById(HOST_ID);
+    if (!target || target === inspector || (inspector && inspector.contains(target))) {
+      statusHost.textContent = 'This element is not available on the current page.';
+      return;
+    }
+
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center', inline: 'nearest' });
+
+    const marker = document.createElement('div');
+    marker.id = '__usabl-highlight';
+    marker.setAttribute('aria-hidden', 'true');
+    const targetName = displayText(finding.elementName) || selector || 'selected element';
+    marker.style.cssText = [
+      'position:fixed',
+      'z-index:2147483646',
+      'pointer-events:none',
+      'box-sizing:border-box',
+      'border:4px solid #c9363e',
+      'border-radius:6px',
+      'outline:2px solid #ffffff',
+      'outline-offset:1px',
+    ].join(';');
+
+    const label = document.createElement('span');
+    label.textContent = 'Accessibility problem';
+    label.style.cssText = [
+      'position:absolute',
+      'left:-4px',
+      'bottom:calc(100% + 6px)',
+      'padding:5px 8px',
+      'border-radius:4px',
+      'background:#c9363e',
+      'color:#ffffff',
+      'font:700 13px/1.25 system-ui,Segoe UI,Arial,sans-serif',
+      'white-space:nowrap',
+    ].join(';');
+    marker.appendChild(label);
+    document.body.appendChild(marker);
+
+    const position = () => {
+      const rect = target.getBoundingClientRect();
+      marker.style.left = Math.max(2, rect.left - 4) + 'px';
+      marker.style.top = Math.max(2, rect.top - 4) + 'px';
+      marker.style.width = Math.max(8, rect.width + 8) + 'px';
+      marker.style.height = Math.max(8, rect.height + 8) + 'px';
+      label.style.bottom = rect.top < 42 ? 'auto' : 'calc(100% + 6px)';
+      label.style.top = rect.top < 42 ? 'calc(100% + 6px)' : 'auto';
+    };
+    position();
+
+    window.addEventListener('scroll', position, true);
+    window.addEventListener('resize', position);
+    const timeout = window.setTimeout(clearHighlight, 5000);
+    state.highlightCleanup = () => {
+      window.clearTimeout(timeout);
+      window.removeEventListener('scroll', position, true);
+      window.removeEventListener('resize', position);
+      marker.remove();
+    };
+    statusHost.textContent = 'Highlighted ' + targetName + ' on the page.';
   }
 
   function renderLauncher(host, payload, error) {
@@ -726,6 +848,16 @@ export const overlayClientSource = `(() => {
     repair.appendChild(make('p', '', finding.fix));
     section.appendChild(repair);
 
+    const actions = make('div', 'detail-actions');
+    const locate = make('button', 'locate-button', 'Locate on page');
+    locate.type = 'button';
+    const locateStatus = make('p', 'locate-status', 'Show the affected element on this page.');
+    locateStatus.setAttribute('aria-live', 'polite');
+    locate.addEventListener('click', () => locateFinding(finding, locateStatus));
+    actions.appendChild(locate);
+    actions.appendChild(locateStatus);
+    section.appendChild(actions);
+
     const meta = make('dl', 'detail-meta');
     appendDefinition(meta, 'Screen', finding.screenId);
     appendDefinition(meta, 'Element', finding.elementName || finding.elementPath);
@@ -791,6 +923,7 @@ export const overlayClientSource = `(() => {
   }
 
   function renderLoading(host) {
+    clearHighlight();
     const loading = {
       verdict: null,
       summary: 'Scanning affected accessibility surfaces.',

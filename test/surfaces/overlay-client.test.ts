@@ -92,7 +92,7 @@ async function mount(
           <head><title>Clean host</title></head>
           <body>
             <header><h1>Fleet operations</h1></header>
-            <main><button type="button">Host action</button></main>
+            <main><button id="cluster-details" type="button">Host action</button></main>
             <script type="module">${overlayClientSource}</script>
           </body>
         </html>`,
@@ -152,6 +152,43 @@ describe('overlay browser client', { timeout: 15_000 }, () => {
         return root instanceof ShadowRoot && root.activeElement === element;
       }),
     ).toBe(true);
+
+    await page.context().close();
+  });
+
+  it('locates the selected accessibility problem on the page', async () => {
+    const page = await mount(projectOverlay(result()));
+    const host = page.locator('#__usabl-overlay');
+    await host.getByRole('button', { name: /Open usabl inspector/i }).click();
+
+    await host.getByRole('button', { name: 'Locate on page' }).click();
+
+    const marker = page.locator('#__usabl-highlight');
+    expect(await marker.isVisible()).toBe(true);
+    expect(await marker.getAttribute('aria-hidden')).toBe('true');
+    expect(await marker.textContent()).toContain('Accessibility problem');
+    expect(await host.getByText('Highlighted View cluster details on the page.').isVisible()).toBe(true);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await page.keyboard.press('Escape');
+    expect(await marker.count()).toBe(0);
+
+    await page.context().close();
+  });
+
+  it('reports a stale or invalid finding selector without changing the page', async () => {
+    const page = await mount(
+      projectOverlay(result({ findings: [finding({ elementPath: 'not[valid' })] })),
+    );
+    const host = page.locator('#__usabl-overlay');
+    await host.getByRole('button', { name: /Open usabl inspector/i }).click();
+
+    await host.getByRole('button', { name: 'Locate on page' }).click();
+
+    expect(await page.locator('#__usabl-highlight').count()).toBe(0);
+    expect(await host.getByText('This element is not available on the current page.').isVisible()).toBe(true);
 
     await page.context().close();
   });
