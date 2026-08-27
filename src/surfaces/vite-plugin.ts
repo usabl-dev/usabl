@@ -11,6 +11,14 @@ import { run } from '../run.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 import { overlayClientSource } from './overlay-client.js';
 
+function overlayClientModuleSource(): string {
+  return [
+    "import { createHotContext as __vite__createHotContext } from '/@vite/client';",
+    "import.meta.hot = __vite__createHotContext('/__usabl/client.js');",
+    overlayClientSource,
+  ].join('\n');
+}
+
 export interface OverlayProjection {
   advisory: true;
   displayExitCode: 0;
@@ -210,7 +218,7 @@ export function usablVitePlugin(opts: { run: () => Promise<Result> }): UsablVite
         if (method === 'GET' && pathname === '/__usabl/client.js') {
           res.statusCode = 200;
           res.setHeader('content-type', 'application/javascript; charset=utf-8');
-          res.end(overlayClientSource);
+          res.end(overlayClientModuleSource());
           return;
         }
         if (method === 'GET' && pathname === '/__usabl/result') {
