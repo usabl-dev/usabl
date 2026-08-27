@@ -2,8 +2,8 @@ import { copyFile, lstat, mkdir, readdir, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const PUBLIC_FILES = ['how-usabl-works.html', 'team-orientation.html'];
-const OUTPUT_FILES = ['how-usabl-works.html', 'index.html', 'team-orientation.html'];
+const PUBLIC_FILES = ['code-walkthrough.html', 'how-usabl-works.html', 'team-orientation.html'];
+const OUTPUT_FILES = ['code-walkthrough.html', 'how-usabl-works.html', 'index.html', 'team-orientation.html'];
 
 async function stagePublicPages(sourceDir = 'docs', outputDir = '.pages') {
   const source = resolve(sourceDir);
