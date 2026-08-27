@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'; script-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; upgrade-insecure-requests">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="description" content="A plain-language walkthrough of the usabl source code, module by module.">
+  <title>usabl code walkthrough</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #101827;
+      --raised: #172033;
+      --paper: #f7f5ef;
+      --white: #fff;
+      --blue: #2457e6;
+      --blue-light: #5b7cfa;
+      --green: #177a4a;
+      --red: #c9363e;
+      --amber: #a95f00;
+      --violet: #7452b8;
+      --slate: #596579;
+      --line: #cbd1da;
+      --soft: #e9edf4;
+      --sans: Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 5.5rem; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 17px/1.58 var(--sans);
+    }
+    a {
+      color: var(--blue);
+      text-decoration-thickness: .11em;
+      text-underline-offset: .18em;
+    }
+    a:focus-visible {
+      outline: 3px solid var(--blue-light);
+      outline-offset: 4px;
+    }
+    code, pre { font-family: var(--mono); }
+    code { font-size: .9em; }
+    .skip {
+      position: fixed;
+      z-index: 100;
+      top: .75rem;
+      left: .75rem;
+      padding: .7rem 1rem;
+      background: var(--white);
+      transform: translateY(-180%);
+    }
+    .skip:focus { transform: translateY(0); }
+    .utility {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      background: var(--ink);
+      color: var(--white);
+      border-bottom: 3px solid var(--blue);
+    }
+    .utility-inner {
+      width: min(calc(100% - 3rem), 1160px);
+      min-height: 4.6rem;
+      margin: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2rem;
+    }
+    .identity {
+      display: flex;
+      align-items: baseline;
+      gap: .85rem;
+      white-space: nowrap;
+    }
+    .identity strong { font-size: 1.35rem; letter-spacing: -.04em; }
+    .identity span, .route {
+      color: #cfd8eb;
+      font-size: .74rem;
+      font-weight: 750;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .route {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.35rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .route a { color: inherit; text-decoration: none; }
+    .route a:hover { color: var(--white); }
+    .section {
+      width: min(calc(100% - 3rem), 1160px);
+      margin: auto;
+      padding: 5rem 0;
+      display: grid;
+      grid-template-columns: 4rem minmax(0, 1fr);
+      gap: 1.7rem;
+    }
+    .number {
+      padding-top: .25rem;
+      border-right: 1px solid var(--line);
+      color: var(--blue);
+      font-size: 1.35rem;
+      font-weight: 850;
+      line-height: 1;
+    }
+    .body { min-width: 0; }
+    .eyebrow {
+      margin: 0 0 .8rem;
+      color: var(--blue);
+      font-size: .76rem;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { margin-top: 0; line-height: 1.08; text-wrap: balance; }
+    h1 {
+      max-width: 850px;
+      margin-bottom: 1.4rem;
+      font-size: clamp(3rem, 5vw, 5.3rem);
+      letter-spacing: -.06em;
+    }
+    h2 { margin-bottom: 1rem; font-size: clamp(2rem, 3vw, 3rem); letter-spacing: -.045em; }
+    h3 { margin-bottom: .6rem; font-size: 1.15rem; }
+    p { margin-top: 0; }
+    .lede { max-width: 820px; color: #354156; font-size: 1.2rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: .85rem; margin-top: 2rem; }
+    .action {
+      display: inline-flex;
+      min-height: 3.2rem;
+      align-items: center;
+      padding: .72rem 1.15rem;
+      border: 2px solid var(--blue);
+      font-weight: 780;
+      text-decoration: none;
+    }
+    .primary { background: var(--blue); color: var(--white); }
+    .boundary {
+      max-width: 860px;
+      margin-top: 2.2rem;
+      padding: 1.25rem 1.45rem;
+      border-left: 5px solid var(--green);
+      background: #e3f2e9;
+      color: #0d4c2e;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      margin: 2.5rem 0 1.5rem;
+      padding: 0;
+      list-style: none;
+      counter-reset: flow;
+    }
+    .flow li {
+      position: relative;
+      min-height: 12rem;
+      padding: 3.2rem 1rem 1rem;
+      border-top: 2px solid var(--line);
+      border-right: 1px solid var(--line);
+      counter-increment: flow;
+    }
+    .flow li:last-child { border-right: 0; }
+    .flow li::before {
+      position: absolute;
+      top: -1.2rem;
+      left: 1rem;
+      display: grid;
+      width: 2.4rem;
+      height: 2.4rem;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--blue);
+      color: var(--white);
+      content: counter(flow);
+      font-weight: 850;
+    }
+    .flow strong { display: block; margin-bottom: .45rem; }
+    .flow span { color: var(--slate); font-size: .96rem; }
+    .rule {
+      max-width: 900px;
+      margin-top: 1.8rem;
+      padding: 1.2rem 1.4rem;
+      border-left: 5px solid var(--blue);
+      background: var(--soft);
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+    .card {
+      padding: 1.4rem;
+      border-top: 4px solid var(--blue);
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.55);
+    }
+    .card p { margin-bottom: 0; color: var(--slate); }
+    .dark { background: var(--ink); color: var(--white); }
+    .dark .section { padding-top: 4.6rem; padding-bottom: 4.6rem; }
+    .dark .number { border-color: #526079; color: #76a0ff; }
+    .dark .eyebrow { color: #91afff; }
+    .dark .lede { color: #d9dfeb; }
+    .dark a { color: #a9c0ff; }
+    .precedence {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      margin: 2rem 0;
+      padding: 0;
+      border: 1px solid #526079;
+      list-style: none;
+    }
+    .precedence li { padding: 1rem; border-right: 1px solid #526079; color: #d9dfeb; }
+    .precedence li:last-child { border: 0; }
+    .precedence strong { display: block; color: var(--white); }
+    .idle-note { max-width: 880px; color: #d9dfeb; }
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      margin-top: 2rem;
+    }
+    .list-card { padding: 1.5rem; border: 1px solid var(--line); background: rgba(255,255,255,.5); }
+    .list-card ul { margin-bottom: 0; padding-left: 1.2rem; }
+    .list-card li { margin-bottom: .55rem; }
+    .dark .list-card { border-color: #526079; background: var(--raised); }
+    .dark .list-card p, .dark .list-card li { color: #d9dfeb; }
+    .surface-table { overflow-x: auto; margin-top: 2rem; }
+    .surface-table:focus-visible { outline: 3px solid var(--blue-light); outline-offset: 4px; }
+    table { width: 100%; min-width: 760px; border-collapse: collapse; }
+    th, td { padding: 1rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    thead th { color: var(--slate); font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; }
+    .code-map { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-top: 2rem; }
+    .code-map article { padding: 1.3rem; border-top: 3px solid var(--blue); background: rgba(255,255,255,.5); }
+    .code-map p { margin-bottom: 0; color: var(--slate); }
+    .next {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+    .next a {
+      min-height: 8rem;
+      padding: 1.2rem;
+      border: 2px solid var(--blue);
+      background: var(--white);
+      font-weight: 780;
+      text-decoration: none;
+    }
+    .next span { display: block; margin-top: .45rem; color: var(--slate); font-size: .92rem; font-weight: 500; }
+    @media (max-width: 920px) {
+      .utility { position: static; }
+      .utility-inner { padding: 1rem 0; flex-direction: column; align-items: flex-start; }
+      .section { grid-template-columns: 1fr; }
+      .number { padding-bottom: .7rem; border-right: 0; border-bottom: 1px solid var(--line); }
+      .flow, .precedence { grid-template-columns: 1fr; }
+      .flow { gap: .75rem; }
+      .flow li { min-height: 0; border-right: 0; }
+      .precedence li { border-right: 0; border-bottom: 1px solid #526079; }
+      .cards, .next { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 620px) {
+      body { font-size: 16px; }
+      .section, .utility-inner { width: min(calc(100% - 2rem), 1160px); }
+      .cards, .two-col, .code-map, .next { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print {
+      body { background: #fff; color: #000; font-size: 10pt; }
+      .utility { position: static; }
+      .route, .actions, .skip { display: none; }
+      .section { width: 100%; padding: 12mm 0; }
+      .dark { background: #fff; color: #000; border: solid #000; border-width: 2px 0; }
+      .dark .number, .dark .eyebrow, .dark .lede, .dark a, .precedence li, .precedence strong, .idle-note, .dark .list-card p, .dark .list-card li { color: #000; }
+      .card, .list-card, .code-map article, .next a, tr { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the code walkthrough</a>
+  <header class="utility">
+    <div class="utility-inner">
+      <div class="identity"><strong>usabl</strong><span>code walkthrough</span></div>
+      <nav aria-label="Code walkthrough route">
+        <ol class="route">
+          <li><a href="#core">Core</a></li>
+          <li><a href="#coverage">Coverage</a></li>
+          <li><a href="#trust">Trust</a></li>
+          <li><a href="#checks">Checks</a></li>
+          <li><a href="#gate">Gate</a></li>
+          <li><a href="#surfaces">Surfaces</a></li>
+          <li><a href="#map">Map</a></li>
+        </ol>
+      </nav>
+    </div>
+  </header>
+  <main id="main">
+    <section class="section" aria-labelledby="hero-title">
+      <div class="number" aria-hidden="true">01</div>
+      <div class="body">
+        <p class="eyebrow">The short answer</p>
+        <h1 id="hero-title">One pipeline. One decision-maker.</h1>
+        <p class="lede">The engine is about 90 source files and roughly 7,000 lines of TypeScript in <code>src/</code>. A separate test folder mirrors it, with roughly 9,000 more lines and more than 350 automated tests. Every source file has one of three jobs: collect evidence, make the one decision, or show that decision to people.</p>
+        <p>This page explains the code in the order it runs. One tip before you start: every file begins with a short comment. The comment says what the file does and what it must never do. The most common "must never" is: never decide the final answer. Only one module can do that. It is called the gate.</p>
+        <p class="boundary"><strong>The main design rule:</strong> checks produce evidence. The gate turns the evidence into one final answer, called the verdict. All other code only displays the verdict. If any other code produces its own answer, that is a bug, even when the answer happens to be correct.</p>
+        <div class="actions">
+          <a class="action primary" href="https://github.com/usabl-dev/usabl/tree/main/src">Browse src/ on GitHub</a>
+          <a class="action" href="how-usabl-works.html">Read How usabl works first</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="core" aria-labelledby="core-title">
+      <div class="number" aria-hidden="true">02</div>
+      <div class="body">
+        <p class="eyebrow">Contracts, deps, and run</p>
+        <h2 id="core-title">Three files form the core. Everything else connects to them.</h2>
+        <p class="lede"><code>src/contracts/index.ts</code> defines the shared data shapes. <code>src/deps/</code> holds all code that touches the outside world. <code>src/run.ts</code> controls the order of the steps.</p>
+        <ol class="flow">
+          <li><strong>Check the policy files</strong><span>The guard compares the tool's own policy files with a trusted copy in git. If any differ, the run stops here and asks for human approval.</span></li>
+          <li><strong>Read changed files</strong><span><code>run()</code> gets the list of changed files from the caller, or asks git for local changes.</span></li>
+          <li><strong>Plan coverage</strong><span>The planner finds which screens the changed files affect. "Coverage" means: the set of screens the tool must check.</span></li>
+          <li><strong>Scan the screens</strong><span>The check runner opens each affected screen in a browser and runs every check.</span></li>
+          <li><strong>Decide, then record</strong><span>The gate produces the verdict. Only a "verified" verdict creates a receipt.</span></li>
+        </ol>
+        <div class="two-col">
+          <article class="list-card">
+            <h3>One interface for the outside world</h3>
+            <p><code>contracts/index.ts</code> defines <code>Deps</code>: file access, git access, the browser, and the clock, all in one object. <code>run()</code> receives this object as an argument. No other code opens files or starts a browser on its own. Because of this one rule, the whole engine can run inside a test.</p>
+          </article>
+          <article class="list-card">
+            <h3>A real version and a test version</h3>
+            <p><code>deps/real.ts</code> uses a real browser (Playwright with Chromium). It reads element names from the browser's accessibility tree. That tree is the same data a screen reader uses, so the engine sees what a screen reader user gets. <code>deps/fakes.ts</code> is a copy that works only in memory; the tests use it. If a test calls a fake method that was not set up, the fake throws an error. This makes hidden test mistakes visible instead of letting them pass.</p>
+          </article>
+        </div>
+        <p class="rule"><strong>Core rule:</strong> <code>run()</code> only controls the order of steps. It never decides the verdict. If the engine crashes, the result is exit code 4, no verdict, and a clear error message. A crash can never produce "verified".</p>
+      </div>
+    </section>
+
+    <section class="section" id="coverage" aria-labelledby="coverage-title">
+      <div class="number" aria-hidden="true">03</div>
+      <div class="body">
+        <p class="eyebrow">src/coverage/</p>
+        <h2 id="coverage-title">Coverage answers one question: which screens must be checked?</h2>
+        <p class="lede">Three files do this work. When they cannot connect a changed file to a screen, they record a gap. A gap means: something changed and the tool could not check it. Any gap turns the verdict into "not covered".</p>
+        <div class="cards">
+          <article class="card">
+            <h3>route-manifest.ts</h3>
+            <p>Reads <code>usabl.routes.json</code>, the file that lists the pages (routes) of the app. If that file is missing, a fallback reads the router source code and finds the route paths. The fallback cannot know which component draws each route, so it leaves that field empty instead of guessing.</p>
+          </article>
+          <article class="card">
+            <h3>import-graph.ts</h3>
+            <p>Starts from each route's main file and follows its imports. The result is the list of files each screen depends on. It follows only imports it can find on disk. Anything it cannot resolve is recorded, not guessed.</p>
+          </article>
+          <article class="card">
+            <h3>planner.ts</h3>
+            <p>Connects changed files to screens in three ways: through the import graph, through wide-impact patterns, and through manual mappings in the config. A wide-impact file, such as a stylesheet used everywhere, marks every screen as affected, because its real reach cannot be proven smaller.</p>
+          </article>
+        </div>
+        <div class="two-col">
+          <article class="list-card">
+            <h3>Idle is honest</h3>
+            <p>If no interface file changed, the run is idle: no verdict, exit code 0, and the message "nothing to check". Idle means there was nothing to prove. It is not a pass.</p>
+          </article>
+          <article class="list-card">
+            <h3>Unmapped means a gap</h3>
+            <p>If an interface file changed and no screen could be found for it, the planner writes a gap with a reason. The gate then returns "not covered". Nothing is dropped in silence.</p>
+          </article>
+        </div>
+        <p class="rule"><strong>Coverage rule:</strong> no sampling. The tool checks every affected screen, or it states clearly what it could not check.</p>
+      </div>
+    </section>
+
+    <div class="dark">
+      <section class="section" id="trust" aria-labelledby="trust-title">
+        <div class="number" aria-hidden="true">04</div>
+        <div class="body">
+          <p class="eyebrow">src/trust/, src/guard/, src/intake/</p>
+          <h2 id="trust-title">The trust code expects that anyone can edit any file.</h2>
+          <p class="lede">The engine runs in a workspace where an AI assistant edits files. The assistant can also edit the engine's own policy files: the config, the route list, the accepted-findings list, and the waiver list. The trust layer makes sure a policy change can never approve itself. This check runs before everything else, so a broken or damaged policy file blocks the run instead of crashing it.</p>
+          <ol class="precedence">
+            <li><strong>1. Config first</strong> Compare the bytes of <code>usabl.config.json</code> with the trusted copy in git before using anything written inside it.</li>
+            <li><strong>2. Verified bytes only</strong> The list of guarded files comes from the checked config bytes, never from data already in memory.</li>
+            <li><strong>3. Expand folders</strong> A guarded folder becomes a list of its files, both committed files and new files. A new file cannot hide inside a guarded folder.</li>
+            <li><strong>4. Compare every file</strong> Every guarded file is compared byte by byte with the trusted copy in git.</li>
+            <li><strong>5. Any change blocks</strong> If even one guarded file differs, the verdict is "approval required". A person must review it. No scan runs.</li>
+          </ol>
+          <div class="two-col">
+            <article class="list-card">
+              <h3>Intake stops on bad input</h3>
+              <p><code>intake/</code> reads requirement files that the team writes in YAML. The parser uses a safe mode, so YAML cannot create unexpected object types. The validator rejects unknown fields instead of ignoring them, and it rejects invalid dates in waivers. One broken file means "approval required", because a rule set must never be applied halfway.</p>
+            </article>
+            <article class="list-card">
+              <h3>Requirements become checks</h3>
+              <p><code>intake/map-to-providers.ts</code> turns written requirements into runtime checks: required announcements, keyboard paths, image descriptions. Documentation requirements do not become checks; they describe output files instead.</p>
+            </article>
+          </div>
+          <p class="idle-note"><strong>Why compare bytes instead of reading the content?</strong> Reading a changed file means trusting a changed file. The guard only reports that bytes are different. It never repairs, excuses, or interprets the difference. Interpretation is a human job.</p>
+        </div>
+      </section>
+    </div>
+
+    <section class="section" id="checks" aria-labelledby="checks-title">
+      <div class="number" aria-hidden="true">05</div>
+      <div class="body">
+        <p class="eyebrow">src/providers/ and src/voicing/</p>
+        <h2 id="checks-title">Providers collect evidence. They are not allowed to conclude.</h2>
+        <p class="lede">A provider is one check. It returns drafts and gaps. A draft is one observation: what the user experiences, why it matters, and a possible fix. <code>providers/check-runner.ts</code> opens one screen, records a keyboard pass, then runs every provider. It never throws an error: a screen that fails to open or scan becomes a gap, never a silent skip.</p>
+        <div class="cards">
+          <article class="card">
+            <h3>axe/</h3>
+            <p>Runs axe-core, a widely used open-source accessibility scanner, and turns its results into drafts. When axe is not sure about a result, the draft is marked "unverified". Unsure results are kept, not dropped. They push the verdict toward "not covered".</p>
+          </article>
+          <article class="card">
+            <h3>rulepack/</h3>
+            <p>Six checks written for PatternFly, the design system used by the demo app: icon button names, menu open-and-closed state, unique row actions, table headers, toast placement, and repeated toolbars. It also contains probes: small scripts that really open a dialog or a menu and watch where keyboard focus goes.</p>
+          </article>
+          <article class="card">
+            <h3>keyboard-walk/</h3>
+            <p>Presses the Tab key through the screen and records every stop: the name, role, and state of each element. It stops when the cycle repeats. It reports interactive controls that have no name. When data is missing from the accessibility tree, the draft says "unverified". It never guesses.</p>
+          </article>
+        </div>
+        <div class="two-col">
+          <article class="list-card">
+            <h3>Voicing: two parts, two levels of trust</h3>
+            <p><code>voicing/structural.ts</code> checks facts: did an announcement happen at the required moment, yes or no. These drafts are deterministic, which means repeatable and machine-checked. <code>voicing/voicing.ts</code> compares the words of the announcement. Word matching is weaker evidence, so those drafts are marked "preview" by default. A human can promote a word rule to a blocking rule in config. The code never promotes itself.</p>
+          </article>
+          <article class="list-card">
+            <h3>How announcements are captured</h3>
+            <p>The real browser driver installs a small observer script before the page loads. When the page writes into a live region, which is the area a screen reader announces out loud, the observer records a token. The checks compare these tokens with the written requirements. This is how the tool catches a toast message that appears on screen but is never announced to a screen reader user.</p>
+          </article>
+        </div>
+        <p class="rule"><strong>Evidence rule:</strong> every draft carries an evidence class. Only "deterministic" drafts can change the verdict. "Preview" and "model-judgment" drafts are shown to people, but they can never create "verified" or a receipt.</p>
+      </div>
+    </section>
+
+    <section class="section" id="gate" aria-labelledby="gate-title">
+      <div class="number" aria-hidden="true">06</div>
+      <div class="body">
+        <p class="eyebrow">src/gate/, src/primitives/identity.ts, src/evidence/</p>
+        <h2 id="gate-title">The gate turns drafts into findings, and findings into one verdict.</h2>
+        <p class="lede">This is the only module that makes the decision. It receives everything as input: the coverage, the guard result, the drafts, the accepted-findings list, the waivers, and the clock. It performs no input or output of its own.</p>
+        <div class="two-col">
+          <article class="list-card">
+            <h3>Identity: same problem, one finding</h3>
+            <p><code>primitives/identity.ts</code> builds a key for each finding. It prefers the element's accessible name, because a name survives layout changes. Without a name it uses the element's role and position. As a last resort it counts occurrences. The key ignores which provider found the problem, so when axe and a PatternFly rule report the same defect, they merge into one finding.</p>
+          </article>
+          <article class="list-card">
+            <h3>Status: compare with the accepted list</h3>
+            <p>The evidence floor is the list of findings the team has already accepted. A finding on the list is "carried" and does not block. A finding not on the list is "new" and blocks. A listed finding that no longer appears becomes "fixed": still shown, never blocking. Waivers are written exceptions with a validated expiry date. Together this lets a team block new problems without claiming old problems are gone.</p>
+          </article>
+        </div>
+        <div class="two-col">
+          <article class="list-card">
+            <h3>evidence/receipt.ts</h3>
+            <p>A receipt is proof that a "verified" run happened for an exact state of the code. It binds three things: the exact source tree, a hash of the policy files, and the engine version. Change any one of them and the receipt no longer matches. Creating and checking a receipt use the same hash function, so the check can never drift away from the proof.</p>
+          </article>
+          <article class="list-card">
+            <h3>Same input, same output</h3>
+            <p><code>primitives/canonical.ts</code> turns data into bytes in a fixed order and hashes them. <code>sortKey.ts</code> sorts in a fixed order. The clock is injected, never read from the machine. The same input always produces the same bytes and the same hash. That is why a receipt can be checked again later.</p>
+          </article>
+        </div>
+        <p class="rule"><strong>Verdict order:</strong> first, a changed policy file means "approval required", exit 2. Second, nothing to check means no verdict, exit 0. Third, a new deterministic failure means "regression", exit 1. Fourth, missing coverage or unsure evidence means "not covered", exit 3. Only after all of that: "verified", exit 0.</p>
+      </div>
+    </section>
+
+    <section class="section" id="surfaces" aria-labelledby="surfaces-title">
+      <div class="number" aria-hidden="true">07</div>
+      <div class="body">
+        <p class="eyebrow">src/cli.ts and src/surfaces/</p>
+        <h2 id="surfaces-title">Surfaces only show or enforce the result.</h2>
+        <p class="lede">A surface is a place where people or tools see the result: the command line, the browser, the AI stop hook, the pull request. Every surface reads the same <code>Result</code> object. No surface computes findings again on its own.</p>
+        <div class="surface-table" tabindex="0" role="region" aria-label="Surface modules and their jobs">
+          <table>
+            <thead><tr><th scope="col">Files</th><th scope="col">Surface</th><th scope="col">What the code does</th></tr></thead>
+            <tbody>
+              <tr><th scope="row"><code>cli.ts</code>, <code>cli-bin.ts</code>, <code>surfaces/cli.ts</code></th><td>Command line</td><td>Reads the command flags, calls <code>run()</code>, prints text or JSON, and exits with the Result's exit code. The installed command has its own build entry file, so the build tool cannot accidentally turn it into an empty program.</td></tr>
+              <tr><th scope="row"><code>surfaces/stop-hook.ts</code>, <code>stop-hook-runner.ts</code>, <code>stop-hook-bin.ts</code>, <code>receipt-store.ts</code></th><td>AI stop hook</td><td>Connects to Claude Code. It blocks by printing a JSON message, not by exit codes, because that is how the hook protocol works. If a valid receipt already matches the current code, the stop is allowed without a new scan. The hook blocks only once per stop, so the assistant cannot get trapped in a loop. A one-time bypass file exists for the human operator.</td></tr>
+              <tr><th scope="row"><code>surfaces/vite-plugin.ts</code>, <code>overlay-client.ts</code></th><td>Browser inspector</td><td><code>vite-plugin.ts</code> serves the inspector inside the running app. <code>overlay-client.ts</code>, the largest file in <code>src/</code>, draws the panel, refreshes when code changes, and can point to a finding on the page. It advises only. It can never fail a build or a process.</td></tr>
+              <tr><th scope="row"><code>surfaces/pr-comment.ts</code></th><td>Pull request</td><td>Renders the Result as one pull request comment. A hidden marker lets CI update the same comment instead of adding a new one each time. Enforcement comes from the exit code in CI, not from the comment text.</td></tr>
+              <tr><th scope="row"><code>surfaces/playwright-helper.ts</code></th><td>Test helper</td><td>Lets a Playwright test suite assert on an existing Result inside the tests a team already runs.</td></tr>
+              <tr><th scope="row"><code>surfaces/scrub.ts</code>, <code>primitives/neutralize.ts</code></th><td>Output safety</td><td>Text taken from a web page is untrusted. It can contain hidden control characters, or text that tries to give instructions to an AI. <code>neutralize.ts</code> removes control bytes before terminal output. <code>scrub.ts</code> marks page text as untrusted before it enters an AI conversation.</td></tr>
+              <tr><th scope="row"><code>surfaces/self-check.ts</code></th><td>Mid-task check</td><td>A read-only status view that an AI assistant can request in the middle of a task. It reports. It never blocks.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="rule"><strong>Consistency rule:</strong> if two surfaces ever disagree, the bug is in the display code, not in the decision. Start debugging from the <code>Result</code> object and work outward.</p>
+      </div>
+    </section>
+
+    <section class="section" id="map" aria-labelledby="map-title">
+      <div class="number" aria-hidden="true">08</div>
+      <div class="body">
+        <p class="eyebrow">The rest of src/</p>
+        <h2 id="map-title">The supporting code, in one map.</h2>
+        <div class="code-map">
+          <article><h3>primitives/</h3><p>Small shared helpers with no opinions: hashing, sorting, file pattern matching, name shortening, identity keys, and terminal output cleaning. Nothing here reads files or makes decisions.</p></article>
+          <article><h3>docs/</h3><p>Generators that turn a verified Result into documents: image text lists, announcement examples, and keyboard path descriptions. One shared helper checks the link between a document and its evidence, so no generator can invent its own weaker check.</p></article>
+          <article><h3>output/</h3><p>Text views of a finished Result: the terminal summary and a conformance view. The conformance view refuses to merge all findings into one single score, because one score hides information.</p></article>
+          <article><h3>measure/fleet-insights.ts</h3><p>A measurement tool for scanning real applications. It counts drafts, keyboard stops, and gaps. It never calls the gate. It never produces a verdict or a receipt.</p></article>
+          <article><h3>integration-smoke.ts</h3><p>A manual test entry that uses a real browser. An environment variable guard stops it from reporting success when the browser is not available.</p></article>
+          <article><h3>index.ts</h3><p>The public entry of the library. Its whole header comment is one sentence, and that sentence is the architecture: callers display a Result; they do not make a verdict.</p></article>
+        </div>
+        <p class="rule"><strong>Suggested reading order for a new contributor:</strong> read <code>contracts/index.ts</code> first, for the data shapes. Then <code>run.ts</code>, for the order of steps. Then <code>gate/index.ts</code>, for the decision. Then <code>coverage/planner.ts</code> and <code>providers/check-runner.ts</code>, for the evidence. After that, read the surface you plan to change.</p>
+        <div class="next">
+          <a href="https://github.com/usabl-dev/usabl/blob/main/src/contracts/index.ts">Start with contracts<span>The shared data shapes every module uses.</span></a>
+          <a href="https://github.com/usabl-dev/usabl/blob/main/src/run.ts">Then read run()<span>The whole pipeline in one ordered file.</span></a>
+          <a href="https://github.com/usabl-dev/usabl/blob/main/src/gate/index.ts">Then the gate<span>The only file allowed to decide.</span></a>
+          <a href="https://github.com/usabl-dev/usabl/tree/main/test">Then the tests<span>Fakes, golden Results, and the live fixture show the intent.</span></a>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
