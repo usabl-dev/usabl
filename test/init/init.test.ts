@@ -87,6 +87,38 @@ export function App() {
     expect(draft.routes.routes).toEqual([{ screenId: 'lazy', url: '/lazy', entryFile: null }]);
     expect(draft.notes.some((note) => note.includes('/lazy'))).toBe(true);
   });
+
+  it('skips nested relative route paths instead of inventing a root-absolute URL', async () => {
+    const fs = memoryFs(
+      fixtureFiles({
+        'src/App.tsx': `import { Route, Routes } from 'react-router-dom'
+import { SettingsLayout } from './pages/SettingsLayout'
+import { Profile } from './pages/Profile'
+
+export function App() {
+  return (
+    <Routes>
+      <Route path="/settings" element={<SettingsLayout />}>
+        <Route path="profile" element={<Profile />} />
+      </Route>
+    </Routes>
+  )
+}
+`,
+        'src/pages/SettingsLayout.tsx': 'export function SettingsLayout() { return null }\n',
+        'src/pages/Profile.tsx': 'export function Profile() { return null }\n',
+      }),
+    );
+
+    const draft = await inferInit(fs);
+    expect(draft.routes.routes.find((route) => route.url.includes('profile'))).toBeUndefined();
+    expect(draft.routes.routes).not.toContainEqual(
+      expect.objectContaining({ url: '/profile' }),
+    );
+    expect(draft.notes.some((note) => note.includes('profile') && note.toLowerCase().includes('review'))).toBe(
+      true,
+    );
+  });
 });
 
 describe('writeInitDrafts', () => {

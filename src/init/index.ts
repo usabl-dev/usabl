@@ -4,7 +4,7 @@
  * It must never mint a verdict or consume the files it just wrote in the same run.
  */
 import { posix } from 'node:path';
-import type { UsablConfig } from '../contracts/index.js';
+import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
 import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
 
 const POLICY_FILES = ['usabl.config.json', 'usabl.routes.json'] as const;
@@ -83,6 +83,10 @@ function parseLocalImports(raw: string): Map<string, string> {
   return imports;
 }
 
+function isProvenRoutePath(path: string): boolean {
+  return path.startsWith('/') && !path.startsWith('//') && !path.includes('@') && path !== '*';
+}
+
 function parseRouteTags(raw: string): Array<{ path: string; component: string | null }> {
   const routes: Array<{ path: string; component: string | null }> = [];
   const tags = /<Route\b([^>]*?)\/>/g;
@@ -124,6 +128,20 @@ async function resolveEntryFile(
     }
   }
   return null;
+}
+
+function surfaceUrl(baseUrl: string, routePath: string): string | null {
+  try {
+    const origin = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+    const expectedOrigin = new URL(baseUrl).origin;
+    const resolved = new URL(routePath, origin);
+    if (resolved.origin !== expectedOrigin) {
+      return null;
+    }
+    return resolved.toString();
+  } catch {
+    return null;
+  }
 }
 
 export async function inferInit(fs: InitFs): Promise<InitDraft> {
@@ -170,6 +188,12 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
     const parsed = parseRouteTags(routerRaw);
     let attributed = 0;
     for (const route of parsed) {
+      if (!isProvenRoutePath(route.path)) {
+        notes.push(
+          `Review: skipped unproven route path "${route.path}". Nested or relative paths are not attributed.`,
+        );
+        continue;
+      }
       let entryFile: string | null = null;
       if (route.component !== null) {
         const specifier = imports.get(route.component);
@@ -184,7 +208,7 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
       }
       routes.push({
         screenId: screenIdFromUrl(route.path),
-        url: route.path.startsWith('/') ? route.path : `/${route.path}`,
+        url: route.path,
         entryFile,
       });
     }
@@ -214,11 +238,19 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
   }
 
   const origin = appBaseUrl.endsWith('/') ? appBaseUrl : `${appBaseUrl}/`;
-  const surfaces = routes.map((route) => ({
-    id: route.screenId,
-    url: new URL(route.url, origin).toString(),
-    files: route.entryFile === null ? [] : [route.entryFile],
-  }));
+  const surfaces: SurfaceConfig[] = [];
+  for (const route of routes) {
+    const url = surfaceUrl(appBaseUrl, route.url);
+    if (url === null) {
+      notes.push(`Review: skipped surface URL for ${route.url}; it leaves ${origin}.`);
+      continue;
+    }
+    surfaces.push({
+      id: route.screenId,
+      url,
+      files: route.entryFile === null ? [] : [route.entryFile],
+    });
+  }
 
   const config: UsablConfig = {
     appBaseUrl,
