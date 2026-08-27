@@ -14,10 +14,46 @@ import { overlayClientSource } from './overlay-client.js';
 export interface OverlayProjection {
   advisory: true;
   displayExitCode: 0;
+  exitCode: Result['exitCode'];
   verdict: Result['verdict'];
   schemaVersion: Result['schemaVersion'];
   summary: string;
-  findings: Array<{ rule: string; whatUserExperiences: string; why: string; fix: string }>;
+  coverage: {
+    affected: Result['coverage']['affected'];
+    unresolvedFiles: Result['coverage']['unresolvedFiles'];
+    gaps: Result['coverage']['gaps'];
+  };
+  findings: Array<{
+    rule: string;
+    screenId: string;
+    layer: string;
+    severity: Result['findings'][number]['severity'];
+    evidenceClass: Result['findings'][number]['evidenceClass'];
+    status: Result['findings'][number]['status'];
+    confidence: Result['findings'][number]['confidence'];
+    elementPath: string;
+    elementName: string | null;
+    role: string | null;
+    elementKey: string | null;
+    identityBasis: Result['findings'][number]['identityBasis'];
+    whatUserExperiences: string;
+    why: string;
+    fix: string;
+  }>;
+  receipt: {
+    sourceTree: string;
+    baseRevision: string | null;
+    policyHash: string;
+    runnerVersion: string;
+    scannerVersions: NonNullable<Result['receipt']>['scannerVersions'];
+    surfaces: string[];
+    checkedScreens: string[];
+    notCovered: string[];
+    findingsSummary: NonNullable<Result['receipt']>['findingsSummary'];
+    activeWaivers: number;
+    mintedAt: string;
+  } | null;
+  dirtyGuardedPaths: string[];
 }
 
 type Middleware = (
@@ -82,15 +118,49 @@ export function projectOverlay(result: Result): OverlayProjection {
   return {
     advisory: true,
     displayExitCode: 0,
+    exitCode: safe.exitCode,
     verdict: safe.verdict,
     schemaVersion: safe.schemaVersion,
     summary: safe.summary,
+    coverage: {
+      affected: safe.coverage.affected,
+      unresolvedFiles: safe.coverage.unresolvedFiles,
+      gaps: safe.coverage.gaps,
+    },
     findings: safe.findings.map((finding) => ({
       rule: finding.rule,
+      screenId: finding.screenId,
+      layer: finding.layer,
+      severity: finding.severity,
+      evidenceClass: finding.evidenceClass,
+      status: finding.status,
+      confidence: finding.confidence,
+      elementPath: frameUntrusted(finding.elementPath),
+      elementName: finding.elementName === null ? null : frameUntrusted(finding.elementName),
+      role: finding.role === null ? null : frameUntrusted(finding.role),
+      elementKey: finding.elementKey === null ? null : frameUntrusted(finding.elementKey),
+      identityBasis: finding.identityBasis,
       whatUserExperiences: frameUntrusted(finding.whatUserExperiences),
       why: finding.why,
       fix: finding.fix,
     })),
+    receipt:
+      safe.receipt === null
+        ? null
+        : {
+            sourceTree: safe.receipt.sourceTree,
+            baseRevision: safe.receipt.baseRevision,
+            policyHash: safe.receipt.policyHash,
+            runnerVersion: safe.receipt.runnerVersion,
+            scannerVersions: safe.receipt.scannerVersions,
+            surfaces: safe.receipt.surfaces,
+            checkedScreens: safe.receipt.coverage.checked,
+            notCovered: safe.receipt.coverage.notCovered,
+            findingsSummary: safe.receipt.findingsSummary,
+            activeWaivers: safe.receipt.activeWaivers,
+            mintedAt: safe.receipt.mintedAt,
+          },
+    dirtyGuardedPaths: safe.dirtyGuardedPaths,
   };
 }
 
