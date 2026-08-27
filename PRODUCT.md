@@ -6,7 +6,7 @@ usabl is an accessibility proof engine for product development workflows. It che
 the user interface affected by a change and reports an honest result before the work
 is called done.
 
-Version 0.1.0 is a private team preview and a Red Hat Innovation Days 2026 contest
+Version 0.2.0 is a private team preview and a Red Hat Innovation Days 2026 contest
 entry.
 
 ## Audience
@@ -47,7 +47,7 @@ choose a contribution lane.
 
 Use plain English. Be direct, exact, and humane. Prefer evidence over claims. Explain
 technical terms when they first appear. Do not use marketing language or claim more
-than v0.1.0 proves.
+than v0.2.0 proves.
 
 ## Visual character
 

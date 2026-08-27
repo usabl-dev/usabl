@@ -1,6 +1,6 @@
 # usabl
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.2.0-blue?style=flat-square)
 ![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)
 ![Status](https://img.shields.io/badge/status-team%20preview-green?style=flat-square)
 
@@ -18,8 +18,9 @@ The AI can suggest fixes. It does not get to grade its own work.
 
 ## Status
 
-Team preview (v0.1.0). Teammates can learn the product, run the loop, choose a
-contribution lane, and file feedback.
+Team preview (v0.2.0). Teammates can learn the product, run the loop, choose a
+contribution lane, and file feedback. See [CHANGELOG.md](CHANGELOG.md) for
+merged changes since 0.1.0. This freeze does not tag or publish the package.
 
 Start with the
 [team orientation](https://usabl-dev.github.io/usabl/team-orientation.html) and
