@@ -67,6 +67,7 @@ describe('gate differential', () => {
       fix: 'axe fix',
       evidence: {
         name: { value: 'Save', source: 'ax-tree', fromTree: true },
+        state: { expanded: { value: false, source: 'attribute', fromTree: true } },
         extra: { axeId: 'color-contrast' },
       },
     });
@@ -83,6 +84,9 @@ describe('gate differential', () => {
     const kept = find(out, 'color-contrast')[0]!;
     expect(kept.layer).toBe('pf');
     expect(kept.evidence.extra).toEqual({ axeId: 'color-contrast', pfToken: 'contrast' });
+    expect(kept.evidence.state).toEqual({
+      expanded: { value: false, source: 'attribute', fromTree: true },
+    });
   });
 
   it('regresses when a count-based rule increases over the floor', () => {
