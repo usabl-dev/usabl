@@ -139,4 +139,6 @@ Open a discussion or talk to the team before large design changes.
 
 ## Team preview
 
-See [docs/team-preview.md](docs/team-preview.md) for the internal demo loop and feedback process.
+Start with the [team orientation](docs/team-orientation.html) for the product model,
+workspace map, guided demo, contribution lanes, and three-week finish plan. See
+[docs/team-preview.md](docs/team-preview.md) for the compact technical runbook.

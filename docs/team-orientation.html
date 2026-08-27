@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Team orientation and contribution guide for usabl v0.1.0.">
+  <title>usabl v0.1.0 team orientation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #101827;
+      --raised: #172033;
+      --paper: #f7f5ef;
+      --white: #fff;
+      --blue: #2457e6;
+      --blue-light: #5b7cfa;
+      --green: #177a4a;
+      --red: #c9363e;
+      --amber: #a95f00;
+      --violet: #7452b8;
+      --slate: #596579;
+      --line: #cbd1da;
+      --soft: #e9edf4;
+      --sans: Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 5.5rem; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 17px/1.58 var(--sans);
+    }
+    a {
+      color: var(--blue);
+      text-decoration-thickness: .11em;
+      text-underline-offset: .18em;
+    }
+    a:focus-visible, summary:focus-visible {
+      outline: 3px solid var(--blue-light);
+      outline-offset: 4px;
+    }
+    code, pre { font-family: var(--mono); }
+    code { font-size: .91em; }
+    .skip {
+      position: fixed;
+      z-index: 100;
+      top: .75rem;
+      left: .75rem;
+      padding: .7rem 1rem;
+      background: var(--white);
+      transform: translateY(-180%);
+    }
+    .skip:focus { transform: translateY(0); }
+    .utility {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      background: var(--ink);
+      color: var(--white);
+      border-bottom: 3px solid var(--blue);
+    }
+    .utility-inner {
+      width: min(calc(100% - 3rem), 1240px);
+      min-height: 4.6rem;
+      margin: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2rem;
+    }
+    .identity { display: flex; align-items: baseline; gap: .85rem; white-space: nowrap; }
+    .identity strong { font-size: 1.35rem; letter-spacing: -.04em; }
+    .identity span, .route {
+      color: #cfd8eb;
+      font-size: .74rem;
+      font-weight: 750;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .version { padding-left: .85rem; border-left: 1px solid #526079; font-family: var(--mono); }
+    .route { display: flex; flex-wrap: wrap; gap: 1.5rem; margin: 0; padding: 0; list-style: none; }
+    .route a { color: inherit; text-decoration: none; }
+    .route a:hover { color: var(--white); }
+    .section {
+      width: min(calc(100% - 3rem), 1240px);
+      margin: auto;
+      padding: 3.8rem 0;
+      display: grid;
+      grid-template-columns: 4rem minmax(0, 1fr);
+      gap: 1.7rem;
+    }
+    .number {
+      padding-top: .25rem;
+      border-right: 1px solid var(--line);
+      color: var(--blue);
+      font-size: 1.35rem;
+      font-weight: 850;
+      line-height: 1;
+    }
+    .body { min-width: 0; }
+    .eyebrow {
+      margin: 0 0 .8rem;
+      color: var(--blue);
+      font-size: .76rem;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { margin-top: 0; line-height: 1.08; text-wrap: balance; }
+    h1 { max-width: 760px; margin-bottom: 1.4rem; font-size: clamp(3.1rem, 5.4vw, 5.8rem); letter-spacing: -.062em; }
+    h2 { margin-bottom: 1.1rem; font-size: clamp(2rem, 3.1vw, 3.15rem); letter-spacing: -.045em; }
+    h3 { margin-bottom: .6rem; font-size: 1.13rem; letter-spacing: -.018em; }
+    p { margin-top: 0; }
+    .lede { max-width: 760px; color: #354156; font-size: 1.18rem; }
+    .hero { padding-top: 5.4rem; padding-bottom: 4.8rem; }
+    .hero-grid { display: grid; grid-template-columns: 1.2fr minmax(360px, .8fr); gap: clamp(3rem, 7vw, 7rem); align-items: center; }
+    .actions { display: flex; flex-wrap: wrap; gap: .85rem; margin-top: 2rem; }
+    .action {
+      display: inline-flex;
+      min-height: 3.2rem;
+      align-items: center;
+      padding: .72rem 1.15rem;
+      border: 2px solid var(--blue);
+      font-weight: 780;
+      text-decoration: none;
+    }
+    .primary { background: var(--blue); color: var(--white); }
+    .receipt { position: relative; background: var(--white); border: 1px solid #aeb7c5; box-shadow: 12px 12px 0 var(--soft); }
+    .receipt::before { position: absolute; inset: -1px auto -1px -1px; width: 6px; background: var(--green); content: ""; }
+    .receipt-head { display: flex; justify-content: space-between; gap: 1rem; padding: 1.25rem 1.35rem 1.1rem 1.65rem; border-bottom: 1px solid var(--line); }
+    .receipt-verdict { color: var(--green); font-size: 1.35rem; font-weight: 850; }
+    .receipt-note { color: var(--slate); font: .82rem var(--mono); text-align: right; }
+    .receipt dl { margin: 0; padding: .5rem 1.35rem .8rem 1.65rem; }
+    .receipt-row { display: grid; grid-template-columns: 7rem 1fr; gap: 1rem; padding: .72rem 0; border-bottom: 1px solid #e1e4ea; }
+    dt { color: var(--slate); font-size: .8rem; font-weight: 750; }
+    dd { margin: 0; font-size: .94rem; font-weight: 650; overflow-wrap: anywhere; }
+    .dark { background: var(--ink); color: var(--white); }
+    .dark .section { padding-top: 3.8rem; padding-bottom: 3.8rem; }
+    .dark .number { border-color: #526079; color: #76a0ff; }
+    .dark .eyebrow { color: #91afff; }
+    .idle-note { max-width: 800px; margin: 1.5rem 0 0; padding: 1rem 1.2rem; border: 1px solid #526079; color: #d9dfeb; }
+    .idle-note strong { color: #fff; }
+    .verdicts { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 1.2rem; border: solid #526079; border-width: 1px 0; }
+    .verdict { min-height: 12rem; padding: 1.45rem 1.2rem; border-right: 1px solid #526079; }
+    .verdict:last-child { border: 0; }
+    .verdict strong { display: block; margin-bottom: .8rem; font-size: .82rem; text-transform: uppercase; }
+    .verdict p { margin: 0; color: #d9dfeb; font-size: 1rem; line-height: 1.55; }
+    .verified { color: #49c77f; } .regression { color: #ff6970; }
+    .not-covered { color: #ffb24a; } .approval { color: #bb91ff; }
+    .truth-note { max-width: 800px; margin-top: 1.5rem; color: #cbd4e4; }
+    .system { display: grid; grid-template-columns: 1fr 2.5rem .8fr 2.5rem 1fr 2.5rem 1fr; margin-top: 2.8rem; }
+    .node { padding: 1.4rem; border: 1px solid var(--line); background: rgba(255,255,255,.55); }
+    .result { background: var(--blue); border-color: var(--blue); color: var(--white); }
+    .node-label { display: block; margin-bottom: 1rem; color: var(--blue); font-size: .72rem; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
+    .result .node-label { color: #dbe5ff; }
+    .node ul { margin: 0; padding-left: 1.1rem; }
+    .arrow { display: grid; place-items: center; color: var(--blue); font-size: 1.8rem; }
+    .rule { margin-top: 2rem; padding: 1.25rem 1.5rem; border-left: 5px solid var(--blue); background: var(--soft); }
+    .proof-loop { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 3.5rem; counter-reset: proof; }
+    .proof-step { position: relative; min-height: 13rem; padding: 3.2rem 1rem 1rem; border-top: 2px solid var(--line); border-right: 1px solid var(--line); counter-increment: proof; }
+    .proof-step::before { position: absolute; top: -1.25rem; left: 1rem; display: grid; width: 2.45rem; height: 2.45rem; place-items: center; border-radius: 50%; background: var(--blue); color: var(--white); content: counter(proof); font-weight: 850; }
+    .proof-step p { color: var(--slate); font-size: 1rem; }
+    .evidence-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 1.2rem; margin-top: 1.8rem; }
+    .evidence { margin: 0; padding: 1.4rem 1.5rem; overflow-x: auto; background: var(--raised); color: #edf3ff; border-left: 5px solid var(--blue-light); font-size: 1rem; line-height: 1.65; }
+    .red { color: #ff7f84; } .green { color: #5ad28d; } .blue { color: #91afff; }
+    .behavior { display: grid; grid-template-columns: 1fr 3.5rem 1fr; border: 1px solid var(--line); background: var(--white); }
+    .behavior div { padding: 1.3rem; }
+    .behavior .arrow { background: var(--soft); padding: 0; }
+    .behavior p { margin: 0; color: var(--slate); font-size: 1rem; }
+    .behavior .regression { color: var(--red); }
+    .behavior .verified { color: var(--green); }
+    .repo-grid, .lanes, .weeks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 2.5rem; }
+    .repo { padding: 1.45rem; border-top: 4px solid var(--blue); border-bottom: 1px solid var(--line); background: rgba(255,255,255,.48); }
+    .repo-name { font: 800 1.1rem var(--mono); }
+    .repo-purpose { min-height: 5.5rem; color: var(--slate); }
+    .repo-row { padding: .65rem 0; border-top: 1px solid var(--line); }
+    .repo-row dd { margin-top: .2rem; font-weight: 500; }
+    .table-scroll { overflow-x: auto; }
+    .table-scroll:focus-visible { outline: 3px solid var(--blue-light); outline-offset: 4px; }
+    table { width: 100%; min-width: 780px; margin-top: 2rem; border-collapse: collapse; font-size: 1rem; }
+    th, td { padding: 1rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    thead th { color: var(--slate); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
+    .lanes { gap: 0; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+    .lane { min-height: 16rem; padding: 1.5rem; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .lane-index, .week-number { display: block; margin-bottom: 1rem; color: var(--blue); font: 800 .76rem var(--mono); }
+    .lane dt { margin-top: 1rem; color: var(--ink); }
+    .lane dd { margin-top: .25rem; color: var(--slate); font-weight: 500; }
+    .first-hour { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin: 2.5rem 0 1.5rem; padding: 0; list-style: none; counter-reset: hour; }
+    .first-hour li { position: relative; min-height: 11rem; padding: 3.4rem 1rem 1rem; border-top: 3px solid var(--blue); background: rgba(255,255,255,.52); counter-increment: hour; }
+    .first-hour li::before { position: absolute; top: .9rem; color: var(--blue); content: "0" counter(hour); font: 850 .9rem var(--mono); }
+    .first-hour strong { display: block; margin-bottom: .4rem; }
+    .first-hour span { color: var(--slate); font-size: 1rem; }
+    .outcome { padding: 1.15rem 1.4rem; border-left: 5px solid var(--green); background: #e3f2e9; color: #0d4c2e; font-weight: 690; }
+    .weeks { gap: 0; border: 1px solid var(--line); background: var(--white); }
+    .week { padding: 1.5rem; border-right: 1px solid var(--line); }
+    .week:last-child { border: 0; }
+    .week ul { padding-left: 1.1rem; color: var(--slate); font-size: 1rem; }
+    .two-col, .claims, .closing { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; margin-top: 2.5rem; }
+    details { margin-top: 2rem; border: solid var(--line); border-width: 1px 0; }
+    summary { padding: 1.15rem 0; cursor: pointer; color: var(--blue); font-weight: 800; }
+    details > div { padding-bottom: 1.5rem; }
+    .claims { margin-top: 0; }
+    .claim-list { margin: 1.4rem 0 0; padding: 0; list-style: none; }
+    .claim-list li { padding: .65rem 0; border-bottom: 1px solid #47546a; color: #e5eaf3; }
+    .claim-list li::before { display: inline-block; width: 1.8rem; font-weight: 900; }
+    .can li::before { color: #59d18c; content: "✓"; } .cannot li::before { color: #ff747a; content: "×"; }
+    .closing { grid-template-columns: 1.2fr .8fr; padding-top: 2rem; border-top: 1px solid #526079; }
+    .closing p, .glossary dd { color: #d5ddea; }
+    .dark a { color: #a9c0ff; }
+    .glossary { display: grid; grid-template-columns: 7rem 1fr; margin: 0; }
+    .glossary dt, .glossary dd { padding: .35rem 0; border-bottom: 1px solid #3d4a60; }
+    .glossary dt { color: var(--white); }
+    @media (max-width: 980px) {
+      .utility { position: static; }
+      .utility-inner, .hero-grid, .evidence-grid, .two-col, .claims, .closing { grid-template-columns: 1fr; flex-direction: column; align-items: flex-start; }
+      .utility-inner { padding: 1rem 0; }
+      .section { grid-template-columns: 1fr; }
+      .number { padding-bottom: .7rem; border-right: 0; border-bottom: 1px solid var(--line); }
+      .verdicts, .proof-loop, .first-hour { grid-template-columns: repeat(2, 1fr); }
+      .system, .repo-grid, .lanes, .weeks { grid-template-columns: 1fr; }
+      .system { gap: .7rem; } .arrow { transform: rotate(90deg); }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print {
+      @page { size: A4 landscape; margin: 12mm; }
+      body { background: #fff; color: #000; font-size: 10pt; }
+      .utility { position: static; } .route, .actions, .skip { display: none; }
+      .section { width: 100%; padding: 12mm 0; break-inside: auto; }
+      .dark { background: #fff; color: #000; border: solid #000; border-width: 2px 0; }
+      .dark .number, .dark .eyebrow, .dark h2, .verdict strong, .verdict p, .truth-note, .claim-list li, .closing p, .glossary dt, .glossary dd { color: #000; }
+      a { color: #000; }
+      details > div { display: block !important; }
+      details summary { display: none; }
+      .receipt, .verdict, .repo, .lane, .week, tr, pre, h2, h3 { break-inside: avoid; }
+      .verdict { border: 1px solid #777; }
+      .claim-list li::before { color: #000; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to orientation</a>
+  <header class="utility">
+    <div class="utility-inner">
+      <div class="identity"><strong>usabl</strong><span>team orientation</span><span class="version">v0.1.0</span></div>
+      <nav aria-label="Orientation route"><ol class="route"><li><a href="#understand">Understand</a></li><li><a href="#try">Try</a></li><li><a href="#contribute">Contribute</a></li><li><a href="#demo">Demo</a></li></ol></nav>
+    </div>
+  </header>
+  <main id="main">
+    <section class="section hero" id="understand" aria-labelledby="hero-title">
+      <div class="number" aria-hidden="true">01</div>
+      <div class="body hero-grid">
+        <div><p class="eyebrow">Start here</p><h1 id="hero-title">Prove the accessibility change before we call it done.</h1><p class="lede">usabl checks the user interface affected by an accessibility change. It reports what passed, what regressed, what it could not cover, and when a human must decide.</p><p>The AI can suggest an accessibility fix. It does not get to grade its own work.</p><div class="actions"><a class="action primary" href="guides/proof-loop.md">Run the proof loop</a><a class="action" href="how-usabl-works.html">Learn how usabl works</a><a class="action" href="#contribute">Choose your contribution lane</a></div></div>
+        <aside class="receipt" aria-label="Example verified receipt">
+          <div class="receipt-head"><span class="receipt-verdict">✓ VERIFIED</span><span class="receipt-note">re-checkable<br>exact code state</span></div>
+          <dl><div class="receipt-row"><dt>Source tree</dt><dd>Bound to committed content</dd></div><div class="receipt-row"><dt>Coverage</dt><dd>Affected surfaces checked</dd></div><div class="receipt-row"><dt>Providers</dt><dd>axe, PatternFly, keyboard walk</dd></div><div class="receipt-row"><dt>Policy</dt><dd>Bound to trusted rules</dd></div><div class="receipt-row"><dt>Meaning</dt><dd>No new deterministic barrier in checked coverage</dd></div></dl>
+        </aside>
+      </div>
+    </section>
+    <div class="dark">
+      <section class="section" aria-labelledby="answers-title"><div class="number" aria-hidden="true">02</div><div class="body"><p class="eyebrow">The result model</p><h2 id="answers-title">The result states what usabl checked.</h2>
+        <p class="idle-note"><strong>○ Idle state:</strong> no relevant interface changed, so no check was needed and no verdict was issued.</p>
+        <div class="verdicts" role="list"><div class="verdict" role="listitem"><strong class="verified">✓ Verified</strong><p>The required checks found no new barrier in the screens they covered.</p></div><div class="verdict" role="listitem"><strong class="regression">× Regression</strong><p>A required check found a new accessibility barrier.</p></div><div class="verdict" role="listitem"><strong class="not-covered">? Not covered</strong><p>One or more required screens or checks could not run.</p></div><div class="verdict" role="listitem"><strong class="approval">! Approval required</strong><p>Trusted policy or gate code changed. A human owner must review it.</p></div></div>
+        <p class="truth-note"><strong>Why this matters:</strong> a tool that silently skips a screen can look green while knowing less. usabl reports missing coverage as work the team must resolve.</p>
+      </div></section>
+    </div>
+    <section class="section" aria-labelledby="system-title"><div class="number" aria-hidden="true">03</div><div class="body"><p class="eyebrow">How it works</p><h2 id="system-title">Many checks. One decision. One result.</h2><p class="lede">The command line, app overlay, AI check, and pull request all show the same accessibility decision. <a href="how-usabl-works.html">Read the full system guide</a> to see how coverage, evidence, the gate, receipts, and surfaces connect.</p>
+      <div class="system"><div class="node"><span class="node-label">Providers</span><h3>Collect evidence</h3><ul><li>axe WCAG checks</li><li>PatternFly rules</li><li>Keyboard walk</li></ul></div><div class="arrow" aria-hidden="true">→</div><div class="node"><span class="node-label">Gate</span><h3>Decide once</h3><p>Checks coverage and policy, then compares new barriers with the accepted baseline.</p></div><div class="arrow" aria-hidden="true">→</div><div class="node result"><span class="node-label">Result</span><h3>Carry one result</h3><p>Verdict, findings, coverage, evidence, exit code, and receipt.</p></div><div class="arrow" aria-hidden="true">→</div><div class="node"><span class="node-label">Surfaces</span><h3>Show or enforce</h3><ul><li>Local command</li><li>AI completion check</li><li>In-app overlay</li><li>PR comment and CI</li></ul></div></div>
+      <p class="rule"><strong>The invariant:</strong> providers return evidence drafts. The gate is the only part of usabl allowed to mint a verdict or verified receipt.</p>
+    </div></section>
+    <section class="section" id="try" aria-labelledby="loop-title"><div class="number" aria-hidden="true">04</div><div class="body"><p class="eyebrow">The hero loop</p><h2 id="loop-title">One accessibility change. One proof loop.</h2><p class="lede">The fixture contains a real PatternFly modal focus regression. Follow the <a href="guides/proof-loop.md">step-by-step proof-loop guide</a> to experience it, run usabl, repair the focus behavior, and verify the exact new code state.</p>
+      <div class="proof-loop"><article class="proof-step"><h3>Feel the defect</h3><p>Open cluster details. Press Escape. Focus does not return to the trigger.</p></article><article class="proof-step"><h3>Run usabl</h3><p>From <code>usabl-app</code>, run <code>npx usabl check</code>.</p></article><article class="proof-step"><h3>Read the result</h3><p>Expect <code>regression</code>, rule <code>pf-modal-focus-return</code>, and exit code 1.</p></article><article class="proof-step"><h3>Repair focus</h3><p>Restore <code>triggerEl.focus()</code> when the modal closes.</p></article><article class="proof-step"><h3>Run it again</h3><p>The same engine checks the changed source and affected screen.</p></article><article class="proof-step"><h3>Verify proof</h3><p>Expect <code>verified</code> and a receipt bound to that source tree.</p></article></div>
+      <div class="evidence-grid"><pre class="evidence" aria-label="Expected command flow"><code><span class="blue">usabl-app $</span> npx usabl check
+verdict: <span class="red">REGRESSION</span>
+rule: pf-modal-focus-return
+exit: 1
+
+<span class="blue">usabl-app $</span> npx usabl check
+verdict: <span class="green">VERIFIED</span>
+receipt: bound to source tree
+exit: 0</code></pre><div class="behavior"><div><strong class="regression">Before</strong><p>Escape closes the dialog. Keyboard focus is lost.</p></div><div class="arrow" aria-hidden="true">→</div><div><strong class="verified">After</strong><p>Focus returns to “View cluster details.”</p></div></div></div>
+      <p class="rule"><strong>Do it yourself:</strong> the <a href="guides/proof-loop.md">proof-loop guide</a> has the prerequisites, exact commands, expected output, repair, and verification checks.</p>
+    </div></section>
+    <section class="section" aria-labelledby="repos-title"><div class="number" aria-hidden="true">05</div><div class="body"><p class="eyebrow">Know the workspace</p><h2 id="repos-title">Three repositories. Three clear jobs.</h2>
+      <div class="repo-grid"><article class="repo"><span class="repo-name">usabl</span><p class="repo-purpose">The proof engine, providers, gate, receipts, surfaces, tests, and product documentation.</p><dl><div class="repo-row"><dt>Work here when</dt><dd>You change how evidence is collected, decided, secured, or shown.</dd></div><div class="repo-row"><dt>Primary check</dt><dd><code>npm run check</code></dd></div></dl></article><article class="repo"><span class="repo-name">usabl-app</span><p class="repo-purpose">The PatternFly 6 fixture that makes the defect, overlay, integration, and demo tangible.</p><dl><div class="repo-row"><dt>Work here when</dt><dd>You add a scenario, refine the demo, or test an integration.</dd></div><div class="repo-row"><dt>Primary checks</dt><dd><code>npm test</code> and <code>npm run build</code></dd></div></dl></article><article class="repo"><span class="repo-name">usabl-plans</span><p class="repo-purpose">Product decisions, phased architecture, team roles, quality bar, and contest record.</p><dl><div class="repo-row"><dt>Work here when</dt><dd>You update an agreed plan, decision, ownership rule, or verified history.</dd></div><div class="repo-row"><dt>Boundary</dt><dd>Plans do not ship inside the product package.</dd></div></dl></article></div>
+      <h3>What the four surfaces do</h3><div class="table-scroll" tabindex="0" role="region" aria-label="Four product surfaces"><table><thead><tr><th scope="col">Surface</th><th scope="col">Enforces</th><th scope="col">Use it for</th><th scope="col">Important behavior</th></tr></thead><tbody><tr><th scope="row">CLI</th><td>Yes, by exit code</td><td>Direct checks while working</td><td><code>npx usabl check</code> is the main entry point.</td></tr><tr><th scope="row">Overlay</th><td>No, advisory</td><td>Fast feedback in the running app</td><td><code>?usabl=off</code> hides it. Automated browser sessions skip it.</td></tr><tr><th scope="row">Stop hook</th><td>Yes, for the AI</td><td>Prevent an assistant from calling a regression done</td><td>The assistant must stop and report the regression. A continued session receives the result without getting trapped.</td></tr><tr><th scope="row">PR and CI</th><td>Yes, when required</td><td>Trusted review against the protected base</td><td>Policy comes from the protected base, not the pull request.</td></tr></tbody></table></div>
+    </div></section>
+    <section class="section" id="contribute" aria-labelledby="lanes-title"><div class="number" aria-hidden="true">06</div><div class="body"><p class="eyebrow">Everyone can contribute</p><h2 id="lanes-title">Pick your lane.</h2><p class="lede">You do not need to write engine code to improve accessibility proof. Choose how you can judge, test, explain, or strengthen the product. The <a href="guides/README.md">team guide index</a> gives you the exact steps.</p>
+      <div class="lanes"><article class="lane"><span class="lane-index">LANE 01</span><h3>Product testing</h3><dl><dt>Start here</dt><dd>Run or observe the hero loop. Note what surprises you.</dd><dt>First contribution</dt><dd>File one reproducible issue with steps and expected result.</dd></dl></article><article class="lane"><span class="lane-index">LANE 02</span><h3>Accessibility review</h3><dl><dt>Start here</dt><dd>Use keyboard and a screen reader on the fixture.</dd><dt>First contribution</dt><dd>Record one missed barrier, false result, or coverage gap.</dd></dl></article><article class="lane"><span class="lane-index">LANE 03</span><h3>UX and content</h3><dl><dt>Start here</dt><dd>Read every result as a first-time user.</dd><dt>First contribution</dt><dd>Improve one explanation without weakening its meaning.</dd></dl></article><article class="lane"><span class="lane-index">LANE 04</span><h3>Engineering</h3><dl><dt>Start here</dt><dd>Read <code>CONTRIBUTING.md</code>, build, and run tests.</dd><dt>First contribution</dt><dd>Fix one issue with a failing test first.</dd></dl></article><article class="lane"><span class="lane-index">LANE 05</span><h3>Demo and story</h3><dl><dt>Start here</dt><dd>Practice the defect, result, fix, and receipt.</dd><dt>First contribution</dt><dd>Remove one confusing step or add visible proof.</dd></dl></article><article class="lane"><span class="lane-index">LANE 06</span><h3>Project operations</h3><dl><dt>Start here</dt><dd>Review outcomes, risks, and owner gaps.</dd><dt>First contribution</dt><dd>Own one exit criterion and keep evidence current.</dd></dl></article></div>
+    </div></section>
+    <section class="section" aria-labelledby="hour-title"><div class="number" aria-hidden="true">07</div><div class="body"><p class="eyebrow">From orientation to action</p><h2 id="hour-title">Make your first contribution.</h2>
+      <ol class="first-hour"><li><strong>Understand the system</strong><span>Read <a href="how-usabl-works.html">How usabl works</a>.</span></li><li><strong>Run the accessibility proof</strong><span>Follow the <a href="guides/proof-loop.md">proof-loop guide</a>.</span></li><li><strong>Test accessibility behavior</strong><span>Use the <a href="guides/test-and-report.md">testing and reporting guide</a>.</span></li><li><strong>Make the work visible</strong><span>Follow the <a href="guides/make-a-contribution.md">contribution guide</a> or <a href="guides/rehearse-demo.md">demo guide</a>.</span></li></ol><p class="outcome">Outcome: you can explain what usabl proves, run or observe the accessibility proof loop, and start a useful contribution.</p>
+      <details><summary>Pull request hygiene for contributors</summary><div class="two-col"><div><h3>Before opening</h3><ul><li>Cut a focused branch from current <code>main</code>.</li><li>Write a failing test first for behavior changes.</li><li>Use Conventional Commits.</li><li>Run <code>pre-commit run --all-files</code> and <code>npm run check</code>.</li><li>Do not skip hooks or add AI co-author trailers.</li></ul></div><div><h3>Before merge</h3><ul><li>Explain the pull request in one sentence.</li><li>Complete the summary, test plan, and AI note.</li><li>Get independent engineering and security review.</li><li>Let the founder make the merge decision.</li><li>Use squash merge only.</li></ul></div></div></details>
+    </div></section>
+    <section class="section" id="demo" aria-labelledby="weeks-title"><div class="number" aria-hidden="true">08</div><div class="body"><p class="eyebrow">Three weeks to the contest</p><h2 id="weeks-title">Finish around proof, not feature count.</h2><p class="lede">Each week ends with something the team can run, inspect, and repeat.</p>
+      <div class="weeks"><article class="week"><span class="week-number">WEEK 2</span><h3>Harden and onboard</h3><ul><li>Merge package hardening after review.</li><li>Get every teammate through orientation.</li><li><a href="guides/proof-loop.md">Run the accessibility proof loop</a> from a clean clone.</li><li>Own every onboarding issue.</li></ul><p><strong>Exit:</strong> another teammate can guide the loop without the builder.</p></article><article class="week"><span class="week-number">WEEK 3</span><h3>Test and sharpen</h3><ul><li><a href="guides/test-and-report.md">Test and report</a> keyboard and screen-reader behavior.</li><li>Resolve high-impact false results and gaps.</li><li>Make all four surfaces agree.</li><li>Freeze the scenario and claim set.</li></ul><p><strong>Exit:</strong> the accessibility proof survives skeptical team testing.</p></article><article class="week"><span class="week-number">WEEK 4</span><h3>Rehearse and prove</h3><ul><li><a href="guides/rehearse-demo.md">Practice the live demo</a> to time.</li><li>Capture backup evidence.</li><li>Rehearse failure recovery and handoffs.</li><li>Freeze candidates and verify receipts.</li></ul><p><strong>Exit:</strong> two people can deliver and recover the demo.</p></article></div>
+    </div></section>
+    <div class="dark"><section class="section" aria-labelledby="claims-title"><div class="number" aria-hidden="true">09</div><div class="body"><p class="eyebrow">Claim boundary</p><h2 id="claims-title">Say exactly what v0.1.0 proves.</h2>
+      <div class="claims"><div><h3>What we can claim</h3><ul class="claim-list can"><li>usabl evaluates affected user interface surfaces.</li><li>One gate calculates the result used by every surface.</li><li>Verified evidence is tied to exact code, policy, and runner.</li><li>Missing coverage becomes <code>not_covered</code>.</li><li>The demo proves a real focus regression and repair.</li></ul></div><div><h3>What we cannot claim</h3><ul class="claim-list cannot"><li>We do not guarantee accessibility outside executed coverage.</li><li>We do not replace disabled users or accessibility experts.</li><li>We do not claim legal compliance.</li><li>Preview and model judgment do not mint receipts.</li><li>v0.1.0 is a private team preview.</li></ul></div></div>
+      <div class="closing"><div><h3>Feedback that helps</h3><p>Name the surface, result seen, expected result, exact steps, and whether the output was honest or confusing.</p><p><a href="https://github.com/usabl-dev/usabl/issues/new?template=feedback.yml">Open the usabl feedback form</a> or bring the observation to the team channel.</p></div><div><h3>Mini glossary</h3><dl class="glossary"><dt>Provider</dt><dd>A check that returns evidence drafts.</dd><dt>Gate</dt><dd>The only component that decides a verdict.</dd><dt>Coverage</dt><dd>The screens and checks usabl could exercise.</dd><dt>Receipt</dt><dd>Proof bound to exact code and policy.</dd><dt>Surface</dt><dd>Where the canonical Result is shown or enforced.</dd><dt>Ratchet</dt><dd>Blocks new debt without claiming old debt is fixed.</dd></dl></div></div>
+    </div></section></div>
+  </main>
+</body>
+</html>

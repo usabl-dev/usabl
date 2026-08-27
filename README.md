@@ -18,9 +18,11 @@ The AI can suggest fixes. It does not get to grade its own work.
 
 ## Status
 
-Team preview (v0.1.0). Teammates can clone, run the loop, and file feedback.
+Team preview (v0.1.0). Teammates can learn the product, run the loop, choose a
+contribution lane, and file feedback.
 
-See [docs/team-preview.md](docs/team-preview.md) for the internal runbook.
+Start with the [team orientation](docs/team-orientation.html). The
+[team preview runbook](docs/team-preview.md) is the compact technical reference.
 
 ## Quick start
 
