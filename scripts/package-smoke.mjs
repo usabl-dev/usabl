@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -99,7 +99,27 @@ try {
   assert.equal(refused.status, 2, failure('installed usabl CI refusal', refused));
   assert.match(refused.stderr, /CI mode requires --trusted-ref/);
 
-  process.stdout.write('usabl package smoke: installed CLI produced, projected, and enforced a Result.\n');
+  const installedPackage = join(consumer, 'node_modules', 'usabl');
+  const installedStopHook = join(installedPackage, 'dist', 'stop-hook-runner.js');
+  const directHook = run(process.execPath, [installedStopHook], {
+    cwd: consumer,
+    input: '{invalid-json}',
+  });
+  assert.equal(directHook.status, 0, failure('installed Stop hook', directHook));
+  assert.match(directHook.stderr, /NOT verified - invalid stop hook input JSON/);
+
+  const linkedPackage = join(consumer, 'linked-usabl');
+  await symlink(installedPackage, linkedPackage, 'dir');
+  const linkedHook = run(process.execPath, [join(linkedPackage, 'dist', 'stop-hook-runner.js')], {
+    cwd: consumer,
+    input: '{invalid-json}',
+  });
+  assert.equal(linkedHook.status, 0, failure('linked Stop hook', linkedHook));
+  assert.match(linkedHook.stderr, /NOT verified - invalid stop hook input JSON/);
+
+  process.stdout.write(
+    'usabl package smoke: installed CLI and direct or linked Stop hooks executed.\n',
+  );
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }

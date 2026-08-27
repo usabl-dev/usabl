@@ -291,15 +291,3 @@ async function readStdin(): Promise<string> {
 export async function main(): Promise<number> {
   return runStopHookFromStdin(await readStdin());
 }
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main()
-    .then((code) => {
-      process.exit(code);
-    })
-    .catch((err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`NOT verified - stop hook error: ${message}\n`);
-      process.exit(0);
-    });
-}
