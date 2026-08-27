@@ -115,6 +115,11 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         }
         seenPaths.add(path);
 
+        // Browsers move focus to the document body after the last Tab stop and
+        // before cycling to the first control. That ends the walk. It is not an
+        // unnamed focusable element.
+        if (await ctx.page.activeElementIs('body')) break;
+
         const node = await ctx.page.activeNode();
         if (node === null) {
           drafts.push(unconfirmedFocusDraft(ctx.screen.id, path));
