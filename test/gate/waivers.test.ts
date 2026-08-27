@@ -33,6 +33,12 @@ describe('gate waivers', () => {
     expect(out.verdict).toBe('regression');
   });
 
+
+  it('treats a waiver as expired when expires equals now', () => {
+    const out = gate({ ...base, waivers: [waiver({ expires: '2026-06-01T00:00:00.000Z' })], now: '2026-06-01T00:00:00.000Z' });
+    expect(out.findings.find((f) => f.rule === 'color-contrast')!.status).toBe('new');
+    expect(out.verdict).toBe('regression');
+  });
   it('matches a wildcard scope for the whole rule on the surface', () => {
     const out = gate({ ...base, waivers: [waiver({ scope: '*' })], now: '2026-06-01T00:00:00.000Z' });
     expect(out.verdict).toBe('verified');
