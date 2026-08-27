@@ -4,6 +4,9 @@
  * Missing HEAD blobs return null so the guard can disclose not-covered work honestly.
  */
 import { execFile } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { GitReader } from '../contracts/index.js';
 
@@ -105,11 +108,12 @@ function parseNameOnly(output: string): string[] {
   return [...names];
 }
 
-async function runGit(cwd: string, args: string[]): Promise<string> {
+async function runGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   const { stdout } = await execFileAsync('git', args, {
     cwd,
     encoding: 'utf8',
     maxBuffer: 10 * 1024 * 1024,
+    env: env === undefined ? process.env : { ...process.env, ...env },
   });
   return stdout;
 }
@@ -152,7 +156,15 @@ export function makeGitReader(options: { cwd?: string } = {}): GitReader {
       return parseLsFiles(output);
     },
     async writeTree() {
-      return (await runGit(cwd, ['write-tree'])).trim();
+      const tempDir = await mkdtemp(join(tmpdir(), 'usabl-index-'));
+      const env = { GIT_INDEX_FILE: join(tempDir, 'index') };
+      try {
+        await runGit(cwd, ['read-tree', 'HEAD'], env);
+        await runGit(cwd, ['add', '-A', '--', '.'], env);
+        return (await runGit(cwd, ['write-tree'], env)).trim();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
     },
     async headRef() {
       return (await runGit(cwd, ['rev-parse', 'HEAD'])).trim();
