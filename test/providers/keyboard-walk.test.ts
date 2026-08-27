@@ -139,6 +139,20 @@ describe('makeKeyboardWalkProvider', () => {
     });
   });
 
+  it('stops without a finding when Tab returns focus to the document body', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 1 });
+    const page = await makeScriptedPage({
+      activePaths: ['html > body:nth-child(2)'],
+      activeNodes: [null],
+      announcements: [[]],
+    });
+    page.activeElementIs = async (selector) => selector === 'body';
+
+    const drafts = await provider.run(makeContext(page));
+
+    expect(drafts).toEqual([]);
+  });
+
   it('emits fail draft for unnamed interactive role reached by Tab', async () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 1 });
     const page = await makeScriptedPage({
