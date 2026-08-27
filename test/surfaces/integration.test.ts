@@ -90,6 +90,61 @@ describe('surface integration projections', () => {
     expect(helper.verdict).toBe('regression');
   });
 
+  it('keeps gate-owned finding identity and receipt binding in the overlay projection', () => {
+    const fixedFindings: Result['findings'] = baseResult({}).findings.map((finding) => ({
+      ...finding,
+      status: 'fixed',
+    }));
+    const verified = baseResult({
+      verdict: 'verified',
+      summary: 'verified: 0 gating finding(s)',
+      exitCode: 0,
+      findings: fixedFindings,
+      coverage: {
+        changedFiles: ['src/app.tsx'],
+        affected: [
+          {
+            screenId: 'clusters',
+            url: 'http://127.0.0.1:5173/clusters',
+            provenance: 'route-graph',
+          },
+        ],
+        unresolvedFiles: [],
+        gaps: [],
+        nothingToCheck: false,
+      },
+    });
+
+    const overlay = projectOverlay(verified);
+    const finding = overlay.findings[0];
+
+    expect(overlay.exitCode).toBe(verified.exitCode);
+    expect(overlay.coverage.affected).toEqual(verified.coverage.affected);
+    expect(finding).toEqual(
+      expect.objectContaining({
+        rule: 'color-contrast',
+        screenId: 'clusters',
+        layer: 'axe',
+        severity: 'serious',
+        status: 'fixed',
+        confidence: 'fail',
+        identityBasis: 'name',
+      }),
+    );
+    expect(finding?.elementKey).toContain('k');
+    expect(overlay.receipt).toEqual(
+      expect.objectContaining({
+        sourceTree: 'tree-abc',
+        policyHash: 'policy-123',
+        runnerVersion: '0.0.0-test',
+        checkedScreens: ['clusters'],
+        activeWaivers: 0,
+      }),
+    );
+    expect(overlay.advisory).toBe(true);
+    expect(overlay.displayExitCode).toBe(0);
+  });
+
   it('scrubs poison tokens at every projection egress', () => {
     const regression = baseResult({ verdict: 'regression', exitCode: 1 });
     const cliProjection = projectCli(regression);

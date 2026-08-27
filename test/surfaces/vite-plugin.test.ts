@@ -77,6 +77,154 @@ describe('projectOverlay', () => {
     ]);
     expect(JSON.stringify(overlay.findings)).not.toContain('SECRETPOISON');
   });
+
+  it('projects the complete gate-owned inspector contract', () => {
+    const finding: Result['findings'][number] = {
+      rule: 'pf-focus-into-dialog',
+      layer: 'pf',
+      severity: 'serious',
+      evidenceClass: 'deterministic',
+      screenId: 'clusters',
+      elementPath: '#cluster-details',
+      elementName: 'View cluster details',
+      role: 'button',
+      whatUserExperiences: 'Focus stays behind the dialog.',
+      why: 'The dialog focus lifecycle is incomplete.',
+      fix: 'Move focus into the dialog when it opens.',
+      evidence: {},
+      confidence: 'fail',
+      elementKey: 'clusters|pf-focus-into-dialog|name:view-cluster-details',
+      identityBasis: 'name',
+      status: 'new',
+    };
+    const overlay = projectOverlay(
+      baseResult({
+        verdict: 'regression',
+        exitCode: 1,
+        coverage: {
+          changedFiles: ['src/pages/Clusters.tsx'],
+          affected: [
+            {
+              screenId: 'clusters',
+              url: 'http://127.0.0.1:5173/clusters',
+              provenance: 'route-graph',
+              importChain: ['src/pages/Clusters.tsx', 'src/components/DemoModal.tsx'],
+            },
+          ],
+          unresolvedFiles: ['src/pages/Unknown.tsx'],
+          gaps: [{ ref: 'clusters', state: 'not-covered', reason: 'browser unavailable' }],
+          nothingToCheck: false,
+        },
+        findings: [finding],
+        receipt: null,
+        dirtyGuardedPaths: [],
+      }),
+    );
+    const verifiedOverlay = projectOverlay(
+      baseResult({
+        verdict: 'verified',
+        exitCode: 0,
+        findings: [{ ...finding, status: 'fixed' }],
+        receipt: {
+          schemaVersion: 1,
+          sourceTree: 'abcdef1234567890',
+          baseRevision: 'base123',
+          policyHash: 'policy123',
+          runnerVersion: '0.1.0',
+          scannerVersions: { axeCore: '4.13.0', playwright: '1.62.1', chromium: '140' },
+          surfaces: ['cli', 'vite'],
+          coverage: { checked: ['clusters'], notCovered: [] },
+          verdict: 'verified',
+          findingsSummary: { new: 0, carried: 0, fixed: 2, unverified: 0 },
+          activeWaivers: 0,
+          mintedAt: '2026-08-27T00:00:00.000Z',
+        },
+        dirtyGuardedPaths: [],
+      }),
+    );
+    const approvalOverlay = projectOverlay(
+      baseResult({
+        verdict: 'approval_required',
+        exitCode: 2,
+        findings: [],
+        receipt: null,
+        dirtyGuardedPaths: ['usabl.config.json'],
+      }),
+    );
+
+    expect(overlay.exitCode).toBe(1);
+    expect(overlay.coverage).toEqual({
+      affected: [
+        {
+          screenId: 'clusters',
+          url: 'http://127.0.0.1:5173/clusters',
+          provenance: 'route-graph',
+          importChain: ['src/pages/Clusters.tsx', 'src/components/DemoModal.tsx'],
+        },
+      ],
+      unresolvedFiles: ['src/pages/Unknown.tsx'],
+      gaps: [{ ref: 'clusters', state: 'not-covered', reason: 'browser unavailable' }],
+    });
+    expect(overlay.findings[0]).toEqual(
+      expect.objectContaining({
+        rule: 'pf-focus-into-dialog',
+        screenId: 'clusters',
+        layer: 'pf',
+        severity: 'serious',
+        evidenceClass: 'deterministic',
+        status: 'new',
+        confidence: 'fail',
+        identityBasis: 'name',
+      }),
+    );
+    expect(verifiedOverlay.receipt).toEqual(
+      expect.objectContaining({
+        sourceTree: 'abcdef1234567890',
+        policyHash: 'policy123',
+        runnerVersion: '0.1.0',
+        checkedScreens: ['clusters'],
+        activeWaivers: 0,
+      }),
+    );
+    expect(approvalOverlay.dirtyGuardedPaths).toEqual(['usabl.config.json']);
+    expect(overlay.advisory).toBe(true);
+    expect(overlay.displayExitCode).toBe(0);
+  });
+
+  it('frames page-derived finding text before browser egress', () => {
+    const overlay = projectOverlay(
+      baseResult({
+        findings: [
+          {
+            rule: 'button-name',
+            layer: 'axe',
+            severity: 'serious',
+            evidenceClass: 'deterministic',
+            screenId: 'clusters',
+            elementPath: '#token=SECRETPOISON',
+            elementName: 'token=SECRETPOISON',
+            role: 'button',
+            whatUserExperiences: 'token=SECRETPOISON has no accessible name',
+            why: 'A button needs an accessible name.',
+            fix: 'Add an accessible name.',
+            evidence: {},
+            confidence: 'fail',
+            elementKey: 'clusters|button-name|name:token=SECRETPOISON',
+            identityBasis: 'name',
+            status: 'new',
+          },
+        ],
+      }),
+    );
+    const finding = overlay.findings[0];
+
+    expect(finding?.elementPath).toContain('[BEGIN UNTRUSTED PAGE TEXT');
+    expect(finding?.elementName).toContain('[BEGIN UNTRUSTED PAGE TEXT');
+    expect(finding?.role).toContain('[BEGIN UNTRUSTED PAGE TEXT');
+    expect(finding?.elementKey).toContain('[BEGIN UNTRUSTED PAGE TEXT');
+    expect(finding?.whatUserExperiences).toContain('[BEGIN UNTRUSTED PAGE TEXT');
+    expect(JSON.stringify(finding)).not.toContain('SECRETPOISON');
+  });
 });
 
 describe('singleFlight', () => {
