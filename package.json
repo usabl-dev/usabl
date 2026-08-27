@@ -1,8 +1,19 @@
 {
   "name": "usabl",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Accessibility proof engine",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usabl-dev/usabl.git"
+  },
+  "homepage": "https://github.com/usabl-dev/usabl",
+  "bugs": {
+    "url": "https://github.com/usabl-dev/usabl/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
     "usabl": "./dist/cli.js"
@@ -22,7 +33,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=22"
