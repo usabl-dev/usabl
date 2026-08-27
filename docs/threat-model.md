@@ -184,6 +184,23 @@ block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`
 
 ---
 
+## Accepted risk: app CI same-job fixture and checker
+
+`usabl-app` CI starts the pull request's `npm run dev` in the same job that runs
+the trusted checker. The checker binary is copied to `/opt/usabl-trusted` and
+made immutable, and the verdict is the captured process exit code matched to
+`Result.exitCode`. That holds the gate answer.
+
+It does not isolate the fixture process from the comment step. A hostile PR can
+still try to spoof the sticky comment or race a git ref between checkout and
+`--trusted-ref`. Accepted for the private team fixture. If the repository ever
+widens, split the trusted check into a job the pull request cannot start, and
+keep comment posting on that job's output only.
+
+**Status:** [x] Recorded. Not a contest blocker. Named fix is job separation.
+
+---
+
 ## License review
 
 | Dependency | License | Notes |

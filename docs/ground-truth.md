@@ -193,15 +193,17 @@ These make "easy to add later" real. They are non-negotiable constraints on the 
    None of them gets to decide the verdict. That stays with the gate.
 
 3. **Label each problem with what kind of evidence it is.** On every Draft, a label:
-   `deterministic` (a hard, repeatable check), `model-judgment` (an AI model's
-   assessment), or `human-confirmed` (something a person verified). During the contest
-   everything is `deterministic`. The label means we can add model-judgment checks later
-   without changing the data at all.
+   `deterministic` (a hard, repeatable check), `preview` (an approximation that is
+   useful in the loop but is not a screen reader), `model-judgment` (an AI model's
+   assessment), or `human-confirmed` (something a person verified). `preview` is a
+   fourth provenance class, not a fifth verdict. Word-matching announcement drafts are
+   `preview` by default. A human can promote a listed class in config; the engine never
+   promotes itself.
 
 4. **Only deterministic checks can produce a verified.** The gate filters on
-   `evidenceClass` before computing the verdict. Model-judgment findings are surfaced
-   but never count toward or against `verified`. One of them can never slip into a
-   verified answer by accident.
+   `evidenceClass` before computing the verdict. Preview, model-judgment, and
+   human-confirmed findings are surfaced but never count toward or against `verified`.
+   One of them can never slip into a verified answer by accident.
 
 5. **Give the page tool a few extra abilities now.** Even though we will not use them
    for the contest, the Page interface supports changing the zoom and window size,
@@ -279,8 +281,12 @@ sorted by a stable key before it is hashed or snapshotted.
 
 ```ts
 export type Severity = 'critical' | 'serious' | 'moderate' | 'minor';
-// `human-confirmed` is reserved. Contest produces only `deterministic`.
-export type EvidenceClass = 'deterministic' | 'model-judgment' | 'human-confirmed';
+// Evidence class is provenance, not authority. Preview and model-judgment never gate.
+export type EvidenceClass =
+  | 'deterministic'
+  | 'preview'
+  | 'model-judgment'
+  | 'human-confirmed';
 export type Verdict = 'verified' | 'regression' | 'not_covered' | 'approval_required';
 export type FactSource = 'ax-tree' | 'attribute';
 export type IdentityBasis = 'name' | 'structural' | 'count';
@@ -338,6 +344,7 @@ export interface ScreenScan {
   url: string;
   stops: TranscriptStop[];
   drafts: Draft[];
+  gaps: CoverageGap[];
 }
 
 export interface AffectedScreen {
@@ -347,10 +354,17 @@ export interface AffectedScreen {
   importChain?: string[];
 }
 
+export interface CoverageGap {
+  ref: string;
+  state: 'unresolved' | 'not-covered' | 'skipped' | 'capability-denied';
+  reason: string;
+}
+
 export interface Coverage {
   changedFiles: string[];
   affected: AffectedScreen[];
   unresolvedFiles: string[];
+  gaps: CoverageGap[];
   nothingToCheck: boolean;        // no UI-touching files; not a verdict
 }
 
@@ -370,18 +384,20 @@ export interface Receipt {
 }
 
 export interface Result {
-  verdict: Verdict | null;        // null iff coverage.nothingToCheck
+  schemaVersion: 'usabl.result.v1';
+  verdict: Verdict | null;        // null when idle or fail-open disclosure
   summary: string;                // for idle: "nothing to check"
   screens: ScreenScan[];
   coverage: Coverage;
   findings: Finding[];
   receipt: Receipt | null;
   dirtyGuardedPaths: string[];
-  exitCode: 0 | 1 | 2 | 3 | 4;
+  exitCode: 0 | 1 | 2 | 3 | 4 | 5;
 }
 
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
-// 3 not_covered; 4 unhandled error (fail open with disclosure).
+// 3 not_covered; 4 unhandled error (fail open with disclosure);
+// 5 reserved for an opt-in judgment soft-gate (off by default). The default install never emits 5.
 
 // Design intake
 export type RequirementKind = 'content' | 'flow' | 'doc';
@@ -638,10 +654,10 @@ their own.
 2. **Coverage.** If `nothingToCheck`, return `verdict: null`, exit 0, no browser, and
    a summary like "nothing to check (no UI-touching files)."
 3. **Run checks.** For every affected surface, run providers, collect Drafts. Do not
-   sample. If any affected surface cannot be fully exercised, `not_covered` — never
+   sample. If any affected surface cannot be fully exercised, `not_covered` - never
    mint a `verified` receipt on a partial scan.
 4. **Filter by evidenceClass.** Only Drafts with `evidenceClass === 'deterministic'`
-   participate in the verdict. Model-judgment and human-confirmed findings are
+   participate in the verdict. Preview, model-judgment, and human-confirmed findings are
    surfaced in the Result but do not block or enable `verified`.
 5. **Identity, dedup, differential, waivers.**
 6. **Verdict priority order:**
@@ -657,11 +673,12 @@ Every Finding gets `{ screenId, layer, rule, elementKey, identityBasis }`.
 
 Priority:
 
-1. **name** — a stable accessible name from evidence (survives markup churn).
-2. **structural** — role plus ordinal among same-role elements in the nearest labelled
-   region. Weaker than a name; stronger than a full CSS path.
-3. **count** — identity-weak. No per-element key. Compare `{screenId, layer, rule}` by
-   count.
+1. **name** - a stable accessible name from evidence (survives markup churn).
+2. **structural** - role plus the element path with nth-child indexes stripped.
+   Weaker than a name; stronger than a volatile CSS path.
+3. **count** - identity-weak. No per-element key. Compare `{screenId, rule}` by
+   count. The floor key omits layer so axe and PatternFly reports of the same
+   defect can collapse.
 
 Identity-weak rules are an allow-list of "this element has no accessible name" checks
 (`button-name` from axe, `pf-icon-button-name`). You cannot honestly key an unnamed
@@ -760,7 +777,7 @@ The canonical entry point. Runs coverage → providers → gate → `Result`. Pr
 exits with `exitCode`. Everything else is a wrapper.
 
 **Why it exists.** Brownfield adoption: a team can run `usabl check` against an
-existing PatternFly app the same way they would run axe or Lighthouse — get findings,
+existing PatternFly app the same way they would run axe or Lighthouse - get findings,
 establish an evidence floor, then turn on the stop hook and CI. It is scanner-shaped
 invocation, not scanner semantics: output is a full `Result` with verdict, differential,
 coverage honesty, and optional receipt minting.
@@ -768,11 +785,15 @@ coverage honesty, and optional receipt minting.
 **Typical uses:**
 
 - Local: `usabl check` on changed files or named surfaces.
+- First-run drafts: `usabl init` infers `usabl.config.json` and `usabl.routes.json`
+  from the app tree. It never calls the gate and never consumes the files it just
+  wrote. Unproven routes stay `entryFile: null`. Overwrite requires `--force`.
 - CI: workflow invokes CLI with `--trusted-ref`.
 - Library: stop hook, overlay, and optional MCP server import `run()` directly.
 
 Does not replace the stop hook for the AI-gating story. It enables the baseline pass
-that makes the ratchet meaningful.
+that makes the ratchet meaningful. The evidence floor is still operator-authored
+in v0.2.0; `usabl init` does not write `.usabl-evidence.json` or waivers.
 
 ### 11.2 Stop hook (headline)
 
