@@ -1,6 +1,9 @@
 /**
- * `run(deps, config)` is the whole engine sequencer: cover, guard, scan, gate, maybe receipt.
+ * `run(deps, config)` is the whole engine sequencer: guard, cover, scan, gate, maybe receipt.
  * It never decides a verdict. The gate does. This file only sequences injected I/O.
+ *
+ * Guard runs first. Diverged policy must not be parsed as coverage, floor, or waivers,
+ * because a crash would fail open (exit 4) instead of blocking as approval_required.
  *
  * Coverage mapping comes from the planner shared by tests and production code.
  * A local fallback mapper is forbidden because it could hide unmapped UI as idle.
@@ -126,8 +129,38 @@ async function readJson(read: (path: string) => Promise<string | null>, path: st
 export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}): Promise<Result> {
   try {
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
-    const discoveredCoverage = await computeCoverage(deps.fs, config, changed);
     const guardDivergedPaths = await checkGuard(deps, config, opts.trustedRef ?? 'HEAD');
+    if (guardDivergedPaths.length > 0) {
+      // Diverged guarded bytes are untrusted. Parsing them can throw and fail open.
+      const coverage: Coverage = {
+        changedFiles: changed,
+        affected: [],
+        unresolvedFiles: [],
+        gaps: [],
+        nothingToCheck: false,
+      };
+      const gated = gate({
+        coverage,
+        guardDivergedPaths,
+        drafts: [],
+        floor: EMPTY_FLOOR,
+        waivers: [],
+        now: deps.clock(),
+      });
+      return {
+        schemaVersion: 'usabl.result.v1',
+        verdict: gated.verdict,
+        summary: gated.summary,
+        screens: [],
+        coverage,
+        findings: gated.findings,
+        receipt: null,
+        dirtyGuardedPaths: guardDivergedPaths,
+        exitCode: gated.exitCode,
+      };
+    }
+
+    const discoveredCoverage = await computeCoverage(deps.fs, config, changed);
     const loadedRequirements = await loadRequirements(deps.fs, config);
     const intakePolicyPaths =
       loadedRequirements.ok
