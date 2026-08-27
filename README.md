@@ -21,7 +21,9 @@ The AI can suggest fixes. It does not get to grade its own work.
 Team preview (v0.1.0). Teammates can learn the product, run the loop, choose a
 contribution lane, and file feedback.
 
-Start with the [team orientation](docs/team-orientation.html). The
+Start with the
+[team orientation](https://usabl-dev.github.io/usabl/team-orientation.html) and
+[How usabl works](https://usabl-dev.github.io/usabl/how-usabl-works.html). The
 [team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md) is the complete operational walkthrough.
 
 ## Quick start
