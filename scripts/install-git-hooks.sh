@@ -22,8 +22,8 @@ fi
 # Install into .git/hooks even if the user has a global core.hooksPath. Hide
 # user/system gitconfig for this command only so pre-commit does not refuse.
 git config --local --unset-all core.hooksPath 2>/dev/null || true
-GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null pre-commit install --install-hooks
-GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null pre-commit install --hook-type commit-msg
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null pre-commit install --install-hooks >&2
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null pre-commit install --hook-type commit-msg >&2
 
 # Pin every clone to .git/hooks so a user-global hooksPath cannot replace the
 # team's hooks. Same command on every machine.
