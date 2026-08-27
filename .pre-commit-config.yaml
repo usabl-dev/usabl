@@ -3,6 +3,15 @@
 # CI re-runs these hooks so a skipped local install cannot land on main.
 
 repos:
+  - repo: local
+    hooks:
+      - id: approved-git-identity
+        name: approved Git identity
+        entry: node scripts/check-commit-identities.mjs --local
+        language: system
+        pass_filenames: false
+        always_run: true
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
