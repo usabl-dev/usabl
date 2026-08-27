@@ -1,15 +1,19 @@
 /**
  * Draft policy generation for first-run onboarding.
  * This unit infers config and route sidecars from the working tree.
- * It must never mint a verdict or consume the files it just wrote in the same run.
+ * It must never mint a verdict, write waivers or evidence, or consume the
+ * files it just wrote in the same run. A wrong mapping is worse than a gap.
  */
 import { posix } from 'node:path';
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
 import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
 
+// Init writes only these two drafts. Waivers stay human-authored judgment.
 const POLICY_FILES = ['usabl.config.json', 'usabl.routes.json'] as const;
 const VITE_CONFIG_CANDIDATES = ['vite.config.ts', 'vite.config.js', 'vite.config.mts', 'vite.config.mjs'];
 const ROUTER_CANDIDATES = ['src/App.tsx', 'src/App.jsx', 'src/routes.tsx', 'src/router.tsx'];
+// Seed guardedPaths to match the engine's always-guarded set so a first draft
+// cannot omit a ledger the gate later treats as trusted policy.
 const ALWAYS_GUARDED = [
   'usabl.config.json',
   'usabl.routes.json',
@@ -38,6 +42,8 @@ export interface WriteInitResult {
 }
 
 function screenIdFromUrl(url: string): string {
+  // Same identity rule as the route sidecar parser. Init must not invent a
+  // second screen-id scheme that later coverage planning cannot match.
   const trimmed = url.startsWith('/') ? url.slice(1) : url;
   if (trimmed.length === 0) return 'root';
   return trimmed.replace(/\//g, '-');
@@ -52,6 +58,8 @@ function parseVitePort(raw: string): number | null {
 }
 
 function parseLocalImports(raw: string): Map<string, string> {
+  // Only relative specifiers (starting with ".") can prove a local entry file.
+  // Package imports are left unmapped so init cannot guess across dependencies.
   const imports = new Map<string, string>();
   const named = /import\s+\{([^}]+)\}\s+from\s+['"](\.[^'"]+)['"]/g;
   for (const match of raw.matchAll(named)) {
@@ -84,11 +92,16 @@ function parseLocalImports(raw: string): Map<string, string> {
 }
 
 function isProvenRoutePath(path: string): boolean {
+  // Root-absolute app paths only. Relative nested paths would be rewritten as
+  // /child instead of /parent/child. Protocol-relative and @ URLs can leave
+  // the operator origin. Catch-alls are not screens.
   return path.startsWith('/') && !path.startsWith('//') && !path.includes('@') && path !== '*';
 }
 
 function parseRouteTags(raw: string): Array<{ path: string; component: string | null }> {
   const routes: Array<{ path: string; component: string | null }> = [];
+  // Self-closing tags only. Opening <Route> parents are layouts; inferring
+  // their children would require a nesting walk this draft does not claim.
   const tags = /<Route\b([^>]*?)\/>/g;
   for (const match of raw.matchAll(tags)) {
     const attrs = match[1];
@@ -115,6 +128,8 @@ async function resolveEntryFile(
   specifier: string,
 ): Promise<string | null> {
   const resolved = posix.normalize(posix.join(posix.dirname(routerFile), specifier));
+  // Stay inside the project tree. A `..` after normalize is an unproven path,
+  // not an entry file we are willing to attribute.
   if (resolved.startsWith('..') || posix.isAbsolute(resolved)) {
     return null;
   }
@@ -135,6 +150,8 @@ function surfaceUrl(baseUrl: string, routePath: string): string | null {
     const origin = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
     const expectedOrigin = new URL(baseUrl).origin;
     const resolved = new URL(routePath, origin);
+    // Same origin lock as coverage planning. A draft surface off the declared
+    // app origin would point later scans at the wrong host.
     if (resolved.origin !== expectedOrigin) {
       return null;
     }
@@ -146,6 +163,8 @@ function surfaceUrl(baseUrl: string, routePath: string): string | null {
 
 export async function inferInit(fs: InitFs): Promise<InitDraft> {
   const notes: string[] = [];
+  // Vite's default origin when server.port is absent. Call it out as a review
+  // note so the operator does not treat the fallback as a measured fact.
   let appBaseUrl = 'http://127.0.0.1:5173';
   let viteSource: string | null = null;
   for (const candidate of VITE_CONFIG_CANDIDATES) {
@@ -201,6 +220,8 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
           entryFile = await resolveEntryFile(fs, routerFile, specifier);
         }
       }
+      // Missing attribution stays null. Guessing an entry file would hide a
+      // coverage gap behind a mapping we cannot prove.
       if (entryFile !== null) {
         attributed += 1;
       } else {
@@ -277,6 +298,8 @@ export async function writeInitDrafts(
   draft: InitDraft,
   opts: { force: boolean },
 ): Promise<WriteInitResult> {
+  // Existing policy is operator-owned. Overwrite is explicit so init cannot
+  // clobber a reviewed sidecar during a later re-run.
   const refused: string[] = [];
   if (!opts.force) {
     for (const path of POLICY_FILES) {

@@ -1,3 +1,7 @@
+/**
+ * Init drafts must be proven from an in-memory app fixture, not from a
+ * checked-in usabl.config.json. Wrong attribution is a product failure.
+ */
 import { describe, expect, it } from 'vitest';
 import { parseCliArgs } from '../../src/surfaces/cli.js';
 import { inferInit, writeInitDrafts, type InitFs } from '../../src/init/index.js';

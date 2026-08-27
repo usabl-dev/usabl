@@ -1,6 +1,9 @@
 /**
- * CLI command implementation over `run()`.
- * The CLI never mints verdicts. It only parses args, runs the engine, and projects.
+ * CLI command implementation.
+ * Check, comment, and self-check project a gated Result from `run()`.
+ * `init` writes draft policy only and must return before `loadConfig` / `run`
+ * so this process cannot consume files it just generated.
+ * The CLI never mints verdicts.
  * Sample `usabl.config.json` URLs (`http://127.0.0.1:5173`) are the fixture app's
  * Vite origin, not a hardcoded engine target. The engine always reads operator config.
  */
@@ -121,6 +124,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   if (opts.command === 'init') {
+    // Init is a generator, not a check. Returning here keeps draft writes off
+    // the verdict path and prevents a same-run consume of the new sidecar.
     const globber = makeFsGlob();
     const initFs: InitFs = {
       readFile: globber.readFile,

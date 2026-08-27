@@ -58,6 +58,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
       continue;
     }
     if (token === '--force') {
+      // Init-only overwrite of draft policy files. This is not a gate bypass.
       force = true;
       continue;
     }
