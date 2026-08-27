@@ -327,7 +327,7 @@ export interface Finding extends Draft {
 }
 
 export interface AnnouncementToken {
-  kind: 'name' | 'role' | 'state';
+  kind: 'name' | 'role' | 'state' | 'live';
   text: string | null;
   fromTree: boolean;
   source: FactSource;
