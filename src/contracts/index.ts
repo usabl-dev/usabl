@@ -165,8 +165,8 @@ export interface Waiver {
   reason: string;
   owner: string;
   approvedBy: string;
-  created: string; // ISO
-  expires: string; // ISO; ignored once past
+  created: string; // ISO-8601 UTC (YYYY-MM-DDTHH:mm:ss.sssZ)
+  expires: string; // ISO-8601 UTC; ignored once past
 }
 export interface WaiverLedger {
   version: 1;

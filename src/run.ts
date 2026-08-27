@@ -27,6 +27,7 @@ import { computeCoverage } from './coverage/planner.js';
 import { gate } from './gate/index.js';
 import { mintReceipt } from './evidence/receipt.js';
 import { loadRequirements } from './intake/load.js';
+import { assertIso8601Utc } from './primitives/iso8601.js';
 import { checkGuard } from './trust/guard.js';
 
 const EMPTY_FLOOR: EvidenceFloor = { version: 1, entries: [] };
@@ -102,6 +103,8 @@ function parseWaiver(value: unknown): Waiver {
   if (typeof approvedBy !== 'string') throw new Error('waiver approvedBy must be a string');
   if (typeof created !== 'string') throw new Error('waiver created must be a string');
   if (typeof expires !== 'string') throw new Error('waiver expires must be a string');
+  assertIso8601Utc(created, 'waiver created');
+  assertIso8601Utc(expires, 'waiver expires');
 
   return { rule, surface, scope, reason, owner, approvedBy, created, expires };
 }
