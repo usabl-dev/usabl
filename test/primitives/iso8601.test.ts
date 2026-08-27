@@ -15,4 +15,8 @@ describe('assertIso8601Utc', () => {
   it('rejects a matching-shape invalid calendar date', () => {
     expect(() => assertIso8601Utc('2026-02-31T00:00:00.000Z', 'waiver created')).toThrow(/ISO-8601 UTC/);
   });
+
+  it('rejects an out-of-range month with the same actionable error', () => {
+    expect(() => assertIso8601Utc('2026-13-01T00:00:00.000Z', 'waiver expires')).toThrow(/ISO-8601 UTC/);
+  });
 });
