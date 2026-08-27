@@ -1,91 +1,58 @@
 # Rehearse the demo
 
-Use this guide to make the contest accessibility demo repeatable by two
-operators.
+Use the [usabl-app team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md) as the exact sequence. Do
+not copy its commands into another guide.
 
-Read [How usabl works](../how-usabl-works.html) before explaining the result,
-receipt, or product surfaces to an audience.
+Read [How usabl works](../how-usabl-works.html) before explaining the Result,
+receipt, or enforcement boundary.
 
 ## Demo outcome
 
 The audience should see:
 
-1. A real keyboard focus defect
-2. A regression result that matches the defect
-3. The code change that repairs it
-4. Correct browser behavior after the change
-5. A verified result and re-checkable receipt
-6. The same result shown on more than one surface
+1. Clear accessibility barriers in Deployments and Clusters.
+2. One eight-finding Regression across the browser, Claude, and pull request.
+3. The mid-session Claude check remain advisory.
+4. The Claude Stop hook and CI check block completion.
+5. The source repair change the actual accessibility behavior.
+6. A Verified Result and receipt bound to the repaired working tree.
 
-## Prepare
+## Rehearsal roles
 
-- Complete the [proof-loop guide](proof-loop.md).
-- Use known engine and app commit IDs.
-- Start from a clean workspace.
-- Confirm Node.js 22 and installed dependencies.
-- Confirm the fixture opens at `http://127.0.0.1:5173/clusters`.
-- Confirm the command produces a Result before rehearsal starts.
+- The primary operator drives the browser, Claude, terminal, and pull request.
+- The backup operator tracks time, checks expected evidence, and takes over when
+  a live step fails.
 
-## Assign two operators
+Both operators should complete the full runbook before the contest demo.
 
-- **Primary operator:** drives the browser, terminal, and code change.
-- **Backup operator:** tracks time, watches expected results, and takes over if a
-  live step fails.
+## Evidence to capture
 
-Both operators should be able to complete the full sequence.
+- The broken browser behavior and eight-finding inspector.
+- The Claude mid-session result and Stop hook block.
+- The failed pull request check and Regression comment.
+- The focused accessibility source diff.
+- The repaired browser behavior and Stop hook allow.
+- The passed pull request check and Verified receipt.
 
-## Rehearse the sequence
+Label every artifact with the app commit, engine commit, and Result. Do not use
+evidence from a different source state.
 
-| Step | Action | Proof on screen |
-| --- | --- | --- |
-| 1 | Open and close the broken modal | Focus does not return |
-| 2 | Run `npx usabl check` | Regression and `pf-modal-focus-return` |
-| 3 | Show the mapped source change | Default route selects fixed behavior |
-| 4 | Open and close the modal again | Focus returns to the trigger |
-| 5 | Run the check again | Verified result and receipt |
-| 6 | Show another surface | Overlay or PR comment matches the Result |
+## Recovery practice
 
-Record the time for each step. Cut explanation before cutting proof.
-
-## Capture backup evidence
-
-Capture these before the contest:
-
-- Screenshot or short recording of the broken focus path
-- Regression command output
-- The focused source diff
-- Screenshot or short recording of the fixed focus path
-- Verified command output and receipt
-- Trusted pull request comment when available
-
-Label every artifact with repository, commit ID, and result. Do not use an artifact
-from a different code state as live proof.
-
-## Practice failure recovery
-
-Rehearse these failures:
+Practice these cases:
 
 - The fixture does not start.
-- The browser opens the wrong route.
-- The command prints no Result.
-- The check returns `not_covered`.
-- The overlay is hidden.
+- The inspector is absent or Idle.
+- Claude does not load the project skill or Stop hook.
+- The Result is Not covered.
+- The pull request cannot check out the trusted engine.
 - The network is unavailable.
 
-For each failure, decide:
-
-1. What the operator says
-2. Which local backup artifact they show
-3. Whether the live demo continues or stops
-
-Never describe a failed or missing check as verified.
+For each case, state what is missing, choose the matching backup evidence, and
+decide whether the live demo can continue. Never describe a failed or missing
+check as Verified.
 
 ## Ready condition
 
-The demo is ready when:
-
-- Two people can deliver it within the time limit.
-- Both can explain all four verdicts and Idle.
-- Every live claim has visible evidence.
-- Backup artifacts match the rehearsed commits.
-- A failed live step has a practiced recovery.
+The demo is ready when two people can deliver it to time, explain every surface,
+show evidence for every claim, and recover from each practiced failure.
