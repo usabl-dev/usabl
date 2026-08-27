@@ -262,6 +262,7 @@ export interface Page {
   activeNode(): Promise<AxNode | null>;
   activePath(): Promise<string>;
   axAt(selector: string): Promise<AxNode | null>;
+  getAttribute(selector: string, name: string): Promise<string | null>;
   queryAll(selector: string): Promise<ElementRef[]>;
   close(): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;

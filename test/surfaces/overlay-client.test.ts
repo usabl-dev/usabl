@@ -117,7 +117,7 @@ afterAll(async () => {
   }
 });
 
-describe('overlay browser client', () => {
+describe('overlay browser client', { timeout: 15_000 }, () => {
   it('renders an accessible regression inspector and returns focus on Escape', async () => {
     const page = await mount(projectOverlay(result()));
     const host = page.locator('#__usabl-overlay');

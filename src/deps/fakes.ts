@@ -53,6 +53,7 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     activeNode: async () => null,
     activePath: async () => 'body',
     axAt: async () => null,
+    getAttribute: async () => null,
     queryAll: async () => [],
     close: async () => {},
     setViewport: async () => {},

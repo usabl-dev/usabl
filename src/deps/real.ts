@@ -339,6 +339,9 @@ function wrapPage(pw: PwPage, context: BrowserContext, cdp: CDPSession): Page {
       }
       return axFromBackendId(cdp, backendNodeId);
     },
+    async getAttribute(selector: string, name: string): Promise<string | null> {
+      return pw.locator(selector).getAttribute(name);
+    },
     async queryAll(selector: string): Promise<Array<{ selector: string }>> {
       const paths = await stablePathsForSelector(pw, selector);
       return paths.map((path) => ({ selector: path }));
