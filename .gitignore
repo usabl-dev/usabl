@@ -22,3 +22,6 @@ fleet-insights-session.json
 **/fleet-insights-session.json
 *.scrubbed.json
 fleet-insights-session/
+
+# Local GitHub Pages staging output
+.pages/
