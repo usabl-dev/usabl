@@ -843,7 +843,7 @@ before the Stop hook fires. The value is self-correction mid-task. The value is 
 **How it works (contest default).** The agent runs `usabl check` through the host's
 shell (Bash in Claude Code). Same `run()` → `Result` as every other surface. The Stop
 hook remains the gate; this path only advises the agent. The demo storyline (step 4)
-works with a CLI call on screen just as well as an MCP call — MCP is not load-bearing
+works with a CLI call on screen just as well as an MCP call - MCP is not load-bearing
 for the narrative.
 
 **MCP wrapper (optional transport).** Same engine, thin protocol adapter. Decide MCP
@@ -852,7 +852,7 @@ vs Bash-only on discoverability, not capability.
 | | **CLI via Bash** | **MCP tool** |
 |---|---|---|
 | **Pros** | No server, protocol, or registration work. Same Result. Zero extra transport to test. No page text flowing into agent context as structured tool output (lower prompt-injection surface than MCP). | First-class tool with description in Claude Code; model more likely to call at the right moment. Structured content the model handles natively instead of stdout to parse. |
-| **Cons** | Model may forget to self-check without prompting. Parses CLI text output. | Fourth transport over one engine (integration + test surface). Page-derived text (aria-labels, headings, errors) returns as tool output — prompt-injection surface the Stop hook does not open. Requires `neutralize()` and untrusted-data framing (section 17). |
+| **Cons** | Model may forget to self-check without prompting. Parses CLI text output. | Fourth transport over one engine (integration + test surface). Page-derived text (aria-labels, headings, errors) returns as tool output - prompt-injection surface the Stop hook does not open. Requires `neutralize()` and untrusted-data framing (section 17). |
 
 **Contest sequencing.** Ship CLI mid-task check with the hero loop. Add the MCP wrapper
 in the same window as stretch goals if reliable agent self-correction in the demo
