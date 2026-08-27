@@ -155,6 +155,35 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
 
 ---
 
+## Decision: Stop hook fail-open on exit 4
+
+After the guard runs before any coverage, floor, or waiver parse, a diverged
+guarded policy file (including corrupt JSON) is `approval_required` and the Stop
+hook blocks. Remaining `run()` exit 4 is an unhandled crash: git, filesystem,
+browser launch, or a parse failure of policy bytes that still match the trusted
+ref (so the guard does not short-circuit).
+
+**Attack if we blocked on exit 4:** a wedged Stop hook traps the operator in the
+session. They cannot continue, cannot easily recover, and may disable the hook
+entirely. That is a worse integrity outcome than an honest unverified allow.
+
+**Decision:** keep fail-open with disclosure.
+
+- `evaluateStopDecision` allows when `exitCode === 4`.
+- The operator sees `NOT verified` plus the crash summary. This is not idle and
+  not `verified`. No receipt is minted.
+- CI still fails the job on exit 4, so a crash cannot become a green merge.
+- The one-shot escape hatch remains `.usabl/bypass-once` (`usabl bypass`). It is
+  loud, consumed on the next stop, and is for emergencies, not a substitute for
+  this policy.
+
+**Not this decision:** `regression`, `not_covered`, and `approval_required` still
+block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`.
+
+**Status:** [x] Recorded. Matches the shipped Stop hook and runner error paths.
+
+---
+
 ## License review
 
 | Dependency | License | Notes |
