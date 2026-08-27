@@ -8,6 +8,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { run } from './run.js';
 import type { Result, SurfaceConfig, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
+import { makeFsGlob } from './deps/fs.js';
+import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
 import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli } from './surfaces/cli.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
@@ -108,9 +110,29 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 2;
   }
 
-  if (opts.command !== 'check' && opts.command !== 'comment' && opts.command !== 'bypass') {
+  if (
+    opts.command !== 'check' &&
+    opts.command !== 'comment' &&
+    opts.command !== 'bypass' &&
+    opts.command !== 'init'
+  ) {
     process.stderr.write(`unknown command: ${opts.command}\n`);
     return 2;
+  }
+
+  if (opts.command === 'init') {
+    const globber = makeFsGlob();
+    const initFs: InitFs = {
+      readFile: globber.readFile,
+      glob: globber.glob,
+      writeFile: async (path, contents) => {
+        await writeFile(path, contents, 'utf8');
+      },
+    };
+    const draft = await inferInit(initFs);
+    const result = await writeInitDrafts(initFs, draft, { force: opts.force });
+    process.stdout.write(formatInitReport(draft, result));
+    return result.ok ? 0 : 2;
   }
 
   if (opts.command === 'bypass') {
