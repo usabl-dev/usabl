@@ -16,6 +16,7 @@ import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
 import { loadRequirements } from '../intake/load.js';
 import { mapRequirementsToProviders } from '../intake/map-to-providers.js';
 import { overlayRequirementsFs } from '../intake/overlay-fs.js';
+import { resolveIntakeConfig } from '../intake/trusted-config.js';
 import { makeRealBrowserDriver } from './real.js';
 import { makeGitReader } from './git.js';
 import { makeFsGlob } from './fs.js';
@@ -93,8 +94,9 @@ export async function buildDeps(
   );
   const fs = makeFsGlob({ cwd });
   const git = makeGitReader({ cwd });
-  const intakeFs = overlayRequirementsFs(fs, git, config, options.trustedRef);
-  const loadedRequirements = await loadRequirements(intakeFs, config);
+  const intakeConfig = await resolveIntakeConfig(git, config, options.trustedRef);
+  const intakeFs = overlayRequirementsFs(fs, git, intakeConfig, options.trustedRef);
+  const loadedRequirements = await loadRequirements(intakeFs, intakeConfig);
   const providers = [
     axeProvider,
     makeRulepackProvider(),
@@ -121,7 +123,7 @@ export async function buildDeps(
     checkRunner: makeCheckRunner({
       browser,
       providers,
-      config,
+      config: intakeConfig,
       // Static-only mode denies live capability explicitly so the result records not-covered gaps.
       allowedCapabilities,
       stepRunner: makeStepRunner(),

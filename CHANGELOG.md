@@ -42,3 +42,6 @@ tag or publish to npm.
 - Fleet Insights measurement is runnable. It is not a verdict.
 - Requirement YAML intake is pinned to `--trusted-ref` so accessibility checks
   cannot self-grade against unapproved PR policy edits.
+- Intake provider wiring now resolves the requirements root from trusted-ref
+  `usabl.config.json`, which prevents PR-only path rewrites from dropping
+  baseline requirement checks.

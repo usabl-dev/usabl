@@ -29,6 +29,8 @@ re-baseline to green.
 
 - Verdicts computed against **committed** base config and committed
   requirements YAML from `--trusted-ref`, not working tree bytes.
+- The requirements root is also read from trusted-ref `usabl.config.json`, so a
+  PR cannot rewrite the requirements path to bypass baseline intake providers.
 - Config diff -> `approval_required`.
 - CODEOWNERS on policy paths in CI. The accessibility required check uses
   `accessibilityExitCode` (never 2). The policy required check passes only
