@@ -16,6 +16,7 @@ import type { UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
 import { makeFsGlob } from './deps/fs.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
+import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { makeGitReader } from './deps/git.js';
 import { parseUsablConfig } from './intake/config.js';
 import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
@@ -125,6 +126,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'comment' &&
     opts.command !== 'bypass' &&
     opts.command !== 'init' &&
+    opts.command !== 'baseline' &&
     opts.command !== 'enforce'
   ) {
     process.stderr.write(`unknown command: ${opts.command}\n`);
@@ -153,6 +155,32 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     await writeFile(BYPASS_ONCE_PATH, `${new Date().toISOString()}\n`, 'utf8');
     process.stdout.write('NOT verified - BYPASS set for the next stop only.\n');
     return 0;
+  }
+
+  if (opts.command === 'baseline') {
+    // Baseline is an explicit local generator. It writes only the floor draft and returns.
+    const config = await loadConfig(opts.configPath);
+    const deps = await buildDeps(config, {
+      ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
+    });
+    try {
+      const baselineFs: BaselineFs = {
+        writeFile: async (path, contents) => {
+          await writeFile(path, contents, 'utf8');
+        },
+      };
+      const outcome = await runBaseline(deps, config, baselineFs, {
+        ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
+      });
+      if (outcome.exitCode === 0) {
+        process.stdout.write(`${outcome.message}\n`);
+      } else {
+        process.stderr.write(`usabl: ${outcome.message}\n`);
+      }
+      return outcome.exitCode;
+    } finally {
+      await deps.browser.close();
+    }
   }
 
   if (opts.command === 'comment') {
