@@ -18,6 +18,8 @@ const baseResult = (over: Partial<Result>): Result => ({
   receipt: null,
   dirtyGuardedPaths: [],
   exitCode: 0,
+  accessibilityVerdict: null,
+  accessibilityExitCode: 0,
   ...over,
 });
 
@@ -165,5 +167,21 @@ describe('formatSummary', () => {
     const text = 'screen gap: \u001b[31mcheck did not run';
 
     expect(neutralizePrintedText(text)).toBe('screen gap: check did not run');
+  });
+
+  it('states the accessibility outcome when approval is required', () => {
+    const out = formatSummary(
+      baseResult({
+        verdict: 'approval_required',
+        summary: 'approval required: 1 guarded path(s) changed',
+        exitCode: 2,
+        accessibilityVerdict: 'regression',
+        accessibilityExitCode: 1,
+        dirtyGuardedPaths: ['.usabl-evidence.json'],
+      }),
+    );
+    expect(out).toContain('APPROVAL REQUIRED');
+    expect(out).toContain('accessibility REGRESSION');
+    expect(out).toContain('.usabl-evidence.json');
   });
 });

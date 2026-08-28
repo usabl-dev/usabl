@@ -1,6 +1,8 @@
 /**
  * CLI command implementation.
  * Check, comment, and self-check project a gated Result from `run()`.
+ * `enforce` reads that Result from stdin and exits a CI status. It never
+ * calls `gate()`. GitHub review lookup lives here, not in `run()`.
  * `init` writes draft policy only and must return before `loadConfig` / `run`
  * so this process cannot consume files it just generated.
  * The CLI never mints verdicts.
@@ -8,13 +10,16 @@
  * Vite origin, not a hardcoded engine target. The engine always reads operator config.
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { run } from './run.js';
 import type { Result, SurfaceConfig, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
 import { makeFsGlob } from './deps/fs.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
-import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli } from './surfaces/cli.js';
+import { makeGitReader } from './deps/git.js';
+import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
+import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultJson } from './surfaces/policy-enforce.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
 
@@ -85,14 +90,7 @@ export async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfi
 }
 
 function expectResult(value: unknown): Result {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('comment input must be a Result object');
-  }
-  const schemaVersion = Reflect.get(value, 'schemaVersion');
-  if (schemaVersion !== 'usabl.result.v1') {
-    throw new Error('comment input must have schemaVersion usabl.result.v1');
-  }
-  return value as Result;
+  return parseResultJson(value);
 }
 
 async function readStdin(): Promise<string> {
@@ -101,6 +99,79 @@ async function readStdin(): Promise<string> {
     chunks.push(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
   }
   return chunks.join('');
+}
+
+async function runEnforce(opts: CliOptions): Promise<number> {
+  try {
+    if (opts.enforceCheck !== 'accessibility' && opts.enforceCheck !== 'policy') {
+      process.stderr.write('usabl: enforce requires accessibility or policy\n');
+      return 2;
+    }
+    const parsed: unknown = JSON.parse(await readStdin());
+    const result = expectResult(parsed);
+    if (opts.enforceCheck === 'accessibility') {
+      const outcome = enforceAccessibility(result);
+      process.stdout.write(`${outcome.message}\n`);
+      return outcome.exitCode;
+    }
+    if (opts.trustedRef === null) {
+      process.stderr.write('usabl: enforce policy requires --trusted-ref\n');
+      return 2;
+    }
+    const pr = parsePullRequestEvent(readEventPayload());
+    if (pr === null) {
+      process.stderr.write('usabl: GITHUB_EVENT_PATH must describe a pull request\n');
+      return 2;
+    }
+    const git = makeGitReader();
+    const outcome = await enforcePolicy(result, {
+      trustedRef: opts.trustedRef,
+      pr,
+      git: { show: (ref, path) => git.show(ref, path) },
+      listReviews: () => listPullReviews(pr.number),
+    });
+    process.stdout.write(`${outcome.message}\n`);
+    return outcome.exitCode;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`usabl: ${message}\n`);
+    return 4;
+  }
+}
+
+function readEventPayload(): unknown {
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (eventPath === undefined || eventPath.length === 0) {
+    return null;
+  }
+  try {
+    return JSON.parse(readFileSync(eventPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function listPullReviews(pullNumber: number): Promise<Array<{ userLogin: string; state: string; commitId: string }>> {
+  const token = process.env.GITHUB_TOKEN;
+  const repo = process.env.GITHUB_REPOSITORY;
+  if (token === undefined || token.length === 0 || repo === undefined || repo.length === 0) {
+    throw new Error('GITHUB_TOKEN and GITHUB_REPOSITORY are required for enforce policy');
+  }
+  return collectReviews(async (page) => {
+    const url = `https://api.github.com/repos/${repo}/pulls/${pullNumber}/reviews?per_page=100&page=${page}`;
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'usabl',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`GitHub reviews request failed (${response.status})`);
+    }
+    return response.json();
+  });
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -117,7 +188,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'check' &&
     opts.command !== 'comment' &&
     opts.command !== 'bypass' &&
-    opts.command !== 'init'
+    opts.command !== 'init' &&
+    opts.command !== 'enforce'
   ) {
     process.stderr.write(`unknown command: ${opts.command}\n`);
     return 2;
@@ -153,6 +225,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const result = expectResult(parsed);
     process.stdout.write(projectPrComment(result) + '\n');
     return result.exitCode;
+  }
+
+  if (opts.command === 'enforce') {
+    return runEnforce(opts);
   }
 
   const refusal = ciRefusal(opts);

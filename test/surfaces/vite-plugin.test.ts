@@ -20,6 +20,8 @@ const baseResult = (over: Partial<Result>): Result => ({
   receipt: null,
   dirtyGuardedPaths: [],
   exitCode: 0,
+  accessibilityVerdict: null,
+  accessibilityExitCode: 0,
   ...over,
 });
 

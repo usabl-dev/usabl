@@ -102,5 +102,27 @@ describe('run', () => {
     expect(r.verdict).toBe('approval_required');
     expect(r.dirtyGuardedPaths).toEqual(['usabl.config.json']);
     expect(r.exitCode).toBe(2);
+    expect(r.accessibilityVerdict).toBeNull();
+    expect(r.accessibilityExitCode).toBe(0);
+    expect(r.coverage.nothingToCheck).toBe(true);
+  });
+
+  it('scans affected UI when policy diverged and keeps accessibility as regression', async () => {
+    const deps = makeFakeDeps({
+      files: { 'usabl.config.json': '{"tampered":true}' },
+      headContents: { 'usabl.config.json': '{}' },
+      changed: [
+        { code: 'M', path: 'usabl.config.json' },
+        { code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' },
+      ],
+      scans: { clusters: scanWith([failDraft]) },
+    });
+    const r = await run(deps, config);
+    expect(r.verdict).toBe('approval_required');
+    expect(r.exitCode).toBe(2);
+    expect(r.receipt).toBeNull();
+    expect(r.accessibilityVerdict).toBe('regression');
+    expect(r.accessibilityExitCode).toBe(1);
+    expect(r.findings.some((finding) => finding.rule === 'color-contrast')).toBe(true);
   });
 });

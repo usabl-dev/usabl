@@ -9,6 +9,9 @@ tag or publish to npm.
 
 - `usabl init` drafts coverage and related policy from the application tree. It
   does not run the gate and does not write waivers or evidence.
+- `usabl enforce accessibility` and `usabl enforce policy` split CI checks so a
+  policy change can merge with a non-author CODEOWNERS approval of the current
+  head. Result gains `accessibilityVerdict` and `accessibilityExitCode` (never 2).
 - Browser inspector: refresh and locate reported findings.
 - Overlay projection and accessibility inspector surfaces.
 - Team orientation, How usabl works, and code walkthrough pages.

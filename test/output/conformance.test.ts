@@ -14,7 +14,8 @@ const result = (over: Partial<Result>): Result => ({
   schemaVersion: 'usabl.result.v1',
   verdict: 'verified', summary: '', screens: [],
   coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
-  findings: [], receipt: null, dirtyGuardedPaths: [], exitCode: 0, ...over,
+  findings: [], receipt: null, dirtyGuardedPaths: [], exitCode: 0,
+  accessibilityVerdict: null, accessibilityExitCode: 0, ...over,
 });
 
 describe('computeConformance', () => {

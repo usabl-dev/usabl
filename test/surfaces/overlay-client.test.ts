@@ -58,6 +58,8 @@ const result = (over: Partial<Result> = {}): Result => ({
   receipt: null,
   dirtyGuardedPaths: [],
   exitCode: 1,
+  accessibilityVerdict: null,
+  accessibilityExitCode: 0,
   ...over,
 });
 

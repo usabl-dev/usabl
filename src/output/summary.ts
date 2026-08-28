@@ -52,6 +52,13 @@ export function formatSummary(result: Result): string {
   if (result.dirtyGuardedPaths.length > 0) {
     lines.push(`  guarded paths changed: ${result.dirtyGuardedPaths.join(', ')}`);
   }
+  if (result.verdict === 'approval_required') {
+    const accessibility =
+      result.accessibilityVerdict === null
+        ? 'IDLE'
+        : (HEADLINE[result.accessibilityVerdict] ?? result.accessibilityVerdict);
+    lines.push(`  accessibility ${accessibility} (${result.accessibilityExitCode})`);
+  }
   if (result.receipt) {
     lines.push(`  receipt: sourceTree ${result.receipt.sourceTree} @ ${result.receipt.mintedAt}`);
   }

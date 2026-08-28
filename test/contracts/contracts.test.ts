@@ -1,15 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import type {
+  AccessibilityVerdict,
   Draft,
   Finding,
-  Result,
   Verdict,
   EvidenceClass,
-  Waiver,
-  EvidenceFloor,
-  UsablConfig,
-  GateInput,
-  GateOutput,
   ConformanceSummary,
 } from '../../src/contracts/index.js';
 
@@ -54,6 +49,14 @@ describe('contracts', () => {
     ];
     expect(verdicts).toHaveLength(4);
     expect(classes).toContain('preview');
+  });
+
+  it('keeps approval_required off the accessibility verdict', () => {
+    const accessibility: AccessibilityVerdict[] = ['verified', 'regression', 'not_covered'];
+    expect(accessibility).toHaveLength(3);
+    // @ts-expect-error approval_required is a Result verdict, not an accessibility verdict
+    const forbidden: AccessibilityVerdict = 'approval_required';
+    expect(forbidden).toBe('approval_required');
   });
 
   it('constructs a conformance summary with all buckets shown', () => {

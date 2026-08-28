@@ -46,6 +46,8 @@ function makeResult(receipt: Receipt | null): Result {
     receipt,
     dirtyGuardedPaths: [],
     exitCode: 0,
+    accessibilityVerdict: receipt === null ? null : 'verified',
+    accessibilityExitCode: 0,
   };
 }
 

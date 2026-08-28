@@ -8,24 +8,41 @@
  *
  * Idle (`verdict: null`, exit 0) means nothing UI-touching changed.
  * `not_covered` means there was something to prove and we could not.
+ * Dirty guarded paths are `approval_required` and still carry accessibility findings.
  */
-import type { Draft, EvidenceFacts, Finding, FloorEntry, GateInput, GateOutput, Waiver } from '../contracts/index.js';
+import type { AccessibilityExitCode, AccessibilityVerdict, Draft, EvidenceFacts, Finding, FloorEntry, GateInput, GateOutput, Waiver } from '../contracts/index.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { computeIdentity } from '../primitives/identity.js';
 
 const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
 
 export function gate(input: GateInput): GateOutput {
-  // Policy edits cannot be self-graded. Any dirty guarded path is approval_required
-  // and the harness never runs.
+  const accessibility = accessibilityOutcome(input);
   if (input.guardDivergedPaths.length > 0) {
+    // Policy divergence is a human approval problem, not an accessibility skip.
+    // Keep the scan outcome so CI can AND a second check without GitHub inside the gate.
     return {
       verdict: 'approval_required',
-      findings: [],
+      findings: accessibility.findings,
       exitCode: 2,
       summary: `approval required: ${input.guardDivergedPaths.length} guarded path(s) changed`,
+      accessibilityVerdict: accessibility.verdict,
+      accessibilityExitCode: accessibility.exitCode,
     };
   }
+  return {
+    ...accessibility,
+    accessibilityVerdict: accessibility.verdict,
+    accessibilityExitCode: accessibility.exitCode,
+  };
+}
+
+function accessibilityOutcome(input: GateInput): {
+  verdict: AccessibilityVerdict | null;
+  findings: Finding[];
+  exitCode: AccessibilityExitCode;
+  summary: string;
+} {
   // Idle is not a fifth verdict and not not_covered.
   if (input.coverage.nothingToCheck) {
     return { verdict: null, findings: [], exitCode: 0, summary: 'nothing to check (no UI-touching files)' };
@@ -41,7 +58,9 @@ export function gate(input: GateInput): GateOutput {
     input.coverage.unresolvedFiles.length > 0 ||
     input.coverage.gaps.length > 0;
 
-  if (hasNewFail) return { verdict: 'regression', findings, exitCode: 1, summary: verdictSummary('regression', gating) };
+  if (hasNewFail) {
+    return { verdict: 'regression', findings, exitCode: 1, summary: verdictSummary('regression', gating) };
+  }
   if (hasUnverified) {
     return { verdict: 'not_covered', findings, exitCode: 3, summary: verdictSummary('not_covered', gating) };
   }
@@ -144,6 +163,6 @@ export function findingKey(f: Finding): string {
   return `${f.screenId}|${f.layer}|${f.rule}|${f.elementKey ?? 'count'}`;
 }
 
-function verdictSummary(verdict: string, gating: Finding[]): string {
+function verdictSummary(verdict: AccessibilityVerdict, gating: Finding[]): string {
   return `${verdict}: ${gating.length} gating finding(s)`;
 }

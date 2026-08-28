@@ -8,7 +8,7 @@ import { formatSummary } from '../output/summary.js';
 import { scrubResult } from './scrub.js';
 
 export interface CliOptions {
-  command: 'check' | 'comment' | string;
+  command: 'check' | 'comment' | 'enforce' | string;
   staticOnly: boolean;
   trustedRef: string | null;
   json: boolean;
@@ -16,6 +16,7 @@ export interface CliOptions {
   configPath: string;
   selfCheck: boolean;
   force: boolean;
+  enforceCheck: 'accessibility' | 'policy' | null;
 }
 
 function isFlag(value: string): boolean {
@@ -31,6 +32,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let configPath = 'usabl.config.json';
   let selfCheck = false;
   let force = false;
+  let enforceCheck: 'accessibility' | 'policy' | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -38,6 +40,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
       continue;
     }
     if (!isFlag(token)) {
+      // `usabl enforce accessibility|policy` is a projection, not a second gate.
+      if (command === 'enforce' && (token === 'accessibility' || token === 'policy')) {
+        enforceCheck = token;
+        continue;
+      }
       command = token;
       continue;
     }
@@ -81,7 +88,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
   }
 
-  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck, force };
+  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck };
 }
 
 export function ciRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {

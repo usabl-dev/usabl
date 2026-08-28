@@ -288,6 +288,8 @@ export type EvidenceClass =
   | 'model-judgment'
   | 'human-confirmed';
 export type Verdict = 'verified' | 'regression' | 'not_covered' | 'approval_required';
+export type AccessibilityVerdict = Exclude<Verdict, 'approval_required'>;
+export type AccessibilityExitCode = 0 | 1 | 3 | 4;
 export type FactSource = 'ax-tree' | 'attribute';
 export type IdentityBasis = 'name' | 'structural' | 'count';
 
@@ -393,11 +395,15 @@ export interface Result {
   receipt: Receipt | null;
   dirtyGuardedPaths: string[];
   exitCode: 0 | 1 | 2 | 3 | 4 | 5;
+  accessibilityVerdict: AccessibilityVerdict | null;
+  accessibilityExitCode: AccessibilityExitCode;
 }
 
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);
 // 5 reserved for an opt-in judgment soft-gate (off by default). The default install never emits 5.
+// accessibilityExitCode is the same scale without 2. CI uses it for the accessibility
+// required check so an approved policy change can merge without turning the Result green.
 
 // Design intake
 export type RequirementKind = 'content' | 'flow' | 'doc';
@@ -650,7 +656,11 @@ their own.
 ### Verdict computation
 
 1. **Guard check first.** If any guarded path differs from the trust anchor, the
-   verdict is `approval_required` and the harness never runs.
+   verdict is `approval_required`. Affected UI still scans unless intake is
+   malformed (the harness stays closed for unreadable requirements). Findings
+   stay on the Result. No receipt. The gate also mints `accessibilityVerdict`
+   and `accessibilityExitCode` (never 2) so CI can split policy approval from
+   accessibility enforcement.
 2. **Coverage.** If `nothingToCheck`, return `verdict: null`, exit 0, no browser, and
    a summary like "nothing to check (no UI-touching files)."
 3. **Run checks.** For every affected surface, run providers, collect Drafts. Do not
@@ -789,6 +799,9 @@ coverage honesty, and optional receipt minting.
   from the app tree. It never calls the gate and never consumes the files it just
   wrote. Unproven routes stay `entryFile: null`. Overwrite requires `--force`.
 - CI: workflow invokes CLI with `--trusted-ref`.
+- Enforce: `usabl enforce accessibility` and `usabl enforce policy --trusted-ref`
+  read Result JSON from stdin. They project CI status. They do not mint a
+  verdict. GitHub stays out of `run()`.
 - Library: stop hook, overlay, and optional MCP server import `run()` directly.
 
 Does not replace the stop hook for the AI-gating story. It enables the baseline pass
@@ -831,8 +844,9 @@ Reads policy from the protected branch (or the trusted ref), never the working t
 Refuses to run without a base ref. The comment leads with the receipt, groups findings
 as new/known/unverified, shows a before-and-after announcement diff, and applies a
 noise budget. All page-derived text passes through `neutralize()`. Sticky comment
-matched only among bot-authored comments. The check blocks merge only when it is a
-required status; otherwise it comments.
+matched only among bot-authored comments. On `approval_required` the comment stays
+loud after the policy check is green. Required checks are AND: accessibility uses
+`usabl enforce accessibility`; policy uses `usabl enforce policy --trusted-ref`.
 
 ### 11.5 Mid-task self-check (CLI; MCP optional)
 

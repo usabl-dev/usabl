@@ -75,6 +75,8 @@ function resultFixture(): Result {
     receipt: receiptFixture,
     dirtyGuardedPaths: [],
     exitCode: 0,
+    accessibilityVerdict: 'verified',
+    accessibilityExitCode: 0,
   };
 }
 
