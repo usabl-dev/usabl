@@ -21,6 +21,10 @@ export type Verdict =
   | 'regression'
   | 'not_covered'
   | 'approval_required';
+// Accessibility fields never carry approval_required. That verdict is policy, not a scan outcome.
+export type AccessibilityVerdict = Exclude<Verdict, 'approval_required'>;
+// AccessibilityExitCode never includes 2. Crash is 4.
+export type AccessibilityExitCode = 0 | 1 | 3 | 4;
 export type FactSource = 'ax-tree' | 'attribute';
 export type IdentityBasis = 'name' | 'structural' | 'count';
 
@@ -129,6 +133,11 @@ export interface Result {
   receipt: Receipt | null;
   dirtyGuardedPaths: string[];
   exitCode: 0 | 1 | 2 | 3 | 4 | 5;
+  // Accessibility outcome with policy divergence ignored. The gate mints this so CI
+  // can split enforcement without GitHub or the workflow inventing a verdict.
+  // Never approval_required and never exit 2. Crash runs use exitCode 4 and leave these as null / 4.
+  accessibilityVerdict: AccessibilityVerdict | null;
+  accessibilityExitCode: AccessibilityExitCode;
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);
@@ -354,4 +363,6 @@ export interface GateOutput {
   findings: Finding[];
   exitCode: 0 | 1 | 2 | 3 | 4 | 5; // 5 reserved; default install never emits it
   summary: string;
+  accessibilityVerdict: AccessibilityVerdict | null;
+  accessibilityExitCode: AccessibilityExitCode;
 }

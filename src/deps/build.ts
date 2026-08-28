@@ -15,6 +15,8 @@ import { makeKeyboardWalkProvider } from '../providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
 import { loadRequirements } from '../intake/load.js';
 import { mapRequirementsToProviders } from '../intake/map-to-providers.js';
+import { overlayRequirementsFs } from '../intake/overlay-fs.js';
+import { resolveIntakeConfig } from '../intake/trusted-config.js';
 import { makeRealBrowserDriver } from './real.js';
 import { makeGitReader } from './git.js';
 import { makeFsGlob } from './fs.js';
@@ -83,7 +85,7 @@ function readChromiumVersion(): string {
 
 export async function buildDeps(
   config: UsablConfig,
-  options: { cwd?: string; allowedCapabilities?: Capability[]; storageStatePath?: string } = {},
+  options: { cwd?: string; allowedCapabilities?: Capability[]; storageStatePath?: string; trustedRef?: string } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
   const allowedCapabilities = options.allowedCapabilities ?? ['live'];
@@ -91,7 +93,10 @@ export async function buildDeps(
     options.storageStatePath === undefined ? {} : { storageStatePath: options.storageStatePath },
   );
   const fs = makeFsGlob({ cwd });
-  const loadedRequirements = await loadRequirements(fs, config);
+  const git = makeGitReader({ cwd });
+  const intakeConfig = await resolveIntakeConfig(git, config, options.trustedRef);
+  const intakeFs = overlayRequirementsFs(fs, git, intakeConfig, options.trustedRef);
+  const loadedRequirements = await loadRequirements(intakeFs, intakeConfig);
   const providers = [
     axeProvider,
     makeRulepackProvider(),
@@ -113,12 +118,12 @@ export async function buildDeps(
       chromium: readChromiumVersion(),
     },
     browser,
-    git: makeGitReader({ cwd }),
+    git,
     fs,
     checkRunner: makeCheckRunner({
       browser,
       providers,
-      config,
+      config: intakeConfig,
       // Static-only mode denies live capability explicitly so the result records not-covered gaps.
       allowedCapabilities,
       stepRunner: makeStepRunner(),

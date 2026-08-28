@@ -106,6 +106,23 @@ The change needs:
 
 Do not paste the private security review into the pull request.
 
+### Policy and floor changes
+
+A pull request that edits `usabl.config.json`, `usabl.routes.json`,
+the configured requirements path, `.usabl-evidence.json`, or
+`.usabl-waivers.json` is `approval_required`.
+That is not a merge dead-end. This is the consumer gate (the app that
+runs `usabl enforce policy`). This repository's org-team CODEOWNERS is
+engine governance and is a separate file.
+
+- The accessibility check reports what the gate would have decided without
+  the policy diff. It never uses exit 2.
+- The policy check stays red until a CODEOWNERS user who is not the author
+  approves the current head commit for **each** dirty guarded path.
+- Approving your own policy pull request does not count.
+- The sticky usabl comment still shows `APPROVAL REQUIRED` after the policy
+  check is green.
+
 ## Non-code contributions
 
 You can contribute without a branch:

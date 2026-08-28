@@ -9,6 +9,10 @@ tag or publish to npm.
 
 - `usabl init` drafts coverage and related policy from the application tree. It
   does not run the gate and does not write waivers or evidence.
+- `usabl enforce accessibility` and `usabl enforce policy` split CI checks so a
+  policy change can merge with a non-author CODEOWNERS approval of the current
+  head for each dirty guarded path. Result gains `accessibilityVerdict` and
+  `accessibilityExitCode` (never 2).
 - Browser inspector: refresh and locate reported findings.
 - Overlay projection and accessibility inspector surfaces.
 - Team orientation, How usabl works, and code walkthrough pages.
@@ -36,3 +40,8 @@ tag or publish to npm.
 - Menu state attributes are read for PatternFly checks.
 - Package JSON output is preserved through the build.
 - Fleet Insights measurement is runnable. It is not a verdict.
+- Requirement YAML intake is pinned to `--trusted-ref` so accessibility checks
+  cannot self-grade against unapproved PR policy edits.
+- Intake provider wiring now resolves the requirements root from trusted-ref
+  `usabl.config.json`, which prevents PR-only path rewrites from dropping
+  baseline requirement checks.

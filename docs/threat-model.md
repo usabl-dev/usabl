@@ -27,9 +27,17 @@ re-baseline to green.
 
 **Controls (shipped in spec):**
 
-- Verdicts computed against **committed** base config, not working tree.
+- Verdicts computed against **committed** base config and committed
+  requirements YAML from `--trusted-ref`, not working tree bytes.
+- The requirements root is also read from trusted-ref `usabl.config.json`, so a
+  PR cannot rewrite the requirements path to bypass baseline intake providers.
 - Config diff -> `approval_required`.
-- CODEOWNERS on policy paths in CI.
+- CODEOWNERS on policy paths in CI. The accessibility required check uses
+  `accessibilityExitCode` (never 2). The policy required check passes only
+  when a CODEOWNERS user who is not the PR author has `APPROVED` the current
+  head SHA for each dirty guarded path. CODEOWNERS is read from `--trusted-ref`, never the PR tree.
+  Org team entries fail closed. The PR comment stays loud after the policy
+  check is green.
 
 **Status:** [x] Documented in ground-truth; demo skeptic script in judge pass.
 

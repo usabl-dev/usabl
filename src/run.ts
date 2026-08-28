@@ -2,8 +2,9 @@
  * `run(deps, config)` is the whole engine sequencer: guard, cover, scan, gate, maybe receipt.
  * It never decides a verdict. The gate does. This file only sequences injected I/O.
  *
- * Guard runs first. Diverged policy must not be parsed as coverage, floor, or waivers,
+ * Guard runs first. Diverged working-tree floor and waiver bytes are not parsed,
  * because a crash would fail open (exit 4) instead of blocking as approval_required.
+ * Affected UI still scans so mixed policy PRs keep accessibility findings.
  *
  * Coverage mapping comes from the planner shared by tests and production code.
  * A local fallback mapper is forbidden because it could hide unmapped UI as idle.
@@ -26,7 +27,9 @@ import type {
 import { computeCoverage } from './coverage/planner.js';
 import { gate } from './gate/index.js';
 import { mintReceipt } from './evidence/receipt.js';
+import { parseUsablConfig } from './intake/config.js';
 import { loadRequirements } from './intake/load.js';
+import { overlayRequirementsFs } from './intake/overlay-fs.js';
 import { assertIso8601Utc } from './primitives/iso8601.js';
 import { checkGuard } from './trust/guard.js';
 
@@ -133,48 +136,22 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
   try {
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
     const guardDivergedPaths = await checkGuard(deps, config, opts.trustedRef ?? 'HEAD');
-    if (guardDivergedPaths.length > 0) {
-      // Diverged guarded bytes are untrusted. Parsing them can throw and fail open.
-      const coverage: Coverage = {
-        changedFiles: changed,
-        affected: [],
-        unresolvedFiles: [],
-        gaps: [],
-        nothingToCheck: false,
-      };
-      const gated = gate({
-        coverage,
-        guardDivergedPaths,
-        drafts: [],
-        floor: EMPTY_FLOOR,
-        waivers: [],
-        now: deps.clock(),
-      });
-      return {
-        schemaVersion: 'usabl.result.v1',
-        verdict: gated.verdict,
-        summary: gated.summary,
-        screens: [],
-        coverage,
-        findings: gated.findings,
-        receipt: null,
-        dirtyGuardedPaths: guardDivergedPaths,
-        exitCode: gated.exitCode,
-      };
-    }
-
-    const discoveredCoverage = await computeCoverage(deps.fs, config, changed);
-    const loadedRequirements = await loadRequirements(deps.fs, config);
+    const scanConfig = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
+    const coverageFs = overlayUntrustedRoutes(deps, guardDivergedPaths, opts.trustedRef);
+    const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed);
+    const intakeFs = overlayRequirementsFs(deps.fs, deps.git, scanConfig, opts.trustedRef);
+    const loadedRequirements = await loadRequirements(intakeFs, scanConfig);
     const intakePolicyPaths =
       loadedRequirements.ok
         ? []
         : [loadedRequirements.path ?? config.requirements ?? 'requirements'].filter((path) => path.length > 0);
     const policyDivergedPaths = [...new Set([...guardDivergedPaths, ...intakePolicyPaths])].sort();
 
-    // Dirty policy or idle: do not open the harness. Otherwise scan every affected surface.
-    // Malformed intake cannot self-grade. The harness must stay closed until policy is valid.
+    // Malformed intake cannot self-grade. The harness stays closed until policy is valid.
+    // Guarded-file edits still scan affected UI so mixed PRs keep accessibility findings.
     const screens: ScreenScan[] = [];
-    if (policyDivergedPaths.length === 0 && !discoveredCoverage.nothingToCheck) {
+    const canScan = loadedRequirements.ok && !discoveredCoverage.nothingToCheck;
+    if (canScan) {
       for (const s of discoveredCoverage.affected) {
         screens.push(await deps.checkRunner.scan({ id: s.screenId, url: s.url }));
       }
@@ -185,18 +162,20 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     };
     const drafts = screens.flatMap((s) => s.drafts);
 
+    const policyUntrusted = policyDivergedPaths.length > 0;
     const readTrustFile = (path: string): Promise<string | null> => {
       // Floor and waivers can be pinned to a trusted ref so a PR cannot claim
       // verified against acceptance bytes it just changed in the working tree.
       if (opts.trustedRef !== undefined) {
         return deps.git.show(opts.trustedRef, path);
       }
+      if (policyUntrusted) {
+        return Promise.resolve(null);
+      }
       return deps.fs.readFile(path);
     };
-    const floorValue = await readJson(readTrustFile, '.usabl-evidence.json');
-    const floor = floorValue === null ? EMPTY_FLOOR : parseEvidenceFloor(floorValue);
-    const ledgerValue = await readJson(readTrustFile, '.usabl-waivers.json');
-    const waivers: Waiver[] = ledgerValue === null ? [] : parseWaiverLedger(ledgerValue).waivers;
+    const floor = await readFloorOrEmpty(readTrustFile, policyUntrusted);
+    const waivers = await readWaiversOrEmpty(readTrustFile, policyUntrusted);
 
     const gated = gate({ coverage, guardDivergedPaths: policyDivergedPaths, drafts, floor, waivers, now: deps.clock() });
 
@@ -222,6 +201,8 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       receipt,
       dirtyGuardedPaths: policyDivergedPaths,
       exitCode: gated.exitCode,
+      accessibilityVerdict: gated.accessibilityVerdict,
+      accessibilityExitCode: gated.accessibilityExitCode,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -237,8 +218,83 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       receipt: null,
       dirtyGuardedPaths: [],
       exitCode: 4,
+      accessibilityVerdict: null,
+      accessibilityExitCode: 4,
     };
   }
+}
+
+async function readFloorOrEmpty(
+  read: (path: string) => Promise<string | null>,
+  policyUntrusted: boolean,
+): Promise<EvidenceFloor> {
+  try {
+    const floorValue = await readJson(read, '.usabl-evidence.json');
+    return floorValue === null ? EMPTY_FLOOR : parseEvidenceFloor(floorValue);
+  } catch (err) {
+    if (policyUntrusted) return EMPTY_FLOOR;
+    throw err;
+  }
+}
+
+async function readWaiversOrEmpty(
+  read: (path: string) => Promise<string | null>,
+  policyUntrusted: boolean,
+): Promise<Waiver[]> {
+  try {
+    const ledgerValue = await readJson(read, '.usabl-waivers.json');
+    return ledgerValue === null ? [] : parseWaiverLedger(ledgerValue).waivers;
+  } catch (err) {
+    if (policyUntrusted) return [];
+    throw err;
+  }
+}
+
+async function scanConfigForCoverage(
+  deps: Deps,
+  config: UsablConfig,
+  guardDivergedPaths: string[],
+  trustedRef: string | undefined,
+): Promise<UsablConfig> {
+  // Working-tree config URLs are untrusted when config diverged. Scan the
+  // trusted-ref document so a policy PR cannot point the CI browser at a new origin.
+  if (!guardDivergedPaths.includes('usabl.config.json') || trustedRef === undefined) {
+    return config;
+  }
+  const raw = await deps.git.show(trustedRef, 'usabl.config.json');
+  if (raw === null) {
+    return { ...config, surfaces: [], uiFileGlobs: [] };
+  }
+  try {
+    return parseUsablConfig(raw);
+  } catch {
+    return { ...config, surfaces: [], uiFileGlobs: [] };
+  }
+}
+
+function overlayUntrustedRoutes(
+  deps: Deps,
+  guardDivergedPaths: string[],
+  trustedRef: string | undefined,
+): Deps['fs'] {
+  // Coverage planning reads usabl.routes.json. If that file diverged, use the
+  // trusted ref (or nothing) so a PR cannot widen its own blast radius.
+  const routesDiverged = guardDivergedPaths.includes('usabl.routes.json');
+  if (!routesDiverged) {
+    return deps.fs;
+  }
+  return {
+    glob: (patterns) => deps.fs.glob(patterns),
+    readFile: async (path) => {
+      if (path !== 'usabl.routes.json') {
+        return deps.fs.readFile(path);
+      }
+      if (trustedRef !== undefined) {
+        return deps.git.show(trustedRef, path);
+      }
+      return null;
+    },
+  };
 }
 
 function summarize(findings: Finding[]) {

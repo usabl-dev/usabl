@@ -35,6 +35,32 @@ describe('gate verdict', () => {
     const out = gate({ ...base, coverage: covered, drafts: [], guardDivergedPaths: ['src/gate'] });
     expect(out.verdict).toBe('approval_required');
     expect(out.exitCode).toBe(2);
+    expect(out.accessibilityVerdict).toBe('verified');
+    expect(out.accessibilityExitCode).toBe(0);
+    expect(out.accessibilityExitCode).not.toBe(2);
+  });
+
+  it('keeps accessibility findings on approval_required so mixed PRs can still be judged', () => {
+    const out = gate({
+      ...base,
+      coverage: covered,
+      drafts: [d({ rule: 'color-contrast' })],
+      guardDivergedPaths: ['.usabl-evidence.json'],
+    });
+    expect(out.verdict).toBe('approval_required');
+    expect(out.exitCode).toBe(2);
+    expect(out.accessibilityVerdict).toBe('regression');
+    expect(out.accessibilityExitCode).toBe(1);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.rule).toBe('color-contrast');
+  });
+
+  it('treats policy-only idle coverage as idle accessibility under approval_required', () => {
+    const coverage: Coverage = { changedFiles: ['.usabl-evidence.json'], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
+    const out = gate({ ...base, coverage, drafts: [], guardDivergedPaths: ['.usabl-evidence.json'] });
+    expect(out.verdict).toBe('approval_required');
+    expect(out.accessibilityVerdict).toBeNull();
+    expect(out.accessibilityExitCode).toBe(0);
     expect(out.findings).toEqual([]);
   });
 
@@ -45,10 +71,12 @@ describe('gate verdict', () => {
     expect(out.exitCode).toBe(0);
   });
 
-  it('regresses on a new deterministic failure', () => {
+  it('matches accessibility fields to the verdict when policy did not change', () => {
     const out = gate({ ...base, coverage: covered, drafts: [d({ rule: 'color-contrast' })] });
     expect(out.verdict).toBe('regression');
     expect(out.exitCode).toBe(1);
+    expect(out.accessibilityVerdict).toBe('regression');
+    expect(out.accessibilityExitCode).toBe(1);
   });
 
   it('ignores preview and model-judgment findings for the verdict', () => {

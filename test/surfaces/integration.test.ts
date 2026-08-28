@@ -57,6 +57,8 @@ const baseResult = (over: Partial<Result>): Result => ({
   },
   dirtyGuardedPaths: [],
   exitCode: 1,
+  accessibilityVerdict: null,
+  accessibilityExitCode: 0,
   ...over,
 });
 

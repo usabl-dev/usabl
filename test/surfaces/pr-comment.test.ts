@@ -65,6 +65,8 @@ const baseResult = (over: Partial<Result>): Result => ({
   },
   dirtyGuardedPaths: [],
   exitCode: 1,
+  accessibilityVerdict: null,
+  accessibilityExitCode: 0,
   ...over,
 });
 
@@ -141,5 +143,22 @@ describe('projectPrComment', () => {
     expect(markdown).toContain('### New barriers');
     expect(markdown).toContain('### Known (carried)');
     expect(markdown).toContain('### Advisory (non-gating)');
+  });
+
+  it('keeps APPROVAL REQUIRED loud and names the accessibility outcome', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'approval_required',
+        exitCode: 2,
+        receipt: null,
+        accessibilityVerdict: 'regression',
+        accessibilityExitCode: 1,
+        dirtyGuardedPaths: ['.usabl-evidence.json'],
+      }),
+    );
+
+    expect(markdown).toContain('usabl report: APPROVAL REQUIRED');
+    expect(markdown).toContain('Accessibility on this run: **REGRESSION**');
+    expect(markdown).toContain('CODEOWNERS user approval');
   });
 });

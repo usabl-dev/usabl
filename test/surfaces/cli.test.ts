@@ -23,6 +23,8 @@ const baseResult = (over: Partial<Result>): Result => ({
   receipt: null,
   dirtyGuardedPaths: [],
   exitCode: 0,
+  accessibilityVerdict: null,
+  accessibilityExitCode: 0,
   ...over,
 });
 
@@ -37,6 +39,7 @@ describe('parseCliArgs', () => {
       configPath: 'usabl.config.json',
       selfCheck: false,
       force: false,
+      enforceCheck: null,
     });
   });
 
@@ -61,6 +64,7 @@ describe('parseCliArgs', () => {
       configPath: 'x.json',
       selfCheck: true,
       force: false,
+      enforceCheck: null,
     });
   });
 
@@ -82,7 +86,19 @@ describe('parseCliArgs', () => {
       configPath: 'usabl.config.json',
       selfCheck: false,
       force: false,
+      enforceCheck: null,
     });
+  });
+
+  it('accepts enforce accessibility and policy subcommands', () => {
+    expect(parseCliArgs(['enforce', 'accessibility']).command).toBe('enforce');
+    expect(parseCliArgs(['enforce', 'accessibility']).enforceCheck).toBe('accessibility');
+    expect(parseCliArgs(['enforce', 'policy', '--trusted-ref', 'origin/main']).enforceCheck).toBe(
+      'policy',
+    );
+    expect(parseCliArgs(['enforce', 'policy', '--trusted-ref', 'origin/main']).trustedRef).toBe(
+      'origin/main',
+    );
   });
 });
 

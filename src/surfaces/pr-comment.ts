@@ -24,6 +24,18 @@ function projectHeadline(verdict: Verdict | null): string {
   return `## usabl report: ${headline}`;
 }
 
+function renderAccessibilitySplit(result: Result): string[] {
+  if (result.verdict !== 'approval_required') {
+    return [];
+  }
+  const accessibility =
+    result.accessibilityVerdict === null ? 'IDLE' : HEADLINE[result.accessibilityVerdict];
+  return [
+    '',
+    `Policy changed. Accessibility on this run: **${accessibility}**. Merge still needs a CODEOWNERS user approval of this head from someone other than the pull request author.`,
+  ];
+}
+
 function renderReceipt(result: Result): string[] {
   if (result.receipt === null) {
     // Receipts are verified-only evidence. Missing receipt must never look like a pass.
@@ -141,6 +153,7 @@ export function projectPrComment(result: Result): string {
   return [
     COMMENT_MARKER,
     projectHeadline(safe.verdict),
+    ...renderAccessibilitySplit(safe),
     '',
     ...renderReceipt(safe),
     '',

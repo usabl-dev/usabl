@@ -92,6 +92,8 @@ export function scrubResult(result: Result): Result {
     receipt: scrubValue(result.receipt),
     dirtyGuardedPaths: scrubValue(result.dirtyGuardedPaths),
     exitCode: result.exitCode,
+    accessibilityVerdict: result.accessibilityVerdict,
+    accessibilityExitCode: result.accessibilityExitCode,
   };
 }
 
