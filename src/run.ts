@@ -251,6 +251,10 @@ function overlayUntrustedRoutes(
   guardDivergedPaths: string[],
   trustedRef: string | undefined,
 ): Deps['fs'] {
+  // Coverage planning reads usabl.routes.json. If that file diverged, use the
+  // trusted ref (or nothing) so a PR cannot widen its own blast radius.
+  // usabl.config.json is loaded by the CLI before run() and is already listed
+  // in dirtyGuardedPaths; substituting it here would not change scan targets.
   const routesDiverged = guardDivergedPaths.includes('usabl.routes.json');
   if (!routesDiverged) {
     return deps.fs;

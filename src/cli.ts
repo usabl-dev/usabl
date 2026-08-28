@@ -12,7 +12,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { run } from './run.js';
-import type { Result, SurfaceConfig, UsablConfig } from './contracts/index.js';
+import type { SurfaceConfig, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
 import { makeFsGlob } from './deps/fs.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
@@ -89,10 +89,6 @@ export async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfi
   return parseConfig(await readFile(path, 'utf8'));
 }
 
-function expectResult(value: unknown): Result {
-  return parseResultJson(value);
-}
-
 async function readStdin(): Promise<string> {
   const chunks: string[] = [];
   for await (const chunk of process.stdin) {
@@ -108,7 +104,7 @@ async function runEnforce(opts: CliOptions): Promise<number> {
       return 2;
     }
     const parsed: unknown = JSON.parse(await readStdin());
-    const result = expectResult(parsed);
+    const result = parseResultJson(parsed);
     if (opts.enforceCheck === 'accessibility') {
       const outcome = enforceAccessibility(result);
       process.stdout.write(`${outcome.message}\n`);
@@ -222,7 +218,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   if (opts.command === 'comment') {
     // Comment mode is a pure projection from stdin so CI does not import package internals.
     const parsed: unknown = JSON.parse(await readStdin());
-    const result = expectResult(parsed);
+    const result = parseResultJson(parsed);
     process.stdout.write(projectPrComment(result) + '\n');
     return result.exitCode;
   }

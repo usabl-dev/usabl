@@ -226,6 +226,9 @@ function ownersFor(rules: CodeownersRule[], paths: string[]): Set<string> {
   const owners = new Set<string>();
   for (const path of paths) {
     // GitHub last-match-wins: a later rule for the same path replaces earlier owners.
+    // matchGlob is usabl's file glob (`*` does not cross `/`). Guarded policy
+    // files are root-level names, so last-match plus exact path is enough.
+    // This is not GitHub's full CODEOWNERS dialect.
     let matched: CodeownersRule | null = null;
     for (const rule of rules) {
       if (matchGlob(rule.pattern, path) || rule.pattern === path) {
