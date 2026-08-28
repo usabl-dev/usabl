@@ -9,6 +9,8 @@ tag or publish to npm.
 
 - `usabl init` drafts coverage and related policy from the application tree. It
   does not run the gate and does not write waivers or evidence.
+- `usabl baseline` runs a full UI scan and drafts `.usabl-evidence.json` from
+  deterministic findings as a reviewable working-tree diff.
 - `usabl enforce accessibility` and `usabl enforce policy` split CI checks so a
   policy change can merge with a non-author CODEOWNERS approval of the current
   head for each dirty guarded path. Result gains `accessibilityVerdict` and

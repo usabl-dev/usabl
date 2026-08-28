@@ -798,6 +798,8 @@ coverage honesty, and optional receipt minting.
 - First-run drafts: `usabl init` infers `usabl.config.json` and `usabl.routes.json`
   from the app tree. It never calls the gate and never consumes the files it just
   wrote. Unproven routes stay `entryFile: null`. Overwrite requires `--force`.
+- Baseline drafts: `usabl baseline` runs a full UI scan and writes
+  `.usabl-evidence.json` as a reviewable working-tree diff.
 - CI: workflow invokes CLI with `--trusted-ref`.
 - Enforce: `usabl enforce accessibility` and `usabl enforce policy --trusted-ref`
   read Result JSON from stdin. They project CI status. They do not mint a
@@ -805,8 +807,9 @@ coverage honesty, and optional receipt minting.
 - Library: stop hook, overlay, and optional MCP server import `run()` directly.
 
 Does not replace the stop hook for the AI-gating story. It enables the baseline pass
-that makes the ratchet meaningful. The evidence floor is still operator-authored
-in v0.2.0; `usabl init` does not write `.usabl-evidence.json` or waivers.
+that makes the ratchet meaningful. `usabl init` still does not write
+`.usabl-evidence.json` or waivers, while `usabl baseline` drafts the evidence floor
+as a working-tree diff for review and merge.
 
 ### 11.2 Stop hook (headline)
 
