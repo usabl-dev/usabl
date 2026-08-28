@@ -32,7 +32,7 @@ re-baseline to green.
 - CODEOWNERS on policy paths in CI. The accessibility required check uses
   `accessibilityExitCode` (never 2). The policy required check passes only
   when a CODEOWNERS user who is not the PR author has `APPROVED` the current
-  head SHA. CODEOWNERS is read from `--trusted-ref`, never the PR tree.
+  head SHA for each dirty guarded path. CODEOWNERS is read from `--trusted-ref`, never the PR tree.
   Org team entries fail closed. The PR comment stays loud after the policy
   check is green.
 

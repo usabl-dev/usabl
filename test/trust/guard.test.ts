@@ -65,7 +65,7 @@ describe('trust guard', () => {
     await expect(checkGuard(deps, configFixture)).resolves.toEqual([]);
   });
 
-  it('checkGuard short-circuits on a tampered working-tree config before trusting config contents', async () => {
+  it('checkGuard lists every dirty guarded file even when config also diverged', async () => {
     const deps = makeFakeDeps({
       files: {
         'usabl.config.json': '{"guardedPaths":[]}',
@@ -78,6 +78,7 @@ describe('trust guard', () => {
     });
 
     await expect(checkGuard(deps, { ...configFixture, guardedPaths: [] })).resolves.toEqual([
+      'src/gate/index.ts',
       'usabl.config.json',
     ]);
   });

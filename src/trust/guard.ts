@@ -3,7 +3,7 @@
  * This unit expands guard scope and reports drift only.
  * It must never mint a verdict or hide unguarded policy edits.
  */
-import type { Deps, UsablConfig } from '../contracts/index.js';
+import type { Deps, GitReader, UsablConfig } from '../contracts/index.js';
 import { sha256 } from '../primitives/canonical.js';
 
 const CONFIG_PATH = 'usabl.config.json';
@@ -110,35 +110,89 @@ export async function expandGuardedSet(
 }
 
 /**
- * Config-first ordering is an honesty boundary.
- * If config bytes diverge from the trusted ref, return the config path immediately.
- * Never trust potentially tampered guardedPaths content from the workspace.
+ * Config-first scope is an honesty boundary.
+ * If config bytes diverge, guarded set still comes from the trusted ref so a
+ * PR cannot hide other dirty policy files by shrinking guardedPaths.
+ * Every diverged guarded path is returned. The gate needs the full list so
+ * CODEOWNERS approval cannot be satisfied by the config owner alone.
  */
 export async function checkGuard(deps: Deps, config: UsablConfig, trustedRef = 'HEAD'): Promise<string[]> {
   const [workingConfig, trustedConfig] = await Promise.all([
     deps.fs.readFile(CONFIG_PATH),
     deps.git.show(trustedRef, CONFIG_PATH),
   ]);
-  if (workingConfig !== trustedConfig) {
+  const configDiverged = workingConfig !== trustedConfig;
+
+  // Scope is trusted-ref config when bytes diverged. Matched bytes can use
+  // working-tree parse because they are the same document.
+  const scopeRaw = configDiverged ? trustedConfig : workingConfig;
+  const scopeConfig = scopeRaw === null ? null : parseGuardConfigBytes(scopeRaw);
+  if (scopeConfig === null && !configDiverged) {
     return [CONFIG_PATH];
   }
 
-  // Guard scope comes from the verified config bytes, not the caller object.
-  // After bytes match the trusted ref, trusting in-memory config would let a caller edit
-  // guardedPaths and self-approve in the same run.
-  if (workingConfig === null) {
-    return [CONFIG_PATH];
-  }
-  const verifiedConfig = parseGuardConfigBytes(workingConfig);
-  if (verifiedConfig === null) {
-    return [CONFIG_PATH];
-  }
-
-  const expanded = await expandGuardedSet(deps, buildGuardedSet(verifiedConfig), trustedRef);
+  const expanded = await expandGuardedSet(
+    deps,
+    buildGuardedSet(scopeConfig ?? { guardedPaths: [] }),
+    trustedRef,
+  );
   const diverged: string[] = [];
   for (const path of expanded) {
     const [working, trusted] = await Promise.all([deps.fs.readFile(path), deps.git.show(trustedRef, path)]);
     // Optional ledgers may be absent in both places early in a repo lifecycle.
+    if (working === null && trusted === null) {
+      continue;
+    }
+    if (working !== trusted) {
+      diverged.push(path);
+    }
+  }
+  return diverged.sort();
+}
+
+/**
+ * Same honesty as checkGuard, for CI policy enforce that only has git refs.
+ * Working-tree bytes are not consulted. PR head vs trusted ref is the source of truth
+ * so a forged Result cannot hide a guarded-file diff.
+ */
+export async function listDivergedGuardedPathsAtRefs(
+  git: Pick<GitReader, 'show' | 'lsFiles'>,
+  trustedRef: string,
+  workingRef: string,
+): Promise<string[]> {
+  const [workingConfig, trustedConfig] = await Promise.all([
+    git.show(workingRef, CONFIG_PATH),
+    git.show(trustedRef, CONFIG_PATH),
+  ]);
+  const configDiverged = workingConfig !== trustedConfig;
+  const scopeRaw = configDiverged ? trustedConfig : workingConfig;
+  const scopeConfig = scopeRaw === null ? null : parseGuardConfigBytes(scopeRaw);
+  if (scopeConfig === null && !configDiverged) {
+    return [CONFIG_PATH];
+  }
+
+  const expanded = new Set<string>();
+  for (const entry of buildGuardedSet(scopeConfig ?? { guardedPaths: [] })) {
+    const prefix = normalizePrefix(entry);
+    const [trustedFiles, workingFiles] = await Promise.all([
+      git.lsFiles(trustedRef, prefix),
+      git.lsFiles(workingRef, prefix),
+    ]);
+    if (trustedFiles.length === 0 && workingFiles.length === 0) {
+      expanded.add(entry);
+      continue;
+    }
+    for (const path of trustedFiles) {
+      expanded.add(path);
+    }
+    for (const path of workingFiles) {
+      expanded.add(path);
+    }
+  }
+
+  const diverged: string[] = [];
+  for (const path of expanded) {
+    const [working, trusted] = await Promise.all([git.show(workingRef, path), git.show(trustedRef, path)]);
     if (working === null && trusted === null) {
       continue;
     }

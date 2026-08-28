@@ -6,6 +6,7 @@
  */
 import { matchGlob } from '../primitives/match-glob.js';
 import type { Result } from '../contracts/index.js';
+import { listDivergedGuardedPathsAtRefs } from '../trust/guard.js';
 
 export interface PolicyReview {
   userLogin: string;
@@ -20,6 +21,7 @@ export interface PolicyPr {
 
 export interface PolicyGit {
   show(ref: string, path: string): Promise<string | null>;
+  lsFiles(ref: string, prefix: string): Promise<string[]>;
 }
 
 export interface PolicyEnforceDeps {
@@ -144,7 +146,14 @@ export async function enforcePolicy(result: Result, deps: PolicyEnforceDeps): Pr
   if (result.exitCode === 4) {
     return { exitCode: 4, message: result.summary };
   }
-  if (result.verdict !== 'approval_required') {
+
+  // Git refs are the policy source of truth. A forged stdin verdict cannot skip CODEOWNERS.
+  const dirtyGuardedPaths = await listDivergedGuardedPathsAtRefs(
+    deps.git,
+    deps.trustedRef,
+    deps.pr.headSha,
+  );
+  if (dirtyGuardedPaths.length === 0) {
     return { exitCode: 0, message: 'no policy change' };
   }
 
@@ -158,26 +167,16 @@ export async function enforcePolicy(result: Result, deps: PolicyEnforceDeps): Pr
     return { exitCode: 2, message: parsed.message };
   }
 
-  const owners = ownersFor(parsed.rules, result.dirtyGuardedPaths);
-  if (owners.size === 0) {
-    return { exitCode: 2, message: 'no CODEOWNERS user logins for dirty guarded paths' };
-  }
-
   const reviews = await deps.listReviews();
   const latest = latestDecisiveReviewByUser(reviews);
   const author = deps.pr.authorLogin.toLowerCase();
-  const approved = [...owners].some((owner) => {
-    if (owner === author) {
-      return false;
-    }
-    const review = latest.get(owner);
-    return review !== undefined && review.state === 'APPROVED' && review.commitId === deps.pr.headSha;
-  });
-
-  if (!approved) {
+  const uncovered = dirtyGuardedPaths.filter(
+    (path) => !pathHasQualifyingApproval(path, parsed.rules, latest, author, deps.pr.headSha),
+  );
+  if (uncovered.length > 0) {
     return {
       exitCode: 2,
-      message: 'approval required: need a CODEOWNERS user review of this head that is not the PR author',
+      message: 'approval required: each dirty guarded path needs a CODEOWNERS user review of this head that is not the PR author',
     };
   }
   return { exitCode: 0, message: 'policy owner approved current head' };
@@ -220,6 +219,26 @@ function parseCodeowners(raw: string): { ok: true; rules: CodeownersRule[] } | {
     rules.push({ pattern, users });
   }
   return { ok: true, rules };
+}
+
+function pathHasQualifyingApproval(
+  path: string,
+  rules: CodeownersRule[],
+  latest: Map<string, PolicyReview>,
+  author: string,
+  headSha: string,
+): boolean {
+  const owners = ownersFor(rules, [path]);
+  if (owners.size === 0) {
+    return false;
+  }
+  return [...owners].some((owner) => {
+    if (owner === author) {
+      return false;
+    }
+    const review = latest.get(owner);
+    return review !== undefined && review.state === 'APPROVED' && review.commitId === headSha;
+  });
 }
 
 function ownersFor(rules: CodeownersRule[], paths: string[]): Set<string> {

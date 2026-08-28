@@ -12,81 +12,21 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { run } from './run.js';
-import type { SurfaceConfig, UsablConfig } from './contracts/index.js';
+import type { UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
 import { makeFsGlob } from './deps/fs.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
 import { makeGitReader } from './deps/git.js';
+import { parseUsablConfig } from './intake/config.js';
 import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultJson } from './surfaces/policy-enforce.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
 
-function expectObject(value: unknown, label: string): object {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(`${label} must be an object`);
-  }
-  return value;
-}
-
-function expectString(value: unknown, label: string): string {
-  if (typeof value !== 'string') {
-    throw new Error(`${label} must be a string`);
-  }
-  return value;
-}
-
-function expectStringArray(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
-    throw new Error(`${label} must be a string array`);
-  }
-  return value;
-}
-
-function parseSurface(raw: unknown, index: number): SurfaceConfig {
-  const surface = expectObject(raw, `surfaces[${index}]`);
-  return {
-    id: expectString(Reflect.get(surface, 'id'), `surfaces[${index}].id`),
-    url: expectString(Reflect.get(surface, 'url'), `surfaces[${index}].url`),
-    files: expectStringArray(Reflect.get(surface, 'files'), `surfaces[${index}].files`),
-  };
-}
-
-function parseConfig(raw: string): UsablConfig {
-  const parsed: unknown = JSON.parse(raw);
-  const root = expectObject(parsed, 'config');
-  const discovery = expectObject(Reflect.get(root, 'discovery'), 'discovery');
-  const surfacesRaw = Reflect.get(root, 'surfaces');
-  if (!Array.isArray(surfacesRaw)) {
-    throw new Error('surfaces must be an array');
-  }
-
-  const requirementsRaw = Reflect.get(root, 'requirements');
-  const requirements =
-    requirementsRaw === undefined ? undefined : expectString(requirementsRaw, 'requirements');
-
-  const promotedRaw = Reflect.get(root, 'promotedObligations');
-  const promotedObligations =
-    promotedRaw === undefined ? undefined : expectStringArray(promotedRaw, 'promotedObligations');
-
-  return {
-    appBaseUrl: expectString(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
-    uiFileGlobs: expectStringArray(Reflect.get(root, 'uiFileGlobs'), 'uiFileGlobs'),
-    discovery: {
-      routerFile: expectString(Reflect.get(discovery, 'routerFile'), 'discovery.routerFile'),
-      wideBlastGlobs: expectStringArray(Reflect.get(discovery, 'wideBlastGlobs'), 'discovery.wideBlastGlobs'),
-    },
-    surfaces: surfacesRaw.map((surface, index) => parseSurface(surface, index)),
-    guardedPaths: expectStringArray(Reflect.get(root, 'guardedPaths'), 'guardedPaths'),
-    ...(requirements === undefined ? {} : { requirements }),
-    ...(promotedObligations === undefined ? {} : { promotedObligations }),
-  };
-}
-
 export async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
-  return parseConfig(await readFile(path, 'utf8'));
+  return parseUsablConfig(await readFile(path, 'utf8'));
 }
 
 async function readStdin(): Promise<string> {
@@ -123,7 +63,7 @@ async function runEnforce(opts: CliOptions): Promise<number> {
     const outcome = await enforcePolicy(result, {
       trustedRef: opts.trustedRef,
       pr,
-      git: { show: (ref, path) => git.show(ref, path) },
+      git: { show: (ref, path) => git.show(ref, path), lsFiles: (ref, prefix) => git.lsFiles(ref, prefix) },
       listReviews: () => listPullReviews(pr.number),
     });
     process.stdout.write(`${outcome.message}\n`);

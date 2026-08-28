@@ -27,6 +27,7 @@ import type {
 import { computeCoverage } from './coverage/planner.js';
 import { gate } from './gate/index.js';
 import { mintReceipt } from './evidence/receipt.js';
+import { parseUsablConfig } from './intake/config.js';
 import { loadRequirements } from './intake/load.js';
 import { assertIso8601Utc } from './primitives/iso8601.js';
 import { checkGuard } from './trust/guard.js';
@@ -134,9 +135,10 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
   try {
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
     const guardDivergedPaths = await checkGuard(deps, config, opts.trustedRef ?? 'HEAD');
+    const scanConfig = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
     const coverageFs = overlayUntrustedRoutes(deps, guardDivergedPaths, opts.trustedRef);
-    const discoveredCoverage = await computeCoverage(coverageFs, config, changed);
-    const loadedRequirements = await loadRequirements(deps.fs, config);
+    const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed);
+    const loadedRequirements = await loadRequirements(deps.fs, scanConfig);
     const intakePolicyPaths =
       loadedRequirements.ok
         ? []
@@ -246,6 +248,28 @@ async function readWaiversOrEmpty(
   }
 }
 
+async function scanConfigForCoverage(
+  deps: Deps,
+  config: UsablConfig,
+  guardDivergedPaths: string[],
+  trustedRef: string | undefined,
+): Promise<UsablConfig> {
+  // Working-tree config URLs are untrusted when config diverged. Scan the
+  // trusted-ref document so a policy PR cannot point the CI browser at a new origin.
+  if (!guardDivergedPaths.includes('usabl.config.json') || trustedRef === undefined) {
+    return config;
+  }
+  const raw = await deps.git.show(trustedRef, 'usabl.config.json');
+  if (raw === null) {
+    return { ...config, surfaces: [], uiFileGlobs: [] };
+  }
+  try {
+    return parseUsablConfig(raw);
+  } catch {
+    return { ...config, surfaces: [], uiFileGlobs: [] };
+  }
+}
+
 function overlayUntrustedRoutes(
   deps: Deps,
   guardDivergedPaths: string[],
@@ -253,8 +277,6 @@ function overlayUntrustedRoutes(
 ): Deps['fs'] {
   // Coverage planning reads usabl.routes.json. If that file diverged, use the
   // trusted ref (or nothing) so a PR cannot widen its own blast radius.
-  // usabl.config.json is loaded by the CLI before run() and is already listed
-  // in dirtyGuardedPaths; substituting it here would not change scan targets.
   const routesDiverged = guardDivergedPaths.includes('usabl.routes.json');
   if (!routesDiverged) {
     return deps.fs;

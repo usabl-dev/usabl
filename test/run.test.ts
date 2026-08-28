@@ -125,4 +125,52 @@ describe('run', () => {
     expect(r.accessibilityExitCode).toBe(1);
     expect(r.findings.some((finding) => finding.rule === 'color-contrast')).toBe(true);
   });
+
+  it('lists every dirty guarded path when config and evidence both changed', async () => {
+    const deps = makeFakeDeps({
+      files: {
+        'usabl.config.json': '{"tampered":true}',
+        '.usabl-evidence.json': '{"version":1,"entries":[]}',
+      },
+      headContents: {
+        'usabl.config.json': '{}',
+        '.usabl-evidence.json': '{"version":1,"entries":[{"screenId":"x","layer":"axe","rule":"r","elementKey":null,"identityBasis":"count","count":1}]}',
+      },
+      changed: [
+        { code: 'M', path: 'usabl.config.json' },
+        { code: 'M', path: '.usabl-evidence.json' },
+      ],
+    });
+    const r = await run(deps, config);
+    expect(r.verdict).toBe('approval_required');
+    expect(r.dirtyGuardedPaths).toEqual(['.usabl-evidence.json', 'usabl.config.json']);
+  });
+
+  it('scans using trusted-ref config URLs when working-tree config diverged', async () => {
+    const goodConfigJson = JSON.stringify({
+      appBaseUrl: 'http://127.0.0.1:5173',
+      uiFileGlobs: ['fixtures/app/src/**'],
+      discovery: { routerFile: 'fixtures/app/src/App.tsx', wideBlastGlobs: [] },
+      surfaces: [
+        { id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['fixtures/app/src/ClustersPage.tsx'] },
+      ],
+      guardedPaths: ['usabl.config.json'],
+    });
+    const evilConfig = {
+      ...config,
+      appBaseUrl: 'http://evil.test',
+      surfaces: [{ id: 'clusters', url: 'http://evil.test/clusters', files: ['fixtures/app/src/ClustersPage.tsx'] }],
+    };
+    const deps = makeFakeDeps({
+      files: { 'usabl.config.json': '{"appBaseUrl":"http://evil.test"}' },
+      headContents: { 'usabl.config.json': goodConfigJson },
+      refContents: { 'origin/main': { 'usabl.config.json': goodConfigJson } },
+      changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
+      scans: { clusters: scanWith([failDraft]) },
+    });
+    const r = await run(deps, evilConfig, { trustedRef: 'origin/main' });
+    expect(r.verdict).toBe('approval_required');
+    expect(r.screens[0]?.url).toBe('http://127.0.0.1:5173/clusters');
+    expect(r.accessibilityVerdict).toBe('regression');
+  });
 });
