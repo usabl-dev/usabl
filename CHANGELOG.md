@@ -40,3 +40,5 @@ tag or publish to npm.
 - Menu state attributes are read for PatternFly checks.
 - Package JSON output is preserved through the build.
 - Fleet Insights measurement is runnable. It is not a verdict.
+- Requirement YAML intake is pinned to `--trusted-ref` so accessibility checks
+  cannot self-grade against unapproved PR policy edits.

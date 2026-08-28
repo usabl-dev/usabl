@@ -177,6 +177,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const deps = await buildDeps(config, {
     // Static-only denies live checks as explicit capability gaps instead of silent omission.
     allowedCapabilities: opts.staticOnly ? [] : ['live'],
+    ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
   });
   try {
     let changedFiles: string[] | undefined;

@@ -15,6 +15,7 @@ import { makeKeyboardWalkProvider } from '../providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
 import { loadRequirements } from '../intake/load.js';
 import { mapRequirementsToProviders } from '../intake/map-to-providers.js';
+import { overlayRequirementsFs } from '../intake/overlay-fs.js';
 import { makeRealBrowserDriver } from './real.js';
 import { makeGitReader } from './git.js';
 import { makeFsGlob } from './fs.js';
@@ -83,7 +84,7 @@ function readChromiumVersion(): string {
 
 export async function buildDeps(
   config: UsablConfig,
-  options: { cwd?: string; allowedCapabilities?: Capability[]; storageStatePath?: string } = {},
+  options: { cwd?: string; allowedCapabilities?: Capability[]; storageStatePath?: string; trustedRef?: string } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
   const allowedCapabilities = options.allowedCapabilities ?? ['live'];
@@ -91,7 +92,9 @@ export async function buildDeps(
     options.storageStatePath === undefined ? {} : { storageStatePath: options.storageStatePath },
   );
   const fs = makeFsGlob({ cwd });
-  const loadedRequirements = await loadRequirements(fs, config);
+  const git = makeGitReader({ cwd });
+  const intakeFs = overlayRequirementsFs(fs, git, config, options.trustedRef);
+  const loadedRequirements = await loadRequirements(intakeFs, config);
   const providers = [
     axeProvider,
     makeRulepackProvider(),
@@ -113,7 +116,7 @@ export async function buildDeps(
       chromium: readChromiumVersion(),
     },
     browser,
-    git: makeGitReader({ cwd }),
+    git,
     fs,
     checkRunner: makeCheckRunner({
       browser,

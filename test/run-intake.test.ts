@@ -64,4 +64,95 @@ requirements:
     expect(result.exitCode).toBe(2);
     expect(result.dirtyGuardedPaths).toContain('requirements/bad.yaml');
   });
+
+  it('uses trusted-ref requirements for accessibility scans when working-tree intake is malformed', async () => {
+    const configJson = JSON.stringify({
+      appBaseUrl: config.appBaseUrl,
+      uiFileGlobs: config.uiFileGlobs,
+      discovery: config.discovery,
+      surfaces: config.surfaces,
+      requirements: 'requirements/',
+      guardedPaths: config.guardedPaths,
+    });
+    const badYaml = `
+version: 1
+requirements:
+  - id: requirement-pr
+    kind: content
+    surface: clusters
+    description: malformed intake file
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Welcome
+    approved: true
+  broken: [1, 2
+`;
+    const goodYaml = `
+version: 1
+requirements:
+  - id: requirement-base
+    kind: content
+    surface: clusters
+    description: baseline requirement
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Welcome
+    approved: true
+`;
+
+    const deps = makeFakeDeps({
+      files: {
+        'usabl.config.json': configJson,
+        'requirements/base.yaml': badYaml,
+      },
+      headContents: {
+        'usabl.config.json': configJson,
+        'requirements/base.yaml': goodYaml,
+      },
+      refContents: {
+        'origin/main': {
+          'usabl.config.json': configJson,
+          'requirements/base.yaml': goodYaml,
+        },
+      },
+      changed: [
+        { code: 'M', path: 'requirements/base.yaml' },
+        { code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' },
+      ],
+      scans: {
+        clusters: {
+          ...emptyScan(),
+          drafts: [
+            {
+              rule: 'color-contrast',
+              layer: 'axe',
+              severity: 'serious',
+              evidenceClass: 'deterministic',
+              screenId: 'clusters',
+              elementPath: 'button',
+              elementName: 'Save',
+              role: 'button',
+              whatUserExperiences: '',
+              why: '',
+              fix: '',
+              evidence: { name: { value: 'Save', source: 'ax-tree', fromTree: true } },
+              confidence: 'fail',
+            },
+          ],
+        },
+      },
+    });
+    const scanSpy = vi.spyOn(deps.checkRunner, 'scan');
+
+    const result = await run(deps, config, { trustedRef: 'origin/main' });
+
+    expect(scanSpy).toHaveBeenCalledTimes(1);
+    expect(result.verdict).toBe('approval_required');
+    expect(result.exitCode).toBe(2);
+    expect(result.accessibilityVerdict).toBe('regression');
+    expect(result.accessibilityExitCode).toBe(1);
+    expect(result.dirtyGuardedPaths).toContain('requirements/base.yaml');
+  });
 });

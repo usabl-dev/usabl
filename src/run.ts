@@ -29,6 +29,7 @@ import { gate } from './gate/index.js';
 import { mintReceipt } from './evidence/receipt.js';
 import { parseUsablConfig } from './intake/config.js';
 import { loadRequirements } from './intake/load.js';
+import { overlayRequirementsFs } from './intake/overlay-fs.js';
 import { assertIso8601Utc } from './primitives/iso8601.js';
 import { checkGuard } from './trust/guard.js';
 
@@ -138,7 +139,8 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const scanConfig = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
     const coverageFs = overlayUntrustedRoutes(deps, guardDivergedPaths, opts.trustedRef);
     const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed);
-    const loadedRequirements = await loadRequirements(deps.fs, scanConfig);
+    const intakeFs = overlayRequirementsFs(deps.fs, deps.git, scanConfig, opts.trustedRef);
+    const loadedRequirements = await loadRequirements(intakeFs, scanConfig);
     const intakePolicyPaths =
       loadedRequirements.ok
         ? []

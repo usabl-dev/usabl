@@ -27,7 +27,8 @@ re-baseline to green.
 
 **Controls (shipped in spec):**
 
-- Verdicts computed against **committed** base config, not working tree.
+- Verdicts computed against **committed** base config and committed
+  requirements YAML from `--trusted-ref`, not working tree bytes.
 - Config diff -> `approval_required`.
 - CODEOWNERS on policy paths in CI. The accessibility required check uses
   `accessibilityExitCode` (never 2). The policy required check passes only

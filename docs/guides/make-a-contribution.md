@@ -109,7 +109,8 @@ Do not paste the private security review into the pull request.
 ### Policy and floor changes
 
 A pull request that edits `usabl.config.json`, `usabl.routes.json`,
-`.usabl-evidence.json`, or `.usabl-waivers.json` is `approval_required`.
+the configured requirements path, `.usabl-evidence.json`, or
+`.usabl-waivers.json` is `approval_required`.
 That is not a merge dead-end. This is the consumer gate (the app that
 runs `usabl enforce policy`). This repository's org-team CODEOWNERS is
 engine governance and is a separate file.
