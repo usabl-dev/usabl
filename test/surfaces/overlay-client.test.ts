@@ -341,7 +341,8 @@ describe('overlay browser client', { timeout: 15_000 }, () => {
     const host = page.locator('#__usabl-overlay');
     await host.getByRole('button', { name: /Open usabl inspector/i }).click();
 
-    expect(await host.getByText(/4 entries.*floor/i).isVisible()).toBe(true);
+    expect(await host.getByText(/4 previously accepted findings.*cleanly scanned/i).isVisible()).toBe(true);
+    expect(await host.getByText(/usabl floor prune.*re-arm/i).isVisible()).toBe(true);
     await page.context().close();
   });
 
@@ -359,7 +360,7 @@ describe('overlay browser client', { timeout: 15_000 }, () => {
     const host = page.locator('#__usabl-overlay');
     await host.getByRole('button', { name: /Open usabl inspector/i }).click();
 
-    expect(await host.getByText(/floor.*paid/i).count()).toBe(0);
+    expect(await host.getByText(/floor debt/i).count()).toBe(0);
     await page.context().close();
   });
 });

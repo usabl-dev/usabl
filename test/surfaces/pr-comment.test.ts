@@ -174,8 +174,8 @@ describe('projectPrComment', () => {
       }),
     );
 
-    expect(markdown).toContain('2');
-    expect(markdown).toContain('floor');
+    expect(markdown).toContain('floor debt resolved: 2 entries');
+    expect(markdown).toContain('run usabl floor prune to re-arm');
   });
 
   it('omits the floor pay-down notice when the count is zero', () => {
@@ -188,7 +188,7 @@ describe('projectPrComment', () => {
       }),
     );
 
-    expect(markdown).not.toContain('paid down');
-    expect(markdown).not.toMatch(/\bfloor.*paid/i);
+    expect(markdown).not.toContain('floor debt');
+    expect(markdown).not.toContain('prune');
   });
 });

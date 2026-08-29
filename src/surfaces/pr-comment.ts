@@ -63,7 +63,7 @@ function renderConformance(result: Result): string[] {
   ];
   if (result.paidDownCount > 0) {
     const plural = result.paidDownCount === 1 ? 'entry' : 'entries';
-    lines.push(`- floor paid down: ${result.paidDownCount} ${plural}`);
+    lines.push(`- floor debt resolved: ${result.paidDownCount} ${plural} (run usabl floor prune to re-arm)`);
   }
   return lines;
 }

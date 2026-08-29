@@ -151,9 +151,16 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
           })
         : null;
 
-    // Count floor entries paid down. When the floor shrinks, fixed findings surface the
-    // identities that matched and were carried. This count makes re-armed gates visible.
-    const paidDownCount = gated.findings.filter((f) => f.status === 'fixed').length;
+    // Count previously floored barriers that this run confirms are resolved. A barrier is
+    // confirmed resolved only when its screen was scanned cleanly (no coverage gaps) AND
+    // the barrier was not observed. A gapped screen produces no drafts, so an absent barrier
+    // there is unproven (not resolved). Counting it would claim progress that did not happen.
+    const cleanlyScannedScreens = new Set(
+      screens.filter((screen) => screen.gaps.length === 0).map((screen) => screen.screenId),
+    );
+    const paidDownCount = gated.findings.filter(
+      (f) => f.status === 'fixed' && cleanlyScannedScreens.has(f.screenId),
+    ).length;
 
     return {
       schemaVersion: 'usabl.result.v1',

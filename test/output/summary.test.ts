@@ -194,8 +194,8 @@ describe('formatSummary', () => {
         paidDownCount: 3,
       }),
     );
-    expect(out).toContain('3');
-    expect(out).toContain('floor');
+    expect(out).toContain('floor debt resolved: 3');
+    expect(out).toContain('prune to re-arm the gate');
   });
 
   it('omits the floor pay-down notice when the count is zero', () => {

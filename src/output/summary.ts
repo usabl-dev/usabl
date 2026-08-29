@@ -60,8 +60,7 @@ export function formatSummary(result: Result): string {
     lines.push(`  accessibility ${accessibility} (${result.accessibilityExitCode})`);
   }
   if (result.paidDownCount > 0) {
-    const plural = result.paidDownCount === 1 ? 'entry' : 'entries';
-    lines.push(`  floor paid down ${result.paidDownCount} ${plural}`);
+    lines.push(`  floor debt resolved: ${result.paidDownCount} (prune to re-arm the gate)`);
   }
   if (result.receipt) {
     lines.push(`  receipt: sourceTree ${result.receipt.sourceTree} @ ${result.receipt.mintedAt}`);

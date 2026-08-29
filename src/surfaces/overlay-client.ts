@@ -904,10 +904,10 @@ export const overlayClientSource = `(() => {
       return null;
     }
     const section = make('section', 'section');
-    const plural = count === 1 ? 'entry' : 'entries';
-    section.appendChild(make('h3', '', 'Floor paid down'));
+    const plural = count === 1 ? 'finding' : 'findings';
+    section.appendChild(make('h3', '', 'Floor debt resolved'));
     const notice = make('p', '');
-    notice.textContent = count + ' ' + plural + ' removed from the evidence floor. The gate is re-armed for those identities.';
+    notice.textContent = count + ' previously accepted ' + plural + ' no longer present on cleanly scanned screens. Run usabl floor prune to remove them and re-arm the gate.';
     section.appendChild(notice);
     return section;
   }
