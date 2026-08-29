@@ -62,6 +62,7 @@ export interface OverlayProjection {
     mintedAt: string;
   } | null;
   dirtyGuardedPaths: string[];
+  paidDownCount: number;
 }
 
 type Middleware = (
@@ -169,6 +170,7 @@ export function projectOverlay(result: Result): OverlayProjection {
             mintedAt: safe.receipt.mintedAt,
           },
     dirtyGuardedPaths: safe.dirtyGuardedPaths,
+    paidDownCount: safe.paidDownCount,
   };
 }
 

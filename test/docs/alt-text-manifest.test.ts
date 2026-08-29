@@ -48,6 +48,7 @@ function makeResult(receipt: Receipt | null): Result {
     exitCode: 0,
     accessibilityVerdict: receipt === null ? null : 'verified',
     accessibilityExitCode: 0,
+    paidDownCount: 0,
   };
 }
 

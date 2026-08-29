@@ -53,7 +53,7 @@ function renderReceipt(result: Result): string[] {
 function renderConformance(result: Result): string[] {
   // This is a read-only three-bucket projection and never a score.
   const summary = computeConformance(result);
-  return [
+  const lines = [
     '### Conformance summary',
     `- schemaVersion: \`${result.schemaVersion}\``,
     `- deterministic: new ${summary.deterministic.newFailures}, carried ${summary.deterministic.carried}, waived ${summary.deterministic.waived}, fixed ${summary.deterministic.fixed}`,
@@ -61,6 +61,11 @@ function renderConformance(result: Result): string[] {
     `- not evaluated: unresolved files ${summary.notEvaluated.unresolvedFiles}, gaps ${summary.notEvaluated.gaps}`,
     `- blocked: ${summary.blocked ? 'yes' : 'no'}`,
   ];
+  if (result.paidDownCount > 0) {
+    const plural = result.paidDownCount === 1 ? 'entry' : 'entries';
+    lines.push(`- floor paid down: ${result.paidDownCount} ${plural}`);
+  }
+  return lines;
 }
 
 function formatFinding(finding: Finding): string[] {

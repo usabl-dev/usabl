@@ -67,6 +67,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   exitCode: 1,
   accessibilityVerdict: null,
   accessibilityExitCode: 0,
+  paidDownCount: 0,
   ...over,
 });
 
@@ -161,5 +162,33 @@ describe('projectPrComment', () => {
     expect(markdown).toContain('usabl report: APPROVAL REQUIRED');
     expect(markdown).toContain('Accessibility on this run: **REGRESSION**');
     expect(markdown).toContain('CODEOWNERS user approval');
+  });
+
+  it('shows the floor pay-down count when greater than zero', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'verified',
+        summary: 'verified: 0 gating finding(s)',
+        findings: [],
+        paidDownCount: 2,
+      }),
+    );
+
+    expect(markdown).toContain('2');
+    expect(markdown).toContain('floor');
+  });
+
+  it('omits the floor pay-down notice when the count is zero', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'verified',
+        summary: 'verified: 0 gating finding(s)',
+        findings: [],
+        paidDownCount: 0,
+      }),
+    );
+
+    expect(markdown).not.toContain('paid down');
+    expect(markdown).not.toMatch(/\bfloor.*paid/i);
   });
 });

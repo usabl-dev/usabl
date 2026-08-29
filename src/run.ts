@@ -151,6 +151,10 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
           })
         : null;
 
+    // Count floor entries paid down. When the floor shrinks, fixed findings surface the
+    // identities that matched and were carried. This count makes re-armed gates visible.
+    const paidDownCount = gated.findings.filter((f) => f.status === 'fixed').length;
+
     return {
       schemaVersion: 'usabl.result.v1',
       verdict: gated.verdict,
@@ -163,6 +167,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       exitCode: gated.exitCode,
       accessibilityVerdict: gated.accessibilityVerdict,
       accessibilityExitCode: gated.accessibilityExitCode,
+      paidDownCount,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -180,6 +185,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       exitCode: 4,
       accessibilityVerdict: null,
       accessibilityExitCode: 4,
+      paidDownCount: 0,
     };
   }
 }

@@ -138,6 +138,11 @@ export interface Result {
   // Never approval_required and never exit 2. Crash runs use exitCode 4 and leave these as null / 4.
   accessibilityVerdict: AccessibilityVerdict | null;
   accessibilityExitCode: AccessibilityExitCode;
+  // Count of floor entries paid down when the floor shrank. When the floor pays down
+  // debt, this count surfaces on every output so a re-armed gate is visible to humans
+  // instead of silent. Zero means no pay-down happened. This is projection only; the
+  // gate never consumes it and it never influences a verdict.
+  paidDownCount: number;
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);

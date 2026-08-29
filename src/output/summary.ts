@@ -59,6 +59,10 @@ export function formatSummary(result: Result): string {
         : (HEADLINE[result.accessibilityVerdict] ?? result.accessibilityVerdict);
     lines.push(`  accessibility ${accessibility} (${result.accessibilityExitCode})`);
   }
+  if (result.paidDownCount > 0) {
+    const plural = result.paidDownCount === 1 ? 'entry' : 'entries';
+    lines.push(`  floor paid down ${result.paidDownCount} ${plural}`);
+  }
   if (result.receipt) {
     lines.push(`  receipt: sourceTree ${result.receipt.sourceTree} @ ${result.receipt.mintedAt}`);
   }
