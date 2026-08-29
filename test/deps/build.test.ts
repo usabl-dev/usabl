@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { chromium } from 'playwright';
 import { describe, expect, it, vi } from 'vitest';
-import { buildDeps } from '../../src/deps/build.js';
+import { buildDeps, hashEngineFiles } from '../../src/deps/build.js';
 import { testConfig } from '../helpers.js';
 
 const packageJsonPath = fileURLToPath(new URL('../../package.json', import.meta.url));
@@ -42,7 +42,10 @@ describe('buildDeps', () => {
     const packageVersion =
       typeof packageJson === 'object' && packageJson !== null ? readVersion(Reflect.get(packageJson, 'version')) : null;
 
-    expect(deps.runnerVersion).toBe(packageVersion);
+    // runnerVersion binds the engine: package version plus a sha256 prefix over the
+    // on-disk engine files, so any engine change invalidates a prior receipt (ground-truth s10).
+    expect(deps.runnerVersion.startsWith(`${packageVersion}+`)).toBe(true);
+    expect(deps.runnerVersion).toMatch(/^.+\+[0-9a-f]{64}$/);
     expect(deps.scannerVersions.axeCore).toMatch(/\S+/);
     expect(deps.scannerVersions.playwright).toMatch(/\S+/);
     expect(deps.scannerVersions.chromium).toMatch(/\S+/);
@@ -77,5 +80,54 @@ describe('buildDeps', () => {
     } finally {
       launchSpy.mockRestore();
     }
+  });
+});
+
+describe('hashEngineFiles', () => {
+  it('is deterministic and independent of input order', () => {
+    const forward = [
+      { path: 'a.ts', content: 'alpha' },
+      { path: 'b.ts', content: 'beta' },
+    ];
+    const reversed = [
+      { path: 'b.ts', content: 'beta' },
+      { path: 'a.ts', content: 'alpha' },
+    ];
+
+    expect(hashEngineFiles(forward)).toBe(hashEngineFiles(reversed));
+  });
+
+  it('changes when any engine file content changes', () => {
+    const base = [
+      { path: 'a.ts', content: 'alpha' },
+      { path: 'b.ts', content: 'beta' },
+    ];
+    const tampered = [
+      { path: 'a.ts', content: 'alpha' },
+      { path: 'b.ts', content: 'beta-tampered' },
+    ];
+
+    expect(hashEngineFiles(tampered)).not.toBe(hashEngineFiles(base));
+  });
+
+  it('changes when an engine file is renamed', () => {
+    const base = [{ path: 'src/run.ts', content: 'engine' }];
+    const renamed = [{ path: 'src/run-moved.ts', content: 'engine' }];
+
+    expect(hashEngineFiles(renamed)).not.toBe(hashEngineFiles(base));
+  });
+
+  it('changes when an engine file is added or removed', () => {
+    const base = [{ path: 'a.ts', content: 'alpha' }];
+    const grown = [
+      { path: 'a.ts', content: 'alpha' },
+      { path: 'b.ts', content: 'beta' },
+    ];
+
+    expect(hashEngineFiles(grown)).not.toBe(hashEngineFiles(base));
+  });
+
+  it('returns a lowercase hex sha256 digest', () => {
+    expect(hashEngineFiles([{ path: 'a.ts', content: 'alpha' }])).toMatch(/^[0-9a-f]{64}$/);
   });
 });

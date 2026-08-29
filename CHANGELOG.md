@@ -37,6 +37,9 @@ tag or publish to npm.
 
 ### Fixed
 
+- Receipts bind the engine build. `runnerVersion` embeds a sha256 prefix over the
+  on-disk engine files, so tampering with or upgrading the engine invalidates a
+  prior receipt on re-verification, matching ground truth §10.
 - Linked Stop hooks execute.
 - Tests are ignored when mapping UI coverage.
 - Menu state attributes are read for PatternFly checks.

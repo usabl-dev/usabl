@@ -761,7 +761,7 @@ committed tamper that git-status-clean cannot see.
 Three hashes:
 - `sourceTree`: hash of the working tree (git write-tree on a temporary index).
 - `policyHash`: sha256 over sorted guarded-path blob shas at the anchor.
-- `runnerVersion`: package version + sha256 prefix over on-disk engine files.
+- `runnerVersion`: package version + sha256 over on-disk engine files.
 
 Any file change or committed policy change invalidates the receipt.
 

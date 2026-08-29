@@ -3,11 +3,14 @@
  * This unit wires adapters and providers only and must never decide verdicts.
  * Browser launch stays lazy so normal checks and type/test workflows do not open Chromium.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import type { Capability, Deps, UsablConfig } from '../contracts/index.js';
+import { canonicalHash, sha256 } from '../primitives/canonical.js';
+import { sortBy } from '../primitives/sortKey.js';
 import { makeCheckRunner } from '../providers/check-runner.js';
 import { axeProvider } from '../providers/axe/index.js';
 import { makeRulepackProvider } from '../providers/rulepack/index.js';
@@ -38,7 +41,7 @@ function readVersion(value: unknown): string | null {
   return trimmed.length === 0 ? null : trimmed;
 }
 
-async function readRunnerVersion(): Promise<string> {
+async function readPackageVersion(): Promise<string> {
   for (const path of RUNNER_PACKAGE_PATHS) {
     try {
       const raw = await readFile(path, 'utf8');
@@ -59,6 +62,61 @@ async function readRunnerVersion(): Promise<string> {
     }
   }
   throw new Error('usabl package.json was not found beside the source or built package');
+}
+
+/**
+ * Deterministic digest over the engine's own files. `runnerVersion` embeds a prefix of this,
+ * so a change to any shipped engine file moves the receipt fingerprint (ground-truth §10):
+ * a receipt minted by one engine build cannot re-verify under a tampered or upgraded engine.
+ * Pure and order-independent so trust never depends on directory-walk order.
+ */
+export function hashEngineFiles(files: Array<{ path: string; content: string }>): string {
+  const fingerprints = sortBy(
+    files.map((file) => [file.path, sha256(file.content)] as const),
+    ([path]) => path,
+  );
+  return canonicalHash(fingerprints);
+}
+
+/**
+ * Resolve the on-disk engine root and the extension that marks engine code.
+ * Built package: this module is a bundled chunk in `dist/`; engine files are `dist/*.js`.
+ * Source or test run: this module is `src/deps/build.ts`; engine files are `src` tree `*.ts`.
+ */
+function resolveEngineScope(): { root: string; extension: string } {
+  const selfDir = dirname(fileURLToPath(import.meta.url));
+  if (basename(selfDir) === 'deps' && basename(dirname(selfDir)) === 'src') {
+    return { root: dirname(selfDir), extension: '.ts' };
+  }
+  return { root: selfDir, extension: '.js' };
+}
+
+async function collectEngineFiles(root: string, extension: string): Promise<Array<{ path: string; content: string }>> {
+  const entries = await readdir(root, { withFileTypes: true, recursive: true });
+  const files: Array<{ path: string; content: string }> = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(extension)) {
+      continue;
+    }
+    const absolute = join(entry.parentPath, entry.name);
+    files.push({ path: relative(root, absolute), content: await readFile(absolute, 'utf8') });
+  }
+  return files;
+}
+
+async function readEngineHash(): Promise<string> {
+  const { root, extension } = resolveEngineScope();
+  const files = await collectEngineFiles(root, extension);
+  if (files.length === 0) {
+    // Fail closed: a receipt that cannot bind the engine would be a false proof.
+    throw new Error(`usabl engine files were not found under ${root}`);
+  }
+  return hashEngineFiles(files);
+}
+
+async function readRunnerVersion(): Promise<string> {
+  const [version, engineHash] = await Promise.all([readPackageVersion(), readEngineHash()]);
+  return `${version}+${engineHash}`;
 }
 
 function readDependencyVersion(packageName: string): string {
