@@ -206,7 +206,7 @@ export interface InteractionContract {
   maxTabPath?: number;
 }
 
-// ---- design intake + docs output (types frozen; producers not wired yet) ----
+// ---- design intake + docs output (producers wired; reachable via `usabl docs` and the usabl/docs export) ----
 export type RequirementKind = 'content' | 'flow' | 'doc';
 export interface ContentAssertion {
   type: 'content';
@@ -309,6 +309,9 @@ export interface Deps {
   checkRunner: CheckRunner;
   runnerVersion: string;
   scannerVersions: { axeCore: string; playwright: string; chromium: string };
+  // The design-intake bundle loaded once at build time (trusted-ref overlaid). The docs surface
+  // reads this exact bundle so it never re-derives intake or drifts from what the run enforced.
+  requirements: RequirementBundle;
 }
 
 // ---- config (operator file; engine does not hardcode origins) ----

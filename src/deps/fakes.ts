@@ -3,7 +3,7 @@
  * Scripted maps are the only source of truth. `browser.open` ignores the URL.
  * Unused Page methods throw: a test that hits them is lying about coverage, not passing.
  */
-import type { Deps, ScreenScan, Page } from '../contracts/index.js';
+import type { Deps, RequirementBundle, ScreenScan, Page } from '../contracts/index.js';
 import { matchGlob } from '../primitives/match-glob.js';
 
 export interface FakeDepsSpec {
@@ -19,6 +19,7 @@ export interface FakeDepsSpec {
   writeTree: string; // git write-tree result
   headRef: string;
   scans: Record<string, ScreenScan>; // by screenId
+  requirements?: RequirementBundle; // design-intake bundle for the docs surface
 }
 
 const DEFAULTS: FakeDepsSpec = {
@@ -33,6 +34,7 @@ const DEFAULTS: FakeDepsSpec = {
   writeTree: 'tree-0000',
   headRef: 'HEAD-0000',
   scans: {},
+  requirements: { version: 1, requirements: [] },
 };
 
 const notUsed = (name: string) => async (): Promise<never> => {
@@ -105,6 +107,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
       readFile: async (path) => spec.files[path] ?? null,
       glob: async (patterns) => Object.keys(spec.files).filter((f) => patterns.some((p) => matchGlob(p, f))),
     },
+    requirements: spec.requirements ?? { version: 1, requirements: [] },
     checkRunner: {
       scan: async ({ id, url }) => spec.scans[id] ?? { screenId: id, url, stops: [], drafts: [], gaps: [] },
     },

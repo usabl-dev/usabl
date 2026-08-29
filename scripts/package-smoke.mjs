@@ -99,6 +99,14 @@ try {
   assert.equal(refused.status, 2, failure('installed usabl CI refusal', refused));
   assert.match(refused.stderr, /CI mode requires --trusted-ref/);
 
+  // The docs surface must be reachable from the installed CLI, not just as a library import.
+  // With no surfaces or requirements configured it emits an empty, well-formed artifact envelope.
+  const docs = run(process.execPath, [cli, 'docs'], { cwd: consumer });
+  assert.equal(docs.status, 0, failure('installed usabl docs', docs));
+  const docsResult = JSON.parse(docs.stdout);
+  assert.ok(Array.isArray(docsResult.artifacts), 'usabl docs did not emit an artifacts array');
+  assert.equal(docsResult.artifacts.length, 0, 'usabl docs invented artifacts with no config');
+
   const installedPackage = join(consumer, 'node_modules', 'usabl');
   const installedStopHook = join(installedPackage, 'dist', 'stop-hook-runner.js');
   const directHook = run(process.execPath, [installedStopHook], {

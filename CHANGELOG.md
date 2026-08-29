@@ -15,6 +15,11 @@ tag or publish to npm.
   policy change can merge with a non-author CODEOWNERS approval of the current
   head for each dirty guarded path. Result gains `accessibilityVerdict` and
   `accessibilityExitCode` (never 2).
+- `usabl docs` generates accessible documentation artifacts (alt-text manifest,
+  announcement snippets, keyboard paths) from a run. It is a generator, not a
+  gate: it always exits 0 and binds every artifact to the receipt, so unverified
+  surfaces carry no evidence reference. The same projection is available as the
+  `usabl/docs` library export (`projectDocs`, `collectDocArtifacts`).
 - Browser inspector: refresh and locate reported findings.
 - Overlay projection and accessibility inspector surfaces.
 - Team orientation, How usabl works, and code walkthrough pages.

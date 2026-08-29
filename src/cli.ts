@@ -20,6 +20,7 @@ import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { makeGitReader } from './deps/git.js';
 import { parseUsablConfig } from './intake/config.js';
 import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
+import { projectDocs } from './surfaces/docs.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultJson } from './surfaces/policy-enforce.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
@@ -127,7 +128,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'bypass' &&
     opts.command !== 'init' &&
     opts.command !== 'baseline' &&
-    opts.command !== 'enforce'
+    opts.command !== 'enforce' &&
+    opts.command !== 'docs'
   ) {
     process.stderr.write(`unknown command: ${opts.command}\n`);
     return 2;
@@ -193,6 +195,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   if (opts.command === 'enforce') {
     return runEnforce(opts);
+  }
+
+  if (opts.command === 'docs') {
+    // Docs is a generator, not a gate. It projects design-intake and transcript artifacts
+    // from a full run and always exits 0. Artifact honesty comes from receipt binding
+    // (unverified surfaces carry no evidenceRef), never from a verdict this command invents.
+    const config = await loadConfig(opts.configPath);
+    const deps = await buildDeps(config, {
+      allowedCapabilities: opts.staticOnly ? [] : ['live'],
+    });
+    try {
+      const result = await run(deps, config);
+      const projected = projectDocs(result, deps.requirements);
+      process.stdout.write(projected.json + '\n');
+      return 0;
+    } finally {
+      await deps.browser.close();
+    }
   }
 
   const refusal = ciRefusal(opts);

@@ -30,6 +30,10 @@
     "./playwright": {
       "types": "./dist/playwright-helper.d.ts",
       "import": "./dist/playwright-helper.js"
+    },
+    "./docs": {
+      "types": "./dist/docs.d.ts",
+      "import": "./dist/docs.js"
     }
   },
   "files": [
