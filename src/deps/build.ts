@@ -3,70 +3,156 @@
  * This unit wires adapters and providers only and must never decide verdicts.
  * Browser launch stays lazy so normal checks and type/test workflows do not open Chromium.
  */
-import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
-import type { Capability, Deps, UsablConfig } from '../contracts/index.js';
-import { makeCheckRunner } from '../providers/check-runner.js';
-import { axeProvider } from '../providers/axe/index.js';
-import { makeRulepackProvider } from '../providers/rulepack/index.js';
-import { makeKeyboardWalkProvider } from '../providers/keyboard-walk/index.js';
-import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
-import { loadRequirements } from '../intake/load.js';
-import { mapRequirementsToProviders } from '../intake/map-to-providers.js';
-import { overlayRequirementsFs } from '../intake/overlay-fs.js';
-import { resolveIntakeConfig } from '../intake/trusted-config.js';
-import { makeRealBrowserDriver } from './real.js';
-import { makeGitReader } from './git.js';
-import { makeFsGlob } from './fs.js';
+import { readFile, readdir } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { basename, dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { chromium } from "playwright";
+import type { Capability, Deps, UsablConfig } from "../contracts/index.js";
+import { canonicalHash, sha256 } from "../primitives/canonical.js";
+import { sortBy } from "../primitives/sortKey.js";
+import { makeCheckRunner } from "../providers/check-runner.js";
+import { axeProvider } from "../providers/axe/index.js";
+import { makeRulepackProvider } from "../providers/rulepack/index.js";
+import { makeKeyboardWalkProvider } from "../providers/keyboard-walk/index.js";
+import { makeStepRunner } from "../providers/keyboard-walk/steps.js";
+import { loadRequirements } from "../intake/load.js";
+import { mapRequirementsToProviders } from "../intake/map-to-providers.js";
+import { overlayRequirementsFs } from "../intake/overlay-fs.js";
+import { resolveIntakeConfig } from "../intake/trusted-config.js";
+import { makeRealBrowserDriver } from "./real.js";
+import { makeGitReader } from "./git.js";
+import { makeFsGlob } from "./fs.js";
 
 const require = createRequire(import.meta.url);
 const RUNNER_PACKAGE_PATHS = [
   // Built entries and chunks live in dist/.
-  fileURLToPath(new URL('../package.json', import.meta.url)),
+  fileURLToPath(new URL("../package.json", import.meta.url)),
   // Source imports during Vitest live in src/deps/.
-  fileURLToPath(new URL('../../package.json', import.meta.url)),
+  fileURLToPath(new URL("../../package.json", import.meta.url)),
 ];
 const KEYBOARD_WALL_CLOCK_MS = 4_000;
 
 function readVersion(value: unknown): string | null {
-  if (typeof value !== 'string') {
+  if (typeof value !== "string") {
     return null;
   }
   const trimmed = value.trim();
   return trimmed.length === 0 ? null : trimmed;
 }
 
-async function readRunnerVersion(): Promise<string> {
+async function readPackageVersion(): Promise<string> {
   for (const path of RUNNER_PACKAGE_PATHS) {
     try {
-      const raw = await readFile(path, 'utf8');
+      const raw = await readFile(path, "utf8");
       const parsed: unknown = JSON.parse(raw);
-      if (typeof parsed !== 'object' || parsed === null) {
-        throw new Error('package.json must be a JSON object');
+      if (typeof parsed !== "object" || parsed === null) {
+        throw new Error("package.json must be a JSON object");
       }
-      const version = readVersion(Reflect.get(parsed, 'version'));
+      const version = readVersion(Reflect.get(parsed, "version"));
       if (version === null) {
-        throw new Error('package.json missing version');
+        throw new Error("package.json missing version");
       }
       return version;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         continue;
       }
       throw error;
     }
   }
-  throw new Error('usabl package.json was not found beside the source or built package');
+  throw new Error(
+    "usabl package.json was not found beside the source or built package",
+  );
+}
+
+/**
+ * Deterministic digest over the engine's own files. `runnerVersion` embeds this digest,
+ * so a change to any shipped engine file moves the receipt fingerprint (ground-truth §10):
+ * a receipt minted by one engine build cannot re-verify under a tampered or upgraded engine.
+ * Pure and order-independent so trust never depends on directory-walk order.
+ */
+export function hashEngineFiles(
+  files: Array<{ path: string; content: string }>,
+): string {
+  const fingerprints = sortBy(
+    files.map((file) => [file.path, sha256(file.content)] as const),
+    ([path]) => path,
+  );
+  return canonicalHash(fingerprints);
+}
+
+/**
+ * The path is part of the hashed tuple and the sort key. `path.relative` emits `\` on
+ * win32, so without this a receipt minted on one OS would falsely fail re-verification on
+ * another. Normalize to `/` so the fingerprint is the same bytes on every platform.
+ */
+export function normalizeSeparators(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
+/**
+ * Resolve the on-disk engine root and the extension that marks engine code.
+ * Built package: this module is a bundled chunk in `dist/`; engine files are `dist/*.js`.
+ * Source or test run: this module is `src/deps/build.ts`; engine files are `src` tree `*.ts`.
+ */
+function resolveEngineScope(): { root: string; extension: string } {
+  const selfDir = dirname(fileURLToPath(import.meta.url));
+  if (basename(selfDir) === "deps" && basename(dirname(selfDir)) === "src") {
+    return { root: dirname(selfDir), extension: ".ts" };
+  }
+  return { root: selfDir, extension: ".js" };
+}
+
+export async function collectEngineFiles(
+  root: string,
+  extension: string,
+): Promise<Array<{ path: string; content: string }>> {
+  const entries = await readdir(root, { withFileTypes: true, recursive: true });
+  const files: Array<{ path: string; content: string }> = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(extension)) {
+      continue;
+    }
+    const absolute = join(entry.parentPath, entry.name);
+    files.push({
+      path: normalizeSeparators(relative(root, absolute)),
+      content: await readFile(absolute, "utf8"),
+    });
+  }
+  return files;
+}
+
+async function readEngineHash(): Promise<string> {
+  const { root, extension } = resolveEngineScope();
+  const files = await collectEngineFiles(root, extension);
+  if (files.length === 0) {
+    // Fail closed: a receipt that cannot bind the engine would be a false proof.
+    throw new Error(`usabl engine files were not found under ${root}`);
+  }
+  return hashEngineFiles(files);
+}
+
+async function readRunnerVersion(): Promise<string> {
+  const [version, engineHash] = await Promise.all([
+    readPackageVersion(),
+    readEngineHash(),
+  ]);
+  return `${version}+${engineHash}`;
 }
 
 function readDependencyVersion(packageName: string): string {
   try {
     const pkg: unknown = require(`${packageName}/package.json`);
-    return readVersion(typeof pkg === 'object' && pkg !== null ? Reflect.get(pkg, 'version') : null) ?? 'unknown';
+    return (
+      readVersion(
+        typeof pkg === "object" && pkg !== null
+          ? Reflect.get(pkg, "version")
+          : null,
+      ) ?? "unknown"
+    );
   } catch {
-    return 'unknown';
+    return "unknown";
   }
 }
 
@@ -77,25 +163,41 @@ function readChromiumVersion(): string {
     if (revisionMatch?.[1] !== undefined) {
       return `revision-${revisionMatch[1]}`;
     }
-    return 'unknown';
+    return "unknown";
   } catch {
-    return 'unknown';
+    return "unknown";
   }
 }
 
 export async function buildDeps(
   config: UsablConfig,
-  options: { cwd?: string; allowedCapabilities?: Capability[]; storageStatePath?: string; trustedRef?: string } = {},
+  options: {
+    cwd?: string;
+    allowedCapabilities?: Capability[];
+    storageStatePath?: string;
+    trustedRef?: string;
+  } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
-  const allowedCapabilities = options.allowedCapabilities ?? ['live'];
+  const allowedCapabilities = options.allowedCapabilities ?? ["live"];
   const browser = makeRealBrowserDriver(
-    options.storageStatePath === undefined ? {} : { storageStatePath: options.storageStatePath },
+    options.storageStatePath === undefined
+      ? {}
+      : { storageStatePath: options.storageStatePath },
   );
   const fs = makeFsGlob({ cwd });
   const git = makeGitReader({ cwd });
-  const intakeConfig = await resolveIntakeConfig(git, config, options.trustedRef);
-  const intakeFs = overlayRequirementsFs(fs, git, intakeConfig, options.trustedRef);
+  const intakeConfig = await resolveIntakeConfig(
+    git,
+    config,
+    options.trustedRef,
+  );
+  const intakeFs = overlayRequirementsFs(
+    fs,
+    git,
+    intakeConfig,
+    options.trustedRef,
+  );
   const loadedRequirements = await loadRequirements(intakeFs, intakeConfig);
   const providers = [
     axeProvider,
@@ -113,8 +215,8 @@ export async function buildDeps(
     clock: () => new Date().toISOString(),
     runnerVersion: await readRunnerVersion(),
     scannerVersions: {
-      axeCore: readDependencyVersion('axe-core'),
-      playwright: readDependencyVersion('playwright'),
+      axeCore: readDependencyVersion("axe-core"),
+      playwright: readDependencyVersion("playwright"),
       chromium: readChromiumVersion(),
     },
     browser,

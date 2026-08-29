@@ -1,0 +1,3 @@
+# Receipts hash engine source bytes. Normalize line endings so a fresh checkout on any
+# OS produces the same engine hash and never falsely fails receipt re-verification.
+* text=auto eol=lf

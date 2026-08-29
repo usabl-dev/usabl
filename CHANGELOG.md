@@ -37,6 +37,10 @@ tag or publish to npm.
 
 ### Fixed
 
+- Receipts bind the engine and its scanner stack. `runnerVersion` embeds a
+  sha256 over the on-disk engine files, and `verifyReceipt` now also compares
+  `scannerVersions`, so tampering with or upgrading the engine or its scanners
+  invalidates a prior receipt on re-verification, matching ground truth §10.
 - Linked Stop hooks execute.
 - Tests are ignored when mapping UI coverage.
 - Menu state attributes are read for PatternFly checks.

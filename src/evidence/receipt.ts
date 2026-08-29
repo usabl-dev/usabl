@@ -6,16 +6,16 @@
  * Three bindings: sourceTree (current Git working tree), policyHash (guarded-path
  * blobs at HEAD), runnerVersion. Lists are sorted so the same inputs hash the same way.
  */
-import type { Deps, Receipt, UsablConfig } from '../contracts/index.js';
-import { sortBy } from '../primitives/sortKey.js';
-import { canonicalHash } from '../primitives/canonical.js';
-import { buildGuardedSet, expandGuardedSet } from '../trust/guard.js';
+import type { Deps, Receipt, UsablConfig } from "../contracts/index.js";
+import { sortBy } from "../primitives/sortKey.js";
+import { canonicalHash } from "../primitives/canonical.js";
+import { buildGuardedSet, expandGuardedSet } from "../trust/guard.js";
 
 export interface ReceiptArgs {
   surfaces: string[];
   checked: string[];
   notCovered: string[];
-  findingsSummary: Receipt['findingsSummary'];
+  findingsSummary: Receipt["findingsSummary"];
   activeWaivers: number;
   baseRevision?: string | null;
 }
@@ -27,16 +27,26 @@ export interface ReceiptArgs {
  * We hash HEAD blob shas from lsTree, not working-tree bytes, so receipts bind committed
  * policy state instead of a dirty copy that can change between runs.
  */
-export async function computePolicyHash(deps: Deps, guardedPaths: string[]): Promise<string> {
-  const blobs = await deps.git.lsTree('HEAD', guardedPaths);
+export async function computePolicyHash(
+  deps: Deps,
+  guardedPaths: string[],
+): Promise<string> {
+  const blobs = await deps.git.lsTree("HEAD", guardedPaths);
   const pairs = sortBy(Object.entries(blobs), ([path]) => path);
   return canonicalHash(pairs);
 }
 
-export async function mintReceipt(deps: Deps, config: UsablConfig, args: ReceiptArgs): Promise<Receipt> {
+export async function mintReceipt(
+  deps: Deps,
+  config: UsablConfig,
+  args: ReceiptArgs,
+): Promise<Receipt> {
   // Mint uses the same expanded guarded input as verify so an engine-minted receipt
   // can re-verify without relying on caller-side pre-expansion conventions.
-  const expandedGuardedPaths = await expandGuardedSet(deps, buildGuardedSet(config));
+  const expandedGuardedPaths = await expandGuardedSet(
+    deps,
+    buildGuardedSet(config),
+  );
   const [sourceTree, policy] = await Promise.all([
     deps.git.writeTree(),
     computePolicyHash(deps, expandedGuardedPaths),
@@ -49,8 +59,11 @@ export async function mintReceipt(deps: Deps, config: UsablConfig, args: Receipt
     runnerVersion: deps.runnerVersion,
     scannerVersions: deps.scannerVersions,
     surfaces: sortBy([...args.surfaces], (s) => s),
-    coverage: { checked: sortBy([...args.checked], (s) => s), notCovered: sortBy([...args.notCovered], (s) => s) },
-    verdict: 'verified',
+    coverage: {
+      checked: sortBy([...args.checked], (s) => s),
+      notCovered: sortBy([...args.notCovered], (s) => s),
+    },
+    verdict: "verified",
     findingsSummary: args.findingsSummary,
     activeWaivers: args.activeWaivers,
     mintedAt: deps.clock(),
@@ -74,17 +87,31 @@ export async function verifyReceipt(
   currentSourceTree: string,
 ): Promise<ReceiptVerification> {
   const failedFields: string[] = [];
-  const expandedGuardedPaths = await expandGuardedSet(deps, buildGuardedSet(config));
+  const expandedGuardedPaths = await expandGuardedSet(
+    deps,
+    buildGuardedSet(config),
+  );
   const policyHash = await computePolicyHash(deps, expandedGuardedPaths);
 
   if (receipt.sourceTree !== currentSourceTree) {
-    failedFields.push('sourceTree');
+    failedFields.push("sourceTree");
   }
   if (receipt.policyHash !== policyHash) {
-    failedFields.push('policyHash');
+    failedFields.push("policyHash");
   }
   if (receipt.runnerVersion !== deps.runnerVersion) {
-    failedFields.push('runnerVersion');
+    failedFields.push("runnerVersion");
+  }
+  // scannerVersions is what actually decides the verdict (axe-core et al.). It is minted
+  // into the receipt, so verify must compare it too; a swapped scanner is a different engine.
+  const mintedScanners = receipt.scannerVersions;
+  const currentScanners = deps.scannerVersions;
+  if (
+    mintedScanners.axeCore !== currentScanners.axeCore ||
+    mintedScanners.playwright !== currentScanners.playwright ||
+    mintedScanners.chromium !== currentScanners.chromium
+  ) {
+    failedFields.push("scannerVersions");
   }
 
   return {
