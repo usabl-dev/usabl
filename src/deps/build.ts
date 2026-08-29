@@ -222,6 +222,11 @@ export async function buildDeps(
     browser,
     git,
     fs,
+    // Expose the same bundle the providers were built from. Failed intake yields the empty
+    // bundle here so the docs surface renders transcript artifacts without inventing content.
+    requirements: loadedRequirements.ok
+      ? loadedRequirements.bundle
+      : { version: 1, requirements: [] },
     checkRunner: makeCheckRunner({
       browser,
       providers,

@@ -64,6 +64,17 @@ describe("buildDeps", () => {
     await deps.browser.close();
   });
 
+  it("exposes the loaded requirement bundle for the docs surface", async () => {
+    const deps = await buildDeps(testConfig());
+    try {
+      // No requirements directory is configured, so intake yields the empty bundle.
+      // The docs surface reads this exact bundle instead of re-deriving intake itself.
+      expect(deps.requirements).toEqual({ version: 1, requirements: [] });
+    } finally {
+      await deps.browser.close();
+    }
+  });
+
   it("uses cwd for git and filesystem adapters", async () => {
     const fixtureRepo = await mkdtemp(join(tmpdir(), "usabl-builddeps-"));
     await execFileAsync("git", ["init"], { cwd: fixtureRepo });

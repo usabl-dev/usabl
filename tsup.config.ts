@@ -7,6 +7,7 @@ export default defineConfig({
     'stop-hook-runner': 'src/surfaces/stop-hook-bin.ts',
     'vite-plugin': 'src/surfaces/vite-plugin.ts',
     'playwright-helper': 'src/surfaces/playwright-helper.ts',
+    docs: 'src/surfaces/docs.ts',
   },
   format: ['esm'],
   dts: true,

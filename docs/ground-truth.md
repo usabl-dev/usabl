@@ -1051,6 +1051,16 @@ AI can propose alt text or doc copy. usabl publishes only entries with
 Each DocArtifact is bound to the code state via `boundToReceipt`. If the code changes
 and the receipt is invalidated, stale docs are marked as needing regeneration.
 
+### How to run it
+
+`usabl docs` runs a full check and prints an `{ artifacts: [...] }` JSON envelope on
+stdout. It is a generator, not a gate: it always exits 0 and never mints a verdict.
+Announcement snippets and keyboard paths come from the run transcript; the alt-text
+manifest comes from configured content requirements. Surfaces the run did not verify
+carry no `evidenceRef`, so unverified state cannot masquerade as proof. The same
+projection is available to library callers as `projectDocs` and `collectDocArtifacts`
+from the `usabl/docs` export.
+
 ### Not v1
 
 - Full VPAT automation.

@@ -593,6 +593,7 @@ function makeDeps(): Deps {
       readFile: async () => null,
       glob: async () => [],
     },
+    requirements: { version: 1, requirements: [] },
     checkRunner: {
       scan: async () => ({
         screenId: 'screen',
