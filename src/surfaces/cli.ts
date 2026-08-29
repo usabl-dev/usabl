@@ -8,7 +8,7 @@ import { formatSummary } from '../output/summary.js';
 import { scrubResult } from './scrub.js';
 
 export interface CliOptions {
-  command: 'check' | 'comment' | 'enforce' | string;
+  command: 'check' | 'comment' | 'enforce' | 'floor' | string;
   staticOnly: boolean;
   trustedRef: string | null;
   json: boolean;
@@ -17,6 +17,7 @@ export interface CliOptions {
   selfCheck: boolean;
   force: boolean;
   enforceCheck: 'accessibility' | 'policy' | null;
+  floorSubcommand: 'prune' | null;
 }
 
 function isFlag(value: string): boolean {
@@ -24,7 +25,7 @@ function isFlag(value: string): boolean {
 }
 
 export function parseCliArgs(argv: string[]): CliOptions {
-  let command: 'check' | 'comment' | string = 'check';
+  let command: 'check' | 'comment' | 'enforce' | 'floor' | string = 'check';
   let staticOnly = false;
   let trustedRef: string | null = null;
   let json = false;
@@ -33,6 +34,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let selfCheck = false;
   let force = false;
   let enforceCheck: 'accessibility' | 'policy' | null = null;
+  let floorSubcommand: 'prune' | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -45,7 +47,17 @@ export function parseCliArgs(argv: string[]): CliOptions {
         enforceCheck = token;
         continue;
       }
+      if (command === 'floor' && token === 'prune') {
+        floorSubcommand = 'prune';
+        continue;
+      }
       command = token;
+      if (command !== 'enforce') {
+        enforceCheck = null;
+      }
+      if (command !== 'floor') {
+        floorSubcommand = null;
+      }
       continue;
     }
     if (token === '--static-only') {
@@ -88,7 +100,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
   }
 
-  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck };
+  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand };
 }
 
 export function ciRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {

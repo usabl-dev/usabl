@@ -11,6 +11,9 @@ tag or publish to npm.
   does not run the gate and does not write waivers or evidence.
 - `usabl baseline` runs a full UI scan and drafts `.usabl-evidence.json` from
   deterministic findings as a reviewable working-tree diff.
+- `usabl floor prune` removes paid-down identities from
+  `.usabl-evidence.json` after a full scan so reintroduced barriers gate as
+  `new` instead of staying `carried`.
 - `usabl enforce accessibility` and `usabl enforce policy` split CI checks so a
   policy change can merge with a non-author CODEOWNERS approval of the current
   head for each dirty guarded path. Result gains `accessibilityVerdict` and

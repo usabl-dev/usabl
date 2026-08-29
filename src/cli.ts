@@ -17,6 +17,7 @@ import { buildDeps } from './deps/build.js';
 import { makeFsGlob } from './deps/fs.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
 import { runBaseline, type BaselineFs } from './baseline/index.js';
+import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
 import { parseUsablConfig } from './intake/config.js';
 import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
@@ -37,6 +38,10 @@ async function readStdin(): Promise<string> {
     chunks.push(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
   }
   return chunks.join('');
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === 'object' && error !== null && 'code' in error;
 }
 
 async function runEnforce(opts: CliOptions): Promise<number> {
@@ -128,6 +133,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'bypass' &&
     opts.command !== 'init' &&
     opts.command !== 'baseline' &&
+    opts.command !== 'floor' &&
     opts.command !== 'enforce' &&
     opts.command !== 'docs'
   ) {
@@ -172,6 +178,45 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         },
       };
       const outcome = await runBaseline(deps, config, baselineFs, {
+        ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
+      });
+      if (outcome.exitCode === 0) {
+        process.stdout.write(`${outcome.message}\n`);
+      } else {
+        process.stderr.write(`usabl: ${outcome.message}\n`);
+      }
+      return outcome.exitCode;
+    } finally {
+      await deps.browser.close();
+    }
+  }
+
+  if (opts.command === 'floor') {
+    if (opts.floorSubcommand !== 'prune') {
+      process.stderr.write('usabl: floor supports only the prune subcommand\n');
+      return 2;
+    }
+    const config = await loadConfig(opts.configPath);
+    const deps = await buildDeps(config, {
+      ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
+    });
+    try {
+      const floorFs: FloorPruneFs = {
+        readFile: async (path) => {
+          try {
+            return await readFile(path, 'utf8');
+          } catch (error) {
+            if (isErrnoException(error) && error.code === 'ENOENT') {
+              return null;
+            }
+            throw error;
+          }
+        },
+        writeFile: async (path, contents) => {
+          await writeFile(path, contents, 'utf8');
+        },
+      };
+      const outcome = await runFloorPrune(deps, config, floorFs, {
         ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
       });
       if (outcome.exitCode === 0) {

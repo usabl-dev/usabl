@@ -40,6 +40,7 @@ describe('parseCliArgs', () => {
       selfCheck: false,
       force: false,
       enforceCheck: null,
+      floorSubcommand: null,
     });
   });
 
@@ -65,6 +66,7 @@ describe('parseCliArgs', () => {
       selfCheck: true,
       force: false,
       enforceCheck: null,
+      floorSubcommand: null,
     });
   });
 
@@ -80,6 +82,18 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['baseline']).command).toBe('baseline');
   });
 
+  it('parses floor prune as the floor command', () => {
+    const parsed = parseCliArgs(['floor', 'prune']);
+    expect(parsed.command).toBe('floor');
+    expect(parsed.floorSubcommand).toBe('prune');
+  });
+
+  it('keeps floor as the command when no subcommand is given', () => {
+    const parsed = parseCliArgs(['floor']);
+    expect(parsed.command).toBe('floor');
+    expect(parsed.floorSubcommand).toBeNull();
+  });
+
   it('accepts check command with flags after command', () => {
     expect(parseCliArgs(['check', '--ci'])).toEqual({
       command: 'check',
@@ -91,6 +105,7 @@ describe('parseCliArgs', () => {
       selfCheck: false,
       force: false,
       enforceCheck: null,
+      floorSubcommand: null,
     });
   });
 
