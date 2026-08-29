@@ -114,10 +114,11 @@ describe('projectPrComment', () => {
       }),
     );
 
-    expect(markdown).toContain(
-      '### Announcements (current run; base diff arrives with the base-run artifact)',
-    );
-    expect(markdown).toContain('current run only');
+    expect(markdown).toContain('### Announcements (current run)');
+    expect(markdown).toContain('current state, not a before/after comparison');
+    // No unbacked promise of a base-run diff: that comparison is not built for v0.2.0.
+    expect(markdown).not.toContain('base diff');
+    expect(markdown).not.toContain('base-run artifact');
     expect(markdown).toContain('Create cluster 1');
     expect(markdown).not.toContain('Create cluster 21');
   });

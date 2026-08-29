@@ -80,9 +80,11 @@ The specific things that are new, each against what exists today:
    answer instead of quietly passing. Reporting unknown as unknown is rare.
 3. Its answers can be re-checked. Every result is tied to the exact code and can be
    recomputed by anyone.
-4. It shows what a screen reader would actually say, and diffs it. Simulating
-   screen-reader output is a gap the field names itself, and using that
-   before-and-after as evidence on a code change is new.
+4. It shows what a screen reader would actually say, on the change. Simulating
+   screen-reader output is a gap the field names itself, and surfacing that
+   announcement as re-checkable evidence on a code change is new. The preview is
+   current-run today; an automated before/after diff against a base run is a planned
+   follow-up, not a v0.2.0 claim.
 5. It has rules for our design system. There is a tool like this for one design system
    (Microsoft built one for FluentUI) and none for PatternFly. usabl fills an empty
    slot.
@@ -866,7 +868,7 @@ mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
 
 Reads policy from the protected branch (or the trusted ref), never the working tree.
 Refuses to run without a base ref. The comment leads with the receipt, groups findings
-as new/known/unverified, shows a before-and-after announcement diff, and applies a
+as new/known/unverified, shows the current-run announcement preview, and applies a
 noise budget. All page-derived text passes through `neutralize()`. Sticky comment
 matched only among bot-authored comments. On `approval_required` the comment stays
 loud after the policy check is green. Required checks are AND: accessibility uses
@@ -1245,7 +1247,7 @@ stays; MCP wrapper is optional (section 11.5).
 3. MCP wrapper (if hero loop is not solid yet).
 
 Never cut: the gate, receipt fast-path, config-guards-itself, CODEOWNERS, four-verdict
-output, transcript diff, the recorded hero loop, overlay, docs output, CLI mid-task
+output, announcement preview, the recorded hero loop, overlay, docs output, CLI mid-task
 self-check.
 
 ---
@@ -1472,7 +1474,7 @@ Claude Code (Claude's stop hook lifecycle event). Confirmed.
 4. The assistant fixes it, running `usabl check` mid-task (CLI via Bash; MCP wrapper
    if shipped). The hook re-runs and passes. A receipt is shown once.
 5. Replay the clean announcement. Start and end on sound. The before/after
-   announcement diff is the empathy payload.
+   contrast, broken at the cold open and clean at the bookend, is the empathy payload.
 6. One live reveal at the end: type a fresh broken change and watch the hook
    block it live.
 7. Supporting and fast: one PR-comment screenshot, one short overlay clip, one

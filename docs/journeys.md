@@ -61,8 +61,8 @@ kill switch; same severity order as CLI.
 | Stage | What happens | Emotion | Friction risk |
 |---|---|---|---|
 | 1. Open PR | Visual diff as usual | Routine | - |
-| 2. Evidence comment | Findings + announcement before/after | Insight | Comment noise on large PRs |
-| 3. Hear diff | Transcript diff for focus path | "Aha" | Preview vs real AT confusion |
+| 2. Evidence comment | Findings + current-run announcements | Insight | Comment noise on large PRs |
+| 3. Hear announcements | Current-run transcript for focus path | "Aha" | Preview vs real AT confusion |
 | 4. Approve | Merge when ratchet green | Confidence | Block without waiver path |
 
 **Rip-out moment:** Team ignores bot comments.  
@@ -104,7 +104,7 @@ violations; CODEOWNERS on policy files.
 | 4. Shipped | Same release or next | Validated | Regression in following release |
 
 **Rip-out moment:** James stops reporting; works around in private.  
-**Prevention:** Verified verdict on fix; announcement diff in PR; SME voice in validation.
+**Prevention:** Verified verdict on fix; announcement preview in PR; SME voice in validation.
 
 **Demo:** Real NVDA cold open and bookend; in-loop preview labeled as dev-time aid.
 

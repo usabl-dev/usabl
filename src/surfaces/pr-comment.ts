@@ -112,8 +112,8 @@ function formatStop(stop: TranscriptStop): string {
 
 function renderAnnouncements(result: Result): string[] {
   const lines = [
-    '### Announcements (current run; base diff arrives with the base-run artifact)',
-    '_current run only. base diff arrives when the base artifact is available._',
+    '### Announcements (current run)',
+    '_Screen reader announcements captured on this run. This is current state, not a before/after comparison against a base run._',
   ];
 
   for (const screen of result.screens) {
