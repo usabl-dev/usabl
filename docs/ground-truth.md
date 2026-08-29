@@ -1454,6 +1454,14 @@ The Result object includes `coverage.unresolvedFiles`. The overlay and PR commen
 surface these as "files usabl could not map to a screen." The fleet view (later)
 can aggregate coverage percentage across surfaces. The tool never hides a gap.
 
+The fleet view's data source is runnable today as a measurement-only harness.
+`npm run measure:fleet-insights` (from a repository clone) and the `usabl/measure`
+export (`runMeasurementOnly`) walk the configured surfaces and report how many
+screens surfaced draft findings and how many drafts in total. This harness never
+mints a verdict, writes a receipt, or gates, and it is deliberately not a `usabl`
+subcommand, so measurement can never be mistaken for a proof. The later fleet view
+aggregates this measurement across repos; verdict authority stays with the gate.
+
 ---
 
 ## 26. Demo strategy

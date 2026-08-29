@@ -8,6 +8,7 @@ export default defineConfig({
     'vite-plugin': 'src/surfaces/vite-plugin.ts',
     'playwright-helper': 'src/surfaces/playwright-helper.ts',
     docs: 'src/surfaces/docs.ts',
+    measure: 'src/measure/fleet-insights.ts',
   },
   format: ['esm'],
   dts: true,

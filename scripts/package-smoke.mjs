@@ -107,6 +107,17 @@ try {
   assert.ok(Array.isArray(docsResult.artifacts), 'usabl docs did not emit an artifacts array');
   assert.equal(docsResult.artifacts.length, 0, 'usabl docs invented artifacts with no config');
 
+  // The Fleet Insights measurement harness ships as a library subpath export, deliberately
+  // separate from the gate CLI. Prove usabl/measure resolves from the installed package.
+  const measureProbe = [
+    "const m = await import('usabl/measure');",
+    "if (typeof m.runMeasurementOnly !== 'function') throw new Error('runMeasurementOnly not exported');",
+    "process.stdout.write('measure-ok');",
+  ].join('\n');
+  const measure = run(process.execPath, ['--input-type=module', '-e', measureProbe], { cwd: consumer });
+  assert.equal(measure.status, 0, failure('usabl/measure import', measure));
+  assert.match(measure.stdout, /measure-ok/);
+
   const installedPackage = join(consumer, 'node_modules', 'usabl');
   const installedStopHook = join(installedPackage, 'dist', 'stop-hook-runner.js');
   const directHook = run(process.execPath, [installedStopHook], {

@@ -20,6 +20,12 @@ tag or publish to npm.
   gate: it always exits 0 and binds every artifact to the receipt, so unverified
   surfaces carry no evidence reference. The same projection is available as the
   `usabl/docs` library export (`projectDocs`, `collectDocArtifacts`).
+- Fleet Insights measurement is runnable from a repository clone via
+  `npm run measure:fleet-insights`, and ships as the `usabl/measure` library
+  export (`runMeasurementOnly`). It reports how many screens surfaced draft
+  findings and how many drafts in total, without minting a verdict, writing a
+  receipt, or gating. It is deliberately not a `usabl` gate subcommand, so
+  measurement can never masquerade as a proof.
 - Browser inspector: refresh and locate reported findings.
 - Overlay projection and accessibility inspector surfaces.
 - Team orientation, How usabl works, and code walkthrough pages.
@@ -50,7 +56,6 @@ tag or publish to npm.
 - Tests are ignored when mapping UI coverage.
 - Menu state attributes are read for PatternFly checks.
 - Package JSON output is preserved through the build.
-- Fleet Insights measurement is runnable. It is not a verdict.
 - Requirement YAML intake is pinned to `--trusted-ref` so accessibility checks
   cannot self-grade against unapproved PR policy edits.
 - Intake provider wiring now resolves the requirements root from trusted-ref
