@@ -758,12 +758,33 @@ committed tamper that git-status-clean cannot see.
 
 ### Receipt binding
 
-Three hashes:
+Four bindings are compared on re-verification:
 - `sourceTree`: hash of the working tree (git write-tree on a temporary index).
 - `policyHash`: sha256 over sorted guarded-path blob shas at the anchor.
-- `runnerVersion`: package version + sha256 over on-disk engine files.
+- `runnerVersion`: package version + sha256 over the engine's own shipped files
+  (first-party `dist/*.js` in the installed package, or the `src` tree when run from
+  source). A change to any shipped engine file moves this hash, so a receipt minted by
+  one engine build cannot re-verify under a tampered or upgraded engine.
+- `scannerVersions`: the axe-core, Playwright, and Chromium versions that decided the
+  verdict. `verifyReceipt` compares these too, so a swapped or upgraded scanner
+  invalidates the receipt.
 
-Any file change or committed policy change invalidates the receipt.
+A source-tree change or committed policy change invalidates the receipt, and so does an
+engine or scanner change.
+
+Scope and limits, stated plainly so the proof is not oversold:
+- The engine hash covers first-party engine code, not the `node_modules` dependency
+  bytes. Dependency identity is bound by version through `scannerVersions`, not by a
+  content hash; folding a lockfile content-hash into the fingerprint is a planned
+  follow-up.
+- The hash keys on relative paths normalized to `/`, so it is identical across
+  operating systems. Mint and verify must use the same deployment shape: a receipt
+  minted from a source run and one minted from the built package carry different engine
+  hashes for the same version.
+- The binding fingerprints on-disk bytes, not the bytes Node ultimately executes
+  (`NODE_OPTIONS`, loaders, and module redirection can still alter runtime behavior).
+  It is defense-in-depth that complements the root-owned read-only engine mount and the
+  trusted-ref pin; it is not a standalone cryptographic proof that a specific engine ran.
 
 ### CODEOWNERS + branch protection
 
