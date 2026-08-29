@@ -40,8 +40,8 @@ work, not abstract audit items.
 
 **Pain:** Multi-release latency; teams do not hear what he hears until late.
 
-**usabl value:** Announcement preview and transcript diff make barriers audible to
-non-AT teammates early. Verified fix loop shortens time-to-ship.
+**usabl value:** Announcement preview makes barriers audible to non-AT teammates
+early. Verified fix loop shortens time-to-ship.
 
 **Success looks like:** Reports one barrier; team reproduces via harness; fix verified
 and shipped in days, not quarters.

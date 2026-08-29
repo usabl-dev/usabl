@@ -38,7 +38,7 @@ CLI, AI assistant, browser overlay, CI, and docs.
 |---|---|
 | **Complete change coverage** | Every touched UI surface is identified, exercised, and checked. |
 | **Fix verification** | Problems are found and re-checked after the fix, before anyone calls the work finished. |
-| **Accessibility announcement preview** | Shows what a screen reader would likely announce, before and after, on the actual change. |
+| **Accessibility announcement preview** | Shows what a screen reader would likely announce on the actual change. |
 | **Keyboard and interaction proof** | Tab order, focus, and interaction paths are walked, not just static markup rules. |
 | **Design-system intelligence** | PatternFly-specific composition rules on top of industry-standard checks. |
 | **One answer everywhere** | Same result in the terminal, in the AI session, in the browser, and on the PR. |
@@ -84,8 +84,8 @@ Four pillars, ranked. Each is an integrated capability no single competitor ship
 
 Most tools find problems. usabl closes the loop: scan -> fix -> re-verify -> gate -> ship.
 The AI cannot declare victory until proof passes on what changed. One pass combines
-axe-core, PatternFly composition rules, live keyboard walk, and screen reader
-announcement preview with before/after diff.
+axe-core, PatternFly composition rules, live keyboard walk, and a screen reader
+announcement preview on what changed.
 
 **Why it matters:** Teams stop shipping "probably fixed" UI.
 
@@ -100,8 +100,8 @@ after the fact.
 
 ### 3. Screen reader evidence on the change
 
-Shows what would be announced before and after, attached to the PR and the assistant
-session. Reviewers hear accessibility impact alongside visual diff.
+Shows what a screen reader would announce on the change, attached to the PR and the
+assistant session. Reviewers hear accessibility impact alongside the visual diff.
 
 **Why it matters:** Screen reader behavior becomes visible team evidence, not a
 separate QA pass weeks later.
@@ -161,7 +161,7 @@ Priority order for pitches, demos, and one-pagers:
 
 1. **End-to-end proof loop** - find, fix, verify, gate
 2. **AI-native completion gate** - proof before "done"
-3. **Screen reader evidence on the change** - before/after on the PR
+3. **Screen reader evidence on the change** - announcements on the PR
 4. **One engine, team enforcement** - same result everywhere, tamper-evident
 
 ---

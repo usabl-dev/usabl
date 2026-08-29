@@ -107,7 +107,7 @@ it with a stronger signal. The upstream prevention in the assistant loop is addi
 **What they do well:** Market fix verification and a persistent dashboard for teams
 buying an enforcement story.
 
-**What we add:** Full multi-layer proof (keyboard, PF rules, transcript diff), OSS,
+**What we add:** Full multi-layer proof (keyboard, PF rules, announcement preview), OSS,
 PatternFly-native, integrated with MCP-capable assistants and CI. No subscription, no
 vendor lock.
 
