@@ -130,14 +130,22 @@ export async function runFloorPrune(
       };
     }
 
-    const affectedScreens = new Set(result.coverage.affected.map((screen) => screen.screenId));
+    // A floor entry is paid down only if its screen was actually verified this run.
+    // `coverage.affected` records intent to scan; a screen that was affected but
+    // gapped (for example, browser unavailable) still appears there yet yields no
+    // drafts. Treating that absence as a fix would prune real debt and re-arm the
+    // gate against a barrier that is still present, forcing a false regression on
+    // the next clean scan. Narrow the prune set to screens whose scan had no gaps.
+    const cleanlyScannedScreens = new Set(
+      result.screens.filter((screen) => screen.gaps.length === 0).map((screen) => screen.screenId),
+    );
     const observedKeys = observedDeterministicKeys(result.screens);
     const keptEntries: typeof floor.entries = [];
     let prunedCount = 0;
     for (const entry of floor.entries) {
-      // A screen we did not scan is not paid down evidence. Keep those entries so
-      // prune never treats not-covered surfaces as fixed debt.
-      if (!affectedScreens.has(entry.screenId)) {
+      // Keep entries for any screen we did not fully verify this run: not affected,
+      // not scanned, or scanned with a coverage gap. Absence is not proof of a fix.
+      if (!cleanlyScannedScreens.has(entry.screenId)) {
         keptEntries.push(entry);
         continue;
       }
@@ -164,7 +172,9 @@ export async function runFloorPrune(
       prunedCount,
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // The error can carry page-derived text with control bytes. Neutralize it before
+    // it reaches stderr, matching every other output path in this unit.
+    const message = neutralize(err instanceof Error ? err.message : String(err));
     return {
       exitCode: 4,
       wrote: false,

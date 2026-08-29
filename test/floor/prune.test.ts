@@ -156,6 +156,44 @@ describe('runFloorPrune', () => {
     expect(writer.writes).toHaveLength(0);
   });
 
+  it('keeps entries for an affected screen whose scan gapped instead of pruning them', async () => {
+    const config = testConfig();
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({
+        '.usabl-evidence.json': JSON.stringify(
+          floor([
+            {
+              screenId: 'clusters',
+              layer: 'axe',
+              rule: 'color-contrast',
+              elementKey: 'clusters|color-contrast|name:save',
+              identityBasis: 'name',
+              count: 1,
+            },
+          ]),
+        ),
+      }),
+      // The clusters screen is affected, but its scan failed (browser unavailable),
+      // so it yields no drafts and a not-covered gap. Absence of the barrier here is
+      // not proof it was fixed. Pruning it would re-arm the gate on debt that is still
+      // present, forcing a false regression the next time the screen scans cleanly.
+      scans: {
+        clusters: scanWith(
+          [],
+          [{ ref: 'http://127.0.0.1:5173/clusters', state: 'not-covered', reason: 'browser unavailable' }],
+        ),
+      },
+    });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, config, writer);
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.wrote).toBe(false);
+    expect(outcome.prunedCount).toBe(0);
+    expect(writer.writes).toHaveLength(0);
+  });
+
   it('refuses when other guarded files are dirty', async () => {
     const config = testConfig();
     const deps = makeFakeDeps({

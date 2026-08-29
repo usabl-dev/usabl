@@ -31,8 +31,6 @@ tag or publish to npm.
   measurement can never masquerade as a proof.
 - Browser inspector: refresh and locate reported findings.
 - Overlay projection and accessibility inspector surfaces.
-- CLI summary, PR comment, and overlay findings now print the paid-down notice
-  that points operators to `usabl floor prune` to re-arm the gate.
 - Team orientation, How usabl works, and code walkthrough pages.
 - Installed-package proof (`npm run test:package`) from an empty directory.
 
