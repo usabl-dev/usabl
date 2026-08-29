@@ -88,6 +88,9 @@ export async function expandGuardedSet(
 
   for (const entry of guardedPaths) {
     const prefix = normalizePrefix(entry);
+    // fs.glob returns files only, so a directory entry expands to the files beneath
+    // it and a file entry matches itself. lsFiles adds committed files the working
+    // tree may have deleted.
     const [trustedFiles, workingFiles] = await Promise.all([
       deps.git.lsFiles(trustedRef, prefix),
       deps.fs.glob([prefix, prefix + '/**']),
