@@ -838,7 +838,7 @@ as a working-tree diff for review and merge.
 
 Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
-- Unconfigured repo: allow silently.
+- Unconfigured repo: loud fail-open. The stop hook discloses "NOT verified - stop hook error: ..." and allows, never a silent allow.
 - Nothing to check (no UI files in the diff): allow with explicit "nothing to check"
   message. Not `not_covered`.
 - Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser.
@@ -854,7 +854,7 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - One-continuation escape: at most one forced continuation, then a loud disclosed
   allow marked "NOT verified."
 - Hook error: fail open with disclosure, never a wedge.
-- A findable single-run bypass (env var) so a wrong block means "bypass once and
+- A findable single-run bypass (the "usabl bypass" command writes a one-shot .usabl/bypass-once file) so a wrong block means "bypass once and
   file it," not "delete the hook."
 
 ### 11.3 Overlay (dev-server)
@@ -1316,7 +1316,7 @@ self-check.
     "usabl.config.json",
     "src/providers/rulepack",
     "src/gate",
-    "src/guard",
+    "src/trust",
     ".usabl-evidence.json",
     ".usabl-waivers.json",
     ".github/workflows/usabl.yml",
