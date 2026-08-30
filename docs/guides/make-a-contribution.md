@@ -70,6 +70,7 @@ In `usabl-app`:
 ```bash
 npm test
 npm run build
+npm run lint
 ```
 
 Do not skip hooks. Do not treat an empty usabl result as a pass.
