@@ -34,9 +34,13 @@ async function runChecker(root: string): Promise<RunResult> {
 
 describe('check-doc-links command', () => {
   let root = '';
+  let outer = '';
 
   afterEach(async () => {
     if (root !== '') await rm(root, { recursive: true, force: true });
+    if (outer !== '') await rm(outer, { recursive: true, force: true });
+    root = '';
+    outer = '';
   });
 
   it('reports a broken relative link with its source and exits non-zero', async () => {
@@ -93,5 +97,28 @@ describe('check-doc-links command', () => {
     const result = await runChecker(root);
 
     expect(result.code).toBe(0);
+  });
+
+  it('discloses a link that resolves but escapes the repo root without failing', async () => {
+    // Lay the corpus root inside an outer directory and put the target as a
+    // sibling of the root, so the link resolves on disk yet points outside the
+    // repo and would break in a clean clone.
+    outer = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-escape-'));
+    root = join(outer, 'repo');
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(join(outer, 'outside.md'), '# Outside\n', 'utf8');
+    await writeFile(
+      join(root, 'docs', 'a.md'),
+      '# A\n\nSee [outside](../../outside.md).\n',
+      'utf8',
+    );
+
+    const result = await runChecker(root);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('escape the repo root');
+    expect(result.stdout).toContain('docs/a.md');
+    expect(result.stdout).toContain('../../outside.md');
+    expect(result.stdout).toContain('0 broken');
   });
 });

@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { dirname, extname, join, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Offline documentation link checker. It validates relative links and local
@@ -174,6 +174,7 @@ async function checkDocLinks(root) {
   }
 
   const broken = [];
+  const escaped = [];
   let externalCount = 0;
   let checkedCount = 0;
 
@@ -212,6 +213,15 @@ async function checkDocLinks(root) {
         continue;
       }
 
+      // A target that resolves on this filesystem but sits outside the corpus
+      // root would break in a clean clone. Disclose it as its own category
+      // instead of blessing it, but do not fail the build on it here.
+      const withinRoot = relative(root, targetPath);
+      if (withinRoot !== '' && (withinRoot.startsWith('..') || isAbsolute(withinRoot))) {
+        escaped.push({ relFile, lineNumber, target: raw });
+        continue;
+      }
+
       // Cross-file fragment: resolve against the target file when we can parse it.
       if (fragment !== '' && ANCHOR_EXTENSIONS.has(extname(targetPath).toLowerCase())) {
         const targetAnchors = await anchorsFor(targetPath);
@@ -222,21 +232,29 @@ async function checkDocLinks(root) {
     }
   }
 
-  return { files, broken, externalCount, checkedCount };
+  return { files, broken, escaped, externalCount, checkedCount };
 }
 
 async function main() {
   const root = resolve(process.argv[2] ?? process.cwd());
-  const { files, broken, externalCount, checkedCount } = await checkDocLinks(root);
+  const { files, broken, escaped, externalCount, checkedCount } = await checkDocLinks(root);
 
   for (const entry of broken) {
     process.stdout.write(`${entry.relFile}:${entry.lineNumber}: ${entry.reason}: ${entry.target}\n`);
+  }
+  for (const entry of escaped) {
+    process.stdout.write(`${entry.relFile}:${entry.lineNumber}: escapes repo root: ${entry.target}\n`);
   }
 
   process.stdout.write(
     `\nScanned ${files.length} file(s): ${checkedCount} relative link(s) checked, ` +
       `${externalCount} external URL(s) skipped (not checked), ${broken.length} broken.\n`,
   );
+  if (escaped.length > 0) {
+    process.stdout.write(
+      `${escaped.length} link(s) escape the repo root (resolved locally, would break in a clean clone).\n`,
+    );
+  }
 
   process.exit(broken.length > 0 ? 1 : 0);
 }
