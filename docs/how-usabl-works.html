@@ -422,7 +422,7 @@
             <p>Moves through interactive controls and records focus order, accessible names, roles, states, and navigation gaps.</p>
           </article>
         </div>
-        <p class="rule"><strong>Authority rule:</strong> deterministic evidence can affect the v0.2.0 gate. Preview and model-based observations may be shown for review, but they cannot create a verified result or receipt.</p>
+        <p class="rule"><strong>Authority rule:</strong> every draft carries one of four evidence classes: deterministic, preview, model-judgment, and human-confirmed. Only deterministic evidence can affect the v0.2.0 gate. Preview, model-judgment, and human-confirmed observations may be shown for review, but they cannot create a verified result or receipt.</p>
       </div>
     </section>
 
@@ -461,13 +461,14 @@
           <div class="receipt-head"><strong>Verified receipt</strong><span>Only the gate can mint it</span></div>
           <dl class="receipt-grid">
             <div><dt>Source tree</dt><dd>The exact Git content that was checked.</dd></div>
-            <div><dt>Base revision</dt><dd>The comparison point when one was used.</dd></div>
+            <div><dt>Base revision</dt><dd>The comparison point when one was used. It is recorded for context and is not one of the bindings checked on re-verification.</dd></div>
             <div><dt>Policy hash</dt><dd>The trusted accessibility rules and floor.</dd></div>
             <div><dt>Runner version</dt><dd>The installed usabl engine code.</dd></div>
             <div><dt>Scanner versions</dt><dd>axe, Playwright, and Chromium versions.</dd></div>
             <div><dt>Coverage</dt><dd>The screens checked and any missing coverage.</dd></div>
           </dl>
         </div>
+        <p class="rule"><strong>What is compared:</strong> re-verification checks four bindings, the source tree, the policy hash, the runner version, and the scanner versions. Base revision and coverage are recorded alongside them for context and are not compared.</p>
         <div class="two-col">
           <article class="list-card">
             <h3>Local work is tamper-evident</h3>

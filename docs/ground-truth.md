@@ -601,6 +601,16 @@ Multi-step interactions expressed as data (JSON steps a generic runner executes)
 step that cannot establish its fact emits `unverified`. Adding a new interaction check
 needs no engine change, just data.
 
+### 7.5 Voicing lane (built, not wired in v0.2.0)
+
+The voicing lane lives under `src/voicing/` and is exported from the library
+(`runStructuralTier`, `runVoicingTier`, `makeVirtualSrProvider`, `normalizeToken`,
+`obligationSatisfied`). It is built and tested, but v0.2.0 does not import it into the
+run, gate, or provider path, so it does not affect the v0.2.0 gate. The structural
+tier checks whether a required announcement happened; the voicing tier compares the
+words of the announcement and is `preview` evidence by default. The lane and its
+calibration land in v0.3.0.
+
 ---
 
 ## 8. Coverage and discovery
@@ -1130,7 +1140,7 @@ not blocking).
    checks when the host allows them (not on GitHub Free private).
 2. Config-guards-itself (integrity check before reading contents).
 3. CI reads policy from trusted ref, refuses without base ref.
-4. Receipt binding (three hashes, receipt store excluded from version control).
+4. Receipt binding (four bindings, receipt store excluded from version control).
 5. `neutralize()` on all page-derived text at every egress.
 6. Localhost-only binds by default.
 7. Pinned scanner versions; unreadable version degrades to `not_covered`.

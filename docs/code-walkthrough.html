@@ -431,15 +431,15 @@
         </div>
         <div class="two-col">
           <article class="list-card">
-            <h3>Voicing: two parts, two levels of trust</h3>
-            <p><code>voicing/structural.ts</code> checks facts: did an announcement happen at the required moment, yes or no. These drafts are deterministic, which means repeatable and machine-checked. <code>voicing/voicing.ts</code> compares the words of the announcement. Word matching is weaker evidence, so those drafts are marked "preview" by default. A human can promote a word rule to a blocking rule in config. The code never promotes itself.</p>
+            <h3>Voicing: built and exported, not yet wired in</h3>
+            <p>The voicing lane is built and exported from the library, but v0.2.0 does not import it into the run path, so it does not affect the gate yet. It has two parts. <code>voicing/structural.ts</code> checks facts: did an announcement happen at the required moment, yes or no. Those drafts are deterministic, which means repeatable and machine-checked. <code>voicing/voicing.ts</code> compares the words of the announcement. Word matching is weaker evidence, so those drafts would be marked "preview" by default. A human can promote a word rule to a blocking rule in config, and the code never promotes itself. The lane and its calibration land in v0.3.0.</p>
           </article>
           <article class="list-card">
             <h3>How announcements are captured</h3>
             <p>The real browser driver installs a small observer script before the page loads. When the page writes into a live region, which is the area a screen reader announces out loud, the observer records a token. The checks compare these tokens with the written requirements. This is how the tool catches a toast message that appears on screen but is never announced to a screen reader user.</p>
           </article>
         </div>
-        <p class="rule"><strong>Evidence rule:</strong> every draft carries an evidence class. Only "deterministic" drafts can change the verdict. "Preview" and "model-judgment" drafts are shown to people, but they can never create "verified" or a receipt.</p>
+        <p class="rule"><strong>Evidence rule:</strong> every draft carries one of four evidence classes: "deterministic", "preview", "model-judgment", and "human-confirmed". Only "deterministic" drafts can change the verdict. "Preview", "model-judgment", and "human-confirmed" drafts are shown to people, but they can never create "verified" or a receipt.</p>
       </div>
     </section>
 
@@ -462,7 +462,7 @@
         <div class="two-col">
           <article class="list-card">
             <h3>evidence/receipt.ts</h3>
-            <p>A receipt is proof that a "verified" run happened for an exact state of the code. It binds three things: the exact source tree, a hash of the policy files, and the engine version. Change any one of them and the receipt no longer matches. Creating and checking a receipt use the same hash function, so the check can never drift away from the proof.</p>
+            <p>A receipt is proof that a "verified" run happened for an exact state of the code. It binds four things: the exact source tree, a hash of the policy files, the engine version, and the scanner versions. Change any one of them and the receipt no longer matches. Creating and checking a receipt use the same hash function, so the check can never drift away from the proof.</p>
           </article>
           <article class="list-card">
             <h3>Same input, same output</h3>
