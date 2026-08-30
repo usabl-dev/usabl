@@ -115,6 +115,12 @@ That is not a merge dead-end. This is the consumer gate (the app that
 runs `usabl enforce policy`). This repository's org-team CODEOWNERS is
 engine governance and is a separate file.
 
+Two commands draft and maintain that evidence floor. `usabl baseline` runs a
+full scan and drafts the accepted accessibility floor in `.usabl-evidence.json`
+as a reviewable working-tree diff. `usabl floor prune` re-arms the floor after a
+full scan by removing paid-down identities, so a reintroduced barrier gates as
+new instead of staying carried. Both write drafts and neither mints a verdict.
+
 - The accessibility check reports what the gate would have decided without
   the policy diff. It never uses exit 2.
 - The policy check stays red until a CODEOWNERS user who is not the author
