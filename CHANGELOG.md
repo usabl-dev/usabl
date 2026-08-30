@@ -5,6 +5,12 @@
 Release candidate. Version files name 0.2.0. This freeze does not create a git
 tag or publish to npm.
 
+Carried from 0.1.0 (already present, listed here for complete command coverage,
+not new in 0.2.0): `usabl check` is the core gate command, `usabl comment`
+projects a run read from stdin into a pull request comment for CI, and
+`usabl bypass` is a one-time, next-stop-only escape hatch that does not verify.
+It sets a marker so the next Stop hook skips verification once.
+
 ### Added
 
 - `usabl init` drafts coverage and related policy from the application tree. It
