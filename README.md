@@ -61,8 +61,12 @@ Maintenance:
 CI and hook surfaces:
 
 - `usabl comment` projects a run read from stdin into a pull request comment. It does not run the gate.
-- `usabl stop-hook` is the stable Stop hook entry point. It reads stdin and always exits 0, so a wedged hook cannot block continuation through an exit code.
+- `usabl stop-hook` is the stable Stop hook entry point. It runs the gate when the assistant tries to finish and blocks continuation through the Stop hook decision when the gate reports a new barrier, an uncovered change, or a policy change that needs approval, or when a guarded policy file changes during the session. It always exits 0, so a wedged hook fails open with disclosure instead of blocking through an exit code.
 - `usabl enforce accessibility|policy` reads a gate result from stdin and returns the CI check status. It never re-runs the gate.
+
+Reporting:
+
+- `usabl docs` projects design-intake and transcript artifacts from a full run as JSON on stdout. It is a generator, not a gate: it always exits 0 and mints no verdict.
 
 The bypass escape hatch:
 
