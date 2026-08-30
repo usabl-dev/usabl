@@ -241,11 +241,31 @@ describe('run', () => {
         { code: 'M', path: 'fixtures/app/src/SettingsPage.tsx' },
       ],
       scans: {
-        clusters: scanWith([], []),
-        settings: scanWith([], [{ ref: 'http://127.0.0.1:5173/settings', state: 'not-covered', reason: 'browser failed to load' }]),
+        clusters: {
+          screenId: 'clusters',
+          url: 'http://127.0.0.1:5173/clusters',
+          stops: [],
+          drafts: [],
+          gaps: [],
+        },
+        settings: {
+          screenId: 'settings',
+          url: 'http://127.0.0.1:5173/settings',
+          stops: [],
+          drafts: [],
+          gaps: [{ ref: 'http://127.0.0.1:5173/settings', state: 'not-covered', reason: 'browser failed to load' }],
+        },
       },
     });
     const r = await run(deps, configWithTwoScreens);
+    // Verify both screens were scanned: clusters cleanly, settings with a gap.
+    expect(r.screens).toHaveLength(2);
+    const clustersScreen = r.screens.find((s) => s.screenId === 'clusters');
+    const settingsScreen = r.screens.find((s) => s.screenId === 'settings');
+    expect(clustersScreen).toBeDefined();
+    expect(settingsScreen).toBeDefined();
+    expect(clustersScreen!.gaps).toHaveLength(0);
+    expect(settingsScreen!.gaps).toHaveLength(1);
     // The gate marks both floored barriers as 'fixed' because neither was observed.
     const fixedFindings = r.findings.filter((f) => f.status === 'fixed');
     expect(fixedFindings).toHaveLength(2);

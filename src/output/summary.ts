@@ -60,7 +60,7 @@ export function formatSummary(result: Result): string {
     lines.push(`  accessibility ${accessibility} (${result.accessibilityExitCode})`);
   }
   if (result.paidDownCount > 0) {
-    lines.push(`  floor debt resolved: ${result.paidDownCount} (prune to re-arm the gate)`);
+    lines.push(`  floor debt resolved: ${result.paidDownCount} (run usabl floor prune to re-arm)`);
   }
   if (result.receipt) {
     lines.push(`  receipt: sourceTree ${result.receipt.sourceTree} @ ${result.receipt.mintedAt}`);

@@ -900,7 +900,7 @@ export const overlayClientSource = `(() => {
   }
 
   function renderFloorPaidDown(count) {
-    if (!count || count === 0) {
+    if (!count) {
       return null;
     }
     const section = make('section', 'section');

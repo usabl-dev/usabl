@@ -195,7 +195,7 @@ describe('formatSummary', () => {
       }),
     );
     expect(out).toContain('floor debt resolved: 3');
-    expect(out).toContain('prune to re-arm the gate');
+    expect(out).toContain('run usabl floor prune to re-arm');
   });
 
   it('omits the floor pay-down notice when the count is zero', () => {
