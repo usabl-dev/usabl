@@ -7,6 +7,7 @@
 import type { FsGlob } from '../contracts/index.js';
 import { parseConfiguredManifest, parseDiscoveredManifest } from '../coverage/route-manifest.js';
 import type { RouteManifest } from '../coverage/route-manifest.js';
+import { neutralize } from '../primitives/neutralize.js';
 
 export interface RoutesDrift {
   added: string[];
@@ -61,14 +62,14 @@ export function formatDriftReport(drift: RoutesDrift): string {
   if (drift.added.length > 0) {
     lines.push(`\nAdded routes (present in app router but missing from usabl.routes.json):`);
     for (const url of drift.added) {
-      lines.push(`  ${url}`);
+      lines.push(`  ${neutralize(url)}`);
     }
   }
 
   if (drift.removed.length > 0) {
     lines.push(`\nRemoved routes (present in usabl.routes.json but missing from app router):`);
     for (const url of drift.removed) {
-      lines.push(`  ${url}`);
+      lines.push(`  ${neutralize(url)}`);
     }
   }
 
@@ -90,6 +91,13 @@ export async function runRoutesDrift(fs: FsGlob, routerFile: string): Promise<Ro
     return {
       exitCode: 2,
       stderr: `usabl: router file ${routerFile} not found or unreadable. Cannot discover routes.\n`,
+    };
+  }
+
+  if (discovered.routes.length === 0 && configured.routes.length > 0) {
+    return {
+      exitCode: 2,
+      stderr: `usabl: discovered no routes in ${routerFile}. This usually means the router uses a style usabl cannot parse (for example React Router's data-router API). Verify the router file and usabl.routes.json manually; usabl will not report drift it cannot confirm.\n`,
     };
   }
 

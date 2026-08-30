@@ -146,8 +146,15 @@ export async function parseDiscoveredManifest(
   routerFile: string,
 ): Promise<RouteManifest | null> {
   // Parse the router file to discover the app's current routes.
-  // Returns null when the router file is missing or unreadable.
-  const router = await fs.readFile(routerFile);
+  // Returns null when the router file is missing or unreadable so drift
+  // detection can refuse with a manual next step rather than crash.
+  let router: string | null;
+  try {
+    router = await fs.readFile(routerFile);
+  } catch {
+    // An unreadable router (for example permission denied) is a refusal, matching the exit 2 contract.
+    return null;
+  }
   if (router === null) {
     return null;
   }

@@ -221,6 +221,80 @@ describe('runRoutesDrift', () => {
     expect(outcome.stderr).toContain('src/router.tsx');
     expect(outcome.stdout).toBeUndefined();
   });
+
+  it('returns exit 2 when discovery finds no routes in a readable router file', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [
+          { screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' },
+          { screenId: 'about', url: '/about', entryFile: 'src/About.tsx' },
+        ],
+      }),
+      'src/router.tsx': `
+        const router = createBrowserRouter([
+          { path: '/home', element: <Home /> },
+          { path: '/about', element: <About /> },
+        ]);
+      `,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toContain('discovered no routes');
+    expect(outcome.stderr).toContain('src/router.tsx');
+    expect(outcome.stderr).toContain('Verify');
+    expect(outcome.stdout).toBeUndefined();
+    expect(outcome.stdout ?? '').not.toContain('Route drift detected');
+  });
+
+  it('returns exit 2 when router file is unreadable', async () => {
+    const throwingFs = {
+      async readFile(path: string): Promise<string | null> {
+        if (path === 'usabl.routes.json') {
+          return JSON.stringify({
+            routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+          });
+        }
+        if (path === 'src/router.tsx') {
+          throw new Error('EACCES: permission denied');
+        }
+        return null;
+      },
+      async glob(): Promise<string[]> {
+        return [];
+      },
+    };
+
+    const outcome = await runRoutesDrift(throwingFs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toContain('router file');
+    expect(outcome.stderr).toContain('not found or unreadable');
+    expect(outcome.stdout).toBeUndefined();
+  });
+
+  it('neutralizes URLs containing control sequences in the drift report', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [
+          { screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' },
+          { screenId: 'spoof', url: '/x\x1b[2Kspoof', entryFile: 'src/Spoof.tsx' },
+        ],
+      }),
+      'src/router.tsx': `
+        <Route path="/home" element={<Home />} />
+        <Route path="/y\x1b[2Kspoof" element={<Y />} />
+      `,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stdout).toContain('Route drift detected');
+    expect(outcome.stdout).not.toContain('\x1b');
+    expect(outcome.stdout).toContain('spoof');
+  });
 });
 
 describe('drift command parsing', () => {
