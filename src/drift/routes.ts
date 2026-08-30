@@ -71,6 +71,9 @@ export function formatDriftReport(drift: RoutesDrift): string {
     for (const url of drift.removed) {
       lines.push(`  ${neutralize(url)}`);
     }
+    lines.push(
+      `\nNote: routes written in styles usabl cannot parse (for example computed paths or variable paths) can appear as false removals. Verify before acting.`,
+    );
   }
 
   lines.push('');
@@ -78,6 +81,9 @@ export function formatDriftReport(drift: RoutesDrift): string {
 }
 
 export async function runRoutesDrift(fs: FsGlob, routerFile: string): Promise<RoutesDriftOutcome> {
+  // Note: an empty sidecar plus an app whose routes are all unparseable produces
+  // empty-versus-empty and reports exit 0 no drift, which is a known limitation
+  // of URL-only discovery.
   const configured = await parseConfiguredManifest(fs);
   if (configured === null) {
     return {
@@ -90,14 +96,14 @@ export async function runRoutesDrift(fs: FsGlob, routerFile: string): Promise<Ro
   if (discovered === null) {
     return {
       exitCode: 2,
-      stderr: `usabl: router file ${routerFile} not found or unreadable. Cannot discover routes.\n`,
+      stderr: `usabl: router file ${neutralize(routerFile)} not found or unreadable. Cannot discover routes.\n`,
     };
   }
 
   if (discovered.routes.length === 0 && configured.routes.length > 0) {
     return {
       exitCode: 2,
-      stderr: `usabl: discovered no routes in ${routerFile}. This usually means the router uses a style usabl cannot parse (for example React Router's data-router API). Verify the router file and usabl.routes.json manually; usabl will not report drift it cannot confirm.\n`,
+      stderr: `usabl: discovered no routes in ${neutralize(routerFile)}. This usually means the router uses a style usabl cannot parse (for example computed paths or variable paths). Verify the router file and usabl.routes.json manually; usabl will not report drift it cannot confirm.\n`,
     };
   }
 

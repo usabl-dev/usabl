@@ -78,19 +78,37 @@ function screenIdFromUrl(url: string): string {
 }
 
 function parseRouterFallback(rawRouter: string): RouteManifest {
-  // Fallback only reads literal path="..." fragments from route declarations.
-  // It cannot prove rendered component files, so entryFile remains null.
-  const re = /path=["'`](\/[^"'`]*)["'`]/g;
+  // Fallback reads literal path values from both JSX attribute form (path="...")
+  // and object-property form (path: '...') used by data-router APIs like React
+  // Router's createBrowserRouter. It cannot prove rendered component files, so
+  // entryFile remains null.
+  const attributeRe = /path=["'`](\/[^"'`]*)["'`]/g;
+  const objectRe = /path:\s*["'`](\/[^"'`]*)["'`]/g;
+  const urlsSeen = new Set<string>();
   const routes: RouteEntry[] = [];
-  for (const match of rawRouter.matchAll(re)) {
+
+  for (const match of rawRouter.matchAll(attributeRe)) {
     const [, url] = match;
-    if (typeof url !== 'string') continue;
+    if (typeof url !== 'string' || urlsSeen.has(url)) continue;
+    urlsSeen.add(url);
     routes.push({
       screenId: screenIdFromUrl(url),
       url,
       entryFile: null,
     });
   }
+
+  for (const match of rawRouter.matchAll(objectRe)) {
+    const [, url] = match;
+    if (typeof url !== 'string' || urlsSeen.has(url)) continue;
+    urlsSeen.add(url);
+    routes.push({
+      screenId: screenIdFromUrl(url),
+      url,
+      entryFile: null,
+    });
+  }
+
   return { routes };
 }
 
@@ -148,6 +166,8 @@ export async function parseDiscoveredManifest(
   // Parse the router file to discover the app's current routes.
   // Returns null when the router file is missing or unreadable so drift
   // detection can refuse with a manual next step rather than crash.
+  // Duplicate paths are allowed here because drift compares URLs only and
+  // never uses screenId, and legitimate nested routes can share paths.
   let router: string | null;
   try {
     router = await fs.readFile(routerFile);
@@ -159,6 +179,5 @@ export async function parseDiscoveredManifest(
     return null;
   }
   const manifest = parseRouterFallback(router);
-  assertUniqueScreenIds(manifest.routes);
   return manifest;
 }

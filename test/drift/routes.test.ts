@@ -231,10 +231,8 @@ describe('runRoutesDrift', () => {
         ],
       }),
       'src/router.tsx': `
-        const router = createBrowserRouter([
-          { path: '/home', element: <Home /> },
-          { path: '/about', element: <About /> },
-        ]);
+        const routes = buildRoutes();
+        const router = createBrowserRouter(routes);
       `,
     });
 
@@ -294,6 +292,103 @@ describe('runRoutesDrift', () => {
     expect(outcome.stdout).toContain('Route drift detected');
     expect(outcome.stdout).not.toContain('\x1b');
     expect(outcome.stdout).toContain('spoof');
+  });
+
+  it('neutralizes router file name in refusal messages', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+      }),
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/\x1b[2Krouter.tsx');
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).not.toContain('\x1b');
+    expect(outcome.stderr).toContain('router');
+  });
+
+  it('parses React Router data-router API object-literal routes', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [
+          { screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' },
+          { screenId: 'about', url: '/about', entryFile: 'src/About.tsx' },
+        ],
+      }),
+      'src/router.tsx': `
+        const router = createBrowserRouter([
+          { path: '/home', element: <Home /> },
+          { path: '/about', element: <About /> },
+        ]);
+      `,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.stdout).toContain('No drift detected');
+  });
+
+  it('detects drift in data-router API routes', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+      }),
+      'src/router.tsx': `
+        const router = createBrowserRouter([
+          { path: '/home', element: <Home /> },
+          { path: '/settings', element: <Settings /> },
+        ]);
+      `,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stdout).toContain('/settings');
+  });
+
+  it('includes caveat about unparseable routes in removed routes section', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [
+          { screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' },
+          { screenId: 'removed', url: '/removed', entryFile: 'src/Removed.tsx' },
+        ],
+      }),
+      'src/router.tsx': `
+        <Route path="/home" element={<Home />} />
+      `,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stdout).toContain('Removed routes');
+    expect(outcome.stdout).toMatch(/computed|variable|parse/i);
+  });
+
+  it('handles duplicate literal paths without crashing', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [
+          { screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' },
+          { screenId: 'profile', url: '/profile', entryFile: 'src/Profile.tsx' },
+        ],
+      }),
+      'src/router.tsx': `
+        <Route path="/home" element={<Home />} />
+        <Route path="/home" element={<HomeDuplicate />} />
+        <Route path="/about" element={<About />} />
+      `,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stdout).toContain('/about');
+    expect(outcome.stdout).toContain('/profile');
   });
 });
 
