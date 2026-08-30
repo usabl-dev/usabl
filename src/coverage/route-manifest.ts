@@ -128,3 +128,30 @@ export async function parseRouteManifest(
   assertUniqueScreenIds(manifest.routes);
   return manifest;
 }
+
+export async function parseConfiguredManifest(fs: FsGlob): Promise<RouteManifest | null> {
+  // Load the committed usabl.routes.json sidecar as the configured manifest.
+  // Returns null when the sidecar is absent so drift detection can refuse.
+  const sidecar = await fs.readFile('usabl.routes.json');
+  if (sidecar === null) {
+    return null;
+  }
+  const manifest = parseSidecar(sidecar);
+  assertUniqueScreenIds(manifest.routes);
+  return manifest;
+}
+
+export async function parseDiscoveredManifest(
+  fs: FsGlob,
+  routerFile: string,
+): Promise<RouteManifest | null> {
+  // Parse the router file to discover the app's current routes.
+  // Returns null when the router file is missing or unreadable.
+  const router = await fs.readFile(routerFile);
+  if (router === null) {
+    return null;
+  }
+  const manifest = parseRouterFallback(router);
+  assertUniqueScreenIds(manifest.routes);
+  return manifest;
+}

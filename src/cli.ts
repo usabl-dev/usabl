@@ -26,6 +26,8 @@ import { projectPrComment } from './surfaces/pr-comment.js';
 import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultJson } from './surfaces/policy-enforce.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
+import { parseConfiguredManifest, parseDiscoveredManifest } from './coverage/route-manifest.js';
+import { computeRoutesDrift, formatDriftReport } from './drift/routes.js';
 
 export async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
@@ -134,6 +136,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'init' &&
     opts.command !== 'baseline' &&
     opts.command !== 'floor' &&
+    opts.command !== 'drift' &&
     opts.command !== 'enforce' &&
     opts.command !== 'docs'
   ) {
@@ -228,6 +231,35 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     } finally {
       await deps.browser.close();
     }
+  }
+
+  if (opts.command === 'drift') {
+    if (opts.driftSubcommand !== 'routes') {
+      process.stderr.write('usabl: drift supports only the routes subcommand\n');
+      return 2;
+    }
+    const config = await loadConfig(opts.configPath);
+    const globber = makeFsGlob();
+
+    const configured = await parseConfiguredManifest(globber);
+    if (configured === null) {
+      process.stderr.write(
+        'usabl: usabl.routes.json not found. Run "usabl init" to create the sidecar.\n',
+      );
+      return 2;
+    }
+
+    const discovered = await parseDiscoveredManifest(globber, config.discovery.routerFile);
+    if (discovered === null) {
+      process.stderr.write(
+        `usabl: router file ${config.discovery.routerFile} not found or unreadable. Cannot discover routes.\n`,
+      );
+      return 2;
+    }
+
+    const drift = computeRoutesDrift(configured, discovered);
+    process.stdout.write(formatDriftReport(drift));
+    return drift.hasDrift ? 1 : 0;
   }
 
   if (opts.command === 'comment') {
