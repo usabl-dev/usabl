@@ -36,6 +36,7 @@ import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEv
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
 import { runRoutesDrift } from './drift/routes.js';
+import { runDoctor, type DoctorDeps } from './doctor/index.js';
 
 export async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
@@ -229,6 +230,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'enforce' &&
     opts.command !== 'install' &&
     opts.command !== 'stop-hook' &&
+    opts.command !== 'doctor' &&
     opts.command !== 'docs'
   ) {
     process.stderr.write(`unknown command: ${opts.command}\n`);
@@ -348,6 +350,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (outcome.stderr) {
       process.stderr.write(outcome.stderr);
     }
+    return outcome.exitCode;
+  }
+
+  if (opts.command === 'doctor') {
+    // Doctor is a read-only projection. It reads the working tree and a read-only gh GET,
+    // reports each surface state, and always exits 0 because it mints no verdict. The
+    // read-only fs writeFile throws so any accidental write fails loudly instead of mutating.
+    const globber = makeFsGlob();
+    const doctorFs: InstallFs = {
+      readFile: globber.readFile,
+      glob: globber.glob,
+      writeFile: async () => {
+        throw new Error('doctor is read-only and never writes');
+      },
+    };
+    const deps: DoctorDeps = { fs: doctorFs, gh: makeGhReader(), configPath: opts.configPath };
+    const outcome = await runDoctor(deps);
+    process.stdout.write(outcome.stdout);
     return outcome.exitCode;
   }
 

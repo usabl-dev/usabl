@@ -72,7 +72,9 @@ function parseWaiver(value: unknown): Waiver {
   return { rule, surface, scope, reason, owner, approvedBy, created, expires };
 }
 
-function parseWaiverLedger(value: unknown): WaiverLedger {
+// Exported so the read-only doctor projection can report waiver-ledger parse health without
+// re-implementing a weaker validator. run() stays the only caller that acts on the result.
+export function parseWaiverLedger(value: unknown): WaiverLedger {
   if (!isRecord(value)) {
     throw new Error('waiver ledger must be an object');
   }

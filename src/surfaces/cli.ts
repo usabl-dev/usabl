@@ -16,7 +16,7 @@ export type InstallTarget = 'overlay' | 'claude' | 'ci' | 'branch-rule';
 export const INSTALL_TARGET_FLAGS = ['--overlay', '--claude', '--ci', '--branch-rule'] as const;
 
 export interface CliOptions {
-  command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | 'install' | 'stop-hook' | string;
+  command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | 'install' | 'stop-hook' | 'doctor' | string;
   staticOnly: boolean;
   trustedRef: string | null;
   json: boolean;

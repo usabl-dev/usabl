@@ -395,3 +395,83 @@ export async function writeCi(fs: InstallFs, plan: CiPlan): Promise<InstallResul
     message: `Refusing to overwrite ${plan.path}: it differs from the usabl draft, and ${plan.difference}. Reconcile it by hand; usabl never overwrites a hand-tuned security workflow.`,
   };
 }
+
+// A pin-aware recognizer for `usabl doctor`, additive to the install plan above and next to
+// the constants it needs. planCi answers a different question: "may usabl write, or must it
+// refuse?", so it treats the draft (sentinel and all) as the one shape it may no-op on and
+// anything else as a hand-tuned file to leave alone. doctor asks "is this surface
+// functionally correct?", and the honest answer turns on the engine ref. The draft ships
+// unpinned (the sentinel), a correctly wired workflow carries a real commit SHA at both
+// engine-ref lines, and any other change is drift. classifyGateWorkflow reports those states
+// without changing planCi or writeCi, so recognition stays centralized here rather than being
+// re-derived, more weakly, inside doctor.
+export type GateWorkflowState = 'missing' | 'wired' | 'unpinned' | 'drifted';
+
+// Identify an engine-ref line by matching the DRAFT. A draft line is a variable pin only when
+// it is a ref line whose value is the sentinel. Every other draft line is fixed and must be
+// reproduced byte for byte. Returns the leading indent so the actual line can be required to
+// keep it, or null when the draft line is not an engine-ref line.
+function draftEngineRefIndent(draftLine: string): string | null {
+  const match = /^(\s*)ref:\s*(\S+)\s*$/.exec(draftLine);
+  if (match === null || match[2] !== ENGINE_REF_PLACEHOLDER) {
+    return null;
+  }
+  return match[1] ?? '';
+}
+
+export function classifyGateWorkflow(raw: string | null): GateWorkflowState {
+  // Recognition never fails toward success. Only a workflow that matches the draft line for
+  // line, differing solely at the engine-ref lines and only to the same real 40-character
+  // commit SHA, reads as wired. Everything less confident lands on missing, unpinned, or
+  // drifted, never wired.
+  if (raw === null) {
+    return 'missing';
+  }
+  const actualLines = raw.split('\n');
+  const draftLines = USABL_GATE_WORKFLOW.split('\n');
+  // A different line count is a structural change, never just a pin: drifted.
+  if (actualLines.length !== draftLines.length) {
+    return 'drifted';
+  }
+  const refValues: string[] = [];
+  for (let i = 0; i < draftLines.length; i += 1) {
+    const draftLine = draftLines[i] ?? '';
+    const actualLine = actualLines[i] ?? '';
+    const indent = draftEngineRefIndent(draftLine);
+    if (indent === null) {
+      // A fixed line. It is correct only when it matches the draft exactly.
+      if (draftLine !== actualLine) {
+        return 'drifted';
+      }
+      continue;
+    }
+    // An engine-ref line. The pin value is variable, but the line must still be a ref line at
+    // the same indent. Anything else here is a structural edit, not a pin: drifted.
+    const actualMatch = /^(\s*)ref:\s*(\S+)\s*$/.exec(actualLine);
+    if (actualMatch === null || actualMatch[1] !== indent) {
+      return 'drifted';
+    }
+    refValues.push(actualMatch[2] ?? '');
+  }
+  // The draft always carries exactly two engine-ref lines. If none matched, the draft itself
+  // changed shape underneath us; treat that as drifted rather than guess.
+  if (refValues.length === 0) {
+    return 'drifted';
+  }
+  const first = refValues[0] ?? '';
+  const allSame = refValues.every((value) => value === first);
+  if (!allSame) {
+    // The engine-ref lines disagree, for example one pinned and one still the sentinel. That
+    // is an inconsistent pin, not a confident wired.
+    return 'drifted';
+  }
+  if (/^[0-9a-f]{40}$/.test(first)) {
+    return 'wired';
+  }
+  if (first === ENGINE_REF_PLACEHOLDER) {
+    return 'unpinned';
+  }
+  // A single consistent ref that is neither a full commit SHA nor the sentinel: a branch, a
+  // tag, or a short SHA. usabl cannot confirm that as a trusted pin, so: drifted.
+  return 'drifted';
+}
