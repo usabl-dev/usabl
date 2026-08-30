@@ -13,7 +13,7 @@
 import type { InstallFs } from '../install/index.js';
 import { planOverlay } from '../install/overlay.js';
 import { planClaude } from '../install/claude.js';
-import { planCi } from '../install/ci.js';
+import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { verifyBranchRule, type GhReader } from '../install/branch-rule.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
@@ -26,6 +26,17 @@ import { neutralize } from '../primitives/neutralize.js';
 // guard.ts, and init all use the literal), so doctor names it locally rather than invent a
 // weaker presence-only waiver check.
 const WAIVERS_PATH = '.usabl-waivers.json';
+
+// Surface labels are named once and reused by both the collector and the read-failure guard,
+// so an unreadable surface reports the same label as a readable one and the two never drift.
+const CONFIG_LABEL = 'usabl config';
+const ROUTES_LABEL = 'route manifest (usabl.routes.json)';
+const EVIDENCE_FLOOR_LABEL = `evidence floor (${EVIDENCE_FLOOR_PATH})`;
+const WAIVERS_LABEL = `waiver ledger (${WAIVERS_PATH})`;
+const OVERLAY_LABEL = 'vite overlay plugin';
+const STOP_HOOK_LABEL = 'claude stop hook (.claude/settings.json)';
+const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
+const BRANCH_RULE_LABEL = 'branch protection (main requires usabl-policy)';
 
 // Four states, and unknown is first class. wired is a positive confirmation. missing is a
 // confident absence. drifted is present-but-not-what-usabl-expects. unknown is "cannot
@@ -53,14 +64,50 @@ export interface DoctorDeps {
   configPath: string;
 }
 
+function isFsReadError(error: unknown): boolean {
+  // A Node file-system failure (EACCES, EIO, EISDIR, and the like) is an Error carrying a
+  // string `code`. That is a genuine "usabl could not read this surface" signal, which doctor
+  // maps to unknown. A programmer error (a TypeError, or a thrown non-Error) has no such code,
+  // so it is NOT swallowed here: it propagates to the cli catch-all as exit 4, where a real
+  // bug belongs. Hiding it behind unknown would fail toward success.
+  return error instanceof Error && typeof (error as { code?: unknown }).code === 'string';
+}
+
+async function guardRead(
+  id: string,
+  label: string,
+  collect: () => Promise<SurfaceReport>,
+): Promise<SurfaceReport> {
+  // Wrap each collector so an unexpected file-system read error becomes an honest unknown
+  // rather than crashing the whole report to exit 4. Only fs errors are absorbed; a
+  // programmer error re-throws so it is never masked as a surface state.
+  try {
+    return await collect();
+  } catch (error) {
+    if (!isFsReadError(error)) {
+      throw error;
+    }
+    // Recognition never fails toward success: an unreadable surface cannot be confirmed, so it
+    // is unknown, never wired. It is also not "missing", because a permission error is not a
+    // confident absence.
+    return {
+      id,
+      label,
+      state: 'unknown',
+      nextStep: `usabl could not read ${label}; check file permissions.`,
+    };
+  }
+}
+
 async function collectConfig(deps: DoctorDeps): Promise<SurfaceReport> {
   // Read the bytes directly. loadConfig throws on a missing file, which would crash doctor,
-  // so doctor reads with the null-on-missing fs and parses in a try/catch of its own.
+  // so doctor reads with the null-on-missing fs and parses in a try/catch of its own. A real
+  // fs read error (not a missing file) propagates to guardRead, which maps it to unknown.
   const raw = await deps.fs.readFile(deps.configPath);
   if (raw === null) {
     return {
       id: 'config',
-      label: 'usabl config',
+      label: CONFIG_LABEL,
       state: 'missing',
       nextStep: `No usabl config. Run "usabl init" to create ${deps.configPath}.`,
     };
@@ -70,12 +117,12 @@ async function collectConfig(deps: DoctorDeps): Promise<SurfaceReport> {
   } catch {
     return {
       id: 'config',
-      label: 'usabl config',
+      label: CONFIG_LABEL,
       state: 'drifted',
       nextStep: `${deps.configPath} is present but does not parse as a usabl config. Fix the JSON, or re-run "usabl init".`,
     };
   }
-  return { id: 'config', label: 'usabl config', state: 'wired', nextStep: '' };
+  return { id: 'config', label: CONFIG_LABEL, state: 'wired', nextStep: '' };
 }
 
 async function collectRoutes(deps: DoctorDeps): Promise<SurfaceReport> {
@@ -85,10 +132,16 @@ async function collectRoutes(deps: DoctorDeps): Promise<SurfaceReport> {
   let manifest;
   try {
     manifest = await parseConfiguredManifest(deps.fs);
-  } catch {
+  } catch (error) {
+    // Separate a genuine fs read failure from a parse failure. An unreadable manifest cannot
+    // be confirmed, so it re-throws to guardRead (unknown); only a real parse failure is the
+    // honest "present but does not parse" drift.
+    if (isFsReadError(error)) {
+      throw error;
+    }
     return {
       id: 'routes',
-      label: 'route manifest (usabl.routes.json)',
+      label: ROUTES_LABEL,
       state: 'drifted',
       nextStep: 'usabl.routes.json is present but does not parse. Fix the JSON so route coverage can be planned.',
     };
@@ -96,14 +149,14 @@ async function collectRoutes(deps: DoctorDeps): Promise<SurfaceReport> {
   if (manifest === null) {
     return {
       id: 'routes',
-      label: 'route manifest (usabl.routes.json)',
+      label: ROUTES_LABEL,
       state: 'missing',
       nextStep: 'No usabl.routes.json. Run "usabl init" to create the route manifest.',
     };
   }
   return {
     id: 'routes',
-    label: 'route manifest (usabl.routes.json)',
+    label: ROUTES_LABEL,
     state: 'wired',
     nextStep: 'Present and parses. For the deeper check, run "usabl drift routes" to compare it against the app router.',
   };
@@ -114,7 +167,7 @@ async function collectEvidenceFloor(deps: DoctorDeps): Promise<SurfaceReport> {
   if (raw === null) {
     return {
       id: 'evidence-floor',
-      label: `evidence floor (${EVIDENCE_FLOOR_PATH})`,
+      label: EVIDENCE_FLOOR_LABEL,
       state: 'missing',
       nextStep: `No evidence floor. Run "usabl baseline" to record current debt so only new barriers gate.`,
     };
@@ -124,12 +177,12 @@ async function collectEvidenceFloor(deps: DoctorDeps): Promise<SurfaceReport> {
   } catch {
     return {
       id: 'evidence-floor',
-      label: `evidence floor (${EVIDENCE_FLOOR_PATH})`,
+      label: EVIDENCE_FLOOR_LABEL,
       state: 'drifted',
       nextStep: `${EVIDENCE_FLOOR_PATH} is present but does not parse as an evidence floor. Fix it, or re-run "usabl baseline".`,
     };
   }
-  return { id: 'evidence-floor', label: `evidence floor (${EVIDENCE_FLOOR_PATH})`, state: 'wired', nextStep: '' };
+  return { id: 'evidence-floor', label: EVIDENCE_FLOOR_LABEL, state: 'wired', nextStep: '' };
 }
 
 async function collectWaivers(deps: DoctorDeps): Promise<SurfaceReport> {
@@ -137,7 +190,7 @@ async function collectWaivers(deps: DoctorDeps): Promise<SurfaceReport> {
   if (raw === null) {
     return {
       id: 'waivers',
-      label: `waiver ledger (${WAIVERS_PATH})`,
+      label: WAIVERS_LABEL,
       state: 'missing',
       nextStep: `No waiver ledger. Add ${WAIVERS_PATH} only if you need to time-box an accepted barrier.`,
     };
@@ -147,12 +200,12 @@ async function collectWaivers(deps: DoctorDeps): Promise<SurfaceReport> {
   } catch {
     return {
       id: 'waivers',
-      label: `waiver ledger (${WAIVERS_PATH})`,
+      label: WAIVERS_LABEL,
       state: 'drifted',
       nextStep: `${WAIVERS_PATH} is present but does not parse as a waiver ledger. Fix it before the gate runs.`,
     };
   }
-  return { id: 'waivers', label: `waiver ledger (${WAIVERS_PATH})`, state: 'wired', nextStep: '' };
+  return { id: 'waivers', label: WAIVERS_LABEL, state: 'wired', nextStep: '' };
 }
 
 async function collectOverlay(deps: DoctorDeps): Promise<SurfaceReport> {
@@ -160,81 +213,111 @@ async function collectOverlay(deps: DoctorDeps): Promise<SurfaceReport> {
   // no config at all is missing. This drives off the same string-aware recognizer install
   // uses, so a commented-out or quoted mention never reads as wired.
   const plan = await planOverlay(deps.fs);
-  const label = 'vite overlay plugin';
   if (plan.action === 'already-wired') {
-    return { id: 'overlay', label, state: 'wired', nextStep: '' };
+    return { id: 'overlay', label: OVERLAY_LABEL, state: 'wired', nextStep: '' };
   }
   if (plan.action === 'refuse') {
     return {
       id: 'overlay',
-      label,
+      label: OVERLAY_LABEL,
       state: 'drifted',
       nextStep: `${plan.path} is present but does not wire the overlay. Run "usabl install --overlay" for the exact two lines, or add them by hand.`,
     };
   }
   return {
     id: 'overlay',
-    label,
+    label: OVERLAY_LABEL,
     state: 'missing',
     nextStep: 'No Vite config wires the overlay. Run "usabl install --overlay" to write a draft.',
   };
 }
 
 async function collectStopHook(deps: DoctorDeps): Promise<SurfaceReport> {
-  // already-wired is the only wired mapping. update means a usabl hook still points at the
-  // retired dist path (drifted). write means the file is absent (missing). refuse means an
-  // unparseable, foreign, or ambiguous Stop hook that usabl cannot recognize: doctor cannot
-  // positively confirm, so it is unknown, never wired.
+  // planClaude answers "write, update, no-op, or refuse?"; doctor needs the finer question of
+  // WHY an update is needed, which the plan's reason discriminator now carries.
+  //   already-wired -> wired (the stable command is in place).
+  //   update + add-missing -> missing: the file exists but has no usabl Stop hook at all, so
+  //     the surface is absent, not merely drifted.
+  //   update + normalize -> drifted: a usabl Stop hook is present but is not the stable
+  //     command (a bare or retired form), so it needs normalizing. No claim about which form.
+  //   write -> missing: the file itself is absent.
+  //   refuse -> unknown: an unparseable, foreign, or ambiguous Stop hook usabl cannot
+  //     recognize. Doctor cannot positively confirm, so unknown, never wired.
   const plan = await planClaude(deps.fs);
-  const label = 'claude stop hook (.claude/settings.json)';
   if (plan.action === 'already-wired') {
-    return { id: 'stop-hook', label, state: 'wired', nextStep: '' };
+    return { id: 'stop-hook', label: STOP_HOOK_LABEL, state: 'wired', nextStep: '' };
   }
   if (plan.action === 'update') {
+    if (plan.reason === 'add-missing') {
+      return {
+        id: 'stop-hook',
+        label: STOP_HOOK_LABEL,
+        state: 'missing',
+        nextStep: '.claude/settings.json exists but has no usabl Stop hook. Run "usabl install --claude" to add it.',
+      };
+    }
     return {
       id: 'stop-hook',
-      label,
+      label: STOP_HOOK_LABEL,
       state: 'drifted',
-      nextStep: 'The usabl Stop hook points at the retired dist path. Run "usabl install --claude" to update it to "npx usabl stop-hook".',
+      nextStep:
+        'A usabl Stop hook is present but is not the canonical "npx usabl stop-hook" command. Run "usabl install --claude" to normalize it.',
     };
   }
   if (plan.action === 'write') {
     return {
       id: 'stop-hook',
-      label,
+      label: STOP_HOOK_LABEL,
       state: 'missing',
       nextStep: 'No .claude/settings.json. Run "usabl install --claude" to wire the usabl Stop hook.',
     };
   }
   return {
     id: 'stop-hook',
-    label,
+    label: STOP_HOOK_LABEL,
     state: 'unknown',
-    nextStep: 'usabl cannot confirm the Stop hook: the file has a Stop hook usabl does not recognize or cannot parse. Reconcile it by hand; see "usabl install --claude".',
+    nextStep:
+      'usabl cannot confirm the Stop hook: the file has a Stop hook usabl does not recognize or cannot parse. Reconcile it by hand; see "usabl install --claude".',
   };
 }
 
 async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
-  // already-wired is the only wired mapping. refuse means an existing workflow whose bytes
-  // differ from the usabl draft (drifted). write means it is absent (missing).
-  const plan = await planCi(deps.fs);
-  const label = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
-  if (plan.action === 'already-wired') {
-    return { id: 'ci', label, state: 'wired', nextStep: '' };
+  // doctor asks a finer question than planCi: is the gate workflow present, structurally
+  // correct, AND pinned to a trusted engine commit? classifyGateWorkflow answers that from the
+  // same draft constant install uses.
+  //   missing -> missing: a confident absence.
+  //   wired -> wired: requires both engine-ref lines to carry the same real 40-character
+  //     commit SHA. The draft's sentinel does not qualify.
+  //   unpinned -> drifted: the workflow is otherwise correct but still ships the sentinel, so
+  //     it is not yet enforceable. Present but not wired is drift, with a pin next step.
+  //   drifted -> drifted: any structural difference from the draft.
+  const raw = await deps.fs.readFile(USABL_GATE_WORKFLOW_PATH);
+  const state = classifyGateWorkflow(raw);
+  if (state === 'wired') {
+    return { id: 'ci', label: CI_LABEL, state: 'wired', nextStep: '' };
   }
-  if (plan.action === 'refuse') {
+  if (state === 'missing') {
     return {
       id: 'ci',
-      label,
+      label: CI_LABEL,
+      state: 'missing',
+      nextStep: 'No usabl gate workflow. Run "usabl install --ci" to write the draft.',
+    };
+  }
+  if (state === 'unpinned') {
+    return {
+      id: 'ci',
+      label: CI_LABEL,
       state: 'drifted',
-      nextStep: 'A gate workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
+      nextStep:
+        'The gate workflow is present but the engine ref is still the placeholder. Run "usabl install --ci" and replace PIN_TO_A_TRUSTED_USABL_COMMIT (it appears twice) with a full 40-character commit SHA you trust.',
     };
   }
   return {
     id: 'ci',
-    label,
-    state: 'missing',
-    nextStep: 'No usabl gate workflow. Run "usabl install --ci" to write the draft.',
+    label: CI_LABEL,
+    state: 'drifted',
+    nextStep: 'A gate workflow is present but differs from the usabl draft. Run "usabl install --ci" to see where, and reconcile by hand.',
   };
 }
 
@@ -243,21 +326,20 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
   // cannot-verify (gh missing, ambiguous 404, unreadable response) is unknown, because
   // doctor cannot positively confirm the setting and must not guess it is present or absent.
   const result = await verifyBranchRule(deps.gh);
-  const label = 'branch protection (main requires usabl-policy)';
   if (result.action === 'verified') {
-    return { id: 'branch-rule', label, state: 'wired', nextStep: '' };
+    return { id: 'branch-rule', label: BRANCH_RULE_LABEL, state: 'wired', nextStep: '' };
   }
   if (result.action === 'not-applied') {
     return {
       id: 'branch-rule',
-      label,
+      label: BRANCH_RULE_LABEL,
       state: 'missing',
       nextStep: 'The main branch does not require the usabl-policy check. Run "usabl install --branch-rule" for the exact setting.',
     };
   }
   return {
     id: 'branch-rule',
-    label,
+    label: BRANCH_RULE_LABEL,
     state: 'unknown',
     nextStep: 'usabl cannot confirm branch protection (gh unavailable, or the read was inconclusive). Verify by hand; see "usabl install --branch-rule".',
   };
@@ -266,17 +348,18 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
 export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceReport[]> {
   // Order mirrors the slice: config, routes, evidence floor, waivers, overlay, stop hook,
   // ci workflow, branch rule. Each collector is self-contained health logic with no printing,
-  // so tests can target the states directly. Only genuine internal errors propagate; every
-  // recognized state (including drifted and unknown) is returned, not thrown.
+  // so tests can target the states directly. guardRead absorbs an unexpected fs read error as
+  // an honest unknown; every recognized state (including drifted and unknown) is returned, and
+  // only a real programmer error propagates.
   return [
-    await collectConfig(deps),
-    await collectRoutes(deps),
-    await collectEvidenceFloor(deps),
-    await collectWaivers(deps),
-    await collectOverlay(deps),
-    await collectStopHook(deps),
-    await collectCi(deps),
-    await collectBranchRule(deps),
+    await guardRead('config', CONFIG_LABEL, () => collectConfig(deps)),
+    await guardRead('routes', ROUTES_LABEL, () => collectRoutes(deps)),
+    await guardRead('evidence-floor', EVIDENCE_FLOOR_LABEL, () => collectEvidenceFloor(deps)),
+    await guardRead('waivers', WAIVERS_LABEL, () => collectWaivers(deps)),
+    await guardRead('overlay', OVERLAY_LABEL, () => collectOverlay(deps)),
+    await guardRead('stop-hook', STOP_HOOK_LABEL, () => collectStopHook(deps)),
+    await guardRead('ci', CI_LABEL, () => collectCi(deps)),
+    await guardRead('branch-rule', BRANCH_RULE_LABEL, () => collectBranchRule(deps)),
   ];
 }
 
@@ -291,9 +374,10 @@ export function formatDoctorReport(reports: SurfaceReport[]): string {
     '',
   ];
   for (const report of reports) {
-    lines.push(`  [${report.state}] ${report.label}`);
-    // nextStep can embed a file-derived value (for example the --config path), so neutralize
-    // it at this egress. Authored labels carry no derived content, so they print as-is.
+    // Both the label and the next step can embed a file-derived value (for example a
+    // surface path or the --config path), so neutralize both at this egress. Nothing
+    // file-derived reaches the terminal with control bytes intact.
+    lines.push(`  [${report.state}] ${neutralize(report.label)}`);
     const step = report.nextStep.length > 0 ? neutralize(report.nextStep) : 'no action';
     lines.push(`      ${step}`);
   }

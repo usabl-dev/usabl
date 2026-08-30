@@ -15,9 +15,17 @@ export const CLAUDE_SETTINGS_PATH = '.claude/settings.json';
 // usabl as a dependency.
 export const STOP_HOOK_COMMAND = 'npx usabl stop-hook';
 
+// Why an update is needed. A read-only caller (doctor) needs to tell two cases apart that
+// planClaude otherwise collapses into one "update": a settings file that simply lacks the
+// usabl Stop hook (add-missing, which for doctor is a missing surface) from one whose usabl
+// hook is present but not the stable command (normalize, which for doctor is a drifted
+// surface). writeClaude does not branch on this; it exists so recognition of the two cases
+// stays here, next to classifyStop, rather than being re-derived inside doctor.
+export type UpdateReason = 'add-missing' | 'normalize';
+
 export type ClaudePlan =
   | { action: 'write'; path: string; contents: string }
-  | { action: 'update'; path: string; contents: string }
+  | { action: 'update'; path: string; contents: string; reason: UpdateReason }
   | { action: 'already-wired'; path: string }
   | { action: 'refuse'; path: string; reason: string };
 
@@ -160,6 +168,10 @@ export async function planClaude(fs: InstallFs): Promise<ClaudePlan> {
   updated['hooks'] = updatedHooks;
   const updatedStop = Array.isArray(updatedHooks['Stop']) ? (updatedHooks['Stop'] as unknown[]) : [];
   updatedHooks['Stop'] = updatedStop;
+  // A usabl hook already present means the only change is to normalize its command. No usabl
+  // hook present means we are adding the missing hook. Capture that here, before the mutation,
+  // so an update carries an honest reason for read-only callers.
+  const reason: UpdateReason = counts.usabl > 0 ? 'normalize' : 'add-missing';
   if (counts.usabl > 0) {
     rewriteUsablCommands(updatedStop);
   } else {
@@ -170,7 +182,7 @@ export async function planClaude(fs: InstallFs): Promise<ClaudePlan> {
   if (JSON.stringify(updated) === JSON.stringify(parsed)) {
     return { action: 'already-wired', path: CLAUDE_SETTINGS_PATH };
   }
-  return { action: 'update', path: CLAUDE_SETTINGS_PATH, contents: `${JSON.stringify(updated, null, 2)}\n` };
+  return { action: 'update', path: CLAUDE_SETTINGS_PATH, contents: `${JSON.stringify(updated, null, 2)}\n`, reason };
 }
 
 export async function writeClaude(fs: InstallFs, plan: ClaudePlan): Promise<InstallResult> {

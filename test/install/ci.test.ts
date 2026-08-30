@@ -12,9 +12,13 @@ import {
   ENGINE_REF_PLACEHOLDER,
   USABL_GATE_WORKFLOW,
   USABL_GATE_WORKFLOW_PATH,
+  classifyGateWorkflow,
   planCi,
   writeCi,
 } from '../../src/install/ci.js';
+
+const TRUSTED_SHA = '0123456789abcdef0123456789abcdef01234567';
+const PINNED_WORKFLOW = USABL_GATE_WORKFLOW.replaceAll(ENGINE_REF_PLACEHOLDER, TRUSTED_SHA);
 
 function memoryFs(files: Record<string, string>): InstallFs & { store: Record<string, string> } {
   const store = { ...files };
@@ -55,6 +59,53 @@ describe('USABL_GATE_WORKFLOW security properties', () => {
     expect(occurrences).toBe(2);
     // A 40-char hex commit-shaped ref would be a fabricated pin. There must be none on a ref line.
     expect(/^\s*ref: [0-9a-f]{40}\s*$/m.test(USABL_GATE_WORKFLOW)).toBe(false);
+  });
+});
+
+describe('classifyGateWorkflow', () => {
+  it('reports a null (absent) workflow as missing', () => {
+    expect(classifyGateWorkflow(null)).toBe('missing');
+  });
+
+  it('reports the draft with the sentinel still in place as unpinned, never wired', () => {
+    // The draft ships the sentinel at both engine-ref lines. It is structurally correct but
+    // not yet enforceable, so it must not read as wired. This is the honesty inversion the
+    // rework fixes: byte-identical-to-draft is unpinned, not wired.
+    expect(classifyGateWorkflow(USABL_GATE_WORKFLOW)).toBe('unpinned');
+  });
+
+  it('reports a workflow pinned to a real 40-character commit SHA as wired', () => {
+    expect(classifyGateWorkflow(PINNED_WORKFLOW)).toBe('wired');
+  });
+
+  it('reports a structural edit outside the engine ref as drifted', () => {
+    const tampered = PINNED_WORKFLOW.replace('runs-on: ubuntu-latest', 'runs-on: self-hosted');
+    expect(classifyGateWorkflow(tampered)).toBe('drifted');
+  });
+
+  it('reports an added or removed line as drifted', () => {
+    expect(classifyGateWorkflow(`# extra header\n${PINNED_WORKFLOW}`)).toBe('drifted');
+  });
+
+  it('reports a ref that is neither a full SHA nor the sentinel as drifted', () => {
+    // A branch name, a tag, or a short SHA is not a trusted pin usabl can confirm.
+    const branchPinned = USABL_GATE_WORKFLOW.replaceAll(ENGINE_REF_PLACEHOLDER, 'main');
+    expect(classifyGateWorkflow(branchPinned)).toBe('drifted');
+    const shortPinned = USABL_GATE_WORKFLOW.replaceAll(ENGINE_REF_PLACEHOLDER, '0123abc');
+    expect(classifyGateWorkflow(shortPinned)).toBe('drifted');
+    const uppercasePinned = USABL_GATE_WORKFLOW.replaceAll(
+      ENGINE_REF_PLACEHOLDER,
+      TRUSTED_SHA.toUpperCase(),
+    );
+    expect(classifyGateWorkflow(uppercasePinned)).toBe('drifted');
+  });
+
+  it('reports an inconsistent pin (one engine-ref pinned, one still the sentinel) as drifted', () => {
+    // Replace only the first sentinel occurrence, leaving the second unpinned. A half-pinned
+    // gate is not enforceable, so it is drifted, never wired.
+    const halfPinned = USABL_GATE_WORKFLOW.replace(ENGINE_REF_PLACEHOLDER, TRUSTED_SHA);
+    expect(halfPinned).toContain(ENGINE_REF_PLACEHOLDER);
+    expect(classifyGateWorkflow(halfPinned)).toBe('drifted');
   });
 });
 
