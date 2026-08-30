@@ -8,7 +8,7 @@ import { formatSummary } from '../output/summary.js';
 import { scrubResult } from './scrub.js';
 
 export interface CliOptions {
-  command: 'check' | 'comment' | 'enforce' | 'floor' | string;
+  command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | string;
   staticOnly: boolean;
   trustedRef: string | null;
   json: boolean;
@@ -18,6 +18,7 @@ export interface CliOptions {
   force: boolean;
   enforceCheck: 'accessibility' | 'policy' | null;
   floorSubcommand: 'prune' | null;
+  driftSubcommand: 'routes' | null;
 }
 
 function isFlag(value: string): boolean {
@@ -25,7 +26,7 @@ function isFlag(value: string): boolean {
 }
 
 export function parseCliArgs(argv: string[]): CliOptions {
-  let command: 'check' | 'comment' | 'enforce' | 'floor' | string = 'check';
+  let command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | string = 'check';
   let staticOnly = false;
   let trustedRef: string | null = null;
   let json = false;
@@ -35,6 +36,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let force = false;
   let enforceCheck: 'accessibility' | 'policy' | null = null;
   let floorSubcommand: 'prune' | null = null;
+  let driftSubcommand: 'routes' | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -51,12 +53,19 @@ export function parseCliArgs(argv: string[]): CliOptions {
         floorSubcommand = 'prune';
         continue;
       }
+      if (command === 'drift' && token === 'routes') {
+        driftSubcommand = 'routes';
+        continue;
+      }
       command = token;
       if (command !== 'enforce') {
         enforceCheck = null;
       }
       if (command !== 'floor') {
         floorSubcommand = null;
+      }
+      if (command !== 'drift') {
+        driftSubcommand = null;
       }
       continue;
     }
@@ -100,7 +109,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
   }
 
-  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand };
+  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, driftSubcommand };
 }
 
 export function ciRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {

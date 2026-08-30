@@ -42,6 +42,7 @@ describe('parseCliArgs', () => {
       force: false,
       enforceCheck: null,
       floorSubcommand: null,
+      driftSubcommand: null,
     });
   });
 
@@ -68,6 +69,7 @@ describe('parseCliArgs', () => {
       force: false,
       enforceCheck: null,
       floorSubcommand: null,
+      driftSubcommand: null,
     });
   });
 
@@ -107,7 +109,20 @@ describe('parseCliArgs', () => {
       force: false,
       enforceCheck: null,
       floorSubcommand: null,
+      driftSubcommand: null,
     });
+  });
+
+  it('parses drift routes as the drift command', () => {
+    const parsed = parseCliArgs(['drift', 'routes']);
+    expect(parsed.command).toBe('drift');
+    expect(parsed.driftSubcommand).toBe('routes');
+  });
+
+  it('keeps drift as the command when no subcommand is given', () => {
+    const parsed = parseCliArgs(['drift']);
+    expect(parsed.command).toBe('drift');
+    expect(parsed.driftSubcommand).toBeNull();
   });
 
   it('accepts enforce accessibility and policy subcommands', () => {
