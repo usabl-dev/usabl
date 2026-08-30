@@ -38,6 +38,36 @@ npm run build
 
 Node 22 required. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup (pre-commit, hooks, CI).
 
+## Command surface
+
+These commands draft, inspect, wire, and report, but only the gate decides a verdict. Locally the gate is `usabl check`; in CI, `usabl enforce` turns the gate's result into the required check status. Nothing else on this list mints a verdict.
+
+The gate:
+
+- `usabl check` runs the accessibility gate on the affected screens and returns one verdict with its exit code. It is the default command.
+
+Adoption and setup:
+
+- `usabl init` drafts coverage and policy from the application tree. It does not run the gate and writes no waivers or evidence.
+- `usabl baseline` runs a full scan and drafts the accepted accessibility floor in `.usabl-evidence.json` as a reviewable working-tree diff.
+- `usabl install --overlay|--claude|--ci|--branch-rule` wires exactly one surface as a draft and enables nothing on its own. `--branch-rule` is a read-only verify.
+- `usabl doctor` is a read-only self-check. It reports each surface as wired, missing, drifted, or unknown, and mints no verdict.
+
+Maintenance:
+
+- `usabl floor prune` re-arms the floor after a full scan by removing paid-down identities from `.usabl-evidence.json`, so a reintroduced barrier gates as new instead of staying carried.
+- `usabl drift routes` reports drift between the route manifest and the application router. It reads only and mints no verdict.
+
+CI and hook surfaces:
+
+- `usabl comment` projects a run read from stdin into a pull request comment. It does not run the gate.
+- `usabl stop-hook` is the stable Stop hook entry point. It reads stdin and always exits 0, so a wedged hook cannot block continuation through an exit code.
+- `usabl enforce accessibility|policy` reads a gate result from stdin and returns the CI check status. It never re-runs the gate.
+
+The bypass escape hatch:
+
+- `usabl bypass` is a one-time, next-stop-only escape hatch that does not verify. It sets a marker so the next Stop hook skips verification once.
+
 ## Design
 
 See [docs/ground-truth.md](docs/ground-truth.md) for the complete project ground truth:
