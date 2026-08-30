@@ -1,8 +1,10 @@
 /**
  * The branch-rule generator is read-only. It prints the exact protection setting and
- * verifies the current state with a single read-only gh call. It must never issue a
- * mutating request and must never claim verified when it cannot confirm. Both of those
- * honesty properties are asserted to be load-bearing here.
+ * verifies the current state with a single read-only gh call. The port is read-only by
+ * construction: it exposes only getJson(endpoint), so a caller cannot pass a method or a
+ * mutating body through it. It must also never claim verified when it cannot confirm, and
+ * it must not turn a generic 404 into a confident "not applied". Both honesty properties
+ * are asserted to be load-bearing here.
  */
 import { describe, expect, it } from 'vitest';
 import type { GhReader, GhResult } from '../../src/install/branch-rule.js';
@@ -14,17 +16,17 @@ import {
   verifyBranchRule,
 } from '../../src/install/branch-rule.js';
 
-function recordingGh(reply: (args: string[]) => GhResult | null): {
+function recordingGh(reply: (endpoint: string) => GhResult | null): {
   reader: GhReader;
-  calls: string[][];
+  calls: string[];
 } {
-  const calls: string[][] = [];
+  const calls: string[] = [];
   return {
     calls,
     reader: {
-      run: async (args) => {
-        calls.push(args);
-        return reply(args);
+      getJson: async (endpoint) => {
+        calls.push(endpoint);
+        return reply(endpoint);
       },
     },
   };
@@ -56,17 +58,10 @@ describe('verifyBranchRule', () => {
     expect(result.action).toBe('verified');
     expect(result.message.toLowerCase()).toContain('verified');
 
-    // Read-only proof: exactly one GET to the protection endpoint, never a mutation.
+    // Read-only proof: exactly one getJson to the protection endpoint. The port exposes no
+    // method or body, so it cannot mutate; the endpoint it was asked for is exact.
     expect(gh.calls).toHaveLength(1);
-    expect(gh.calls[0]?.[0]).toBe('api');
-    expect(gh.calls[0]).toContain(`repos/{owner}/{repo}/branches/${PROTECTED_BRANCH}/protection`);
-    for (const call of gh.calls) {
-      expect(call).not.toContain('-X');
-      expect(call).not.toContain('--method');
-      for (const verb of ['PUT', 'POST', 'PATCH', 'DELETE']) {
-        expect(call.some((arg) => arg.toUpperCase().includes(verb))).toBe(false);
-      }
-    }
+    expect(gh.calls[0]).toBe(`repos/{owner}/{repo}/branches/${PROTECTED_BRANCH}/protection`);
   });
 
   it('reports not applied when the check is absent, and prints the exact setting', async () => {
@@ -81,11 +76,33 @@ describe('verifyBranchRule', () => {
     expect(result.message.toLowerCase()).not.toContain('verified:');
   });
 
-  it('treats a 404 with no protection as not applied', async () => {
-    const gh = recordingGh(() => ({ code: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' }));
+  it('treats a genuine "Branch not protected" response as not applied', async () => {
+    // This is the exact signal GitHub returns for GET .../protection when the branch exists
+    // but has no protection, so it is a confident not-applied.
+    const gh = recordingGh(() => ({ code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' }));
     const result = await verifyBranchRule(gh.reader);
     expect(result.action).toBe('not-applied');
     expect(result.exitCode).toBe(2);
+  });
+
+  it('refuses a generic 404 or a permission error rather than call it not applied', async () => {
+    // Load-bearing: a bare 404 can be a missing branch, wrong repo, or no permission. None
+    // of those prove the rule is absent, so they must fall to cannot-verify, not not-applied.
+    const notFound = recordingGh(() => ({ code: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' }));
+    const nf = await verifyBranchRule(notFound.reader);
+    expect(nf.action).toBe('cannot-verify');
+    expect(nf.exitCode).toBe(2);
+    expect(nf.message.toLowerCase()).toContain('verify by hand');
+    expect(nf.message.toLowerCase()).not.toContain('verified:');
+
+    const denied = recordingGh(() => ({
+      code: 1,
+      stdout: '',
+      stderr: 'gh: Must have admin rights to Repository. (HTTP 403)',
+    }));
+    const d = await verifyBranchRule(denied.reader);
+    expect(d.action).toBe('cannot-verify');
+    expect(d.exitCode).toBe(2);
   });
 
   it('refuses when gh is unavailable rather than claim verified', async () => {
@@ -112,7 +129,7 @@ describe('isUsablPolicyRequired', () => {
     expect(
       isUsablPolicyRequired({ required_status_checks: { contexts: ['usabl-policy'] } }),
     ).toBe(true);
-    expect(isUsablPolicyRequired(JSON.parse(protectionJson(['other']))).valueOf()).toBe(false);
+    expect(isUsablPolicyRequired(JSON.parse(protectionJson(['other'])))).toBe(false);
     expect(isUsablPolicyRequired({})).toBe(false);
     expect(isUsablPolicyRequired(null)).toBe(false);
   });

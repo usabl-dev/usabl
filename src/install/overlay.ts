@@ -9,12 +9,16 @@
 import type { InstallFs, InstallResult } from './index.js';
 
 // The same config candidates init inspects, so overlay and init agree on which file is
-// the app's Vite config.
+// the app's Vite config. The .cts and .cjs forms are included because Vite resolves them
+// too. If we missed them, an operator whose only config is vite.config.cts would get a
+// fresh vite.config.ts that Vite loads first, silently shadowing their real config.
 export const OVERLAY_CONFIG_CANDIDATES = [
   'vite.config.ts',
   'vite.config.js',
   'vite.config.mts',
   'vite.config.mjs',
+  'vite.config.cts',
+  'vite.config.cjs',
 ];
 
 // The draft we write when no Vite config exists. It matches the fixture's wiring: import
@@ -37,11 +41,86 @@ export type OverlayPlan =
   | { action: 'already-wired'; path: string }
   | { action: 'refuse'; path: string };
 
+// Walk the source once and return a copy with comments removed. String and template
+// literal contents are removed too when blankStrings is set. This is string-aware so a
+// `//` inside a URL literal is not mistaken for the start of a comment, and it is the
+// reason a commented-out or quoted mention of the plugin never reads as real wiring.
+function scrubSource(source: string, blankStrings: boolean): string {
+  let out = '';
+  let index = 0;
+  while (index < source.length) {
+    const char = source[index];
+    if (char === undefined) {
+      break;
+    }
+    const nextChar = source[index + 1];
+    // Comments are always dropped, whichever mode we are in.
+    if (char === '/' && nextChar === '/') {
+      index += 2;
+      while (index < source.length && source[index] !== '\n') {
+        index += 1;
+      }
+      continue;
+    }
+    if (char === '/' && nextChar === '*') {
+      index += 2;
+      while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) {
+        index += 1;
+      }
+      index += 2;
+      continue;
+    }
+    // Strings and template literals: consume to the matching close, honoring escapes. The
+    // delimiters stay so structure reads normally; the contents drop when blankStrings is set.
+    if (char === '"' || char === "'" || char === '`') {
+      const quote = char;
+      out += char;
+      index += 1;
+      while (index < source.length) {
+        const inner = source[index];
+        if (inner === undefined || inner === quote) {
+          break;
+        }
+        if (inner === '\\') {
+          if (!blankStrings) {
+            out += source.slice(index, index + 2);
+          }
+          index += 2;
+          continue;
+        }
+        if (!blankStrings) {
+          out += inner;
+        }
+        index += 1;
+      }
+      if (index < source.length) {
+        out += quote;
+        index += 1;
+      }
+      continue;
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
+}
+
 export function isOverlayWired(source: string): boolean {
-  // Wiring needs both the import from usabl/vite and a call to the factory. Either one
-  // alone is not proof, so we require both before we call a config already wired.
-  const hasImport = /from\s*['"]usabl\/vite['"]/.test(source) && /\busablVitePluginFromConfig\b/.test(source);
-  const hasCall = /usablVitePluginFromConfig\s*\(/.test(source);
+  // Wiring needs both an active import from usabl/vite and an active call to the factory.
+  // A commented-out or quoted mention must not count, so both checks run on scrubbed copies.
+  const withoutComments = scrubSource(source, false);
+  const codeOnly = scrubSource(source, true);
+
+  // The import binding lives in code, while its module specifier is itself a string literal.
+  // Checking on the comment-stripped copy (strings intact) lets the specifier survive while
+  // a commented-out import line does not. Both the binding and the specifier must be present.
+  const hasImport =
+    /import\b[^;\n]*\busablVitePluginFromConfig\b[^;\n]*from\s*['"]usabl\/vite['"]/.test(withoutComments);
+
+  // The factory call must survive in active code, not inside a comment or a string, so it is
+  // checked on the copy with both comments removed and string contents blanked.
+  const hasCall = /\busablVitePluginFromConfig\s*\(/.test(codeOnly);
+
   return hasImport && hasCall;
 }
 

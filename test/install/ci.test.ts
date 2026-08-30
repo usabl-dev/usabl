@@ -80,6 +80,19 @@ describe('writeCi', () => {
     expect(result.action).toBe('already-wired');
   });
 
+  it('is idempotent as a round-trip: a second write on the just-written store no-ops', async () => {
+    // Write into an empty store, then plan and write again against what the first write left
+    // behind. The second pass must recognize its own output and change nothing.
+    const fs = memoryFs({});
+    const first = await writeCi(fs, await planCi(fs));
+    expect(first.action).toBe('written');
+
+    const second = await writeCi(fs, await planCi(fs));
+    expect(second.exitCode).toBe(0);
+    expect(second.action).toBe('already-wired');
+    expect(fs.store[USABL_GATE_WORKFLOW_PATH]).toBe(USABL_GATE_WORKFLOW);
+  });
+
   it('refuses to overwrite a workflow that differs, and points at the difference', async () => {
     const tuned = USABL_GATE_WORKFLOW.replace('runs-on: ubuntu-latest', 'runs-on: self-hosted');
     const fs = memoryFs({ [USABL_GATE_WORKFLOW_PATH]: tuned });

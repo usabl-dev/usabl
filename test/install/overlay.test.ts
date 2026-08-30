@@ -60,6 +60,30 @@ export default defineConfig({ plugins: [usablVitePluginFromConfig({ cwd: import.
     expect(plan.action).toBe('refuse');
     expect(plan.path).toBe('vite.config.ts');
   });
+
+  it('refuses a config whose only plugin wiring is commented out', async () => {
+    // The import is active but the plugin call is commented out, so the overlay is off.
+    // A comment-blind scan would call this already-wired; the fix must refuse instead.
+    const commented = `import { defineConfig } from 'vite'
+import { usablVitePluginFromConfig } from 'usabl/vite'
+export default defineConfig({
+  plugins: [
+    // usablVitePluginFromConfig({ cwd: import.meta.dirname }),
+  ],
+})
+`;
+    const plan = await planOverlay(memoryFs({ 'vite.config.ts': commented }));
+    expect(plan.action).toBe('refuse');
+  });
+
+  it('refuses an unwired vite.config.cts instead of shadowing it with a fresh config', async () => {
+    // If .cts were not a candidate, planOverlay would write a fresh vite.config.ts that Vite
+    // loads first, silently shadowing the operator's real config. It must refuse instead.
+    const cts = "import { defineConfig } from 'vite'\nexport default defineConfig({})\n";
+    const plan = await planOverlay(memoryFs({ 'vite.config.cts': cts }));
+    expect(plan.action).toBe('refuse');
+    expect(plan.path).toBe('vite.config.cts');
+  });
 });
 
 describe('writeOverlay', () => {
@@ -89,6 +113,18 @@ describe('writeOverlay', () => {
     expect(result.message).toContain("import { usablVitePluginFromConfig } from 'usabl/vite'");
     expect(result.message).toContain('usablVitePluginFromConfig({ cwd: import.meta.dirname })');
   });
+
+  it('refuses an unwired vite.config.cts without writing a shadowing vite.config.ts', async () => {
+    const cts = "import { defineConfig } from 'vite'\nexport default defineConfig({})\n";
+    const fs = memoryFs({ 'vite.config.cts': cts });
+    const result = await writeOverlay(fs, await planOverlay(fs));
+
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('refused');
+    // The real .cts config is untouched and no fresh vite.config.ts was written to shadow it.
+    expect(fs.store['vite.config.cts']).toBe(cts);
+    expect(fs.store['vite.config.ts']).toBeUndefined();
+  });
 });
 
 describe('isOverlayWired', () => {
@@ -96,5 +132,31 @@ describe('isOverlayWired', () => {
     expect(isOverlayWired(OVERLAY_DRAFT)).toBe(true);
     expect(isOverlayWired("import { usablVitePluginFromConfig } from 'usabl/vite'\n")).toBe(false);
     expect(isOverlayWired('usablVitePluginFromConfig({ cwd: import.meta.dirname })\n')).toBe(false);
+  });
+
+  it('ignores commented-out or quoted mentions of the plugin', () => {
+    // Import active, call commented out: the overlay is off, so this is not wired.
+    const commentedCall = `import { usablVitePluginFromConfig } from 'usabl/vite'
+export default { plugins: [
+  // usablVitePluginFromConfig({ cwd: import.meta.dirname }),
+] }
+`;
+    expect(isOverlayWired(commentedCall)).toBe(false);
+
+    // The call named only inside a string is data, not wiring.
+    const quotedMention = `import { defineConfig } from 'vite'
+const note = 'call usablVitePluginFromConfig() to wire the overlay'
+export default defineConfig({ plugins: [] })
+`;
+    expect(isOverlayWired(quotedMention)).toBe(false);
+
+    // A real wiring next to a URL string still reads as wired: comment detection is
+    // string-aware, so the // inside the URL is not mistaken for a comment.
+    const wiredWithUrl = `import { defineConfig } from 'vite'
+import { usablVitePluginFromConfig } from 'usabl/vite'
+const site = 'https://example.com/app'
+export default defineConfig({ plugins: [usablVitePluginFromConfig({ cwd: import.meta.dirname })] })
+`;
+    expect(isOverlayWired(wiredWithUrl)).toBe(true);
   });
 });

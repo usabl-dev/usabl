@@ -105,6 +105,20 @@ describe('planClaude', () => {
     expect(merged.hooks.PreToolUse[0]?.hooks[0]?.command).toBe('echo keep-me');
   });
 
+  it('migrates a bare usabl stop-hook command to the stable command', async () => {
+    const existing = JSON.stringify(
+      { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'usabl stop-hook' }] }] } },
+      null,
+      2,
+    );
+    const fs = memoryFs({ [CLAUDE_SETTINGS_PATH]: existing });
+    const plan = await planClaude(fs);
+    expect(plan.action).toBe('update');
+    const result = await writeClaude(fs, plan);
+    expect(result.exitCode).toBe(0);
+    expect(stopCommands(fs.store[CLAUDE_SETTINGS_PATH] ?? '')).toEqual(['npx usabl stop-hook']);
+  });
+
   it('refuses when a Stop hook it cannot recognize is present', async () => {
     const existing = JSON.stringify(
       { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'run-my-own-formatter' }] }] } },
@@ -122,6 +136,62 @@ describe('planClaude', () => {
     expect(result.message.toLowerCase()).toContain('stop hook');
   });
 
+  it('refuses a wrapped usabl command rather than destroy the operator command', async () => {
+    // An env prefix and a redirect wrap the real hook. Substring matching would call this
+    // usabl-owned and rewrite it to the bare command, silently dropping the operator's
+    // customization. Anchored recognition must treat it as foreign and refuse.
+    const command = 'FOO=bar npx usabl stop-hook 2>>/var/log/x.log';
+    const existing = JSON.stringify(
+      { hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } },
+      null,
+      2,
+    );
+    const fs = memoryFs({ [CLAUDE_SETTINGS_PATH]: existing });
+    const result = await writeClaude(fs, await planClaude(fs));
+
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('refused');
+    expect(fs.store[CLAUDE_SETTINGS_PATH]).toBe(existing);
+  });
+
+  it('refuses a foreign command that only mentions the marker as data', async () => {
+    const command = "grep -q 'usabl stop-hook' settings.json && ./notify.sh";
+    const existing = JSON.stringify(
+      { hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } },
+      null,
+      2,
+    );
+    const fs = memoryFs({ [CLAUDE_SETTINGS_PATH]: existing });
+    const result = await writeClaude(fs, await planClaude(fs));
+
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('refused');
+    expect(fs.store[CLAUDE_SETTINGS_PATH]).toBe(existing);
+  });
+
+  it('refuses when more than one usabl Stop hook is present rather than hide a double-run', async () => {
+    const existing = JSON.stringify(
+      {
+        hooks: {
+          Stop: [
+            { hooks: [{ type: 'command', command: 'npx usabl stop-hook' }] },
+            { hooks: [{ type: 'command', command: 'node node_modules/usabl/dist/stop-hook-runner.js' }] },
+          ],
+        },
+      },
+      null,
+      2,
+    );
+    const fs = memoryFs({ [CLAUDE_SETTINGS_PATH]: existing });
+    const result = await writeClaude(fs, await planClaude(fs));
+
+    // Load-bearing: two usabl Stop hooks would both run. Reporting already-wired or
+    // auto-collapsing would hide that, so it must refuse and leave the file untouched.
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('refused');
+    expect(fs.store[CLAUDE_SETTINGS_PATH]).toBe(existing);
+  });
+
   it('refuses to merge into unparseable JSON rather than clobber it', async () => {
     const broken = '{ this is not json';
     const fs = memoryFs({ [CLAUDE_SETTINGS_PATH]: broken });
@@ -134,9 +204,19 @@ describe('planClaude', () => {
 });
 
 describe('isUsablStopCommand', () => {
-  it('recognizes the stable command and the retired dist path only', () => {
+  it('recognizes only the exact stable, bare, and plain retired-dist forms', () => {
+    // Exact forms usabl emits or shipped are usabl-owned.
     expect(isUsablStopCommand('npx usabl stop-hook')).toBe(true);
+    expect(isUsablStopCommand('usabl stop-hook')).toBe(true);
     expect(isUsablStopCommand('node node_modules/usabl/dist/stop-hook-runner.js')).toBe(true);
+    // Surrounding whitespace is trimmed before matching.
+    expect(isUsablStopCommand('  npx usabl stop-hook  ')).toBe(true);
+
+    // Anything wrapped, prefixed, argument-extended, or foreign is not usabl-owned.
+    expect(isUsablStopCommand('FOO=bar npx usabl stop-hook 2>>/var/log/x.log')).toBe(false);
+    expect(isUsablStopCommand("grep -q 'usabl stop-hook' settings.json && ./notify.sh")).toBe(false);
+    expect(isUsablStopCommand('npx usabl stop-hook --debug')).toBe(false);
+    expect(isUsablStopCommand('node ./wrap.js && node node_modules/usabl/dist/stop-hook-runner.js')).toBe(false);
     expect(isUsablStopCommand('run-my-own-formatter')).toBe(false);
   });
 });

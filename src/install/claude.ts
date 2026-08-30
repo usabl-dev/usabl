@@ -26,9 +26,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function isUsablStopCommand(command: string): boolean {
-  // The stable command and the retired raw dist path are both usabl-owned. Recognizing
-  // the old form lets us cleanly migrate it to the stable command.
-  return command.includes('usabl stop-hook') || command.includes('usabl/dist/stop-hook-runner');
+  // Recognition is exact and anchored, never a substring match. A command is usabl-owned
+  // only when the whole trimmed command is one of the forms usabl itself emits or shipped.
+  // Anything that merely contains the marker (an env prefix, a redirect, a pipe, extra
+  // args, or a foreign command that mentions it as data) is an operator customization we
+  // must not silently rewrite, so it falls through to the refusal path instead.
+  const trimmed = command.trim();
+  if (trimmed === STOP_HOOK_COMMAND || trimmed === 'usabl stop-hook') {
+    return true;
+  }
+  // A plain node invocation of the retired dist runner and nothing else: no wrappers, env
+  // prefixes, redirects, pipes, subshells, or trailing arguments.
+  return /^node\s+[^\s'";|&<>()]*usabl\/dist\/stop-hook-runner\.js$/.test(trimmed);
 }
 
 function canonicalStopEntry(): { hooks: Array<{ type: string; command: string }> } {
@@ -135,6 +144,14 @@ export async function planClaude(fs: InstallFs): Promise<ClaudePlan> {
       `Refusing to change ${CLAUDE_SETTINGS_PATH}: it already has a Stop hook usabl does not recognize. Two Stop hooks would both run.`,
     );
   }
+  if (counts.usabl > 1) {
+    // Collapsing several usabl Stop entries to one could silently drop a differing matcher
+    // or other fields, and leaving them reports already-wired while two hooks both run.
+    // Refusing with a manual step is the honest, safe call.
+    return refuse(
+      `Refusing to change ${CLAUDE_SETTINGS_PATH}: it has more than one usabl Stop hook, and two would both run. Reconcile them to a single usabl Stop hook by hand.`,
+    );
+  }
 
   // Build the merged object without touching the original, so a refusal path never leaves
   // a half-written file. Only non-Stop content and usabl-owned commands are affected.
@@ -157,14 +174,25 @@ export async function planClaude(fs: InstallFs): Promise<ClaudePlan> {
 }
 
 export async function writeClaude(fs: InstallFs, plan: ClaudePlan): Promise<InstallResult> {
-  if (plan.action === 'write' || plan.action === 'update') {
+  if (plan.action === 'write') {
+    // The file did not exist, so this is a fresh draft the operator can review whole.
     await fs.writeFile(plan.path, plan.contents);
-    const verb = plan.action === 'write' ? 'Wrote' : 'Updated';
     return {
       exitCode: 0,
       action: 'written',
       path: plan.path,
-      message: `${verb} ${plan.path} to run the usabl Stop hook (${STOP_HOOK_COMMAND}). Review this draft before you merge it.`,
+      message: `Wrote ${plan.path} to run the usabl Stop hook (${STOP_HOOK_COMMAND}). Review this file before you commit it.`,
+    };
+  }
+  if (plan.action === 'update') {
+    // This lands directly on the live .claude/settings.json that Claude Code reads, so the
+    // message says the live file changed and points at the diff rather than calling it a draft.
+    await fs.writeFile(plan.path, plan.contents);
+    return {
+      exitCode: 0,
+      action: 'written',
+      path: plan.path,
+      message: `Updated the live ${plan.path} to run the usabl Stop hook (${STOP_HOOK_COMMAND}). Review the diff before you commit it.`,
     };
   }
   if (plan.action === 'already-wired') {

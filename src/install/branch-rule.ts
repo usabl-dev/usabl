@@ -23,9 +23,10 @@ export interface GhResult {
 }
 
 export interface GhReader {
-  // Returns the process result, or null when gh could not run at all (not installed).
-  // The reader is only ever asked to perform read-only requests.
-  run(args: string[]): Promise<GhResult | null>;
+  // Read-only by construction: the only method issues a GET against an api endpoint. There
+  // is no way to pass a method or a mutating body through this port, so a caller cannot turn
+  // it into a write. Returns null when gh could not run at all (not installed).
+  getJson(endpoint: string): Promise<GhResult | null>;
 }
 
 export interface BranchRuleResult {
@@ -94,10 +95,12 @@ function verifyByHand(): string {
   ].join('\n');
 }
 
-function looksLikeMissingProtection(stderr: string): boolean {
-  // A 404 on the protection endpoint means the branch has no protection yet. That is a
-  // confident "not applied", distinct from an auth or network failure we cannot judge.
-  return /404/.test(stderr) || /not found/i.test(stderr);
+function isBranchNotProtected(stderr: string): boolean {
+  // GitHub returns exactly "Branch not protected" for GET .../protection when the branch
+  // exists but has no protection. That is the only confident "not applied" signal. A
+  // generic 404 can mean a missing branch, the wrong repo, or no permission, none of which
+  // prove the absence of a rule, so those fall through to cannot-verify.
+  return /branch not protected/i.test(stderr);
 }
 
 export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> {
@@ -105,8 +108,8 @@ export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> 
 
   let outcome: GhResult | null;
   try {
-    // Default method is GET. We never pass -X or --method, so this cannot mutate anything.
-    outcome = await gh.run(['api', PROTECTION_ENDPOINT]);
+    // The port only issues a GET, so this read cannot mutate the repository.
+    outcome = await gh.getJson(PROTECTION_ENDPOINT);
   } catch {
     outcome = null;
   }
@@ -120,7 +123,7 @@ export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> 
   }
 
   if (outcome.code !== 0) {
-    if (looksLikeMissingProtection(outcome.stderr)) {
+    if (isBranchNotProtected(outcome.stderr)) {
       return {
         exitCode: 2,
         action: 'not-applied',

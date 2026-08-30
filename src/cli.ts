@@ -129,15 +129,21 @@ async function listPullReviews(pullNumber: number): Promise<Array<{ userLogin: s
 
 const execFileAsync = promisify(execFile);
 
-// A read-only gh reader for the branch-rule check. It only ever runs the argument list it
-// is handed, never a shell string, and the branch-rule generator only hands it GET args.
-// gh missing (ENOENT) returns null so the generator can refuse honestly instead of
-// pretending the setting was verified.
+// A read-only gh reader for the branch-rule check. The only method issues a GET against an
+// api endpoint, building the argument list internally as ['api', endpoint] and never adding
+// -X or --method, so it is read-only by construction rather than by convention. The call
+// uses the list form, never a shell string. gh missing (ENOENT) returns null so the
+// generator can refuse honestly instead of pretending the setting was verified.
 function makeGhReader(): GhReader {
   return {
-    run: async (args) => {
+    getJson: async (endpoint) => {
+      // Defense in depth: the endpoint is a fixed constant today, but reject anything shaped
+      // like a flag or carrying extra tokens so it can never smuggle in a method change.
+      if (endpoint.startsWith('-') || /\s/.test(endpoint)) {
+        return null;
+      }
       try {
-        const { stdout, stderr } = await execFileAsync('gh', args, { encoding: 'utf8' });
+        const { stdout, stderr } = await execFileAsync('gh', ['api', endpoint], { encoding: 'utf8' });
         return { code: 0, stdout, stderr };
       } catch (error) {
         if (isErrnoException(error) && error.code === 'ENOENT') {
@@ -145,7 +151,7 @@ function makeGhReader(): GhReader {
           return null;
         }
         // A non-zero exit carries a numeric code plus captured output. Surface it so the
-        // generator can tell a 404 (no protection) from an auth or network failure.
+        // generator can tell "branch not protected" from an auth or network failure.
         const failure = error as { code?: number; stdout?: string; stderr?: string };
         if (typeof failure.code === 'number') {
           return { code: failure.code, stdout: failure.stdout ?? '', stderr: failure.stderr ?? '' };
