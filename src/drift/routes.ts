@@ -4,12 +4,20 @@
  * Comparison is URL-only because discovered routes have no real entryFile or
  * operator-authored screenId.
  */
+import type { FsGlob } from '../contracts/index.js';
+import { parseConfiguredManifest, parseDiscoveredManifest } from '../coverage/route-manifest.js';
 import type { RouteManifest } from '../coverage/route-manifest.js';
 
 export interface RoutesDrift {
   added: string[];
   removed: string[];
   hasDrift: boolean;
+}
+
+export interface RoutesDriftOutcome {
+  exitCode: 0 | 1 | 2;
+  stdout?: string;
+  stderr?: string;
 }
 
 export function computeRoutesDrift(
@@ -66,4 +74,28 @@ export function formatDriftReport(drift: RoutesDrift): string {
 
   lines.push('');
   return lines.join('\n');
+}
+
+export async function runRoutesDrift(fs: FsGlob, routerFile: string): Promise<RoutesDriftOutcome> {
+  const configured = await parseConfiguredManifest(fs);
+  if (configured === null) {
+    return {
+      exitCode: 2,
+      stderr: 'usabl: usabl.routes.json not found. Run "usabl init" to create the sidecar.\n',
+    };
+  }
+
+  const discovered = await parseDiscoveredManifest(fs, routerFile);
+  if (discovered === null) {
+    return {
+      exitCode: 2,
+      stderr: `usabl: router file ${routerFile} not found or unreadable. Cannot discover routes.\n`,
+    };
+  }
+
+  const drift = computeRoutesDrift(configured, discovered);
+  return {
+    exitCode: drift.hasDrift ? 1 : 0,
+    stdout: formatDriftReport(drift),
+  };
 }

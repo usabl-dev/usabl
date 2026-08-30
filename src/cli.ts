@@ -26,8 +26,7 @@ import { projectPrComment } from './surfaces/pr-comment.js';
 import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultJson } from './surfaces/policy-enforce.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
-import { parseConfiguredManifest, parseDiscoveredManifest } from './coverage/route-manifest.js';
-import { computeRoutesDrift, formatDriftReport } from './drift/routes.js';
+import { runRoutesDrift } from './drift/routes.js';
 
 export async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
@@ -239,27 +238,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return 2;
     }
     const config = await loadConfig(opts.configPath);
-    const globber = makeFsGlob();
-
-    const configured = await parseConfiguredManifest(globber);
-    if (configured === null) {
-      process.stderr.write(
-        'usabl: usabl.routes.json not found. Run "usabl init" to create the sidecar.\n',
-      );
-      return 2;
+    const outcome = await runRoutesDrift(makeFsGlob(), config.discovery.routerFile);
+    if (outcome.stdout) {
+      process.stdout.write(outcome.stdout);
     }
-
-    const discovered = await parseDiscoveredManifest(globber, config.discovery.routerFile);
-    if (discovered === null) {
-      process.stderr.write(
-        `usabl: router file ${config.discovery.routerFile} not found or unreadable. Cannot discover routes.\n`,
-      );
-      return 2;
+    if (outcome.stderr) {
+      process.stderr.write(outcome.stderr);
     }
-
-    const drift = computeRoutesDrift(configured, discovered);
-    process.stdout.write(formatDriftReport(drift));
-    return drift.hasDrift ? 1 : 0;
+    return outcome.exitCode;
   }
 
   if (opts.command === 'comment') {

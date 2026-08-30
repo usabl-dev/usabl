@@ -1,6 +1,11 @@
-import { describe, it, expect } from 'vitest';
-import { computeRoutesDrift } from '../../src/drift/routes.js';
+import { describe, it, expect, vi } from 'vitest';
+import { computeRoutesDrift, runRoutesDrift } from '../../src/drift/routes.js';
+import { main } from '../../src/cli.js';
+import { parseCliArgs } from '../../src/surfaces/cli.js';
 import type { RouteManifest } from '../../src/coverage/route-manifest.js';
+import { makeFakeDeps } from '../../src/deps/fakes.js';
+
+const fsOf = (files: Record<string, string>) => makeFakeDeps({ files }).fs;
 
 describe('computeRoutesDrift', () => {
   it('reports added routes when discovered route is absent from configured', () => {
@@ -125,5 +130,119 @@ describe('computeRoutesDrift', () => {
 
     expect(drift.added).toEqual(['/x', '/y']);
     expect(drift.removed).toEqual(['/a', '/z']);
+  });
+});
+
+describe('runRoutesDrift', () => {
+  it('returns exit 0 and no drift message when routes match', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [
+          { screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' },
+          { screenId: 'about', url: '/about', entryFile: 'src/About.tsx' },
+        ],
+      }),
+      'src/router.tsx': `
+        <Route path="/home" element={<Home />} />
+        <Route path="/about" element={<About />} />
+      `,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.stdout).toContain('No drift detected');
+    expect(outcome.stderr).toBeUndefined();
+  });
+
+  it('returns exit 1 and reports added routes when drift is detected', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+      }),
+      'src/router.tsx': `
+        <Route path="/home" element={<Home />} />
+        <Route path="/about" element={<About />} />
+      `,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stdout).toContain('Route drift detected');
+    expect(outcome.stdout).toContain('/about');
+    expect(outcome.stderr).toBeUndefined();
+  });
+
+  it('returns exit 1 and reports removed routes when drift is detected', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [
+          { screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' },
+          { screenId: 'about', url: '/about', entryFile: 'src/About.tsx' },
+        ],
+      }),
+      'src/router.tsx': `
+        <Route path="/home" element={<Home />} />
+      `,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stdout).toContain('Route drift detected');
+    expect(outcome.stdout).toContain('/about');
+    expect(outcome.stderr).toBeUndefined();
+  });
+
+  it('returns exit 2 when usabl.routes.json is absent', async () => {
+    const fs = fsOf({
+      'src/router.tsx': '<Route path="/home" />',
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toContain('usabl init');
+    expect(outcome.stdout).toBeUndefined();
+  });
+
+  it('returns exit 2 when router file is missing', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+      }),
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toContain('router file');
+    expect(outcome.stderr).toContain('src/router.tsx');
+    expect(outcome.stdout).toBeUndefined();
+  });
+});
+
+describe('drift command parsing', () => {
+  it('parses drift routes and refuses drift without routes', async () => {
+    const parsed = parseCliArgs(['drift', 'routes']);
+    expect(parsed.command).toBe('drift');
+    expect(parsed.driftSubcommand).toBe('routes');
+
+    const stderr: string[] = [];
+    const writeSpy = vi.spyOn(process.stderr, 'write').mockImplementation(
+      ((chunk: string | Uint8Array) => {
+        stderr.push(String(chunk));
+        return true;
+      }) as typeof process.stderr.write,
+    );
+
+    try {
+      const exitCode = await main(['drift']);
+      expect(exitCode).toBe(2);
+      expect(stderr.join('')).toContain('drift supports only the routes subcommand');
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 });
