@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 - 2026-08-27
+## 0.2.0 - 2026-08-30
 
 Release candidate. Version files name 0.2.0. This freeze does not create a git
 tag or publish to npm.
@@ -14,6 +14,18 @@ tag or publish to npm.
 - `usabl floor prune` removes paid-down identities from
   `.usabl-evidence.json` after a full scan so reintroduced barriers gate as
   `new` instead of staying `carried`.
+- Resolved floor debt is reported as a paid-down count across the CLI summary,
+  the PR comment, and the overlay, each with a reminder to run
+  `usabl floor prune` to re-arm the floor. Reporting alone does not re-arm.
+- `usabl drift routes` reports drift between the route manifest and the
+  application router. It reads only and mints no verdict.
+- `usabl install` writes adoption drafts and never enables anything on its own.
+  Each target (`--overlay`, `--claude`, `--ci`) writes a draft only or refuses
+  with a manual step, and `--branch-rule` is a read-only verify.
+- `usabl stop-hook` is the stable Stop hook entry point. It always exits 0, so a
+  wedged hook cannot block continuation through an exit code.
+- `usabl doctor` is a read-only self-check. It reports each integration surface
+  as wired, missing, drifted, or unknown, and mints no verdict.
 - `usabl enforce accessibility` and `usabl enforce policy` split CI checks so a
   policy change can merge with a non-author CODEOWNERS approval of the current
   head for each dirty guarded path. Result gains `accessibilityVerdict` and
