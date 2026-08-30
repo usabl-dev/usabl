@@ -94,6 +94,7 @@ export function scrubResult(result: Result): Result {
     exitCode: result.exitCode,
     accessibilityVerdict: result.accessibilityVerdict,
     accessibilityExitCode: result.accessibilityExitCode,
+    paidDownCount: result.paidDownCount,
   };
 }
 

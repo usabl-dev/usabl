@@ -73,6 +73,7 @@ function resultFixture(): Result {
     exitCode: 0,
     accessibilityVerdict: 'verified',
     accessibilityExitCode: 0,
+    paidDownCount: 0,
   };
 }
 

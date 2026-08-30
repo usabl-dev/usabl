@@ -59,6 +59,9 @@ export function formatSummary(result: Result): string {
         : (HEADLINE[result.accessibilityVerdict] ?? result.accessibilityVerdict);
     lines.push(`  accessibility ${accessibility} (${result.accessibilityExitCode})`);
   }
+  if (result.paidDownCount > 0) {
+    lines.push(`  floor debt resolved: ${result.paidDownCount} (run usabl floor prune to re-arm)`);
+  }
   if (result.receipt) {
     lines.push(`  receipt: sourceTree ${result.receipt.sourceTree} @ ${result.receipt.mintedAt}`);
   }

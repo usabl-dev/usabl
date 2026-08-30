@@ -20,6 +20,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   exitCode: 0,
   accessibilityVerdict: null,
   accessibilityExitCode: 0,
+  paidDownCount: 0,
   ...over,
 });
 
@@ -183,5 +184,28 @@ describe('formatSummary', () => {
     expect(out).toContain('APPROVAL REQUIRED');
     expect(out).toContain('accessibility REGRESSION');
     expect(out).toContain('.usabl-evidence.json');
+  });
+
+  it('shows the floor pay-down count when greater than zero', () => {
+    const out = formatSummary(
+      baseResult({
+        verdict: 'verified',
+        summary: 'verified: 0 gating finding(s)',
+        paidDownCount: 3,
+      }),
+    );
+    expect(out).toContain('floor debt resolved: 3');
+    expect(out).toContain('run usabl floor prune to re-arm');
+  });
+
+  it('omits the floor pay-down notice when the count is zero', () => {
+    const out = formatSummary(
+      baseResult({
+        verdict: 'verified',
+        summary: 'verified: 0 gating finding(s)',
+        paidDownCount: 0,
+      }),
+    );
+    expect(out).not.toContain('floor');
   });
 });

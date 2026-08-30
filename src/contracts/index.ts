@@ -138,6 +138,11 @@ export interface Result {
   // Never approval_required and never exit 2. Crash runs use exitCode 4 and leave these as null / 4.
   accessibilityVerdict: AccessibilityVerdict | null;
   accessibilityExitCode: AccessibilityExitCode;
+  // Count of previously accepted floor barriers that this run confirms are resolved on
+  // cleanly scanned screens. These are the entries a floor prune would remove. run() does
+  // not modify the floor; pruning does. This is projection only; the gate never consumes
+  // it and it never influences a verdict.
+  paidDownCount: number;
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);

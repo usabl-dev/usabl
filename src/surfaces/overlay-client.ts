@@ -899,6 +899,19 @@ export const overlayClientSource = `(() => {
     return section;
   }
 
+  function renderFloorPaidDown(count) {
+    if (!count) {
+      return null;
+    }
+    const section = make('section', 'section');
+    const plural = count === 1 ? 'finding' : 'findings';
+    section.appendChild(make('h3', '', 'Floor debt resolved'));
+    const notice = make('p', '');
+    notice.textContent = count + ' previously accepted ' + plural + ' no longer present on cleanly scanned screens. Run usabl floor prune to remove them and re-arm the gate.';
+    section.appendChild(notice);
+    return section;
+  }
+
   function renderPanel(host, payload, error) {
     const panel = host.shadowRoot.querySelector('.panel');
     const status = statusFor(payload, error, state.scanning);
@@ -916,9 +929,11 @@ export const overlayClientSource = `(() => {
     const detail = renderDetail(payload);
     const receipt = renderReceipt(payload.receipt);
     const guarded = renderGuardedPaths(payload.dirtyGuardedPaths);
+    const floorPaidDown = renderFloorPaidDown(payload.paidDownCount);
     if (detail) children.push(detail);
     if (receipt) children.push(receipt);
     if (guarded) children.push(guarded);
+    if (floorPaidDown) children.push(floorPaidDown);
     panel.replaceChildren(...children);
   }
 
@@ -931,6 +946,7 @@ export const overlayClientSource = `(() => {
       findings: [],
       receipt: null,
       dirtyGuardedPaths: [],
+      paidDownCount: 0,
     };
     state.payload = loading;
     state.error = false;
@@ -979,6 +995,7 @@ export const overlayClientSource = `(() => {
           findings: [],
           receipt: null,
           dirtyGuardedPaths: [],
+          paidDownCount: 0,
         },
         true,
       );

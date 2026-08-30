@@ -59,6 +59,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   exitCode: 1,
   accessibilityVerdict: null,
   accessibilityExitCode: 0,
+  paidDownCount: 0,
   ...over,
 });
 

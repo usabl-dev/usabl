@@ -60,6 +60,7 @@ const result = (over: Partial<Result> = {}): Result => ({
   exitCode: 1,
   accessibilityVerdict: null,
   accessibilityExitCode: 0,
+  paidDownCount: 0,
   ...over,
 });
 
@@ -323,6 +324,43 @@ describe('overlay browser client', { timeout: 15_000 }, () => {
     expect((bounds?.x ?? 0) + (bounds?.width ?? 0)).toBeLessThanOrEqual(360);
     expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBeLessThanOrEqual(640);
     expect(horizontalOverflow).toBe(false);
+    await page.context().close();
+  });
+
+  it('shows the floor pay-down count when greater than zero', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'verified',
+          summary: 'verified: 0 gating finding(s)',
+          findings: [],
+          paidDownCount: 4,
+        }),
+      ),
+    );
+    const host = page.locator('#__usabl-overlay');
+    await host.getByRole('button', { name: /Open usabl inspector/i }).click();
+
+    expect(await host.getByText(/4 previously accepted findings.*cleanly scanned/i).isVisible()).toBe(true);
+    expect(await host.getByText(/usabl floor prune.*re-arm/i).isVisible()).toBe(true);
+    await page.context().close();
+  });
+
+  it('omits the floor pay-down notice when the count is zero', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'verified',
+          summary: 'verified: 0 gating finding(s)',
+          findings: [],
+          paidDownCount: 0,
+        }),
+      ),
+    );
+    const host = page.locator('#__usabl-overlay');
+    await host.getByRole('button', { name: /Open usabl inspector/i }).click();
+
+    expect(await host.getByText(/floor debt/i).count()).toBe(0);
     await page.context().close();
   });
 });

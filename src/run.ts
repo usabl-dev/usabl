@@ -151,6 +151,17 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
           })
         : null;
 
+    // Count previously floored barriers that this run confirms are resolved. A barrier is
+    // confirmed resolved only when its screen was scanned cleanly (no coverage gaps) AND
+    // the barrier was not observed. A gapped screen produces no drafts, so an absent barrier
+    // there is unproven (not resolved). Counting it would claim progress that did not happen.
+    const cleanlyScannedScreens = new Set(
+      screens.filter((screen) => screen.gaps.length === 0).map((screen) => screen.screenId),
+    );
+    const paidDownCount = gated.findings.filter(
+      (f) => f.status === 'fixed' && cleanlyScannedScreens.has(f.screenId),
+    ).length;
+
     return {
       schemaVersion: 'usabl.result.v1',
       verdict: gated.verdict,
@@ -163,6 +174,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       exitCode: gated.exitCode,
       accessibilityVerdict: gated.accessibilityVerdict,
       accessibilityExitCode: gated.accessibilityExitCode,
+      paidDownCount,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -180,6 +192,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       exitCode: 4,
       accessibilityVerdict: null,
       accessibilityExitCode: 4,
+      paidDownCount: 0,
     };
   }
 }

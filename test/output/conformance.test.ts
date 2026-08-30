@@ -15,7 +15,7 @@ const result = (over: Partial<Result>): Result => ({
   verdict: 'verified', summary: '', screens: [],
   coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
   findings: [], receipt: null, dirtyGuardedPaths: [], exitCode: 0,
-  accessibilityVerdict: null, accessibilityExitCode: 0, ...over,
+  accessibilityVerdict: null, accessibilityExitCode: 0, paidDownCount: 0, ...over,
 });
 
 describe('computeConformance', () => {
