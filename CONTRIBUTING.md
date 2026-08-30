@@ -33,15 +33,15 @@ Do not add another bundler. Typecheck and tests are `npm run check`. Write a fai
 
 ## How we build
 
-A human owns product and UX. Ask before pushing a branch and before merging a pull request.
+A human owns product and UX, and is asked before a branch is pushed and before a pull request is merged.
 
-Implementation, review, and security review use **three different model families**. The family that writes the patch does not review it, does not own the merge security gate, and does not grade its own work. For example: Codex implements, Opus reviews, Gemini does security review.
+Work runs in three independent lanes: implement, review, and security review. The lane that writes a change does not review it, does not own the merge security gate, and does not grade its own work.
 
-- **Implement** with one family. TDD. Commit. Report. Do not push. Do not freelance product language.
-- **Review** with a second family after every task. Correctness, honesty (providers return drafts, the gate is the only verdict), and would you staff this. That family does not write the product code in review.
-- **Security review** with a third family on every pull request versus `main` before merge. Independent of the code review. Do not merge on Critical or Important findings. Do not paste that review into the pull request.
+- **Implement** in the first lane. TDD. Commit. Report. Do not push. Do not freelance product language.
+- **Review** in a second lane after every task. It covers correctness, honesty (generators return drafts, the gate is the only verdict), and "would you staff this." The lane that wrote the change does not review it.
+- **Security review** in a third lane. It is independent of the code review, runs on every pull request against `main` before merge, and is not pasted into the pull request. Do not merge on Critical or Important findings.
 
-CI green does not skip review or security review. Other teammates should use this split even if they pick different families than the example.
+CI being green does not replace review or security review.
 
 ## Commits
 
@@ -140,5 +140,6 @@ Open a discussion or talk to the team before large design changes.
 ## Team preview
 
 Start with the [team orientation](docs/team-orientation.html) for the product model,
-workspace map, guided demo, contribution lanes, and three-week finish plan. See
-[docs/team-preview.md](docs/team-preview.md) for the compact technical runbook.
+the workspace map, the adoption commands, the contribution lanes, and the team
+handoff. See [docs/team-preview.md](docs/team-preview.md) for the compact technical
+runbook.
