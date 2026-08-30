@@ -7,8 +7,16 @@ import type { Result } from '../contracts/index.js';
 import { formatSummary } from '../output/summary.js';
 import { scrubResult } from './scrub.js';
 
+// The one integration each install run wires. Exactly one per invocation.
+export type InstallTarget = 'overlay' | 'claude' | 'ci' | 'branch-rule';
+
+// The flags that name an install target, in the order the refusal message lists them.
+// --ci is dual-purpose: it keeps its CI-mode meaning on check and only names a target
+// under the install command, so it appears here for target counting as well.
+export const INSTALL_TARGET_FLAGS = ['--overlay', '--claude', '--ci', '--branch-rule'] as const;
+
 export interface CliOptions {
-  command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | string;
+  command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | 'install' | 'stop-hook' | string;
   staticOnly: boolean;
   trustedRef: string | null;
   json: boolean;
@@ -19,10 +27,40 @@ export interface CliOptions {
   enforceCheck: 'accessibility' | 'policy' | null;
   floorSubcommand: 'prune' | null;
   driftSubcommand: 'routes' | null;
+  // The single install target for `usabl install`, or null when this is not an install
+  // run or when zero or several target flags were given (installRefusal handles those).
+  installTarget: InstallTarget | null;
 }
 
 function isFlag(value: string): boolean {
   return value.startsWith('-');
+}
+
+// Resolve the one install target from the flags actually seen. Only the install command
+// consumes these as targets, so `check --ci` never becomes an install run. Zero or several
+// targets resolve to null on purpose; installRefusal turns that into an honest refusal
+// rather than half-wiring an integration.
+function resolveInstallTarget(
+  command: string,
+  seen: { overlay: boolean; claude: boolean; ci: boolean; branchRule: boolean },
+): InstallTarget | null {
+  if (command !== 'install') {
+    return null;
+  }
+  const selected: InstallTarget[] = [];
+  if (seen.overlay) {
+    selected.push('overlay');
+  }
+  if (seen.claude) {
+    selected.push('claude');
+  }
+  if (seen.ci) {
+    selected.push('ci');
+  }
+  if (seen.branchRule) {
+    selected.push('branch-rule');
+  }
+  return selected.length === 1 ? (selected[0] ?? null) : null;
 }
 
 export function parseCliArgs(argv: string[]): CliOptions {
@@ -37,6 +75,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let enforceCheck: 'accessibility' | 'policy' | null = null;
   let floorSubcommand: 'prune' | null = null;
   let driftSubcommand: 'routes' | null = null;
+  // Install target flags are tracked separately from the command so the exactly-one rule
+  // can be enforced after parsing. --ci reuses the existing `ci` boolean below.
+  let overlay = false;
+  let claude = false;
+  let branchRule = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -85,6 +128,18 @@ export function parseCliArgs(argv: string[]): CliOptions {
       selfCheck = true;
       continue;
     }
+    if (token === '--overlay') {
+      overlay = true;
+      continue;
+    }
+    if (token === '--claude') {
+      claude = true;
+      continue;
+    }
+    if (token === '--branch-rule') {
+      branchRule = true;
+      continue;
+    }
     if (token === '--force') {
       // Init-only overwrite of draft policy files. This is not a gate bypass.
       force = true;
@@ -109,7 +164,25 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
   }
 
-  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, driftSubcommand };
+  const installTarget = resolveInstallTarget(command, { overlay, claude, ci, branchRule });
+
+  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, driftSubcommand, installTarget };
+}
+
+export function installRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {
+  // Only the install command has a target to resolve. Everything else passes through.
+  if (opts.command !== 'install') {
+    return null;
+  }
+  // Exactly one target is wired per run. Zero or several is ambiguous, so refuse and name
+  // the four valid flags rather than half-wire an integration the operator did not choose.
+  if (opts.installTarget !== null) {
+    return null;
+  }
+  return {
+    exitCode: 2,
+    message: `install needs exactly one target flag. Choose one of: ${INSTALL_TARGET_FLAGS.join(', ')}`,
+  };
 }
 
 export function ciRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {

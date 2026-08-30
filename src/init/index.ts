@@ -10,7 +10,16 @@ import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
 
 // Init writes only these two drafts. Waivers stay human-authored judgment.
 const POLICY_FILES = ['usabl.config.json', 'usabl.routes.json'] as const;
-const VITE_CONFIG_CANDIDATES = ['vite.config.ts', 'vite.config.js', 'vite.config.mts', 'vite.config.mjs'];
+// Include the .cts and .cjs forms Vite also resolves, so init inspects the operator's real
+// config instead of missing it and defaulting the origin.
+const VITE_CONFIG_CANDIDATES = [
+  'vite.config.ts',
+  'vite.config.js',
+  'vite.config.mts',
+  'vite.config.mjs',
+  'vite.config.cts',
+  'vite.config.cjs',
+];
 const ROUTER_CANDIDATES = ['src/App.tsx', 'src/App.jsx', 'src/routes.tsx', 'src/router.tsx'];
 // Seed guardedPaths to match the engine's always-guarded set so a first draft
 // cannot omit a ledger the gate later treats as trusted policy.

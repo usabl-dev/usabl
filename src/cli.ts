@@ -11,6 +11,9 @@
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { run } from './run.js';
 import type { UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
@@ -20,7 +23,13 @@ import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
 import { parseUsablConfig } from './intake/config.js';
-import { ciRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
+import { ciRefusal, installRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
+import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
+import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
+import { planOverlay, writeOverlay } from './install/overlay.js';
+import { planClaude, writeClaude } from './install/claude.js';
+import { planCi, writeCi } from './install/ci.js';
+import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { projectDocs } from './surfaces/docs.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultJson } from './surfaces/policy-enforce.js';
@@ -118,6 +127,87 @@ async function listPullReviews(pullNumber: number): Promise<Array<{ userLogin: s
   });
 }
 
+const execFileAsync = promisify(execFile);
+
+// A read-only gh reader for the branch-rule check. The only method issues a GET against an
+// api endpoint, building the argument list internally as ['api', endpoint] and never adding
+// -X or --method, so it is read-only by construction rather than by convention. The call
+// uses the list form, never a shell string. gh missing (ENOENT) returns null so the
+// generator can refuse honestly instead of pretending the setting was verified.
+function makeGhReader(): GhReader {
+  return {
+    getJson: async (endpoint) => {
+      // Defense in depth: the endpoint is a fixed constant today, but reject anything shaped
+      // like a flag or carrying extra tokens so it can never smuggle in a method change.
+      if (endpoint.startsWith('-') || /\s/.test(endpoint)) {
+        return null;
+      }
+      try {
+        const { stdout, stderr } = await execFileAsync('gh', ['api', endpoint], { encoding: 'utf8' });
+        return { code: 0, stdout, stderr };
+      } catch (error) {
+        if (isErrnoException(error) && error.code === 'ENOENT') {
+          // gh is not installed at all. The generator turns this into cannot-verify.
+          return null;
+        }
+        // A non-zero exit carries a numeric code plus captured output. Surface it so the
+        // generator can tell "branch not protected" from an auth or network failure.
+        const failure = error as { code?: number; stdout?: string; stderr?: string };
+        if (typeof failure.code === 'number') {
+          return { code: failure.code, stdout: failure.stdout ?? '', stderr: failure.stderr ?? '' };
+        }
+        return null;
+      }
+    },
+  };
+}
+
+async function runInstall(opts: CliOptions): Promise<number> {
+  // Exactly one target per run. Zero or several is refused before any file is touched.
+  const refusal = installRefusal(opts);
+  if (refusal !== null) {
+    process.stderr.write(`usabl: ${refusal.message}\n`);
+    return refusal.exitCode;
+  }
+
+  // branch-rule is read-only. It writes nothing and only verifies through a read-only gh
+  // GET, so it takes the gh reader rather than a filesystem port.
+  if (opts.installTarget === 'branch-rule') {
+    const outcome = await verifyBranchRule(makeGhReader());
+    const stream = outcome.exitCode === 0 ? process.stdout : process.stderr;
+    stream.write(formatInstallReport(outcome));
+    return outcome.exitCode;
+  }
+
+  const globber = makeFsGlob();
+  const installFs: InstallFs = {
+    readFile: globber.readFile,
+    glob: globber.glob,
+    writeFile: async (path, contents) => {
+      // Create the parent folder (.claude, .github/workflows) before writing the draft.
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, contents, 'utf8');
+    },
+  };
+
+  // Each generator splits into a pure plan step and a write step, mirroring init. Nothing
+  // here reads a verdict, calls the gate, or consumes a file it just wrote.
+  let result: InstallResult;
+  if (opts.installTarget === 'overlay') {
+    result = await writeOverlay(installFs, await planOverlay(installFs));
+  } else if (opts.installTarget === 'claude') {
+    result = await writeClaude(installFs, await planClaude(installFs));
+  } else {
+    result = await writeCi(installFs, await planCi(installFs));
+  }
+
+  // Exit 0 (written or already wired) goes to stdout; a refusal (exit 2) goes to stderr,
+  // matching the baseline and floor commands.
+  const stream = result.exitCode === 0 ? process.stdout : process.stderr;
+  stream.write(formatInstallReport(result));
+  return result.exitCode;
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   let opts;
   try {
@@ -137,10 +227,23 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'floor' &&
     opts.command !== 'drift' &&
     opts.command !== 'enforce' &&
+    opts.command !== 'install' &&
+    opts.command !== 'stop-hook' &&
     opts.command !== 'docs'
   ) {
     process.stderr.write(`unknown command: ${opts.command}\n`);
     return 2;
+  }
+
+  if (opts.command === 'stop-hook') {
+    // The stable entry point wired into .claude/settings.json. It reads stdin and hands
+    // off to the shared runner, which always returns 0 so a wedged hook can never block
+    // continuation through an exit code. No gate or verdict logic lives here.
+    return runStopHookFromStdin(await readStdin());
+  }
+
+  if (opts.command === 'install') {
+    return runInstall(opts);
   }
 
   if (opts.command === 'init') {

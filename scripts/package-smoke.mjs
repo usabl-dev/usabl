@@ -136,8 +136,27 @@ try {
   assert.equal(linkedHook.status, 0, failure('linked Stop hook', linkedHook));
   assert.match(linkedHook.stderr, /NOT verified - invalid stop hook input JSON/);
 
+  // The stable command wired into .claude/settings.json is `usabl stop-hook`. Prove it
+  // resolves through the installed CLI and stays always-exit-0 with the same disclosure as
+  // the raw runner, so the install --claude draft points at a real entry point.
+  const stopHookCommand = run(process.execPath, [cli, 'stop-hook'], {
+    cwd: consumer,
+    input: '{invalid-json}',
+  });
+  assert.equal(stopHookCommand.status, 0, failure('installed usabl stop-hook', stopHookCommand));
+  assert.match(stopHookCommand.stderr, /NOT verified - invalid stop hook input JSON/);
+
+  // The draft prefers `npx usabl stop-hook` so it works without a global install. Prove that
+  // form resolves the local bin and behaves identically.
+  const stopHookNpx = run('npx', ['--no-install', 'usabl', 'stop-hook'], {
+    cwd: consumer,
+    input: '{invalid-json}',
+  });
+  assert.equal(stopHookNpx.status, 0, failure('installed npx usabl stop-hook', stopHookNpx));
+  assert.match(stopHookNpx.stderr, /NOT verified - invalid stop hook input JSON/);
+
   process.stdout.write(
-    'usabl package smoke: installed CLI and direct or linked Stop hooks executed.\n',
+    'usabl package smoke: installed CLI, stop-hook command, and direct or linked Stop hooks executed.\n',
   );
 } finally {
   await rm(workspace, { recursive: true, force: true });

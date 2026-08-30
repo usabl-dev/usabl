@@ -43,6 +43,7 @@ describe('parseCliArgs', () => {
       enforceCheck: null,
       floorSubcommand: null,
       driftSubcommand: null,
+      installTarget: null,
     });
   });
 
@@ -70,6 +71,7 @@ describe('parseCliArgs', () => {
       enforceCheck: null,
       floorSubcommand: null,
       driftSubcommand: null,
+      installTarget: null,
     });
   });
 
@@ -110,6 +112,7 @@ describe('parseCliArgs', () => {
       enforceCheck: null,
       floorSubcommand: null,
       driftSubcommand: null,
+      installTarget: null,
     });
   });
 
