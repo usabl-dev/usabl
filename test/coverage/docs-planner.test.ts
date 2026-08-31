@@ -189,7 +189,88 @@ describe('computeDocsCoverage', () => {
       ref: 'modules/orphan.adoc',
       state: 'unresolved',
     });
-    expect(result.gaps[0]?.reason).toBeTruthy();
+    expect(result.gaps[0]?.reason).toContain('not in any page sources or shared glob pattern');
+  });
+
+  it('keeps the orphan .adoc gap even when a wide blast scans every page', () => {
+    const manifest: DocsManifest = {
+      format: 'asciidoc-modular',
+      docsBaseUrl: 'http://localhost:8080/docs',
+      builtRoot: 'build/html',
+      buildCommand: null,
+      pages: [
+        {
+          pageId: 'page-1',
+          url: '/page-1.html',
+          assemblyFile: 'modules/page-1.adoc',
+          sources: ['modules/page-1.adoc'],
+        },
+        {
+          pageId: 'page-2',
+          url: '/page-2.html',
+          assemblyFile: 'modules/page-2.adoc',
+          sources: ['modules/page-2.adoc'],
+        },
+      ],
+      sharedGlobs: ['modules/_attributes.adoc'],
+    };
+
+    const result = computeDocsCoverage(manifest, ['modules/_attributes.adoc', 'modules/orphan.adoc']);
+    expect(result.nothingToCheck).toBe(false);
+    // Wide blast queued every page for scanning, so scan reach is total.
+    expect(result.affected).toHaveLength(2);
+    expect(result.affected.map((s) => s.screenId).sort()).toEqual(['page-1', 'page-2']);
+    expect(result.affected.every((s) => s.provenance === 'wide-blast')).toBe(true);
+    // Scanning every page is not the same as covering every change: the orphan .adoc
+    // maps to no page source, so it must still be an explicit gap. Fail-closed wins.
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0]).toMatchObject({
+      ref: 'modules/orphan.adoc',
+      state: 'unresolved',
+    });
+    expect(result.unresolvedFiles).toEqual(['modules/orphan.adoc']);
+  });
+
+  it('records both a mapped page and an orphan .adoc gap for partial coverage', () => {
+    const manifest: DocsManifest = {
+      format: 'asciidoc-modular',
+      docsBaseUrl: 'http://localhost:8080/docs',
+      builtRoot: 'build/html',
+      buildCommand: null,
+      pages: [
+        {
+          pageId: 'getting-started',
+          url: '/getting-started.html',
+          assemblyFile: 'modules/getting-started.adoc',
+          sources: ['modules/getting-started.adoc'],
+        },
+        {
+          pageId: 'api-reference',
+          url: '/api/reference.html',
+          assemblyFile: 'modules/api-reference.adoc',
+          sources: ['modules/api-reference.adoc'],
+        },
+      ],
+      sharedGlobs: [],
+    };
+
+    const result = computeDocsCoverage(manifest, ['modules/getting-started.adoc', 'modules/orphan.adoc']);
+    expect(result.nothingToCheck).toBe(false);
+    // The mapped module attributes exactly its own page via the docs manifest.
+    expect(result.affected).toHaveLength(1);
+    expect(result.affected[0]).toEqual({
+      screenId: 'getting-started',
+      url: 'http://localhost:8080/docs/getting-started.html',
+      provenance: 'docs-manifest',
+      profile: 'docs',
+    });
+    // Partial coverage still leaves the orphan .adoc as an explicit gap.
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0]).toMatchObject({
+      ref: 'modules/orphan.adoc',
+      state: 'unresolved',
+    });
+    expect(result.unresolvedFiles).toEqual(['modules/orphan.adoc']);
   });
 
   it('ignores non-doc non-shared changed files', () => {

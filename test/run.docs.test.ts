@@ -166,6 +166,35 @@ describe('run with docs manifest', () => {
     expect(result.screens).toHaveLength(0);
   });
 
+  it('produces not_covered verdict when a wide blast coincides with an orphan .adoc', async () => {
+    const cleanDocsScan: ScreenScan = {
+      screenId: 'getting-started',
+      url: 'http://localhost:8080/docs/getting-started.html',
+      stops: [],
+      drafts: [],
+      gaps: [],
+    };
+
+    const deps = makeFakeDeps({
+      ...guardOk,
+      changed: [
+        { code: 'M', path: 'modules/_attributes.adoc' },
+        { code: 'M', path: 'modules/orphan.adoc' },
+      ],
+      scans: { 'getting-started': cleanDocsScan },
+    });
+
+    const result = await run(deps, config);
+
+    // The wide blast scanned every page, but the orphan .adoc maps to no page
+    // source, so the run must fail closed rather than claim the change is covered.
+    expect(result.verdict).toBe('not_covered');
+    expect(result.exitCode).toBe(3);
+    expect(result.coverage.gaps.length).toBeGreaterThanOrEqual(1);
+    expect(result.coverage.affected[0]?.provenance).toBe('wide-blast');
+    expect(result.screens).toHaveLength(1);
+  });
+
   it('is idle when docs surface present but untouched', async () => {
     const deps = makeFakeDeps({
       ...guardOk,

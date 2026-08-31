@@ -31,8 +31,12 @@ export interface DocsCoverage {
   nothingToCheck: boolean;
 }
 
+function isWideBlastFile(file: string, globs: string[]): boolean {
+  return globs.some((glob) => matchGlob(glob, file));
+}
+
 function isDocConcern(file: string, manifest: DocsManifest): boolean {
-  return file.endsWith('.adoc') || manifest.sharedGlobs.some((glob) => matchGlob(glob, file));
+  return file.endsWith('.adoc') || isWideBlastFile(file, manifest.sharedGlobs);
 }
 
 function addAffected(target: Map<string, AffectedScreen>, candidate: AffectedScreen): void {
@@ -55,7 +59,7 @@ export function computeDocsCoverage(manifest: DocsManifest | null, changedFiles:
   const unresolvedFiles: string[] = [];
   const gaps: CoverageGap[] = [];
 
-  const hasWideBlast = docFiles.some((file) => manifest.sharedGlobs.some((glob) => matchGlob(glob, file)));
+  const hasWideBlast = docFiles.some((file) => isWideBlastFile(file, manifest.sharedGlobs));
   if (hasWideBlast) {
     for (const page of manifest.pages) {
       addAffected(affectedByScreen, {
@@ -68,7 +72,7 @@ export function computeDocsCoverage(manifest: DocsManifest | null, changedFiles:
   }
 
   for (const file of docFiles) {
-    const isWideBlastMatch = manifest.sharedGlobs.some((glob) => matchGlob(glob, file));
+    const isWideBlastMatch = isWideBlastFile(file, manifest.sharedGlobs);
     if (isWideBlastMatch) {
       continue;
     }
