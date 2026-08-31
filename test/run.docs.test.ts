@@ -125,4 +125,28 @@ describe('run with docs manifest', () => {
     expect(result.exitCode).toBe(0);
     expect(result.coverage.nothingToCheck).toBe(true);
   });
+
+  it('scans docs pages when manifest is in changed set (Phase A scans all pages)', async () => {
+    const cleanDocsScan: ScreenScan = {
+      screenId: 'getting-started',
+      url: 'http://localhost:8080/docs/getting-started.html',
+      stops: [],
+      drafts: [],
+      gaps: [],
+    };
+
+    const deps = makeFakeDeps({
+      ...guardOk,
+      writeTree: 'tree-docs-2',
+      changed: [{ code: 'M', path: 'usabl.docs.json' }],
+      scans: { 'getting-started': cleanDocsScan },
+    });
+
+    const result = await run(deps, config);
+
+    expect(result.verdict).toBe('verified');
+    expect(result.exitCode).toBe(0);
+    expect(result.coverage.nothingToCheck).toBe(false);
+    expect(result.receipt?.coverage.checked).toContain('getting-started');
+  });
 });

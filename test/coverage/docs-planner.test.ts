@@ -104,6 +104,46 @@ describe('computeDocsCoverage', () => {
       sharedGlobs: [],
     };
 
-    expect(() => computeDocsCoverage(manifest)).toThrow(/page url must stay on docs origin/);
+    expect(() => computeDocsCoverage(manifest)).toThrow(/page url must stay under the docs base path/);
+  });
+
+  it('throws when a page url uses .. path traversal to escape base path', () => {
+    const manifest: DocsManifest = {
+      format: 'asciidoc-modular',
+      docsBaseUrl: 'http://localhost:8080/docs',
+      builtRoot: 'build/html',
+      buildCommand: null,
+      pages: [
+        {
+          pageId: 'traversal',
+          url: '/../../../admin/secrets.html',
+          assemblyFile: 'modules/traversal.adoc',
+          sources: ['modules/traversal.adoc'],
+        },
+      ],
+      sharedGlobs: [],
+    };
+
+    expect(() => computeDocsCoverage(manifest)).toThrow(/page url must stay under the docs base path/);
+  });
+
+  it('throws when a page url uses backslash traversal to escape base path', () => {
+    const manifest: DocsManifest = {
+      format: 'asciidoc-modular',
+      docsBaseUrl: 'http://localhost:8080/docs',
+      builtRoot: 'build/html',
+      buildCommand: null,
+      pages: [
+        {
+          pageId: 'backslash',
+          url: '/foo\\..\\..\\admin.html',
+          assemblyFile: 'modules/backslash.adoc',
+          sources: ['modules/backslash.adoc'],
+        },
+      ],
+      sharedGlobs: [],
+    };
+
+    expect(() => computeDocsCoverage(manifest)).toThrow(/page url must stay under the docs base path/);
   });
 });

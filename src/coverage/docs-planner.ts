@@ -8,20 +8,16 @@ import type { DocsManifest } from './docs-manifest.js';
 
 function docsPageUrl(docsBaseUrl: string, pagePath: string): string {
   const base = new URL(docsBaseUrl);
-  const expectedOrigin = base.origin;
-  // Protocol-relative URLs (//evil.com/x) are rejected before they reach URL construction.
-  if (pagePath.startsWith('//')) {
-    throw new Error(`page url must stay on docs origin: ${pagePath}`);
-  }
-  // pagePath starts with '/', and URL constructor treats absolute paths as origin-relative.
-  // To join relative to the base path, strip the leading slash and use base.pathname.
-  const normalizedPath = pagePath.startsWith('/') ? pagePath.slice(1) : pagePath;
   const joinBase = base.pathname.endsWith('/') ? base.pathname : `${base.pathname}/`;
-  const resolved = new URL(`${base.origin}${joinBase}${normalizedPath}`);
-  // Page urls must remain on the declared docs origin. A manifest entry that changes
-  // origin would mint dishonest scan targets outside declared scope.
-  if (resolved.origin !== expectedOrigin) {
-    throw new Error(`page url must stay on docs origin: ${pagePath}`);
+  // Page paths start with '/'. Strip the leading slash so URL resolves relative to the
+  // join base (not origin-absolute). This mirrors routeUrl in planner.ts.
+  const normalizedPath = pagePath.startsWith('/') ? pagePath.slice(1) : pagePath;
+  const joinBaseUrl = `${base.origin}${joinBase}`;
+  const resolved = new URL(normalizedPath, joinBaseUrl);
+  // The resolved URL must stay under the docs base path. This catches protocol-relative
+  // URLs, .. traversal, and backslash traversal (WHATWG normalizes backslashes to slashes).
+  if (resolved.origin !== base.origin || !resolved.pathname.startsWith(joinBase)) {
+    throw new Error(`page url must stay under the docs base path: ${pagePath}`);
   }
   return resolved.toString();
 }
