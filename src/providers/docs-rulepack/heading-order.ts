@@ -19,7 +19,10 @@ export async function checkDocsHeadingOrder(ctx: ProviderContext): Promise<Draft
     const node = await ctx.page.axAt(h.selector);
     // CDP exposes heading depth as the numeric `level` property, copied into states.level.
     // This unifies native <h1>..<h6> and role="heading" aria-level through one honest source.
-    const lvl = typeof node?.states.level === 'number' ? node.states.level : null;
+    // Number.isInteger rejects NaN and non-integers, so a junk level reads as unreadable instead
+    // of poisoning previousLevel with NaN, which would silently disable every later comparison.
+    const rawLevel = node?.states.level;
+    const lvl = Number.isInteger(rawLevel) ? (rawLevel as number) : null;
 
     if (lvl === null) {
       // Level unreadable: we cannot honestly assert a skip from an unknown level, so we neither

@@ -76,7 +76,7 @@ function draftFrom(rule: string): Draft {
 }
 
 describe('makeDocsRulepackProvider', () => {
-  it('stays silent when heading levels descend by one, repeat, or climb back up', async () => {
+  it('stays silent when heading levels descend by one and repeat', async () => {
     const one = element('#h-one');
     const twoA = element('#h-two-a');
     const twoB = element('#h-two-b');
@@ -168,6 +168,61 @@ describe('makeDocsRulepackProvider', () => {
       elementPath: three.selector,
     });
     expect(drafts[0]?.evidence.extra).toEqual({ fromLevel: 1, toLevel: 3 });
+  });
+
+  it('treats a NaN level as unreadable and keeps detecting a later real skip', async () => {
+    const one = element('#h-one');
+    const notANumber = element('#h-nan');
+    const three = element('#h-three');
+    const provider = makeDocsRulepackProvider();
+    const ctx = await makeContext(
+      [one, notANumber, three],
+      {
+        [one.selector]: heading(1),
+        // A NaN level must not poison previousLevel. If it did, every later comparison
+        // against NaN would be false and heading-order detection would go silent.
+        [notANumber.selector]: heading(Number.NaN),
+        [three.selector]: heading(3),
+      },
+      'docs',
+    );
+
+    const drafts = await provider.run(ctx);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      rule: 'docs-heading-order',
+      elementPath: three.selector,
+    });
+    expect(drafts[0]?.evidence.extra).toEqual({ fromLevel: 1, toLevel: 3 });
+  });
+
+  it('emits a draft per skip and re-anchors after a climb back up', async () => {
+    const two = element('#h-two');
+    const four = element('#h-four');
+    const three = element('#h-three');
+    const five = element('#h-five');
+    const provider = makeDocsRulepackProvider();
+    const ctx = await makeContext(
+      [two, four, three, five],
+      {
+        [two.selector]: heading(2),
+        [four.selector]: heading(4),
+        [three.selector]: heading(3),
+        [five.selector]: heading(5),
+      },
+      'docs',
+    );
+
+    const drafts = await provider.run(ctx);
+
+    // 2->4 skips a level. 4->3 climbs back up and re-anchors previousLevel to 3.
+    // 3->5 then skips again against that re-anchored level, so two drafts emit in one page.
+    expect(drafts).toHaveLength(2);
+    expect(drafts[0]?.elementPath).toBe(four.selector);
+    expect(drafts[0]?.evidence.extra).toEqual({ fromLevel: 2, toLevel: 4 });
+    expect(drafts[1]?.elementPath).toBe(five.selector);
+    expect(drafts[1]?.evidence.extra).toEqual({ fromLevel: 3, toLevel: 5 });
   });
 
   it('stays silent when an unreadable level sits between two equal levels', async () => {
