@@ -14,7 +14,7 @@ The audience should see:
 2. One Regression Result with eight findings, covering the barriers across the
    Deployments and Clusters screens, shown the same way in the browser, Claude, and
    pull request.
-3. The mid-session Claude check remain advisory.
+3. The assistant's `/usabl-check` self-check remains advisory.
 4. The Claude Stop hook and CI check block completion.
 5. The source repair change the actual accessibility behavior.
 6. A Verified Result and receipt bound to the repaired working tree.
@@ -30,7 +30,7 @@ Both operators should complete the full runbook before the contest demo.
 ## Evidence to capture
 
 - The broken browser behavior and the Regression inspector.
-- The Claude mid-session result and Stop hook block.
+- The assistant self-check result and Stop hook block.
 - The failed pull request check and Regression comment.
 - The focused accessibility source diff.
 - The repaired browser behavior and Stop hook allow.

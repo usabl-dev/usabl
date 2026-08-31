@@ -14,7 +14,7 @@ The runbook guides the team through:
 2. Changing the tracked source to the broken state.
 3. Reading the single Regression Result (eight findings across the Deployments and
    Clusters screens), with findings grouped by screen, in the browser inspector.
-4. Running the Claude mid-session check.
+4. Running the assistant's `/usabl-check` self-check.
 5. Seeing the Claude Stop hook block completion.
 6. Seeing the pull request check and sticky comment report Regression.
 7. Repairing the tracked accessibility state.
