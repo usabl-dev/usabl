@@ -97,6 +97,7 @@
     }
     .route a { color: inherit; text-decoration: none; }
     .route a:hover { color: var(--white); }
+    .version { padding-left: .85rem; border-left: 1px solid #526079; font-family: var(--mono); }
     .section {
       width: min(calc(100% - 3rem), 1160px);
       margin: auto;
@@ -152,6 +153,9 @@
       background: #e3f2e9;
       color: #0d4c2e;
     }
+    .diagram { margin: 2.6rem 0 0; }
+    .diagram svg { width: 100%; height: auto; max-width: 940px; border: 1px solid var(--line); border-radius: 8px; background: var(--white); }
+    .diagram figcaption { margin-top: .75rem; color: var(--slate); font-size: .95rem; max-width: 820px; }
     .flow {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -234,6 +238,13 @@
     .list-card li { margin-bottom: .55rem; }
     .dark .list-card { border-color: #526079; background: var(--raised); }
     .dark .list-card p, .dark .list-card li { color: #d9dfeb; }
+    .dark .diagram figcaption { color: #d9dfeb; }
+    .dark .owner { border-bottom-color: #526079; background: var(--raised); }
+    .dark .owner p { color: #d9dfeb; }
+    .dark .owner .owns { color: #aeb8c9; }
+    .dark .owner .owns code { background: #223150; color: #dbe4ff; }
+    .dark .owner.dormant { background: #2b2415; border-top-color: var(--amber); }
+    .dark .owner.dormant .owns code { background: #3a3320; color: #f0e2c4; }
     .surface-table { overflow-x: auto; margin-top: 2rem; }
     .surface-table:focus-visible { outline: 3px solid var(--blue-light); outline-offset: 4px; }
     table { width: 100%; min-width: 760px; border-collapse: collapse; }
@@ -242,6 +253,20 @@
     .code-map { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-top: 2rem; }
     .code-map article { padding: 1.3rem; border-top: 3px solid var(--blue); background: rgba(255,255,255,.5); }
     .code-map p { margin-bottom: 0; color: var(--slate); }
+    .owners { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-top: 2.4rem; }
+    .owner { padding: 1.45rem; border-top: 3px solid var(--blue); border-bottom: 1px solid var(--line); background: rgba(255,255,255,.6); }
+    .owner h3 { margin-bottom: .5rem; }
+    .owner p { margin-bottom: 0; }
+    .owner .owns { margin-bottom: .75rem; color: var(--slate); font-size: .85rem; line-height: 1.75; }
+    .owner .owns code { background: var(--soft); padding: .05rem .32rem; border-radius: 3px; }
+    .owner.dormant { grid-column: 1 / -1; border-top-color: var(--amber); background: #fbf3e6; }
+    .sample-set { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 0; }
+    .sample { padding: 1.15rem 1.25rem; border: 1px solid var(--line); background: var(--white); }
+    .sample.pass { border-left: 5px solid var(--green); }
+    .sample.warn { border-left: 5px solid var(--amber); }
+    .sample h3 { margin-bottom: .6rem; font-size: .95rem; }
+    .sample .quote { margin: 0 0 .6rem; font-size: .93rem; color: #354156; }
+    .sample .banner { margin: 0; font-family: var(--mono); font-size: .82rem; line-height: 1.5; overflow-wrap: anywhere; }
     .next {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -266,12 +291,12 @@
       .flow { gap: .75rem; }
       .flow li { min-height: 0; border-right: 0; }
       .precedence li { border-right: 0; border-bottom: 1px solid #526079; }
-      .cards, .next { grid-template-columns: repeat(2, 1fr); }
+      .cards, .next, .owners { grid-template-columns: repeat(2, 1fr); }
     }
     @media (max-width: 620px) {
       body { font-size: 16px; }
       .section, .utility-inner { width: min(calc(100% - 2rem), 1160px); }
-      .cards, .two-col, .code-map, .next { grid-template-columns: 1fr; }
+      .cards, .two-col, .code-map, .next, .owners, .sample-set { grid-template-columns: 1fr; }
     }
     @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
     @media print {
@@ -280,8 +305,9 @@
       .route, .actions, .skip { display: none; }
       .section { width: 100%; padding: 12mm 0; }
       .dark { background: #fff; color: #000; border: solid #000; border-width: 2px 0; }
-      .dark .number, .dark .eyebrow, .dark .lede, .dark a, .precedence li, .precedence strong, .idle-note, .dark .list-card p, .dark .list-card li { color: #000; }
-      .card, .list-card, .code-map article, .next a, tr { break-inside: avoid; }
+      .dark .number, .dark .eyebrow, .dark .lede, .dark a, .precedence li, .precedence strong, .idle-note, .dark .list-card p, .dark .list-card li, .dark .owner p, .dark .owner .owns, .dark .diagram figcaption { color: #000; }
+      .card, .list-card, .code-map article, .next a, tr, .owner, .sample { break-inside: avoid; }
+      .diagram svg { border-color: #000; }
     }
   </style>
 </head>
@@ -289,7 +315,7 @@
   <a class="skip" href="#main">Skip to the code walkthrough</a>
   <header class="utility">
     <div class="utility-inner">
-      <div class="identity"><strong>usabl</strong><span>code walkthrough</span></div>
+      <div class="identity"><strong>usabl</strong><span>code walkthrough</span><span class="version">v0.2.0</span></div>
       <nav aria-label="Code walkthrough route">
         <ol class="route">
           <li><a href="#core">Core</a></li>
@@ -298,6 +324,7 @@
           <li><a href="#checks">Checks</a></li>
           <li><a href="#gate">Gate</a></li>
           <li><a href="#surfaces">Surfaces</a></li>
+          <li><a href="#own">Own</a></li>
           <li><a href="#map">Map</a></li>
         </ol>
       </nav>
@@ -309,9 +336,57 @@
       <div class="body">
         <p class="eyebrow">The short answer</p>
         <h1 id="hero-title">One pipeline. One decision-maker.</h1>
-        <p class="lede">The engine is about 90 source files and roughly 7,000 lines of TypeScript in <code>src/</code>. A separate test folder mirrors it, with roughly 9,000 more lines and more than 350 automated tests. Every source file has one of three jobs: collect evidence, make the one decision, or show that decision to people.</p>
+        <p class="lede">The engine is about 83 source files and more than 11,000 lines of TypeScript in <code>src/</code>. A separate test folder mirrors it, with another 14,000 lines and more than 600 automated tests. Every source file has one of three jobs: collect evidence, make the one decision, or show that decision to people.</p>
         <p>This page explains the code in the order it runs. One tip before you start: every file begins with a short comment. The comment says what the file does and what it must never do. The most common "must never" is: never decide the final answer. Only one module can do that. It is called the gate.</p>
         <p class="boundary"><strong>The main design rule:</strong> checks produce evidence. The gate turns the evidence into one final answer, called the verdict. All other code only displays the verdict. If any other code produces its own answer, that is a bug, even when the answer happens to be correct.</p>
+        <figure class="diagram">
+          <svg viewBox="0 0 920 285" role="img" aria-labelledby="arch-title arch-desc">
+            <title id="arch-title">How usabl runs: evidence in, one decision, many displays</title>
+            <desc id="arch-desc">Three checks run on the live page: the axe scanner, the PatternFly rulepack, and the keyboard walk. Each produces drafts and gaps, which flow into the gate. The gate is the only component that turns them into a verdict. The verdict flows out to the surfaces that show it, which are the command line, the AI stop hook, the browser overlay, the pull request, and the documentation page. A receipt is written only when the verdict is verified.</desc>
+            <defs>
+              <marker id="arch-head" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0 L10 5 L0 10 z" fill="#8a93a3"></path>
+              </marker>
+            </defs>
+            <text x="125" y="34" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" font-weight="800" letter-spacing="1.2" fill="#596579">COLLECT EVIDENCE</text>
+            <text x="455" y="34" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" font-weight="800" letter-spacing="1.2" fill="#596579">DECIDE ONCE</text>
+            <text x="767" y="34" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" font-weight="800" letter-spacing="1.2" fill="#596579">SHOW THE VERDICT</text>
+            <g font-family="Inter, sans-serif">
+              <rect x="30" y="60" width="190" height="52" rx="6" fill="#fff" stroke="#cbd1da" stroke-width="1.5"></rect>
+              <text x="45" y="83" font-size="15" font-weight="700" fill="#101827">axe scanner</text>
+              <text x="45" y="101" font-size="12" fill="#596579">general accessibility checks</text>
+              <rect x="30" y="123" width="190" height="52" rx="6" fill="#fff" stroke="#cbd1da" stroke-width="1.5"></rect>
+              <text x="45" y="146" font-size="15" font-weight="700" fill="#101827">PatternFly rulepack</text>
+              <text x="45" y="164" font-size="12" fill="#596579">design-system checks</text>
+              <rect x="30" y="186" width="190" height="52" rx="6" fill="#fff" stroke="#cbd1da" stroke-width="1.5"></rect>
+              <text x="45" y="209" font-size="15" font-weight="700" fill="#101827">keyboard walk</text>
+              <text x="45" y="227" font-size="12" fill="#596579">tab order and names</text>
+            </g>
+            <line x1="220" y1="86" x2="358" y2="128" stroke="#8a93a3" stroke-width="2" marker-end="url(#arch-head)"></line>
+            <line x1="220" y1="149" x2="358" y2="149" stroke="#8a93a3" stroke-width="2" marker-end="url(#arch-head)"></line>
+            <line x1="220" y1="212" x2="358" y2="170" stroke="#8a93a3" stroke-width="2" marker-end="url(#arch-head)"></line>
+            <text x="289" y="112" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-style="italic" fill="#596579">drafts + gaps</text>
+            <rect x="362" y="109" width="186" height="80" rx="7" fill="#2457e6"></rect>
+            <text x="455" y="145" text-anchor="middle" font-family="Inter, sans-serif" font-size="17" font-weight="800" fill="#fff">The gate</text>
+            <text x="455" y="167" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" fill="#dbe4ff">one verdict, exit code</text>
+            <line x1="548" y1="149" x2="646" y2="149" stroke="#8a93a3" stroke-width="2" marker-end="url(#arch-head)"></line>
+            <text x="597" y="140" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-style="italic" fill="#596579">verdict</text>
+            <rect x="650" y="60" width="240" height="178" rx="7" fill="#f7f5ef" stroke="#cbd1da" stroke-width="1.5"></rect>
+            <text x="670" y="86" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#101827">Surfaces (display only)</text>
+            <g font-family="Inter, sans-serif" font-size="13.5" fill="#354156">
+              <text x="670" y="112">command line</text>
+              <text x="670" y="136">AI stop hook</text>
+              <text x="670" y="160">browser overlay</text>
+              <text x="670" y="184">pull request comment</text>
+              <text x="670" y="208">documentation page</text>
+            </g>
+            <line x1="455" y1="189" x2="455" y2="215" stroke="#8a93a3" stroke-width="2" marker-end="url(#arch-head)"></line>
+            <rect x="385" y="217" width="140" height="46" rx="6" fill="#177a4a"></rect>
+            <text x="455" y="240" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#fff">receipt</text>
+            <text x="455" y="256" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" fill="#cdeadb">verified runs only</text>
+          </svg>
+          <figcaption>Evidence flows in from the left. Only the gate turns it into a verdict. Every surface on the right reads that one verdict; none of them decide.</figcaption>
+        </figure>
         <div class="actions">
           <a class="action primary" href="https://github.com/usabl-dev/usabl/tree/main/src">Browse src/ on GitHub</a>
           <a class="action" href="how-usabl-works.html">Read How usabl works first</a>
@@ -487,24 +562,133 @@
               <tr><th scope="row"><code>surfaces/stop-hook.ts</code>, <code>stop-hook-runner.ts</code>, <code>stop-hook-bin.ts</code>, <code>receipt-store.ts</code></th><td>AI stop hook</td><td>Connects to Claude Code. It blocks by printing a JSON message, not by exit codes, because that is how the hook protocol works. If a valid receipt already matches the current code, the stop is allowed without a new scan. The hook blocks only once per stop, so the assistant cannot get trapped in a loop. A one-time bypass file exists for the human operator.</td></tr>
               <tr><th scope="row"><code>surfaces/vite-plugin.ts</code>, <code>overlay-client.ts</code></th><td>Browser inspector</td><td><code>vite-plugin.ts</code> serves the inspector inside the running app. <code>overlay-client.ts</code>, the largest file in <code>src/</code>, draws the panel, refreshes when code changes, and can point to a finding on the page. It advises only. It can never fail a build or a process.</td></tr>
               <tr><th scope="row"><code>surfaces/pr-comment.ts</code></th><td>Pull request</td><td>Renders the Result as one pull request comment. A hidden marker lets CI update the same comment instead of adding a new one each time. Enforcement comes from the exit code in CI, not from the comment text.</td></tr>
+              <tr><th scope="row"><code>surfaces/docs.ts</code>, <code>surfaces/docs-html.ts</code></th><td>Documentation</td><td><code>docs.ts</code> projects a run's design-intake and transcript artifacts: an image text list, announcement examples, and keyboard paths. <code>usabl docs</code> prints them as JSON; <code>usabl docs --html</code>, rendered by <code>docs-html.ts</code>, writes one self-contained, accessible HTML page. It is a generator, not a gate: it always exits 0 and makes no verdict. On the page an artifact reads as verified only when it is bound to a minted receipt and its entries carry evidence; a bound artifact whose entries carry no evidence is labelled an expectation, and anything unbound is labelled an observation.</td></tr>
               <tr><th scope="row"><code>surfaces/playwright-helper.ts</code></th><td>Test helper</td><td>Lets a Playwright test suite assert on an existing Result inside the tests a team already runs.</td></tr>
               <tr><th scope="row"><code>surfaces/scrub.ts</code>, <code>primitives/neutralize.ts</code></th><td>Output safety</td><td>Text taken from a web page is untrusted. It can contain hidden control characters, or text that tries to give instructions to an AI. <code>neutralize.ts</code> removes control bytes before terminal output. <code>scrub.ts</code> marks page text as untrusted before it enters an AI conversation.</td></tr>
               <tr><th scope="row"><code>surfaces/self-check.ts</code></th><td>Mid-task check</td><td>A read-only status view that an AI assistant can request in the middle of a task. It reports. It never blocks.</td></tr>
             </tbody>
           </table>
         </div>
+        <figure class="diagram">
+          <div class="sample-set">
+            <div class="sample pass">
+              <h3>Run with a minted receipt</h3>
+              <p class="quote">8 artifacts across 4 surfaces. 8 bound to a minted receipt and shown as verified; 0 shown as observations only, with no receipt claim.</p>
+              <p class="banner"><span aria-hidden="true">✔</span> Verified. Bound to receipt bae693a194cf8071b1e2b698ecec8752a303639a, generated 2026-08-31T00:33:25Z.</p>
+            </div>
+            <div class="sample warn">
+              <h3>Same page, no receipt</h3>
+              <p class="quote">8 artifacts across 4 surfaces. 0 bound to a minted receipt and shown as verified; 8 shown as observations only, with no receipt claim.</p>
+              <p class="banner"><span aria-hidden="true">⚠</span> Not verified. These are observations, not proof. No receipt was minted for this run, so nothing on this card is bound to gate coverage.</p>
+            </div>
+          </div>
+          <figcaption>Captured text from two real <code>usabl docs --html</code> runs on the demo app: each panel shows the page overview line above one artifact's status banner. Same page, same artifacts. When no receipt is minted, every card falls back from "Verified" to "Not verified" on its own. The generator never shows a card as proof unless a receipt backs it.</figcaption>
+        </figure>
         <p class="rule"><strong>Consistency rule:</strong> if two surfaces ever disagree, the bug is in the display code, not in the decision. Start debugging from the <code>Result</code> object and work outward.</p>
       </div>
     </section>
 
+    <div class="dark">
+      <section class="section" id="own" aria-labelledby="own-title">
+        <div class="number" aria-hidden="true">08</div>
+        <div class="body">
+          <p class="eyebrow">Pick a system to maintain</p>
+          <h2 id="own-title">The engine divides into eight systems. Each one is a job someone can own.</h2>
+          <p class="lede">The sections above explain the code in the order it runs. This one groups it a different way: into eight systems with clear edges, so each engineer can take one and know exactly where it starts and stops. The edges follow how the code actually imports across files, not how the folders are named.</p>
+          <figure class="diagram">
+            <svg viewBox="0 0 920 336" role="img" aria-labelledby="own-map-title own-map-desc">
+              <title id="own-map-title">The eight systems, grouped by their role in a run</title>
+              <desc id="own-map-desc">Three systems collect evidence: system 2, scan and providers; system 3, coverage and discovery; and system 5, design intake. Their output flows into two systems that decide: system 1, the engine core that holds the gate; and system 4, trust and receipts. The decision flows out to three systems that report and enforce: system 6, the command line and reporting; system 8, the hook and overlay runtime; and system 5 again, documentation generation. Beneath them, system 7, adoption and wiring, gets usabl into a repository. Below that sit the dormant lanes, voicing and measure, which do not run in this version.</desc>
+              <defs>
+                <marker id="own-head" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0 0 L10 5 L0 10 z" fill="#8a93a3"></path>
+                </marker>
+              </defs>
+              <g font-family="Inter, sans-serif">
+                <rect x="20" y="44" width="250" height="150" rx="7" fill="#fff" stroke="#cbd1da" stroke-width="1.5"></rect>
+                <text x="38" y="72" font-size="14" font-weight="800" fill="#101827">Collect evidence</text>
+                <text x="38" y="102" font-size="13.5" fill="#354156">2 · Scan &amp; providers</text>
+                <text x="38" y="126" font-size="13.5" fill="#354156">3 · Coverage &amp; discovery</text>
+                <text x="38" y="150" font-size="13.5" fill="#354156">5 · Design intake</text>
+                <rect x="335" y="44" width="250" height="150" rx="7" fill="#fff" stroke="#2457e6" stroke-width="2"></rect>
+                <text x="353" y="72" font-size="14" font-weight="800" fill="#101827">Decide once</text>
+                <text x="353" y="102" font-size="13.5" fill="#354156">1 · Engine core (the gate)</text>
+                <text x="353" y="126" font-size="13.5" fill="#354156">4 · Trust &amp; receipts</text>
+                <rect x="650" y="44" width="250" height="150" rx="7" fill="#fff" stroke="#cbd1da" stroke-width="1.5"></rect>
+                <text x="668" y="72" font-size="14" font-weight="800" fill="#101827">Report &amp; enforce</text>
+                <text x="668" y="102" font-size="13.5" fill="#354156">6 · CLI &amp; reporting</text>
+                <text x="668" y="126" font-size="13.5" fill="#354156">8 · Hook &amp; overlay</text>
+                <text x="668" y="150" font-size="13.5" fill="#354156">5 · Docs generation</text>
+                <line x1="270" y1="119" x2="333" y2="119" stroke="#8a93a3" stroke-width="2" marker-end="url(#own-head)"></line>
+                <line x1="585" y1="119" x2="648" y2="119" stroke="#8a93a3" stroke-width="2" marker-end="url(#own-head)"></line>
+                <rect x="20" y="214" width="880" height="44" rx="7" fill="#eef2fb" stroke="#cbd1da" stroke-width="1.5"></rect>
+                <text x="38" y="241" font-size="13.5" fill="#354156"><tspan font-weight="800" fill="#101827">7 · Adoption &amp; wiring: </tspan>gets usabl into a repository (init, install, doctor, drift).</text>
+                <rect x="20" y="272" width="880" height="44" rx="7" fill="#fbf3e6" stroke="#a95f00" stroke-width="1.5" stroke-dasharray="6 4"></rect>
+                <text x="38" y="299" font-size="13.5" fill="#5a3a00"><tspan font-weight="800">Dormant in v0.2.0: </tspan>voicing (a ready but unregistered check) and measure (a standalone harness). Neither runs today.</text>
+              </g>
+            </svg>
+            <figcaption>The same eight systems that follow, arranged by the part they play in one run. The numbers match the cards below.</figcaption>
+          </figure>
+          <div class="owners">
+            <article class="owner">
+              <h3>1. Engine core</h3>
+              <p class="owns"><code>contracts/</code> · <code>run.ts</code> · <code>gate/</code> · <code>primitives/</code> · <code>index.ts</code></p>
+              <p>Owns the one verdict, the order the pipeline runs in, the shared data shapes every other module imports, and the small pure helpers. This is where the product's honesty guarantee lives. Own this and you own the rule that only the gate decides.</p>
+            </article>
+            <article class="owner">
+              <h3>2. Scan and providers</h3>
+              <p class="owns"><code>providers/</code> (axe, rulepack, keyboard-walk, check-runner) · <code>deps/</code></p>
+              <p>Owns how the browser is driven and how raw drafts are produced from a live page. It also computes the engine and scanner version stamps that a receipt needs. It collects evidence; it never concludes.</p>
+            </article>
+            <article class="owner">
+              <h3>3. Coverage and discovery</h3>
+              <p class="owns"><code>coverage/</code> (planner, route-manifest, import-graph)</p>
+              <p>Owns the question of which screens a change touches. When it cannot connect a changed file to a screen, it records a gap. That gap is what makes the gate answer "not covered" instead of guessing.</p>
+            </article>
+            <article class="owner">
+              <h3>4. Trust and receipts</h3>
+              <p class="owns"><code>trust/guard.ts</code> · <code>evidence/</code> · <code>surfaces/receipt-store.ts</code> · <code>baseline/</code> · <code>floor/</code></p>
+              <p>Owns the tamper model, the four-part receipt (both minting and checking it), and the accepted-findings floor with its prune step. A policy change cannot approve itself, because these reads happen against the trusted copy in git.</p>
+            </article>
+            <article class="owner">
+              <h3>5. Design intake and docs</h3>
+              <p class="owns"><code>intake/</code> · <code>docs/</code> · <code>surfaces/docs.ts</code> · <code>surfaces/docs-html.ts</code></p>
+              <p>Owns the path from written requirements to runtime checks, and from a finished run to the accessible documentation page. The three-state honesty rule for that page, verified against expectation against observation, lives here.</p>
+            </article>
+            <article class="owner">
+              <h3>6. CLI and reporting</h3>
+              <p class="owns"><code>cli.ts</code> · <code>surfaces/cli.ts</code> · <code>output/</code> · <code>scrub.ts</code> · <code>pr-comment.ts</code> · <code>policy-enforce.ts</code></p>
+              <p>Owns command routing and every read-only view of a result, for a person or for CI, plus the cleaning of untrusted page text before it leaves the tool. The <code>usabl enforce</code> path turns a result into a CI status without running the gate again.</p>
+            </article>
+            <article class="owner">
+              <h3>7. Adoption and wiring</h3>
+              <p class="owns"><code>init/</code> · <code>install/</code> (overlay, claude, ci, branch-rule) · <code>doctor/</code> · <code>drift/</code></p>
+              <p>Owns getting usabl into a repository: drafting config, wiring exactly one surface per run, and reporting what is wired or has drifted. Every step writes a reviewable draft; none of them mint a verdict.</p>
+            </article>
+            <article class="owner">
+              <h3>8. Hook and overlay runtime</h3>
+              <p class="owns"><code>stop-hook*.ts</code> · <code>vite-plugin.ts</code> · <code>overlay-client.ts</code> · <code>playwright-helper.ts</code></p>
+              <p>Owns the live entry points that actually call <code>run()</code>: the AI stop hook, which is the headline surface, the in-browser overlay, and the Playwright test seam. All of them fail open, so a stuck hook discloses rather than blocks by accident.</p>
+            </article>
+            <article class="owner dormant">
+              <h3>Dormant lanes (built, not wired)</h3>
+              <p class="owns"><code>voicing/</code> · <code>measure/fleet-insights.ts</code></p>
+              <p>Neither is on a production path in v0.2.0. <code>voicing/</code> is a complete check that is not yet registered in <code>deps/build.ts</code>; <code>measure/fleet-insights.ts</code> is a standalone scanning harness that nothing else imports. When they are switched on, voicing folds into Scan and providers, because it is already a valid provider, and measure folds into CLI and reporting. They are flagged here so nobody assumes they run today.</p>
+            </article>
+          </div>
+          <p class="idle-note"><strong>One caution for every maintainer:</strong> three names look alike but mean different things. The word "verified" in <code>install/branch-rule.ts</code> is that command's own outcome value, meaning it confirmed the required CI check (<code>usabl-policy</code>) is in place, not a gate verdict. <code>CoverageGap</code> uses "not-covered" with a hyphen for an unchecked screen, while the gate verdict "not_covered" uses an underscore. <code>output/conformance.ts</code> echoes the verdict for display and sets a "blocked" flag, but it never mints one. When in doubt, the verdict comes from one place only: <code>gate/index.ts</code>.</p>
+        </div>
+      </section>
+    </div>
+
     <section class="section" id="map" aria-labelledby="map-title">
-      <div class="number" aria-hidden="true">08</div>
+      <div class="number" aria-hidden="true">09</div>
       <div class="body">
         <p class="eyebrow">The rest of src/</p>
         <h2 id="map-title">The supporting code, in one map.</h2>
         <div class="code-map">
           <article><h3>primitives/</h3><p>Small shared helpers with no opinions: hashing, sorting, file pattern matching, name shortening, identity keys, and terminal output cleaning. Nothing here reads files or makes decisions.</p></article>
-          <article><h3>docs/</h3><p>Generators that turn a verified Result into documents: image text lists, announcement examples, and keyboard path descriptions. One shared helper checks the link between a document and its evidence, so no generator can invent its own weaker check.</p></article>
+          <article><h3>docs/</h3><p>Generators that turn a Result into documents: image text lists, announcement examples, and keyboard path descriptions. One shared helper checks the link between a document and its evidence, so no generator can invent its own weaker check. The <code>usabl docs</code> command projects these as JSON, and <code>surfaces/docs-html.ts</code> renders them as an accessible HTML page (see Surfaces).</p></article>
           <article><h3>output/</h3><p>Text views of a finished Result: the terminal summary and a conformance view. The conformance view refuses to merge all findings into one single score, because one score hides information.</p></article>
           <article><h3>measure/fleet-insights.ts</h3><p>A measurement tool for scanning real applications. It counts drafts, keyboard stops, and gaps. It never calls the gate. It never produces a verdict or a receipt.</p></article>
           <article><h3>integration-smoke.ts</h3><p>A manual test entry that uses a real browser. An environment variable guard stops it from reporting success when the browser is not available.</p></article>

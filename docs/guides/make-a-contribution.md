@@ -136,6 +136,7 @@ You can contribute without a branch:
 - File a reproducible product or accessibility issue.
 - Test an existing pull request and report the exact result.
 - Review the orientation as a first-time user.
+- Generate the accessible documentation page with `usabl docs --html` and review it for accuracy and accessibility.
 - Rehearse the demo and record timing or recovery problems.
 - Own a checklist or evidence capture task.
 

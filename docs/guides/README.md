@@ -2,7 +2,9 @@
 
 Start with the [team orientation](../team-orientation.html). Read
 [How usabl works](../how-usabl-works.html) when you need the system mechanics,
-result rules, trust model, or product surface details.
+result rules, trust model, or product surface details. Read the
+[code walkthrough](../code-walkthrough.html) when you want to read the source and
+choose one of the eight systems to maintain.
 
 ## Choose the job you are doing
 
