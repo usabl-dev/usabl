@@ -31,6 +31,7 @@ import { planClaude, writeClaude } from './install/claude.js';
 import { planCi, writeCi } from './install/ci.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { projectDocs } from './surfaces/docs.js';
+import { renderDocsHtml } from './surfaces/docs-html.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultJson } from './surfaces/policy-enforce.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
@@ -394,7 +395,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     try {
       const result = await run(deps, config);
       const projected = projectDocs(result, deps.requirements);
-      process.stdout.write(projected.json + '\n');
+      // --html renders the same artifacts as one accessible, self-contained page.
+      // The page carries the honesty invariant on its face: only receipt-bound
+      // cards are shown as verified; everything else is labelled an observation.
+      const output = opts.html ? renderDocsHtml(projected.artifacts) : projected.json;
+      process.stdout.write(output + '\n');
       return 0;
     } finally {
       await deps.browser.close();
