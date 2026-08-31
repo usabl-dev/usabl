@@ -261,8 +261,14 @@ async function stablePathsForSelector(pw: PwPage, selector: string): Promise<str
 
 function attachAxeBridge(page: Page, pw: PwPage): void {
   Object.assign(page, {
-    runAxe: async (): Promise<AxeResult> => {
-      const result = await new AxeBuilder({ page: pw }).analyze();
+    runAxe: async (options?: { tags?: readonly string[] }): Promise<AxeResult> => {
+      // Tags apply only when the docs profile passes them. No tags means axe keeps its default
+      // ruleset, so the app path builds and analyzes exactly as before.
+      let builder = new AxeBuilder({ page: pw });
+      if (options?.tags && options.tags.length > 0) {
+        builder = builder.withTags([...options.tags]);
+      }
+      const result = await builder.analyze();
       return {
         violations: mapAxeIssues(result.violations),
         incomplete: mapAxeIssues(result.incomplete),

@@ -25,8 +25,12 @@ export interface AxeIssue {
 }
 
 export interface AxePage {
-  runAxe(): Promise<{ violations: AxeIssue[]; incomplete: AxeIssue[] }>;
+  runAxe(options?: { tags?: readonly string[] }): Promise<{ violations: AxeIssue[]; incomplete: AxeIssue[] }>;
 }
+
+// The Red Hat WCAG 2.2 AA bar for the docs surface. The app path passes no tags so axe keeps its
+// default ruleset and the app evidence floor never shifts.
+export const DOCS_AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'] as const;
 
 function isAxePage(page: ProviderContext['page']): page is ProviderContext['page'] & AxePage {
   return 'runAxe' in page && typeof page.runAxe === 'function';
@@ -100,7 +104,11 @@ export const axeProvider: Provider = {
       throw new Error('axe provider requires page.runAxe()');
     }
 
-    const axeResult = await ctx.page.runAxe();
+    // Docs runs the WCAG 2.2 AA tag set. App passes no argument so its call stays byte-identical.
+    const axeResult =
+      (ctx.profile ?? 'app') === 'docs'
+        ? await ctx.page.runAxe({ tags: DOCS_AXE_TAGS })
+        : await ctx.page.runAxe();
     const drafts: Draft[] = [];
 
     for (const issue of axeResult.violations) {

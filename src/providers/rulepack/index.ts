@@ -28,6 +28,12 @@ export function makeRulepackProvider(extraChecks: RulepackCheck[] = []): Provide
     layer: 'pf',
     capabilities: ['live'],
     async run(ctx: ProviderContext): Promise<Draft[]> {
+      // The PF selectors match nothing on docs, and the PF-worded copy reads wrong for a docs guide.
+      // So the whole rulepack is a no-op on docs. App and default behavior stays unchanged.
+      if ((ctx.profile ?? 'app') === 'docs') {
+        return [];
+      }
+
       const drafts: Draft[] = [];
 
       // Static checks run first because later interactive probes mutate page state.

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { Page, ProviderContext } from '../../src/contracts/index.js';
+import type { Page, ProfileName, ProviderContext } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import type { AxeIssue } from '../../src/providers/axe/index.js';
-import { axeProvider } from '../../src/providers/axe/index.js';
+import { axeProvider, DOCS_AXE_TAGS } from '../../src/providers/axe/index.js';
 import { testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
+
+type RunAxeOptions = { tags?: readonly string[] } | undefined;
 
 interface AxeResult {
   violations: AxeIssue[];
@@ -16,6 +18,33 @@ function withRunAxe(page: Page, result: AxeResult): Page & { runAxe: () => Promi
   return Object.assign(page, {
     runAxe: async () => result,
   });
+}
+
+// Records the options each runAxe call received so tests can prove app vs docs axe wiring.
+function withRecordingRunAxe(
+  page: Page,
+  calls: RunAxeOptions[],
+): Page & { runAxe: (options?: RunAxeOptions) => Promise<AxeResult> } {
+  return Object.assign(page, {
+    runAxe: async (options?: RunAxeOptions) => {
+      calls.push(options);
+      return { violations: [], incomplete: [] };
+    },
+  });
+}
+
+async function makeRecordingContext(
+  calls: RunAxeOptions[],
+  profile?: ProfileName,
+): Promise<ProviderContext> {
+  const deps = makeFakeDeps();
+  const page = await deps.browser.open(SCREEN.url);
+  return {
+    page: withRecordingRunAxe(page, calls),
+    screen: SCREEN,
+    config: testConfig(),
+    ...(profile !== undefined ? { profile } : {}),
+  };
 }
 
 async function makeContext(result: AxeResult): Promise<ProviderContext> {
@@ -102,5 +131,33 @@ describe('axeProvider', () => {
     const ctx = await makeContextWithoutAxe();
 
     await expect(axeProvider.run(ctx)).rejects.toThrow('axe provider requires page.runAxe()');
+  });
+
+  it('runs axe with the docs WCAG 2.2 AA tags when the profile is docs', async () => {
+    const calls: RunAxeOptions[] = [];
+    const ctx = await makeRecordingContext(calls, 'docs');
+
+    await axeProvider.run(ctx);
+
+    expect(calls).toEqual([{ tags: DOCS_AXE_TAGS }]);
+    expect(DOCS_AXE_TAGS).toEqual(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']);
+  });
+
+  it('runs axe with no options when the profile is app so app behavior is unchanged', async () => {
+    const calls: RunAxeOptions[] = [];
+    const ctx = await makeRecordingContext(calls, 'app');
+
+    await axeProvider.run(ctx);
+
+    expect(calls).toEqual([undefined]);
+  });
+
+  it('runs axe with no options when the profile is absent so app behavior is unchanged', async () => {
+    const calls: RunAxeOptions[] = [];
+    const ctx = await makeRecordingContext(calls);
+
+    await axeProvider.run(ctx);
+
+    expect(calls).toEqual([undefined]);
   });
 });

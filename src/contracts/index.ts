@@ -304,7 +304,8 @@ export interface FsGlob {
   glob(patterns: string[]): Promise<string[]>;
 }
 export interface CheckRunner {
-  scan(screen: { id: string; url: string }): Promise<ScreenScan>;
+  // profile picks the per-surface provider configuration for this scan target. Absent means 'app'.
+  scan(screen: { id: string; url: string; profile?: ProfileName }): Promise<ScreenScan>;
 }
 export interface Deps {
   clock: () => string;
@@ -339,10 +340,15 @@ export interface UsablConfig {
 
 export type Capability = 'live' | 'network' | 'secrets' | 'filesystem-write';
 
+// The provider configuration a scan target selects. One run scans both surfaces, so the profile
+// rides per scan target, not per run. Absent means 'app'; each provider reads ctx.profile ?? 'app'.
+export type ProfileName = 'app' | 'docs';
+
 export interface ProviderContext {
   page: Page;
   screen: { id: string; url: string };
   config: UsablConfig;
+  profile?: ProfileName;
 }
 
 export interface Provider {
