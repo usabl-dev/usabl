@@ -34,6 +34,7 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs([])).toEqual({
       command: 'check',
       staticOnly: false,
+      html: false,
       trustedRef: null,
       json: false,
       ci: false,
@@ -51,6 +52,7 @@ describe('parseCliArgs', () => {
     expect(
       parseCliArgs([
         '--static-only',
+        '--html',
         '--trusted-ref',
         'origin/main',
         '--json',
@@ -62,6 +64,7 @@ describe('parseCliArgs', () => {
     ).toEqual({
       command: 'check',
       staticOnly: true,
+      html: true,
       trustedRef: 'origin/main',
       json: true,
       ci: true,
@@ -73,6 +76,16 @@ describe('parseCliArgs', () => {
       driftSubcommand: null,
       installTarget: null,
     });
+  });
+
+  it('parses --html for the docs command', () => {
+    const parsed = parseCliArgs(['docs', '--html']);
+    expect(parsed.command).toBe('docs');
+    expect(parsed.html).toBe(true);
+  });
+
+  it('defaults html to false', () => {
+    expect(parseCliArgs([]).html).toBe(false);
   });
 
   it('accepts comment command', () => {
@@ -103,6 +116,7 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['check', '--ci'])).toEqual({
       command: 'check',
       staticOnly: false,
+      html: false,
       trustedRef: null,
       json: false,
       ci: true,

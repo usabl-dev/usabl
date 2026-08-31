@@ -18,6 +18,9 @@ export const INSTALL_TARGET_FLAGS = ['--overlay', '--claude', '--ci', '--branch-
 export interface CliOptions {
   command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | 'install' | 'stop-hook' | 'doctor' | string;
   staticOnly: boolean;
+  // Render the docs artifacts as an accessible HTML page instead of JSON.
+  // Only the docs command reads this; every other command ignores it.
+  html: boolean;
   trustedRef: string | null;
   json: boolean;
   ci: boolean;
@@ -66,6 +69,7 @@ function resolveInstallTarget(
 export function parseCliArgs(argv: string[]): CliOptions {
   let command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | string = 'check';
   let staticOnly = false;
+  let html = false;
   let trustedRef: string | null = null;
   let json = false;
   let ci = false;
@@ -114,6 +118,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
     if (token === '--static-only') {
       staticOnly = true;
+      continue;
+    }
+    if (token === '--html') {
+      html = true;
       continue;
     }
     if (token === '--json') {
@@ -166,7 +174,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
 
   const installTarget = resolveInstallTarget(command, { overlay, claude, ci, branchRule });
 
-  return { command, staticOnly, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, driftSubcommand, installTarget };
+  return { command, staticOnly, html, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, driftSubcommand, installTarget };
 }
 
 export function installRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `usabl docs --html` renders the docs artifacts as one self-contained,
+  accessible HTML page instead of JSON. The page carries the same honesty rule
+  as the engine and separates three states in words, never by color alone: an
+  artifact reads as verified only when it is bound to a minted receipt and its
+  entries carry per-entry evidence; an artifact that is bound but whose entries
+  carry no evidence is labelled an expectation, not proof; and an unbound
+  artifact is labelled an observation, not proof. The renderer is pure and
+  deterministic, escapes all page-derived text, uses the same strict
+  content-security policy as the other project pages, and mints no verdict.
+  Without the flag, `usabl docs` still emits JSON on stdout.
+
 ## 0.2.0 - 2026-08-30
 
 Release candidate. Version files name 0.2.0. This freeze does not create a git

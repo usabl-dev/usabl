@@ -66,7 +66,7 @@ CI and hook surfaces:
 
 Reporting:
 
-- `usabl docs` projects design-intake and transcript artifacts from a full run as JSON on stdout. It is a generator, not a gate: it always exits 0 and mints no verdict.
+- `usabl docs` projects design-intake and transcript artifacts from a full run as JSON on stdout. Add `--html` to render the same artifacts as one self-contained, accessible HTML page instead. Either way it is a generator, not a gate: it always exits 0 and mints no verdict. The page carries the engine's honesty rule on its face, separating three states in words rather than by color: an artifact reads as verified only when it is bound to a minted receipt and its entries carry per-entry evidence; bound entries without evidence are labelled an expectation, not proof; and anything unbound is labelled an observation, not proof.
 
 The bypass escape hatch:
 
