@@ -77,6 +77,40 @@ describe('parseDocsManifest', () => {
     await expect(parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify(bad) }))).rejects.toThrow(/url/i);
   });
 
+  it('throws when a page url contains lowercase percent-encoded dot traversal', async () => {
+    const bad = { ...validManifest, pages: [{ ...basePage, url: '/%2e%2e/%2e%2e/admin.html' }] };
+    await expect(parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify(bad) }))).rejects.toThrow(
+      /percent-encoded path characters/i,
+    );
+  });
+
+  it('throws when a page url contains uppercase percent-encoded dot traversal', async () => {
+    const bad = { ...validManifest, pages: [{ ...basePage, url: '/%2E%2E/admin.html' }] };
+    await expect(parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify(bad) }))).rejects.toThrow(
+      /percent-encoded path characters/i,
+    );
+  });
+
+  it('throws when a page url contains percent-encoded forward slash', async () => {
+    const bad = { ...validManifest, pages: [{ ...basePage, url: '/a%2fb.html' }] };
+    await expect(parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify(bad) }))).rejects.toThrow(
+      /percent-encoded path characters/i,
+    );
+  });
+
+  it('throws when a page url contains percent-encoded backslash', async () => {
+    const bad = { ...validManifest, pages: [{ ...basePage, url: '/a%5cb.html' }] };
+    await expect(parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify(bad) }))).rejects.toThrow(
+      /percent-encoded path characters/i,
+    );
+  });
+
+  it('accepts nested clean page urls without false positives', async () => {
+    const clean = { ...validManifest, pages: [{ ...basePage, url: '/api/reference.html' }] };
+    const manifest = await parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify(clean) }));
+    expect(manifest?.pages[0]?.url).toBe('/api/reference.html');
+  });
+
   it('throws when builtRoot is an absolute path', async () => {
     await expect(
       parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify({ ...validManifest, builtRoot: '/etc/html' }) })),

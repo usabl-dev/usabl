@@ -51,6 +51,14 @@ function expectDocsPathUrl(value: unknown, field: string): string {
   if (!url.startsWith('/') || url.includes('@')) {
     throw new Error(`usabl.docs.json ${field} must start with "/" and must not contain "@"`);
   }
+  // Reject percent-encoded path metacharacters. Legitimate built-doc page paths
+  // are plain slugs like /getting-started.html or /api/reference.html and never
+  // contain percent-encoded dots or slashes. This is defense in depth: the
+  // trusted-ref overlay neutralizes a diverged manifest, but we still reject
+  // encoding at the input boundary before it can escape downstream decoding.
+  if (/%2e|%2f|%5c/i.test(url)) {
+    throw new Error(`usabl.docs.json ${field} must not contain percent-encoded path characters (%2e, %2f, %5c)`);
+  }
   return url;
 }
 
