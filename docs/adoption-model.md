@@ -23,6 +23,97 @@ own. Only `check` mints a verdict.
 
 ---
 
+## Brownfield onboarding, step by step
+
+This is the ordered path for adding usabl to an existing app, with every human step
+marked. New to the product, start with the [team orientation](team-orientation.html)
+for the one-read overview, then follow the steps here. The funnel below explains why
+each stage matters; this section is what a team actually types, in order.
+
+### Phase 1: scaffold the policy (human)
+
+1. (human) Confirm the basics: the app runs on a local dev server, the repo is git,
+   and Node 22 is available. Install the headless browser the scanner drives with
+   `npx playwright install chromium`, then install usabl. The package is not published
+   yet, so today this means building the engine from `usabl-dev/usabl` and linking it;
+   the generated CI clones and pins that same engine.
+2. (automatic, `usabl init`) Drafts `usabl.config.json` and `usabl.routes.json` from
+   the working tree. It infers `appBaseUrl` from the Vite port, reads the app router
+   for screens, and seeds the interface globs, the wide-impact globs, and the
+   guarded-path list. It writes nothing else and refuses to overwrite either file
+   without `--force`.
+3. (human) Review the two drafts; the routes and globs are drafts, not measured facts.
+   One limit to plan for: `init` recognizes self-closing `<Route ... />` entries with
+   root-absolute paths, so a `createBrowserRouter` or data-router app starts
+   under-mapped. Step 6 surfaces exactly which screens are missing.
+4. (human) Merge both files through a normal PR. They are guarded from then on: an edit
+   that makes them diverge from the trusted ref forces an `approval_required` verdict
+   until a code owner reviews it.
+
+### Phase 2: first contact and fix the map (mostly automatic)
+
+5. (human) Start the dev server, touch an interface file, and run `usabl check` (the
+   default command). Mid-task, `usabl check --self-check` gives an advisory pass that
+   never blocks.
+6. (automatic) The engine maps the changed files to screens, scans them in a real
+   browser, and reports. On a brownfield app expect two kinds of noise: real existing
+   findings (verdict `regression`, because there is no floor yet) and coverage gaps
+   (verdict `not_covered`) for changed files the route map does not know.
+7. (human, `usabl drift routes`) Fix the map first, not the app. `drift routes`
+   compares `usabl.routes.json` against the live router and lists the screens added or
+   removed. Add the missing routes or manual surfaces, by hand or by re-running
+   `usabl init --force`, until a typical change produces zero gaps. Each map edit is a
+   guarded change, so it goes through PR review.
+
+### Phase 3: baseline the floor (the key human decision)
+
+8. (automatic, `usabl baseline`) Runs a full scan and drafts the accepted floor into
+   `.usabl-evidence.json` as a reviewable working-tree diff. It refuses when other
+   guarded paths are dirty, when the scan crashed, or when nothing matched the
+   interface globs.
+9. (human) Review and merge the floor as an `approval_required` accept. After it lands,
+   carried debt does not gate and only new barriers do.
+10. (human, optional) Add waivers to `.usabl-waivers.json` for findings that need a
+    temporary exception. Each waiver is fully typed and names `rule`, `surface`,
+    `scope`, `reason`, `owner`, `approvedBy`, `created`, and `expires` (both timestamps
+    ISO-8601 UTC). Expired waivers cover nothing, so the finding gates again on its own.
+
+### Phase 4: install the surfaces (human, one draft per run)
+
+11. (automatic, `usabl install --overlay`) Drafts the advisory Vite plugin so the
+    browser inspector appears during development. It refuses to clobber an existing
+    config and prints the exact lines to add.
+12. (automatic, `usabl install --claude`) Merges a Stop hook running
+    `npx usabl stop-hook` into `.claude/settings.json`, so an assistant cannot call
+    interface work done without proof.
+13. (automatic, `usabl install --ci`) Writes the two-job
+    `.github/workflows/usabl-gate.yml` draft: `gate-comment` for the sticky PR comment
+    and the required `usabl-policy` check. Replace the `PIN_TO_A_TRUSTED_USABL_COMMIT`
+    sentinel with a full engine SHA. The workflow runs
+    `usabl check --ci --trusted-ref origin/<base-ref>`; the trusted ref is what stops a
+    PR from rewriting the floor and approving itself, because policy is read from the
+    trusted base and the `usabl-policy` job never checks out PR head.
+14. (human) Turn on branch protection so the `usabl-policy` check is required, then run
+    `usabl install --branch-rule`. That target is read-only: it verifies through the
+    GitHub API that `main` requires the check and writes nothing.
+15. (human, `usabl doctor`) Run the read-only health check across every wired surface.
+    It reports each as wired, missing, drifted, or unknown, and always exits 0.
+
+### Phase 5: the daily loop (automatic, humans only when blocked)
+
+16. (automatic) A developer or an assistant changes interface code. The overlay shows
+    findings live, the agent can self-check mid-task, and at stop time and PR time the
+    same engine runs on just the affected screens and returns one of the four verdicts.
+    `verified` mints a receipt bound to the exact code, and the Stop hook accepts a
+    valid receipt without rescanning. `usabl bypass` is a loud, one-time escape that
+    lets the next stop skip verification once.
+17. (human, periodically, `usabl floor prune`) When a floor finding is fixed it shows
+    as `fixed` and stops appearing. `floor prune` removes paid-down entries from screens
+    that scanned cleanly and re-arms the gate; merge the floor diff with the fix. The
+    floor only ratchets downward with review; it never grows silently.
+
+---
+
 ## The funnel
 
 ```
@@ -251,6 +342,7 @@ surface.
 
 ## Relationship to other docs
 
+- **Start here:** [team orientation](team-orientation.html), the product in one read
 - **Try** stage requirements: [ux-policy.md](./ux-policy.md), first-run experience
 - **Contribute** stage: `CONTRIBUTING.md` in the repo root (engineering deliverable)
 - **Discover** stage README: the quickstart README
