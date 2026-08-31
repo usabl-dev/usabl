@@ -574,15 +574,15 @@
             <div class="sample pass">
               <h3>Run with a minted receipt</h3>
               <p class="quote">8 artifacts across 4 surfaces. 8 bound to a minted receipt and shown as verified; 0 shown as observations only, with no receipt claim.</p>
-              <p class="banner">✔ Verified. Bound to receipt bae693a194cf8071b1e2b698ecec8752a303639a, generated 2026-08-31T00:33:25Z.</p>
+              <p class="banner"><span aria-hidden="true">✔</span> Verified. Bound to receipt bae693a194cf8071b1e2b698ecec8752a303639a, generated 2026-08-31T00:33:25Z.</p>
             </div>
             <div class="sample warn">
               <h3>Same page, no receipt</h3>
               <p class="quote">8 artifacts across 4 surfaces. 0 bound to a minted receipt and shown as verified; 8 shown as observations only, with no receipt claim.</p>
-              <p class="banner">⚠ Not verified. These are observations, not proof. No receipt was minted for this run, so nothing on this card is bound to gate coverage.</p>
+              <p class="banner"><span aria-hidden="true">⚠</span> Not verified. These are observations, not proof. No receipt was minted for this run, so nothing on this card is bound to gate coverage.</p>
             </div>
           </div>
-          <figcaption>Captured text from two real <code>usabl docs --html</code> runs on the demo app. Same page, same artifacts. When no receipt is minted, every card falls back from "Verified" to "Not verified" on its own. The generator never shows a card as proof unless a receipt backs it.</figcaption>
+          <figcaption>Captured text from two real <code>usabl docs --html</code> runs on the demo app: each panel shows the page overview line above one artifact's status banner. Same page, same artifacts. When no receipt is minted, every card falls back from "Verified" to "Not verified" on its own. The generator never shows a card as proof unless a receipt backs it.</figcaption>
         </figure>
         <p class="rule"><strong>Consistency rule:</strong> if two surfaces ever disagree, the bug is in the display code, not in the decision. Start debugging from the <code>Result</code> object and work outward.</p>
       </div>
@@ -647,7 +647,7 @@
             </article>
             <article class="owner">
               <h3>4. Trust and receipts</h3>
-              <p class="owns"><code>trust/guard.ts</code> · <code>evidence/</code> · <code>receipt-store.ts</code> · <code>baseline/</code> · <code>floor/</code></p>
+              <p class="owns"><code>trust/guard.ts</code> · <code>evidence/</code> · <code>surfaces/receipt-store.ts</code> · <code>baseline/</code> · <code>floor/</code></p>
               <p>Owns the tamper model, the four-part receipt (both minting and checking it), and the accepted-findings floor with its prune step. A policy change cannot approve itself, because these reads happen against the trusted copy in git.</p>
             </article>
             <article class="owner">
@@ -676,7 +676,7 @@
               <p>Neither is on a production path in v0.2.0. <code>voicing/</code> is a complete check that is not yet registered in <code>deps/build.ts</code>; <code>measure/fleet-insights.ts</code> is a standalone scanning harness that nothing else imports. When they are switched on, voicing folds into Scan and providers, because it is already a valid provider, and measure folds into CLI and reporting. They are flagged here so nobody assumes they run today.</p>
             </article>
           </div>
-          <p class="idle-note"><strong>One caution for every maintainer:</strong> three names look alike but mean different things. The word "verified" in <code>install/branch-rule.ts</code> is the name of a required CI check, not a gate verdict. <code>CoverageGap</code> uses "not-covered" with a hyphen for an unchecked screen, while the gate verdict "not_covered" uses an underscore. <code>output/conformance.ts</code> echoes the verdict for display and sets a "blocked" flag, but it never mints one. When in doubt, the verdict comes from one place only: <code>gate/index.ts</code>.</p>
+          <p class="idle-note"><strong>One caution for every maintainer:</strong> three names look alike but mean different things. The word "verified" in <code>install/branch-rule.ts</code> is that command's own outcome value, meaning it confirmed the required CI check (<code>usabl-policy</code>) is in place, not a gate verdict. <code>CoverageGap</code> uses "not-covered" with a hyphen for an unchecked screen, while the gate verdict "not_covered" uses an underscore. <code>output/conformance.ts</code> echoes the verdict for display and sets a "blocked" flag, but it never mints one. When in doubt, the verdict comes from one place only: <code>gate/index.ts</code>.</p>
         </div>
       </section>
     </div>
