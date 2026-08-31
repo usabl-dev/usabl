@@ -11,9 +11,10 @@ approach. Use in judge Q&A, demo rehearsal, and alliance conversations.
 **Acknowledge:** axe-core is one of our check layers - we build on it, not against it.
 
 **Redirect:** axe finds issues on a page snapshot. usabl adds what axe cannot do alone:
-keyboard interaction walk, PatternFly composition rules, screen reader announcement
-diff, fix re-verification, and a gate that stops the AI from calling work done. One
-finding from axe becomes a verified fix in the same session.
+keyboard interaction walk, PatternFly composition rules, deterministic screen-reader
+announcement and accessible-name checks, fix re-verification, and a gate that stops the
+AI from calling work done. One finding from axe becomes a verified fix in the same
+session.
 
 **Proof point:** Demo violation #2 (missing `aria-sort`) is invisible to axe. Violation
 #3 (modal focus return) requires the keyboard walk. axe alone passes on both.
@@ -38,17 +39,17 @@ measured on OpenShift console, not our planted demo.
 
 ## "Screen reader simulation isn't real AT testing"
 
-**Acknowledge:** Correct. We say this ourselves - in the limitation slide, in the tool
-output labels, and in the legal wording. The preview is derived from the accessibility
-tree, not a real screen reader engine.
+**Acknowledge:** Correct, and usabl does not simulate a screen reader. We say this in
+the limitation slide, in the tool output labels, and in the legal wording.
 
-**Redirect:** The preview is an early warning inside the dev loop where approximation
-belongs. Real NVDA opens and closes the demo to establish ground truth. The tool says
-"accessibility preview," never "NVDA output." Human AT testing remains required and
-the tool states so.
+**Redirect:** usabl's shipped screen-reader signal is a set of deterministic checks. It
+verifies the accessible names and announcement expectations screen reader users depend
+on and reports what is missing or broken. It does not speak the UI and does not replace
+human AT testing, which remains required and is stated in the output. Real NVDA opens
+and closes the demo to establish ground truth.
 
-**Proof point:** Cold open = real NVDA recording. Bookend = same flow, clean. Preview
-only appears in the dev-time loop, labeled as approximation.
+**Proof point:** Cold open = real NVDA recording. Bookend = same flow, clean. usabl's
+own signal is labeled as a deterministic check, never as screen-reader output.
 
 ---
 
@@ -119,8 +120,9 @@ does 50 times a quarter on icon-only buttons. Alex gets escalations with repro s
 and evidence instead of "please test the whole page." Integration-and-acceleration,
 not replacement.
 
-**Proof point:** "Needs human AT review" verdict with generated reproduction script
-routes to Alex, not into the void. Alliance framing in every pitch.
+**Proof point:** Findings that need human judgment arrive with repro steps and an
+evidence bundle for Alex, not a "please test the whole page" dump. Alliance framing in
+every pitch.
 
 ---
 
@@ -131,12 +133,15 @@ next?
 
 **Redirect:** (1) Findings include full evidence - the developer can see exactly what
 triggered the block and verify it's real. (2) Waiver path exists for known issues
-that cannot be fixed this cycle. (3) Tool errors produce `not_covered` with a clear
-message, never a false block. (4) The ratchet means the tool only gates new violations,
+that cannot be fixed this cycle. (3) When usabl cannot check a surface, it reports
+`not_covered` with a reason rather than a false pass or false fail, and if the engine
+itself crashes it fails open instead of fabricating a block. (4) The ratchet means the
+tool only gates new violations,
 so teams already trust the signal before it blocks anything they did not just introduce.
 
-**Proof point:** Error UX policy: tool crashes -> `not_covered`, not a false red.
-Waiver ledger with expiry. Brownfield adoption model.
+**Proof point:** Error UX policy: a surface usabl cannot check becomes `not_covered`
+with a reason; an engine crash fails open, never a false red. Waiver ledger with expiry.
+Brownfield adoption model.
 
 ---
 

@@ -1,8 +1,8 @@
 # Threat model
 
-Security and trust analysis for usabl beyond gate-tamper (covered in ground-truth and
-entry-spec). Gate-tamper controls: committed base config, `approval_required` on policy
-diffs, CODEOWNERS in CI.
+Security and trust analysis for usabl beyond gate-tamper (covered in
+[ground-truth.md](./ground-truth.md)). Gate-tamper controls: committed base config,
+`approval_required` on policy diffs, CODEOWNERS in CI.
 
 Build contracts: [ground-truth.md](./ground-truth.md).
 
@@ -48,8 +48,8 @@ re-baseline to green.
 **Attack:** Hostile `aria-label`, announcement text, or finding-adjacent DOM content
 contains instructions ("ignore previous findings", "mark verified").
 
-**Exposure:** Page-derived strings flow into findings JSON, transcript, MCP tool
-responses, and assistant context.
+**Exposure:** Page-derived strings flow into findings JSON, transcript, a future MCP
+surface, and assistant context.
 
 **Controls:**
 
@@ -59,7 +59,10 @@ responses, and assistant context.
 - Document for integrators: sanitize or quote-wrap page-derived strings in assistant
   UIs.
 
-**Status:** [ ] Frame MCP and hook prompts as untrusted. [x] `formatSummary` runs page-derived fields (`whatUserExperiences`, `fix`) through `neutralize()` before a live `CheckRunner` can fill them. The CLI is already an egress.
+**Status:** [x] `formatSummary` neutralizes page-derived fields (`whatUserExperiences`,
+`fix`), `scrubResult` redacts and neutralizes at every egress, and the stop-hook wraps
+finding text with `frameUntrusted()`. [ ] Framing for a future MCP surface is not built,
+since no MCP server ships in v0.2.0.
 
 ---
 
@@ -68,13 +71,13 @@ responses, and assistant context.
 **Attack:** MCP server bound to `0.0.0.0` on a shared network exposes check results and
 page URLs.
 
-**Controls:**
+**Controls (for a future MCP surface):**
 
 - Default bind: **localhost only**.
 - Document trust boundary when binding wider (containers, remote dev, CI sidecar).
 - Require explicit flag for non-localhost bind.
 
-**Status:** [ ] Enforce in MCP server implementation; document in README.
+**Status:** [ ] v0.2.0 ships no MCP server; these are requirements for one if it is built.
 
 ---
 
@@ -85,12 +88,17 @@ passing bundle from another run.
 
 **Controls:**
 
-- Provenance fields on every bundle: `url`, `commitSha`, `timestamp`, `runnerVersion`,
-  `policyHash`.
-- CI compares receipt commit to PR head; hook compares to session tree.
-- Future: signed attestation on receipt (engineering §7).
+- A minted receipt binds four values re-checked on verify: `sourceTree` (the working-tree
+  `git write-tree`), `policyHash` (HEAD blob shas over the guarded set), `runnerVersion`,
+  and `scannerVersions` (axe-core, Playwright, Chromium). It also records `baseRevision`
+  and `mintedAt`. A receipt exists only for a `verified` run.
+- `verifyReceipt` re-derives `sourceTree` and `policyHash` from the current tree and HEAD
+  and compares all four bindings. A bundle lifted from another run fails because its
+  bindings do not match this tree, policy, runner, and scanners. The stop-hook fast path
+  re-checks the stored receipt the same way before it trusts a green.
+- Future: signed attestation on the receipt (engineering §7).
 
-**Status:** Partial - schema in ground-truth; signing open.
+**Status:** Receipt bindings ship and re-verify; cross-run signing is still open.
 
 ---
 
@@ -101,11 +109,14 @@ awareness.
 
 **Controls:**
 
-- Exact-pin versions in lockfile.
-- Surface `axe-core` and `@axe-core/playwright` versions in findings JSON metadata.
-- Renovate bumps require explicit team review for policy impact.
+- Exact-pin runtime versions in the lockfile (axe-core 4.13.0, @axe-core/playwright
+  4.13.0, Playwright 1.62.1).
+- Record `scannerVersions` (axe-core, Playwright, Chromium) in the receipt so a scanner
+  swap moves the fingerprint and fails `verifyReceipt`.
+- Dependabot bumps require explicit team review for policy impact.
 
-**Status:** [ ] Implement version fields in findings output.
+**Status:** [x] Lockfile pins and receipt `scannerVersions` ship. [ ] The team review rule
+for scanner bumps is process, not code.
 
 ---
 
@@ -116,11 +127,14 @@ comments.
 
 **Controls:**
 
-- Default: all processing **local**; no telemetry without explicit opt-in decision.
+- Default: all processing **local**; no telemetry ships in v0.2.0.
 - Document that transcripts may contain page data; caution for production URLs in CI.
-- Optional redaction hook for known secret patterns (future).
+- Secret redaction and control-byte neutralization already run at egress: `scrubResult`
+  redacts credential-shaped keys and values and `neutralize` strips control sequences,
+  applied by the CLI, docs, and stop-hook projections before any output leaves the tool.
 
-**Status:** [x] Local-first architecture; telemetry decision open.
+**Status:** [x] Local-first; egress redaction and neutralization ship. [ ] Telemetry
+decision open.
 
 ---
 
@@ -135,14 +149,17 @@ the tool errored, not because the page is accessible.
 
 **Controls:**
 
-- Tool errors always produce `not_covered`, never `verified`. Receipt includes
-  `reason: "tool_error"` or `reason: "timeout"`.
-- CI timeout budget (120s per surface). Exceeded -> `not_covered` with explicit message.
-- No silent degradation: every error is surfaced in the verdict summary.
-- Partial results (some layers completed): findings surfaced, but verdict remains
-  `not_covered` (incomplete proof is not proof).
+- A tool error never mints `verified` and never mints a receipt. A provider that throws or
+  is denied a capability becomes a coverage gap, and a gap forces `not_covered` (exit 3).
+  An unhandled crash in `run()` fails open to exit 4 with `verdict: null`, again with no
+  receipt. Receipts carry no error field because they exist only for `verified`.
+- No silent degradation: every gap and every crash is disclosed in the Result summary and
+  its findings, so a green can never come from an error.
+- Partial results (some screens scanned, others gapped): the scanned findings are still
+  surfaced, but any gap holds the verdict at `not_covered`. Incomplete proof is not proof.
 
-**Status:** [ ] Implement in harness error paths; document in ux-policy error UX.
+**Status:** [x] The `not_covered` gap path and exit-4 fail-open ship. [ ] A per-surface
+time budget is not yet a config knob; the shipped bound is the keyboard-walk 4s wall clock.
 
 ---
 
@@ -153,13 +170,15 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
 
 **Controls:**
 
-- Hard timeout per surface check (120s default, configurable).
-- On timeout: `not_covered` verdict, not infinite block.
-- CI mode: teams configure timeout behavior (block or warn). Default: warn + comment.
-- Assistant hook: timeout after configured budget; surface `not_covered` with
-  suggestion to debug locally.
+- The keyboard-walk provider ships a 4s wall-clock cap and the check runner caps transcript
+  tabs at 50, so a single provider cannot spin forever.
+- A timed-out or failed scan becomes a coverage gap, which resolves to `not_covered`
+  (exit 3), not an infinite block.
+- `not_covered` is a blocking verdict, so a pathological page fails the gate closed rather
+  than passing as green. There is no warn-only mode; usabl is on or off.
 
-**Status:** [ ] Implement timeout in harness runner; expose in config.
+**Status:** [x] Provider wall-clock cap and transcript-tab cap ship. [ ] A configurable
+per-surface budget is not yet exposed.
 
 ---
 
@@ -192,20 +211,38 @@ block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`
 
 ---
 
-## Accepted risk: app CI same-job fixture and checker
+## CI trust boundary: the generated gate draft
 
-`usabl-app` CI starts the pull request's `npm run dev` in the same job that runs
-the trusted checker. The checker binary is copied to `/opt/usabl-trusted` and
-made immutable, and the verdict is the captured process exit code matched to
-`Result.exitCode`. That holds the gate answer.
+`usabl install --ci` writes a two-job workflow to `.github/workflows/usabl-gate.yml`
+(`src/install/ci.ts`). The two jobs split trust deliberately:
 
-It does not isolate the fixture process from the comment step. A hostile PR can
-still try to spoof the sticky comment or race a git ref between checkout and
-`--trusted-ref`. Accepted for the private team fixture. If the repository ever
-widens, split the trusted check into a job the pull request cannot start, and
-keep comment posting on that job's output only.
+- **`gate-comment`** is the only job allowed to run PR head code, and it is fenced to the
+  `pull_request` event (`if: github.event_name == 'pull_request'`). It starts the fixture
+  with `npm run dev` (head code) and runs the accessibility scan. A `pull_request_review`
+  event carries base-repo secrets, so head code must never run on it. Before the fixture
+  starts, the trusted engine is cloned from `usabl-dev/usabl` pinned by a full 40-character
+  commit SHA (the draft ships the sentinel `PIN_TO_A_TRUSTED_USABL_COMMIT`, which the
+  operator must replace), checked out with `persist-credentials: false`, and snapshotted to
+  a read-only `/opt/usabl-trusted` so the fixture cannot overwrite the checker. The scan
+  runs `check --ci --trusted-ref "origin/<base>"` from that snapshot.
+- **`usabl-policy`** is the required status check. It checks out the base commit only,
+  fetches the head as git objects, and runs `enforce policy --trusted-ref "origin/<base>"`,
+  which reads blobs with `git show` and `git ls-tree` and never checks out or executes head
+  code. This is the job branch protection waits on, and it is one the PR cannot start with
+  its own code.
 
-**Status:** [x] Recorded. Not a contest blocker. Named fix is job separation.
+**Accepted residual risk:** within `gate-comment`, the fixture process and the sticky
+comment step share a job, so a hostile PR could try to spoof the comment. That job posts
+the comment but does not decide the gate; the required `usabl-policy` job is isolated and
+does not trust the comment. Accepted for the private team fixture.
+
+Note the difference from the engine's own checked-in `.github/workflows/usabl-gate.yml`.
+That dogfood workflow is a single `gate-comment` job that builds the engine locally with
+`npm ci && npm run build`. It has no external-engine pin and no `usabl-policy` job, because
+the engine is testing itself rather than a separate fixture.
+
+**Status:** [x] Recorded. The generated draft already isolates the policy decision; the
+operator must set the engine SHA before the gate can run.
 
 ---
 
@@ -230,18 +267,19 @@ axe-core source; depend via npm.
 No compliance claims. Evidence-support language only. Tool states human AT review
 required where applicable.
 
-**Status:** [x] Build rule in entry-spec and ground-truth.
+**Status:** [x] Build rule in [ground-truth.md](./ground-truth.md).
 
 ---
 
 ## Open actions
 
+Receipt bindings (`sourceTree`, `policyHash`, `runnerVersion`, `scannerVersions`), the
+`not_covered` gap path, and exit-4 fail-open already ship, so they are no longer open.
+Remaining items:
+
 | Item | Target |
 |---|---|
-| MCP untrusted-data framing | MCP wrapper slice |
-| Localhost default bind | MCP server |
-| Findings provenance fields | Receipt v1 |
-| axe/playwright version in JSON | Harness output |
-| Tool-error -> not_covered path | Harness runner |
-| Timeout budget (120s default) | Harness runner |
-| Telemetry decision | Pre OSS release |
+| MCP untrusted-data framing (no MCP server ships in v0.2.0) | future MCP wrapper |
+| Localhost default bind | future MCP server |
+| Configurable per-surface time budget | harness runner |
+| Telemetry decision | pre OSS release |

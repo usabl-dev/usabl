@@ -4,8 +4,9 @@ Metrics are defined before the demo so we can report numbers we actually measure
 aspirations. Each metric has a definition, measurement method, target, and where the
 number will appear.
 
-For product framing see [positioning.md](./positioning.md). For demo script see
-`entry-spec.md` at repo root.
+For product framing see [positioning.md](./positioning.md). For the demo strategy and
+beat sequence see [ground-truth.md](./ground-truth.md); the executable walkthrough is the
+[team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md).
 
 ---
 
@@ -25,7 +26,7 @@ sitting, not after a mapping sprint.
 3. Repeat on two repos: demo app (controlled) and one real PatternFly surface.
 
 **Target:** Under five minutes on the demo app. Under fifteen minutes on a real PF
-surface with Storybook or route discovery enabled.
+surface with route discovery enabled.
 
 **Where reported:** Quickstart README, proof slide footnote, judge Q&A.
 
@@ -45,25 +46,29 @@ behavior, not just one demo moment.
 
 **Measurement:**
 
-- CI: PRs where harness verdict is `regression` and merge was blocked or waived.
+- CI: PRs where the harness verdict is `regression` and merge was blocked or waived.
 - Assistant: stop-hook blocks where re-verify eventually reaches `verified` (count the
   would-have-shipped violation).
-- Fleet evidence view: aggregate from committed findings JSON per repo (demo seed data
-  for contest; real number post-pilot).
+- Fleet aggregation: the fleet-insights view aggregates committed findings JSON per repo.
+  This is measurement-only. It runs through the `measure:fleet-insights` npm script and the
+  `./measure` package export, not during a `check` or a gate, and it never changes a
+  verdict.
 
 **Target (contest):** Qualitative story plus at least one blocked regression in the
-filmed demo. Quantitative weekly rate is a post-contest pilot metric.
+filmed demo. A quantitative weekly rate is a post-contest pilot metric.
 
-**Where reported:** Fleet tile, enforcement segment of demo arc.
+**Where reported:** The fleet-insights view (a measurement-only reporting surface, not a
+gate), plus the enforcement segment of the demo.
 
-**Status:** Demo-scripted; fleet uses seeded honest JSON.
+**Status:** Demo-scripted; fleet aggregation uses seeded honest JSON and does not gate.
 
 ---
 
 ## 3. Verified-verdict rate on real surfaces
 
 **Definition:** Of mapped surfaces checked in a full pass, what percentage
-receive a `verified` outcome (no findings, full coverage) on first run?
+receive a `verified` outcome (no gating findings, full coverage) on first run? Waived and
+fixed findings can still be present on a verified surface; they do not gate.
 
 Formula: `verified_surfaces / mapped_surfaces` on the probe set.
 
@@ -82,7 +87,7 @@ If below expectation, widen probe set or rulepack before submission.
 
 **Where reported:** Proof slide, build-week log.
 
-**Status:** Open - scheduled build-week measurement per entry-spec red-team #17.
+**Status:** Open - scheduled build-week measurement on a real surface, not the demo app.
 
 ---
 
@@ -106,7 +111,8 @@ industry benchmark.
 
 **Where reported:** Bookend of demo arc; not a standalone marketing claim.
 
-**Status:** Demo arc defined in entry-spec; filmed timing open.
+**Status:** Demo arc defined in the demo strategy ([ground-truth.md](./ground-truth.md));
+filmed timing open.
 
 ---
 
@@ -142,11 +148,12 @@ slide regardless.
 Placeholder for section 7 quickstart README. Success metric #1 depends on this path:
 
 ```bash
-# Target shape (exact commands TBD when CLI ships)
 git clone <repo>
 cd <repo> && npm install
-npx usabl check --url http://localhost:5173/demo
-# -> first finding in < 5 min from cold clone
+# The demo repo ships usabl.config.json. For a new app: npx usabl init
+npm run dev &                 # start the app the config points at
+npx usabl check               # targets come from usabl.config.json; no URL argument
+# first finding in < 5 min from a cold clone
 ```
 
 ---
@@ -157,7 +164,7 @@ npx usabl check --url http://localhost:5173/demo
 |---|---|---|---|
 | Time to first finding (demo app) | | | |
 | Time to first finding (real PF surface) | | | |
-| Verified-verdict rate (observe, real surface) | | | |
-| False positive rate (observe, real surface) | | | |
+| Verified-verdict rate (real surface) | | | |
+| False positive rate (real surface) | | | |
 | Demo: finding -> verified fix | | | |
 | Regressions blocked (demo / fleet) | | | |
