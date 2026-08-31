@@ -63,7 +63,8 @@ function parseGuardConfigBytes(raw: string): GuardConfigSource | null {
 
 /**
  * The guard always includes core policy ledgers even if guardedPaths is empty.
- * `usabl.routes.json` is load-bearing because it controls scan targets.
+ * `usabl.routes.json` is load-bearing because it controls the app scan targets, and
+ * `usabl.docs.json` is equally load-bearing because it controls the docs scan surface.
  */
 export function buildGuardedSet(config: GuardConfigSource): string[] {
   const guarded = new Set<string>(ALWAYS_GUARDED);

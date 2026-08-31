@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import type { FsGlob } from '../../src/contracts/index.js';
 import { parseDocsManifest } from '../../src/coverage/docs-manifest.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 
@@ -30,10 +31,20 @@ describe('parseDocsManifest', () => {
     expect(await parseDocsManifest(fsOf({}))).toBeNull();
   });
 
+  it('propagates a readFile IO error instead of treating it as no docs surface', async () => {
+    const throwingFs: FsGlob = {
+      readFile: async (_path: string) => {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      },
+      glob: async (_patterns: string[]) => [],
+    };
+    await expect(parseDocsManifest(throwingFs)).rejects.toThrow(/permission denied/i);
+  });
+
   it('throws when the top-level value is an array rather than an object', async () => {
     await expect(
       parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify([validManifest]) })),
-    ).rejects.toThrow(/usabl\.docs\.json/i);
+    ).rejects.toThrow(/must be an object/i);
   });
 
   it('throws when format is missing', async () => {
@@ -97,6 +108,12 @@ describe('parseDocsManifest', () => {
     await expect(
       parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify({ ...validManifest, pages: [] }) })),
     ).rejects.toThrow(/pages/i);
+  });
+
+  it('throws when buildCommand is present but not a string', async () => {
+    await expect(
+      parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify({ ...validManifest, buildCommand: 42 }) })),
+    ).rejects.toThrow(/buildCommand/i);
   });
 
   it('defaults buildCommand to null when omitted', async () => {

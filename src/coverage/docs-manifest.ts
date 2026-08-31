@@ -141,14 +141,13 @@ function parseSidecar(raw: string): DocsManifest {
 }
 
 export async function parseDocsManifest(fs: FsGlob): Promise<DocsManifest | null> {
-  // Presence of usabl.docs.json activates the docs surface. Absence (null or an
-  // ENOENT-style throw) is a clean "no docs surface", not an error.
-  let raw: string | null;
-  try {
-    raw = await fs.readFile('usabl.docs.json');
-  } catch {
-    return null;
-  }
+  // Presence of usabl.docs.json activates the docs surface. Absence is signalled by
+  // readFile returning null, and that is a clean "no docs surface", not an error.
+  // Genuine IO errors (for example EACCES) propagate as a hard failure: swallowing
+  // them would silently rewrite the story exactly like pretending invalid means "no
+  // docs". This mirrors parseConfiguredManifest in route-manifest.ts, which uses no
+  // try/catch.
+  const raw = await fs.readFile('usabl.docs.json');
   if (raw === null) {
     return null;
   }
