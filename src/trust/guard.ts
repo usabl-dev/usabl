@@ -11,6 +11,7 @@ const ALWAYS_GUARDED = [
   CONFIG_PATH,
   '.usabl-evidence.json',
   '.usabl-waivers.json',
+  'usabl.docs.json',
   'usabl.routes.json',
 ];
 
