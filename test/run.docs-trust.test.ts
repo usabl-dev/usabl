@@ -72,7 +72,7 @@ describe('run with docs manifest trust overlay', () => {
           'usabl.docs.json': goodDocsManifest,
         },
       },
-      changed: [],
+      changed: [{ code: 'M', path: 'modules/_attributes.adoc' }],
       scans: { 'getting-started': cleanGoodScan },
     });
 
@@ -83,14 +83,13 @@ describe('run with docs manifest trust overlay', () => {
     expect(result.exitCode).toBe(2);
 
     // Scan targeted the TRUSTED page (getting-started from main), not the evil page from working tree.
+    // The shared glob change triggers wide blast using the trusted manifest.
     expect(result.coverage.affected).toHaveLength(1);
     const affectedScreen = result.coverage.affected[0];
-    expect(affectedScreen).toEqual({
-      screenId: 'getting-started',
-      url: 'http://localhost:8080/docs/getting-started.html',
-      provenance: 'docs-manifest',
-      profile: 'docs',
-    });
+    expect(affectedScreen?.screenId).toBe('getting-started');
+    expect(affectedScreen?.url).toBe('http://localhost:8080/docs/getting-started.html');
+    expect(affectedScreen?.provenance).toBe('wide-blast');
+    expect(affectedScreen?.profile).toBe('docs');
 
     // No screen with evil pageId was scanned.
     const hasEvil = result.coverage.affected.some((s) => s.screenId === 'evil');
@@ -109,7 +108,7 @@ describe('run with docs manifest trust overlay', () => {
         'usabl.config.json': goodConfigJson,
         'usabl.docs.json': goodDocsManifest,
       },
-      changed: [],
+      changed: [{ code: 'M', path: 'modules/_attributes.adoc' }],
       scans: {},
     });
 
@@ -141,7 +140,7 @@ describe('run with docs manifest trust overlay', () => {
           'usabl.config.json': goodConfigJson,
         },
       },
-      changed: [],
+      changed: [{ code: 'M', path: 'modules/_attributes.adoc' }],
       scans: {},
     });
 

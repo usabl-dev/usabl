@@ -60,7 +60,7 @@ describe('run with docs manifest', () => {
 
     const deps = makeFakeDeps({
       ...guardOk,
-      changed: [],
+      changed: [{ code: 'M', path: 'modules/getting-started.adoc' }],
       scans: { 'getting-started': scanWithDocsDraft },
     });
 
@@ -100,7 +100,7 @@ describe('run with docs manifest', () => {
     const deps = makeFakeDeps({
       ...guardOk,
       writeTree: 'tree-docs-1',
-      changed: [],
+      changed: [{ code: 'M', path: 'modules/getting-started.adoc' }],
       scans: { 'getting-started': cleanDocsScan },
     });
 
@@ -126,7 +126,7 @@ describe('run with docs manifest', () => {
     expect(result.coverage.nothingToCheck).toBe(true);
   });
 
-  it('scans docs pages when manifest is in changed set (Phase A scans all pages)', async () => {
+  it('scans all pages via wide blast when sharedGlobs file changes', async () => {
     const cleanDocsScan: ScreenScan = {
       screenId: 'getting-started',
       url: 'http://localhost:8080/docs/getting-started.html',
@@ -138,7 +138,7 @@ describe('run with docs manifest', () => {
     const deps = makeFakeDeps({
       ...guardOk,
       writeTree: 'tree-docs-2',
-      changed: [{ code: 'M', path: 'usabl.docs.json' }],
+      changed: [{ code: 'M', path: 'modules/_attributes.adoc' }],
       scans: { 'getting-started': cleanDocsScan },
     });
 
@@ -147,6 +147,35 @@ describe('run with docs manifest', () => {
     expect(result.verdict).toBe('verified');
     expect(result.exitCode).toBe(0);
     expect(result.coverage.nothingToCheck).toBe(false);
+    expect(result.coverage.affected[0]?.provenance).toBe('wide-blast');
     expect(result.receipt?.coverage.checked).toContain('getting-started');
+  });
+
+  it('produces not_covered verdict when orphan .adoc changes', async () => {
+    const deps = makeFakeDeps({
+      ...guardOk,
+      changed: [{ code: 'M', path: 'modules/orphan.adoc' }],
+      scans: {},
+    });
+
+    const result = await run(deps, config);
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.exitCode).toBe(3);
+    expect(result.coverage.gaps.length).toBeGreaterThanOrEqual(1);
+    expect(result.screens).toHaveLength(0);
+  });
+
+  it('is idle when docs surface present but untouched', async () => {
+    const deps = makeFakeDeps({
+      ...guardOk,
+      changed: [],
+    });
+
+    const result = await run(deps, config);
+
+    expect(result.verdict).toBeNull();
+    expect(result.exitCode).toBe(0);
+    expect(result.coverage.nothingToCheck).toBe(true);
   });
 });

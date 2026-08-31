@@ -104,9 +104,9 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const coverageFs = overlayUntrustedManifests(deps, guardDivergedPaths, opts.trustedRef);
     const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed);
     const docsManifest = await parseDocsManifest(coverageFs);
-    const docsAffected = computeDocsCoverage(docsManifest);
-    const affected = [...discoveredCoverage.affected, ...docsAffected];
-    const nothingToCheck = discoveredCoverage.nothingToCheck && docsAffected.length === 0;
+    const docsCoverage = computeDocsCoverage(docsManifest, changed);
+    const affected = [...discoveredCoverage.affected, ...docsCoverage.affected];
+    const nothingToCheck = discoveredCoverage.nothingToCheck && docsCoverage.nothingToCheck;
     const intakeFs = overlayRequirementsFs(deps.fs, deps.git, scanConfig, opts.trustedRef);
     const loadedRequirements = await loadRequirements(intakeFs, scanConfig);
     const intakePolicyPaths =
@@ -132,7 +132,8 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       ...discoveredCoverage,
       affected,
       nothingToCheck,
-      gaps: [...discoveredCoverage.gaps, ...screens.flatMap((screen) => screen.gaps)],
+      unresolvedFiles: [...discoveredCoverage.unresolvedFiles, ...docsCoverage.unresolvedFiles],
+      gaps: [...discoveredCoverage.gaps, ...docsCoverage.gaps, ...screens.flatMap((screen) => screen.gaps)],
     };
     const drafts = screens.flatMap((s) => s.drafts);
 
