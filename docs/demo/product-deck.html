@@ -1,0 +1,1182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'; script-src 'unsafe-inline'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; upgrade-insecure-requests">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="description" content="usabl product briefing: an accessibility proof engine for UI development.">
+  <title>usabl: Technical Overview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #101827;
+      --raised: #172033;
+      --stage: #0c1220;
+      --paper: #f7f5ef;
+      --white: #fff;
+      --blue: #2457e6;
+      --blue-light: #5b7cfa;
+      --verified: #177a4a;
+      --regression: #c9363e;
+      --uncovered: #a95f00;
+      --approval: #7452b8;
+      --slate: #596579;
+      --line: #cbd1da;
+      --soft: #e9edf4;
+      --mist: #cfd8eb;
+      --display: "Red Hat Display", Overpass, Inter, "Segoe UI", sans-serif;
+      --text: "Red Hat Text", Overpass, Inter, "Segoe UI", sans-serif;
+      --mono: "Red Hat Mono", "Liberation Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: var(--stage);
+      color: var(--paper);
+      font: 18px/1.45 var(--text);
+    }
+    a { color: var(--blue-light); }
+    a:focus-visible, button:focus-visible, summary:focus-visible {
+      outline: 3px solid var(--blue-light);
+      outline-offset: 3px;
+    }
+    code, .mono { font-family: var(--mono); }
+    h1, h2 {
+      font-family: var(--display);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.12;
+      margin: 0 0 0.7rem;
+    }
+    h1 { font-size: clamp(1.8rem, 3.4vw, 2.85rem); }
+    p { margin: 0 0 0.75rem; }
+    p:last-child, ul:last-child, table:last-child, dl:last-child { margin-bottom: 0; }
+
+    .skip {
+      position: fixed;
+      z-index: 40;
+      top: 0.6rem;
+      left: 0.6rem;
+      padding: 0.65rem 0.9rem;
+      background: var(--white);
+      color: var(--ink);
+      transform: translateY(-180%);
+    }
+    .skip:focus { transform: none; }
+
+    .live {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
+
+    .chrome {
+      position: fixed;
+      z-index: 8;
+      right: 1.25rem;
+      left: 1.25rem;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--mist);
+    }
+    .chrome-top { top: 0.85rem; }
+    .chrome-bottom { bottom: 0.85rem; }
+    .brand { font-family: var(--display); font-size: 1.05rem; letter-spacing: -0.04em; text-transform: none; color: var(--white); }
+    .chrome button {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      letter-spacing: inherit;
+      text-transform: inherit;
+      cursor: pointer;
+      padding: 0.2rem 0.35rem;
+    }
+    .progress {
+      position: fixed;
+      z-index: 8;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      height: 4px;
+      background: #243044;
+    }
+    .progress > span {
+      display: block;
+      height: 100%;
+      background: var(--blue);
+      width: 0;
+    }
+
+    .deck {
+      min-height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 3.4rem 1.5rem 3.2rem;
+    }
+
+    .slide {
+      width: min(100%, 1120px);
+    }
+    .slide[hidden] { display: none !important; }
+
+    .card {
+      position: relative;
+      background: var(--paper);
+      color: var(--ink);
+      min-height: min(72vh, 640px);
+      padding: 2.4rem 2.6rem 2.2rem 3.1rem;
+      border: 1px solid #d7d2c6;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+    }
+    .card::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: -7px;
+      width: 14px;
+      background:
+        radial-gradient(circle at 7px 14px, var(--stage) 5px, transparent 5.5px) 0 8px / 14px 22px;
+    }
+    .kicker {
+      margin: 0 0 0.55rem;
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .lede {
+      max-width: 42rem;
+      font-size: clamp(1.15rem, 1.7vw, 1.38rem);
+      color: #243044;
+    }
+    .quiet { color: var(--slate); font-size: 0.95rem; }
+
+    .title-card {
+      min-height: min(72vh, 640px);
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      background:
+        linear-gradient(180deg, rgba(16, 24, 39, 0.08), transparent 34%),
+        var(--paper);
+    }
+    .wordmark {
+      font-family: var(--display);
+      font-size: clamp(4.2rem, 10vw, 7.2rem);
+      font-weight: 800;
+      letter-spacing: -0.06em;
+      line-height: 0.9;
+      color: var(--ink);
+    }
+
+    .agenda {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 0.85rem;
+    }
+    .agenda li {
+      display: grid;
+      grid-template-columns: 2.4rem 1fr;
+      gap: 0.9rem;
+      align-items: baseline;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .agenda b { font-family: var(--mono); color: var(--blue); font-size: 0.95rem; }
+    .agenda span { font-family: var(--display); font-size: 1.35rem; font-weight: 650; }
+
+    .facts, .tiles, .layers, .groups, .loop, .surfaces {
+      display: grid;
+      gap: 0.85rem;
+    }
+    .facts { grid-template-columns: repeat(3, 1fr); }
+    .tiles { grid-template-columns: 1fr 1fr; }
+    .layers { grid-template-columns: repeat(3, 1fr); }
+    .groups { grid-template-columns: 1fr 1fr; }
+    .loop { grid-template-columns: repeat(5, 1fr); }
+    .surfaces { grid-template-columns: repeat(3, 1fr); }
+    .panel, .tile, .layer, .group, .step, .surface, .fact {
+      background: var(--white);
+      border: 1px solid var(--line);
+      padding: 0.85rem 0.95rem;
+    }
+    .fact strong, .layer strong, .group strong, .step strong, .surface strong, .tile strong {
+      display: block;
+      font-family: var(--display);
+      margin-bottom: 0.3rem;
+    }
+    .cite {
+      display: block;
+      margin-top: 0.45rem;
+      color: var(--slate);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+
+    .quote {
+      margin: 0;
+      font-family: var(--display);
+      font-size: clamp(1.35rem, 2.3vw, 1.85rem);
+      font-weight: 600;
+      line-height: 1.28;
+      max-width: 46rem;
+    }
+
+    .stamp {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.18rem 0.5rem;
+      border: 2px solid currentColor;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      transform: rotate(-1.5deg);
+    }
+    .stamp-verified { color: var(--verified); }
+    .stamp-regression { color: var(--regression); }
+    .stamp-uncovered { color: var(--uncovered); }
+    .stamp-approval { color: var(--approval); }
+
+    .verdicts { display: grid; gap: 0.7rem; }
+    .verdict {
+      display: grid;
+      grid-template-columns: 11.5rem 1fr;
+      gap: 1rem;
+      align-items: start;
+      background: var(--white);
+      border: 1px solid var(--line);
+      padding: 0.8rem 1rem;
+    }
+    .verdict p { margin: 0; }
+
+    table.rules {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+    }
+    table.rules th, table.rules td {
+      text-align: left;
+      vertical-align: top;
+      padding: 0.48rem 0.55rem 0.48rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+    table.rules th {
+      color: var(--slate);
+      font-size: 0.72rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    table.rules code { font-size: 0.82rem; }
+
+    .anatomy {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.85rem;
+      margin-top: 1rem;
+    }
+    .anatomy b {
+      display: block;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: 0.35rem;
+    }
+
+    .help {
+      max-width: 28rem;
+      padding: 1.2rem 1.3rem;
+      border: 0;
+      background: var(--paper);
+      color: var(--ink);
+    }
+    .help::backdrop { background: rgba(12, 18, 32, 0.72); }
+    .help h2 { font-size: 1.3rem; }
+    .help dl { display: grid; grid-template-columns: 7rem 1fr; gap: 0.35rem 0.8rem; margin: 0; }
+    .help dt { font-family: var(--mono); font-weight: 700; }
+    .help dd { margin: 0; }
+
+    .overview-list {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.35rem 1.2rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      font-size: 0.95rem;
+    }
+    .overview-list button {
+      appearance: none;
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      padding: 0.2rem 0;
+    }
+    .overview-list .n { font-family: var(--mono); color: var(--blue); margin-right: 0.45rem; }
+
+    .diagram {
+      margin-top: 1.1rem;
+      background: var(--white);
+      border: 1px solid var(--line);
+      padding: 1rem 1.1rem 0.7rem;
+    }
+    .diagram svg { display: block; width: 100%; height: auto; }
+    .diagram .node-box { fill: var(--soft); stroke: var(--line); stroke-width: 1.5; }
+    .diagram .node-box.accent { fill: var(--blue); stroke: var(--blue); }
+    .diagram .node-title {
+      font-family: var(--display);
+      font-weight: 700;
+      font-size: 15px;
+      fill: var(--ink);
+    }
+    .diagram .node-title.on-accent { fill: var(--white); }
+    .diagram .node-sub { font-family: var(--text); font-size: 11px; fill: var(--slate); }
+    .diagram .node-sub.on-accent { fill: var(--mist); }
+    .diagram .flow-line { stroke: var(--blue); stroke-width: 2; fill: none; }
+    .diagram .spoke-line { stroke: var(--line); stroke-width: 2; fill: none; }
+    .diagram .axis-line { stroke: var(--slate); stroke-width: 1.5; }
+    .diagram .axis-label {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      fill: var(--slate);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .diagram .bar-known { fill: var(--uncovered); }
+    .diagram .bar-new { fill: var(--regression); }
+    .diagram .legend-label { font-family: var(--text); font-size: 12px; fill: var(--ink); }
+    .diagram .hub-circle { fill: var(--blue); stroke: var(--blue); }
+    .diagram figcaption { margin: 0; }
+    .diagram + .quiet, figcaption.quiet { margin-top: 0.55rem; }
+
+    .steps {
+      margin: 0 0 0.4rem;
+      padding-left: 1.4rem;
+      display: grid;
+      gap: 0.4rem;
+      font-size: 1.02rem;
+    }
+    .steps li { padding-left: 0.2rem; }
+    .mock {
+      margin: 1.05rem 0 0;
+      background: var(--white);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--regression);
+      padding: 0.85rem 1.05rem;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .mock .h { color: var(--regression); font-weight: 700; }
+    .mock .k { color: var(--slate); font-weight: 700; }
+    .mock .rule { color: var(--blue); }
+
+    @media (max-width: 900px) {
+      .facts, .tiles, .layers, .groups, .loop, .surfaces, .anatomy, .verdict {
+        grid-template-columns: 1fr;
+      }
+      .card { padding: 1.4rem 1.3rem 1.3rem 1.8rem; min-height: 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; }
+    }
+
+    @media print {
+      @page { size: landscape; margin: 12mm; }
+      body { background: white; color: black; }
+      .chrome, .progress, .skip, .live, dialog { display: none !important; }
+      .deck { display: block; padding: 0; }
+      .slide { display: block !important; break-after: page; width: auto; }
+      .card { box-shadow: none; min-height: 0; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#stage">Skip to current slide</a>
+  <div class="live" id="live" aria-live="polite"></div>
+  <svg width="0" height="0" style="position: absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--blue)"></path>
+      </marker>
+    </defs>
+  </svg>
+
+  <header class="chrome chrome-top">
+    <div class="brand">usabl</div>
+    <div>Technical Overview · v0.2.0</div>
+  </header>
+  <footer class="chrome chrome-bottom">
+    <div>
+      <button type="button" id="prev" aria-label="Previous slide">Prev</button>
+      ·
+      <button type="button" id="next" aria-label="Next slide">Next</button>
+      ·
+      <button type="button" id="helpBtn" aria-haspopup="dialog">Keys</button>
+    </div>
+    <div id="counter">1 / 23</div>
+  </footer>
+  <div class="progress" aria-hidden="true"><span id="bar"></span></div>
+
+  <main class="deck" id="stage">
+
+    <section class="slide" id="title" data-title="Title">
+      <div class="card title-card">
+        <p class="kicker">Technical Overview</p>
+        <p class="wordmark">usabl</p>
+        <p class="lede">An accessibility proof engine for UI development. Integrates deterministic checks into the developer workflow across the CLI, CI, and AI assistants.</p>
+      </div>
+    </section>
+
+    <section class="slide" id="agenda" data-title="Agenda" hidden>
+      <div class="card">
+        <p class="kicker">Agenda</p>
+        <h1 tabindex="-1">System Overview</h1>
+        <ol class="agenda">
+          <li><b>01</b><span>The Verification Gap: Why standard scanners aren't enough for automated workflows.</span></li>
+          <li><b>02</b><span>Core Architecture: Targeting, Providers, the Gate, and Verdicts.</span></li>
+          <li><b>03</b><span>Check Layers: axe-core, Keyboard Walk, PatternFly rules, and design intake.</span></li>
+          <li><b>04</b><span>Workflow Integration: CLI, CI, and Assistant hooks.</span></li>
+          <li><b>05</b><span>Adoption: Managing legacy debt with baselines and waivers.</span></li>
+          <li><b>06</b><span>usabl for Documentation: Extending the same engine to product docs.</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="slide" id="problem" data-title="The Problem" hidden>
+      <div class="card">
+        <p class="kicker">Background</p>
+        <h1 tabindex="-1">The Verification Gap</h1>
+        <p class="lede">Code generation and AI assistants accelerate UI development, but accessibility verification remains an out-of-band, manual process.</p>
+        <p class="lede">Standard scanners produce issue lists for static pages, but they do not map git diffs to affected routes, verify fixes automatically, or prevent inaccessible code from being merged.</p>
+      </div>
+    </section>
+
+    <section class="slide" id="solution" data-title="System Concept" hidden>
+      <div class="card">
+        <p class="kicker">System Concept</p>
+        <h1 tabindex="-1">Automated Accessibility Proof</h1>
+        <p class="lede">The gap is between what gets written and what ships to a user who depends on accessibility. usabl closes it by evaluating UI changes automatically, as part of the existing merge workflow, before code reaches production.</p>
+        <div class="tiles" style="margin-top:1rem">
+          <article class="tile">
+            <strong>Targeted Execution</strong>
+            Maps changed files to specific application routes and runs checks only on affected screens.
+          </article>
+          <article class="tile">
+            <strong>Strict Enforcement</strong>
+            Compares results against a known baseline. Blocks new regressions while allowing existing technical debt to be managed over time.
+          </article>
+        </div>
+        <figure class="diagram">
+          <svg viewBox="0 0 960 150" role="img" aria-label="Flow diagram: a git diff maps to affected screens, checks run in a real browser, results are compared to the baseline, and one verdict is produced.">
+            <path class="flow-line" d="M160,80 H200" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M340,80 H380" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M520,80 H560" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M700,80 H740" marker-end="url(#arrow)"></path>
+
+            <rect class="node-box" x="20" y="50" width="140" height="60" rx="6"></rect>
+            <text class="node-title" x="90" y="76" text-anchor="middle">Git diff</text>
+            <text class="node-sub" x="90" y="94" text-anchor="middle">Changed files</text>
+
+            <rect class="node-box" x="200" y="50" width="140" height="60" rx="6"></rect>
+            <text class="node-title" x="270" y="76" text-anchor="middle">Affected screens</text>
+            <text class="node-sub" x="270" y="94" text-anchor="middle">Routes + imports</text>
+
+            <rect class="node-box" x="380" y="50" width="140" height="60" rx="6"></rect>
+            <text class="node-title" x="450" y="76" text-anchor="middle">Checks run</text>
+            <text class="node-sub" x="450" y="94" text-anchor="middle">In a real browser</text>
+
+            <rect class="node-box" x="560" y="50" width="140" height="60" rx="6"></rect>
+            <text class="node-title" x="630" y="76" text-anchor="middle">Compare</text>
+            <text class="node-sub" x="630" y="94" text-anchor="middle">vs. known findings</text>
+
+            <rect class="node-box accent" x="740" y="50" width="200" height="60" rx="6"></rect>
+            <text class="node-title on-accent" x="840" y="76" text-anchor="middle">Verdict</text>
+            <text class="node-sub on-accent" x="840" y="94" text-anchor="middle">One result, every time</text>
+          </svg>
+          <figcaption class="quiet">This sequence runs on every check, whether triggered from the CLI, an assistant hook, or CI.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="slide" id="targeting" data-title="Targeting" hidden>
+      <div class="card">
+        <p class="kicker">Targeting</p>
+        <h1 tabindex="-1">How usabl Knows What to Check</h1>
+        <p class="lede">usabl does not re-scan the whole app on every change. It reads the git diff and works out which screens each changed file can actually affect, then checks only those. A file it cannot trace to a screen is reported as not covered, never quietly passed.</p>
+        <figure class="diagram">
+          <svg viewBox="0 0 960 250" role="img" aria-label="Four mappings from a changed file to what gets checked. A changed screen file maps to that one screen. A changed shared component maps to every screen that imports it, by following the import graph. A changed app-shell file maps to every screen, called wide blast. A file that cannot be mapped becomes not covered, which fails closed.">
+            <path class="flow-line" d="M300,42 H560" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M300,100 H560" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M300,158 H560" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M300,216 H560" marker-end="url(#arrow)"></path>
+
+            <rect class="node-box" x="40" y="20" width="260" height="44" rx="6"></rect>
+            <text class="node-title" x="56" y="40">Changed screen file</text>
+            <text class="node-sub" x="56" y="57">e.g. Settings.tsx</text>
+
+            <rect class="node-box" x="40" y="78" width="260" height="44" rx="6"></rect>
+            <text class="node-title" x="56" y="98">Changed shared component</text>
+            <text class="node-sub" x="56" y="115">e.g. IconButton.tsx</text>
+
+            <rect class="node-box" x="40" y="136" width="260" height="44" rx="6"></rect>
+            <text class="node-title" x="56" y="156">Changed app shell</text>
+            <text class="node-sub" x="56" y="173">e.g. App.tsx, main.tsx</text>
+
+            <rect class="node-box" x="40" y="194" width="260" height="44" rx="6"></rect>
+            <text class="node-title" x="56" y="214">Unmappable file</text>
+            <text class="node-sub" x="56" y="231">no route match</text>
+
+            <rect class="node-box" x="560" y="20" width="360" height="44" rx="6"></rect>
+            <text class="node-title" x="576" y="40">That one screen</text>
+            <text class="node-sub" x="576" y="57">direct route match</text>
+
+            <rect class="node-box" x="560" y="78" width="360" height="44" rx="6"></rect>
+            <text class="node-title" x="576" y="98">Every screen that imports it</text>
+            <text class="node-sub" x="576" y="115">import-graph closure</text>
+
+            <rect class="node-box" x="560" y="136" width="360" height="44" rx="6"></rect>
+            <text class="node-title" x="576" y="156">Every screen</text>
+            <text class="node-sub" x="576" y="173">wide blast</text>
+
+            <rect class="node-box" x="560" y="194" width="360" height="44" rx="6" fill="#f6e6cf" stroke="var(--uncovered)"></rect>
+            <text class="node-title" x="576" y="214">Not covered</text>
+            <text class="node-sub" x="576" y="231">flagged, never silently passed</text>
+          </svg>
+          <figcaption class="quiet">The import graph follows real relative imports only. Aliased or missing imports are recorded as unresolved, never guessed, so coverage stays honest.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="slide" id="architecture" data-title="Architecture" hidden>
+      <div class="card">
+        <p class="kicker">Architecture</p>
+        <h1 tabindex="-1">Separation of Evaluation and Enforcement</h1>
+        <p class="lede">A scanner that both finds issues and decides outcomes is hard to audit and easy to game. usabl separates these responsibilities: providers only report findings, and a single Gate makes every pass-or-fail decision against committed policy.</p>
+        <div class="tiles">
+          <article class="tile">
+            <strong>Providers</strong>
+            Modules like axe-core or custom scripts that inspect the page and emit findings (<code>Draft[]</code>). Providers never decide the final outcome.
+          </article>
+          <article class="tile">
+            <strong>The Gate</strong>
+            The central authority. It evaluates all drafts against the baseline and waivers, then issues a single final verdict for the run.
+          </article>
+        </div>
+        <figure class="diagram">
+          <svg viewBox="0 0 900 220" role="img" aria-label="Three provider modules, axe-core, Keyboard Walk, and PatternFly Rules, each send findings to a central Gate. The Gate applies the baseline and waivers and produces one verdict.">
+            <path class="flow-line" d="M250,35 H320 V105 H370" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M250,105 H370" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M250,175 H320 V105 H370" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M560,105 H640" marker-end="url(#arrow)"></path>
+
+            <rect class="node-box" x="20" y="10" width="230" height="50" rx="6"></rect>
+            <text class="node-title" x="40" y="32">axe-core</text>
+            <text class="node-sub" x="40" y="50">DOM, ARIA, contrast rules</text>
+
+            <rect class="node-box" x="20" y="80" width="230" height="50" rx="6"></rect>
+            <text class="node-title" x="40" y="102">Keyboard Walk</text>
+            <text class="node-sub" x="40" y="120">Live tab order &amp; focus</text>
+
+            <rect class="node-box" x="20" y="150" width="230" height="50" rx="6"></rect>
+            <text class="node-title" x="40" y="172">PatternFly Rules</text>
+            <text class="node-sub" x="40" y="190">Component composition</text>
+
+            <rect class="node-box accent" x="370" y="70" width="190" height="70" rx="6"></rect>
+            <text class="node-title on-accent" x="465" y="100" text-anchor="middle">Gate</text>
+            <text class="node-sub on-accent" x="465" y="120" text-anchor="middle">Applies baseline + waivers</text>
+
+            <rect class="node-box" x="640" y="70" width="240" height="70" rx="6"></rect>
+            <text class="node-title" x="760" y="100" text-anchor="middle">Verdict</text>
+            <text class="node-sub" x="760" y="120" text-anchor="middle">One of four possible outcomes</text>
+          </svg>
+          <figcaption class="quiet">Providers only report findings. The Gate is the only component that decides pass or fail.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="slide" id="verdicts" data-title="Verdicts" hidden>
+      <div class="card">
+        <p class="kicker">Gate Outputs</p>
+        <h1 tabindex="-1">Four Deterministic Verdicts</h1>
+        <p class="lede">A list of issues is not an answer. In a CI pipeline or an AI-assisted workflow, the system needs one unambiguous decision: can this change ship? The Gate produces exactly one of four verdicts for every run. Each names a specific state with a specific required response. There is no ambiguous middle ground.</p>
+        <div class="verdicts">
+          <article class="verdict">
+            <div><span class="stamp stamp-verified">verified</span><span class="cite">exit 0</span></div>
+            <p>No new accessibility barriers were found on the touched surfaces, and coverage was complete.</p>
+          </article>
+          <article class="verdict">
+            <div><span class="stamp stamp-regression">regression</span><span class="cite">exit 1</span></div>
+            <p>A new machine-checkable barrier was introduced. The build or commit is blocked.</p>
+          </article>
+          <article class="verdict">
+            <div><span class="stamp stamp-uncovered">not covered</span><span class="cite">exit 3</span></div>
+            <p>A changed file could not be mapped to a scannable page, so the check could not vouch for it. usabl fails closed rather than passing silently.</p>
+          </article>
+          <article class="verdict">
+            <div><span class="stamp stamp-approval">approval required</span><span class="cite">exit 2</span></div>
+            <p>The change touches a baseline, waiver, or policy file, so it needs an explicit code-owner review before it can pass.</p>
+          </article>
+        </div>
+        <p class="quiet" style="margin-top:0.9rem">An idle run with nothing to check exits 0 without minting a receipt, and that is kept distinct from verified: usabl only claims verified when it actually checked something.</p>
+      </div>
+    </section>
+
+    <section class="slide" id="layers" data-title="Check Layers" hidden>
+      <div class="card">
+        <p class="kicker">Evaluation</p>
+        <h1 tabindex="-1">Multi-Layered Checks</h1>
+        <p class="lede">No single scanner catches everything. DOM validation misses keyboard behavior. Focus testing misses ARIA attributes. Neither understands design system composition contracts. Three complementary layers cover the real accessibility surface.</p>
+        <div class="layers">
+          <article class="layer">
+            <strong>axe-core</strong>
+            Executes the standard axe-core 4.13 ruleset for baseline DOM, ARIA, and contrast validation.
+          </article>
+          <article class="layer">
+            <strong>Keyboard Walk</strong>
+            Dynamically tabs through the page, reading the accessibility tree to verify focus order and accessible names.
+          </article>
+          <article class="layer">
+            <strong>PatternFly Rules</strong>
+            Component-specific composition rules (e.g., modal focus return, menu state) that generic scanners miss.
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="walk" data-title="Keyboard Walk" hidden>
+      <div class="card">
+        <p class="kicker">Deep Dive</p>
+        <h1 tabindex="-1">Keyboard Walk Provider</h1>
+        <p class="lede">Static analysis cannot verify interactive focus behavior. The Keyboard Walk provider physically tabs through the document and inspects the accessibility tree at each stop.</p>
+        <div class="tiles">
+          <article class="tile">
+            <strong>Unnamed Interactive Elements</strong>
+            Flags any element in the tab order that exposes an interactive role (button, link, etc.) but lacks a computed accessible name.
+          </article>
+          <article class="tile">
+            <strong>Unconfirmed Focus</strong>
+            Flags tab stops where the accessibility tree node cannot be resolved, preventing silent failures on focus traps.
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="patternfly" data-title="Component Rules" hidden>
+      <div class="card">
+        <p class="kicker">Deep Dive</p>
+        <h1 tabindex="-1">PatternFly Composition Rules</h1>
+        <p class="lede">Generic scanners check DOM elements in isolation. They cannot verify design system behavioral contracts: a modal must return focus to its trigger, a menu must expose its expanded state, table row actions must have unique names. These are real accessibility failures users encounter, but they require understanding how the component is supposed to behave, not just what its markup looks like.</p>
+        <p class="quiet">Static rules inspect the DOM directly. Interaction probes exercise real component behavior in a live browser.</p>
+        <table class="rules">
+          <thead>
+            <tr><th>Rule</th><th>Validation Target</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>pf-icon-button-name</code></td><td>Ensures icon-only controls have accessible names.</td></tr>
+            <tr><td><code>pf-kebab-expanded-state</code></td><td>Verifies menu toggles expose expanded/haspopup states.</td></tr>
+            <tr><td><code>pf-row-action-name-unique</code></td><td>Prevents table row actions from sharing identical names (e.g., multiple "Delete" buttons).</td></tr>
+            <tr><td><code>pf-table-header-assoc</code></td><td>Ensures data cells are programmatically bound to headers.</td></tr>
+            <tr><td><code>pf-toast-live-region</code></td><td>Verifies alerts are contained within active live regions.</td></tr>
+            <tr><td><code>pf-focus-into-dialog</code></td><td>Ensures focus moves into a dialog upon activation.</td></tr>
+            <tr><td><code>pf-modal-focus-return</code></td><td>Verifies focus returns to the trigger element when a modal is closed.</td></tr>
+            <tr><td><code>pf-toolbar-labeled-when-repeated</code></td><td>Requires a distinguishing label when a toolbar appears more than once, so each is identifiable.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="slide" id="intake" data-title="Design Intake" hidden>
+      <div class="card">
+        <p class="kicker">Deep Dive</p>
+        <h1 tabindex="-1">Design Intake (Optional)</h1>
+        <p class="lede">Some requirements cannot be inferred by scanning a rendered page. Design intake lets a team author those expectations directly, as data, and the engine checks them the same way it checks everything else.</p>
+        <div class="tiles">
+          <article class="tile">
+            <strong>Content Assertions</strong>
+            Assert that a specific element's accessible name matches approved text, is non-empty, or is intentionally decorative with no exposed name.
+          </article>
+          <article class="tile">
+            <strong>Flow Assertions</strong>
+            Assert that after a sequence of interactions, tab, click, or key presses, a specific announcement reaches assistive technology through focus or a live region.
+          </article>
+        </div>
+        <p class="quiet" style="margin-top:0.9rem">Authored requirements become additional Provider modules. They report findings the same way axe-core or the Keyboard Walk do, and they still pass through the Gate. They do not bypass it.</p>
+      </div>
+    </section>
+
+    <section class="slide" id="surfaces" data-title="Integrations" hidden>
+      <div class="card">
+        <p class="kicker">Integrations</p>
+        <h1 tabindex="-1">Consistent Execution Across Environments</h1>
+        <p class="lede">If the check only runs in CI, inaccessible code gets written and caught minutes later in a failed build. If it only runs in the AI assistant, someone can bypass it. The same engine runs across every surface so feedback is immediate wherever the change is made, and no path skips the check.</p>
+        <figure class="diagram">
+          <svg viewBox="0 0 960 280" role="img" aria-label="Hub and spoke diagram: the usabl engine sits at the center, with six connected surfaces: CLI, CI/GitHub, Playwright, Docs, Dev Server, and Assistant Hook.">
+            <line class="spoke-line" x1="480" y1="140" x2="480" y2="30"></line>
+            <line class="spoke-line" x1="480" y1="140" x2="575" y2="85"></line>
+            <line class="spoke-line" x1="480" y1="140" x2="575" y2="195"></line>
+            <line class="spoke-line" x1="480" y1="140" x2="480" y2="250"></line>
+            <line class="spoke-line" x1="480" y1="140" x2="385" y2="195"></line>
+            <line class="spoke-line" x1="480" y1="140" x2="385" y2="85"></line>
+
+            <circle class="hub-circle" cx="480" cy="140" r="62"></circle>
+            <text class="node-title on-accent" x="480" y="136" text-anchor="middle">usabl</text>
+            <text class="node-title on-accent" x="480" y="154" text-anchor="middle">engine</text>
+
+            <rect class="node-box" x="405" y="5" width="150" height="50" rx="6"></rect>
+            <text class="node-title" x="480" y="35" text-anchor="middle">CLI</text>
+
+            <rect class="node-box" x="500" y="60" width="150" height="50" rx="6"></rect>
+            <text class="node-title" x="575" y="90" text-anchor="middle">CI / GitHub</text>
+
+            <rect class="node-box" x="500" y="170" width="150" height="50" rx="6"></rect>
+            <text class="node-title" x="575" y="200" text-anchor="middle">Playwright</text>
+
+            <rect class="node-box" x="405" y="225" width="150" height="50" rx="6"></rect>
+            <text class="node-title" x="480" y="255" text-anchor="middle">Docs</text>
+
+            <rect class="node-box" x="310" y="170" width="150" height="50" rx="6"></rect>
+            <text class="node-title" x="385" y="200" text-anchor="middle">Dev Server</text>
+
+            <rect class="node-box" x="310" y="60" width="150" height="50" rx="6"></rect>
+            <text class="node-title" x="385" y="90" text-anchor="middle">Assistant Hook</text>
+          </svg>
+          <figcaption class="quiet">Every surface calls the same engine and gets the same verdict for the same change.</figcaption>
+        </figure>
+        <div class="surfaces">
+          <article class="surface"><strong>CLI</strong><code>usabl check</code> runs the gate locally.</article>
+          <article class="surface"><strong>Assistant Hook</strong>Blocks AI agents from marking tasks complete if regressions are introduced.</article>
+          <article class="surface"><strong>Dev Server</strong>Vite plugin overlays findings directly on the local application.</article>
+          <article class="surface"><strong>CI / GitHub</strong>Required status check and automated PR comments detailing findings.</article>
+          <article class="surface"><strong>Playwright</strong>Integrates into existing E2E test suites.</article>
+          <article class="surface"><strong>Docs</strong>Generates JSON/HTML evidence reports bound to specific commits.</article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="adoption" data-title="Adoption" hidden>
+      <div class="card">
+        <p class="kicker">Workflow</p>
+        <h1 tabindex="-1">Managing Legacy Codebases</h1>
+        <p class="lede">usabl is designed for brownfield adoption. It does not block builds for pre-existing issues.</p>
+        <div class="layers">
+          <article class="layer">
+            <strong>The Floor</strong>
+            <code>usabl baseline</code> records all current violations into a committed evidence file. These known issues are tracked but do not fail the build.
+          </article>
+          <article class="layer">
+            <strong>The Ratchet</strong>
+            The gate only blocks on <em>new</em> deterministic failures. As legacy issues are fixed, the floor is pruned, preventing regressions.
+          </article>
+          <article class="layer">
+            <strong>Waivers</strong>
+            Exceptions can be granted via a waiver ledger, requiring an owner, reason, and strict expiration date.
+          </article>
+        </div>
+        <figure class="diagram">
+          <svg viewBox="0 0 960 260" role="img" aria-label="Bar chart illustrating the ratchet: known legacy issues shrink over successive checkpoints as debt is paid down, while new issues stay flush at zero at every checkpoint because the gate blocks them.">
+            <line class="axis-line" x1="60" y1="210" x2="920" y2="210"></line>
+            <line class="axis-line" x1="60" y1="20" x2="60" y2="210"></line>
+            <text class="axis-label" x="25" y="115" text-anchor="middle" transform="rotate(-90, 25, 115)">Known issues</text>
+
+            <rect class="bar-known" x="105" y="60" width="45" height="150"></rect>
+            <rect class="bar-new" x="160" y="202" width="45" height="8"></rect>
+            <text class="axis-label" x="160" y="228" text-anchor="middle">Day 1</text>
+
+            <rect class="bar-known" x="325" y="100" width="45" height="110"></rect>
+            <rect class="bar-new" x="380" y="202" width="45" height="8"></rect>
+            <text class="axis-label" x="380" y="228" text-anchor="middle">Day 30</text>
+
+            <rect class="bar-known" x="545" y="135" width="45" height="75"></rect>
+            <rect class="bar-new" x="600" y="202" width="45" height="8"></rect>
+            <text class="axis-label" x="600" y="228" text-anchor="middle">Day 60</text>
+
+            <rect class="bar-known" x="765" y="170" width="45" height="40"></rect>
+            <rect class="bar-new" x="820" y="202" width="45" height="8"></rect>
+            <text class="axis-label" x="820" y="228" text-anchor="middle">Day 90</text>
+
+            <rect class="bar-known" x="700" y="10" width="14" height="14"></rect>
+            <text class="legend-label" x="720" y="21">Known issues (floor)</text>
+            <rect class="bar-new" x="700" y="30" width="14" height="14"></rect>
+            <text class="legend-label" x="720" y="41">New issues (always blocked)</text>
+          </svg>
+          <figcaption class="quiet">Known issues shrink as debt is paid down. New issues never land, at any checkpoint.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="slide" id="in-practice" data-title="In Practice" hidden>
+      <div class="card">
+        <p class="kicker">In Practice</p>
+        <h1 tabindex="-1">A Change That Gets Blocked</h1>
+        <p class="lede">Here is one change moving through the gate, end to end.</p>
+        <ol class="steps">
+          <li>A developer tidies a shared <code>IconButton</code> and drops its label.</li>
+          <li>usabl follows the import graph: that component is used on three screens, so all three are checked.</li>
+          <li>axe-core, the keyboard walk, and the PatternFly rules run in a real browser. One finds a new barrier: an icon-only button with no name.</li>
+          <li>The verdict is regression, so the pull request is blocked with this comment.</li>
+        </ol>
+        <pre class="mock">
+<span class="h">## usabl report: REGRESSION</span>
+
+Receipt: none. This run was not verified.
+
+Deterministic:  1 new · 0 carried · 0 waived
+Coverage:       3 screens checked · 0 not covered
+Blocked:        yes
+
+<span class="k">New barriers</span>
+- [serious] `settings` - `<span class="rule">pf/pf-icon-button-name</span>`
+  A screen reader announces only "button", so the control's purpose is lost.
+  why: the icon-only button has no accessible name
+  fix: add an accessible name, e.g. aria-label="Delete row"
+</pre>
+        <p class="quiet">Illustrative. A real comment also lists carried, waived, and advisory findings, plus any coverage gaps.</p>
+      </div>
+    </section>
+
+    <section class="slide" id="docs-intro" data-title="usabl for Documentation" hidden>
+      <div class="card title-card">
+        <p class="kicker">Extending the Engine</p>
+        <h1 tabindex="-1">usabl for Documentation</h1>
+        <p class="lede">usabl already proves that the application meets accessibility standards. The same engine now checks product documentation, so the user guides and install guides that ship with the product are checked and enforced to the same bar, automatically, every time they change.</p>
+      </div>
+    </section>
+
+    <section class="slide" id="docs-gap" data-title="Docs: The Gap" hidden>
+      <div class="card">
+        <p class="kicker">The Gap</p>
+        <h1 tabindex="-1">Documentation Is the Largest Unchecked Surface</h1>
+        <p class="lede">Companies test their applications for accessibility but almost never test the documentation that ships with them.</p>
+        <div class="tiles">
+          <article class="tile">
+            <strong>Customer Impact</strong>
+            Documentation is how customers actually learn to use a product. A person who relies on a screen reader may be able to operate the app, but if the install guide has images with no descriptions or headings in the wrong order, the product has still failed that customer.
+          </article>
+          <article class="tile">
+            <strong>Compliance Impact</strong>
+            The same standard that applies to the app, WCAG 2.2 AA, applies to the docs. Today nothing checks the docs against it automatically.
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="docs-what" data-title="Docs: What It Does" hidden>
+      <div class="card">
+        <p class="kicker">What It Does</p>
+        <h1 tabindex="-1">Checks the Real, Published Pages</h1>
+        <p class="lede">It checks the actual rendered documentation pages, the real thing a customer sees, every time the docs change, and flags problems before they reach customers.</p>
+        <div class="tiles">
+          <article class="tile">
+            <strong>Findings in the Writer's Source</strong>
+            When it finds a problem, it points to exactly what is wrong and how to fix it, in the writer's own source, not as a technical error code.
+          </article>
+          <article class="tile">
+            <strong>Targeted Re-Checks</strong>
+            It only re-checks the pages that changed, so it stays fast, and it will not let a change introduce a new accessibility problem.
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="docs-why" data-title="Docs: Why It Matters" hidden>
+      <div class="card">
+        <p class="kicker">Why It Matters</p>
+        <h1 tabindex="-1">Four Reasons This Closes a Real Gap</h1>
+        <div class="tiles">
+          <article class="tile">
+            <strong>Reduces Compliance Risk</strong>
+            Closes a gap in meeting WCAG 2.2 AA, the bar already committed to, at a time when the European Accessibility Act and Section 508 are raising the stakes. Continuous, not a once-a-year audit that is out of date the next day.
+          </article>
+          <article class="tile">
+            <strong>Reaches More Customers</strong>
+            Documentation is half the product experience. This makes it usable by everyone, including customers with disabilities.
+          </article>
+          <article class="tile">
+            <strong>Lowers Cost</strong>
+            Replaces expensive periodic manual audits with a check that runs automatically in the pipeline the docs team already uses.
+          </article>
+          <article class="tile">
+            <strong>Catches Problems Early</strong>
+            Issues are caught at the moment of the change, before publishing, when they are cheap to fix, rather than after a customer complaint or an external audit finding.
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="docs-adoption" data-title="Docs: Adoption" hidden>
+      <div class="card">
+        <p class="kicker">Why Adoption Is Easy</p>
+        <h1 tabindex="-1">No New Tool, No Wall of Findings</h1>
+        <p class="lede">This is the same engine, and the same baseline-and-ratchet model already covered, pointed at a second surface.</p>
+        <div class="tiles">
+          <article class="tile">
+            <strong>No New Tool for Writers</strong>
+            It is the same check the application team already uses, pointed at the docs. Nothing new to learn.
+          </article>
+          <article class="tile">
+            <strong>Baseline First</strong>
+            Existing issues are recorded as a known baseline on day one. Only new problems block. Quality improves steadily instead of every change stalling behind a wall of pre-existing findings.
+          </article>
+          <article class="tile">
+            <strong>Fits the Existing Pipeline</strong>
+            For our documentation, that is the standard AsciiDoc and Pantheon toolchain. There is nothing new to stand up.
+          </article>
+          <article class="tile">
+            <strong>Results Where Writers Already Look</strong>
+            Findings show up in a pull request the same way a failing test does, so problems are visible and get fixed before anything ships.
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="docs-why-now" data-title="Docs: Why Now" hidden>
+      <div class="card">
+        <p class="kicker">Why Now</p>
+        <h1 tabindex="-1">One Engine, Two Surfaces</h1>
+        <p class="lede">The obligation already exists, but no tool checks documentation content automatically today. Design systems cover the page frame, the navigation and theme. The authored content, the words and images a writer produces, goes unchecked. This closes that specific, named gap by reusing an engine already trusted for the application, rather than building or buying a separate product.</p>
+        <figure class="diagram">
+          <svg viewBox="0 0 960 190" role="img" aria-label="Diagram: the same usabl engine, with the same Providers and Gate, checks two surfaces, the application UI and the documentation pages, and produces a verdict for each.">
+            <path class="flow-line" d="M240,50 H300 V100 H340" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M240,140 H300 V100 H340" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M560,85 H620 V60 H680" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M560,115 H620 V140 H680" marker-end="url(#arrow)"></path>
+
+            <rect class="node-box" x="20" y="20" width="220" height="60" rx="6"></rect>
+            <text class="node-title" x="40" y="46">Application UI</text>
+            <text class="node-sub" x="40" y="64">Screens &amp; components</text>
+
+            <rect class="node-box" x="20" y="110" width="220" height="60" rx="6"></rect>
+            <text class="node-title" x="40" y="136">Documentation Pages</text>
+            <text class="node-sub" x="40" y="154">Guides, install docs, references</text>
+
+            <rect class="node-box accent" x="340" y="65" width="220" height="70" rx="6"></rect>
+            <text class="node-title on-accent" x="450" y="95" text-anchor="middle">usabl engine</text>
+            <text class="node-sub on-accent" x="450" y="115" text-anchor="middle">Same Providers, same Gate</text>
+
+            <rect class="node-box" x="680" y="30" width="240" height="60" rx="6"></rect>
+            <text class="node-title" x="800" y="56" text-anchor="middle">Verdict: App</text>
+            <text class="node-sub" x="800" y="74" text-anchor="middle">One of four outcomes</text>
+
+            <rect class="node-box" x="680" y="110" width="240" height="60" rx="6"></rect>
+            <text class="node-title" x="800" y="136" text-anchor="middle">Verdict: Docs</text>
+            <text class="node-sub" x="800" y="154" text-anchor="middle">One of four outcomes</text>
+          </svg>
+          <figcaption class="quiet">Same Providers, same Gate, same four verdicts, now applied to a second surface.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="slide" id="trust" data-title="Security & Trust" hidden>
+      <div class="card">
+        <p class="kicker">Security</p>
+        <h1 tabindex="-1">Protecting the Verdict</h1>
+        <p class="lede">Two things could make a real barrier disappear: someone edits the policy to silence a failure, or a scanned page feeds hostile text back into the pipeline. A developer under deadline pressure, or an AI assistant optimizing for task completion, has motive to do the first. usabl guards against both.</p>
+        <div class="layers">
+          <article class="layer">
+            <strong>Trusted References</strong>
+            Verdicts are computed against the baseline and configuration from the target branch (e.g., <code>main</code>), not the working tree. A pull request cannot weaken its own policy to make itself pass.
+          </article>
+          <article class="layer">
+            <strong>Codeowner Enforcement</strong>
+            Any change to a baseline, waiver, or route mapping automatically triggers an <code>approval_required</code> verdict, so a human owner has to review it.
+          </article>
+          <article class="layer">
+            <strong>Neutralized Content</strong>
+            Any text read from a scanned page, such as a label or heading, is scrubbed and clearly framed before it appears in a report or reaches an AI assistant, so a hostile page cannot inject instructions.
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="receipts" data-title="Receipts" hidden>
+      <div class="card">
+        <p class="kicker">Evidence</p>
+        <h1 tabindex="-1">A Re-Checkable Receipt</h1>
+        <p class="lede">"We checked it" is not evidence. A compliance team, an auditor, or a future developer needs to confirm for themselves that a specific change was tested before it shipped.</p>
+        <p class="lede">When a run passes with no new barriers, usabl writes a small receipt that records what made the result reproducible: a hash of the source tree, a hash of the committed policy, and the exact scanner versions. Because the policy is read from the commit rather than a working copy, and the scanner versions are pinned, the same commit produces the same verdict every time.</p>
+        <figure class="diagram">
+          <svg viewBox="0 0 960 170" role="img" aria-label="A verified run mints a receipt that binds three values: the source-tree hash, the policy hash, and the scanner versions. The receipt can be re-verified at any time by recomputing and comparing those values, with no re-scan.">
+            <path class="flow-line" d="M200,85 H250" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M630,85 H690" marker-end="url(#arrow)"></path>
+
+            <rect class="node-box" x="20" y="55" width="180" height="60" rx="6"></rect>
+            <text class="node-title" x="110" y="82" text-anchor="middle">Verified run</text>
+            <text class="node-sub" x="110" y="100" text-anchor="middle">no new barriers</text>
+
+            <rect class="node-box accent" x="250" y="45" width="380" height="80" rx="6"></rect>
+            <text class="node-title on-accent" x="440" y="80" text-anchor="middle">Receipt</text>
+            <text class="node-sub on-accent" x="440" y="100" text-anchor="middle">source-tree hash · policy hash · scanner versions</text>
+
+            <rect class="node-box" x="690" y="55" width="250" height="60" rx="6"></rect>
+            <text class="node-title" x="815" y="82" text-anchor="middle">Re-verify anytime</text>
+            <text class="node-sub" x="815" y="100" text-anchor="middle">recompute &amp; compare, no re-scan</text>
+          </svg>
+          <figcaption class="quiet">If every bound value still matches, the receipt holds. If any changed, it does not, and that is the point. It is a hash-bound record tied to a specific commit, not a signed attestation; signing is a planned addition.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="slide" id="summary" data-title="Summary" hidden>
+      <div class="card title-card">
+        <p class="kicker">Summary</p>
+        <h1 tabindex="-1">Continuous Accessibility Verification</h1>
+        <p class="lede">usabl moves accessibility checking into the everyday workflow, the CLI, CI, and AI assistants, instead of a separate audit that happens later.</p>
+        <p class="lede">It records existing issues as a baseline, blocks only new ones, and points the same engine at both the application and its documentation. Teams can change the UI, and the docs, knowing nothing new slipped through.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <dialog class="help" id="help" aria-labelledby="help-title">
+    <h2 id="help-title">Keyboard</h2>
+    <dl>
+      <dt>Right / Space</dt><dd>Next slide</dd>
+      <dt>Left / Backspace</dt><dd>Previous slide</dd>
+      <dt>Home / End</dt><dd>First / last</dd>
+      <dt>O</dt><dd>Jump list</dd>
+      <dt>?</dt><dd>This panel</dd>
+      <dt>Escape</dt><dd>Close panel</dd>
+    </dl>
+    <p class="quiet" style="margin-top:0.8rem">Print the page for a landscape PDF of every slide.</p>
+    <form method="dialog"><button type="submit">Close</button></form>
+  </dialog>
+
+  <dialog class="help" id="jump" aria-labelledby="jump-title">
+    <h2 id="jump-title">Jump to slide</h2>
+    <ol class="overview-list" id="jumpList"></ol>
+    <form method="dialog"><button type="submit">Close</button></form>
+  </dialog>
+
+  <script>
+    (function () {
+      const slides = Array.from(document.querySelectorAll(".slide"));
+      const live = document.getElementById("live");
+      const counter = document.getElementById("counter");
+      const bar = document.getElementById("bar");
+      const help = document.getElementById("help");
+      const jump = document.getElementById("jump");
+      const jumpList = document.getElementById("jumpList");
+      let index = 0;
+
+      slides.forEach(function (slide, i) {
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.innerHTML = '<span class="n">' + String(i + 1).padStart(2, "0") + "</span>" + slide.dataset.title;
+        button.addEventListener("click", function () {
+          show(i);
+          jump.close();
+        });
+        item.appendChild(button);
+        jumpList.appendChild(item);
+      });
+
+      function heading(slide) {
+        return slide.querySelector("h1, .wordmark");
+      }
+
+      function show(next) {
+        index = Math.max(0, Math.min(slides.length - 1, next));
+        slides.forEach(function (slide, i) {
+          const on = i === index;
+          slide.hidden = !on;
+        });
+        const slide = slides[index];
+        const title = slide.dataset.title || "Slide";
+        counter.textContent = (index + 1) + " / " + slides.length;
+        bar.style.width = ((index + 1) / slides.length) * 100 + "%";
+        live.textContent = "Slide " + (index + 1) + " of " + slides.length + ": " + title;
+        if (history.replaceState) {
+          history.replaceState(null, "", "#" + slide.id);
+        } else {
+          location.hash = slide.id;
+        }
+        const focusTarget = heading(slide);
+        if (focusTarget) {
+          if (!focusTarget.hasAttribute("tabindex")) focusTarget.setAttribute("tabindex", "-1");
+          focusTarget.focus({ preventScroll: true });
+        }
+      }
+
+      function fromHash() {
+        const id = location.hash.replace(/^#/, "");
+        const found = slides.findIndex(function (slide) { return slide.id === id; });
+        show(found >= 0 ? found : 0);
+      }
+
+      function isTypingTarget(el) {
+        if (!el || !el.closest) return false;
+        return Boolean(el.closest("input, textarea, select, dialog, [contenteditable]"));
+      }
+
+      document.addEventListener("keydown", function (event) {
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        if (help.open || jump.open) {
+          if (event.key === "Escape") return;
+          if (event.key === "?" ) {
+            event.preventDefault();
+            help.close();
+          }
+          return;
+        }
+        if (isTypingTarget(event.target)) return;
+        if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") {
+          event.preventDefault();
+          show(index + 1);
+        } else if (event.key === "ArrowLeft" || event.key === "PageUp" || event.key === "Backspace") {
+          event.preventDefault();
+          show(index - 1);
+        } else if (event.key === "Home") {
+          event.preventDefault();
+          show(0);
+        } else if (event.key === "End") {
+          event.preventDefault();
+          show(slides.length - 1);
+        } else if (event.key === "?" ) {
+          event.preventDefault();
+          help.showModal();
+        } else if (event.key === "o" || event.key === "O") {
+          event.preventDefault();
+          jump.showModal();
+        }
+      });
+
+      document.getElementById("prev").addEventListener("click", function () { show(index - 1); });
+      document.getElementById("next").addEventListener("click", function () { show(index + 1); });
+      document.getElementById("helpBtn").addEventListener("click", function () { help.showModal(); });
+      window.addEventListener("hashchange", fromHash);
+      fromHash();
+    })();
+  </script>
+</body>
+</html>
