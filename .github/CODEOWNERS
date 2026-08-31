@@ -1,5 +1,25 @@
-# Code owners for repo governance files.
-# Expand this file as usabl's protected paths are defined in this repository.
+# Code owners for usabl's trust-critical surface.
+#
+# Individual GitHub logins only. The usabl-dev org has no teams, so an
+# "@usabl-dev/<name>" team reference silently resolves to nobody and routes no
+# review. Each owner must also have write access to this repo, or GitHub ignores
+# the entry.
 
-.github/workflows/usabl.yml                     @usabl-dev/eparenti @usabl-dev/nitin-dhevar @usabl-dev/vishsanghishetty
-.github/CODEOWNERS                              @usabl-dev/eparenti @usabl-dev/nitin-dhevar @usabl-dev/vishsanghishetty
+# The trust boundary detects guarded-manifest divergence and drives the
+# trusted-ref overlay that stops a pull request from steering scans.
+/src/trust/          @eparenti @nitin-dhevar @vishsanghishetty
+
+# The gate is the only verdict authority. Nothing else decides pass or fail.
+/src/gate/           @eparenti @nitin-dhevar @vishsanghishetty
+
+# The sequencer wires guard, coverage, scan, and gate together and applies the
+# untrusted-manifest overlay. A change here can weaken the trust boundary.
+/src/run.ts          @eparenti @nitin-dhevar @vishsanghishetty
+
+# Engine configuration and the CI workflows that run the gate. A workflow edit
+# could disable enforcement, so an owner reviews these too.
+/usabl.config.json   @eparenti @nitin-dhevar @vishsanghishetty
+/.github/workflows/  @eparenti @nitin-dhevar @vishsanghishetty
+
+# The gate protects itself: changing who can approve policy needs owner review.
+/.github/CODEOWNERS  @eparenti @nitin-dhevar @vishsanghishetty
