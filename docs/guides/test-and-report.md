@@ -13,6 +13,7 @@ Test one surface at a time:
 - Browser behavior in `usabl-app`
 - The in-app overlay
 - Command output
+- The accessible documentation page from `usabl docs --html`
 - AI stop-hook behavior
 - Pull request comment and check status
 - The team orientation or one of these guides

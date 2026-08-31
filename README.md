@@ -74,6 +74,10 @@ The bypass escape hatch:
 
 ## Design
 
+The [code walkthrough](https://usabl-dev.github.io/usabl/code-walkthrough.html)
+explains the source in the order it runs and then groups it into eight systems,
+each a job an engineer can own. Read it before picking up a maintenance area.
+
 See [docs/ground-truth.md](docs/ground-truth.md) for the complete project ground truth:
 architecture, contracts, scan layers, surfaces, adoption model, design intake, docs
 output, WCAG coverage map, demo strategy, and team plan.
