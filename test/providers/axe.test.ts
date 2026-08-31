@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Page, ProfileName, ProviderContext } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import type { AxeIssue } from '../../src/providers/axe/index.js';
-import { axeProvider, DOCS_AXE_TAGS } from '../../src/providers/axe/index.js';
+import { applyAxeTags, axeProvider, DOCS_AXE_TAGS } from '../../src/providers/axe/index.js';
 import { testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
@@ -140,7 +140,8 @@ describe('axeProvider', () => {
     await axeProvider.run(ctx);
 
     expect(calls).toEqual([{ tags: DOCS_AXE_TAGS }]);
-    expect(DOCS_AXE_TAGS).toEqual(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']);
+    // Cumulative WCAG: 2.2 AA must carry Level A and AA from 2.0, 2.1, and 2.2.
+    expect(DOCS_AXE_TAGS).toEqual(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']);
   });
 
   it('runs axe with no options when the profile is app so app behavior is unchanged', async () => {
@@ -159,5 +160,55 @@ describe('axeProvider', () => {
     await axeProvider.run(ctx);
 
     expect(calls).toEqual([undefined]);
+  });
+});
+
+// A fake AxeBuilder that records withTags calls without pulling in playwright or @axe-core.
+interface FakeBuilder {
+  calls: string[][];
+  withTags(tags: string[]): FakeBuilder;
+}
+
+function makeFakeBuilder(): FakeBuilder {
+  const calls: string[][] = [];
+  const builder: FakeBuilder = {
+    calls,
+    withTags(tags: string[]): FakeBuilder {
+      calls.push(tags);
+      return builder;
+    },
+  };
+  return builder;
+}
+
+describe('applyAxeTags', () => {
+  it('applies tags as a fresh copy when tags are present', () => {
+    const builder = makeFakeBuilder();
+
+    const result = applyAxeTags(builder, { tags: DOCS_AXE_TAGS });
+
+    expect(result).toBe(builder);
+    expect(builder.calls).toHaveLength(1);
+    expect(builder.calls[0]).toEqual([...DOCS_AXE_TAGS]);
+    // withTags must receive a copy, never the readonly DOCS_AXE_TAGS reference.
+    expect(builder.calls[0]).not.toBe(DOCS_AXE_TAGS as unknown as string[]);
+  });
+
+  it('keeps axe defaults when no options are passed so the app path is unchanged', () => {
+    const builder = makeFakeBuilder();
+
+    const result = applyAxeTags(builder);
+
+    expect(result).toBe(builder);
+    expect(builder.calls).toHaveLength(0);
+  });
+
+  it('treats an empty tag array as no tags to avoid a false clean', () => {
+    const builder = makeFakeBuilder();
+
+    const result = applyAxeTags(builder, { tags: [] });
+
+    expect(result).toBe(builder);
+    expect(builder.calls).toHaveLength(0);
   });
 });
