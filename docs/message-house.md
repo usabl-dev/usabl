@@ -25,15 +25,15 @@ promise; differentiator #1 message explains how we keep it.
 
 | Audience | One line |
 |---|---|
-| **Judge (general)** | The first open proof engine that stops AI from calling inaccessible UI done - with evidence you can re-check on the PR. |
+| **Judge (general)** | The first open proof engine that stops AI from calling inaccessible UI done, with a receipt you can re-check when the change verifies. |
 | **Judge (technical)** | Deterministic Playwright + axe + keyboard walk + PatternFly rules; AI proposes fixes, the gate decides pass/fail. |
 | **Judge (business)** | Catches accessibility regressions before VPAT evidence and customer escalations - without claiming compliance. |
 | **Judge (accessibility expert)** | Mechanical layers handle the repeatable checks; your expertise stays on judgment calls, with repro scripts attached. |
 | **Priya (engineer)** | Real-time findings with fix guidance, and the assistant cannot say done until the harness verifies the change. |
-| **James (AT user)** | Barriers become audible to the team before merge, and fixes are verified in the same workflow that introduced them. |
+| **James (AT user)** | Broken announcements and unnamed controls are caught before merge, and fixes are verified in the same workflow that introduced them. |
 | **Morgan (eng lead)** | Install it, gate from day one - ratchet blocks only new debt, with a waiver ledger for the rest. |
 | **Alex (a11y SME)** | Fewer repeated audits; escalations arrive with evidence, not "please test the whole page." |
-| **Riley (compliance)** | Receipt-backed findings on each change for evidence packs - the tool states human review is still required. |
+| **Riley (compliance)** | A re-checkable receipt on each verified change for evidence packs; the tool states human review is still required. |
 | **PatternFly / upstream** | An open rulepack that encodes your guidance inside the proof loop teams already run. Proposed upstream, co-maintained. |
 | **OSS contributor** | Provider interface is the contribution seam - add a check, return `Draft[]`, ship a rule. |
 
@@ -44,7 +44,7 @@ promise; differentiator #1 message explains how we keep it.
 | Rank | Differentiator | Message |
 |---|---|---|
 | 1 | Verified-fix assistant loop | "AI suggests. Rules decide. Done waits for proof." |
-| 2 | Announcement preview in loop | "Hear the change before merge - in the PR and in the session." |
+| 2 | Screen-reader announcement checks in loop | "Catch broken announcements before merge, in the PR and in the session." |
 | 3 | CI ratchet + PR evidence | "Same proof at scale: block new debt, ship the receipt." |
 
 Teaching artifact supports #3; not a fourth pillar.
@@ -81,17 +81,18 @@ that more than a feature list.
 
 ## Status
 
-- [x] Differentiators mapped to judge types (entry-spec "Why this wins")
+- [x] Differentiators mapped to judge types (see [positioning.md](./positioning.md))
 - [x] Compressed to one line per audience (this doc)
 - [x] Lead order declared: tagline opens, mechanism supports
 - [ ] Voice and taste pass on deck narration
-- [ ] Limitation slide phrased as confidence (see demo arc in entry-spec)
+- [ ] Limitation slide phrased as confidence (see the demo strategy in [ground-truth.md](./ground-truth.md))
 
 ---
 
 ## Demo narrative
 
-The scripted demo arc lives in `entry-spec.md` § "Demo arc." This doc owns the
-**messaging frame**; the entry-spec owns the **beat-by-beat script**. When rehearsing,
-use the proof points table above as a checklist: every claim in the narration must map
-to a demo artifact.
+This doc owns the **messaging frame**. The demo strategy and beat sequence live in
+[ground-truth.md](./ground-truth.md), and the executable, beat-by-beat walkthrough is the
+[team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md). When
+rehearsing, use the proof points table above as a checklist: every claim in the narration
+must map to a demo artifact.

@@ -11,8 +11,8 @@ strategy, not a nice-to-have.
 For build contracts, verdict semantics, and architecture, see [ground-truth.md](./ground-truth.md).
 For pitch lines by audience, see [message-house.md](./message-house.md).
 For competitor Q&A, see [battlecards.md](./battlecards.md).
-For a technical competitor-by-competitor research pass, see
-[market-landscape-2026-08.md](../../research/market-landscape-2026-08.md).
+For a technical competitor-by-competitor research pass, see the internal
+market-landscape research (August 2026, maintained outside this repository).
 
 ---
 
@@ -36,14 +36,14 @@ CLI, AI assistant, browser overlay, CI, and docs.
 
 | What users get | What that means for them |
 |---|---|
-| **Complete change coverage** | Every touched UI surface is identified, exercised, and checked. |
+| **Change coverage with honest gaps** | Touched UI surfaces are mapped, exercised, and checked. A surface usabl cannot identify is reported as not_covered, never a false pass. |
 | **Fix verification** | Problems are found and re-checked after the fix, before anyone calls the work finished. |
-| **Accessibility announcement preview** | Shows what a screen reader would likely announce on the actual change. |
+| **Screen-reader announcement checks** | Deterministically verifies the accessible names and announcement expectations screen reader users depend on, on the actual change. |
 | **Keyboard and interaction proof** | Tab order, focus, and interaction paths are walked, not just static markup rules. |
 | **Design-system intelligence** | PatternFly-specific composition rules on top of industry-standard checks. |
 | **One answer everywhere** | Same result in the terminal, in the AI session, in the browser, and on the PR. |
 | **Team enforcement** | CI, stop hooks, and policy guardrails so accessibility proof is part of shipping. |
-| **Ship-ready artifacts** | Alt text, announcements, and keyboard paths generated and tied to the verified change. |
+| **Evidence artifacts** | Findings with fix guidance, plus a re-checkable evidence page (JSON or HTML) tied to the verified change. |
 
 ---
 
@@ -58,7 +58,7 @@ product today.
 | **CI regression tools** | Chromatic, Pa11y CI, MFA11y | Block new violations vs baseline | Same ratchet idea, plus AI gate, keyboard walk, SR evidence, PF rules |
 | **AI accessibility assistants** | Deque axe MCP, a11y MCP wrappers | Scan and suggest fixes from the agent | Proof before "done"; the assistant does not grade its own homework |
 | **Agent enforcement hooks** | Community-Access/accessibility-agents, agent-gates | Block edits until review runs | Per-change deterministic proof loop, not one review per session |
-| **Screen reader simulation** | Tactual, Speakable, JAWS Inspect | Announcement preview and diff | Built into the full dev loop: gate, CI, fix verification, PF rules |
+| **Screen reader simulation** | Tactual, Speakable, JAWS Inspect | Announcement preview and diff | Deterministic announcement and accessible-name checks wired into the gated loop: CI, fix verification, PF rules |
 | **Design-system lint** | FluentUI eslint plugin | Component-level static rules | Runtime interaction, keyboard walk, and proof engine; PatternFly-native |
 | **Commercial verification** | Jeikin, Evinced | Enterprise dashboards and flows | Open, integrated loop from AI session to merge |
 
@@ -84,8 +84,8 @@ Four pillars, ranked. Each is an integrated capability no single competitor ship
 
 Most tools find problems. usabl closes the loop: scan -> fix -> re-verify -> gate -> ship.
 The AI cannot declare victory until proof passes on what changed. One pass combines
-axe-core, PatternFly composition rules, live keyboard walk, and a screen reader
-announcement preview on what changed.
+axe-core, PatternFly composition rules, a live keyboard walk, and deterministic
+screen-reader announcement checks on what changed.
 
 **Why it matters:** Teams stop shipping "probably fixed" UI.
 
@@ -98,19 +98,21 @@ but never grades its own work.
 **Why it matters:** Accessibility proof is built into how AI builds UI, not bolted on
 after the fact.
 
-### 3. Screen reader evidence on the change
+### 3. Screen-reader announcement checks on the change
 
-Shows what a screen reader would announce on the change, attached to the PR and the
-assistant session. Reviewers hear accessibility impact alongside the visual diff.
+usabl deterministically checks the accessible names and announcement expectations that
+screen reader users depend on, and attaches the findings to the PR and the assistant
+session. Reviewers see screen-reader impact alongside the visual diff. usabl does not
+speak the UI or replace assistive-technology testing.
 
-**Why it matters:** Screen reader behavior becomes visible team evidence, not a
-separate QA pass weeks later.
+**Why it matters:** Screen-reader barriers become visible team evidence in the loop,
+not a separate QA pass weeks later.
 
 ### 4. One engine, team enforcement
 
 CLI, stop hook, overlay, CI comment, Playwright helper, and docs output all run the
-same engine and return the same verdict. Policy changes are tamper-evident. Every
-result ties to the exact code state and can be recomputed by anyone.
+same engine and project the same verdict. Policy changes are tamper-evident. A verified
+result ties to the exact code state and can be re-checked by anyone.
 
 **Why it matters:** No tool sprawl, no conflicting scores, and standards stay
 enforceable as the codebase evolves.
@@ -119,10 +121,11 @@ enforceable as the codebase evolves.
 
 - **PatternFly rulepack** - purpose-built composition rules; empty slot for PF (FluentUI
   has one, PF does not).
-- **Full-surface coverage per change** - maps touched surfaces, runs the full stack on
-  that set, returns a definitive outcome for the whole change.
-- **Receipt-backed results** - audit-ready, re-checkable proof for compliance
-  conversations and release confidence.
+- **Coverage per change** - maps touched surfaces, runs the full stack on that set,
+  and returns one verdict for the whole change, with any surface it cannot reach flagged
+  as not_covered.
+- **Receipt-backed verified results** - each verified change carries a re-checkable
+  receipt: audit-ready proof for compliance conversations and release confidence.
 
 ---
 
@@ -144,14 +147,15 @@ enforceable as the codebase evolves.
 
 ### Vs screen reader simulation tools
 
-> Tactual and Speakable preview announcements. usabl runs that preview inside the full
-> proof loop that gates your AI and your merge.
+> Tactual and Speakable preview announcements. usabl runs deterministic announcement
+> and accessible-name checks inside the full proof loop that gates your AI and your
+> merge.
 
 ### Innovation / contest angle
 
 > The first open tool that combines AI completion gating, multi-layer accessibility
-> proof, differential regression, screen reader evidence on the PR, and
-> PatternFly-native rules on one re-checkable result.
+> proof, differential regression, deterministic screen-reader announcement checks on the
+> PR, and PatternFly-native rules, with a re-checkable receipt when the change verifies.
 
 ---
 
@@ -161,7 +165,7 @@ Priority order for pitches, demos, and one-pagers:
 
 1. **End-to-end proof loop** - find, fix, verify, gate
 2. **AI-native completion gate** - proof before "done"
-3. **Screen reader evidence on the change** - announcements on the PR
+3. **Screen-reader announcement checks on the change** - accessible names and announcements on the PR
 4. **One engine, team enforcement** - same result everywhere, tamper-evident
 
 ---
@@ -171,7 +175,7 @@ Priority order for pitches, demos, and one-pagers:
 | Term | Typical use |
 |---|---|
 | **Positioning document** (this doc) | Who we are, what category we own, how we differ, how we talk about it |
-| **Competitive landscape / analysis** | Deeper research on competitors and market gaps ([market-landscape-2026-08.md](../../research/market-landscape-2026-08.md)) |
+| **Competitive landscape / analysis** | Deeper research on competitors and market gaps (internal market-landscape research, August 2026) |
 | **Battlecard** | Competitive positioning: us vs a class of tools, what we add |
 | **Adoption model** | How users discover, try, integrate, expand, and contribute ([adoption-model.md](./adoption-model.md)) |
 | **Value proposition** | User outcomes and proof points; often folded into positioning |

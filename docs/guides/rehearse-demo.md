@@ -11,7 +11,9 @@ receipt, or enforcement boundary.
 The audience should see:
 
 1. Clear accessibility barriers in Deployments and Clusters.
-2. One eight-finding Regression across the browser, Claude, and pull request.
+2. One Regression Result with eight findings, covering the barriers across the
+   Deployments and Clusters screens, shown the same way in the browser, Claude, and
+   pull request.
 3. The mid-session Claude check remain advisory.
 4. The Claude Stop hook and CI check block completion.
 5. The source repair change the actual accessibility behavior.
@@ -27,7 +29,7 @@ Both operators should complete the full runbook before the contest demo.
 
 ## Evidence to capture
 
-- The broken browser behavior and eight-finding inspector.
+- The broken browser behavior and the Regression inspector.
 - The Claude mid-session result and Stop hook block.
 - The failed pull request check and Regression comment.
 - The focused accessibility source diff.

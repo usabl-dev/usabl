@@ -28,7 +28,7 @@ claim compliance.
 - **What:** US federal ICT must meet Section 508; enterprise vendors routinely provide
   VPAT/ACR evidence in procurement.
 - **When:** Ongoing; federal refresh and buyer scrutiny continue through 2025–2026 cycles.
-- **Why usabl:** Receipt-backed, re-checkable findings on each change support VPAT
+- **Why usabl:** A re-checkable receipt on each verified change supports VPAT
   evidence packs without claiming certification.
 
 **Sources:**
@@ -94,7 +94,7 @@ From market research and vendor comparisons (August 2026):
 usabl's timing: the advisory MCP layer commoditized in under a year; the **proof loop**
 is the next layer teams will ask for.
 
-**Source:** [research/market-landscape-2026-08.md](../../research/market-landscape-2026-08.md)
+**Source:** internal market-landscape research (August 2026, maintained outside this repository)
 
 ---
 

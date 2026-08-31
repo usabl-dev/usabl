@@ -7,6 +7,10 @@ contest-build-plan.md, and team-work-plan.md with one document that includes the
 check-agnostic core, evidence labels, design intake, docs output, and the on/off
 adoption model.
 
+This document describes usabl v0.2.0: an Apache-2.0 accessibility proof engine, published
+as ESM, requiring Node >=22, with a single bin `usabl` mapped to `./dist/cli.js`. Where
+this document and the source disagree, the source is authoritative.
+
 ---
 
 ## 1. Product thesis and name
@@ -38,6 +42,11 @@ Idle is not a fifth verdict. When there is no UI-touching change, usabl allows w
 an explicit informational outcome: `Result.verdict` is `null`, exit 0, no findings,
 and `summary` says "nothing to check." `not_covered` means there *was* something to
 prove and the tool could not. A docs-only PR is idle, not `not_covered`.
+
+`verdict: null` is overloaded, so it is never treated as a verdict. It means either idle
+(`coverage.nothingToCheck` is true, exit 0) or a crash and fail-open (exit 4, disclosed,
+`nothingToCheck` false). The two are distinguished by `coverage.nothingToCheck`, not by
+the null itself.
 
 **The gate always decides. Surfaces choose whether to enforce.** Overlay and the
 advisory lane display the Result without blocking. The stop hook enforces. CI
@@ -214,53 +223,61 @@ These make "easy to add later" real. They are non-negotiable constraints on the 
 
 ### Module map
 
+This is the actual source layout as built for v0.2.0. Dedup is not a separate module;
+it runs inside the gate (see section 9). There is no built MCP surface (section 11.5);
+an MCP wrapper stays an optional transport.
+
 ```
 src/
   contracts/        index.ts
-  primitives/       cssPath.ts glob.ts slug.ts sortKey.ts neutralize.ts identity.ts
-  deps/             index.ts real.ts fakes.ts
+  primitives/       canonical.ts identity.ts iso8601.ts match-glob.ts neutralize.ts slug.ts sortKey.ts
+  deps/             build.ts real.ts fakes.ts fs.ts git.ts
   providers/
     axe/            index.ts notes.ts
-    rulepack/       index.ts <one-file-per-rule>.ts
+    rulepack/       index.ts probes.ts selectors.ts pf-<one-file-per-static-rule>.ts
     keyboard-walk/  index.ts steps.ts
-  evidence/         evidence.ts hash.ts receipt.ts
-  dedup/            index.ts
-  transcript/       diff.ts
-  coverage/         index.ts importGraph.ts routeManifest.ts
+    check-runner.ts index.ts
+  evidence/         receipt.ts floor.ts
+  coverage/         import-graph.ts planner.ts route-manifest.ts
   gate/             index.ts
-  guard/            index.ts
-  intake/           normalize.ts schema.ts
-  output/           docs.ts altText.ts
+  trust/            guard.ts
+  intake/           schema.ts normalize.ts load.ts config.ts trusted-config.ts map-to-providers.ts overlay-fs.ts
+  docs/             alt-text-manifest.ts announcement-snippets.ts keyboard-paths.ts evidence-binding.ts
+  output/           conformance.ts summary.ts
+  doctor/           index.ts
+  drift/            routes.ts
+  floor/            prune.ts
+  init/             index.ts
+  baseline/         index.ts
+  install/          overlay.ts claude.ts ci.ts branch-rule.ts index.ts
+  voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts   (built, not wired; section 7.5)
+  measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
   surfaces/
-    stophook/       index.ts
-    ci/             index.ts comment.ts
-    overlay/        vite-plugin.ts client.ts
-    mcp/            server.ts
-    playwright/     index.ts
-  cli.ts
+    cli.ts pr-comment.ts policy-enforce.ts scrub.ts receipt-store.ts
+    stop-hook.ts stop-hook-runner.ts stop-hook-bin.ts
+    vite-plugin.ts overlay-client.ts playwright-helper.ts
+    self-check.ts docs.ts docs-html.ts
+  run.ts cli.ts cli-bin.ts index.ts
 fixtures/
-  app/
-  golden/
 test/
 usabl.config.json
+usabl.routes.json
 .usabl-evidence.json
 .usabl-waivers.json
-.github/workflows/usabl.yml
+.github/workflows/usabl.yml        (engine dogfood CI: gitleaks, pre-commit, semgrep, npm run check)
+.github/workflows/usabl-gate.yml   (engine PR gate; see section 11.4)
 ```
 
 ### Check-agnostic data flow
 
 ```
-Providers (axe, rulepack, walk, future)
+Providers (axe, rulepack, walk, intake-derived, future)
     │
     │  each returns Draft[] with evidenceClass
     ▼
-Dedup (collapse same defect across layers)
-    │
-    ▼
 Gate (the single verdict authority)
     │  filters: only evidenceClass=deterministic counts
-    │  applies: identity, differential, waivers
+    │  applies: identity, dedup across layers, differential, waivers
     │  computes: verdict
     ▼
 Result (the whole serializable output)
@@ -384,6 +401,7 @@ export interface Receipt {
   verdict: 'verified';
   findingsSummary: { new: number; carried: number; fixed: number; unverified: number };
   activeWaivers: number;
+  signature?: string;             // reserved for later signed attestation; unused today
   mintedAt: string;
 }
 
@@ -399,6 +417,8 @@ export interface Result {
   exitCode: 0 | 1 | 2 | 3 | 4 | 5;
   accessibilityVerdict: AccessibilityVerdict | null;
   accessibilityExitCode: AccessibilityExitCode;
+  paidDownCount: number;          // floor entries this run confirms resolved on cleanly
+                                  // scanned screens; projection only, never gates
 }
 
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
@@ -474,18 +494,28 @@ export interface Deps {
   checkRunner: CheckRunner;
   runnerVersion: string;
   scannerVersions: { axeCore: string; playwright: string; chromium: string };
+  requirements: RequirementBundle; // intake bundle loaded once at build time (trusted-ref overlaid)
 }
 
-export interface BrowserDriver { open(url: string): Promise<Page>; }
+export interface BrowserDriver {
+  open(url: string): Promise<Page>;
+  close(): Promise<void>;
+}
 
 export interface Page {
   gotoReady(): Promise<void>;
   focusBody(): Promise<void>;
   tab(): Promise<void>;
   press(key: string): Promise<void>;
+  click(selector: string): Promise<void>;
+  activeElementIs(selector: string): Promise<boolean>;
+  activeElementWithin(selector: string): Promise<boolean>;
+  armAnnouncementCapture(): Promise<void>;
+  drainAnnouncements(): Promise<string[]>;
   activeNode(): Promise<AxNode | null>;
   activePath(): Promise<string>;
   axAt(selector: string): Promise<AxNode | null>;
+  getAttribute(selector: string, name: string): Promise<string | null>;
   queryAll(selector: string): Promise<ElementRef[]>;
   close(): Promise<void>;
   // Capabilities wired for future checks (not used by contest providers)
@@ -507,7 +537,9 @@ export interface GitReader {
   writeTree(): Promise<string>;
   show(ref: string, path: string): Promise<string | null>;
   statusZ(): Promise<Array<{ code: string; path: string }>>;
+  diffNameOnly(ref: string): Promise<string[]>; // merge-base..HEAD changed files
   lsTree(ref: string, paths: string[]): Promise<Record<string, string>>;
+  lsFiles(ref: string, prefix: string): Promise<string[]>;
   headRef(): Promise<string>;
 }
 
@@ -529,25 +561,25 @@ Three layers, one `Provider` interface. The gate does not know or care how many
 providers exist.
 
 ```ts
-export interface Provider {
-  layer: string;
-  scan(page: Page, screen: { id: string; url: string }): Promise<Draft[]>;
+export type Capability = 'live' | 'network' | 'secrets' | 'filesystem-write';
+
+export interface ProviderContext {
+  page: Page;
+  screen: { id: string; url: string };
+  config: UsablConfig;
 }
 
-export interface RuleModule {
+export interface Provider {
   id: string;
-  severity: Severity;
-  why: string;
-  fix: string;
-  evaluate(page: Page): Promise<Array<{
-    elementPath: string;
-    elementName: string | null;
-    role: string | null;
-    evidence: EvidenceFacts;
-    confidence: 'fail' | 'unverified';
-  }>>;
+  layer: string;
+  capabilities: Capability[];
+  run(ctx: ProviderContext): Promise<Draft[]>;
 }
 ```
+
+The rulepack does not use a separate `RuleModule` type. Each PatternFly rule is a plain
+function `(ctx: ProviderContext) => Promise<Draft[]>` that the provider composes; see
+section 7.2.
 
 ### 7.1 axe-core provider
 
@@ -558,7 +590,9 @@ common rules with plain-language PatternFly-specific guidance. Every Draft has
 
 ### 7.2 PatternFly rulepack
 
-Eight named rules, each a small module returning `Draft[]`:
+The provider id is `pf-rulepack` (layer `pf`). It emits eight named rules: six static
+checks (one file per rule) and two interaction probes (`pf-focus-into-dialog` and
+`pf-modal-focus-return`, both in `probes.ts`), all returning `Draft[]`:
 
 1. `pf-toast-live-region`: toasts, alert groups, inline validation, and async table
    loading must sit in a role=status/alert/aria-live region that exists before the
@@ -758,9 +792,11 @@ cannot influence what policy they are judged against.
 ### Config-guards-itself
 
 Check the config file's own integrity against the anchor before trusting its contents
-to build the guarded set. Always force config, evidence, and waiver files into the
-guarded set regardless of what config says. Ordering is load-bearing: integrity check
-before reading contents.
+to build the guarded set. Four policy files are always forced into the guarded set
+regardless of what config says: `usabl.config.json`, `.usabl-evidence.json`,
+`.usabl-waivers.json`, and `usabl.routes.json` (`ALWAYS_GUARDED` in `src/trust/guard.ts`);
+the requirements directory is added when config sets `requirements`. Ordering is
+load-bearing: integrity check before reading contents.
 
 ### Session pinning
 
@@ -825,19 +861,41 @@ establish an evidence floor, then turn on the stop hook and CI. It is scanner-sh
 invocation, not scanner semantics: output is a full `Result` with verdict, differential,
 coverage honesty, and optional receipt minting.
 
+**Command surface.** `main` recognizes exactly twelve commands: `check`, `comment`,
+`bypass`, `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`,
+`doctor`, `docs`. `check` is the default when no command is given. There is no `--help`
+and no `--version`, and unrecognized flags are silently ignored (the parser has no
+catch-all for unknown `-` tokens); an unknown *command* exits 2.
+
 **Typical uses:**
 
-- Local: `usabl check` on changed files or named surfaces.
-- First-run drafts: `usabl init` infers `usabl.config.json` and `usabl.routes.json`
-  from the app tree. It never calls the gate and never consumes the files it just
-  wrote. Unproven routes stay `entryFile: null`. Overwrite requires `--force`.
-- Baseline drafts: `usabl baseline` runs a full UI scan and writes
-  `.usabl-evidence.json` as a reviewable working-tree diff.
-- CI: workflow invokes CLI with `--trusted-ref`.
-- Enforce: `usabl enforce accessibility` and `usabl enforce policy --trusted-ref`
-  read Result JSON from stdin. They project CI status. They do not mint a
+- Local: `usabl check` (the default) on changed files or named surfaces.
+- First-run policy drafts: `usabl init` infers and writes `usabl.config.json` and
+  `usabl.routes.json` only. It never calls the gate and never consumes the files it just
+  wrote, and it refuses to overwrite existing files unless `--force` is given (`--force`
+  is init-only draft overwrite, not a gate bypass).
+- Integration wiring: `usabl install <target>` wires exactly one integration surface per
+  run. The targets are `--overlay`, `--claude`, `--ci`, and `--branch-rule`; zero or more
+  than one refuses with exit 2. `init` scaffolds policy; `install` wires integrations; they
+  are different commands (see section 12).
+- Baseline drafts: `usabl baseline` runs a full UI scan and writes `.usabl-evidence.json`
+  as a reviewable working-tree diff.
+- Floor prune: `usabl floor prune` removes paid-down floor entries on cleanly scanned
+  screens, re-arming the gate. `prune` is the only subcommand; anything else exits 2.
+- Routes drift: `usabl drift routes` compares `usabl.routes.json` against the app router.
+  `routes` is the only subcommand; anything else exits 2.
+- Health check: `usabl doctor` is a read-only projection over the wired surfaces and always
+  exits 0 (see section 11.9).
+- CI: the workflow invokes `usabl check --ci --trusted-ref <base>`. On `check`, `--ci` is
+  the CI-mode boolean and forces `--trusted-ref` (without it, `check --ci` refuses with
+  exit 2). The same `--ci` token is the CI *install target* under `usabl install`; the two
+  meanings are disambiguated only by the command.
+- Comment: `usabl comment` reads a Result from stdin and prints the PR comment Markdown.
+- Enforce: `usabl enforce accessibility` and `usabl enforce policy --trusted-ref` read
+  Result JSON from stdin. They project CI status. They never call the gate and never mint a
   verdict. GitHub stays out of `run()`.
-- Library: stop hook, overlay, and optional MCP server import `run()` directly.
+- Library: the stop hook, overlay, and an optional MCP wrapper import `run()` directly.
+  No MCP surface is built today (section 11.5).
 
 Does not replace the stop hook for the AI-gating story. It enables the baseline pass
 that makes the ratchet meaningful. `usabl init` still does not write
@@ -880,9 +938,25 @@ Reads policy from the protected branch (or the trusted ref), never the working t
 Refuses to run without a base ref. The comment leads with the receipt, groups findings
 as new/known/unverified, shows the current-run announcement preview, and applies a
 noise budget. All page-derived text passes through `neutralize()`. Sticky comment
-matched only among bot-authored comments. On `approval_required` the comment stays
-loud after the policy check is green. Required checks are AND: accessibility uses
-`usabl enforce accessibility`; policy uses `usabl enforce policy --trusted-ref`.
+matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
+`approval_required` the comment stays loud after the policy check is green.
+
+**Two different workflows, do not conflate them.** The engine's own repo checks in
+`.github/workflows/usabl-gate.yml`, which is a single-job (`gate-comment`) dogfood
+workflow: it builds the engine locally with `npm ci && npm run build`, runs
+`node dist/cli.js check --ci --trusted-ref "origin/<base>" --json`, posts the sticky
+comment, and enforces the verdict in a final step (fail closed if the exit code is
+missing). It has no external-engine pin and no `usabl-policy` job. Separately, `usabl
+install --ci` *generates* a different, hardened, two-job workflow (written to the same
+`.github/workflows/usabl-gate.yml` path in the consuming repo): a `gate-comment` job
+fenced to `pull_request` that clones and pins the engine at the
+`PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel (the operator must replace it with a full
+40-char SHA), runs the scan, posts the comment, and runs `usabl enforce accessibility`
+as a step; and a `usabl-policy` job (`needs: gate-comment`, `if: always()`) that checks
+out the trusted base only and runs `usabl enforce policy --trusted-ref`, never executing
+PR head code. The required status check named in branch protection is `usabl-policy`
+(the workflow *file* is named `usabl-gate`), and the protected branch is `main`. Both
+`enforce` commands read Result JSON from stdin and never call the gate.
 
 ### 11.5 Mid-task self-check (CLI; MCP optional)
 
@@ -943,6 +1017,17 @@ checks without booting the full app router. Same `Result`, story URL as `screenI
 Not in contest. Add only if teams using Storybook ask for it and discovery from routes
 is insufficient.
 
+### 11.9 Doctor (onboarding health check, built)
+
+`usabl doctor` is a read-only projection that reports the state of each wired
+integration surface. It always exits 0, because a missing surface is information, not a
+failure; its filesystem port throws on any write so an accidental write fails loudly. It
+reports eight surfaces: config, route manifest, evidence floor, waivers, overlay,
+stop-hook, ci, and branch-rule, each with a state such as wired, missing, drifted, or
+unknown. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
+engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the pin
+sentinel), or `drifted` (any other shape). Doctor never mints a verdict or a receipt.
+
 ---
 
 ## 12. Adoption model
@@ -952,6 +1037,15 @@ is insufficient.
 usabl is installed (CLI + stop hook + CI + overlay + docs output, one standard) or
 the team is not using usabl. Mid-task self-check uses the CLI; an MCP wrapper is
 optional. There is no "partial" mode and no per-surface strictness.
+
+Onboarding uses two distinct commands. `usabl init` scaffolds policy: it writes
+`usabl.config.json` and `usabl.routes.json` only (never the evidence floor or waivers)
+and refuses to overwrite without `--force`. `usabl install <target>` wires integrations,
+exactly one per run: `--overlay` (vite plugin), `--claude` (a Stop hook running `npx usabl
+stop-hook` in `.claude/settings.json`), `--ci` (the generated PR-gate workflow), or
+`--branch-rule` (a read-only check that the protected branch and the `usabl-policy`
+required status check exist). `init` does not wire CI or overlays, and `install` does not
+scaffold policy.
 
 ### Brownfield adoption (prove what you touch)
 
@@ -1033,8 +1127,9 @@ add content and flow assertions that the engine enforces alongside the default s
 - `doc` requirements are not runtime checks; they feed the output module.
 
 All intake-derived Drafts carry `evidenceClass: 'deterministic'` (the assertion is
-hard and repeatable) unless the requirement explicitly marks itself as needing human
-judgment.
+hard and repeatable). `mapRequirementsToProviders` emits deterministic drafts with rule
+id `intake:<id>` for content and flow requirements; there is no code path in v0.2.0 that
+marks an intake draft as model-judgment.
 
 ---
 
@@ -1064,7 +1159,8 @@ and the receipt is invalidated, stale docs are marked as needing regeneration.
 ### How to run it
 
 `usabl docs` runs a full check and prints an `{ artifacts: [...] }` JSON envelope on
-stdout. It is a generator, not a gate: it always exits 0 and never mints a verdict.
+stdout, or, with `--html`, renders the same artifacts as one accessible, self-contained
+HTML page. It is a generator, not a gate: it always exits 0 and never mints a verdict.
 Announcement snippets and keyboard paths come from the run transcript; the alt-text
 manifest comes from configured content requirements. Surfaces the run did not verify
 carry no `evidenceRef`, so unverified state cannot masquerade as proof. The same
@@ -1324,16 +1420,23 @@ self-check.
   "requirements": "requirements/",
   "guardedPaths": [
     "usabl.config.json",
+    "usabl.routes.json",
     "src/providers/rulepack",
     "src/gate",
     "src/trust",
     ".usabl-evidence.json",
     ".usabl-waivers.json",
-    ".github/workflows/usabl.yml",
+    ".github/workflows/usabl-gate.yml",
     "requirements/"
   ]
 }
 ```
+
+`guardedPaths` is additive. The four policy files (`usabl.config.json`,
+`usabl.routes.json`, `.usabl-evidence.json`, `.usabl-waivers.json`) are force-guarded by
+`ALWAYS_GUARDED` whether or not they are listed here, and the requirements directory is
+added when `requirements` is set. Listing rule modules, the gate, the trust code, and the
+gate workflow puts them under the same `approval_required` review.
 
 There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 (nothing to check) is an explicit informational allow. That is code, not a config dial.
@@ -1530,11 +1633,15 @@ drive Orca programmatically. Instead, Vishali captures Orca's spoken output via 
 speech-dispatcher log module or a manual transcription pass, then compares it offline
 to the Virtual Screen Reader transcript.
 
-The in-loop announcement provider is `@guidepup/virtual-screen-reader` (headless,
-pure-JS, cross-platform). Its output is honesty-class "preview, not real AT." The
-demo voice (NVDA) differs from the validated reader (Orca); this is the accepted seam.
-The engine is screen-reader-agnostic; the harness measures Virtual-SR fidelity to a
-real reader, not to NVDA specifically.
+The in-run announcement preview is derived from the accessibility tree captured during
+the transcript, not from a real screen reader; its honesty class is "preview, not real
+AT." usabl also ships its own headless virtual screen reader provider
+(`makeVirtualSrProvider`, the voicing lane), which is built but dormant in v0.2.0 and is
+not wired into the run or the gate (section 7.5); it is usabl's own code, not the npm
+`@guidepup/virtual-screen-reader` package, which is not a dependency in v0.2.0. The demo
+voice (NVDA) differs from the validated reader (Orca); this is the accepted seam. The
+engine is screen-reader-agnostic; the validation harness measures the virtual-SR
+transcript's fidelity to a real reader, not to NVDA specifically.
 
 If text-to-speech is used as a fallback, label it "synthesized from the announcement
 transcript" and never imply it is live screen-reader output.

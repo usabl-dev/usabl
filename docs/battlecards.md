@@ -5,8 +5,8 @@ conversations, and judge follow-ups. This is competitive positioning for an OSS
 project: we acknowledge what others do well, explain where we go further, and note
 where tools are complementary rather than zero-sum.
 
-Full landscape: [research/market-landscape-2026-08.md](../../research/market-landscape-2026-08.md).
-User-facing positioning: [positioning.md](./positioning.md).
+Full landscape: internal market-landscape research (August 2026, maintained outside
+this repository). User-facing positioning: [positioning.md](./positioning.md).
 
 ---
 
@@ -15,9 +15,9 @@ User-facing positioning: [positioning.md](./positioning.md).
 **What they do well:** Drop into Claude Code, Cursor, or Copilot today; familiar axe
 findings; Deque adds remediate guidance and training content.
 
-**What we add:** The full proof loop - fix re-verification, keyboard walk, screen
-reader evidence, differential ratchet, and a stop gate that blocks "done" until proof
-passes on the change.
+**What we add:** The full proof loop - fix re-verification, keyboard walk,
+deterministic screen-reader announcement checks, differential ratchet, and a stop gate
+that blocks "done" until proof passes on the change.
 
 **Complementary?** Yes - Deque's remediate guidance and usabl's proof gate can coexist.
 axe-core is one of our check layers.
@@ -47,8 +47,9 @@ deterministic proof).
 **What they do well:** Strong announcement preview; JAWS Inspect uses the real engine;
 Tactual and Speakable add diff and CI-friendly workflows.
 
-**What we add:** Embed announcement evidence in the assistant and PR proof loop with
-fix verification, PatternFly rules, and team enforcement on one Result.
+**What we add:** Deterministic announcement and accessible-name checks embedded in the
+assistant and PR proof loop, with fix verification, PatternFly rules, and team
+enforcement on one Result.
 
 **Complementary?** Yes - Tactual or Speakable could be adopted as a provider behind the
 usabl gate for richer phrasing validation. Guidepup is a candidate too.
@@ -107,9 +108,9 @@ it with a stronger signal. The upstream prevention in the assistant loop is addi
 **What they do well:** Market fix verification and a persistent dashboard for teams
 buying an enforcement story.
 
-**What we add:** Full multi-layer proof (keyboard, PF rules, announcement preview), OSS,
-PatternFly-native, integrated with MCP-capable assistants and CI. No subscription, no
-vendor lock.
+**What we add:** Full multi-layer proof (keyboard walk, PF rules, deterministic
+screen-reader announcement checks), OSS, PatternFly-native, integrated with MCP-capable
+assistants and CI. No subscription, no vendor lock.
 
 **Complementary?** No - different philosophical bets. Jeikin is closed-source SaaS;
 usabl is open and local-first.
