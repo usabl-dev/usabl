@@ -123,4 +123,37 @@ describe('run with docs manifest trust overlay', () => {
     const docsScreens = result.coverage.affected.filter((s) => s.provenance === 'docs-manifest');
     expect(docsScreens).toHaveLength(0);
   });
+
+  it('scans no docs when net-new manifest added (absent at trustedRef)', async () => {
+    // PR adds a brand-new usabl.docs.json (absent at the trusted ref).
+    // Overlay calls git.show('main', 'usabl.docs.json'), which returns null (file does not exist at main).
+    // This exercises the null-via-absent-file path rather than null-via-undefined-trustedRef.
+    const deps = makeFakeDeps({
+      files: {
+        'usabl.config.json': goodConfigJson,
+        'usabl.docs.json': evilDocsManifest,
+      },
+      headContents: {
+        'usabl.config.json': goodConfigJson,
+      },
+      refContents: {
+        main: {
+          'usabl.config.json': goodConfigJson,
+        },
+      },
+      changed: [],
+      scans: {},
+    });
+
+    const result = await run(deps, config, { trustedRef: 'main' });
+
+    // Guard flagged the net-new guarded file as diverged (working bytes vs null at the ref).
+    expect(result.verdict).toBe('approval_required');
+    expect(result.exitCode).toBe(2);
+
+    // Overlay returned the trusted-ref bytes (null), so parseDocsManifest returned null
+    // and no docs pages were minted.
+    const docsScreens = result.coverage.affected.filter((s) => s.provenance === 'docs-manifest');
+    expect(docsScreens).toHaveLength(0);
+  });
 });
