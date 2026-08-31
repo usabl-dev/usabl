@@ -87,8 +87,9 @@ export interface ScreenScan {
 export interface AffectedScreen {
   screenId: string;
   url: string;
-  provenance: 'route-graph' | 'wide-blast' | 'manual';
+  provenance: 'route-graph' | 'wide-blast' | 'manual' | 'docs-manifest';
   importChain?: string[];
+  profile?: ProfileName;
 }
 export interface CoverageGap {
   ref: string; // surface id, url, or file path this gap concerns

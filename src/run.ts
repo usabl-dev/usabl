@@ -24,6 +24,8 @@ import type {
   WaiverLedger,
 } from './contracts/index.js';
 import { computeCoverage } from './coverage/planner.js';
+import { parseDocsManifest } from './coverage/docs-manifest.js';
+import { computeDocsCoverage } from './coverage/docs-planner.js';
 import { gate } from './gate/index.js';
 import { mintReceipt } from './evidence/receipt.js';
 import { parseEvidenceFloor } from './evidence/floor.js';
@@ -101,6 +103,10 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const scanConfig = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
     const coverageFs = overlayUntrustedRoutes(deps, guardDivergedPaths, opts.trustedRef);
     const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed);
+    const docsManifest = await parseDocsManifest(coverageFs);
+    const docsAffected = computeDocsCoverage(docsManifest);
+    const affected = [...discoveredCoverage.affected, ...docsAffected];
+    const nothingToCheck = discoveredCoverage.nothingToCheck && docsAffected.length === 0;
     const intakeFs = overlayRequirementsFs(deps.fs, deps.git, scanConfig, opts.trustedRef);
     const loadedRequirements = await loadRequirements(intakeFs, scanConfig);
     const intakePolicyPaths =
@@ -112,14 +118,20 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     // Malformed intake cannot self-grade. The harness stays closed until policy is valid.
     // Guarded-file edits still scan affected UI so mixed PRs keep accessibility findings.
     const screens: ScreenScan[] = [];
-    const canScan = loadedRequirements.ok && !discoveredCoverage.nothingToCheck;
+    const canScan = loadedRequirements.ok && !nothingToCheck;
     if (canScan) {
-      for (const s of discoveredCoverage.affected) {
-        screens.push(await deps.checkRunner.scan({ id: s.screenId, url: s.url }));
+      for (const s of affected) {
+        screens.push(await deps.checkRunner.scan({
+          id: s.screenId,
+          url: s.url,
+          ...(s.profile !== undefined ? { profile: s.profile } : {}),
+        }));
       }
     }
     const coverage: Coverage = {
       ...discoveredCoverage,
+      affected,
+      nothingToCheck,
       gaps: [...discoveredCoverage.gaps, ...screens.flatMap((screen) => screen.gaps)],
     };
     const drafts = screens.flatMap((s) => s.drafts);
