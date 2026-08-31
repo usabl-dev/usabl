@@ -101,7 +101,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
     const guardDivergedPaths = await checkGuard(deps, config, opts.trustedRef ?? 'HEAD');
     const scanConfig = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
-    const coverageFs = overlayUntrustedRoutes(deps, guardDivergedPaths, opts.trustedRef);
+    const coverageFs = overlayUntrustedManifests(deps, guardDivergedPaths, opts.trustedRef);
     const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed);
     const docsManifest = await parseDocsManifest(coverageFs);
     const docsAffected = computeDocsCoverage(docsManifest);
@@ -259,21 +259,25 @@ async function scanConfigForCoverage(
   }
 }
 
-function overlayUntrustedRoutes(
+function overlayUntrustedManifests(
   deps: Deps,
   guardDivergedPaths: string[],
   trustedRef: string | undefined,
 ): Deps['fs'] {
-  // Coverage planning reads usabl.routes.json. If that file diverged, use the
-  // trusted ref (or nothing) so a PR cannot widen its own blast radius.
-  const routesDiverged = guardDivergedPaths.includes('usabl.routes.json');
-  if (!routesDiverged) {
+  // Coverage planning reads usabl.routes.json and usabl.docs.json. Both control
+  // scan targets (routes controls app scan targets, docs controls the docs scan surface).
+  // If either file diverged, use the trusted ref (or nothing) so a PR cannot steer scans
+  // at attacker-chosen URLs.
+  const overlaidManifests = ['usabl.routes.json', 'usabl.docs.json'];
+  const divergedManifests = overlaidManifests.filter((path) => guardDivergedPaths.includes(path));
+  if (divergedManifests.length === 0) {
     return deps.fs;
   }
+  const divergedSet = new Set(divergedManifests);
   return {
     glob: (patterns) => deps.fs.glob(patterns),
     readFile: async (path) => {
-      if (path !== 'usabl.routes.json') {
+      if (!divergedSet.has(path)) {
         return deps.fs.readFile(path);
       }
       if (trustedRef !== undefined) {
