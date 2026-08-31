@@ -2,94 +2,103 @@
 
 ![Version](https://img.shields.io/badge/version-0.2.0-blue?style=flat-square)
 ![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)
+![Node](https://img.shields.io/badge/node-%3E%3D22-blue?style=flat-square)
 ![Status](https://img.shields.io/badge/status-team%20preview-green?style=flat-square)
 
 **usable by default.**
 
-usabl is an accessibility proof engine for product development workflows. It verifies that a change introduces no new machine-checkable accessibility barriers on the surfaces it touched before work can be called done, and gives one of four clear answers: verified, regression, not covered, or approval required. Accessibility, aligned with WCAG 2.2 AA, is the scope; screen-reader announcement is the differentiating layer, not the whole claim.
+usabl is an accessibility proof engine for product development. It checks that a change adds no new machine-checkable accessibility barriers on the surfaces it touched, and it will not let the work be called done until that is true. Every run returns one of four clear answers: verified, regression, not covered, or approval required. The scope is accessibility aligned with WCAG 2.2 AA. Screen-reader announcement is the differentiating layer, not the whole claim.
 
-The AI can suggest fixes. It does not get to grade its own work.
+> **The AI can suggest fixes. It does not get to grade its own work.**
 
-## What it does
+## Why usabl
 
-- Runs the same trustworthy check across the AI stop hook, dev-server overlay, CI gate, and Playwright helper
-- Combines general accessibility scanning, PatternFly rule checks, and keyboard/screen-reader announcement tests
-- Produces re-verifiable evidence tied to the exact code state
+Most accessibility tools find issues. Very few prove the fix actually worked, and almost none stop an AI assistant from marking inaccessible work complete. usabl closes that loop:
 
-## Status
+- **Proof, not a report.** A change is done only when the gate verifies it. The result is a receipt you can re-check later, not a slide of green numbers.
+- **The same check everywhere.** One deterministic engine runs in the assistant, the browser, and the pull request, so the answer never depends on where you look.
+- **Honest by construction.** The engine keeps verified, not covered, and merely observed apart in words, never by color. It never claims compliance, and it says so on its own output.
+- **Debt that only shrinks.** Known issues sit in a reviewed floor with owners and expiry dates. New barriers block. The floor ratchets down and never grows silently.
 
-Team preview (v0.2.0). Teammates can learn the product, run the loop, choose a
-contribution lane, and file feedback. See [CHANGELOG.md](CHANGELOG.md) for
-merged changes since 0.1.0. This freeze does not tag or publish the package.
+## The four verdicts
 
-Start with the
-[team orientation](https://usabl-dev.github.io/usabl/team-orientation.html) and
-[How usabl works](https://usabl-dev.github.io/usabl/how-usabl-works.html). The
-[team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md) is the complete operational walkthrough.
+Every `usabl check` ends in exactly one verdict, each with a matching exit code:
+
+| Verdict               | Meaning                                                                                                  |
+| --------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Verified**          | No new gating barriers on the touched surfaces, and coverage was complete. A receipt is minted.          |
+| **Regression**        | A new machine-checkable barrier appeared. The change is blocked.                                         |
+| **Not covered**       | usabl could not check a touched surface, so it refuses to guess. This is honest uncertainty, not a pass. |
+| **Approval required** | The change edits policy itself, which needs a human code-owner decision before it can land.              |
+
+Only the gate mints a verdict. Every other command drafts, inspects, wires, or reports.
+
+## How it works
+
+- **Deterministic checks.** Three layers run on every scan: general accessibility rules through axe-core, PatternFly composition rules, and a keyboard and announcement walk. No layer asks a model to judge pass or fail.
+- **One gate, four surfaces.** The same check runs as a Claude Stop hook, a dev-server overlay, a CI gate, and a Playwright helper. The library ships those integrations as subpath exports (`usabl/vite`, `usabl/playwright`, `usabl/docs`).
+- **Receipts bound to the code.** A verified result mints a receipt tied to the exact source tree, the committed policy, the runner version, and the scanner versions. Change any of them and it no longer verifies.
+- **AI proposes, the gate decides.** The assistant can suggest and apply fixes, then it must re-run the same gate. It cannot approve its own work.
 
 ## Quick start
+
+usabl targets Node 22 and is not yet published to a package registry, so build it from source:
 
 ```bash
 git clone https://github.com/usabl-dev/usabl.git
 cd usabl
-npm install
-npm run build
+npm install        # also installs the shared git hooks
+npm run build      # builds dist/ and the usabl CLI
+npm run check      # optional: typecheck, tests, build, and a package smoke test
 ```
 
-Node 22 required. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup (pre-commit, hooks, CI).
+To watch the full loop end to end, from a live barrier through a blocked assistant to a verified receipt, follow the [team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md) in the companion fixture app. See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete development setup, including pre-commit.
 
 ## Command surface
 
-These commands draft, inspect, wire, and report, but only the gate decides a verdict. Locally the gate is `usabl check`; in CI, `usabl enforce` turns the gate's result into the required check status. Nothing else on this list mints a verdict.
+These commands draft, inspect, wire, and report. Only `usabl check` decides a verdict.
 
-The gate:
+| Command                                                  | What it does                                                                                                                                                                                       |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `usabl check`                                            | The gate. Scans the affected screens and returns one verdict with its exit code. This is the default command.                                                                                      |
+| `usabl init`                                             | Drafts coverage and policy from the application tree. Runs no gate and writes no evidence.                                                                                                         |
+| `usabl baseline`                                         | Runs a full scan and drafts the accepted accessibility floor as a reviewable working-tree diff.                                                                                                    |
+| `usabl install --overlay\|--claude\|--ci\|--branch-rule` | Wires one integration surface as a draft, exactly one per run. `--branch-rule` only verifies.                                                                                                      |
+| `usabl doctor`                                           | Read-only self-check. Reports each surface as wired, missing, drifted, or unknown, and mints no verdict.                                                                                           |
+| `usabl floor prune`                                      | Re-arms the floor after a full scan so a reintroduced barrier gates as new instead of staying carried.                                                                                             |
+| `usabl drift routes`                                     | Reports drift between the route manifest and the application router. Read-only.                                                                                                                    |
+| `usabl comment`                                          | Projects a run read from stdin into a pull request comment.                                                                                                                                        |
+| `usabl stop-hook`                                        | The stable Stop hook entry point. Runs the gate when the assistant tries to finish and blocks continuation through the hook decision. Always exits 0, so a wedged hook fails open with disclosure. |
+| `usabl enforce accessibility\|policy`                    | Reads a gate result from stdin and returns the CI check status. Never re-runs the gate.                                                                                                            |
+| `usabl docs`                                             | Projects design-intake and transcript artifacts as JSON on stdout. Add `--html` for one self-contained, accessible HTML page. Always exits 0 and mints no verdict.                                 |
+| `usabl bypass`                                           | A one-time, next-stop-only escape hatch that does not verify. It lets the next Stop hook skip verification once.                                                                                   |
 
-- `usabl check` runs the accessibility gate on the affected screens and returns one verdict with its exit code. It is the default command.
+The [team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md) shows these commands in the order a team runs them. Full contracts and semantics are in [docs/ground-truth.md](docs/ground-truth.md).
 
-Adoption and setup:
+## Documentation
 
-- `usabl init` drafts coverage and policy from the application tree. It does not run the gate and writes no waivers or evidence.
-- `usabl baseline` runs a full scan and drafts the accepted accessibility floor in `.usabl-evidence.json` as a reviewable working-tree diff.
-- `usabl install --overlay|--claude|--ci|--branch-rule` wires exactly one surface as a draft and enables nothing on its own. `--branch-rule` is a read-only verify.
-- `usabl doctor` is a read-only self-check. It reports each surface as wired, missing, drifted, or unknown, and mints no verdict.
+- [Team orientation](https://usabl-dev.github.io/usabl/team-orientation.html): start here.
+- [How usabl works](https://usabl-dev.github.io/usabl/how-usabl-works.html): the result model, trust boundary, and product surfaces.
+- [Code walkthrough](https://usabl-dev.github.io/usabl/code-walkthrough.html): the source in the order it runs, grouped into eight systems an engineer can own.
+- [Team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md): the complete operational walkthrough.
+- [Ground truth](docs/ground-truth.md): architecture, contracts, scan layers, adoption model, WCAG coverage, and the demo strategy.
 
-Maintenance:
+## Status and roadmap
 
-- `usabl floor prune` re-arms the floor after a full scan by removing paid-down identities from `.usabl-evidence.json`, so a reintroduced barrier gates as new instead of staying carried.
-- `usabl drift routes` reports drift between the route manifest and the application router. It reads only and mints no verdict.
+Team preview (v0.2.0). Teammates can learn the product, run the loop, choose a contribution lane, and file feedback. See [CHANGELOG.md](CHANGELOG.md) for changes since 0.1.0. This preview does not tag or publish the package.
 
-CI and hook surfaces:
+The screen-reader **voicing** preview and the **fleet-insights** measurement view are built and exported, but neither is part of the gate today. Voicing is planned to enter the check path in v0.3.0. Fleet-insights aggregates committed findings for reporting only and never changes a verdict.
 
-- `usabl comment` projects a run read from stdin into a pull request comment. It does not run the gate.
-- `usabl stop-hook` is the stable Stop hook entry point. It runs the gate when the assistant tries to finish and blocks continuation through the Stop hook decision when the gate reports a new barrier, an uncovered change, or a policy change that needs approval, or when a guarded policy file changes during the session. It always exits 0, so a wedged hook fails open with disclosure instead of blocking through an exit code.
-- `usabl enforce accessibility|policy` reads a gate result from stdin and returns the CI check status. It never re-runs the gate.
+## Contributing
 
-Reporting:
+The provider interface is the contribution seam: add a check, return `Draft[]`, and ship a rule. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup, including Node 22, pre-commit, and the build.
 
-- `usabl docs` projects design-intake and transcript artifacts from a full run as JSON on stdout. Add `--html` to render the same artifacts as one self-contained, accessible HTML page instead. Either way it is a generator, not a gate: it always exits 0 and mints no verdict. The page carries the engine's honesty rule on its face, separating three states in words rather than by color: an artifact reads as verified only when it is bound to a minted receipt and its entries carry per-entry evidence; bound entries without evidence are labelled an expectation, not proof; and anything unbound is labelled an observation, not proof.
-
-The bypass escape hatch:
-
-- `usabl bypass` is a one-time, next-stop-only escape hatch that does not verify. It sets a marker so the next Stop hook skips verification once.
-
-## Design
-
-The [code walkthrough](https://usabl-dev.github.io/usabl/code-walkthrough.html)
-explains the source in the order it runs and then groups it into eight systems,
-each a job an engineer can own. Read it before picking up a maintenance area.
-
-See [docs/ground-truth.md](docs/ground-truth.md) for the complete project ground truth:
-architecture, contracts, scan layers, surfaces, adoption model, design intake, docs
-output, WCAG coverage map, demo strategy, and team plan.
-
-## Commits
-
-Follow [Conventional Commits](CONTRIBUTING.md#commits).
+Work runs in three independent lanes, implement, review, and security review, and the lane that writes a change does not review it or grade its own work. Follow [Conventional Commits](CONTRIBUTING.md#commits), write the failing test first, and open pull requests against `main`.
 
 ## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
 
-## Slogan
+---
 
-Don't ship until it's usabl.
+**Don't ship until it's usabl.**
