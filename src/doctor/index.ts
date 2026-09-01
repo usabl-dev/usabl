@@ -13,6 +13,7 @@
 import type { InstallFs } from '../install/index.js';
 import { planOverlay } from '../install/overlay.js';
 import { planClaude } from '../install/claude.js';
+import { planClaudeSkill } from '../install/claude-skill.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { verifyBranchRule, type GhReader } from '../install/branch-rule.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
@@ -35,6 +36,7 @@ const EVIDENCE_FLOOR_LABEL = `evidence floor (${EVIDENCE_FLOOR_PATH})`;
 const WAIVERS_LABEL = `waiver ledger (${WAIVERS_PATH})`;
 const OVERLAY_LABEL = 'vite overlay plugin';
 const STOP_HOOK_LABEL = 'claude stop hook (.claude/settings.json)';
+const CLAUDE_SKILL_LABEL = 'claude usabl-check skill (.claude/skills/usabl-check/SKILL.md)';
 const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
 const BRANCH_RULE_LABEL = 'branch protection (main requires usabl-policy)';
 
@@ -281,6 +283,32 @@ async function collectStopHook(deps: DoctorDeps): Promise<SurfaceReport> {
   };
 }
 
+async function collectClaudeSkill(deps: DoctorDeps): Promise<SurfaceReport> {
+  // The /usabl-check skill is a whole-file surface, so it drives off planClaudeSkill's plan the
+  // way overlay does, not planClaude's finer discriminator. already-wired is the only wired
+  // mapping. write means the file is absent, a confident absence. refuse means a file is present
+  // but differs from the canonical skill (an operator edit or an older engine version), which is
+  // drift, never a false wired.
+  const plan = await planClaudeSkill(deps.fs);
+  if (plan.action === 'already-wired') {
+    return { id: 'claude-skill', label: CLAUDE_SKILL_LABEL, state: 'wired', nextStep: '' };
+  }
+  if (plan.action === 'refuse') {
+    return {
+      id: 'claude-skill',
+      label: CLAUDE_SKILL_LABEL,
+      state: 'drifted',
+      nextStep: `${plan.path} is present but is not the canonical usabl-check skill. Reconcile it by hand, or delete it and run "usabl install --claude-skill".`,
+    };
+  }
+  return {
+    id: 'claude-skill',
+    label: CLAUDE_SKILL_LABEL,
+    state: 'missing',
+    nextStep: 'No usabl-check skill. Run "usabl install --claude-skill" to write the on-demand /usabl-check command.',
+  };
+}
+
 async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
   // doctor asks a finer question than planCi: is the gate workflow present, structurally
   // correct, AND pinned to a trusted engine commit? classifyGateWorkflow answers that from the
@@ -347,7 +375,7 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
 
 export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceReport[]> {
   // Order mirrors the slice: config, routes, evidence floor, waivers, overlay, stop hook,
-  // ci workflow, branch rule. Each collector is self-contained health logic with no printing,
+  // usabl-check skill, ci workflow, branch rule. Each collector is self-contained health logic with no printing,
   // so tests can target the states directly. guardRead absorbs an unexpected fs read error as
   // an honest unknown; every recognized state (including drifted and unknown) is returned, and
   // only a real programmer error propagates.
@@ -358,6 +386,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     await guardRead('waivers', WAIVERS_LABEL, () => collectWaivers(deps)),
     await guardRead('overlay', OVERLAY_LABEL, () => collectOverlay(deps)),
     await guardRead('stop-hook', STOP_HOOK_LABEL, () => collectStopHook(deps)),
+    await guardRead('claude-skill', CLAUDE_SKILL_LABEL, () => collectClaudeSkill(deps)),
     await guardRead('ci', CI_LABEL, () => collectCi(deps)),
     await guardRead('branch-rule', BRANCH_RULE_LABEL, () => collectBranchRule(deps)),
   ];

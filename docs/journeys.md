@@ -17,7 +17,8 @@ projections of that verdict and never mint their own.
 
 **Persona:** Priya (UI engineer with an AI assistant).
 **usabl installed:** Yes. `usabl init` for policy, then `usabl install --claude` (Stop
-hook), `usabl install --ci` (PR gate), and `usabl install --overlay` (dev-server badge).
+hook), `usabl install --claude-skill` (the on-demand `/usabl-check` skill), `usabl install
+--ci` (PR gate), and `usabl install --overlay` (dev-server badge).
 
 | Stage | What happens | Emotion | Friction risk |
 |---|---|---|---|

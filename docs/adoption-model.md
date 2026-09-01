@@ -85,7 +85,10 @@ each stage matters; this section is what a team actually types, in order.
     config and prints the exact lines to add.
 12. (automatic, `usabl install --claude`) Merges a Stop hook running
     `npx usabl stop-hook` into `.claude/settings.json`, so an assistant cannot call
-    interface work done without proof.
+    interface work done without proof. Its companion `usabl install --claude-skill`
+    writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`,
+    so the assistant can run the advisory self-check during work. The engine ships the
+    skill body, so the installed command cannot drift from the CLI it calls.
 13. (automatic, `usabl install --ci`) Writes the two-job
     `.github/workflows/usabl-gate.yml` draft: `gate-comment` for the sticky PR comment
     and the required `usabl-policy` check. Replace the `PIN_TO_A_TRUSTED_USABL_COMMIT`
@@ -209,6 +212,7 @@ pin the engine and turn on branch protection.
 | **CI gate** | `usabl install --ci` | Writes `.github/workflows/usabl-gate.yml`, a two-job draft (`gate-comment` and the required `usabl-policy` check). The engine ref is left as the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel for you to replace with a full commit SHA. | Sticky PR comment plus a fail-closed gate |
 | **Dev-server overlay** | `usabl install --overlay` | Wires the advisory Vite plugin into `vite.config.ts`. Writes a draft when no config exists, no-ops when already wired, and refuses to clobber a hand-tuned config. | Advisory findings badge while coding |
 | **Assistant hook** | `usabl install --claude` | Wires a Stop hook running `npx usabl stop-hook` into `.claude/settings.json`. | Blocks an assistant "done" on a blocking verdict |
+| **Assistant skill** | `usabl install --claude-skill` | Writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`, running the advisory `npx usabl check --self-check`. Writes a draft when absent, no-ops when it matches, and refuses to clobber a differing file. | The assistant can self-check mid-task without leaving the editor |
 | **Branch rule** | `usabl install --branch-rule` | Read-only verification through a `gh` GET that branch `main` requires the `usabl-policy` status check. Writes nothing. | Confirms the gate is actually enforced |
 | **Playwright test** | `usabl/playwright` export | `assertUsablVerdict(result, allowed)` asserts a gated Result's verdict inside an existing Playwright suite. It reads a Result; it never mints one. | Reuse a check verdict in tests you already run |
 
