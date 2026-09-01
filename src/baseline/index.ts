@@ -4,6 +4,7 @@
  * It must never mint a verdict, write waivers, or re-consume newly written floor bytes in the same process.
  */
 import type { Deps, EvidenceFloor, FloorEntry, Finding, Result, UsablConfig } from '../contracts/index.js';
+import { parseDocsManifest } from '../coverage/docs-manifest.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { computeIdentity } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
@@ -119,7 +120,17 @@ export async function runBaseline(
     };
   }
 
-  const changedFiles = [...new Set(await deps.fs.glob(config.uiFileGlobs))].sort();
+  // The floor must absorb docs debt too, not only app debt. uiFileGlobs never matches docs source
+  // files, so enumerate every docs page source from the manifest and add them to the change set.
+  // That makes run() scan every docs page (each source maps to its page) so its barriers are floored
+  // in the same commit. Absent manifest leaves the app-only behavior byte-identical. Reaching this
+  // point means no guarded file other than the floor is dirty, so the working-tree manifest matches
+  // the trusted one; enumerating its sources cannot smuggle in attacker-chosen scan targets.
+  const appFiles = await deps.fs.glob(config.uiFileGlobs);
+  const docsManifest = await parseDocsManifest(deps.fs);
+  const docsSourceFiles =
+    docsManifest === null ? [] : docsManifest.pages.flatMap((page) => page.sources);
+  const changedFiles = [...new Set([...appFiles, ...docsSourceFiles])].sort();
   const result = await run(deps, config, {
     ...(opts.trustedRef === undefined ? {} : { trustedRef: opts.trustedRef }),
     changedFiles,
