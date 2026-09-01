@@ -16,8 +16,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 //
 // Scope boundary, stated so a green run is not mistaken for total coverage:
 // this walks static pages and every `.slide` view. It does not yet drive
-// interactive states such as open dialogs (for example the deck's "Keys" help
-// dialog). Those states are not covered here.
+// interactive states such as open dialogs or expanded menus; if a doc grows
+// such a state, its contents are not covered here.
 
 // Load the repo-pinned playwright + axe-core through the repo's own package.json
 // so the gate uses the exact versions the engine ships against, not whatever a
@@ -59,9 +59,11 @@ async function findHtmlDocs(root) {
   return found.sort();
 }
 
-// Bring one self-navigated view into the foreground and wait until the deck's
-// own script has revealed it. Uses the same `location.hash` path a real reader
-// uses, so the gate exercises the shipped navigation rather than forcing styles.
+// Bring one self-navigated view into the foreground and wait until it is
+// actually visible. Uses the same `location.hash` path a real reader uses, so
+// the gate exercises the shipped navigation rather than forcing styles. It waits
+// on computed visibility rather than any single toggle mechanism, so it works
+// whether a doc reveals views through CSS `:target` rules or a script.
 async function showView(page, id) {
   await page.evaluate((slideId) => {
     location.hash = `#${slideId}`;
@@ -69,7 +71,7 @@ async function showView(page, id) {
   await page.waitForFunction(
     (slideId) => {
       const el = document.getElementById(slideId);
-      return el !== null && !el.hasAttribute('hidden');
+      return el !== null && getComputedStyle(el).display !== 'none';
     },
     id,
     { timeout: VIEW_TIMEOUT_MS },
