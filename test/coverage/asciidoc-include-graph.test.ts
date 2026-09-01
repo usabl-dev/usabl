@@ -283,4 +283,73 @@ describe('buildAdocIncludeGraph', () => {
       { from: 'titles/guide/master.adoc', target: '../escape.adoc', reason: expect.stringMatching(/base root|escape/i) },
     ]);
   });
+
+  it('keeps a column-0 include after a ---- block whose body contains a longer ----- run', async () => {
+    const fs = fsOf({
+      'assembly.adoc': [
+        '----',
+        'Example showing a delimiter of a different length:',
+        '-----',
+        '----',
+        'include::real.adoc[]',
+        '',
+      ].join('\n'),
+      'real.adoc': 'Real content.\n',
+    });
+    const graph = await buildAdocIncludeGraph(fs, 'assembly.adoc');
+    expect(graph.sources).toEqual(['assembly.adoc', 'real.adoc']);
+    expect(graph.sources).toContain('real.adoc');
+  });
+
+  it('does not let a ----- (5) delimiter close a ---- (4) verbatim block', async () => {
+    const fs = fsOf({
+      'assembly.adoc': [
+        '----',
+        'include::inside.adoc[]',
+        '-----',
+        'include::still-inside.adoc[]',
+        '----',
+        'include::real.adoc[]',
+        '',
+      ].join('\n'),
+      'real.adoc': 'Real content.\n',
+      'inside.adoc': 'nope',
+      'still-inside.adoc': 'nope',
+    });
+    const graph = await buildAdocIncludeGraph(fs, 'assembly.adoc');
+    expect(graph.sources).toEqual(['assembly.adoc', 'real.adoc']);
+    expect(graph.sources).not.toContain('inside.adoc');
+    expect(graph.sources).not.toContain('still-inside.adoc');
+  });
+
+  it('terminates on a cyclic attribute definition and records the include as unresolved', async () => {
+    const fs = fsOf({
+      'master.adoc': ':a: {b}\n:b: {a}\n\ninclude::{a}/x.adoc[]\n',
+    });
+    const graph = await buildAdocIncludeGraph(fs, 'master.adoc');
+    expect(graph.sources).toEqual(['master.adoc']);
+    expect(graph.unresolved).toEqual([
+      { from: 'master.adoc', target: '{a}/x.adoc', reason: expect.stringMatching(/attribute/i) },
+    ]);
+  });
+
+  it('retains an attribute after an unset directive so the include still resolves (over-approximate)', async () => {
+    const fs = fsOf({
+      'master.adoc': ':moduledir: modules\n:!moduledir:\n\ninclude::{moduledir}/con.adoc[]\n',
+      'modules/con.adoc': 'Content.\n',
+    });
+    const graph = await buildAdocIncludeGraph(fs, 'master.adoc');
+    expect(graph.sources).toContain('modules/con.adoc');
+    expect(graph.unresolved).toEqual([]);
+  });
+
+  it('resolves a lowercase attribute reference from a mixed-case definition', async () => {
+    const fs = fsOf({
+      'master.adoc': ':ModulesDir: modules\n\ninclude::{modulesdir}/con.adoc[]\n',
+      'modules/con.adoc': 'Content.\n',
+    });
+    const graph = await buildAdocIncludeGraph(fs, 'master.adoc');
+    expect(graph.sources).toEqual(['master.adoc', 'modules/con.adoc']);
+    expect(graph.unresolved).toEqual([]);
+  });
 });

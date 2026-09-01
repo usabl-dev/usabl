@@ -16,6 +16,15 @@
  *   to appear in its sources. Output paths are repo-relative and normalized exactly as
  *   git status reports them (no leading "./", forward slashes), so docs-planner's
  *   exact-string sources.includes(file) match holds.
+ * - Block-delimiter and `include::` recognition is done on the trimmed line, not on
+ *   AsciiDoc's strict column-0 rule, so a deeply indented delimiter is treated as a real
+ *   one. This is a known, bounded limitation kept deliberately: it can only keep a block
+ *   open or follow an extra include, never drop a real one, which stays over-approximate.
+ *
+ * Unlike import-graph.ts (which returns an edge map for a caller to BFS), this module
+ * builds the closure inline and eagerly: attribute values needed to resolve `include::`
+ * targets are only known after reading files, so traversal and resolution must interleave
+ * in one fixpoint. The divergence from the sibling is intentional, not an oversight.
  */
 // POSIX paths keep coverage keys stable across operating systems and match git output.
 import { posix as path } from 'node:path';
@@ -33,9 +42,13 @@ const REASON_UNRESOLVED_ATTR = 'unresolved attribute reference in include target
 const REASON_NOT_FOUND = 'include target not found';
 const REASON_ESCAPES_ROOT = 'include target escapes the base root';
 
+// Cap on attribute-substitution passes. Bounds cyclic attribute definitions
+// (e.g. :a: {b} / :b: {a}) so substituteAttributes always halts instead of looping.
+const MAX_ATTRIBUTE_PASSES = 16;
+
 interface AttrDef {
-  name: string;
-  value: string | null; // null means the entry unsets the attribute
+  name: string; // stored lowercase: AsciiDoc downcases attribute names
+  value: string;
 }
 
 interface ParsedAdoc {
@@ -75,19 +88,15 @@ function verbatimDelimiterOf(trimmed: string): string | null {
 }
 
 function matchAttributeDef(trimmed: string): AttrDef | null {
-  // Unset forms come first so they are not mistaken for a set with an empty value.
-  const unsetLeading = /^:!([A-Za-z0-9_][A-Za-z0-9_-]*):$/.exec(trimmed);
-  if (unsetLeading) {
-    return { name: unsetLeading[1] as string, value: null };
-  }
-  const unsetTrailing = /^:([A-Za-z0-9_][A-Za-z0-9_-]*)!:$/.exec(trimmed);
-  if (unsetTrailing) {
-    return { name: unsetTrailing[1] as string, value: null };
-  }
+  // Unset directives (:!name: / :name!:) are deliberately NOT handled: honouring them
+  // could clear a value a later include still references, flipping a resolvable target to
+  // unresolved. That is an under-map, which this module forbids. Last-value-wins keeps the
+  // attribute set (over-approximate), so an unset line falls through as an ignored line.
   // `:name:` sets an empty value; `:name: value` requires whitespace before the value.
   const set = /^:([A-Za-z0-9_][A-Za-z0-9_-]*):(?:\s+(.*))?$/.exec(trimmed);
   if (set) {
-    return { name: set[1] as string, value: (set[2] ?? '').trim() };
+    // AsciiDoc downcases attribute names, so store lowercase to match {name} references.
+    return { name: (set[1] as string).toLowerCase(), value: (set[2] ?? '').trim() };
   }
   return null;
 }
@@ -106,6 +115,7 @@ function parseAdoc(content: string): ParsedAdoc {
   const attrDefs: AttrDef[] = [];
   const includes: string[] = [];
   let inCommentBlock = false;
+  // The exact opening delimiter run (char + length) of the open verbatim block, or null.
   let openVerbatim: string | null = null;
 
   for (const raw of content.split(/\r?\n/)) {
@@ -118,7 +128,10 @@ function parseAdoc(content: string): ParsedAdoc {
       continue;
     }
     if (openVerbatim !== null) {
-      if (isDelimiterLine(trimmed, openVerbatim)) {
+      // AsciiDoc closes a verbatim block only on a delimiter of the SAME char and length.
+      // A longer or shorter inner run (e.g. ----- inside ----) must not close it early,
+      // which would otherwise drop a later column-0 include:: that follows the real close.
+      if (trimmed === openVerbatim) {
         openVerbatim = null;
       }
       continue;
@@ -130,7 +143,8 @@ function parseAdoc(content: string): ParsedAdoc {
     }
     const verbatim = verbatimDelimiterOf(trimmed);
     if (verbatim !== null) {
-      openVerbatim = verbatim;
+      // Record the exact opening run so only an identical run can close this block.
+      openVerbatim = trimmed;
       continue;
     }
     if (trimmed.startsWith('//')) {
@@ -153,11 +167,8 @@ function parseAdoc(content: string): ParsedAdoc {
 }
 
 function applyAttribute(attributes: Map<string, string>, def: AttrDef): void {
-  if (def.value === null) {
-    attributes.delete(def.name);
-  } else {
-    attributes.set(def.name, def.value);
-  }
+  // Last-value-wins: an attribute, once set, stays set for the rest of the closure.
+  attributes.set(def.name, def.value);
 }
 
 // Substitute {name} references using known attributes. Returns null when at least one
@@ -166,13 +177,14 @@ function substituteAttributes(target: string, attributes: Map<string, string>): 
   const REFERENCE = /\{([A-Za-z0-9_][A-Za-z0-9_-]*)\}/;
   let current = target;
   // Bounded to stop on cyclic attribute definitions instead of looping forever.
-  for (let pass = 0; pass < 16; pass++) {
+  for (let pass = 0; pass < MAX_ATTRIBUTE_PASSES; pass++) {
     if (!REFERENCE.test(current)) {
       return current;
     }
     let unresolved = false;
     current = current.replace(new RegExp(REFERENCE, 'g'), (whole, name: string) => {
-      const value = attributes.get(name);
+      // AsciiDoc downcases attribute names, so look up by the lowercased reference.
+      const value = attributes.get(name.toLowerCase());
       if (value === undefined) {
         unresolved = true;
         return whole;
