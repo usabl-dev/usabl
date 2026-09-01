@@ -736,7 +736,7 @@
         <h1 tabindex="-1">Consistent Execution Across Environments</h1>
         <p class="lede">If the check only runs in CI, inaccessible code gets written and caught minutes later in a failed build. If it only runs in the AI assistant, someone can bypass it. The same engine runs across every surface so feedback is immediate wherever the change is made, and no path skips the check.</p>
         <figure class="diagram">
-          <svg viewBox="0 0 960 280" role="img" aria-label="Hub and spoke diagram: the usabl engine sits at the center, with six connected surfaces: CLI, CI/GitHub, Playwright, Docs, Dev Server, and Assistant Hook.">
+          <svg viewBox="0 0 960 280" role="img" aria-label="Hub and spoke diagram: the usabl engine sits at the center, with six connected surfaces: CLI, CI/GitHub, Playwright, Reports, Dev Server, and Assistant Hook.">
             <line class="spoke-line" x1="480" y1="140" x2="480" y2="30"></line>
             <line class="spoke-line" x1="480" y1="140" x2="575" y2="85"></line>
             <line class="spoke-line" x1="480" y1="140" x2="575" y2="195"></line>
@@ -758,7 +758,7 @@
             <text class="node-title" x="575" y="200" text-anchor="middle">Playwright</text>
 
             <rect class="node-box" x="405" y="225" width="150" height="50" rx="6"></rect>
-            <text class="node-title" x="480" y="255" text-anchor="middle">Docs</text>
+            <text class="node-title" x="480" y="255" text-anchor="middle">Reports</text>
 
             <rect class="node-box" x="310" y="170" width="150" height="50" rx="6"></rect>
             <text class="node-title" x="385" y="200" text-anchor="middle">Dev Server</text>
@@ -774,7 +774,7 @@
           <article class="surface"><strong>Dev Server</strong>Vite plugin overlays findings directly on the local application.</article>
           <article class="surface"><strong>CI / GitHub</strong>Required status check and automated PR comments detailing findings.</article>
           <article class="surface"><strong>Playwright</strong>Integrates into existing E2E test suites.</article>
-          <article class="surface"><strong>Docs</strong>Generates JSON/HTML evidence reports bound to specific commits.</article>
+          <article class="surface"><strong>Reports</strong>Generates JSON/HTML evidence artifacts bound to specific commits.</article>
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#intake">Previous</a>
