@@ -34,6 +34,7 @@ import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
 import { planOverlay, writeOverlay } from './install/overlay.js';
 import { planClaude, writeClaude } from './install/claude.js';
+import { planClaudeSkill, writeClaudeSkill } from './install/claude-skill.js';
 import { planCi, planDocsCi, writeCi, writeDocsCi } from './install/ci.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { projectDocs } from './surfaces/docs.js';
@@ -205,6 +206,8 @@ async function runInstall(opts: CliOptions): Promise<number> {
     result = await writeOverlay(installFs, await planOverlay(installFs));
   } else if (opts.installTarget === 'claude') {
     result = await writeClaude(installFs, await planClaude(installFs));
+  } else if (opts.installTarget === 'claude-skill') {
+    result = await writeClaudeSkill(installFs, await planClaudeSkill(installFs));
   } else if (opts.installTarget === 'docs-ci') {
     result = await writeDocsCi(installFs, await planDocsCi(installFs));
   } else {

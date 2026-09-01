@@ -18,6 +18,7 @@ import {
   USABL_GATE_WORKFLOW_PATH,
 } from '../../src/install/ci.js';
 import { CLAUDE_SETTINGS_PATH } from '../../src/install/claude.js';
+import { CLAUDE_SKILL_CONTENTS, CLAUDE_SKILL_PATH } from '../../src/install/claude-skill.js';
 
 describe('usabl install command wiring', () => {
   let workspace: string;
@@ -53,6 +54,17 @@ describe('usabl install command wiring', () => {
     // The nested .claude folder must be created by the install filesystem before the write.
     const written = await readFile(join(workspace, CLAUDE_SETTINGS_PATH), 'utf8');
     expect(written).toContain('npx usabl stop-hook');
+  });
+
+  it('routes --claude-skill to the claude-skill generator and writes the usabl-check skill file', async () => {
+    // The nested .claude/skills/usabl-check folders must be created by the install filesystem
+    // before the write. A mis-route to the Stop-hook generator would leave this file missing.
+    const code = await main(['install', '--claude-skill']);
+    expect(code).toBe(0);
+    const written = await readFile(join(workspace, CLAUDE_SKILL_PATH), 'utf8');
+    expect(written).toBe(CLAUDE_SKILL_CONTENTS);
+    // --claude-skill wires the on-demand command only; it must not also write settings.json.
+    await expect(readFile(join(workspace, CLAUDE_SETTINGS_PATH), 'utf8')).rejects.toThrow();
   });
 
   it('routes --ci to the ci generator and writes the gate workflow, not a --trusted-ref refusal', async () => {
