@@ -1,7 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
-const pages = ['docs/team-orientation.html', 'docs/how-usabl-works.html', 'docs/code-walkthrough.html'];
+const pages = [
+  'docs/team-orientation.html',
+  'docs/how-usabl-works.html',
+  'docs/code-walkthrough.html',
+  'docs/demo/product-deck.html',
+];
 
 describe('public Pages security', () => {
   for (const page of pages) {
