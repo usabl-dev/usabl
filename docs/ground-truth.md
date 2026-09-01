@@ -4,10 +4,10 @@ Status: working draft. Author: eparenti. August 2026.
 
 This is the project ground truth for the usabl product. It replaces shared-design.md,
 contest-build-plan.md, and team-work-plan.md with one document that includes the
-check-agnostic core, evidence labels, design intake, docs output, and the on/off
+check-agnostic core, evidence labels, design intake, Reports, and the on/off
 adoption model.
 
-This document describes usabl v0.2.0: an Apache-2.0 accessibility proof engine, published
+This document describes usabl v0.2.1: an Apache-2.0 accessibility proof engine, published
 as ESM, requiring Node >=22, with a single bin `usabl` mapped to `./dist/cli.js`. Where
 this document and the source disagree, the source is authoritative.
 
@@ -41,7 +41,8 @@ The AI can suggest fixes. It does not get to grade its own work.
 Idle is not a fifth verdict. When there is no UI-touching change, usabl allows with
 an explicit informational outcome: `Result.verdict` is `null`, exit 0, no findings,
 and `summary` says "nothing to check." `not_covered` means there *was* something to
-prove and the tool could not. A docs-only PR is idle, not `not_covered`.
+prove and the tool could not. A change that touches no covered surface (no UI files,
+and no documentation page under a `usabl.docs.json` manifest) is idle, not `not_covered`.
 
 `verdict: null` is overloaded, so it is never treated as a verdict. It means either idle
 (`coverage.nothingToCheck` is true, exit 0) or a crash and fail-open (exit 4, disclosed,
@@ -63,12 +64,18 @@ Every surface is a thin wrapper over one CLI entry point that returns `Result`.
 | **Overlay** | Show findings while hand-coding in the browser. Advises only. |
 | **CI / PR comment** | Team-visible gate on merge. Tamper-proof policy read. |
 | **Mid-task self-check** | Let the agent check itself while context is warm, before Stop. **CLI is sufficient** (Bash); MCP is an optional transport for discoverability (section 11.5). Stop still decides. |
-| **Docs output** | Publish approved artifacts bound to verified evidence. |
+| **Reports** | Publish approved accessibility artifacts (alt-text manifests, snippets, keyboard paths) bound to verified evidence. Command: `usabl docs`. |
 | **Playwright helper** | Same check inside tests teams already run. |
 
-Contest builds CLI, stop hook, overlay, CI, docs output, and mid-task self-check via
+Contest builds CLI, stop hook, overlay, CI, Reports, and mid-task self-check via
 CLI. An MCP wrapper is optional contest scope (section 11.5); ship after the hero
 loop is solid if discoverability matters.
+
+**One engine, two target surfaces.** The table above is about *where the engine runs*.
+On the other axis, *what it checks*, usabl covers two surfaces with the same engine and
+one verdict: the application UI (sections 7-8) and, since v0.2.1, the product's own
+documentation pages (sections 3, 7.6, 8). Documentation checking is not a second product
+or a separate command; it is the same `usabl check` run over a second set of scan targets.
 
 ---
 
@@ -121,8 +128,8 @@ reader actually hears. That combination does not exist today.
 - Surfaces: CLI, stop hook, overlay, CI/PR comment, Playwright helper, mid-task
   self-check (CLI; MCP wrapper optional). CI, overlay, hooks, and MCP all call the
   same CLI core.
-- Accessible docs output: generate alt-text manifests, announcement snippets, and
-  keyboard paths, bound to the receipt.
+- Reports (accessible docs output): generate alt-text manifests, announcement snippets,
+  and keyboard paths, bound to the receipt.
 - Evidence labels on every Draft (`evidenceClass`). During the contest everything is
   `deterministic`.
 - Design intake: RequirementBundle schema and YAML normalize. Wiring intake-derived
@@ -130,10 +137,37 @@ reader actually hears. That combination does not exist today.
 - Page capabilities wired in the deps interface (viewport, zoom, reduced motion,
   computed style, screenshot) even though default contest checks do not use them.
 
-Overlay and docs output are in contest scope. They are not on the cut line. Mid-task
+Overlay and Reports are in contest scope. They are not on the cut line. Mid-task
 self-check is in contest via CLI. The MCP wrapper is optional: add it only if agent
 discoverability in Claude Code matters more than protecting hero-loop time (section
 11.5).
+
+### Documentation checking (shipped in v0.2.1)
+
+usabl checks two target surfaces, not one: the application UI and the product's own
+documentation pages. This shipped in v0.2.1, after the contest scope above was written,
+and it reuses the same engine rather than adding a second product. One `usabl check`
+run scans both surfaces and returns one verdict; there is no separate docs command and
+no `--docs` check flag.
+
+- Activation: a `usabl.docs.json` manifest. Absent means no docs surface; present means
+  the run scans the pages it lists. The manifest is a guarded policy file.
+- Profile: each scanned documentation page carries `profile: 'docs'`. Providers read
+  `ctx.profile ?? 'app'` and adjust (section 7.6): axe-core scopes to the WCAG 2.2 AA
+  tag set, the docs-content rulepack adds `docs-heading-order`, the keyboard walk runs
+  unchanged, and the PatternFly rulepack is a no-op.
+- Coverage: a changed `.adoc` file maps to the pages whose source closure includes it,
+  built from real `include::` transclusions (section 8). Unmapped `.adoc` files are
+  honest `not_covered`, not silent passes.
+- Source-aware findings: a finding on a rendered page is mapped back to its AsciiDoc
+  source so a writer sees the fix in their own markup, not a DOM selector. The mapping
+  is presentation-only and never gates.
+- Onboarding: `usabl init --docs` drafts the manifest for a detected docs format
+  (Pantheon/modular AsciiDoc, OpenShift AsciiBinder); `usabl install --docs-ci` writes
+  a docs gate workflow; `usabl baseline` floors existing docs debt alongside UI debt.
+
+Do not confuse this with Reports (section 14): checking scans docs for barriers, while
+Reports generates publishable artifacts from a verified run.
 
 ### Bloat-proof rule
 
@@ -223,7 +257,7 @@ These make "easy to add later" real. They are non-negotiable constraints on the 
 
 ### Module map
 
-This is the actual source layout as built for v0.2.0. Dedup is not a separate module;
+This is the actual source layout as built for v0.2.1. Dedup is not a separate module;
 it runs inside the gate (see section 9). There is no built MCP surface (section 11.5);
 an MCP wrapper stays an optional transport.
 
@@ -235,19 +269,20 @@ src/
   providers/
     axe/            index.ts notes.ts
     rulepack/       index.ts probes.ts selectors.ts pf-<one-file-per-static-rule>.ts
+    docs-rulepack/  index.ts heading-order.ts
     keyboard-walk/  index.ts steps.ts
     check-runner.ts index.ts
   evidence/         receipt.ts floor.ts
-  coverage/         import-graph.ts planner.ts route-manifest.ts
+  coverage/         import-graph.ts planner.ts route-manifest.ts docs-manifest.ts docs-planner.ts asciidoc-include-graph.ts
   gate/             index.ts
   trust/            guard.ts
   intake/           schema.ts normalize.ts load.ts config.ts trusted-config.ts map-to-providers.ts overlay-fs.ts
-  docs/             alt-text-manifest.ts announcement-snippets.ts keyboard-paths.ts evidence-binding.ts
+  docs/             alt-text-manifest.ts announcement-snippets.ts keyboard-paths.ts evidence-binding.ts source-map.ts
   output/           conformance.ts summary.ts
   doctor/           index.ts
   drift/            routes.ts
   floor/            prune.ts
-  init/             index.ts
+  init/             index.ts docs/index.ts docs/asciidoc-modular.ts docs/asciibinder.ts
   baseline/         index.ts
   install/          overlay.ts claude.ts ci.ts branch-rule.ts index.ts
   voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts   (built, not wired; section 7.5)
@@ -262,6 +297,7 @@ fixtures/
 test/
 usabl.config.json
 usabl.routes.json
+usabl.docs.json
 .usabl-evidence.json
 .usabl-waivers.json
 .github/workflows/usabl.yml        (engine dogfood CI: gitleaks, pre-commit, semgrep, npm run check)
@@ -271,7 +307,7 @@ usabl.routes.json
 ### Check-agnostic data flow
 
 ```
-Providers (axe, rulepack, walk, intake-derived, future)
+Providers (axe, rulepack, docs-rulepack, walk, intake-derived, future)
     │
     │  each returns Draft[] with evidenceClass
     ▼
@@ -288,7 +324,7 @@ Result (the whole serializable output)
     ├── CI/PR comment (comment; block merge when required)
     ├── Playwright helper (return Result)
     ├── Mid-task self-check (CLI; optional MCP transport)
-    └── Docs output (publish artifacts)
+    └── Reports (publish artifacts)
 ```
 
 ---
@@ -463,7 +499,7 @@ export interface RequirementBundle {
   requirements: Requirement[];
 }
 
-// Docs output
+// Reports (accessible docs output)
 export interface DocArtifact {
   kind: 'alt-text-manifest' | 'announcement-snippets' | 'keyboard-paths';
   surface: string;
@@ -645,6 +681,27 @@ tier checks whether a required announcement happened; the voicing tier compares 
 words of the announcement and is `preview` evidence by default. The lane and its
 calibration land in v0.3.0.
 
+### 7.6 Documentation profile (docs-content)
+
+The same providers run over product documentation pages when a scan target carries
+`profile: 'docs'` (`ProfileName = 'app' | 'docs'`; absent means `app`, and each
+provider reads `ctx.profile ?? 'app'`). The profile is threaded per scan target, so a
+single run scans app screens and doc pages together and the gate returns one verdict
+across both. There is no separate docs engine and no separate command.
+
+Per-provider behavior on a docs page:
+
+- **axe-core** runs scoped to the WCAG 2.2 AA tag set (`wcag2a`, `wcag2aa`, `wcag21a`,
+  `wcag21aa`, `wcag22aa`) instead of its full rule set, matching the Red Hat docs bar.
+- **docs rulepack** (`id: docs-rulepack`, layer `docs-content`) contributes one static
+  check, `docs-heading-order`: a rendered heading that jumps more than one level down
+  is a `deterministic` fail, read from the accessibility tree. axe-core's own
+  heading-order rule is tagged best-practice, not WCAG, so it never fires under the docs
+  tag set; this rulepack fills that gap with doc-worded copy. It returns `Draft[]` and
+  never mints a verdict.
+- **PatternFly rulepack** is a no-op (`return []`): product docs are not a PatternFly UI.
+- **keyboard walk** runs unchanged.
+
 ---
 
 ## 8. Coverage and discovery
@@ -666,9 +723,12 @@ Given a set of changed files, discover which surfaces they affect:
 Coverage answers two different questions.
 
 **Nothing to check** (`coverage.nothingToCheck === true`): no changed files match
-`uiFileGlobs`. There was no UI change to prove. `Result.verdict` is `null`, exit 0,
-and an explicit "nothing to check" message. A docs-only PR, a backend-only PR, and a clean tree with no UI diff
-are this path. This is not `not_covered`.
+`uiFileGlobs`, and no changed file maps to a documentation page under a
+`usabl.docs.json` manifest. There was nothing to prove. `Result.verdict` is `null`,
+exit 0, and an explicit "nothing to check" message. A backend-only PR, a prose change
+with no manifested doc page, and a clean tree with no diff are this path. This is not
+`not_covered`. A change to an `.adoc` source that maps to a documentation page is a
+docs-profile check, not idle (see below).
 
 **`not_covered`:** UI files changed, and the tool could not identify or exercise what
 they touched (unmapped file, unresolved import, screen failed to load, check
@@ -690,6 +750,40 @@ this PR. Coverage grows as the team works, not as a boil-the-ocean inventory.
 - Routes not parseable from the router source must be configured or stay unmapped.
 
 These are honest `not_covered` outcomes, not silent passes.
+
+### Documentation coverage
+
+When a `usabl.docs.json` manifest is present, coverage extends to documentation the same
+way it extends to UI. The manifest lists each page with its published `url`, its owning
+`assemblyFile`, and the full `sources` closure of AsciiDoc files that render into it:
+
+1. A changed `.adoc` file maps to every page whose `sources` include it.
+2. A file matching the manifest `sharedGlobs` is a wide blast across all pages.
+3. An `.adoc` file that maps to nothing becomes an `unresolvedFiles` gap and forces
+   `not_covered`, exactly like an unmapped UI file.
+
+The source closure is built by following real `include::` transclusions
+(`asciidoc-include-graph.ts`). It over-approximates (it does not evaluate `ifdef`/`ifeval`)
+rather than guessing narrow, and it ignores includes shown as code blocks or comments.
+Manifest paths are validated: a page `url` must start with `/`, reject `@` and
+percent-encoded traversal, and `assemblyFile`/`sources` are `..`-rejecting repo-relative
+paths.
+
+### Source-aware findings
+
+A finding on a rendered documentation page is mapped back to its AsciiDoc source after
+the gate, presentation-only, by `mapFindingToSource` (`src/docs/source-map.ts`) in three
+tiers:
+
+- **renderer:** a `data-source-file` attribute (plus optional line) emitted by a
+  cooperating Asciidoctor pass gives an exact file and line.
+- **content:** match the rendered image, link, or heading text back to source for the
+  file and construct (`image::`, `link:`, a `=` heading marker), without a line.
+- **fallback:** attribute to the page's assembly file and disclose the whole source
+  closure as candidates.
+
+The mapping never throws and never gates. A writer sees the fix phrased in their own
+markup, not a DOM selector; if the tool cannot place a finding, it says so.
 
 ---
 
@@ -1034,7 +1128,7 @@ sentinel), or `drifted` (any other shape). Doctor never mints a verdict or a rec
 
 ### On or off
 
-usabl is installed (CLI + stop hook + CI + overlay + docs output, one standard) or
+usabl is installed (CLI + stop hook + CI + overlay + Reports, one standard) or
 the team is not using usabl. Mid-task self-check uses the CLI; an MCP wrapper is
 optional. There is no "partial" mode and no per-surface strictness.
 
@@ -1052,7 +1146,7 @@ scaffold policy.
 A team in year four of a 400-screen console adopts usabl on Monday without mapping 400
 screens on Monday.
 
-1. Install usabl (on): CLI, stop hook, CI, overlay, docs output. One standard.
+1. Install usabl (on): CLI, stop hook, CI, overlay, Reports. One standard.
 2. Optional first step: `usabl check` on a surface to see findings and accept an
    evidence floor before the stop hook blocks anyone.
 3. Most PRs that do not touch UI: non-blocking "nothing to check" outcome.
@@ -1133,7 +1227,12 @@ marks an intake draft as model-judgment.
 
 ---
 
-## 14. Accessible docs output
+## 14. Reports (accessible docs output)
+
+The deck calls this surface "Reports." It is distinct from documentation checking
+(sections 3, 7.6, 8): checking scans product docs for barriers, while Reports generates
+publishable accessibility artifacts from an already-verified run. The command is
+`usabl docs`.
 
 ### What it generates
 
@@ -1330,7 +1429,7 @@ switch lives in the fixture app, not on `ScreenScan`.
 
 - Nitin builds accessibility, Vishali reviews accessibility.
 - Ed builds the loop and surfaces, Patrick reviews and hardens them.
-- Ed owns intake schema, YAML normalize, and docs output; Nitin wires intake-derived
+- Ed owns intake schema, YAML normalize, and Reports; Nitin wires intake-derived
   providers.
 
 ### Integration
@@ -1344,7 +1443,7 @@ that they work apart against the frozen contracts.
 - Days 2-5: parallel build (providers, rulepack, walk vs. coverage, gate, guard).
 - End of week 1: working vertical slice with all four verdicts reachable.
 - Days 6-8: integration, surfaces, security controls, intake/output interfaces.
-- Days 9-11: harden, measure, real-repo smoke pass, overlay, docs output.
+- Days 9-11: harden, measure, real-repo smoke pass, overlay, Reports.
 - Days 12-14: full loop working end to end; all surfaces wired.
 - Week 3: polish, fix real-repo findings, performance tuning, demo asset capture.
 - Week 4: demo production, rehearsal, deck, and buffer. No new features.
@@ -1355,7 +1454,7 @@ rehearse the live segment, and everyone to practice the narrative.
 
 ### Cut line (dropped first)
 
-Detection breadth only. Overlay and docs output stay. Mid-task self-check via CLI
+Detection breadth only. Overlay and Reports stay. Mid-task self-check via CLI
 stays; MCP wrapper is optional (section 11.5).
 
 1. `pf-toolbar-labeled-when-repeated`.
@@ -1363,7 +1462,7 @@ stays; MCP wrapper is optional (section 11.5).
 3. MCP wrapper (if hero loop is not solid yet).
 
 Never cut: the gate, receipt fast-path, config-guards-itself, CODEOWNERS, four-verdict
-output, announcement preview, the recorded hero loop, overlay, docs output, CLI mid-task
+output, announcement preview, the recorded hero loop, overlay, Reports, CLI mid-task
 self-check.
 
 ---
@@ -1686,7 +1785,7 @@ Credibility preflight before recording:
 | Idle vs not_covered | Nothing to check is explicit informational allow, not `not_covered`. |
 | Partial scans | Forbidden for `verified`. Full affected set or `not_covered`. |
 | notCovered behavior | Not a config knob. Default hard block; recalibrate from week-2 real-repo `not_covered` rate. |
-| Overlay / docs output | In contest. Not on the cut line. |
+| Overlay / Reports | In contest. Not on the cut line. |
 | CLI | In contest. Foundation; all surfaces call it. |
 | Mid-task self-check | In contest via CLI (Bash). Same Result as MCP. |
 | MCP wrapper | Optional. Discoverability vs hero-loop time (section 11.5). |
@@ -1699,7 +1798,8 @@ Credibility preflight before recording:
 | Validation / dogfood reader | Orca on Fedora; Vishali captures spoken output and compares offline to Virtual Screen Reader transcript. |
 | Evidence labels | On every Draft from day 1. Contest = all deterministic. |
 | Design intake in scope | Schema + YAML normalize in contest. Figma/CSV ingest is a seam. |
-| Docs output in scope | Generate the three artifacts, bound to receipt. |
+| Reports in scope | Generate the three artifacts, bound to receipt. |
+| Documentation checking | Shipped in v0.2.1. Same engine, `profile: 'docs'`, activated by a `usabl.docs.json` manifest. One verdict across app and docs. |
 
 ### Still to decide
 
