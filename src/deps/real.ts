@@ -389,6 +389,71 @@ function wrapPage(pw: PwPage, context: BrowserContext, cdp: CDPSession): Page {
   return page;
 }
 
+// Installs the stable-path helper on a page that already navigated before usabl attached.
+// makeRealBrowserDriver injects LIVE_AND_PATH_INIT_SCRIPT at document start, but a page a caller
+// hands us has already loaded, so the path helper must be installed after the fact. It is guarded
+// so re-adopting the same page is a no-op. The announcement observer is intentionally left out:
+// a retroactive observer cannot capture live updates that already fired, and disclosing that
+// honestly beats arming a lane that would under-report.
+function installPathHelper(): void {
+  const scope = window as unknown as { __usablPathFor?: (element: Element | null) => string };
+  if (typeof scope.__usablPathFor === 'function') {
+    return;
+  }
+  const escapeCss = (value: string): string => {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+      return CSS.escape(value);
+    }
+    return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => '\\' + ch);
+  };
+  const pathFor = (element: Element | null): string => {
+    if (!(element instanceof Element)) {
+      return '';
+    }
+    if (element.id) {
+      return '#' + escapeCss(element.id);
+    }
+    const segments: string[] = [];
+    let current: Element | null = element;
+    while (current instanceof Element) {
+      if (current.id) {
+        segments.unshift('#' + escapeCss(current.id));
+        break;
+      }
+      const parent: Element | null = current.parentElement;
+      if (parent === null) {
+        segments.unshift(current.tagName.toLowerCase());
+        break;
+      }
+      let index = 1;
+      let sibling: Element | null = current.previousElementSibling;
+      while (sibling instanceof Element) {
+        index += 1;
+        sibling = sibling.previousElementSibling;
+      }
+      segments.unshift(current.tagName.toLowerCase() + ':nth-child(' + String(index) + ')');
+      current = parent;
+    }
+    return segments.join(' > ');
+  };
+  scope.__usablPathFor = pathFor;
+}
+
+/**
+ * Adopts a Playwright page a caller already created and navigated, so usabl can run providers on it
+ * (for example from a Playwright test suite). It attaches a CDP session for AX reads and installs the
+ * path helper, then returns a usabl Page whose close() is a no-op: the caller owns the page and its
+ * context, so adoption must never close them. Navigation and readiness are the caller's job.
+ */
+export async function adoptPage(pw: PwPage): Promise<Page> {
+  const context = pw.context();
+  const cdp = await context.newCDPSession(pw);
+  await cdp.send('Accessibility.enable');
+  await pw.evaluate(installPathHelper);
+  const page = wrapPage(pw, context, cdp);
+  return { ...page, close: async (): Promise<void> => {} };
+}
+
 export function makeRealBrowserDriver(options: { storageStatePath?: string } = {}): BrowserDriver {
   let browser: Browser | null = null;
 
