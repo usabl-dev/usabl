@@ -26,8 +26,13 @@ describe('trust guard', () => {
       '.usabl-waivers.json',
       'requirements/',
       'usabl.config.json',
+      'usabl.docs.json',
       'usabl.routes.json',
     ]);
+  });
+
+  it('buildGuardedSet always guards the docs manifest', () => {
+    expect(buildGuardedSet({ ...configFixture, guardedPaths: [] })).toContain('usabl.docs.json');
   });
 
   it('expandGuardedSet expands directory entries from HEAD and the working tree', async () => {

@@ -24,6 +24,9 @@ import type {
   WaiverLedger,
 } from './contracts/index.js';
 import { computeCoverage } from './coverage/planner.js';
+import { parseDocsManifest, type DocsManifest } from './coverage/docs-manifest.js';
+import { computeDocsCoverage } from './coverage/docs-planner.js';
+import { mapFindingToSource, type DocsPageClosure } from './docs/source-map.js';
 import { gate } from './gate/index.js';
 import { mintReceipt } from './evidence/receipt.js';
 import { parseEvidenceFloor } from './evidence/floor.js';
@@ -99,8 +102,12 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
     const guardDivergedPaths = await checkGuard(deps, config, opts.trustedRef ?? 'HEAD');
     const scanConfig = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
-    const coverageFs = overlayUntrustedRoutes(deps, guardDivergedPaths, opts.trustedRef);
+    const coverageFs = overlayUntrustedManifests(deps, guardDivergedPaths, opts.trustedRef);
     const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed);
+    const docsManifest = await parseDocsManifest(coverageFs);
+    const docsCoverage = computeDocsCoverage(docsManifest, changed);
+    const affected = [...discoveredCoverage.affected, ...docsCoverage.affected];
+    const nothingToCheck = discoveredCoverage.nothingToCheck && docsCoverage.nothingToCheck;
     const intakeFs = overlayRequirementsFs(deps.fs, deps.git, scanConfig, opts.trustedRef);
     const loadedRequirements = await loadRequirements(intakeFs, scanConfig);
     const intakePolicyPaths =
@@ -112,15 +119,22 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     // Malformed intake cannot self-grade. The harness stays closed until policy is valid.
     // Guarded-file edits still scan affected UI so mixed PRs keep accessibility findings.
     const screens: ScreenScan[] = [];
-    const canScan = loadedRequirements.ok && !discoveredCoverage.nothingToCheck;
+    const canScan = loadedRequirements.ok && !nothingToCheck;
     if (canScan) {
-      for (const s of discoveredCoverage.affected) {
-        screens.push(await deps.checkRunner.scan({ id: s.screenId, url: s.url }));
+      for (const s of affected) {
+        screens.push(await deps.checkRunner.scan({
+          id: s.screenId,
+          url: s.url,
+          ...(s.profile !== undefined ? { profile: s.profile } : {}),
+        }));
       }
     }
     const coverage: Coverage = {
       ...discoveredCoverage,
-      gaps: [...discoveredCoverage.gaps, ...screens.flatMap((screen) => screen.gaps)],
+      affected,
+      nothingToCheck,
+      unresolvedFiles: [...discoveredCoverage.unresolvedFiles, ...docsCoverage.unresolvedFiles],
+      gaps: [...discoveredCoverage.gaps, ...docsCoverage.gaps, ...screens.flatMap((screen) => screen.gaps)],
     };
     const drafts = screens.flatMap((s) => s.drafts);
 
@@ -140,6 +154,12 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const waivers = await readWaiversOrEmpty(readTrustFile, policyUntrusted);
 
     const gated = gate({ coverage, guardDivergedPaths: policyDivergedPaths, drafts, floor, waivers, now: deps.clock() });
+
+    // Enrich docs findings so they speak the author's markup: source file, AsciiDoc construct, and a
+    // syntax-aware fix. This runs after the gate on purpose. It reads source, never a verdict, and
+    // never changes identity, status, or the floor. Source is read from the working tree (deps.fs),
+    // where the author fixes it, even when the manifest itself was read from a trusted ref.
+    const findings = await enrichDocsFindings(gated.findings, docsManifest, deps.fs);
 
     // Receipts are reserved for verified. Preview and model-judgment cannot mint one.
     const receipt =
@@ -170,7 +190,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       summary: gated.summary,
       screens,
       coverage,
-      findings: gated.findings,
+      findings,
       receipt,
       dirtyGuardedPaths: policyDivergedPaths,
       exitCode: gated.exitCode,
@@ -247,21 +267,25 @@ async function scanConfigForCoverage(
   }
 }
 
-function overlayUntrustedRoutes(
+function overlayUntrustedManifests(
   deps: Deps,
   guardDivergedPaths: string[],
   trustedRef: string | undefined,
 ): Deps['fs'] {
-  // Coverage planning reads usabl.routes.json. If that file diverged, use the
-  // trusted ref (or nothing) so a PR cannot widen its own blast radius.
-  const routesDiverged = guardDivergedPaths.includes('usabl.routes.json');
-  if (!routesDiverged) {
+  // Coverage planning reads usabl.routes.json and usabl.docs.json. Both control
+  // scan targets (routes controls app scan targets, docs controls the docs scan surface).
+  // If either file diverged, use the trusted ref (or nothing) so a PR cannot steer scans
+  // at attacker-chosen URLs.
+  const overlaidManifests = ['usabl.routes.json', 'usabl.docs.json'];
+  const divergedManifests = overlaidManifests.filter((path) => guardDivergedPaths.includes(path));
+  if (divergedManifests.length === 0) {
     return deps.fs;
   }
+  const divergedSet = new Set(divergedManifests);
   return {
     glob: (patterns) => deps.fs.glob(patterns),
     readFile: async (path) => {
-      if (path !== 'usabl.routes.json') {
+      if (!divergedSet.has(path)) {
         return deps.fs.readFile(path);
       }
       if (trustedRef !== undefined) {
@@ -270,6 +294,34 @@ function overlayUntrustedRoutes(
       return null;
     },
   };
+}
+
+// Attach a source mapping to every finding on a docs page (its screenId matches a manifest pageId).
+// App findings and docs findings whose page cannot be resolved pass through unchanged. mapFindingToSource
+// fails open, so a missing or unreadable source yields a fallback mapping, never a throw.
+async function enrichDocsFindings(
+  findings: Finding[],
+  docsManifest: DocsManifest | null,
+  fs: Deps['fs'],
+): Promise<Finding[]> {
+  if (docsManifest === null) {
+    return findings;
+  }
+  const closureByPageId = new Map<string, DocsPageClosure>();
+  for (const page of docsManifest.pages) {
+    closureByPageId.set(page.pageId, { assemblyFile: page.assemblyFile, sources: page.sources });
+  }
+  const enriched: Finding[] = [];
+  for (const finding of findings) {
+    const closure = closureByPageId.get(finding.screenId);
+    if (closure === undefined) {
+      enriched.push(finding);
+      continue;
+    }
+    const docsSource = await mapFindingToSource(finding, closure, fs);
+    enriched.push({ ...finding, docsSource });
+  }
+  return enriched;
 }
 
 function summarize(findings: Finding[]) {

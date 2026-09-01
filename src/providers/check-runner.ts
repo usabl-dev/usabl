@@ -79,7 +79,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
         await page.focusBody();
         const providerResult = await runProviders(
           deps.providers,
-          { page, screen, config: deps.config },
+          { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
           deps.allowedCapabilities,
         );
 

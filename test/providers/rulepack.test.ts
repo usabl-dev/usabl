@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import type { AxNode, ElementRef, Page, ProviderContext } from '../../src/contracts/index.js';
+import { describe, expect, it, vi } from 'vitest';
+import type {
+  AxNode,
+  Draft,
+  ElementRef,
+  Page,
+  ProfileName,
+  ProviderContext,
+} from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeRulepackProvider } from '../../src/providers/rulepack/index.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
@@ -30,6 +37,7 @@ function withRulepackPage(
 async function makeContext(
   queryPlan: Record<string, ElementRef[]>,
   axPlan: Record<string, AxNode | null> = {},
+  profile?: ProfileName,
 ): Promise<ProviderContext> {
   const deps = makeFakeDeps();
   const page = await deps.browser.open(SCREEN.url);
@@ -37,6 +45,25 @@ async function makeContext(
     page: withRulepackPage(page, queryPlan, axPlan),
     screen: SCREEN,
     config: testConfig(),
+    ...(profile !== undefined ? { profile } : {}),
+  };
+}
+
+function draftFrom(rule: string): Draft {
+  return {
+    rule,
+    layer: 'pf',
+    severity: 'moderate',
+    evidenceClass: 'deterministic',
+    screenId: SCREEN.id,
+    elementPath: '.extra',
+    elementName: null,
+    role: null,
+    whatUserExperiences: 'extra check ran',
+    why: 'extra check ran',
+    fix: 'extra check ran',
+    evidence: {},
+    confidence: 'fail',
   };
 }
 
@@ -232,5 +259,43 @@ describe('makeRulepackProvider', () => {
 
     await expect(provider.run(singleContext)).resolves.toEqual([]);
     expect(provider.capabilities).toContain('live');
+  });
+
+  it('is a no-op on the docs profile: returns empty and runs no checks', async () => {
+    const extra = vi.fn(async (): Promise<Draft[]> => [draftFrom('extra-should-not-run')]);
+    const provider = makeRulepackProvider([extra]);
+    // A toast outside a live region would normally flag on the app profile.
+    const outsideAlert = element('.outside-alert');
+    const docsContext = await makeContext(
+      {
+        [SEL.alert]: [outsideAlert],
+        [`${SEL.liveContainer} ${SEL.alert}`]: [],
+      },
+      {},
+      'docs',
+    );
+
+    await expect(provider.run(docsContext)).resolves.toEqual([]);
+    expect(extra).not.toHaveBeenCalled();
+  });
+
+  it('still runs its checks on the app profile and when the profile is absent', async () => {
+    const appExtra = vi.fn(async (): Promise<Draft[]> => [draftFrom('extra-ran-app')]);
+    const appProvider = makeRulepackProvider([appExtra]);
+    const appContext = await makeContext({}, {}, 'app');
+
+    const appDrafts = await appProvider.run(appContext);
+
+    expect(appExtra).toHaveBeenCalledTimes(1);
+    expect(appDrafts).toEqual([draftFrom('extra-ran-app')]);
+
+    const defaultExtra = vi.fn(async (): Promise<Draft[]> => [draftFrom('extra-ran-default')]);
+    const defaultProvider = makeRulepackProvider([defaultExtra]);
+    const defaultContext = await makeContext({});
+
+    const defaultDrafts = await defaultProvider.run(defaultContext);
+
+    expect(defaultExtra).toHaveBeenCalledTimes(1);
+    expect(defaultDrafts).toEqual([draftFrom('extra-ran-default')]);
   });
 });

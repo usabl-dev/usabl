@@ -7,7 +7,7 @@
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
 import type { AxNode, BrowserDriver, Page } from '../contracts/index.js';
-import type { AxeIssue } from '../providers/axe/index.js';
+import { applyAxeTags, type AxeIssue } from '../providers/axe/index.js';
 
 const READY_TIMEOUT_MS = 15_000;
 const CLICK_TIMEOUT_MS = 3_000;
@@ -261,8 +261,11 @@ async function stablePathsForSelector(pw: PwPage, selector: string): Promise<str
 
 function attachAxeBridge(page: Page, pw: PwPage): void {
   Object.assign(page, {
-    runAxe: async (): Promise<AxeResult> => {
-      const result = await new AxeBuilder({ page: pw }).analyze();
+    runAxe: async (options?: { tags?: readonly string[] }): Promise<AxeResult> => {
+      // Tags apply only when the docs profile passes them. No tags means axe keeps its default
+      // ruleset, so the app path builds and analyzes exactly as before.
+      const builder = applyAxeTags(new AxeBuilder({ page: pw }), options);
+      const result = await builder.analyze();
       return {
         violations: mapAxeIssues(result.violations),
         incomplete: mapAxeIssues(result.incomplete),

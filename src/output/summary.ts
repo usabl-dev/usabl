@@ -3,7 +3,7 @@
  * This unit renders operator-facing text only.
  * It must never mutate Result, mint a verdict, or pass through untrusted text unsanitized.
  */
-import type { Result } from '../contracts/index.js';
+import type { DocsSourceMapping, Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 
 /**
@@ -27,6 +27,22 @@ export function neutralizePrintedText(text: string): string {
 }
 
 /**
+ * The source location line for a docs finding: the file plus the author's construct when known,
+ * the file plus the exact line when the renderer supplied one, otherwise the file alone. Kept raw
+ * here; the caller neutralizes before printing.
+ */
+function sourceLocation(source: DocsSourceMapping): string {
+  const file = source.file ?? '';
+  if (source.construct !== null) {
+    return `${file} -> ${source.construct}`;
+  }
+  if (source.line !== null) {
+    return `${file}:${source.line}`;
+  }
+  return file;
+}
+
+/**
  * Human CLI projection of a Result. Never re-derives findings or a verdict.
  * `verdict === null` prints IDLE (nothing to check), not NOT COVERED.
  */
@@ -41,10 +57,19 @@ export function formatSummary(result: Result): string {
   for (const f of gating) {
     const rule = neutralizePrintedText(f.rule);
     const whatUserExperiences = neutralizePrintedText(f.whatUserExperiences);
-    const fix = neutralizePrintedText(f.fix);
+    // A docs finding carries a source mapping and a syntax-aware fix; prefer both so the author
+    // reads their own markup, not the DOM. App findings have no docsSource and keep finding.fix.
+    const source = f.docsSource;
+    const fix = neutralizePrintedText(source ? source.fix : f.fix);
     lines.push(
       `  [${f.status}] ${f.screenId} · ${f.layer}/${rule} (${f.severity}) - ${whatUserExperiences}`,
     );
+    if (source && source.file) {
+      lines.push(`      source: ${neutralizePrintedText(sourceLocation(source))}`);
+      if (source.candidates.length > 1) {
+        lines.push(`      candidates: ${source.candidates.map(neutralizePrintedText).join(', ')}`);
+      }
+    }
     if (fix) {
       lines.push(`      fix: ${fix}`);
     }

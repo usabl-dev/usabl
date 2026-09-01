@@ -137,6 +137,36 @@ describe('makeCheckRunner', () => {
     expect(closeCalls).toBe(1);
   });
 
+  it('threads the scan profile into the provider context and defaults to app', async () => {
+    const seen: Array<string | undefined> = [];
+    const spy: Provider = {
+      id: 'profile-spy',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (ctx): Promise<Draft[]> => {
+        seen.push(ctx.profile);
+        return [];
+      },
+    };
+    const runnerFor = (page: Page) =>
+      makeCheckRunner({
+        browser: { open: async () => page, close: async () => {} },
+        providers: [spy],
+        config: testConfig(),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+      });
+
+    const docsPage = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    await runnerFor(docsPage).scan({ ...SCREEN, profile: 'docs' });
+    expect(seen).toEqual(['docs']);
+
+    seen.length = 0;
+    const appPage = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    await runnerFor(appPage).scan(SCREEN);
+    expect(seen).toEqual(['app']);
+  });
+
   it('returns a not-covered gap when browser.open throws and never rejects', async () => {
     const runner = makeCheckRunner({
       browser: {
