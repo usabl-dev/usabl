@@ -8,12 +8,14 @@ import { formatSummary } from '../output/summary.js';
 import { scrubResult } from './scrub.js';
 
 // The one integration each install run wires. Exactly one per invocation.
-export type InstallTarget = 'overlay' | 'claude' | 'ci' | 'branch-rule';
+export type InstallTarget = 'overlay' | 'claude' | 'ci' | 'docs-ci' | 'branch-rule';
 
 // The flags that name an install target, in the order the refusal message lists them.
 // --ci is dual-purpose: it keeps its CI-mode meaning on check and only names a target
-// under the install command, so it appears here for target counting as well.
-export const INSTALL_TARGET_FLAGS = ['--overlay', '--claude', '--ci', '--branch-rule'] as const;
+// under the install command, so it appears here for target counting as well. --docs-ci is
+// a distinct target from --ci: it wires the docs gate, which builds and serves the rendered
+// documentation rather than the app dev server.
+export const INSTALL_TARGET_FLAGS = ['--overlay', '--claude', '--ci', '--docs-ci', '--branch-rule'] as const;
 
 export interface CliOptions {
   command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | 'install' | 'stop-hook' | 'doctor' | string;
@@ -21,6 +23,9 @@ export interface CliOptions {
   // Render the docs artifacts as an accessible HTML page instead of JSON.
   // Only the docs command reads this; every other command ignores it.
   html: boolean;
+  // Select the docs-manifest onboarding for `usabl init --docs`. Only the init command
+  // reads this; every other command ignores it.
+  docs: boolean;
   trustedRef: string | null;
   json: boolean;
   ci: boolean;
@@ -45,7 +50,7 @@ function isFlag(value: string): boolean {
 // rather than half-wiring an integration.
 function resolveInstallTarget(
   command: string,
-  seen: { overlay: boolean; claude: boolean; ci: boolean; branchRule: boolean },
+  seen: { overlay: boolean; claude: boolean; ci: boolean; docsCi: boolean; branchRule: boolean },
 ): InstallTarget | null {
   if (command !== 'install') {
     return null;
@@ -60,6 +65,9 @@ function resolveInstallTarget(
   if (seen.ci) {
     selected.push('ci');
   }
+  if (seen.docsCi) {
+    selected.push('docs-ci');
+  }
   if (seen.branchRule) {
     selected.push('branch-rule');
   }
@@ -70,6 +78,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | string = 'check';
   let staticOnly = false;
   let html = false;
+  let docs = false;
   let trustedRef: string | null = null;
   let json = false;
   let ci = false;
@@ -83,6 +92,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   // can be enforced after parsing. --ci reuses the existing `ci` boolean below.
   let overlay = false;
   let claude = false;
+  let docsCi = false;
   let branchRule = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -122,6 +132,16 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
     if (token === '--html') {
       html = true;
+      continue;
+    }
+    if (token === '--docs') {
+      // init-only: draft a usabl.docs.json for the detected docs format.
+      docs = true;
+      continue;
+    }
+    if (token === '--docs-ci') {
+      // install-only target: wire the docs gate workflow.
+      docsCi = true;
       continue;
     }
     if (token === '--json') {
@@ -172,9 +192,9 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
   }
 
-  const installTarget = resolveInstallTarget(command, { overlay, claude, ci, branchRule });
+  const installTarget = resolveInstallTarget(command, { overlay, claude, ci, docsCi, branchRule });
 
-  return { command, staticOnly, html, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, driftSubcommand, installTarget };
+  return { command, staticOnly, html, docs, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, driftSubcommand, installTarget };
 }
 
 export function installRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {

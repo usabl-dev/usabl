@@ -25,7 +25,25 @@ export interface AxeIssue {
 }
 
 export interface AxePage {
-  runAxe(): Promise<{ violations: AxeIssue[]; incomplete: AxeIssue[] }>;
+  runAxe(options?: { tags?: readonly string[] }): Promise<{ violations: AxeIssue[]; incomplete: AxeIssue[] }>;
+}
+
+// The Red Hat WCAG 2.2 AA bar for the docs surface. WCAG conformance is cumulative, so 2.2 AA
+// carries every Level A and AA criterion from 2.0, 2.1, and 2.2. axe-core 4.13.0 has no wcag22a
+// tag, so wcag21a is the only Level A tag beyond wcag2a. The app path passes no tags so axe keeps
+// its default ruleset and the app evidence floor never shifts.
+export const DOCS_AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] as const;
+
+// Turns runAxe options into a tag-scoped builder. Generic over the builder so unit tests can pass a
+// fake without dragging playwright or @axe-core into an ordinary test run.
+export function applyAxeTags<B extends { withTags(t: string[]): B }>(
+  builder: B,
+  options?: { tags?: readonly string[] },
+): B {
+  // No tags means keep axe's default ruleset, so the app path is unchanged. An empty tag
+  // array is treated as no tags on purpose: withTags([]) would filter to zero rules and
+  // report a false clean.
+  return options?.tags && options.tags.length > 0 ? builder.withTags([...options.tags]) : builder;
 }
 
 function isAxePage(page: ProviderContext['page']): page is ProviderContext['page'] & AxePage {
@@ -100,7 +118,11 @@ export const axeProvider: Provider = {
       throw new Error('axe provider requires page.runAxe()');
     }
 
-    const axeResult = await ctx.page.runAxe();
+    // Docs runs the WCAG 2.2 AA tag set. App passes no argument so its call stays byte-identical.
+    const axeResult =
+      (ctx.profile ?? 'app') === 'docs'
+        ? await ctx.page.runAxe({ tags: DOCS_AXE_TAGS })
+        : await ctx.page.runAxe();
     const drafts: Draft[] = [];
 
     for (const issue of axeResult.violations) {

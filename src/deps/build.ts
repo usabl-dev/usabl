@@ -14,6 +14,7 @@ import { sortBy } from "../primitives/sortKey.js";
 import { makeCheckRunner } from "../providers/check-runner.js";
 import { axeProvider } from "../providers/axe/index.js";
 import { makeRulepackProvider } from "../providers/rulepack/index.js";
+import { makeDocsRulepackProvider } from "../providers/docs-rulepack/index.js";
 import { makeKeyboardWalkProvider } from "../providers/keyboard-walk/index.js";
 import { makeStepRunner } from "../providers/keyboard-walk/steps.js";
 import { loadRequirements } from "../intake/load.js";
@@ -202,6 +203,8 @@ export async function buildDeps(
   const providers = [
     axeProvider,
     makeRulepackProvider(),
+    // Docs-only checks. This pack self-gates to the docs profile, so it returns [] on app scans.
+    makeDocsRulepackProvider(),
     // Wall-clock cap limits infinite focus loops while still disclosing partial evidence.
     makeKeyboardWalkProvider({ wallClockMs: KEYBOARD_WALL_CLOCK_MS }),
   ];

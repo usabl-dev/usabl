@@ -7,11 +7,16 @@
  * leave the expected file missing and fail these tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { main } from '../../src/cli.js';
-import { USABL_GATE_WORKFLOW, USABL_GATE_WORKFLOW_PATH } from '../../src/install/ci.js';
+import {
+  USABL_DOCS_GATE_WORKFLOW,
+  USABL_DOCS_GATE_WORKFLOW_PATH,
+  USABL_GATE_WORKFLOW,
+  USABL_GATE_WORKFLOW_PATH,
+} from '../../src/install/ci.js';
 import { CLAUDE_SETTINGS_PATH } from '../../src/install/claude.js';
 
 describe('usabl install command wiring', () => {
@@ -58,6 +63,48 @@ describe('usabl install command wiring', () => {
     expect(code).toBe(0);
     const written = await readFile(join(workspace, USABL_GATE_WORKFLOW_PATH), 'utf8');
     expect(written).toBe(USABL_GATE_WORKFLOW);
+  });
+
+  it('routes --docs-ci to the docs-ci generator and writes the docs gate workflow', async () => {
+    // The docs target is distinct from --ci: it must land on the docs gate file with the
+    // docs template verbatim, never the app gate. A mis-route would write the wrong workflow.
+    const code = await main(['install', '--docs-ci']);
+    expect(code).toBe(0);
+    const written = await readFile(join(workspace, USABL_DOCS_GATE_WORKFLOW_PATH), 'utf8');
+    expect(written).toBe(USABL_DOCS_GATE_WORKFLOW);
+    // And it must not also write the app gate.
+    await expect(readFile(join(workspace, USABL_GATE_WORKFLOW_PATH), 'utf8')).rejects.toThrow();
+  });
+
+  it('init --docs cleanly reports no supported docs format and writes nothing', async () => {
+    // An empty workspace has no docs format, which is a clean no-op (exit 0), not a failure.
+    const code = await main(['init', '--docs']);
+    expect(code).toBe(0);
+    await expect(readFile(join(workspace, 'usabl.docs.json'), 'utf8')).rejects.toThrow();
+  });
+
+  it('routes init --docs to the docs generator for an AsciiBinder repo and drafts usabl.docs.json', async () => {
+    // A minimal AsciiBinder repo: one topic map with a single leaf topic and its source .adoc.
+    await mkdir(join(workspace, '_topic_maps'), { recursive: true });
+    await writeFile(
+      join(workspace, '_topic_maps', '_topic_map.yml'),
+      'Name: Install Guide\nDir: install\nTopics:\n  - Name: Overview\n    File: overview\n',
+      'utf8',
+    );
+    await mkdir(join(workspace, 'install'), { recursive: true });
+    await writeFile(join(workspace, 'install', 'overview.adoc'), '= Overview\n\nSome text.\n', 'utf8');
+
+    const code = await main(['init', '--docs']);
+    expect(code).toBe(0);
+    const written = JSON.parse(await readFile(join(workspace, 'usabl.docs.json'), 'utf8')) as {
+      format: string;
+      pages: Array<{ assemblyFile: string }>;
+    };
+    expect(written.format).toBe('asciibinder');
+    expect(written.pages).toHaveLength(1);
+    expect(written.pages[0]?.assemblyFile).toBe('install/overview.adoc');
+    // init --docs is docs-only onboarding: it must not also draft an app usabl.config.json.
+    await expect(readFile(join(workspace, 'usabl.config.json'), 'utf8')).rejects.toThrow();
   });
 
   it('refuses with exit 2 when no install target flag is given', async () => {

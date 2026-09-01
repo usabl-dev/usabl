@@ -19,6 +19,12 @@ import type { UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
 import { makeFsGlob } from './deps/fs.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
+import {
+  formatDocsInitReport,
+  inferDocsInit,
+  writeDocsInitDraft,
+  type DocsInitFs,
+} from './init/docs/index.js';
 import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
@@ -28,7 +34,7 @@ import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
 import { planOverlay, writeOverlay } from './install/overlay.js';
 import { planClaude, writeClaude } from './install/claude.js';
-import { planCi, writeCi } from './install/ci.js';
+import { planCi, planDocsCi, writeCi, writeDocsCi } from './install/ci.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { projectDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
@@ -199,6 +205,8 @@ async function runInstall(opts: CliOptions): Promise<number> {
     result = await writeOverlay(installFs, await planOverlay(installFs));
   } else if (opts.installTarget === 'claude') {
     result = await writeClaude(installFs, await planClaude(installFs));
+  } else if (opts.installTarget === 'docs-ci') {
+    result = await writeDocsCi(installFs, await planDocsCi(installFs));
   } else {
     result = await writeCi(installFs, await planCi(installFs));
   }
@@ -253,6 +261,40 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // Init is a generator, not a check. Returning here keeps draft writes off
     // the verdict path and prevents a same-run consume of the new sidecar.
     const globber = makeFsGlob();
+
+    if (opts.docs) {
+      // --docs drafts the usabl.docs.json sidecar for the detected docs format. It is a
+      // separate onboarding from app-config init: a docs repo has no usabl.config.json to draft.
+      const docsInitFs: DocsInitFs = {
+        readFile: globber.readFile,
+        glob: globber.glob,
+        writeFile: async (path, contents) => {
+          await writeFile(path, contents, 'utf8');
+        },
+      };
+      let draft;
+      try {
+        // The adapter throws when it detects a format but cannot map a single page. A wrong
+        // mapping is worse than a gap, so that surfaces as an error rather than a silent draft.
+        draft = await inferDocsInit(docsInitFs);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`usabl: ${message}\n`);
+        return 2;
+      }
+      if (draft === null) {
+        // Deferred formats (Antora, MkDocs, Docusaurus) and no-docs repos are a clean no-op,
+        // not a failure: there is simply no docs surface init can draft here.
+        process.stdout.write(
+          'No supported docs format detected (looked for a Pantheon titles/*/master.adoc or an AsciiBinder _topic_maps/_topic_map.yml). Nothing written.\n',
+        );
+        return 0;
+      }
+      const result = await writeDocsInitDraft(docsInitFs, draft, { force: opts.force });
+      process.stdout.write(formatDocsInitReport(draft, result));
+      return result.ok ? 0 : 2;
+    }
+
     const initFs: InitFs = {
       readFile: globber.readFile,
       glob: globber.glob,

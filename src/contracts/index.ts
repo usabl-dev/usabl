@@ -56,11 +56,30 @@ export interface Draft {
   evidence: EvidenceFacts;
   confidence: 'fail' | 'unverified';
 }
+// ---- docs source mapping (presentation-only enrichment for docs findings) ----
+// Which tier resolved a docs finding to its AsciiDoc source. renderer = exact file+line from a
+// cooperating sourcemap pass; content = file+construct matched in the include closure; fallback =
+// the page's assembly file with the whole closure disclosed. See src/docs/source-map.ts.
+export type SourceMapTier = 'renderer' | 'content' | 'fallback';
+// How a docs finding maps back to the markup its author edits. run() attaches this after the gate,
+// so it never influences identity, the floor, or the verdict; it only makes a finding speak source.
+export interface DocsSourceMapping {
+  tier: SourceMapTier;
+  file: string | null; // primary attributed source file; null only when a fallback has no assembly
+  candidates: string[]; // every source that could own the construct; the whole closure on fallback
+  construct: string | null; // the author's markup (image::x, link:..., '=== Title'); null on fallback
+  line: number | null; // exact source line, from the renderer tier only
+  fix: string; // the fix phrased in the format's own syntax where a construct is known
+}
+
 // Finding is gate-owned enrichment. The gate adds identity and lifecycle status to each Draft.
 export interface Finding extends Draft {
   elementKey: string | null; // null when identityBasis is 'count'
   identityBasis: IdentityBasis;
   status: 'new' | 'carried' | 'fixed' | 'waived';
+  // Docs findings only: source mapping run() attaches after the gate. Absent on app findings and on
+  // docs findings whose page closure could not be resolved. Presentation only, never gates.
+  docsSource?: DocsSourceMapping;
 }
 
 // ---- announcement / transcript (voicing lane; unused until that lane is wired) ----
@@ -87,8 +106,9 @@ export interface ScreenScan {
 export interface AffectedScreen {
   screenId: string;
   url: string;
-  provenance: 'route-graph' | 'wide-blast' | 'manual';
+  provenance: 'route-graph' | 'wide-blast' | 'manual' | 'docs-manifest';
   importChain?: string[];
+  profile?: ProfileName;
 }
 export interface CoverageGap {
   ref: string; // surface id, url, or file path this gap concerns
@@ -304,7 +324,8 @@ export interface FsGlob {
   glob(patterns: string[]): Promise<string[]>;
 }
 export interface CheckRunner {
-  scan(screen: { id: string; url: string }): Promise<ScreenScan>;
+  // profile picks the per-surface provider configuration for this scan target. Absent means 'app'.
+  scan(screen: { id: string; url: string; profile?: ProfileName }): Promise<ScreenScan>;
 }
 export interface Deps {
   clock: () => string;
@@ -339,10 +360,15 @@ export interface UsablConfig {
 
 export type Capability = 'live' | 'network' | 'secrets' | 'filesystem-write';
 
+// The provider configuration a scan target selects. One run scans both surfaces, so the profile
+// rides per scan target, not per run. Absent means 'app'; each provider reads ctx.profile ?? 'app'.
+export type ProfileName = 'app' | 'docs';
+
 export interface ProviderContext {
   page: Page;
   screen: { id: string; url: string };
   config: UsablConfig;
+  profile?: ProfileName;
 }
 
 export interface Provider {
