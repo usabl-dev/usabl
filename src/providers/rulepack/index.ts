@@ -27,6 +27,9 @@ export function makeRulepackProvider(extraChecks: RulepackCheck[] = []): Provide
     id: 'pf-rulepack',
     layer: 'pf',
     capabilities: ['live'],
+    // The probes below click dialog and menu triggers and press Escape, so any provider that runs
+    // after this one reads a page with open, closed, or refocused widgets in it.
+    mutatesPageState: true,
     async run(ctx: ProviderContext): Promise<Draft[]> {
       // The PF selectors match nothing on docs, and the PF-worded copy reads wrong for a docs guide.
       // So the whole rulepack is a no-op on docs. App and default behavior stays unchanged.

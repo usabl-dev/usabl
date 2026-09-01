@@ -375,6 +375,12 @@ export interface Provider {
   id: string;
   layer: string;
   capabilities: Capability[];
+  // Set when the provider clicks triggers or presses keys during its run. Every provider that runs
+  // after one of these sees a page that is no longer the page the browser loaded.
+  mutatesPageState?: boolean;
+  // Set when the provider's evidence only holds on the page as it loaded, such as a walk of the
+  // real focus order. Running it on a changed page yields thin or empty results that read as clean.
+  requiresPristinePage?: boolean;
   run(ctx: ProviderContext): Promise<Draft[]>;
 }
 
