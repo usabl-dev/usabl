@@ -24,8 +24,9 @@ import type {
   WaiverLedger,
 } from './contracts/index.js';
 import { computeCoverage } from './coverage/planner.js';
-import { parseDocsManifest } from './coverage/docs-manifest.js';
+import { parseDocsManifest, type DocsManifest } from './coverage/docs-manifest.js';
 import { computeDocsCoverage } from './coverage/docs-planner.js';
+import { mapFindingToSource, type DocsPageClosure } from './docs/source-map.js';
 import { gate } from './gate/index.js';
 import { mintReceipt } from './evidence/receipt.js';
 import { parseEvidenceFloor } from './evidence/floor.js';
@@ -154,6 +155,12 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
 
     const gated = gate({ coverage, guardDivergedPaths: policyDivergedPaths, drafts, floor, waivers, now: deps.clock() });
 
+    // Enrich docs findings so they speak the author's markup: source file, AsciiDoc construct, and a
+    // syntax-aware fix. This runs after the gate on purpose. It reads source, never a verdict, and
+    // never changes identity, status, or the floor. Source is read from the working tree (deps.fs),
+    // where the author fixes it, even when the manifest itself was read from a trusted ref.
+    const findings = await enrichDocsFindings(gated.findings, docsManifest, deps.fs);
+
     // Receipts are reserved for verified. Preview and model-judgment cannot mint one.
     const receipt =
       gated.verdict === 'verified'
@@ -183,7 +190,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       summary: gated.summary,
       screens,
       coverage,
-      findings: gated.findings,
+      findings,
       receipt,
       dirtyGuardedPaths: policyDivergedPaths,
       exitCode: gated.exitCode,
@@ -287,6 +294,34 @@ function overlayUntrustedManifests(
       return null;
     },
   };
+}
+
+// Attach a source mapping to every finding on a docs page (its screenId matches a manifest pageId).
+// App findings and docs findings whose page cannot be resolved pass through unchanged. mapFindingToSource
+// fails open, so a missing or unreadable source yields a fallback mapping, never a throw.
+async function enrichDocsFindings(
+  findings: Finding[],
+  docsManifest: DocsManifest | null,
+  fs: Deps['fs'],
+): Promise<Finding[]> {
+  if (docsManifest === null) {
+    return findings;
+  }
+  const closureByPageId = new Map<string, DocsPageClosure>();
+  for (const page of docsManifest.pages) {
+    closureByPageId.set(page.pageId, { assemblyFile: page.assemblyFile, sources: page.sources });
+  }
+  const enriched: Finding[] = [];
+  for (const finding of findings) {
+    const closure = closureByPageId.get(finding.screenId);
+    if (closure === undefined) {
+      enriched.push(finding);
+      continue;
+    }
+    const docsSource = await mapFindingToSource(finding, closure, fs);
+    enriched.push({ ...finding, docsSource });
+  }
+  return enriched;
 }
 
 function summarize(findings: Finding[]) {

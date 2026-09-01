@@ -27,9 +27,17 @@
 // POSIX basename keeps filename comparison stable across operating systems and matches the
 // forward-slash paths the include graph and git report.
 import { posix as path } from "node:path";
-import type { Draft, FsGlob } from "../contracts/index.js";
+import type {
+  Draft,
+  DocsSourceMapping,
+  FsGlob,
+  SourceMapTier,
+} from "../contracts/index.js";
 
-export type SourceMapTier = "renderer" | "content" | "fallback";
+// SourceMapTier and DocsSourceMapping live in the shared contract vocabulary so run() can attach a
+// mapping onto a Finding without this module importing back into it. Re-exported so callers that
+// reach for them through source-map.ts (their conceptual home) still resolve.
+export type { DocsSourceMapping, SourceMapTier };
 
 /**
  * The page an offending element belongs to, as coverage already knows it: the assembly (owning)
@@ -39,21 +47,6 @@ export type SourceMapTier = "renderer" | "content" | "fallback";
 export interface DocsPageClosure {
   assemblyFile: string;
   sources: string[];
-}
-
-export interface DocsSourceMapping {
-  tier: SourceMapTier;
-  // The primary attributed source file. Null only when a fallback has no assembly to name.
-  file: string | null;
-  // Every source that could own the construct: one for a unique match, several when ambiguous,
-  // the whole closure for a fallback. Sorted for a stable primary and stable output.
-  candidates: string[];
-  // The author's markup, e.g. 'image::create-cluster.png' or '==== Advanced options'. Null on fallback.
-  construct: string | null;
-  // Exact source line, populated only by the renderer tier.
-  line: number | null;
-  // The fix, phrased in the format's own syntax where a construct is known, else the finding's own fix.
-  fix: string;
 }
 
 type FindingKind = "image" | "link" | "heading" | "unknown";

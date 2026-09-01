@@ -3,7 +3,13 @@
  * This unit renders markdown only.
  * It must never recompute findings, mint a verdict, or act as a second gate.
  */
-import type { Finding, Result, TranscriptStop, Verdict } from '../contracts/index.js';
+import type {
+  DocsSourceMapping,
+  Finding,
+  Result,
+  TranscriptStop,
+  Verdict,
+} from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { computeConformance } from '../output/conformance.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
@@ -68,18 +74,48 @@ function renderConformance(result: Result): string[] {
   return lines;
 }
 
+// The source location for a docs finding: file plus the author's construct when known, file plus
+// the exact line when the renderer supplied one, else the file alone. Neutralized by the caller.
+function sourceLocation(source: DocsSourceMapping): string {
+  const file = source.file ?? '';
+  if (source.construct !== null) {
+    return `${file} -> ${source.construct}`;
+  }
+  if (source.line !== null) {
+    return `${file}:${source.line}`;
+  }
+  return file;
+}
+
+function renderSource(source: DocsSourceMapping | undefined): string[] {
+  if (source === undefined || source.file === null) {
+    return [];
+  }
+  const lines = [`  - source: \`${neutralize(sourceLocation(source))}\``];
+  if (source.candidates.length > 1) {
+    // Ambiguous ownership is disclosed, never guessed away.
+    const listed = source.candidates.map((candidate) => `\`${neutralize(candidate)}\``).join(', ');
+    lines.push(`  - candidates: ${listed}`);
+  }
+  return lines;
+}
+
 function formatFinding(finding: Finding): string[] {
   const rule = neutralize(finding.rule);
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
-  const fix = neutralize(finding.fix);
+  // Docs findings speak the author's markup: a source line and a syntax-aware fix. App findings
+  // have no docsSource and fall back to finding.fix.
+  const source = finding.docsSource;
+  const fix = neutralize(source ? source.fix : finding.fix);
   const why = neutralize(finding.why);
   const framed = frameUntrusted(finding.whatUserExperiences).split('\n');
   return [
     `- [${severity}] \`${screenId}\` - \`${layer}/${rule}\``,
     ...framed.map((line) => `  ${line}`),
     `  - why: ${why}`,
+    ...renderSource(source),
     `  - fix: ${fix}`,
   ];
 }

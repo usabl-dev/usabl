@@ -56,11 +56,30 @@ export interface Draft {
   evidence: EvidenceFacts;
   confidence: 'fail' | 'unverified';
 }
+// ---- docs source mapping (presentation-only enrichment for docs findings) ----
+// Which tier resolved a docs finding to its AsciiDoc source. renderer = exact file+line from a
+// cooperating sourcemap pass; content = file+construct matched in the include closure; fallback =
+// the page's assembly file with the whole closure disclosed. See src/docs/source-map.ts.
+export type SourceMapTier = 'renderer' | 'content' | 'fallback';
+// How a docs finding maps back to the markup its author edits. run() attaches this after the gate,
+// so it never influences identity, the floor, or the verdict; it only makes a finding speak source.
+export interface DocsSourceMapping {
+  tier: SourceMapTier;
+  file: string | null; // primary attributed source file; null only when a fallback has no assembly
+  candidates: string[]; // every source that could own the construct; the whole closure on fallback
+  construct: string | null; // the author's markup (image::x, link:..., '=== Title'); null on fallback
+  line: number | null; // exact source line, from the renderer tier only
+  fix: string; // the fix phrased in the format's own syntax where a construct is known
+}
+
 // Finding is gate-owned enrichment. The gate adds identity and lifecycle status to each Draft.
 export interface Finding extends Draft {
   elementKey: string | null; // null when identityBasis is 'count'
   identityBasis: IdentityBasis;
   status: 'new' | 'carried' | 'fixed' | 'waived';
+  // Docs findings only: source mapping run() attaches after the gate. Absent on app findings and on
+  // docs findings whose page closure could not be resolved. Presentation only, never gates.
+  docsSource?: DocsSourceMapping;
 }
 
 // ---- announcement / transcript (voicing lane; unused until that lane is wired) ----
