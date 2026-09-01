@@ -730,18 +730,51 @@
       <div class="card">
         <p class="kicker">Deep Dive</p>
         <h1 tabindex="-1">Design Intake (Optional)</h1>
-        <p class="lede">Some requirements cannot be inferred by scanning a rendered page. Design intake lets a team author those expectations directly, as data, and the engine checks them the same way it checks everything else.</p>
-        <div class="tiles">
-          <article class="tile">
-            <strong>Content Assertions</strong>
+        <p class="lede">Some accessibility requirements cannot be inferred by scanning a rendered page: an approved label, a specific spoken announcement, a promised image description. Design intake lets a team author those expectations as reviewed data, and the engine checks them the same way it checks everything else.</p>
+        <div class="layers">
+          <article class="layer">
+            <strong>Content</strong>
             Assert that a specific element's accessible name matches approved text, is non-empty, or is intentionally decorative with no exposed name.
           </article>
-          <article class="tile">
-            <strong>Flow Assertions</strong>
+          <article class="layer">
+            <strong>Flow</strong>
             Assert that after a sequence of interactions, tab, click, or key presses, a specific announcement reaches assistive technology through focus or a live region.
           </article>
+          <article class="layer">
+            <strong>Doc</strong>
+            Require a generated artifact to exist and stay current: an alt-text manifest, announcement snippets, or keyboard paths, projected read-only by <code>usabl docs</code>.
+          </article>
         </div>
-        <p class="quiet" style="margin-top:0.9rem">Authored requirements become additional Provider modules. They report findings the same way axe-core or the Keyboard Walk do, and they still pass through the Gate. They do not bypass it.</p>
+        <figure class="diagram">
+          <svg viewBox="0 0 960 210" role="img" aria-label="Flow diagram: an approved requirement bundle becomes requirement providers that report findings the same way axe-core does. Those findings pass through the same Gate, which applies the baseline and waivers and produces one verdict with a receipt. The same bundle is also projected read-only by the usabl docs command.">
+            <path class="flow-line" d="M220,62 H270" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M490,62 H540" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M710,62 H760" marker-end="url(#arrow)"></path>
+            <path class="flow-line" d="M120,94 V150" marker-end="url(#arrow)"></path>
+
+            <rect class="node-box" x="20" y="30" width="200" height="64" rx="6"></rect>
+            <text class="node-title" x="120" y="58" text-anchor="middle">Approved bundle</text>
+            <text class="node-sub" x="120" y="78" text-anchor="middle">reviewed, per surface</text>
+
+            <rect class="node-box" x="270" y="30" width="220" height="64" rx="6"></rect>
+            <text class="node-title" x="380" y="58" text-anchor="middle">Requirement providers</text>
+            <text class="node-sub" x="380" y="78" text-anchor="middle">report findings, like axe</text>
+
+            <rect class="node-box accent" x="540" y="30" width="170" height="64" rx="6"></rect>
+            <text class="node-title on-accent" x="625" y="58" text-anchor="middle">Gate</text>
+            <text class="node-sub on-accent" x="625" y="78" text-anchor="middle">baseline + waivers</text>
+
+            <rect class="node-box" x="760" y="30" width="180" height="64" rx="6"></rect>
+            <text class="node-title" x="850" y="58" text-anchor="middle">Verdict + receipt</text>
+            <text class="node-sub" x="850" y="78" text-anchor="middle">one of four outcomes</text>
+
+            <rect class="node-box" x="20" y="150" width="200" height="50" rx="6"></rect>
+            <text class="node-title" x="120" y="173" text-anchor="middle">usabl docs</text>
+            <text class="node-sub" x="120" y="190" text-anchor="middle">read-only projection</text>
+          </svg>
+          <figcaption class="quiet">Authored requirements report findings like any provider and pass through the same Gate. They do not bypass it. The same bundle is projected read-only by <code>usabl docs</code>.</figcaption>
+        </figure>
+        <p class="quiet" style="margin-top:0.9rem">The bundle is overlaid from the trusted reference, so a pull request cannot rewrite the requirements it is graded against. A malformed bundle yields <em>approval required</em>, never a silent pass.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#patternfly">Previous</a>
           <span class="pos">11 / 25</span>
