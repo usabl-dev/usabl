@@ -352,6 +352,26 @@
     .mock .h { color: var(--regression); font-weight: 700; }
     .mock .k { color: var(--slate); font-weight: 700; }
     .mock .rule { color: var(--blue); }
+    /* A passing example keeps the console-block styling but a verified (green) accent, not regression red. */
+    .mock.ok { border-left-color: var(--verified); }
+    /* Enforcement chips on the usage-summary slide. The label text carries the meaning; colour is
+       a redundant cue only, so the distinction survives for colourblind and screen-reader users. */
+    .tag {
+      display: inline-block;
+      padding: 0.05rem 0.5rem;
+      margin-right: 0.4rem;
+      border-radius: 999px;
+      font-family: var(--mono);
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--white);
+      vertical-align: 1px;
+    }
+    .tag-block { background: var(--blue); }
+    .tag-advisory { background: var(--slate); }
+    .tag-input { background: var(--verified); }
+    .tag-approval { background: var(--approval); }
 
     @media (max-width: 900px) {
       .facts, .tiles, .layers, .groups, .loop, .surfaces, .anatomy, .verdict {
@@ -390,20 +410,20 @@
 
   <main class="deck" id="stage">
 
-    <section class="slide" id="title" data-title="Title" aria-label="Slide 1 of 23: Title" tabindex="-1">
+    <section class="slide" id="title" data-title="Title" aria-label="Slide 1 of 25: Title" tabindex="-1">
       <div class="card title-card">
         <p class="kicker">Technical Overview</p>
         <p class="wordmark">usabl</p>
         <p class="lede">An accessibility proof engine for UI development. Integrates deterministic checks into the developer workflow across the CLI, CI, and AI assistants.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <span aria-hidden="true"></span>
-          <span class="pos">1 / 23</span>
+          <span class="pos">1 / 25</span>
           <a class="nav-link" href="#agenda">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="agenda" data-title="Agenda" aria-label="Slide 2 of 23: Agenda" tabindex="-1">
+    <section class="slide" id="agenda" data-title="Agenda" aria-label="Slide 2 of 25: Agenda" tabindex="-1">
       <div class="card">
         <p class="kicker">Agenda</p>
         <h1 tabindex="-1">System Overview</h1>
@@ -417,13 +437,13 @@
         </ol>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#title">Previous</a>
-          <span class="pos">2 / 23</span>
+          <span class="pos">2 / 25</span>
           <a class="nav-link" href="#problem">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="problem" data-title="The Problem" aria-label="Slide 3 of 23: The Problem" tabindex="-1">
+    <section class="slide" id="problem" data-title="The Problem" aria-label="Slide 3 of 25: The Problem" tabindex="-1">
       <div class="card">
         <p class="kicker">Background</p>
         <h1 tabindex="-1">The Verification Gap</h1>
@@ -431,13 +451,13 @@
         <p class="lede">Standard scanners produce issue lists for static pages, but they do not map git diffs to affected routes, verify fixes automatically, or prevent inaccessible code from being merged.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#agenda">Previous</a>
-          <span class="pos">3 / 23</span>
+          <span class="pos">3 / 25</span>
           <a class="nav-link" href="#solution">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="solution" data-title="System Concept" aria-label="Slide 4 of 23: System Concept" tabindex="-1">
+    <section class="slide" id="solution" data-title="System Concept" aria-label="Slide 4 of 25: System Concept" tabindex="-1">
       <div class="card">
         <p class="kicker">System Concept</p>
         <h1 tabindex="-1">Automated Accessibility Proof</h1>
@@ -483,13 +503,13 @@
         </figure>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#problem">Previous</a>
-          <span class="pos">4 / 23</span>
+          <span class="pos">4 / 25</span>
           <a class="nav-link" href="#targeting">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="targeting" data-title="Targeting" aria-label="Slide 5 of 23: Targeting" tabindex="-1">
+    <section class="slide" id="targeting" data-title="Targeting" aria-label="Slide 5 of 25: Targeting" tabindex="-1">
       <div class="card">
         <p class="kicker">Targeting</p>
         <h1 tabindex="-1">How usabl Knows What to Check</h1>
@@ -537,13 +557,13 @@
         </figure>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#solution">Previous</a>
-          <span class="pos">5 / 23</span>
+          <span class="pos">5 / 25</span>
           <a class="nav-link" href="#architecture">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="architecture" data-title="Architecture" aria-label="Slide 6 of 23: Architecture" tabindex="-1">
+    <section class="slide" id="architecture" data-title="Architecture" aria-label="Slide 6 of 25: Architecture" tabindex="-1">
       <div class="card">
         <p class="kicker">Architecture</p>
         <h1 tabindex="-1">Separation of Evaluation and Enforcement</h1>
@@ -589,13 +609,13 @@
         </figure>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#targeting">Previous</a>
-          <span class="pos">6 / 23</span>
+          <span class="pos">6 / 25</span>
           <a class="nav-link" href="#verdicts">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="verdicts" data-title="Verdicts" aria-label="Slide 7 of 23: Verdicts" tabindex="-1">
+    <section class="slide" id="verdicts" data-title="Verdicts" aria-label="Slide 7 of 25: Verdicts" tabindex="-1">
       <div class="card">
         <p class="kicker">Gate Outputs</p>
         <h1 tabindex="-1">Four Deterministic Verdicts</h1>
@@ -621,13 +641,13 @@
         <p class="quiet" style="margin-top:0.9rem">An idle run with nothing to check exits 0 without minting a receipt, and that is kept distinct from verified: usabl only claims verified when it actually checked something.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#architecture">Previous</a>
-          <span class="pos">7 / 23</span>
+          <span class="pos">7 / 25</span>
           <a class="nav-link" href="#layers">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="layers" data-title="Check Layers" aria-label="Slide 8 of 23: Check Layers" tabindex="-1">
+    <section class="slide" id="layers" data-title="Check Layers" aria-label="Slide 8 of 25: Check Layers" tabindex="-1">
       <div class="card">
         <p class="kicker">Evaluation</p>
         <h1 tabindex="-1">Multi-Layered Checks</h1>
@@ -648,13 +668,13 @@
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#verdicts">Previous</a>
-          <span class="pos">8 / 23</span>
+          <span class="pos">8 / 25</span>
           <a class="nav-link" href="#walk">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="walk" data-title="Keyboard Walk" aria-label="Slide 9 of 23: Keyboard Walk" tabindex="-1">
+    <section class="slide" id="walk" data-title="Keyboard Walk" aria-label="Slide 9 of 25: Keyboard Walk" tabindex="-1">
       <div class="card">
         <p class="kicker">Deep Dive</p>
         <h1 tabindex="-1">Keyboard Walk Provider</h1>
@@ -671,13 +691,13 @@
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#layers">Previous</a>
-          <span class="pos">9 / 23</span>
+          <span class="pos">9 / 25</span>
           <a class="nav-link" href="#patternfly">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="patternfly" data-title="Component Rules" aria-label="Slide 10 of 23: Component Rules" tabindex="-1">
+    <section class="slide" id="patternfly" data-title="Component Rules" aria-label="Slide 10 of 25: Component Rules" tabindex="-1">
       <div class="card">
         <p class="kicker">Deep Dive</p>
         <h1 tabindex="-1">PatternFly Composition Rules</h1>
@@ -700,13 +720,13 @@
         </table>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#walk">Previous</a>
-          <span class="pos">10 / 23</span>
+          <span class="pos">10 / 25</span>
           <a class="nav-link" href="#intake">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="intake" data-title="Design Intake" aria-label="Slide 11 of 23: Design Intake" tabindex="-1">
+    <section class="slide" id="intake" data-title="Design Intake" aria-label="Slide 11 of 25: Design Intake" tabindex="-1">
       <div class="card">
         <p class="kicker">Deep Dive</p>
         <h1 tabindex="-1">Design Intake (Optional)</h1>
@@ -724,13 +744,13 @@
         <p class="quiet" style="margin-top:0.9rem">Authored requirements become additional Provider modules. They report findings the same way axe-core or the Keyboard Walk do, and they still pass through the Gate. They do not bypass it.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#patternfly">Previous</a>
-          <span class="pos">11 / 23</span>
+          <span class="pos">11 / 25</span>
           <a class="nav-link" href="#surfaces">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="surfaces" data-title="Integrations" aria-label="Slide 12 of 23: Integrations" tabindex="-1">
+    <section class="slide" id="surfaces" data-title="Integrations" aria-label="Slide 12 of 25: Integrations" tabindex="-1">
       <div class="card">
         <p class="kicker">Integrations</p>
         <h1 tabindex="-1">Consistent Execution Across Environments</h1>
@@ -778,13 +798,13 @@
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#intake">Previous</a>
-          <span class="pos">12 / 23</span>
+          <span class="pos">12 / 25</span>
           <a class="nav-link" href="#adoption">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="adoption" data-title="Adoption" aria-label="Slide 13 of 23: Adoption" tabindex="-1">
+    <section class="slide" id="adoption" data-title="Adoption" aria-label="Slide 13 of 25: Adoption" tabindex="-1">
       <div class="card">
         <p class="kicker">Workflow</p>
         <h1 tabindex="-1">Managing Legacy Codebases</h1>
@@ -834,13 +854,13 @@
         </figure>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#surfaces">Previous</a>
-          <span class="pos">13 / 23</span>
+          <span class="pos">13 / 25</span>
           <a class="nav-link" href="#in-practice">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="in-practice" data-title="In Practice" aria-label="Slide 14 of 23: In Practice" tabindex="-1">
+    <section class="slide" id="in-practice" data-title="In Practice" aria-label="Slide 14 of 25: In Practice" tabindex="-1">
       <div class="card">
         <p class="kicker">In Practice</p>
         <h1 tabindex="-1">A Change That Gets Blocked</h1>
@@ -869,26 +889,61 @@ Blocked:        yes
         <p class="quiet">Illustrative. A real comment also lists carried, waived, and advisory findings, plus any coverage gaps.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#adoption">Previous</a>
-          <span class="pos">14 / 23</span>
+          <span class="pos">14 / 25</span>
+          <a class="nav-link" href="#playwright">Next</a>
+        </nav>
+      </div>
+    </section>
+
+    <section class="slide" id="playwright" data-title="Playwright" aria-label="Slide 15 of 25: Playwright" tabindex="-1">
+      <div class="card">
+        <p class="kicker">Integrations</p>
+        <h1 tabindex="-1">Runs Inside Your Playwright Suite</h1>
+        <p class="lede">Teams already drive their app through real user flows in end-to-end tests. usabl reuses those flows instead of asking for new ones: navigate and interact exactly as you do today, then hand the live page to one function. It runs the same axe-core, PatternFly, and keyboard-walk engine as CI, on the exact interactive state your test reached, and returns a verdict you assert on.</p>
+        <pre class="mock ok">
+<span class="k">// a11y.spec.ts — assert on the flow you already test</span>
+import { test, expect } from '@playwright/test';
+import { checkPage } from '<span class="rule">usabl/playwright</span>';
+
+test('cluster list stays accessible', async ({ page }) => {
+  await page.goto('/clusters');
+  await page.getByRole('button', { name: 'Filter' }).click();
+
+<span class="k">  // same axe + PatternFly + keyboard-walk engine as CI</span>
+  const result = await <span class="rule">checkPage</span>(page);
+
+  expect(result.failures).toEqual([]);       <span class="k">// no deterministic barriers</span>
+  expect(result.verdict).toBe('verified');   <span class="k">// checked and fully covered</span>
+});
+</pre>
+        <div class="surfaces">
+          <article class="surface"><strong>Same engine, deeper reach</strong>Assertions run on post-interaction states, such as open menus, dialogs, and wizards, that a route-level scan never reaches.</article>
+          <article class="surface"><strong>One import</strong><code>checkPage(page)</code> from <code>usabl/playwright</code> adopts the page without closing it, then returns the findings and a verdict.</article>
+          <article class="surface"><strong>No silent pass</strong>Assert on <code>failures</code> for hard barriers, or on <code>verdict</code> for full coverage. A check that could not be confirmed is <code>not_covered</code>, never a quiet green.</article>
+        </div>
+        <p class="quiet">Install from npm. The <code>page</code> from the <code>@playwright/test</code> fixture is passed straight through.</p>
+        <nav class="slidenav" aria-label="Slide navigation">
+          <a class="nav-link" href="#in-practice">Previous</a>
+          <span class="pos">15 / 25</span>
           <a class="nav-link" href="#docs-intro">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="docs-intro" data-title="usabl for Documentation" aria-label="Slide 15 of 23: usabl for Documentation" tabindex="-1">
+    <section class="slide" id="docs-intro" data-title="usabl for Documentation" aria-label="Slide 16 of 25: usabl for Documentation" tabindex="-1">
       <div class="card title-card">
         <p class="kicker">Extending the Engine</p>
         <h1 tabindex="-1">usabl for Documentation</h1>
         <p class="lede">usabl already proves that the application meets accessibility standards. The same engine now checks product documentation, so the user guides and install guides that ship with the product are checked and enforced to the same bar, automatically, every time they change.</p>
         <nav class="slidenav" aria-label="Slide navigation">
-          <a class="nav-link" href="#in-practice">Previous</a>
-          <span class="pos">15 / 23</span>
+          <a class="nav-link" href="#playwright">Previous</a>
+          <span class="pos">16 / 25</span>
           <a class="nav-link" href="#docs-gap">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="docs-gap" data-title="Docs: The Gap" aria-label="Slide 16 of 23: Docs: The Gap" tabindex="-1">
+    <section class="slide" id="docs-gap" data-title="Docs: The Gap" aria-label="Slide 17 of 25: Docs: The Gap" tabindex="-1">
       <div class="card">
         <p class="kicker">The Gap</p>
         <h1 tabindex="-1">Documentation Is the Largest Unchecked Surface</h1>
@@ -905,13 +960,13 @@ Blocked:        yes
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#docs-intro">Previous</a>
-          <span class="pos">16 / 23</span>
+          <span class="pos">17 / 25</span>
           <a class="nav-link" href="#docs-what">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="docs-what" data-title="Docs: What It Does" aria-label="Slide 17 of 23: Docs: What It Does" tabindex="-1">
+    <section class="slide" id="docs-what" data-title="Docs: What It Does" aria-label="Slide 18 of 25: Docs: What It Does" tabindex="-1">
       <div class="card">
         <p class="kicker">What It Does</p>
         <h1 tabindex="-1">Checks the Real, Published Pages</h1>
@@ -928,13 +983,13 @@ Blocked:        yes
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#docs-gap">Previous</a>
-          <span class="pos">17 / 23</span>
+          <span class="pos">18 / 25</span>
           <a class="nav-link" href="#docs-why">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="docs-why" data-title="Docs: Why It Matters" aria-label="Slide 18 of 23: Docs: Why It Matters" tabindex="-1">
+    <section class="slide" id="docs-why" data-title="Docs: Why It Matters" aria-label="Slide 19 of 25: Docs: Why It Matters" tabindex="-1">
       <div class="card">
         <p class="kicker">Why It Matters</p>
         <h1 tabindex="-1">Four Reasons This Closes a Real Gap</h1>
@@ -958,13 +1013,13 @@ Blocked:        yes
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#docs-what">Previous</a>
-          <span class="pos">18 / 23</span>
+          <span class="pos">19 / 25</span>
           <a class="nav-link" href="#docs-adoption">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="docs-adoption" data-title="Docs: Adoption" aria-label="Slide 19 of 23: Docs: Adoption" tabindex="-1">
+    <section class="slide" id="docs-adoption" data-title="Docs: Adoption" aria-label="Slide 20 of 25: Docs: Adoption" tabindex="-1">
       <div class="card">
         <p class="kicker">Why Adoption Is Easy</p>
         <h1 tabindex="-1">No New Tool, No Wall of Findings</h1>
@@ -989,13 +1044,13 @@ Blocked:        yes
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#docs-why">Previous</a>
-          <span class="pos">19 / 23</span>
+          <span class="pos">20 / 25</span>
           <a class="nav-link" href="#docs-why-now">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="docs-why-now" data-title="Docs: Why Now" aria-label="Slide 20 of 23: Docs: Why Now" tabindex="-1">
+    <section class="slide" id="docs-why-now" data-title="Docs: Why Now" aria-label="Slide 21 of 25: Docs: Why Now" tabindex="-1">
       <div class="card">
         <p class="kicker">Why Now</p>
         <h1 tabindex="-1">One Engine, Two Surfaces</h1>
@@ -1031,13 +1086,13 @@ Blocked:        yes
         </figure>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#docs-adoption">Previous</a>
-          <span class="pos">20 / 23</span>
+          <span class="pos">21 / 25</span>
           <a class="nav-link" href="#trust">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="trust" data-title="Security & Trust" aria-label="Slide 21 of 23: Security & Trust" tabindex="-1">
+    <section class="slide" id="trust" data-title="Security & Trust" aria-label="Slide 22 of 25: Security & Trust" tabindex="-1">
       <div class="card">
         <p class="kicker">Security</p>
         <h1 tabindex="-1">Protecting the Verdict</h1>
@@ -1058,13 +1113,13 @@ Blocked:        yes
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#docs-why-now">Previous</a>
-          <span class="pos">21 / 23</span>
+          <span class="pos">22 / 25</span>
           <a class="nav-link" href="#receipts">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="receipts" data-title="Receipts" aria-label="Slide 22 of 23: Receipts" tabindex="-1">
+    <section class="slide" id="receipts" data-title="Receipts" aria-label="Slide 23 of 25: Receipts" tabindex="-1">
       <div class="card">
         <p class="kicker">Evidence</p>
         <h1 tabindex="-1">A Re-Checkable Receipt</h1>
@@ -1091,21 +1146,61 @@ Blocked:        yes
         </figure>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#trust">Previous</a>
-          <span class="pos">22 / 23</span>
+          <span class="pos">23 / 25</span>
+          <a class="nav-link" href="#usage">Next</a>
+        </nav>
+      </div>
+    </section>
+
+    <section class="slide" id="usage" data-title="Ways to Use It" aria-label="Slide 24 of 25: Ways to Use It" tabindex="-1">
+      <div class="card">
+        <p class="kicker">Ways to Use It</p>
+        <h1 tabindex="-1">Every Surface, and What It Enforces</h1>
+        <p class="lede">The same engine backs every way you use usabl. Most surfaces block a new barrier the moment it appears; the dev-server overlay is advisory; design intake feeds the engine your own rules; and changing policy files needs a human sign-off.</p>
+        <div class="surfaces">
+          <article class="surface">
+            <strong>AI assistant</strong>
+            <span class="tag tag-block">Blocks</span> The Stop hook will not let Claude Code finish a turn while the gate is red. Run <code>/usabl-check</code> at any point to scan work in progress.
+          </article>
+          <article class="surface">
+            <strong>CI / pull request</strong>
+            <span class="tag tag-block">Blocks</span> A required status check gates merge and posts a findings comment on the pull request. Editing policy files adds the approval gate below.
+          </article>
+          <article class="surface">
+            <strong>Browser overlay</strong>
+            <span class="tag tag-advisory">Advisory</span> The Vite dev-server plugin paints findings on your running app. It is read-only and never blocks a build or a commit.
+          </article>
+          <article class="surface">
+            <strong>Playwright</strong>
+            <span class="tag tag-block">Blocks</span> <code>checkPage()</code> runs the engine on a live page inside your existing E2E suite, so a regression fails the test.
+          </article>
+          <article class="surface">
+            <strong>Design intake</strong>
+            <span class="tag tag-input">Input</span> Author accessibility requirements as guarded YAML. Content and flow rules become deterministic checks in every run, and generate alt-text, keyboard-path, and announcement docs.
+          </article>
+          <article class="surface">
+            <strong>Product docs</strong>
+            <span class="tag tag-block">Blocks</span> Point the same engine at your built AsciiDoc docs at WCAG 2.2 AA. Findings map back to the source <code>.adoc</code> file.
+          </article>
+        </div>
+        <p class="lede"><span class="tag tag-approval">Approval</span> Policy and config files (the config, the waiver ledger, the docs manifest, and any guarded paths) are protected. A pull request that changes them stays <em>approval required</em> until a CODEOWNERS reviewer other than the author approves that exact commit on GitHub. No local flag bypasses it.</p>
+        <nav class="slidenav" aria-label="Slide navigation">
+          <a class="nav-link" href="#receipts">Previous</a>
+          <span class="pos">24 / 25</span>
           <a class="nav-link" href="#summary">Next</a>
         </nav>
       </div>
     </section>
 
-    <section class="slide" id="summary" data-title="Summary" aria-label="Slide 23 of 23: Summary" tabindex="-1">
+    <section class="slide" id="summary" data-title="Summary" aria-label="Slide 25 of 25: Summary" tabindex="-1">
       <div class="card title-card">
         <p class="kicker">Summary</p>
         <h1 tabindex="-1">Continuous Accessibility Verification</h1>
         <p class="lede">usabl moves accessibility checking into the everyday workflow, the CLI, CI, and AI assistants, instead of a separate audit that happens later.</p>
         <p class="lede">It records existing issues as a baseline, blocks only new ones, and points the same engine at both the application and its documentation. Teams can change the UI, and the docs, knowing nothing new slipped through.</p>
         <nav class="slidenav" aria-label="Slide navigation">
-          <a class="nav-link" href="#receipts">Previous</a>
-          <span class="pos">23 / 23</span>
+          <a class="nav-link" href="#usage">Previous</a>
+          <span class="pos">25 / 25</span>
           <span aria-hidden="true"></span>
         </nav>
       </div>
