@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-0.2.1-blue?style=flat-square)
 ![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)
 ![Node](https://img.shields.io/badge/node-%3E%3D22-blue?style=flat-square)
-![Status](https://img.shields.io/badge/status-team%20preview-green?style=flat-square)
+![Status](https://img.shields.io/badge/status-team%20preview-orange?style=flat-square)
 
 **usable by default.**
 

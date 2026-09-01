@@ -57,6 +57,7 @@
     "measure:fleet-insights": "vite-node scripts/measure-fleet-insights.ts",
     "docs:linkcheck": "node scripts/check-doc-links.mjs",
     "docs:a11y": "node scripts/check-docs-a11y.mjs",
+    "docs:badges": "node scripts/check-readme-badges.mjs",
     "prepare": "bash scripts/install-git-hooks.sh"
   },
   "devDependencies": {
