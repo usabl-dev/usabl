@@ -1,6 +1,6 @@
 # usabl
 
-![Version](https://img.shields.io/badge/version-0.2.0-blue?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.2.1-blue?style=flat-square)
 ![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)
 ![Node](https://img.shields.io/badge/node-%3E%3D22-blue?style=flat-square)
 ![Status](https://img.shields.io/badge/status-team%20preview-green?style=flat-square)
@@ -85,7 +85,7 @@ The [team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.
 
 ## Status and roadmap
 
-Team preview (v0.2.0). Teammates can learn the product, run the loop, choose a contribution lane, and file feedback. See [CHANGELOG.md](CHANGELOG.md) for changes since 0.1.0. This preview does not tag or publish the package.
+Team preview (v0.2.1). Teammates can learn the product, run the loop, choose a contribution lane, and file feedback. See [CHANGELOG.md](CHANGELOG.md) for changes since 0.1.0. This preview does not tag or publish the package.
 
 The screen-reader **voicing** preview and the **fleet-insights** measurement view are built and exported, but neither is part of the gate today. Voicing is planned to enter the check path in v0.3.0. Fleet-insights aggregates committed findings for reporting only and never changes a verdict.
 

@@ -1,9 +1,48 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 - 2026-09-01
+
+Version files name 0.2.1. This freeze does not create a git tag or publish to
+npm.
+
+This release adds accessibility checking for rendered documentation. A
+`usabl.docs.json` manifest activates a docs surface that runs through the same
+engine as the app, so one run mints one verdict spanning both.
 
 ### Added
 
+- Docs accessibility surface. When a `usabl.docs.json` manifest is present, the
+  engine scans the rendered documentation pages it names alongside the app and
+  mints a single verdict over both. The manifest is a guarded policy file read
+  from the trusted ref, so a pull request cannot diverge it and self-accept.
+- Docs findings speak the author's source. Each docs finding carries the source
+  file, the AsciiDoc construct that produced the barrier, and a syntax-aware fix,
+  so an author corrects the markup rather than the generated HTML. When ownership
+  is ambiguous the finding discloses every candidate source instead of guessing.
+- Docs coverage narrows to the pages a change touches and reports related pages
+  that were not scanned as `not_covered` gaps, rather than silently skipping
+  them.
+- A docs heading-order rulepack, gated to the docs profile, checks heading nesting
+  on documentation pages. Provider profiles are threaded per surface so app and
+  docs rules do not bleed into each other.
+- `usabl baseline` now captures docs debt as well as app debt. It enumerates every
+  docs page source from the manifest and floors each page barrier in the same
+  commit, so a baseline is complete across both surfaces.
+- `usabl init --docs` drafts a `usabl.docs.json` for a detected documentation
+  format (a Pantheon `titles/*/master.adoc` modular guide, or an OpenShift
+  AsciiBinder `_topic_maps/_topic_map.yml`). It carries loud review notes for
+  anything guessed rather than measured, follows the real include closure for
+  each page's sources, and refuses to overwrite a reviewed sidecar without
+  `--force`. A format it does not support is a clean no-op, not an error.
+- `usabl install --docs-ci` writes the docs gate workflow at
+  `.github/workflows/usabl-docs-gate.yml`. It reproduces every fork-safety
+  property of the app gate (the two-job model, the pull_request fence on head-code
+  execution, pinned action SHAs, and the review-time policy job that reads head as
+  git objects only). Because usabl does not serve the built docs itself, the gate
+  builds the docs with an operator-supplied command and serves the rendered HTML
+  on localhost for the scan. The build command, built-HTML directory, and serve
+  port are repository variables, so the workflow file stays byte-stable and the
+  engine ref remains the only value `usabl doctor` must reason about.
 - `usabl docs --html` renders the docs artifacts as one self-contained,
   accessible HTML page instead of JSON. The page carries the same honesty rule
   as the engine and separates three states in words, never by color alone: an
@@ -14,6 +53,15 @@
   deterministic, escapes all page-derived text, uses the same strict
   content-security policy as the other project pages, and mints no verdict.
   Without the flag, `usabl docs` still emits JSON on stdout.
+
+### Security
+
+- Docs manifest page urls reject path traversal, including percent-encoded
+  forms, and enforce base-path containment so a page url cannot escape the docs
+  origin.
+- The working-tree `usabl.docs.json` is overlaid from the trusted ref when it
+  diverges, matching the app policy overlay, so a diverged manifest cannot widen
+  or narrow what the gate scans.
 
 ## 0.2.0 - 2026-08-30
 
