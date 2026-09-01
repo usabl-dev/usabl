@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>usabl ground truth: briefing and open decisions</title>
+<style>
+  :root {
+    --ink: #14181f;
+    --muted: #5a6472;
+    --line: #dce1e8;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --accent: #2f5bd0;
+    --warn-bg: #fdf4e3;
+    --good: #1c7c4a;
+    --block: #b23838;
+    --chip: #eef1f6;
+    --code-bg: #f0f2f5;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    color: var(--ink);
+    background: var(--bg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px 96px; }
+  header.hero {
+    background: linear-gradient(180deg, #1a2130 0%, #232d40 100%);
+    color: #fff;
+    padding: 56px 0 44px;
+  }
+  header.hero .wrap { padding-bottom: 0; }
+  .kicker {
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    font-size: 12px;
+    color: #a9b6cc;
+    margin: 0 0 10px;
+  }
+  header.hero h1 { font-size: 34px; line-height: 1.15; margin: 0 0 12px; font-weight: 700; }
+  header.hero p.lede { font-size: 17px; color: #d5dcea; margin: 0; max-width: 720px; }
+  header.hero .meta { margin-top: 22px; font-size: 13px; color: #93a1ba; }
+
+  nav.toc {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(246,247,249,.92);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 8px;
+  }
+  nav.toc .wrap { padding-top: 12px; padding-bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  nav.toc a { color: var(--muted); text-decoration: none; font-size: 13.5px; font-weight: 500; }
+  nav.toc a:hover { color: var(--accent); }
+
+  section { margin-top: 44px; }
+  h2 {
+    font-size: 23px; font-weight: 700; margin: 0 0 6px;
+    padding-bottom: 8px; border-bottom: 2px solid var(--ink);
+  }
+  h2 .num { color: var(--accent); font-weight: 700; margin-right: 10px; }
+  h3 { font-size: 17.5px; font-weight: 650; margin: 26px 0 8px; }
+  p { margin: 10px 0; }
+  ul, ol { margin: 10px 0; padding-left: 22px; }
+  li { margin: 6px 0; }
+  strong { font-weight: 650; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin: 14px 0;
+    box-shadow: 0 1px 2px rgba(20,24,31,.03);
+  }
+
+  code {
+    background: var(--code-bg);
+    padding: 1px 6px;
+    border-radius: 5px;
+    font: 13.5px/1.5 "SF Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  }
+
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14.5px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th { background: #eef1f6; font-weight: 650; font-size: 13px; text-transform: uppercase; letter-spacing: .03em; color: #46505f; }
+  tr:last-child td { border-bottom: none; }
+  table.bordered { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+
+  .verdict { display: inline-block; font-family: "SF Mono", ui-monospace, monospace; font-size: 13px; padding: 1px 7px; border-radius: 5px; font-weight: 600; }
+  .v-good { background: #e4f3ea; color: var(--good); }
+  .v-block { background: #fbe6e6; color: var(--block); }
+  .v-idle { background: #eceef2; color: #46505f; }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #eef2fb;
+    padding: 14px 18px;
+    border-radius: 0 10px 10px 0;
+    margin: 16px 0;
+  }
+  .callout.warn { border-left-color: #d98a1f; background: #fdf4e3; }
+  .callout.risk { border-left-color: var(--block); background: #fbeceb; }
+  .callout .label { font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em; display: block; margin-bottom: 4px; }
+  .callout.warn .label { color: #96590a; }
+  .callout.risk .label { color: var(--block); }
+  .callout.rec .label { color: var(--accent); }
+
+  .chip { display: inline-block; background: var(--chip); color: #46505f; border-radius: 20px; padding: 2px 11px; font-size: 12.5px; font-weight: 600; margin: 0 4px 4px 0; }
+  .effort { font-weight: 650; }
+  .effort.s { color: var(--good); }
+  .effort.m { color: #b3720f; }
+  .effort.l { color: var(--block); }
+
+  .lane { border-radius: 12px; border: 1px solid var(--line); overflow: hidden; margin: 14px 0; }
+  .lane .lane-head { padding: 12px 18px; font-weight: 700; color: #fff; }
+  .lane.a .lane-head { background: #2f5bd0; }
+  .lane.b .lane-head { background: #1c7c4a; }
+  .lane.c .lane-head { background: #7a3fb0; }
+  .lane .lane-body { padding: 14px 18px; background: #fff; }
+
+  .num-list { counter-reset: item; list-style: none; padding-left: 0; }
+  .num-list > li { counter-increment: item; position: relative; padding-left: 46px; margin: 18px 0; }
+  .num-list > li::before {
+    content: counter(item);
+    position: absolute; left: 0; top: 0;
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--ink); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px;
+  }
+
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+
+  @media print {
+    nav.toc { display: none; }
+    header.hero { background: #1a2130 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { background: #fff; }
+    section { page-break-inside: avoid; }
+    .panel, .callout, .lane { box-shadow: none; }
+  }
+  @media (max-width: 620px) {
+    header.hero h1 { font-size: 27px; }
+    table { font-size: 13px; }
+    th, td { padding: 7px 8px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="kicker">Scope lock</p>
+    <h1>usabl: what we build, what we skip, what we decide</h1>
+    <p class="lede">Everything the team needs to lock scope, split the work, and know what's cuttable. Derived from docs/ground-truth.md.</p>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <a href="#summary">What usabl does</a>
+    <a href="#scope">Scope map</a>
+    <a href="#decisions">Open decisions</a>
+    <a href="#discuss">Discussion points</a>
+    <a href="#mapping">Work split</a>
+    <a href="#kickoff">Kickoff agenda</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<section id="summary">
+  <h2><span class="num">1</span>What usabl does</h2>
+  <p>When someone changes a UI, or edits a page of the product's own documentation, usabl checks whether that change introduced a new accessibility problem - the kind a machine can catch without human judgment. It returns one of four answers:</p>
+
+  <table class="bordered">
+    <tr><th>Answer</th><th>Plain meaning</th><th>What happens</th></tr>
+    <tr><td><span class="verdict v-good">verified</span></td><td>The screens you touched have no new machine-detectable barriers.</td><td>Work proceeds.</td></tr>
+    <tr><td><span class="verdict v-block">regression</span></td><td>You introduced a new problem.</td><td>Blocked until fixed.</td></tr>
+    <tr><td><span class="verdict v-block">not_covered</span></td><td>usabl could not figure out which screens your change affects, so it cannot vouch for anything.</td><td>Blocked by default (configurable).</td></tr>
+    <tr><td><span class="verdict v-block">approval_required</span></td><td>You changed usabl's own policy files. It refuses to judge changes to itself.</td><td>Blocked until a human approves.</td></tr>
+    <tr><td><span class="verdict v-idle">idle</span></td><td>Your change did not touch any UI. Nothing to check.</td><td>Work proceeds (this is not a verdict).</td></tr>
+  </table>
+
+  <p><strong>The core idea:</strong> Existing tools find problems and list them. usabl goes further - it makes a pass/fail decision and can stop an AI coding assistant from calling work "done" until the new barriers are gone. The AI can suggest fixes, but it cannot mark its own homework.</p>
+
+  <div class="panel">
+    <h3 style="margin-top:0">How it works</h3>
+    <p style="margin-bottom:6px">There is one engine that does the actual work: figure out which screens changed, run the checks, decide the verdict. The CLI (<code>usabl check</code>) is the main way to call it. Every other surface calls the same engine underneath - they just trigger it from different places:</p>
+    <ul style="margin:6px 0 0">
+      <li><strong>Stop hook</strong> - blocks the AI assistant from finishing</li>
+      <li><strong>Browser overlay</strong> - shows findings while you develop</li>
+      <li><strong>CI comment</strong> - posts the verdict on a pull request</li>
+      <li><strong>Mid-task self-check</strong> - the AI checks its own progress partway through</li>
+      <li><strong>Playwright helper</strong> - for test suites</li>
+      <li><strong>Reports</strong> - generates accessibility artifacts</li>
+    </ul>
+    <p style="margin-bottom:0">None of these surfaces have their own verdict logic. One engine, one answer. Only findings the machine can prove (<code>deterministic</code> evidence) affect the verdict. Softer checks can be shown as advice but never block.</p>
+  </div>
+
+  <h3>Two surfaces, one engine: app and documentation</h3>
+  <p>usabl checks two target surfaces, not one. The application UI is the original surface. Since v0.2.1 the same engine also checks the product's own published documentation, the user guides and install docs. Those pages carry the same accessibility barriers as the app and almost never get tested.</p>
+  <div class="panel">
+    <p style="margin-top:0;margin-bottom:6px">Documentation checking is not a second product or a separate command. One <code>usabl check</code> run scans both surfaces and returns one verdict. It works like this:</p>
+    <ul style="margin:6px 0 0">
+      <li><strong>Turned on by a manifest.</strong> A <code>usabl.docs.json</code> file lists the doc pages to check. No manifest, no docs surface.</li>
+      <li><strong>Same checks, doc-appropriate.</strong> axe-core runs against the WCAG 2.2 AA rule set and a docs rule catches broken heading order. The PatternFly rules are skipped, since product docs are not PatternFly.</li>
+      <li><strong>Fixes land in the writer's source.</strong> A finding on a rendered page is traced back to the AsciiDoc source, so a writer sees the fix in their own markup, not a browser selector.</li>
+      <li><strong>Same coverage discipline.</strong> Only changed pages are re-checked, and a doc source it cannot map is an honest <code>not_covered</code>, never a silent pass.</li>
+    </ul>
+  </div>
+
+  <h3>What we are building for the contest</h3>
+  <p>The full verdict engine, three scan layers (axe-core for general a11y, a PatternFly-specific rulepack, and a keyboard walk), all the surfaces listed above, design intake (so designers can declare intent in YAML), accessibility reports, and accessibility checking for the product's own documentation pages (added in v0.2.1). Not building: IDE extensions. Optional: an MCP wrapper for the mid-task check.</p>
+
+  <h3>How much of "accessibility" this covers</h3>
+  <p>WCAG 2.2 Level A+AA has 55 criteria. usabl does not cover all of accessibility - it covers what a machine can prove, on the screens it checked. Here is the honest breakdown:</p>
+  <table class="bordered">
+    <tr><th>Category</th><th>Count</th><th>% of A+AA</th></tr>
+    <tr><td><strong>Contest scope (deterministic, machine-checkable)</strong></td><td>21</td><td>38%</td></tr>
+    <tr><td>Stretch (visible focus, if time)</td><td>1</td><td>2%</td></tr>
+    <tr><td>Post-contest (deterministic, buildable later)</td><td>13</td><td>24%</td></tr>
+    <tr><td>Advisory (AI judgment, shown but never blocks)</td><td>4</td><td>7%</td></tr>
+    <tr><td>Not applicable (media in admin consoles)</td><td>4</td><td>7%</td></tr>
+    <tr><td>Never (requires human judgment or application logic)</td><td>12</td><td>22%</td></tr>
+  </table>
+  <p><strong>What we say:</strong> usabl mechanically verifies 21 of 55 criteria at contest time (38%). With post-contest providers built out, 35 of 55 (64%). The remaining 16 are either not applicable to admin consoles or require human judgment the tool will never replace.</p>
+  <p><strong>What we do not say:</strong> "usabl makes your app WCAG compliant." It does not. Compliance requires all criteria including the ones only a person can judge. We also do not say "covers X% of accessibility" - WCAG is not the whole of accessibility.</p>
+
+  <h3>How it stays honest</h3>
+  <p>Two layers of protection, with different strength:</p>
+  <ul>
+    <li><strong>On the developer's machine:</strong> usabl watches its own config files. If someone edits the rules to cheat, the tool notices and flags it. It cannot physically prevent the edit, but it can refuse to issue a clean verdict afterward.</li>
+    <li><strong>In CI (pull requests):</strong> The CI job reads usabl's policy from a protected branch, not from the PR itself, so the PR cannot weaken its own checks. This is the strong layer.</li>
+  </ul>
+</section>
+
+<section id="scope">
+  <h2><span class="num">2</span>Scope map: what ships, what's stretch, what's a seam</h2>
+  <p>This is the full inventory of what we build. Categories come from the ground truth. Effort and cut-order are editorial - use them to make decisions.</p>
+
+  <h3>Must ship (contest scope)</h3>
+  <table class="bordered">
+    <tr><th>Piece</th><th>What it is</th><th>Effort</th><th>Cut order</th></tr>
+    <tr><td><strong>Shared data shapes</strong></td><td>The TypeScript types everyone builds against: <code>Draft</code>, <code>Finding</code>, <code>Result</code>, <code>Coverage</code>, <code>Receipt</code>, identity fields, evidence labels. Frozen day 1.</td><td class="effort s">S</td><td>Never</td></tr>
+    <tr><td><strong>Verdict engine (gate)</strong></td><td>Takes findings in, applies filters (only deterministic evidence counts), deduplicates, compares against the previous run, handles waivers, and decides the verdict.</td><td class="effort l">L</td><td>Never</td></tr>
+    <tr><td><strong>Integrity guard</strong></td><td>Config watches itself. If someone edits policy files, the tool knows. Also: session pinning and receipt binding (three hashes).</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>Coverage + discovery</strong></td><td>Figures out which screens a code change touches by reading the route manifest and import graph. If it cannot figure it out, the verdict is <code>not_covered</code>.</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>CLI</strong></td><td>The single command everything else calls: <code>usabl check</code>.</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>Stop hook</strong></td><td>Blocks the AI assistant from finishing until usabl says clean. Must respond in under 20ms when a receipt already exists. Has a one-time escape so the AI is not stuck forever.</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>axe-core provider</strong></td><td>Wraps the axe-core library, runs it against each screen, translates results into usabl's format. Adds PatternFly-specific guidance notes.</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>PF rulepack (rules 1-5)</strong></td><td>Five interaction rules that catch PatternFly composition mistakes axe cannot see: toast-live-region, modal-focus-return, focus-into-dialog, kebab-expanded-state, icon-button-name. These carry the demo.</td><td class="effort l">L</td><td>Never</td></tr>
+    <tr><td><strong>PF rulepack (rule 6)</strong></td><td>pf-table-header-assoc (structural)</td><td class="effort s">S</td><td>Cut 3rd. Also: validate against real bug sample before building.</td></tr>
+    <tr><td><strong>PF rulepack (rule 7)</strong></td><td>pf-row-action-name-unique (structural)</td><td class="effort s">S</td><td>Cut 2nd. Same: validate first.</td></tr>
+    <tr><td><strong>PF rulepack (rule 8)</strong></td><td>pf-toolbar-labeled-when-repeated (structural)</td><td class="effort s">S</td><td>Cut 1st. Same: validate first.</td></tr>
+    <tr><td><strong>Keyboard walk</strong></td><td>Tabs through the page in a real browser, records what gets focus, detects traps (cycles), stops after 200 tabs or a time limit.</td><td class="effort l">L</td><td>Never</td></tr>
+    <tr><td><strong>Transcript diff</strong></td><td>Shows the before/after of what a screen reader would announce, so you can hear the difference a code change makes.</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>CI / PR comment</strong></td><td>Runs in CI, reads policy from a protected branch (not the PR), posts the verdict as a sticky comment. Sanitizes all page-derived text before including it.</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>Browser overlay</strong></td><td>A Vite plugin that shows findings in the browser while you develop. Does not interfere with usabl's own checks (detects and skips itself).</td><td class="effort m">M</td><td>Never (protected from cut)</td></tr>
+    <tr><td><strong>Reports</strong></td><td>Generates three accessibility artifacts: alt-text manifest, announcement snippets, keyboard paths. Tied to the receipt so they cannot be faked.</td><td class="effort m">M</td><td>Never (protected from cut)</td></tr>
+    <tr><td><strong>Documentation checking</strong></td><td>A second target surface (shipped v0.2.1): the same engine scans the product's rendered documentation pages, turned on by a <code>usabl.docs.json</code> manifest. Findings map back to AsciiDoc source; one verdict spans app and docs.</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>Mid-task self-check</strong></td><td>The AI can run <code>usabl check</code> mid-task to see how it is doing, before the final verdict. Advisory only - does not block.</td><td class="effort s">S</td><td>Never</td></tr>
+    <tr><td><strong>Design intake</strong></td><td>Lets designers declare intent in YAML (e.g. "this image must say X"). The tool checks those assertions alongside the automatic rules.</td><td class="effort m">M</td><td>Never (in scope per settled decisions)</td></tr>
+    <tr><td><strong>Fixture app + oracle</strong></td><td>A small demo app with 4 routes, a clean mode and a broken mode. The broken mode has exactly the right number of planted bugs to match the rules. This is the test harness.</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>CODEOWNERS + CI workflow</strong></td><td>Protects critical files (rules, config, evidence) so changes require review. The CI workflow enforces this.</td><td class="effort s">S</td><td>Never</td></tr>
+  </table>
+
+  <h3>Stretch (attempt if core is solid by end of week 2)</h3>
+  <table class="bordered">
+    <tr><th>Piece</th><th>What it is</th><th>Effort</th><th>Gate</th></tr>
+    <tr><td><strong>Visible focus check</strong></td><td>Checks that focused elements have a visible focus indicator (WCAG 2.4.7). Uses the keyboard walk plus computed styles.</td><td class="effort m">M</td><td>Do not add to the test fixture. Delete if flaky.</td></tr>
+    <tr><td><strong>Reduced motion check</strong></td><td>Checks that animations respect prefers-reduced-motion. Injects the preference, looks for remaining animation.</td><td class="effort s">S</td><td>Do not add to the test fixture. Delete if flaky.</td></tr>
+    <tr><td><strong>MCP wrapper</strong></td><td>Exposes the self-check as an MCP tool so the AI discovers it automatically. Adds convenience; also adds a prompt-injection surface to manage.</td><td class="effort m">M</td><td>Only if the hero loop is solid AND testing shows the AI forgets to self-check via CLI.</td></tr>
+  </table>
+
+  <h3>Seams (architecture supports it, nobody builds it now)</h3>
+  <p>These are extension points baked into the design. They make the product expandable later without rearchitecting. We ship the interfaces; we do not ship implementations.</p>
+  <table class="bordered">
+    <tr><th>Seam</th><th>What it would enable</th><th>What actually ships</th></tr>
+    <tr><td>Figma / CSV ingest</td><td>Design intake from Figma files or spreadsheets instead of hand-authored YAML.</td><td>The normalize interface accepts pluggable input. No Figma or CSV reader.</td></tr>
+    <tr><td>Storybook addon</td><td>Run checks per-story without needing a full app router.</td><td>Nothing. Route-based discovery is the contest path.</td></tr>
+    <tr><td>Other AI assistants</td><td>Same gate on Cursor, Copilot, or any future assistant.</td><td>The adapter interface is documented. Claude Code is the demo.</td></tr>
+    <tr><td>Cryptographic receipt signing</td><td>CI identity on receipts via OIDC. Proves which CI run produced the verdict.</td><td>Receipt binding via three hashes, but no cryptographic signature.</td></tr>
+    <tr><td>Runtime route dump</td><td>Reads the full route list from the running app. Fixes most <code>not_covered</code> cases.</td><td>Static parser only. Pull this in if measurement shows <code>not_covered</code> is too high.</td></tr>
+    <tr><td>Page capabilities</td><td>Future providers for text resize, target size, reflow, etc.</td><td>Interfaces exist. No contest provider uses them (except stretch goals).</td></tr>
+    <tr><td>Advisory-lane providers</td><td>Softer checks that use AI judgment: plain language, alt-text quality, link purpose.</td><td>The label (<code>model-judgment</code>) and the gate filter ship. No provider is built.</td></tr>
+  </table>
+
+  <h3>Cut order (what drops first when behind)</h3>
+  <div class="panel">
+    <ol>
+      <li><strong>PF rule 8</strong> (toolbar labeling) - least demo value, structural only. May be swapped for a better rule if the bug sample justifies it.</li>
+      <li><strong>PF rules 7 + 6</strong> (row action names, table header association) - structural, no demo beat. Same swap logic.</li>
+      <li><strong>MCP wrapper</strong> - only if the hero loop is not solid. Demo works without it.</li>
+      <li><strong>Stretch goals</strong> (visible focus, reduced motion) - never promised. Delete if flaky.</li>
+      <li><strong>Runtime route dump</strong> - pull in only if <code>not_covered</code> rate is high. Otherwise stays a seam.</li>
+    </ol>
+    <p><strong>Note on rules 6-8:</strong> These are "cut OR swap." The real-bug sample might show a different rule would catch more actual problems. Do not build them until the sample confirms they are the right ones.</p>
+    <p><strong>Never cut:</strong> the verdict engine, the stop hook, the CLI, the keyboard walk, PF rules 1-5, the transcript diff, coverage, the integrity guard, the test fixture, CI/PR comment, the receipt, the overlay, and Reports.</p>
+  </div>
+
+  <h3>What we could cut under extreme pressure</h3>
+  <div class="callout risk">
+    <span class="label">Emergency only - violates the ground truth's protected list</span>
+    <p>If the build is in real trouble, here is what would hurt least from the "never cut" list:</p>
+    <table>
+      <tr><th>Cut this</th><th>What you lose</th><th>Can you still demo?</th></tr>
+      <tr><td><strong>Reports</strong></td><td>No generated alt-text manifest, announcement snippets, or keyboard paths. The "ship-ready artifacts" story disappears.</td><td>Yes. The demo story is about the AI loop, not generated docs.</td></tr>
+      <tr><td><strong>Browser overlay</strong></td><td>No real-time browser feedback for hand-coders. Only the AI and CI paths work.</td><td>Yes. The demo is about the assistant, not the overlay.</td></tr>
+      <tr><td><strong>Design intake (wiring)</strong></td><td>The schema and YAML parser exist but nothing uses them at runtime. The "designers declare intent" story is unproven.</td><td>Yes. The demo is about PF rules catching composition bugs.</td></tr>
+      <tr><td><strong>Waivers</strong></td><td>No way to say "I know about this finding, let it through for now." No debt management.</td><td>Yes. The demo shows the ratchet, not the waiver lifecycle.</td></tr>
+    </table>
+    <p><strong>Never cut even in emergency:</strong> the verdict engine, the stop hook, the CLI, the keyboard walk, PF rules 1-5, the transcript diff, coverage, the integrity guard, the test fixture, CI/PR comment, and the receipt. Without these, the product claim is false.</p>
+  </div>
+
+  <h3>Effort summary</h3>
+  <div class="panel">
+    <table>
+      <tr><th>Size</th><th>What it means</th><th>How many in "must ship"</th></tr>
+      <tr><td><span class="effort s">S</span></td><td>One day or less for one person. Self-contained.</td><td>6 pieces</td></tr>
+      <tr><td><span class="effort m">M</span></td><td>2-4 days. May depend on one other piece.</td><td>10 pieces</td></tr>
+      <tr><td><span class="effort l">L</span></td><td>A week or more. Core complexity. Multiple integration points.</td><td>3 pieces</td></tr>
+    </table>
+    <p>The three L pieces are the critical path: the verdict engine, PF rules 1-5, and the keyboard walk. Everything else can run in parallel around them.</p>
+  </div>
+</section>
+
+<section id="decisions">
+  <h2><span class="num">3</span>Open decisions</h2>
+  <p>These are the things the ground truth deliberately leaves open. Each needs a decision before work can proceed past it.</p>
+
+  <table class="bordered">
+    <tr><th>Decision</th><th>What it means and why it matters</th></tr>
+    <tr>
+      <td><strong>Which app and bug for the live demo</strong></td>
+      <td>Pick the PatternFly app the demo runs on and the one accessibility bug the AI will fix live. Lock both before anything else, because the screen-reader recording has to match this exact bug. If the bug changes after recording, the audio is wrong.
+        <br><br><strong>Options for the hero bug:</strong>
+        <ul style="margin:6px 0 0">
+          <li><strong>Modal focus return (rule 2, Clusters page).</strong> Visible on screen (focus jumps to the wrong place), audible in the transcript (wrong element announced after Escape), and the fix is a single <code>returnFocus</code> prop. Short enough for a live loop.</li>
+          <li><strong>Toast with no live region (rule 4, Clusters page).</strong> Strong empathy - the success message is completely silent to a screen reader. But the fix is slightly less visible on screen.</li>
+          <li><strong>Kebab toggle missing name + expanded state (rules 1+3, Clusters page).</strong> Two findings on one control, shows multi-layer detection. Risk: two fixes in the demo loop takes longer.</li>
+        </ul>
+        <strong>Recommendation:</strong> Modal focus return. One clear bug, one clear fix, maximum audio contrast between "before" and "after."
+      </td>
+    </tr>
+    <tr>
+      <td><strong>Which rules make the cut (validate against real data)</strong></td>
+      <td>The eight PF rules are a starting set. The ground truth says: gather 20-50 real accessibility bugs, run the current rules against them, and count how many get caught. If a bug pattern shows up repeatedly and no rule catches it, that rule goes to the top of the backlog - potentially replacing one of the structural rules (6-8).
+        <br><br>This means the final rulepack is data-driven. We might have access to a customer bug database that changes the picture entirely.
+        <br><br><strong>Options:</strong>
+        <ul style="margin:6px 0 0">
+          <li><strong>Collect the bug sample first, then lock the rules (or swap).</strong> Run the sample before building rules 6-8. If a structural rule catches nothing real but a different pattern catches ten bugs, swap it. Risk: delays rule work by a day or two.</li>
+          <li><strong>Build rules 1-5 now, validate 6-8 against the sample.</strong> The five interaction rules carry the demo and are unlikely to be displaced. Only the structural three are at risk. Build 1-5 while gathering the sample, then decide 6-8.</li>
+          <li><strong>Lock all eight, use the sample for the pitch number only.</strong> Build everything listed. The sample becomes evidence for judges ("caught 22 of 30"), not a selection mechanism. Risk: a rule that catches zero real bugs weakens the pitch.</li>
+        </ul>
+        <strong>Recommendation:</strong> Build 1-5 now. Gather the bug sample in parallel. Validate 6-8 against it before building them. Zero cost to the critical path, and the pitch number stays honest.
+      </td>
+    </tr>
+    <tr>
+      <td><strong>Which real app to run the honest test against</strong></td>
+      <td>Separately from the demo fixture (which we control), pick a real PatternFly codebase to run usabl against. This produces the honest numbers: how well does the tool work on code that was not written for it?
+        <br><br><strong>Options:</strong>
+        <ul style="margin:6px 0 0">
+          <li><strong>OpenShift console.</strong> Large, real, internal credibility. PF v4/v5 mix. High route count tests coverage at scale. Risk: may need import alias resolution or <code>not_covered</code> rate will be high.</li>
+          <li><strong>PatternFly React demos or patternfly.org.</strong> Canonical PF usage, no alias tricks. Risk: too clean, may not produce enough findings to be interesting.</li>
+          <li><strong>A mid-size PF console (e.g. Hybrid Committed Cloud).</strong> Smaller, less setup, still real. Risk: less name recognition for judges.</li>
+        </ul>
+        <strong>Recommendation:</strong> OpenShift console. Judges know it, the large surface proves coverage works at scale, and honest numbers on a hard target are more credible than easy numbers on a simple one.
+      </td>
+    </tr>
+    <tr>
+      <td><strong>What coverage number to put on the slide</strong></td>
+      <td>The "verified-verdict-rate" is the share of UI-touching changes that get a clean <span class="verdict v-good">verified</span> result. We measure it on the real app and report whatever we get. The question is how prominently to feature it.
+        <br><br><strong>Options:</strong>
+        <ul style="margin:6px 0 0">
+          <li><strong>Headline it on the proof slide, whatever the number is.</strong> If above 70%, it speaks for itself. If below, pair it with the discovery roadmap and frame as "here's today, here's what's next."</li>
+          <li><strong>Lead with something else, footnote the coverage number.</strong> Lead with false-positive rate (zero on clean markup) or time-to-fix. Coverage in fine print. Works better if the number is mediocre.</li>
+          <li><strong>Decide after measurement.</strong> Do not commit to slide position now. Run the measurement in week 2, then pick framing based on the actual number.</li>
+        </ul>
+        <strong>Recommendation:</strong> Decide after measurement. Commit now only to reporting honestly. If it is strong, promote it. If weak, pair with the explanation.
+      </td>
+    </tr>
+    <tr>
+      <td><strong>Can the repo block merges, and what if it cannot</strong></td>
+      <td>Our repo is private on GitHub Free. GitHub Free does not let you require a status check to pass before merging. So right now, usabl's CI verdict can post a comment saying "this PR has a regression," but nothing actually prevents someone from clicking Merge anyway.
+        <br><br>This matters because the product story is about stopping bad code from shipping. If we cannot demonstrate an actual block, we have to explain the gap.
+        <br><br><strong>Options:</strong>
+        <ul style="margin:6px 0 0">
+          <li><strong>Make the repo public now (already Apache-2.0).</strong> Public repos on Free get required checks, CODEOWNERS, and branch protection. Also makes the contest submission obvious. Risk: code visible before it is polished.</li>
+          <li><strong>Stay private, accept comment-only for now.</strong> CI still runs, still posts the verdict. Demo shows the comment and explains "one toggle away from blocking on a public or Team repo." No cost, no exposure.</li>
+          <li><strong>Pay for GitHub Team.</strong> Required checks on private repos. Real money for a contest. Probably overkill.</li>
+        </ul>
+        <strong>Recommendation:</strong> Stay private during build. Go public when ready for submission. Gets required checks for the demo, aligns with the open-source positioning, costs nothing.
+      </td>
+    </tr>
+    <tr>
+      <td><strong>Where do the real bugs come from</strong></td>
+      <td>We need 20-50 real accessibility bugs to validate the rulepack and produce the "caught N of M" number for judges. Need to decide what sources to pull from and who gathers them.
+        <br><br><strong>Options:</strong>
+        <ul style="margin:6px 0 0">
+          <li><strong>PatternFly GitHub issues (a11y label).</strong> Public, citable, no approval needed. Skewed toward component-level bugs. Good for rulepack validation.</li>
+          <li><strong>Internal product bugs (Jira/Bugzilla, anonymized).</strong> Richer composition bugs (modals, tables, toolbars). Closer to what usabl's PF rules target. Needs permission and anonymization.</li>
+          <li><strong>Both, deduplicated.</strong> 15-20 from PF GitHub, 15-20 from internal, merged. Best coverage of both patterns.</li>
+        </ul>
+        <strong>Recommendation:</strong> Both sources. Start with PF GitHub (no approval needed, can begin immediately). Add internal bugs as they clear. Report the split honestly.
+      </td>
+    </tr>
+    <tr>
+      <td><strong>Whether to build the MCP version</strong></td>
+      <td>The mid-task self-check already works as a CLI command. MCP is a second delivery mechanism that makes the AI more likely to discover and run the check on its own. The trade-off: MCP is another path to build, test, and secure. It passes page-derived text (aria-labels, headings, error messages) into the AI's context as structured data, which is a prompt-injection surface the CLI path avoids.
+        <br><br><strong>Options:</strong>
+        <ul style="margin:6px 0 0">
+          <li><strong>Skip MCP. CLI only.</strong> Simplest. One fewer thing to build and secure. Demo works fine - the agent runs <code>usabl check</code> on screen.</li>
+          <li><strong>Build MCP as a stretch goal after the core loop is solid.</strong> Gate it on hero-loop readiness, not on a date.</li>
+          <li><strong>Build MCP early because testing shows the AI forgets to self-check.</strong> Only if rehearsals reveal the model never calls <code>usabl check</code> unprompted without tool registration.</li>
+        </ul>
+        <strong>Recommendation:</strong> Skip unless rehearsals show the model fails to self-check via CLI. The demo does not depend on MCP, and the security surface is real work.
+      </td>
+    </tr>
+  </table>
+</section>
+
+<section id="discuss">
+  <h2><span class="num">4</span>Discussion points</h2>
+  <p>These are not decisions with clean options - they are things that need a conversation because the doc leaves a real choice, links people's work, or carries risk.</p>
+
+  <ol class="num-list">
+    <li>
+      <strong>The data shapes freeze is hard to undo.</strong>
+      The plan is: freeze all the shared types on day 1, then two people build separately (one builds detection, one builds the verdict engine) until they join up at integration. If a type is wrong, both people find out late. Hold a focused review of every shared type before locking. The test person should be in that review because the honesty guarantees depend on these shapes.
+    </li>
+    <li>
+      <strong>The <code>not_covered</code> blocking behavior is deliberately unresolved.</strong>
+      By default, if usabl cannot figure out which screens changed, it blocks. But if measurement on a real app shows this happens a lot (say, more than 10% of runs), it should probably warn instead. Agree on the threshold now and who makes the call, because this is the item most likely to cause arguments if the real app scores badly.
+    </li>
+    <li>
+      <strong>Coverage discovery is the main technical risk.</strong>
+      The tool figures out which screens a change touches by reading imports and routes. It will miss: path aliases (<code>@/</code>, <code>~/</code>), dynamic imports, routes built from data, and some edge cases around comments. On a real PatternFly app these are common. The backup plan is to read routes from the running app instead of parsing source. Agree what triggers that and who builds it, because it steals time from rule-building.
+    </li>
+    <li>
+      <strong>The screen-reader recording is a dependency, not a task.</strong>
+      The demo app and the hero bug must be locked before the recording happens. If the app or bug changes after recording, the audio is wrong. The person building detection and the person doing the recording need to agree a hard freeze point. This links two people's work across teams.
+    </li>
+    <li>
+      <strong>The spoken-text preview is an approximation, and a judge could catch it.</strong>
+      usabl builds its transcript from the accessibility tree, not from a real screen reader. One value (<code>aria-sort</code>) is read straight from the HTML because the tool cannot get it the normal way. The doc says: disclose this, do not hide it. Before recording, confirm the preview matches what a real screen reader actually says for the demo bug. Make sure <code>aria-sort</code> is the only exception.
+    </li>
+    <li>
+      <strong>Keep the test fixture honest.</strong>
+      The demo app has a clean mode (zero findings) and a broken mode (exactly N findings, matching the rule count). If either drifts, the test harness is lying. The stretch checks (visible focus, reduced motion) must never go into this fixture. Everyone adding a rule needs to know this.
+    </li>
+    <li>
+      <strong>Idle vs <code>not_covered</code> must live in one place in the code.</strong>
+      The doc is firm: "nothing to check" (idle) and "could not figure out what changed" (not_covered) must never share a code path or a verdict. This is the kind of thing two people build slightly differently. Write it once, in one place.
+    </li>
+    <li>
+      <strong>Design intake needs a real example, not just a schema.</strong>
+      The ground truth defines the TypeScript interface and one example per assertion type, but it does not show what a designer's actual YAML file looks like in practice. Decisions:
+      <ul>
+        <li>What does the YAML a designer writes actually look like? A working example needs to exist before the schema is locked.</li>
+        <li>Does an intake-derived check appear in the demo? If yes, put a requirement file in the fixture app. If no, intake is proven by tests only.</li>
+        <li>Who validates the full path from YAML file through normalize through to a finding that participates in the verdict?</li>
+      </ul>
+      <strong>Options:</strong>
+      <ul>
+        <li><strong>Ship one working example in the fixture app.</strong> A single assertion ("this image must say X") that the broken variant gets wrong. Proves the path end-to-end.</li>
+        <li><strong>Prove intake in tests only, skip it in the demo.</strong> Less to show, one fewer thing to break live.</li>
+        <li><strong>Defer intake wiring to post-demo.</strong> Build the schema, skip the runtime integration. Risk: the "designers declare intent" story is unproven.</li>
+      </ul>
+      <strong>Recommendation:</strong> Ship one working example. Low effort (one YAML file, one planted mismatch), proves the path, and gives the demo an optional beat.
+    </li>
+  </ol>
+</section>
+
+<section id="mapping">
+  <h2><span class="num">5</span>Work split</h2>
+  <p>Three people write code. One is more focused on testing but still ships code. The other roles (screen-reader recording, demo video) belong to other people and are not part of this split.</p>
+
+  <div class="lane a">
+    <div class="lane-head">Person 1: verdict engine + surfaces</div>
+    <div class="lane-body">
+      The verdict engine (gate), coverage, integrity guard, receipts, the CLI, and the stop hook. These parts are tightly linked and must be correct, so one person holds all of them.
+    </div>
+  </div>
+
+  <div class="lane b">
+    <div class="lane-head">Person 2: detection + design intake</div>
+    <div class="lane-body">
+      The three scan providers (axe wrapper, PatternFly rulepack, keyboard walk), the demo fixture app and its oracle, the real-bug sample, and design intake (schema, YAML reader, intake-derived checks). Intake lives here because it produces the same kind of output as the scanners.
+    </div>
+  </div>
+
+  <div class="lane c">
+    <div class="lane-head">Person 3: testing, performance, security</div>
+    <div class="lane-body">
+      Integration tests, performance work, CI setup, the honesty audit, and the security tests that try to break the tool. Also reviews the other two people's code.
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <span class="label">Not in this split</span>
+    The demo video and the live screen-reader recording belong to other people. But you have to feed them: lock the demo app and hero bug early so the recording can happen. Save raw demo runs as you go.
+  </div>
+
+  <div class="callout risk">
+    <span class="label">Watch this</span>
+    The doc protects both the overlay and Reports from being cut. With only three people writing code, that is a lot of surface. Agree now which of those two slows down first if you fall behind, so it is a decision and not a surprise.
+  </div>
+
+  <div class="callout rec">
+    <span class="label">Key dependency</span>
+    Person 1 (verdict engine) and Person 2 (detection) build separately using the shared types, then join up at integration. A wrong type is expensive. That is why the kickoff puts the data shape freeze first.
+  </div>
+</section>
+
+<section id="kickoff">
+  <h2><span class="num">6</span>Kickoff agenda</h2>
+  <p>Leave this meeting with: the shared types locked, the work divided, and the must-be-first steps sequenced. Everything else can wait.</p>
+
+  <ol class="num-list">
+    <li>
+      <strong>Divide the work.</strong> <span class="effort s">Quick.</span><br>
+      Decide who takes each of the three lanes above. Make sure one person (not several) owns the verdict engine, and one person owns the fixture and its oracle. Agree which of the overlay or Reports slows down first if you fall behind.
+    </li>
+    <li>
+      <strong>Lock the shared types.</strong> <span class="effort l">This is the most important item.</span><br>
+      Go through every shared type: <code>Draft</code>, <code>Finding</code>, <code>Result</code>, <code>Coverage</code>, <code>Receipt</code>, and the identity fields. Both the detection person and the verdict-engine person must agree. Nail down two things:
+      <ul>
+        <li>Idle (nothing to check) and <code>not_covered</code> (could not identify what changed) are handled in exactly one place and never confused.</li>
+        <li>Only <code>deterministic</code> findings reach the verdict. The gate filters everything else before deciding.</li>
+      </ul>
+      Lock at the end of this item. Changing later costs both builders.
+    </li>
+    <li>
+      <strong>Sequence the blockers.</strong> <span class="effort m">Medium.</span><br>
+      Some things have a required order:
+      <ul>
+        <li>Pick the demo app and hero bug, lock them, then the screen-reader recording can happen. Tell the recorder early - they are outside this meeting.</li>
+        <li>Pick the real app, run usabl against it, read the <code>not_covered</code> rate, then decide whether it blocks or warns.</li>
+        <li>Confirm the repo situation: comment-only for now, go public at submission.</li>
+      </ul>
+    </li>
+    <li>
+      <strong>Assign the honesty check.</strong> <span class="effort s">Quick.</span><br>
+      One person owns this before recording: confirm the spoken-text preview matches a real screen reader for the hero bug, confirm <code>aria-sort</code> is the only value read straight from HTML, and make sure the disclosure is in the submission.
+    </li>
+    <li>
+      <strong>Confirm the cut order.</strong> <span class="effort s">Quick.</span><br>
+      Cut rules 8, 7, 6 first. Then MCP. Then stretch goals. Never cut: the verdict engine, the receipt, the integrity guard, CODEOWNERS, the four verdicts, the transcript diff, the hero loop, the overlay, Reports, and the CLI self-check.
+    </li>
+  </ol>
+</section>
+
+<footer>
+  <p>Derived from usabl-dev/usabl / docs/ground-truth.md. Section numbers in this briefing refer to that document. This briefing summarizes and does not change the ground truth.</p>
+</footer>
+
+</div>
+</body>
+</html>
