@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import type { Result } from '../../src/contracts/index.js';
+import { buildGuardedSet } from '../../src/trust/guard.js';
 import {
   collectReviews,
   enforceAccessibility,
@@ -281,6 +282,35 @@ describe('enforcePolicy', () => {
     expect(out.message).toContain('user login');
   });
 
+  it('says no rule covers a dirty guarded path that CODEOWNERS never names', async () => {
+    const out = await enforcePolicy(
+      policyResult,
+      deps({
+        gitOver: { codeowners: 'usabl.config.json @bob\n' },
+        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' }],
+      }),
+    );
+    expect(out.exitCode).toBe(2);
+    expect(out.message).toBe('no CODEOWNERS rule covers .usabl-evidence.json');
+    expect(out.message).not.toContain('approval required');
+  });
+
+  it('separates an unowned path from an unapproved one in the same run', async () => {
+    const out = await enforcePolicy(
+      policyResult,
+      deps({
+        gitOver: {
+          codeowners: 'usabl.config.json @bob\n',
+          head: { 'usabl.config.json': '{"guardedPaths":[],"tampered":true}' },
+        },
+      }),
+    );
+    expect(out.exitCode).toBe(2);
+    expect(out.message).toBe(
+      'no CODEOWNERS rule covers .usabl-evidence.json; approval required: no CODEOWNERS user other than the PR author approved this head for usabl.config.json',
+    );
+  });
+
   it('fails closed and names a CODEOWNERS pattern it cannot interpret', async () => {
     const out = await enforcePolicy(
       policyResult,
@@ -357,18 +387,43 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
     expect(out.message).not.toContain('no CODEOWNERS rule covers');
   });
 
-  it('says no rule covers a dirty guarded path that CODEOWNERS never names', async () => {
-    const out = await enforcePolicy(
-      policyResult,
-      await repoDeps({
-        dirty: '.usabl-evidence.json',
-        author: 'eparenti',
-        reviews: [{ userLogin: 'vishsanghishetty', state: 'APPROVED', commitId: head }],
-      }),
+  /**
+   * The gate is only satisfiable if every guarded path has an owner who can clear it, so
+   * that is the invariant, not the wording of any one refusal. This trips when a guarded
+   * path is added without a rule, when a rule stops covering the path it was written for,
+   * and when CODEOWNERS gains a pattern the matcher refuses to interpret.
+   */
+  it('gives every guarded path an owner who can clear it', async () => {
+    const config: unknown = JSON.parse(
+      await readFile(new URL('../../usabl.config.json', import.meta.url), 'utf8'),
     );
-    expect(out.exitCode).toBe(2);
-    expect(out.message).toBe('no CODEOWNERS rule covers .usabl-evidence.json');
-    expect(out.message).not.toContain('approval required');
+    const guarded = buildGuardedSet(config as Parameters<typeof buildGuardedSet>[0]);
+    expect(guarded.length).toBeGreaterThan(0);
+
+    const codeowners = await readFile(new URL('../../.github/CODEOWNERS', import.meta.url), 'utf8');
+    // Every login the file names anywhere, so the check is about coverage of the path and
+    // not about which of the owners happens to be listed for it.
+    const logins = [
+      ...new Set(
+        codeowners
+          .split('\n')
+          .flatMap((line) => line.replace(/#.*$/, '').match(/@[\w.-]+/g) ?? [])
+          .map((owner) => owner.slice(1)),
+      ),
+    ];
+    const reviews = logins.map((login) => ({ userLogin: login, state: 'APPROVED', commitId: head }));
+
+    const unclearable: { path: string; message: string }[] = [];
+    for (const path of guarded) {
+      const out = await enforcePolicy(
+        policyResult,
+        await repoDeps({ dirty: path, author: 'outside-contributor', reviews }),
+      );
+      if (out.exitCode !== 0) {
+        unclearable.push({ path, message: out.message });
+      }
+    }
+    expect(unclearable).toEqual([]);
   });
 });
 
