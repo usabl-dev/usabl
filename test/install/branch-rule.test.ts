@@ -12,7 +12,7 @@ import {
   PROTECTED_BRANCH,
   REQUIRED_CHECK,
   branchRuleSetting,
-  isUsablPolicyRequired,
+  isRequiredCheckPresent,
   verifyBranchRule,
 } from '../../src/install/branch-rule.js';
 
@@ -44,14 +44,17 @@ describe('branchRuleSetting', () => {
     expect(setting).toContain(REQUIRED_CHECK);
     expect(setting).toContain(PROTECTED_BRANCH);
     expect(setting).toContain('required_status_checks');
-    expect(setting).toContain('contexts: ["usabl-policy"]');
+    expect(setting).toContain(`contexts: ["${REQUIRED_CHECK}"]`);
+    // The setting must name the aggregate, and must say why usabl-policy alone is not it.
+    expect(setting).toContain('usabl-required');
+    expect(setting).toContain('accessibility');
     expect(setting.toLowerCase()).toContain('pull request');
   });
 });
 
 describe('verifyBranchRule', () => {
-  it('reports verified when usabl-policy is a required check, using one read-only GET', async () => {
-    const gh = recordingGh(() => ({ code: 0, stdout: protectionJson(['usabl-policy']), stderr: '' }));
+  it('reports verified when the aggregate is a required check, using one read-only GET', async () => {
+    const gh = recordingGh(() => ({ code: 0, stdout: protectionJson([REQUIRED_CHECK]), stderr: '' }));
     const result = await verifyBranchRule(gh.reader);
 
     expect(result.exitCode).toBe(0);
@@ -123,15 +126,27 @@ describe('verifyBranchRule', () => {
   });
 });
 
-describe('isUsablPolicyRequired', () => {
+describe('isRequiredCheckPresent', () => {
   it('reads both the modern checks list and the legacy contexts list', () => {
-    expect(isUsablPolicyRequired(JSON.parse(protectionJson(['usabl-policy'])))).toBe(true);
+    expect(isRequiredCheckPresent(JSON.parse(protectionJson([REQUIRED_CHECK])))).toBe(true);
     expect(
-      isUsablPolicyRequired({ required_status_checks: { contexts: ['usabl-policy'] } }),
+      isRequiredCheckPresent({ required_status_checks: { contexts: [REQUIRED_CHECK] } }),
     ).toBe(true);
-    expect(isUsablPolicyRequired(JSON.parse(protectionJson(['other'])))).toBe(false);
-    expect(isUsablPolicyRequired({})).toBe(false);
-    expect(isUsablPolicyRequired(null)).toBe(false);
+    expect(isRequiredCheckPresent(JSON.parse(protectionJson(['other'])))).toBe(false);
+    expect(isRequiredCheckPresent({})).toBe(false);
+    expect(isRequiredCheckPresent(null)).toBe(false);
+  });
+
+  it('does not accept usabl-policy as the required check', () => {
+    // The defect this change closes. A ruleset that requires only usabl-policy can be
+    // satisfied while the accessibility scan is red, so it must not read as verified.
+    expect(isRequiredCheckPresent(JSON.parse(protectionJson(['usabl-policy'])))).toBe(false);
+    expect(isRequiredCheckPresent(JSON.parse(protectionJson(['check', 'usabl-policy'])))).toBe(
+      false,
+    );
+    expect(
+      isRequiredCheckPresent(JSON.parse(protectionJson(['check', 'usabl-policy', REQUIRED_CHECK]))),
+    ).toBe(true);
   });
 });
 

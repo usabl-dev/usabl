@@ -2,15 +2,19 @@
  * Branch protection generator for `usabl install --branch-rule`.
  * This generator is read-only. It NEVER mutates a repository setting. It prints the exact
  * protection the operator must apply and verifies the current state with a single
- * read-only gh call. It only reports "verified" when it can positively confirm that
- * usabl-policy is a required status check; otherwise it refuses and prints the setting,
- * because claiming verified without proof would be a false green.
+ * read-only gh call. It only reports "verified" when it can positively confirm that the
+ * required check is present; otherwise it refuses and prints the setting, because claiming
+ * verified without proof would be a false green.
  */
+import { REQUIRED_GATE_JOB } from './ci.js';
 
-// The gate triggers on pull requests into main, so main is the branch to protect and
-// usabl-policy is the required job name from the gate workflow.
+// The gate triggers on pull requests into main, so main is the branch to protect. The check
+// to require is the aggregate job, taken from the workflow generator rather than restated
+// here, so the name an operator is told to require and the job that decides the merge can
+// never drift apart. Requiring usabl-policy alone is not enough: it returns success whenever
+// no guarded path diverged, so an accessibility regression satisfies it.
 export const PROTECTED_BRANCH = 'main';
-export const REQUIRED_CHECK = 'usabl-policy';
+export const REQUIRED_CHECK = REQUIRED_GATE_JOB;
 
 // The read-only gh call. {owner}/{repo} are resolved by gh from the current repo context,
 // so no repository slug is interpolated from any external input.
@@ -30,7 +34,7 @@ export interface GhReader {
 }
 
 export interface BranchRuleResult {
-  // 0 = verified (usabl-policy is required); 2 = not applied or cannot verify, both of
+  // 0 = verified (the required check is present); 2 = not applied or cannot verify, both of
   // which need a manual step. Only a positive confirmation returns 0.
   exitCode: 0 | 2;
   action: 'verified' | 'not-applied' | 'cannot-verify';
@@ -41,7 +45,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export function isUsablPolicyRequired(parsed: unknown): boolean {
+export function isRequiredCheckPresent(parsed: unknown): boolean {
   if (!isRecord(parsed)) {
     return false;
   }
@@ -75,7 +79,11 @@ export function branchRuleSetting(): string {
   return [
     `Apply this branch protection on the "${PROTECTED_BRANCH}" branch:`,
     '  - Require status checks to pass before merging.',
-    `  - Required status check context: ${REQUIRED_CHECK} (the required job in .github/workflows/usabl-gate.yml).`,
+    `  - Required status check context: ${REQUIRED_CHECK} (the aggregate job in .github/workflows/usabl-gate.yml).`,
+    `    ${REQUIRED_CHECK} is red unless the accessibility verdict and the policy verdict both pass.`,
+    '    Requiring gate-comment or usabl-policy instead is not enough: gate-comment cannot run on a',
+    '    review event, and usabl-policy passes whenever no guarded path diverged, which says nothing',
+    '    about accessibility. Either one alone can be green while an accessibility regression merges.',
     '  - Require the branch to be up to date before merging (strict).',
     '  - Require a pull request before merging.',
     '  - Require review from Code Owners, so guarded-file changes need an owner approval that usabl-policy enforces.',
@@ -148,7 +156,7 @@ export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> 
     };
   }
 
-  if (isUsablPolicyRequired(parsed)) {
+  if (isRequiredCheckPresent(parsed)) {
     return {
       exitCode: 0,
       action: 'verified',

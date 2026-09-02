@@ -71,23 +71,25 @@ global kill switch; the same severity order as the CLI.
 
 **Persona:** Peer reviewer or Morgan (lead).
 **usabl installed:** Yes. `usabl install --ci` wrote the gate workflow, and branch
-protection requires the `usabl-policy` check (verified with `usabl install --branch-rule`).
+protection requires the `usabl-required` check (verified with `usabl install --branch-rule`).
 
 | Stage | What happens | Emotion | Friction risk |
 |---|---|---|---|
 | 1. Open PR | Visual diff as usual | Routine | None |
 | 2. Evidence comment | The `gate-comment` job posts a sticky comment with the findings and the gated verdict | Insight | Comment noise on large PRs |
 | 3. Read the verdict | The comment shows verified, regression, not_covered, or approval_required, with the findings behind it | Understanding | Reading a raw finding without context |
-| 4. Approve | Merge when the `usabl-policy` check is green | Confidence | A block with no waiver path |
+| 4. Approve | Merge when the `usabl-required` check is green | Confidence | A block with no waiver path |
 
 The comment is a projection of the same gated Result; it invents no verdict. Policy
 enforcement runs in the second job (`usabl-policy`) against the base commit, so head
-code never decides its own gate. Changing a guarded policy file yields
-`approval_required` until it is reviewed.
+code never decides its own gate. The third job, `usabl-required`, is the one branch
+protection waits on: it is red unless the accessibility verdict and the policy verdict
+both pass. Changing a guarded policy file yields `approval_required` until it is
+reviewed.
 
 **Rip-out moment:** The team ignores the bot comment.
 **Prevention:** High-signal comments (regressions and touched surfaces); a link to the
-receipt; the gate blocks a merge only once the team makes `usabl-policy` a required
+receipt; the gate blocks a merge only once the team makes `usabl-required` a required
 check.
 
 ---

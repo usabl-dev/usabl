@@ -216,8 +216,8 @@ block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`
 
 ## CI trust boundary: the generated gate draft
 
-`usabl install --ci` writes a two-job workflow to `.github/workflows/usabl-gate.yml`
-(`src/install/ci.ts`). The two jobs split trust deliberately:
+`usabl install --ci` writes a three-job workflow to `.github/workflows/usabl-gate.yml`
+(`src/install/ci.ts`). The jobs split trust deliberately:
 
 - **`gate-comment`** is the only job allowed to run PR head code, and it is fenced to the
   `pull_request` event (`if: github.event_name == 'pull_request'`). It starts the fixture
@@ -228,18 +228,42 @@ block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`
   operator must replace), checked out with `persist-credentials: false`, and snapshotted to
   a read-only `/opt/usabl-trusted` so the fixture cannot overwrite the checker. The scan
   runs `check --ci --trusted-ref "origin/<base>"` from that snapshot.
-- **`usabl-policy`** is the required status check. It checks out the base commit only,
-  fetches the head as git objects, and runs `enforce policy --trusted-ref "origin/<base>"`,
-  which reads blobs with `git show` and `git ls-tree` and never checks out or executes head
-  code. This is the job branch protection waits on, and it is one the PR cannot start with
-  its own code.
+- **`usabl-policy`** decides the policy verdict and resolves the Result artifact for the
+  head. It checks out the base commit only, fetches the head as git objects, and runs
+  `enforce policy --trusted-ref "origin/<base>"`, which reads blobs with `git show` and
+  `git ls-tree` and never checks out or executes head code. It also runs
+  `enforce accessibility` over the downloaded Result and publishes the outcome as its
+  `accessibility` job output, so the accessibility verdict travels as data rather than being
+  inferred from a job status. It is not the required check on its own: it returns success
+  whenever no guarded path diverged, which says nothing about accessibility.
+- **`usabl-required`** is the required status check. It runs with `if: always()`, depends on
+  both other jobs, and is red unless the accessibility verdict and the policy verdict both
+  pass. It checks nothing out and runs no head code. Its rule handles the event split that
+  the `gate-comment` fence creates: on `pull_request` the scan must have succeeded, on
+  `pull_request_review` the scan must have been skipped by the fence and the artifact-derived
+  accessibility verdict is the authority, and any other event, a cancelled job, or a missing
+  verdict blocks. `always()` is load-bearing, because GitHub counts a skipped job as a
+  satisfied required check.
+
+Requiring `usabl-policy` instead of `usabl-required` reopens the hole this split closes:
+accessibility enforcement lives in `gate-comment`, which is fenced to `pull_request` and so
+cannot be required on a review event, and `usabl-policy` alone can be green while the scan
+is red.
 
 **Accepted residual risk:** within `gate-comment`, the fixture process and the sticky
 comment step share a job, so a hostile PR could try to spoof the comment. That job posts
-the comment but does not decide the gate; the required `usabl-policy` job is isolated and
-does not trust the comment. Accepted for the private team fixture.
+the comment but does not decide the gate; the `usabl-policy` and `usabl-required` jobs are
+isolated and do not trust the comment. That same job boundary now carries a required
+verdict: on a `pull_request` event `usabl-result.json` is written and uploaded from
+`gate-comment`, which is also the job that runs head code through `npm ci` and the fixture
+server, so a hostile author has a window in which to overwrite their own Result before it
+is uploaded. The `pull_request_review` path is stronger, because it downloads the artifact
+from a completed run for that exact head and executes no head code at all. This is not a
+new opening: before `usabl-required` existed, accessibility was not a required check at
+all and a regression merged with no effort, whereas now one merges only if the author
+actively tampers. Accepted for the private team fixture.
 
-The engine's own checked-in `.github/workflows/usabl-gate.yml` runs the same two jobs with
+The engine's own checked-in `.github/workflows/usabl-gate.yml` runs the same three jobs with
 the same event fence, the same numeric PR guard, the same artifact handoff, and the same
 policy isolation. It differs in one way, because the engine is the repository: there is no
 external-engine pin and no `USABL_ENGINE_CHECKOUT_TOKEN`. `usabl-policy` builds the base

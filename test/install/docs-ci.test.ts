@@ -1,6 +1,6 @@
 /**
  * The docs CI generator emits a security-critical gate workflow for rendered documentation.
- * It is the docs sibling of the app gate: same two-job fork-secrets model, same pinned action
+ * It is the docs sibling of the app gate: same three-job fork-secrets model, same pinned action
  * SHAs, same engine-ref sentinel that is never fabricated. The only differences are the build
  * and serve steps, because usabl does not serve the built docs itself. It writes only when the
  * file is absent, no-ops when byte-identical, and refuses when a hand-tuned workflow differs.
@@ -33,11 +33,12 @@ function memoryFs(files: Record<string, string>): InstallFs & { store: Record<st
 }
 
 describe('USABL_DOCS_GATE_WORKFLOW security properties', () => {
-  it('keeps the two-job pattern and every fork-safety property of the app gate', () => {
+  it('keeps the three-job pattern and every fork-safety property of the app gate', () => {
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('name: usabl-docs-gate');
     // gate-comment is the only job allowed to run PR head code, fenced to pull_request.
     expect(USABL_DOCS_GATE_WORKFLOW).toContain("if: github.event_name == 'pull_request'");
-    // usabl-policy is the required status check that re-runs on review and reads head as objects only.
+    // usabl-policy re-runs on review and reads head as objects only. The check an operator
+    // requires is the usabl-required aggregate; see gate-topology.test.ts for that shape.
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('usabl-policy:');
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('needs: gate-comment');
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"');

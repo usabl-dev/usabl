@@ -89,16 +89,19 @@ each stage matters; this section is what a team actually types, in order.
     writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`,
     so the assistant can run the advisory self-check during work. The engine ships the
     skill body, so the installed command cannot drift from the CLI it calls.
-13. (automatic, `usabl install --ci`) Writes the two-job
-    `.github/workflows/usabl-gate.yml` draft: `gate-comment` for the sticky PR comment
-    and the required `usabl-policy` check. Replace the `PIN_TO_A_TRUSTED_USABL_COMMIT`
-    sentinel with a full engine SHA. The workflow runs
+13. (automatic, `usabl install --ci`) Writes the three-job
+    `.github/workflows/usabl-gate.yml` draft: `gate-comment` for the sticky PR comment,
+    `usabl-policy` for the policy verdict, and `usabl-required`, the aggregate that is red
+    unless the accessibility verdict and the policy verdict both pass. Replace the
+    `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel with a full engine SHA. The workflow runs
     `usabl check --ci --trusted-ref origin/<base-ref>`; the trusted ref is what stops a
     PR from rewriting the floor and approving itself, because policy is read from the
     trusted base and the `usabl-policy` job never checks out PR head.
-14. (human) Turn on branch protection so the `usabl-policy` check is required, then run
+14. (human) Turn on branch protection so the `usabl-required` check is required, then run
     `usabl install --branch-rule`. That target is read-only: it verifies through the
-    GitHub API that `main` requires the check and writes nothing.
+    GitHub API that `main` requires the check and writes nothing. Require `usabl-required`,
+    not `usabl-policy`: `usabl-policy` returns success whenever no guarded path diverged, so
+    on its own it can be green while an accessibility regression merges.
 15. (human, `usabl doctor`) Run the read-only health check across every wired surface.
     It reports each as wired, missing, drifted, or unknown, and always exits 0.
 
@@ -209,11 +212,11 @@ pin the engine and turn on branch protection.
 
 | Entry point | Command | What it wires | Value |
 |---|---|---|---|
-| **CI gate** | `usabl install --ci` | Writes `.github/workflows/usabl-gate.yml`, a two-job draft (`gate-comment` and the required `usabl-policy` check). The engine ref is left as the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel for you to replace with a full commit SHA. | Sticky PR comment plus a fail-closed gate |
+| **CI gate** | `usabl install --ci` | Writes `.github/workflows/usabl-gate.yml`, a three-job draft (`gate-comment`, `usabl-policy`, and the required `usabl-required` aggregate). The engine ref is left as the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel for you to replace with a full commit SHA. | Sticky PR comment plus a fail-closed gate |
 | **Dev-server overlay** | `usabl install --overlay` | Wires the advisory Vite plugin into `vite.config.ts`. Writes a draft when no config exists, no-ops when already wired, and refuses to clobber a hand-tuned config. | Advisory findings badge while coding |
 | **Assistant hook** | `usabl install --claude` | Wires a Stop hook running `npx usabl stop-hook` into `.claude/settings.json`. | Blocks an assistant "done" on a blocking verdict |
 | **Assistant skill** | `usabl install --claude-skill` | Writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`, running the advisory `npx usabl check --self-check`. Writes a draft when absent, no-ops when it matches, and refuses to clobber a differing file. | The assistant can self-check mid-task without leaving the editor |
-| **Branch rule** | `usabl install --branch-rule` | Read-only verification through a `gh` GET that branch `main` requires the `usabl-policy` status check. Writes nothing. | Confirms the gate is actually enforced |
+| **Branch rule** | `usabl install --branch-rule` | Read-only verification through a `gh` GET that branch `main` requires the `usabl-required` status check. Writes nothing. | Confirms the gate is actually enforced |
 | **Playwright test** | `usabl/playwright` export | `assertUsablVerdict(result, allowed)` asserts a gated Result's verdict inside an existing Playwright suite. It reads a Result; it never mints one. | Reuse a check verdict in tests you already run |
 
 After wiring, `usabl doctor` gives a read-only projection of every surface and reports
@@ -322,7 +325,7 @@ PatternFly team accepts the upstream rulepack proposal.
 |---|---|
 | **npm** (`usabl`) | Primary install path; run `npx usabl init` then `usabl check` |
 | **GitHub** (`usabl-dev/usabl`) | Source, issues, contributions, releases (Apache-2.0) |
-| **GitHub Action draft** | `usabl install --ci` writes the workflow; you pin the engine SHA and require the `usabl-policy` check |
+| **GitHub Action draft** | `usabl install --ci` writes the workflow; you pin the engine SHA and require the `usabl-required` check |
 
 No paid tier, no freemium gate, no telemetry-gated features. Apache-2.0.
 
@@ -335,7 +338,7 @@ No paid tier, no freemium gate, no telemetry-gated features. Apache-2.0.
 | Discover | README views, clone count | GitHub Insights |
 | Try | First `usabl check` run (anon, opt-in only) | None in contest; future opt-in telemetry decision |
 | Integrate | Repos with `usabl.config.json` or the `usabl-gate` CI workflow | GitHub search (public), self-reported (private) |
-| Expand | Repos gating on the `usabl-policy` check | GitHub search, self-reported |
+| Expand | Repos gating on the `usabl-required` check | GitHub search, self-reported |
 | Contribute | PRs from non-core contributors | GitHub |
 
 **Contest scope:** Adoption metrics are defined for the post-contest pilot. The contest
