@@ -406,7 +406,10 @@ describe('runBaseline', () => {
     expect(result.exitCode).toBe(4);
     expect(result.wrote).toBe(false);
     expect(writer.writes).toHaveLength(0);
-    expect(result.message).toContain('crashed');
+    // The refusal carries the run's own reason, because exit 4 also covers a run that finished
+    // and never saw the application.
+    expect(result.message).toContain('unhandled error: browser disconnected');
+    expect(result.message).toContain('No baseline floor was written');
   });
 
   it('refuses with exit 2 when no UI files match the configured globs', async () => {
