@@ -46,6 +46,7 @@ import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
 import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
+import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
 
 export async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
@@ -421,6 +422,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       gh: makeGhReader(),
       configPath: opts.configPath,
       env: process.env,
+      probePlaywrightChromium,
     };
     const outcome = await runDoctor(deps);
     process.stdout.write(outcome.stdout);

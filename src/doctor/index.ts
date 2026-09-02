@@ -24,6 +24,7 @@ import { EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
 import { parseWaiverLedger } from '../run.js';
 import { readStorageStateEnv, STORAGE_STATE_ENV_VAR, type EnvReader } from '../deps/session.js';
 import { neutralize } from '../primitives/neutralize.js';
+import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
 
 // The waiver ledger path the gate reads. There is no shared constant for it today (run.ts,
 // guard.ts, and init all use the literal), so doctor names it locally rather than invent a
@@ -45,6 +46,7 @@ const CLAUDE_SKILL_LABEL = 'claude usabl-check skill (.claude/skills/usabl-check
 const CURSOR_LABEL = 'cursor assistant (.cursor/commands + rules)';
 const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
 const BRANCH_RULE_LABEL = 'branch protection (main requires usabl-policy)';
+const PLAYWRIGHT_CHROMIUM_LABEL = 'playwright chromium (headless browser)';
 
 // Four states, and unknown is first class. wired is a positive confirmation. missing is a
 // confident absence. drifted is present-but-not-what-usabl-expects. unknown is "cannot
@@ -73,6 +75,9 @@ export interface DoctorDeps {
   // The process environment, injected for the same reason fs and gh are: a collector that
   // reached for process.env directly would be a surface no test could set up honestly.
   env: EnvReader;
+  // Probes the Playwright Chromium install that "usabl check" uses for browser scans. Injected
+  // in tests so doctor never reaches the real environment.
+  probePlaywrightChromium: () => Promise<PlaywrightBootstrapProbe>;
 }
 
 function isFsReadError(error: unknown): boolean {
@@ -427,6 +432,29 @@ async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
   };
 }
 
+async function collectPlaywrightChromium(deps: DoctorDeps): Promise<SurfaceReport> {
+  const state = await deps.probePlaywrightChromium();
+  if (state === 'wired') {
+    return { id: 'playwright-chromium', label: PLAYWRIGHT_CHROMIUM_LABEL, state: 'wired', nextStep: '' };
+  }
+  if (state === 'missing') {
+    return {
+      id: 'playwright-chromium',
+      label: PLAYWRIGHT_CHROMIUM_LABEL,
+      state: 'missing',
+      nextStep:
+        'Chromium is not installed for Playwright. Run "npx playwright install chromium" from your app root. On Linux, if launch still fails, run "npx playwright install --with-deps chromium". Until Chromium is installed, "usabl check" returns not_covered for every screen.',
+    };
+  }
+  return {
+    id: 'playwright-chromium',
+    label: PLAYWRIGHT_CHROMIUM_LABEL,
+    state: 'unknown',
+    nextStep:
+      'usabl could not confirm whether Playwright Chromium is installed. Run "npx playwright install chromium" and try again.',
+  };
+}
+
 async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
   // verified is the only wired mapping. not-applied is a confident absence (missing).
   // cannot-verify (gh missing, ambiguous 404, unreadable response) is unknown, because
@@ -452,9 +480,10 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
 }
 
 export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceReport[]> {
-  // Order mirrors the slice: config, authenticated session, routes, evidence floor, waivers,
-  // overlay, stop hook, usabl-check skill, cursor assistant, ci workflow, branch rule. The
-  // session sits second because it decides what every later scan actually measures. Each
+  // Order mirrors the slice: config, authenticated session, playwright chromium, routes,
+  // evidence floor, waivers, overlay, stop hook, usabl-check skill, cursor assistant, ci
+  // workflow, branch rule. The session sits second because it decides what every later scan
+  // actually measures. Each
   // collector is self-contained health logic with no printing,
   // so tests can target the states directly. guardRead absorbs an unexpected fs read error as
   // an honest unknown; every recognized state (including drifted and unknown) is returned, and
@@ -462,6 +491,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
   return [
     await guardRead('config', CONFIG_LABEL, () => collectConfig(deps)),
     await guardRead('session', SESSION_LABEL, () => collectSession(deps)),
+    await guardRead('playwright-chromium', PLAYWRIGHT_CHROMIUM_LABEL, () => collectPlaywrightChromium(deps)),
     await guardRead('routes', ROUTES_LABEL, () => collectRoutes(deps)),
     await guardRead('evidence-floor', EVIDENCE_FLOOR_LABEL, () => collectEvidenceFloor(deps)),
     await guardRead('waivers', WAIVERS_LABEL, () => collectWaivers(deps)),
