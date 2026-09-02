@@ -19,6 +19,9 @@ async function makeDialogContext(options: {
   openOnClick: boolean;
   focusMovesIntoDialog: boolean;
   focusReturnsToTrigger: boolean;
+  // SEL.dialogTrigger also matches plain disclosure controls, which promise nothing about
+  // dialogs. Default to the declared trigger, the case where a missing dialog is a finding.
+  declaresDialog?: boolean;
 }): Promise<ProviderContext> {
   const deps = makeFakeDeps();
   const page = await deps.browser.open(SCREEN.url);
@@ -42,6 +45,12 @@ async function makeDialogContext(options: {
       }
       if (selector === dialog.selector) {
         return axNode('Details modal', 'dialog');
+      }
+      return null;
+    },
+    getAttribute: async (selector: string, name: string) => {
+      if (selector === trigger.selector && name === 'aria-haspopup') {
+        return options.declaresDialog === false ? null : 'dialog';
       }
       return null;
     },
@@ -196,6 +205,23 @@ describe('rulepack interaction probes', () => {
       severity: 'serious',
       elementPath: '#dialog-trigger',
     });
+  });
+
+  it('stays silent when a plain disclosure control opens something that is not a dialog', async () => {
+    // SEL.dialogTrigger matches every aria-expanded plus aria-controls pair, so it picks up
+    // accordions and filter toggles as well as modal triggers. Those never promised a dialog,
+    // so reporting them would be a claim about the page that the probe cannot support.
+    const provider = makeRulepackProvider([]);
+    const ctx = await makeDialogContext({
+      openOnClick: false,
+      focusMovesIntoDialog: false,
+      focusReturnsToTrigger: false,
+      declaresDialog: false,
+    });
+
+    const drafts = await provider.run(ctx);
+
+    expect(drafts).toEqual([]);
   });
 
   it('emits pf-kebab-expanded-state fail when menu opens without moving focus into it', async () => {
