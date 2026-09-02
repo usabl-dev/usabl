@@ -16,10 +16,11 @@ describe('parseCliArgs install family', () => {
     expect(parseCliArgs(['stop-hook']).command).toBe('stop-hook');
   });
 
-  it('parses each of the six install target flags', () => {
+  it('parses each of the seven install target flags', () => {
     expect(parseCliArgs(['install', '--overlay']).installTarget).toBe('overlay');
     expect(parseCliArgs(['install', '--claude']).installTarget).toBe('claude');
     expect(parseCliArgs(['install', '--claude-skill']).installTarget).toBe('claude-skill');
+    expect(parseCliArgs(['install', '--cursor']).installTarget).toBe('cursor');
     expect(parseCliArgs(['install', '--ci']).installTarget).toBe('ci');
     expect(parseCliArgs(['install', '--docs-ci']).installTarget).toBe('docs-ci');
     expect(parseCliArgs(['install', '--branch-rule']).installTarget).toBe('branch-rule');
