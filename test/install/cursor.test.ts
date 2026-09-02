@@ -40,6 +40,24 @@ describe('CURSOR assistant contents', () => {
     );
   });
 
+  it('passes single files through and only appends extensions to directory globs', () => {
+    // A declared UI file is not a directory. Appending /**/*.{tsx,jsx,css} to it matches
+    // nothing, which is the silent non-coverage this derivation exists to prevent.
+    expect(cursorRuleGlobs(['src/demo/scenarios.ts'])).toBe('src/demo/scenarios.ts');
+    expect(cursorRuleGlobs(['src/lib/variant.ts'])).toBe('src/lib/variant.ts');
+    expect(cursorRuleGlobs(['src/components/DemoControls.tsx'])).toBe(
+      'src/components/DemoControls.tsx',
+    );
+    expect(cursorRuleGlobs(['src/pages/*.tsx'])).toBe('src/pages/*.tsx');
+    expect(cursorRuleGlobs(['src/index.css'])).toBe('src/index.css');
+    expect(cursorRuleGlobs(['src/**'])).toBe('src/**/*.{tsx,jsx,css}');
+    expect(cursorRuleGlobs(['src/components/*'])).toBe('src/components/**/*.{tsx,jsx,css}');
+    expect(cursorRuleGlobs(['src'])).toBe('src/**/*.{tsx,jsx,css}');
+    expect(cursorRuleGlobs(['src/**', 'src/demo/scenarios.ts'])).toBe(
+      'src/**/*.{tsx,jsx,css},src/demo/scenarios.ts',
+    );
+  });
+
   it('states the command is advisory and that the gate decides proof', () => {
     expect(CURSOR_COMMAND_CONTENTS.toLowerCase()).toContain('advisory');
     expect(CURSOR_COMMAND_CONTENTS).toContain('gate');

@@ -53,7 +53,14 @@ export function cursorRuleGlobs(uiFileGlobs: string[]): string {
   const sources = resolveCursorUiFileGlobs(uiFileGlobs);
   return sources
     .map((glob) => {
-      if (glob.includes('{') || /\.(tsx|jsx|css)(\*|$)/.test(glob)) {
+      if (glob.includes('{')) {
+        return glob;
+      }
+      // A last segment with a dot names a file or a file pattern, so it already selects files.
+      // Appending an extension pattern would treat that file as a directory and match nothing,
+      // which silently drops UI the config declared.
+      const lastSegment = glob.slice(glob.lastIndexOf('/') + 1);
+      if (lastSegment.includes('.')) {
         return glob;
       }
       if (glob.endsWith('/**')) {
