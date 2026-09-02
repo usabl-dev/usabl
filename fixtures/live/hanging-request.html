@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>usabl hanging request fixture</title>
+  </head>
+  <body>
+    <main>
+      <h1>Hanging request fixture</h1>
+      <button id="only-button" type="button">Retry</button>
+    </main>
+    <script>
+      // The DOM is finished but a request never returns, so the network never goes quiet. The two
+      // failures have different fixes, so readiness has to name which one ran out.
+      fetch('/hang');
+    </script>
+  </body>
+</html>

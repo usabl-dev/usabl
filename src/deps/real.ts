@@ -9,8 +9,23 @@ import { chromium, type Browser, type BrowserContext, type CDPSession, type Page
 import type { AxNode, BrowserDriver, Page } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue } from '../providers/axe/index.js';
 
-const READY_TIMEOUT_MS = 15_000;
+// Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
+// Ansible Automation Platform screen measured 12.4 s to network idle plus 13.3 s to a DOM that
+// stopped changing, and 15 s failed every screen of it. The default clears that 25.7 s by more
+// than double, because the same lab is slower under load and the number also has to hold for
+// applications nobody has measured yet. Only a page that never settles spends the whole budget,
+// and that is already an error path that ends as a disclosed coverage gap rather than a scan.
+// An operator whose application needs longer sets readyTimeoutMs in usabl.config.json.
+const DEFAULT_READY_TIMEOUT_MS = 60_000;
 const CLICK_TIMEOUT_MS = 3_000;
+// How often readiness re-reads the page, and how many equal reads in a row mean it stopped changing.
+// Four equal reads 500 ms apart is 1.5 seconds of a DOM that is not moving. The window has to
+// outlast the pause between two render passes, and a shorter one does not: a 500 ms window measured
+// against a page that mounts in two bursts settled on the first burst and reported 3 elements on a
+// page that ends at 104, which is the failure this wait exists to prevent. A settled page pays the
+// window once, which is small next to the rest of a screen scan.
+const SETTLE_SAMPLE_INTERVAL_MS = 500;
+const SETTLE_SAMPLES_REQUIRED = 4;
 
 // Inject before app scripts run so the first live update is observable and not lost.
 // Late injection would under-report announcements and create a false sense of coverage.
@@ -259,6 +274,87 @@ async function stablePathsForSelector(pw: PwPage, selector: string): Promise<str
   }, selector);
 }
 
+// The readiness surface of a Playwright page. Narrow on purpose so the wait can be driven by a
+// scripted page in tests without a browser.
+interface ReadinessPage {
+  waitForLoadState(state: 'networkidle', options: { timeout: number }): Promise<void>;
+  evaluate(fn: () => number): Promise<number>;
+}
+
+/**
+ * The readiness budget for a run: the operator's number when the config names one, the engine
+ * default otherwise.
+ */
+export function readyTimeoutMsFor(config: { readyTimeoutMs?: number }): number {
+  return config.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+}
+
+// Playwright marks its own timeouts with this name. Anything else out of a page call is a real
+// failure, such as a closed context, and relabelling it as a timeout would send the operator to
+// the wrong fix.
+function isTimeout(err: unknown): boolean {
+  return err instanceof Error && err.name === 'TimeoutError';
+}
+
+// "Timeout 15000ms exceeded" does not say whether the network never went quiet or the DOM never
+// stopped moving, and those have different fixes: a stuck request against an app or a lab that
+// renders slower than the budget allows.
+function readinessTimeout(phase: string, timeoutMs: number, detail: string): string {
+  return `page ${phase} within ${timeoutMs}ms${detail}; raise readyTimeoutMs in usabl.config.json if this application needs longer`;
+}
+
+/**
+ * Waits for the network to go quiet and then for the DOM to stop changing, inside one budget.
+ *
+ * Network idle is a network fact. A client-rendered application mounts after the last response
+ * settles because render is CPU work, so waiting on the network alone hands the scan an empty page:
+ * every tab stop resolves to body and the run reports a clean screen it never saw.
+ *
+ * The stability signal is the total element count. It moves whenever a framework mounts or swaps a
+ * subtree, it costs one live-collection read in page context, and no application has to cooperate.
+ * Focusable count was the other candidate and it is weaker here: a screen with no focusable elements
+ * reads a constant zero from the first sample, so it would be called ready while it was still
+ * rendering. Stability is the test, not volume, so a page that settles at zero elements is ready
+ * because an empty state is a real page.
+ *
+ * Both phases share timeoutMs, so one operator number covers the whole cost of reaching a screen.
+ * Running out throws, and the message names the phase that ran out because the fixes differ. The
+ * caller discloses that as a coverage gap, which is honest, where returning quietly would publish
+ * a measurement of a page that had not arrived.
+ *
+ * Exported for tests. Product code reaches this through Page.gotoReady().
+ */
+export async function waitForRendered(pw: ReadinessPage, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  try {
+    await pw.waitForLoadState('networkidle', { timeout: timeoutMs });
+  } catch (err) {
+    if (!isTimeout(err)) {
+      throw err;
+    }
+    throw new Error(readinessTimeout('network activity did not go quiet', timeoutMs, ''));
+  }
+
+  let previous: number | null = null;
+  let repeats = 0;
+  for (;;) {
+    const elements = await pw.evaluate(() => document.getElementsByTagName('*').length);
+    repeats = elements === previous ? repeats + 1 : 1;
+    previous = elements;
+    if (repeats >= SETTLE_SAMPLES_REQUIRED) {
+      return;
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new Error(
+        readinessTimeout('DOM did not stop changing', timeoutMs, `, last element count ${elements}`),
+      );
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(SETTLE_SAMPLE_INTERVAL_MS, remaining)));
+  }
+}
+
 function attachAxeBridge(page: Page, pw: PwPage): void {
   Object.assign(page, {
     runAxe: async (options?: { tags?: readonly string[] }): Promise<AxeResult> => {
@@ -274,10 +370,10 @@ function attachAxeBridge(page: Page, pw: PwPage): void {
   });
 }
 
-function wrapPage(pw: PwPage, context: BrowserContext, cdp: CDPSession): Page {
+function wrapPage(pw: PwPage, context: BrowserContext, cdp: CDPSession, readyTimeoutMs: number): Page {
   const page: Page = {
     async gotoReady(): Promise<void> {
-      await pw.waitForLoadState('networkidle', { timeout: READY_TIMEOUT_MS });
+      await waitForRendered(pw, readyTimeoutMs);
     },
     async focusBody(): Promise<void> {
       await pw.evaluate(() => {
@@ -450,12 +546,16 @@ export async function adoptPage(pw: PwPage): Promise<Page> {
   const cdp = await context.newCDPSession(pw);
   await cdp.send('Accessibility.enable');
   await pw.evaluate(installPathHelper);
-  const page = wrapPage(pw, context, cdp);
+  // Adoption has no operator config to read, so a caller that does use gotoReady gets the default.
+  const page = wrapPage(pw, context, cdp, readyTimeoutMsFor({}));
   return { ...page, close: async (): Promise<void> => {} };
 }
 
-export function makeRealBrowserDriver(options: { storageStatePath?: string } = {}): BrowserDriver {
+export function makeRealBrowserDriver(
+  options: { storageStatePath?: string; readyTimeoutMs?: number } = {},
+): BrowserDriver {
   let browser: Browser | null = null;
+  const readyTimeoutMs = readyTimeoutMsFor(options);
 
   return {
     async open(url: string): Promise<Page> {
@@ -467,9 +567,10 @@ export function makeRealBrowserDriver(options: { storageStatePath?: string } = {
       await page.addInitScript(LIVE_AND_PATH_INIT_SCRIPT);
       const cdp = await context.newCDPSession(page);
       await cdp.send('Accessibility.enable');
-      // open() owns navigation and gotoReady() only waits for readiness.
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: READY_TIMEOUT_MS });
-      return wrapPage(page, context, cdp);
+      // open() owns navigation and gotoReady() only waits for readiness. Navigation takes the same
+      // budget, so one config number covers the whole cost of reaching a screen.
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });
+      return wrapPage(page, context, cdp, readyTimeoutMs);
     },
     async close(): Promise<void> {
       if (browser !== null) {

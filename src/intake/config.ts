@@ -26,6 +26,16 @@ function expectStringArray(value: unknown, label: string): string[] {
   return value;
 }
 
+// A budget of zero, a negative, a fraction, or a string would either fail every screen or fail
+// deep inside a browser call. Refusing it here keeps the failure at config load, before a run
+// launches anything.
+function expectPositiveWholeNumber(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive whole number of milliseconds`);
+  }
+  return value;
+}
+
 function parseSurface(raw: unknown, index: number): SurfaceConfig {
   const surface = expectObject(raw, `surfaces[${index}]`);
   return {
@@ -52,6 +62,12 @@ export function parseUsablConfig(raw: string): UsablConfig {
   const promotedObligations =
     promotedRaw === undefined ? undefined : expectStringArray(promotedRaw, 'promotedObligations');
 
+  const readyTimeoutRaw = Reflect.get(root, 'readyTimeoutMs');
+  const readyTimeoutMs =
+    readyTimeoutRaw === undefined
+      ? undefined
+      : expectPositiveWholeNumber(readyTimeoutRaw, 'readyTimeoutMs');
+
   return {
     appBaseUrl: expectString(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
     uiFileGlobs: expectStringArray(Reflect.get(root, 'uiFileGlobs'), 'uiFileGlobs'),
@@ -63,5 +79,6 @@ export function parseUsablConfig(raw: string): UsablConfig {
     guardedPaths: expectStringArray(Reflect.get(root, 'guardedPaths'), 'guardedPaths'),
     ...(requirements === undefined ? {} : { requirements }),
     ...(promotedObligations === undefined ? {} : { promotedObligations }),
+    ...(readyTimeoutMs === undefined ? {} : { readyTimeoutMs }),
   };
 }

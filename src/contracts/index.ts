@@ -356,6 +356,10 @@ export interface UsablConfig {
   // edits cannot hide in newly added files under a listed prefix.
   guardedPaths: string[];
   promotedObligations?: string[]; // empty by default; listed classes may become deterministic voicing misses; the engine never writes this list
+  // Whole-milliseconds budget for one screen to navigate, go quiet, and stop rendering. It lives
+  // in operator config because how long an application takes to render is a property of that
+  // application, not of the engine. Absent means the engine default.
+  readyTimeoutMs?: number;
 }
 
 export type Capability = 'live' | 'network' | 'secrets' | 'filesystem-write';

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>usabl never settles fixture</title>
+  </head>
+  <body>
+    <main id="root">
+      <h1>Never settles fixture</h1>
+    </main>
+    <script>
+      // A page that keeps rewriting itself forever. Readiness can never call this stable, so the
+      // run has to give up inside its budget and disclose the screen instead of measuring it.
+      (() => {
+        const root = document.getElementById('root');
+        setInterval(() => {
+          const row = document.createElement('p');
+          row.textContent = 'Row ' + String(Date.now());
+          root?.appendChild(row);
+        }, 100);
+      })();
+    </script>
+  </body>
+</html>
