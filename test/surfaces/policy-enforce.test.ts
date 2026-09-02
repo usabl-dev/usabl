@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import type { Result } from '../../src/contracts/index.js';
 import {
@@ -9,6 +10,7 @@ import {
   parsePullRequestEvent,
   parseResultJson,
   type PolicyEnforceDeps,
+  type PolicyReview,
 } from '../../src/surfaces/policy-enforce.js';
 
 const result = (over: Partial<Result>): Result => ({
@@ -277,6 +279,96 @@ describe('enforcePolicy', () => {
     );
     expect(out.exitCode).toBe(2);
     expect(out.message).toContain('user login');
+  });
+
+  it('fails closed and names a CODEOWNERS pattern it cannot interpret', async () => {
+    const out = await enforcePolicy(
+      policyResult,
+      deps({
+        gitOver: { codeowners: 'src/**/*.ts @alice\n' },
+        listReviews: async () => [{ userLogin: 'alice', state: 'APPROVED', commitId: 'abc' }],
+      }),
+    );
+    expect(out.exitCode).toBe(2);
+    expect(out.message).toContain('src/**/*.ts');
+  });
+});
+
+/**
+ * These cases run this repository's own CODEOWNERS and its own guardedPaths, because a
+ * matcher exercised only on invented patterns is what let the leading-slash bug ship.
+ */
+describe('enforcePolicy against this repository CODEOWNERS', () => {
+  const head = 'ac4c2b439d4ca130b07d4c0013fbc036efc61eeb';
+
+  async function repoDeps(over: {
+    dirty: string;
+    author?: string;
+    reviews?: PolicyReview[];
+  }): Promise<PolicyEnforceDeps> {
+    const codeowners = await readFile(new URL('../../.github/CODEOWNERS', import.meta.url), 'utf8');
+    const config = await readFile(new URL('../../usabl.config.json', import.meta.url), 'utf8');
+    const trusted: Record<string, string> = {
+      'usabl.config.json': config,
+      '.github/CODEOWNERS': codeowners,
+      [over.dirty]: 'trusted bytes',
+    };
+    const headTable: Record<string, string> = { ...trusted, [over.dirty]: 'head bytes' };
+    const table = (ref: string): Record<string, string> => (ref === 'origin/main' ? trusted : headTable);
+    return {
+      trustedRef: 'origin/main',
+      pr: { authorLogin: over.author ?? 'eparenti', headSha: head },
+      git: {
+        show: async (ref, path) => table(ref)[path] ?? null,
+        lsFiles: async (ref, prefix) => {
+          const normalized = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+          return Object.keys(table(ref))
+            .filter((path) => path === normalized || path.startsWith(`${normalized}/`))
+            .sort();
+        },
+      },
+      listReviews: async () => over.reviews ?? [],
+    };
+  }
+
+  it('accepts a real owner approval of the current head on a guarded path', async () => {
+    const out = await enforcePolicy(
+      policyResult,
+      await repoDeps({
+        dirty: 'src/gate/index.ts',
+        author: 'eparenti',
+        reviews: [{ userLogin: 'vishsanghishetty', state: 'APPROVED', commitId: head }],
+      }),
+    );
+    expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
+  });
+
+  it('still refuses a guarded path whose owners have not approved this head', async () => {
+    const out = await enforcePolicy(
+      policyResult,
+      await repoDeps({
+        dirty: 'src/trust/guard.ts',
+        author: 'eparenti',
+        reviews: [{ userLogin: 'vishsanghishetty', state: 'APPROVED', commitId: 'stale' }],
+      }),
+    );
+    expect(out.exitCode).toBe(2);
+    expect(out.message).toContain('approval required');
+    expect(out.message).not.toContain('no CODEOWNERS rule covers');
+  });
+
+  it('says no rule covers a dirty guarded path that CODEOWNERS never names', async () => {
+    const out = await enforcePolicy(
+      policyResult,
+      await repoDeps({
+        dirty: '.usabl-evidence.json',
+        author: 'eparenti',
+        reviews: [{ userLogin: 'vishsanghishetty', state: 'APPROVED', commitId: head }],
+      }),
+    );
+    expect(out.exitCode).toBe(2);
+    expect(out.message).toBe('no CODEOWNERS rule covers .usabl-evidence.json');
+    expect(out.message).not.toContain('approval required');
   });
 });
 

@@ -4,7 +4,7 @@
  * Accessibility and policy checks split GitHub required status only.
  * GitHub review lookup is injected. `run()` stays GitHub-free.
  */
-import { matchGlob } from '../primitives/match-glob.js';
+import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
 import type { Result } from '../contracts/index.js';
 import { listDivergedGuardedPathsAtRefs } from '../trust/guard.js';
 
@@ -170,14 +170,33 @@ export async function enforcePolicy(result: Result, deps: PolicyEnforceDeps): Pr
   const reviews = await deps.listReviews();
   const latest = latestDecisiveReviewByUser(reviews);
   const author = deps.pr.authorLogin.toLowerCase();
-  const uncovered = dirtyGuardedPaths.filter(
-    (path) => !pathHasQualifyingApproval(path, parsed.rules, latest, author, deps.pr.headSha),
-  );
-  if (uncovered.length > 0) {
-    return {
-      exitCode: 2,
-      message: 'approval required: each dirty guarded path needs a CODEOWNERS user review of this head that is not the PR author',
-    };
+
+  // Two different facts used to share one message. A path with owners who have not
+  // approved is a request a reviewer can answer. A path no rule covers is usabl unable to
+  // evaluate the rule at all, and no review will ever clear it. Both still refuse, they
+  // just no longer read the same, so an unsatisfiable gate cannot pass for a busy one.
+  const unowned: string[] = [];
+  const unapproved: string[] = [];
+  for (const path of dirtyGuardedPaths) {
+    const owners = ownersFor(parsed.rules, path);
+    if (owners.size === 0) {
+      unowned.push(path);
+    } else if (!ownerApprovedHead(owners, latest, author, deps.pr.headSha)) {
+      unapproved.push(path);
+    }
+  }
+
+  const reasons: string[] = [];
+  if (unowned.length > 0) {
+    reasons.push(`no CODEOWNERS rule covers ${unowned.join(', ')}`);
+  }
+  if (unapproved.length > 0) {
+    reasons.push(
+      `approval required: no CODEOWNERS user other than the PR author approved this head for ${unapproved.join(', ')}`,
+    );
+  }
+  if (reasons.length > 0) {
+    return { exitCode: 2, message: reasons.join('; ') };
   }
   return { exitCode: 0, message: 'policy owner approved current head' };
 }
@@ -185,6 +204,7 @@ export async function enforcePolicy(result: Result, deps: PolicyEnforceDeps): Pr
 interface CodeownersRule {
   pattern: string;
   users: string[];
+  match: (path: string) => boolean;
 }
 
 function parseCodeowners(raw: string): { ok: true; rules: CodeownersRule[] } | { ok: false; message: string } {
@@ -199,6 +219,13 @@ function parseCodeowners(raw: string): { ok: true; rules: CodeownersRule[] } | {
     const owners = parts.slice(1);
     if (pattern === undefined || owners.length === 0) {
       return { ok: false, message: 'CODEOWNERS line is missing a pattern or owner' };
+    }
+    // Same precedent as the org-team refusal below. A pattern this matcher cannot honour
+    // would otherwise yield a rule that owns nothing, which reads as "nobody owns this"
+    // instead of "usabl cannot tell".
+    const compiled = compileCodeownersPattern(pattern);
+    if (!compiled.ok) {
+      return { ok: false, message: `CODEOWNERS pattern ${pattern} is not supported: ${compiled.reason}` };
     }
     const users: string[] = [];
     for (const owner of owners) {
@@ -216,22 +243,17 @@ function parseCodeowners(raw: string): { ok: true; rules: CodeownersRule[] } | {
       }
       users.push(name.toLowerCase());
     }
-    rules.push({ pattern, users });
+    rules.push({ pattern, users, match: compiled.match });
   }
   return { ok: true, rules };
 }
 
-function pathHasQualifyingApproval(
-  path: string,
-  rules: CodeownersRule[],
+function ownerApprovedHead(
+  owners: Set<string>,
   latest: Map<string, PolicyReview>,
   author: string,
   headSha: string,
 ): boolean {
-  const owners = ownersFor(rules, [path]);
-  if (owners.size === 0) {
-    return false;
-  }
   return [...owners].some((owner) => {
     if (owner === author) {
       return false;
@@ -241,26 +263,15 @@ function pathHasQualifyingApproval(
   });
 }
 
-function ownersFor(rules: CodeownersRule[], paths: string[]): Set<string> {
-  const owners = new Set<string>();
-  for (const path of paths) {
-    // GitHub last-match-wins: a later rule for the same path replaces earlier owners.
-    // matchGlob is usabl's file glob (`*` does not cross `/`). Guarded policy
-    // files are root-level names, so last-match plus exact path is enough.
-    // This is not GitHub's full CODEOWNERS dialect.
-    let matched: CodeownersRule | null = null;
-    for (const rule of rules) {
-      if (matchGlob(rule.pattern, path) || rule.pattern === path) {
-        matched = rule;
-      }
-    }
-    if (matched !== null) {
-      for (const user of matched.users) {
-        owners.add(user);
-      }
+function ownersFor(rules: CodeownersRule[], path: string): Set<string> {
+  // GitHub last-match-wins: a later rule for the same path replaces earlier owners.
+  let matched: CodeownersRule | null = null;
+  for (const rule of rules) {
+    if (rule.match(path)) {
+      matched = rule;
     }
   }
-  return owners;
+  return new Set(matched === null ? [] : matched.users);
 }
 
 function latestDecisiveReviewByUser(reviews: PolicyReview[]): Map<string, PolicyReview> {
