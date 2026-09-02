@@ -14,6 +14,7 @@
  */
 import type {
   Coverage,
+  CoverageGap,
   Deps,
   EvidenceFloor,
   Finding,
@@ -36,7 +37,10 @@ import { overlayRequirementsFs } from './intake/overlay-fs.js';
 import { assertIso8601Utc } from './primitives/iso8601.js';
 import { checkGuard } from './trust/guard.js';
 
-const EMPTY_FLOOR: EvidenceFloor = { version: 1, entries: [] };
+// Declared here rather than imported from baseline/, which imports run() and would cycle.
+const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
+// Synthesized now, so it is version 2. It holds nothing, so nothing can hide behind it.
+const EMPTY_FLOOR: EvidenceFloor = { version: 2, entries: [] };
 
 export interface RunOptions {
   changedFiles?: string[];
@@ -129,13 +133,6 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
         }));
       }
     }
-    const coverage: Coverage = {
-      ...discoveredCoverage,
-      affected,
-      nothingToCheck,
-      unresolvedFiles: [...discoveredCoverage.unresolvedFiles, ...docsCoverage.unresolvedFiles],
-      gaps: [...discoveredCoverage.gaps, ...docsCoverage.gaps, ...screens.flatMap((screen) => screen.gaps)],
-    };
     const drafts = screens.flatMap((s) => s.drafts);
 
     const policyUntrusted = policyDivergedPaths.length > 0;
@@ -152,6 +149,19 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     };
     const floor = await readFloorOrEmpty(readTrustFile, policyUntrusted);
     const waivers = await readWaiversOrEmpty(readTrustFile, policyUntrusted);
+
+    const coverage: Coverage = {
+      ...discoveredCoverage,
+      affected,
+      nothingToCheck,
+      unresolvedFiles: [...discoveredCoverage.unresolvedFiles, ...docsCoverage.unresolvedFiles],
+      gaps: [
+        ...discoveredCoverage.gaps,
+        ...docsCoverage.gaps,
+        ...screens.flatMap((screen) => screen.gaps),
+        ...staleFloorGaps(floor),
+      ],
+    };
 
     const gated = gate({ coverage, guardDivergedPaths: policyDivergedPaths, drafts, floor, waivers, now: deps.clock() });
 
@@ -219,12 +229,33 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
   }
 }
 
+// A version 1 floor recorded a literal 1 for every name and structural entry instead of the
+// barriers it actually saw. Several barriers can neutralize to one of those keys, so the gate
+// cannot tell one accepted barrier from many and cannot compare their counts. Any green against
+// such a floor would be unproven, so disclose it as a coverage gap and let the verdict be
+// not_covered. Count-basis entries always carried real counts, so they need no disclosure.
+function staleFloorGaps(floor: EvidenceFloor): CoverageGap[] {
+  if (floor.version >= 2) return [];
+  const collapsible = floor.entries.filter((entry) => entry.identityBasis !== 'count');
+  if (collapsible.length === 0) return [];
+  return [{
+    ref: EVIDENCE_FLOOR_PATH,
+    state: 'not-covered',
+    reason:
+      `${EVIDENCE_FLOOR_PATH} predates count tracking (version 1), so ${collapsible.length} name or ` +
+      'structural entr' + (collapsible.length === 1 ? 'y' : 'ies') + ' record a placeholder count of 1 ' +
+      'instead of the barriers observed. Several barriers can share one of those identities, so this ' +
+      'run cannot compare their counts and cannot prove no new barrier is hiding behind an accepted one. ' +
+      'Run "usabl baseline" to regenerate the floor with real counts, then review and merge the diff.',
+  }];
+}
+
 async function readFloorOrEmpty(
   read: (path: string) => Promise<string | null>,
   policyUntrusted: boolean,
 ): Promise<EvidenceFloor> {
   try {
-    const floorValue = await readJson(read, '.usabl-evidence.json');
+    const floorValue = await readJson(read, EVIDENCE_FLOOR_PATH);
     return floorValue === null ? EMPTY_FLOOR : parseEvidenceFloor(floorValue);
   } catch (err) {
     if (policyUntrusted) return EMPTY_FLOOR;

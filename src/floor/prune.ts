@@ -161,7 +161,9 @@ export async function runFloorPrune(
     }
 
     const hasCoverageGaps = result.coverage.unresolvedFiles.length > 0 || result.coverage.gaps.length > 0;
-    const nextFloor = { version: 1 as const, entries: sortBy(keptEntries, floorEntrySortKey) };
+    // Prune only removes entries, so it must keep the version it read. Claiming version 2
+    // over version 1 counts would present placeholder counts as observed debt.
+    const nextFloor = { version: floor.version, entries: sortBy(keptEntries, floorEntrySortKey) };
     await floorFs.writeFile(EVIDENCE_FLOOR_PATH, `${JSON.stringify(nextFloor, null, 2)}\n`);
     return {
       exitCode: 0,

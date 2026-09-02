@@ -112,13 +112,14 @@ export function buildFindings(input: GateInput): Finding[] {
     return { ...draft, elementKey, identityBasis, status: 'new' };
   });
 
+  // Count every key, not only count-basis keys. Several barriers can neutralize to the same
+  // name or structural key and then collapse into one finding here. Without a tally, three
+  // barriers behind one floored identity read as the single barrier the floor accepted.
   const byIdentity = new Map<string, Finding>();
   const countByGroup = new Map<string, number>();
   for (const f of raw) {
     const key = identityKey(f);
-    if (f.identityBasis === 'count') {
-      countByGroup.set(key, (countByGroup.get(key) ?? 0) + 1);
-    }
+    countByGroup.set(key, (countByGroup.get(key) ?? 0) + 1);
     const existing = byIdentity.get(key);
     byIdentity.set(key, existing ? preferLayer(existing, f) : f);
   }
@@ -126,12 +127,19 @@ export function buildFindings(input: GateInput): Finding[] {
   const floorByKey = new Map<string, FloorEntry>();
   for (const e of input.floor.entries) floorByKey.set(identityKey(e), e);
 
+  // Version 1 floors wrote a literal 1 for name and structural entries, so those counts are
+  // not observations. Comparing them would report untouched surfaces as regressions. run()
+  // discloses a coverage gap for that case so the verdict cannot be a green we cannot support.
+  const countsAreObserved = (basis: Finding['identityBasis']): boolean =>
+    basis === 'count' || input.floor.version >= 2;
+
   const findings: Finding[] = [];
   for (const [key, f] of byIdentity) {
     const floor = floorByKey.get(key);
     if (!floor) { findings.push({ ...f, status: 'new' }); continue; }
-    // Count-based rules have no per-element key. A higher count than the floor is a regression.
-    if (f.identityBasis === 'count') {
+    if (countsAreObserved(f.identityBasis)) {
+      // More barriers at this identity than the floor accepted means new debt.
+      // Fewer is progress, never a regression, so it stays carried.
       const now = countByGroup.get(key) ?? 0;
       findings.push({ ...f, status: now > floor.count ? 'new' : 'carried' });
     } else {
