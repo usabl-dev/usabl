@@ -13,6 +13,12 @@ import type { InstallFs } from '../../src/install/index.js';
 import type { GhReader, GhResult } from '../../src/install/branch-rule.js';
 import { ENGINE_REF_PLACEHOLDER, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
 import { CLAUDE_SKILL_CONTENTS, CLAUDE_SKILL_PATH } from '../../src/install/claude-skill.js';
+import {
+  buildCursorRuleContents,
+  CURSOR_COMMAND_CONTENTS,
+  CURSOR_COMMAND_PATH,
+  CURSOR_RULE_PATH,
+} from '../../src/install/cursor.js';
 import { testConfig } from '../helpers.js';
 import {
   collectDoctorReport,
@@ -140,6 +146,8 @@ const FULLY_WIRED_FILES: Record<string, string> = {
   'vite.config.ts': WIRED_OVERLAY,
   '.claude/settings.json': WIRED_CLAUDE,
   [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS,
+  [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
+  [CURSOR_RULE_PATH]: buildCursorRuleContents(['fixtures/app/src/**']),
   '.github/workflows/usabl-gate.yml': PINNED_WORKFLOW,
   // The storage state lives outside the repository on purpose: it holds live session tokens
   // and must never be committed. Doctor reads it through the same fs port, by absolute path.
@@ -392,6 +400,51 @@ export default defineConfig({
       }),
     );
     expect(stateOf(reports, 'claude-skill')).toBe('drifted');
+  });
+
+  it('reports the canonical Cursor files as wired', async () => {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({
+          'usabl.config.json': VALID_CONFIG,
+          [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
+          [CURSOR_RULE_PATH]: buildCursorRuleContents(['fixtures/app/src/**']),
+        }),
+        gh: GH_UNAVAILABLE,
+        configPath: 'usabl.config.json',
+        env: NO_SESSION,
+      }),
+    );
+    expect(stateOf(reports, 'cursor')).toBe('wired');
+  });
+
+  it('reports missing Cursor wiring and names the install step', async () => {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({}),
+        gh: GH_UNAVAILABLE,
+        configPath: 'usabl.config.json',
+        env: NO_SESSION,
+      }),
+    );
+    expect(stateOf(reports, 'cursor')).toBe('missing');
+    expect(byId(reports, 'cursor').nextStep).toContain('--cursor');
+  });
+
+  it('reports a differing Cursor rule file as drifted, never wired', async () => {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({
+          'usabl.config.json': VALID_CONFIG,
+          [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
+          [CURSOR_RULE_PATH]: '---\nglobs: custom/**\n---\n',
+        }),
+        gh: GH_UNAVAILABLE,
+        configPath: 'usabl.config.json',
+        env: NO_SESSION,
+      }),
+    );
+    expect(stateOf(reports, 'cursor')).toBe('drifted');
   });
 
   it('reports a foreign Stop hook as unknown, never wired', async () => {

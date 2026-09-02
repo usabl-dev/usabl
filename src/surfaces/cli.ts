@@ -8,7 +8,7 @@ import { formatSummary } from '../output/summary.js';
 import { scrubResult } from './scrub.js';
 
 // The one integration each install run wires. Exactly one per invocation.
-export type InstallTarget = 'overlay' | 'claude' | 'claude-skill' | 'ci' | 'docs-ci' | 'branch-rule';
+export type InstallTarget = 'overlay' | 'claude' | 'claude-skill' | 'cursor' | 'ci' | 'docs-ci' | 'branch-rule';
 
 // The flags that name an install target, in the order the refusal message lists them.
 // --ci is dual-purpose: it keeps its CI-mode meaning on check and only names a target
@@ -17,7 +17,7 @@ export type InstallTarget = 'overlay' | 'claude' | 'claude-skill' | 'ci' | 'docs
 // documentation rather than the app dev server. --claude-skill is a distinct target from
 // --claude: --claude wires the Stop hook that gates continuation, while --claude-skill writes
 // the on-demand /usabl-check skill the assistant runs during implementation.
-export const INSTALL_TARGET_FLAGS = ['--overlay', '--claude', '--claude-skill', '--ci', '--docs-ci', '--branch-rule'] as const;
+export const INSTALL_TARGET_FLAGS = ['--overlay', '--claude', '--claude-skill', '--cursor', '--ci', '--docs-ci', '--branch-rule'] as const;
 
 export interface CliOptions {
   command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | 'install' | 'stop-hook' | 'doctor' | string;
@@ -52,7 +52,7 @@ function isFlag(value: string): boolean {
 // rather than half-wiring an integration.
 function resolveInstallTarget(
   command: string,
-  seen: { overlay: boolean; claude: boolean; claudeSkill: boolean; ci: boolean; docsCi: boolean; branchRule: boolean },
+  seen: { overlay: boolean; claude: boolean; claudeSkill: boolean; cursor: boolean; ci: boolean; docsCi: boolean; branchRule: boolean },
 ): InstallTarget | null {
   if (command !== 'install') {
     return null;
@@ -66,6 +66,9 @@ function resolveInstallTarget(
   }
   if (seen.claudeSkill) {
     selected.push('claude-skill');
+  }
+  if (seen.cursor) {
+    selected.push('cursor');
   }
   if (seen.ci) {
     selected.push('ci');
@@ -98,6 +101,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let overlay = false;
   let claude = false;
   let claudeSkill = false;
+  let cursor = false;
   let docsCi = false;
   let branchRule = false;
 
@@ -176,6 +180,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
       claudeSkill = true;
       continue;
     }
+    if (token === '--cursor') {
+      // install-only target: write the Cursor /usabl-check command and UI rule.
+      cursor = true;
+      continue;
+    }
     if (token === '--branch-rule') {
       branchRule = true;
       continue;
@@ -204,7 +213,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
   }
 
-  const installTarget = resolveInstallTarget(command, { overlay, claude, claudeSkill, ci, docsCi, branchRule });
+  const installTarget = resolveInstallTarget(command, { overlay, claude, claudeSkill, cursor, ci, docsCi, branchRule });
 
   return { command, staticOnly, html, docs, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, driftSubcommand, installTarget };
 }
