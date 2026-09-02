@@ -20,6 +20,7 @@ import {
   runDoctor,
   type SurfaceReport,
   type SurfaceState,
+  type DoctorDeps,
 } from '../../src/doctor/index.js';
 
 // A read-only InstallFs: writeFile throws so a doctor path that ever tried to write fails
@@ -153,20 +154,32 @@ function byId(reports: SurfaceReport[], id: string): SurfaceReport {
   return found;
 }
 
+function doctorDeps(
+  base: Pick<DoctorDeps, 'fs' | 'gh' | 'configPath'> & Partial<DoctorDeps>,
+): DoctorDeps {
+  return {
+    probePlaywrightChromium: async () => 'wired',
+    env: NO_SESSION,
+    ...base,
+  };
+}
+
 function stateOf(reports: SurfaceReport[], id: string): SurfaceState {
   return byId(reports, id).state;
 }
 
 describe('collectDoctorReport', () => {
   it('reports every surface wired for a fully wired repo', async () => {
-    const reports = await collectDoctorReport({
-      fs: readOnlyFs(FULLY_WIRED_FILES),
-      gh: GH_VERIFIED,
-      configPath: 'usabl.config.json',
-      env: WIRED_SESSION,
-    });
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs(FULLY_WIRED_FILES),
+        gh: GH_VERIFIED,
+        configPath: 'usabl.config.json',
+        env: WIRED_SESSION,
+      }),
+    );
 
-    expect(reports.length).toBeGreaterThanOrEqual(8);
+    expect(reports.length).toBeGreaterThanOrEqual(10);
     for (const report of reports) {
       expect(report.state).toBe('wired');
     }
@@ -175,12 +188,14 @@ describe('collectDoctorReport', () => {
   it('reports every surface missing for a bare repo and names a next step', async () => {
     // A bare repo has no usabl files. main exists on GitHub but carries no protection, so
     // gh returns the confident "Branch not protected" signal and branch-rule reads missing.
-    const reports = await collectDoctorReport({
-      fs: readOnlyFs({}),
-      gh: GH_NOT_PROTECTED,
-      configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({}),
+        gh: GH_NOT_PROTECTED,
+        configPath: 'usabl.config.json',
+        probePlaywrightChromium: async () => 'missing',
+      }),
+    );
 
     for (const report of reports) {
       expect(report.state).toBe('missing');
@@ -189,15 +204,16 @@ describe('collectDoctorReport', () => {
   });
 
   it('reports a realistic mix for a partially wired repo', async () => {
-    const reports = await collectDoctorReport({
-      fs: readOnlyFs({
-        'usabl.config.json': VALID_CONFIG,
-        'vite.config.ts': WIRED_OVERLAY,
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({
+          'usabl.config.json': VALID_CONFIG,
+          'vite.config.ts': WIRED_OVERLAY,
+        }),
+        gh: GH_UNAVAILABLE,
+        configPath: 'usabl.config.json',
       }),
-      gh: GH_UNAVAILABLE,
-      configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+    );
 
     expect(stateOf(reports, 'config')).toBe('wired');
     expect(stateOf(reports, 'overlay')).toBe('wired');
@@ -209,12 +225,14 @@ describe('collectDoctorReport', () => {
 
 describe('authenticated session surface', () => {
   it('reports a readable storage state as wired', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ [SESSION_PATH]: VALID_SESSION_FILE }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
       env: WIRED_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'session')).toBe('wired');
   });
 
@@ -222,12 +240,14 @@ describe('authenticated session surface', () => {
     // The operator-facing half of issue #152. A signed-out run against a login-gated app
     // still mints a verdict, so the next step has to name that consequence rather than
     // only naming the variable.
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({}),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
       env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'session')).toBe('missing');
     const step = byId(reports, 'session').nextStep.toLowerCase();
     expect(step).toContain('usabl_storage_state');
@@ -237,12 +257,14 @@ describe('authenticated session surface', () => {
 
   it('treats an empty or whitespace-only variable as no session, never as wired', async () => {
     for (const value of ['', '   ']) {
-      const reports = await collectDoctorReport({
-        fs: readOnlyFs({}),
-        gh: GH_UNAVAILABLE,
-        configPath: 'usabl.config.json',
-        env: { USABL_STORAGE_STATE: value },
-      });
+      const reports = await collectDoctorReport(
+        doctorDeps({
+          fs: readOnlyFs({}),
+          gh: GH_UNAVAILABLE,
+          configPath: 'usabl.config.json',
+          env: { USABL_STORAGE_STATE: value },
+        }),
+      );
       expect(stateOf(reports, 'session')).toBe('missing');
     }
   });
@@ -250,32 +272,38 @@ describe('authenticated session surface', () => {
   it('reports a configured path with no file as drifted, never wired', async () => {
     // Set but unusable is the worst case to get wrong: the operator believes the scan is
     // authenticated. It is drift, not an absence, and never a wired session.
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({}),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
       env: WIRED_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'session')).toBe('drifted');
   });
 
   it('reports a configured path that is not JSON as drifted', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ [SESSION_PATH]: 'session=letmein' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
       env: WIRED_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'session')).toBe('drifted');
   });
 
   it('reports an unreadable storage state as unknown, never wired', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: fsFailingWith('EACCES'),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
       env: WIRED_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'session')).toBe('unknown');
   });
 
@@ -290,12 +318,14 @@ describe('authenticated session surface', () => {
     ];
     const filesystems = [readOnlyFs({}), readOnlyFs({ [secretPath]: '{"cookies":' })];
     for (const [index, env] of environments.entries()) {
-      const reports = await collectDoctorReport({
+      const reports = await collectDoctorReport(
+      doctorDeps({
         fs: filesystems[index] as InstallFs,
         gh: GH_UNAVAILABLE,
         configPath: 'usabl.config.json',
         env,
-      });
+        }),
+    );
       const text = formatDoctorReport(reports);
       expect(byId(reports, 'session').nextStep).not.toContain(secretPath);
       expect(text).not.toContain(secretPath);
@@ -314,12 +344,13 @@ export default defineConfig({
   ],
 })
 `;
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ 'vite.config.ts': commented }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     const overlay = stateOf(reports, 'overlay');
     expect(overlay).not.toBe('wired');
     // Config present but overlay not wired is a drift, not an absence.
@@ -327,22 +358,24 @@ export default defineConfig({
   });
 
   it('reports the canonical usabl-check skill file as wired', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'claude-skill')).toBe('wired');
   });
 
   it('reports a missing usabl-check skill file as missing and names the install step', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({}),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'claude-skill')).toBe('missing');
     expect(byId(reports, 'claude-skill').nextStep).toContain('--claude-skill');
   });
@@ -351,32 +384,35 @@ export default defineConfig({
     // The path is usabl-owned, but a file that differs from the canonical skill (an operator
     // edit or an older engine version) cannot be confirmed as the current skill. It is drift,
     // not a confident absence and never a false wired.
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ [CLAUDE_SKILL_PATH]: '---\nname: usabl-check\n---\n\nOld version.\n' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'claude-skill')).toBe('drifted');
   });
 
   it('reports a foreign Stop hook as unknown, never wired', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ '.claude/settings.json': FOREIGN_CLAUDE }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'stop-hook')).toBe('unknown');
   });
 
   it('reports a retired-path usabl Stop hook as drifted with a normalize step', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ '.claude/settings.json': RETIRED_CLAUDE }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'stop-hook')).toBe('drifted');
     // The retired path is one normalize case among several. The step must not overclaim it
     // as the specific problem, since a bare command drifts here too.
@@ -384,12 +420,13 @@ export default defineConfig({
   });
 
   it('reports settings.json that exists without a usabl Stop hook as missing, not a false retired-path drift', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ '.claude/settings.json': CLAUDE_WITHOUT_HOOK }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     // Load-bearing: the file exists but has no usabl Stop hook, so the surface is missing, not
     // drifted. The old code collapsed this into a single "retired dist path" drift.
     expect(stateOf(reports, 'stop-hook')).toBe('missing');
@@ -397,12 +434,13 @@ export default defineConfig({
   });
 
   it('reports a bare usabl stop-hook command as drifted with a normalize step, never a retired-path claim', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ '.claude/settings.json': BARE_CLAUDE }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'stop-hook')).toBe('drifted');
     const step = byId(reports, 'stop-hook').nextStep.toLowerCase();
     expect(step).toContain('normalize');
@@ -410,12 +448,13 @@ export default defineConfig({
   });
 
   it('reports branch-rule as unknown when gh is unavailable, never missing or wired', async () => {
-    const reports = await collectDoctorReport({
-      fs: readOnlyFs(FULLY_WIRED_FILES),
-      gh: GH_UNAVAILABLE,
-      configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs(FULLY_WIRED_FILES),
+        gh: GH_UNAVAILABLE,
+        configPath: 'usabl.config.json',
+      }),
+    );
     const branchRule = stateOf(reports, 'branch-rule');
     expect(branchRule).toBe('unknown');
     expect(branchRule).not.toBe('missing');
@@ -423,52 +462,57 @@ export default defineConfig({
   });
 
   it('reports a malformed config as drifted without crashing', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ 'usabl.config.json': '{ this is not valid json' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'config')).toBe('drifted');
   });
 
   it('reports a malformed routes manifest as drifted', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ 'usabl.routes.json': '{ broken' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'routes')).toBe('drifted');
   });
 
   it('reports a malformed evidence floor as drifted', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ '.usabl-evidence.json': '{ "version": 2 }' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'evidence-floor')).toBe('drifted');
   });
 
   it('reports a malformed waiver ledger as drifted', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ '.usabl-waivers.json': '{ "version": 1, "waivers": "nope" }' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'waivers')).toBe('drifted');
   });
 
   it('reports a differing ci workflow as drifted, never wired', async () => {
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ '.github/workflows/usabl-gate.yml': 'name: something-else\n' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'ci')).toBe('drifted');
   });
 
@@ -476,24 +520,26 @@ export default defineConfig({
     // The one wired shape: structurally identical to the draft, with both engine-ref lines
     // carrying the same real 40-character commit SHA. This is the mutation-check anchor for
     // the classifyGateWorkflow SHA guard.
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ '.github/workflows/usabl-gate.yml': PINNED_WORKFLOW }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'ci')).toBe('wired');
   });
 
   it('reports the unpinned draft workflow as drifted, never wired, and names the pin step', async () => {
     // The draft ships the sentinel at both engine-ref lines. It is structurally correct but
     // not yet enforceable, so it is drifted for doctor. The old code read this as wired.
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ '.github/workflows/usabl-gate.yml': USABL_GATE_WORKFLOW }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'ci')).toBe('drifted');
     const step = byId(reports, 'ci').nextStep;
     expect(step).toContain('40-character');
@@ -504,71 +550,92 @@ export default defineConfig({
     // A subtler drift than a wholesale rewrite: the workflow is pinned to a real SHA but a
     // non-ref line was hand-tuned. Only the engine-ref lines are variable, so this is drift.
     const tampered = PINNED_WORKFLOW.replace('runs-on: ubuntu-latest', 'runs-on: self-hosted');
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({ '.github/workflows/usabl-gate.yml': tampered }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'ci')).toBe('drifted');
   });
 
   it('maps an unexpected fs read error to unknown, never wired and never a crash', async () => {
     // An EACCES on read is a genuine cannot-confirm signal. Recognition never fails toward
     // success, so the surface is unknown, and the whole report still renders.
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: fsFailingWith('EACCES'),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(stateOf(reports, 'config')).toBe('unknown');
     expect(byId(reports, 'config').nextStep.toLowerCase()).toContain('permission');
+  });
+
+  it('propagates a programmer error from the playwright probe instead of masking it as unknown', async () => {
+    await expect(
+      collectDoctorReport(
+        doctorDeps({
+          fs: readOnlyFs({}),
+          gh: GH_UNAVAILABLE,
+          configPath: 'usabl.config.json',
+          probePlaywrightChromium: async () => {
+            throw new TypeError('programmer error in probe');
+          },
+        }),
+      ),
+    ).rejects.toThrow('programmer error in probe');
   });
 
   it('propagates a non-fs programmer error instead of masking it as unknown', async () => {
     // Load-bearing: a TypeError is a real bug, not a file-system failure. Swallowing it as
     // unknown would fail toward success and hide the defect. It must reach the cli catch-all.
     await expect(
-      collectDoctorReport({
-        fs: fsThrowingProgrammerError(),
-        gh: GH_UNAVAILABLE,
-        configPath: 'usabl.config.json',
-        env: NO_SESSION,
-      }),
+      collectDoctorReport(
+        doctorDeps({
+          fs: fsThrowingProgrammerError(),
+          gh: GH_UNAVAILABLE,
+          configPath: 'usabl.config.json',
+        }),
+      ),
     ).rejects.toThrow('programmer error');
   });
 });
 
 describe('runDoctor', () => {
   it('exits 0 for a bare repo even though every surface is unwired', async () => {
-    const outcome = await runDoctor({
+    const outcome = await runDoctor(
+      doctorDeps({
       fs: readOnlyFs({}),
       gh: GH_NOT_PROTECTED,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(outcome.exitCode).toBe(0);
     expect(outcome.stdout.length).toBeGreaterThan(0);
   });
 
   it('exits 0 for a partially wired repo', async () => {
-    const outcome = await runDoctor({
+    const outcome = await runDoctor(
+      doctorDeps({
       fs: readOnlyFs({ 'usabl.config.json': VALID_CONFIG }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(outcome.exitCode).toBe(0);
   });
 
   it('renders each surface label and states doctor mints no verdict', async () => {
-    const outcome = await runDoctor({
+    const outcome = await runDoctor(
+      doctorDeps({
       fs: readOnlyFs(FULLY_WIRED_FILES),
       gh: GH_VERIFIED,
       configPath: 'usabl.config.json',
-      env: NO_SESSION,
-    });
+      }),
+    );
     expect(outcome.stdout.toLowerCase()).toContain('doctor');
     expect(outcome.stdout.toLowerCase()).toContain('no verdict');
     expect(outcome.stdout).toContain('[wired]');
@@ -592,12 +659,13 @@ describe('formatDoctorReport neutralization', () => {
 
   it('neutralizes a control-carrying config path end to end through collect and format', async () => {
     const evilPath = 'usabl\x1b[2Kspoof.config.json';
-    const reports = await collectDoctorReport({
+    const reports = await collectDoctorReport(
+      doctorDeps({
       fs: readOnlyFs({}),
       gh: GH_UNAVAILABLE,
       configPath: evilPath,
-      env: NO_SESSION,
-    });
+      }),
+    );
     const text = formatDoctorReport(reports);
     expect(text).not.toContain('\x1b');
     expect(text).toContain('spoof');
