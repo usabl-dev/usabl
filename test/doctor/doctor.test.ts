@@ -12,6 +12,7 @@ import { matchGlob } from '../../src/primitives/match-glob.js';
 import type { InstallFs } from '../../src/install/index.js';
 import type { GhReader, GhResult } from '../../src/install/branch-rule.js';
 import { ENGINE_REF_PLACEHOLDER, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
+import { CLAUDE_SKILL_CONTENTS, CLAUDE_SKILL_PATH } from '../../src/install/claude-skill.js';
 import { testConfig } from '../helpers.js';
 import {
   collectDoctorReport,
@@ -129,6 +130,7 @@ const FULLY_WIRED_FILES: Record<string, string> = {
   '.usabl-waivers.json': VALID_WAIVERS,
   'vite.config.ts': WIRED_OVERLAY,
   '.claude/settings.json': WIRED_CLAUDE,
+  [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS,
   '.github/workflows/usabl-gate.yml': PINNED_WORKFLOW,
 };
 
@@ -210,6 +212,37 @@ export default defineConfig({
     expect(overlay).not.toBe('wired');
     // Config present but overlay not wired is a drift, not an absence.
     expect(overlay).toBe('drifted');
+  });
+
+  it('reports the canonical usabl-check skill file as wired', async () => {
+    const reports = await collectDoctorReport({
+      fs: readOnlyFs({ [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS }),
+      gh: GH_UNAVAILABLE,
+      configPath: 'usabl.config.json',
+    });
+    expect(stateOf(reports, 'claude-skill')).toBe('wired');
+  });
+
+  it('reports a missing usabl-check skill file as missing and names the install step', async () => {
+    const reports = await collectDoctorReport({
+      fs: readOnlyFs({}),
+      gh: GH_UNAVAILABLE,
+      configPath: 'usabl.config.json',
+    });
+    expect(stateOf(reports, 'claude-skill')).toBe('missing');
+    expect(byId(reports, 'claude-skill').nextStep).toContain('--claude-skill');
+  });
+
+  it('reports a differing usabl-check skill file as drifted, never wired', async () => {
+    // The path is usabl-owned, but a file that differs from the canonical skill (an operator
+    // edit or an older engine version) cannot be confirmed as the current skill. It is drift,
+    // not a confident absence and never a false wired.
+    const reports = await collectDoctorReport({
+      fs: readOnlyFs({ [CLAUDE_SKILL_PATH]: '---\nname: usabl-check\n---\n\nOld version.\n' }),
+      gh: GH_UNAVAILABLE,
+      configPath: 'usabl.config.json',
+    });
+    expect(stateOf(reports, 'claude-skill')).toBe('drifted');
   });
 
   it('reports a foreign Stop hook as unknown, never wired', async () => {
