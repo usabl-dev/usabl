@@ -1,4 +1,10 @@
-# usabl PR gate comment
+# usabl PR gate for the engine repository.
+#
+# This is the two-job gate that `usabl install --ci` writes into a consuming repository
+# (src/install/ci.ts), adapted for the one repository where usabl is the engine. The
+# consumer draft clones usabl-dev/usabl at a pinned commit because a consumer has no
+# engine of its own. Here the base commit already is the engine, so both jobs build the
+# tree they have checked out and there is no engine pin and no engine checkout token.
 name: usabl-gate
 
 on:
@@ -6,22 +12,30 @@ on:
     branches: [main]
     # Retargeting onto main must re-run trusted-ref policy checks.
     types: [opened, synchronize, reopened, edited]
+  pull_request_review:
+    # Use the event payload so a review still knows the base branch and head SHA.
+    types: [submitted, edited, dismissed]
 
 permissions:
   contents: read
 
 jobs:
   gate-comment:
+    # This job builds and runs the checked-out tree, which is PR head code. Only a
+    # pull_request event denies secrets to fork head code, so fence the scan to it.
+    # A pull_request_review event carries base-repo secrets and must never run head code.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
     env:
-      BASE_REF: ${{ github.base_ref }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Setup Node.js
@@ -29,6 +43,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install and build
         run: npm ci && npm run build
@@ -41,11 +56,10 @@ jobs:
 
       - name: Run usabl check against trusted base-ref policy
         id: usabl
-        env:
-          BASE_REF: ${{ github.base_ref }}
         run: |
           code=0
           # Capture the command status here because a next-line `$?` becomes 0 under set -e.
+          # trusted-ref points to origin/${BASE_REF} so a PR cannot rewrite policy and pass itself.
           node dist/cli.js check --ci --trusted-ref "origin/${BASE_REF}" --json > usabl-result.json || code=$?
           if [ ! -s usabl-result.json ]; then
             echo "usabl produced no Result JSON."
@@ -57,6 +71,7 @@ jobs:
             if (result.schemaVersion !== "usabl.result.v1") throw new Error("unexpected Result schema");
             if (!Number.isInteger(result.exitCode)) throw new Error("Result exitCode must be an integer");
             if (result.exitCode !== commandExit) throw new Error("Result exitCode does not match command exit");
+            if (result.accessibilityExitCode === 2) throw new Error("accessibilityExitCode cannot be 2");
           '; then
             echo "usabl produced invalid or inconsistent Result JSON."
             code=4
@@ -104,7 +119,18 @@ jobs:
               });
             }
 
-      - name: Enforce verdict (fail closed on missing exit code)
+      - name: Upload Result JSON
+        # The handoff to usabl-policy. A review re-run has no scan of its own, so it
+        # downloads this Result for this exact head instead of reading head code.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: usabl-result
+          path: usabl-result.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Enforce accessibility
         env:
           USABL_EXIT: ${{ steps.usabl.outputs.exit_code }}
         run: |
@@ -112,4 +138,99 @@ jobs:
             echo "usabl produced no exit code; failing closed."
             exit 1
           fi
-          exit "${USABL_EXIT}"
+          # Never exit 2 here. Guarded-file approval lives on usabl-policy.
+          node dist/cli.js enforce accessibility < usabl-result.json
+
+  usabl-policy:
+    # Required status. It re-runs on pull_request_review so a CODEOWNERS approval or
+    # dismissal flips the gate. Review events carry base-repo secrets, so this job
+    # must never check out or execute PR head code. It reads the head only as git
+    # objects and decides from the trusted base ref, CODEOWNERS, and the reviews API.
+    needs: gate-comment
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    env:
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Checkout trusted base-ref policy
+        # Check out the base commit, never the PR head. This working tree is trusted,
+        # and in this repository it is also the engine that decides the verdict.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      - name: Fetch base ref and head objects without checkout
+        run: |
+          # PR_NUMBER comes from the event as an integer. Guard it anyway before it
+          # reaches a ref path, so a malformed value can never inject a fetch refspec.
+          case "${PR_NUMBER}" in
+            ''|*[!0-9]*)
+              echo "pull request number is not numeric; failing closed"
+              exit 1
+              ;;
+          esac
+          # Bring origin/${BASE_REF} for the trusted-ref diff, and the PR head as
+          # objects only. enforce policy reads blob contents with git show and
+          # git ls-tree, which never check out or execute the head, so no PR code runs.
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install and build the trusted engine
+        # The consumer draft builds a separately pinned clone here. In this repository
+        # the engine is the base commit already checked out above, which is trusted by
+        # definition, so build that tree and add no self-referential checkout.
+        run: npm ci && npm run build
+
+      - name: Resolve the accessibility scan run for this head
+        if: github.event_name == 'pull_request_review'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The scan runs only on pull_request. Find its completed run for this exact
+          # head SHA so the re-check consumes a real Result and never scans head code.
+          # env.HEAD_SHA is read inside jq, never interpolated into the filter string.
+          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" \
+            --workflow usabl-gate.yml --event pull_request --limit 50 \
+            --json databaseId,headSha,status \
+            --jq '[.[] | select(.headSha == env.HEAD_SHA and .status == "completed")][0].databaseId')"
+          if [ -z "${run_id}" ] || [ "${run_id}" = "null" ]; then
+            echo "no completed accessibility scan for head ${HEAD_SHA}; failing closed"
+            exit 1
+          fi
+          echo "SCAN_RUN_ID=${run_id}" >> "$GITHUB_ENV"
+
+      - name: Download Result JSON from this run
+        if: github.event_name == 'pull_request'
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: usabl-result
+
+      - name: Download Result JSON from the scan run
+        if: github.event_name == 'pull_request_review'
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: usabl-result
+          run-id: ${{ env.SCAN_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enforce policy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Git refs and CODEOWNERS are the source of truth. The Result on stdin is
+          # consumed only for the exit-4 crash short-circuit, never to skip owners.
+          node dist/cli.js enforce policy --trusted-ref "origin/${BASE_REF}" < usabl-result.json
