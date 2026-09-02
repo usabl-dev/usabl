@@ -3,7 +3,7 @@ import type { AxNode, Page, ProviderContext, Step } from '../../src/contracts/in
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
-import { testConfig } from '../helpers.js';
+import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 
@@ -144,7 +144,7 @@ describe('makeKeyboardWalkProvider', () => {
       announcements: [[], []],
     });
 
-    const drafts = await provider.run(makeContext(page));
+    const drafts = draftsOf(await provider.run(makeContext(page)));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toEqual({
@@ -174,7 +174,7 @@ describe('makeKeyboardWalkProvider', () => {
     });
     page.activeElementIs = async (selector) => selector === 'body';
 
-    const drafts = await provider.run(makeContext(page));
+    const drafts = draftsOf(await provider.run(makeContext(page)));
 
     expect(drafts).toEqual([]);
   });
@@ -190,7 +190,7 @@ describe('makeKeyboardWalkProvider', () => {
       announcements: [[], []],
     });
 
-    const drafts = await provider.run(makeContext(page));
+    const drafts = draftsOf(await provider.run(makeContext(page)));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toEqual({
@@ -228,7 +228,7 @@ describe('makeKeyboardWalkProvider', () => {
       announcements: [[], [], [], [], [], []],
     });
 
-    const drafts = await provider.run(makeContext(page));
+    const drafts = draftsOf(await provider.run(makeContext(page)));
 
     expect(drafts.length).toBeLessThanOrEqual(5);
   });
@@ -240,10 +240,10 @@ describe('makeKeyboardWalkProvider', () => {
     // A real run opens the page, collects a transcript, and runs other providers before this walk,
     // and it does that again for every screen. All of that time is spent on one provider instance.
     clock.advance(30_000);
-    const first = await provider.run(makeContext(await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#b']))));
+    const first = draftsOf(await provider.run(makeContext(await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#b'])))));
 
     clock.advance(30_000);
-    const second = await provider.run(makeContext(await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#b']))));
+    const second = draftsOf(await provider.run(makeContext(await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#b'])))));
 
     expect(rules(first)).toEqual([
       'keyboard-walk-unnamed-interactive',
@@ -261,7 +261,7 @@ describe('makeKeyboardWalkProvider', () => {
       onTab: () => clock.advance(60),
     });
 
-    const drafts = await provider.run(makeContext(page));
+    const drafts = draftsOf(await provider.run(makeContext(page)));
 
     const walked = drafts.filter((d) => d.rule === 'keyboard-walk-unnamed-interactive');
     expect(walked.length).toBeGreaterThan(0);
@@ -282,7 +282,7 @@ describe('makeKeyboardWalkProvider', () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 2 });
     const page = await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#c', '#d']));
 
-    const drafts = await provider.run(makeContext(page));
+    const drafts = draftsOf(await provider.run(makeContext(page)));
 
     expect(drafts.filter((d) => d.rule === 'keyboard-walk-unnamed-interactive')).toHaveLength(2);
     const truncated = drafts.filter((d) => d.rule === 'keyboard-walk-truncated');
@@ -302,7 +302,7 @@ describe('makeKeyboardWalkProvider', () => {
       onTab: () => clock.advance(10),
     });
 
-    const drafts = await provider.run(makeContext(page));
+    const drafts = draftsOf(await provider.run(makeContext(page)));
 
     expect(rules(drafts)).toEqual(['keyboard-walk-unnamed-interactive']);
   });
@@ -312,7 +312,7 @@ describe('makeKeyboardWalkProvider', () => {
     const page = await makeScriptedPage(unnamedLinkPage(['html > body:nth-child(2)']));
     page.activeElementIs = async (selector) => selector === 'body';
 
-    const drafts = await provider.run(makeContext(page));
+    const drafts = draftsOf(await provider.run(makeContext(page)));
 
     expect(drafts).toEqual([]);
   });

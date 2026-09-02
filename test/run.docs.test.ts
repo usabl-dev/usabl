@@ -56,6 +56,7 @@ describe('run with docs manifest', () => {
       stops: [],
       drafts: [failingDocsDraft],
       gaps: [],
+      applicability: [],
     };
 
     const deps = makeFakeDeps({
@@ -95,6 +96,7 @@ describe('run with docs manifest', () => {
       stops: [],
       drafts: [],
       gaps: [],
+      applicability: [],
     };
 
     const deps = makeFakeDeps({
@@ -133,6 +135,7 @@ describe('run with docs manifest', () => {
       stops: [],
       drafts: [],
       gaps: [],
+      applicability: [],
     };
 
     const deps = makeFakeDeps({
@@ -173,6 +176,7 @@ describe('run with docs manifest', () => {
       stops: [],
       drafts: [],
       gaps: [],
+      applicability: [],
     };
 
     const deps = makeFakeDeps({

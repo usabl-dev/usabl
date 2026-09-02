@@ -64,6 +64,7 @@ function docsScan(draft: Draft): ScreenScan {
     stops: [],
     drafts: [draft],
     gaps: [],
+    applicability: [],
   };
 }
 
@@ -128,6 +129,7 @@ describe('runBaseline captures docs debt', () => {
       stops: [],
       drafts: [appDraft],
       gaps: [],
+      applicability: [],
     };
     const deps = makeFakeDeps({
       files: {

@@ -3,7 +3,7 @@ import type { AxNode, ElementRef, Page, ProviderContext } from '../../src/contra
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeRulepackProvider } from '../../src/providers/rulepack/index.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
-import { testConfig } from '../helpers.js';
+import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 
@@ -148,7 +148,7 @@ describe('rulepack interaction probes', () => {
       focusReturnsToTrigger: true,
     });
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     expect(drafts).toHaveLength(2);
     expect(drafts).toEqual(
@@ -177,7 +177,7 @@ describe('rulepack interaction probes', () => {
       focusReturnsToTrigger: false,
     });
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -196,7 +196,7 @@ describe('rulepack interaction probes', () => {
       focusReturnsToTrigger: false,
     });
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -219,7 +219,7 @@ describe('rulepack interaction probes', () => {
       declaresDialog: false,
     });
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     expect(drafts).toEqual([]);
   });
@@ -231,7 +231,7 @@ describe('rulepack interaction probes', () => {
       focusMovesIntoMenu: false,
     });
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -250,7 +250,7 @@ describe('rulepack interaction probes', () => {
       focusReturnsToTrigger: false,
     });
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     expect(drafts.some((draft) => draft.rule === 'pf-focus-into-dialog')).toBe(true);
   });

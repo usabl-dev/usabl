@@ -41,6 +41,7 @@ function scanFor(
     })),
     drafts: options.drafts ?? [],
     gaps: options.gaps ?? [],
+    applicability: [],
   };
 }
 

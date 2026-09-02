@@ -13,6 +13,7 @@ function emptyScan(): ScreenScan {
     stops: [],
     drafts: [],
     gaps: [],
+    applicability: [],
   };
 }
 

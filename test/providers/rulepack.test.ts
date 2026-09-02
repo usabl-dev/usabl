@@ -10,7 +10,7 @@ import type {
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeRulepackProvider } from '../../src/providers/rulepack/index.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
-import { testConfig } from '../helpers.js';
+import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 
@@ -77,7 +77,7 @@ describe('makeRulepackProvider', () => {
       [`${SEL.liveContainer} ${SEL.alert}`]: [insideAlert],
     });
 
-    const outsideDrafts = await provider.run(outsideContext);
+    const outsideDrafts = draftsOf(await provider.run(outsideContext));
 
     expect(outsideDrafts).toHaveLength(1);
     expect(outsideDrafts[0]).toMatchObject({
@@ -111,7 +111,7 @@ describe('makeRulepackProvider', () => {
       },
     );
 
-    const unnamedDrafts = await provider.run(unnamedContext);
+    const unnamedDrafts = draftsOf(await provider.run(unnamedContext));
 
     expect(unnamedDrafts).toHaveLength(1);
     expect(unnamedDrafts[0]).toMatchObject({
@@ -154,7 +154,7 @@ describe('makeRulepackProvider', () => {
       },
     );
 
-    const missingStateDrafts = await provider.run(missingStatesContext);
+    const missingStateDrafts = draftsOf(await provider.run(missingStatesContext));
 
     expect(missingStateDrafts).toHaveLength(1);
     expect(missingStateDrafts[0]).toMatchObject({
@@ -196,7 +196,7 @@ describe('makeRulepackProvider', () => {
       },
     );
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     expect(drafts.length).toBeGreaterThanOrEqual(1);
     expect(drafts.every((draft) => draft.rule === 'pf-row-action-name-unique')).toBe(true);
@@ -209,7 +209,7 @@ describe('makeRulepackProvider', () => {
       [SEL.unscopedTh]: [unscopedHeader],
     });
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -234,7 +234,7 @@ describe('makeRulepackProvider', () => {
       },
     );
 
-    const repeatedDrafts = await provider.run(repeatedContext);
+    const repeatedDrafts = draftsOf(await provider.run(repeatedContext));
 
     expect(repeatedDrafts).toHaveLength(1);
     expect(repeatedDrafts[0]).toMatchObject({
@@ -284,7 +284,7 @@ describe('makeRulepackProvider', () => {
     const appProvider = makeRulepackProvider([appExtra]);
     const appContext = await makeContext({}, {}, 'app');
 
-    const appDrafts = await appProvider.run(appContext);
+    const appDrafts = draftsOf(await appProvider.run(appContext));
 
     expect(appExtra).toHaveBeenCalledTimes(1);
     expect(appDrafts).toEqual([draftFrom('extra-ran-app')]);
@@ -293,7 +293,7 @@ describe('makeRulepackProvider', () => {
     const defaultProvider = makeRulepackProvider([defaultExtra]);
     const defaultContext = await makeContext({});
 
-    const defaultDrafts = await defaultProvider.run(defaultContext);
+    const defaultDrafts = draftsOf(await defaultProvider.run(defaultContext));
 
     expect(defaultExtra).toHaveBeenCalledTimes(1);
     expect(defaultDrafts).toEqual([draftFrom('extra-ran-default')]);

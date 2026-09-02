@@ -111,7 +111,7 @@ describe('projectPrComment', () => {
     const stops = Array.from({ length: 21 }, (_, index) => makeStop(index, `Create cluster ${index + 1}`));
     const markdown = projectPrComment(
       baseResult({
-        screens: [{ screenId: 'clusters', url: 'https://app.local/clusters', stops, drafts: [], gaps: [] }],
+        screens: [{ screenId: 'clusters', url: 'https://app.local/clusters', stops, drafts: [], gaps: [], applicability: [] }],
       }),
     );
 

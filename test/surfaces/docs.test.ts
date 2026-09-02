@@ -18,7 +18,7 @@ const receiptFixture: Receipt = {
 };
 
 function screenFixture(screenId: string, stops: ScreenScan['stops']): ScreenScan {
-  return { screenId, url: `http://127.0.0.1:5173/${screenId}`, stops, drafts: [], gaps: [] };
+  return { screenId, url: `http://127.0.0.1:5173/${screenId}`, stops, drafts: [], gaps: [], applicability: [] };
 }
 
 function resultFixture(overrides: Partial<Result> = {}): Result {

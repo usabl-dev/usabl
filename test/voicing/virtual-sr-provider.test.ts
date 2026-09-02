@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AnnouncementToken, InteractionContract, SpeechObligation, StepRunner, TranscriptStop } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeVirtualSrProvider } from '../../src/voicing/virtual-sr-provider.js';
-import { testConfig } from '../helpers.js';
+import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 
@@ -82,7 +82,7 @@ describe('makeVirtualSrProvider', () => {
     );
     const page = await openClustersPage();
 
-    const drafts = await provider.run({ page, screen: SCREEN, config: testConfig() });
+    const drafts = draftsOf(await provider.run({ page, screen: SCREEN, config: testConfig() }));
 
     expect(drafts.filter((draft) => draft.evidenceClass === 'deterministic')).toHaveLength(0);
     expect(drafts.filter((draft) => draft.evidenceClass === 'preview')).toHaveLength(0);
@@ -95,7 +95,7 @@ describe('makeVirtualSrProvider', () => {
     );
     const page = await openClustersPage();
 
-    const drafts = await provider.run({ page, screen: SCREEN, config: testConfig() });
+    const drafts = draftsOf(await provider.run({ page, screen: SCREEN, config: testConfig() }));
 
     expect(drafts.some((draft) => draft.rule === 'voicing/missing-name' && draft.evidenceClass === 'deterministic')).toBe(true);
   });
@@ -107,7 +107,7 @@ describe('makeVirtualSrProvider', () => {
     );
     const page = await openClustersPage();
 
-    const drafts = await provider.run({ page, screen: SCREEN, config: testConfig({ promotedObligations: [] }) });
+    const drafts = draftsOf(await provider.run({ page, screen: SCREEN, config: testConfig({ promotedObligations: [] }) }));
 
     expect(drafts.some((draft) => draft.rule === 'voicing/missing-announcement' && draft.evidenceClass === 'preview')).toBe(true);
   });
@@ -119,11 +119,13 @@ describe('makeVirtualSrProvider', () => {
     );
     const page = await openClustersPage();
 
-    const drafts = await provider.run({
-      page,
-      screen: SCREEN,
-      config: testConfig({ promotedObligations: ['toast-announced'] }),
-    });
+    const drafts = draftsOf(
+      await provider.run({
+        page,
+        screen: SCREEN,
+        config: testConfig({ promotedObligations: ['toast-announced'] }),
+      }),
+    );
 
     expect(
       drafts.some(
@@ -140,7 +142,7 @@ describe('makeVirtualSrProvider', () => {
     const provider = makeVirtualSrProvider([contract('other-surface', [dialogObligation])], stepRunner);
     const page = await openClustersPage();
 
-    const drafts = await provider.run({ page, screen: SCREEN, config: testConfig() });
+    const drafts = draftsOf(await provider.run({ page, screen: SCREEN, config: testConfig() }));
 
     expect(drafts).toEqual([]);
     expect(stepRunner.run).not.toHaveBeenCalled();

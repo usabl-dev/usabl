@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AxNode, ProviderContext, RequirementBundle } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
-import { testConfig } from '../helpers.js';
+import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = {
   id: 'clusters',
@@ -129,7 +129,7 @@ describe('mapRequirementsToProviders', () => {
       }),
     });
 
-    const drafts = await provider!.run(context);
+    const drafts = draftsOf(await provider!.run(context));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -172,7 +172,7 @@ describe('mapRequirementsToProviders', () => {
       }),
     });
 
-    const drafts = await provider!.run(context);
+    const drafts = draftsOf(await provider!.run(context));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -199,7 +199,7 @@ describe('mapRequirementsToProviders', () => {
       }),
     });
 
-    const drafts = await provider!.run(context);
+    const drafts = draftsOf(await provider!.run(context));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -225,7 +225,7 @@ describe('mapRequirementsToProviders', () => {
       }),
     });
 
-    const drafts = await provider!.run(context);
+    const drafts = draftsOf(await provider!.run(context));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -255,7 +255,7 @@ describe('mapRequirementsToProviders', () => {
       }),
     });
 
-    const drafts = await provider!.run(context);
+    const drafts = draftsOf(await provider!.run(context));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -322,7 +322,7 @@ describe('mapRequirementsToProviders', () => {
       }),
     });
 
-    const drafts = await provider!.run(context);
+    const drafts = draftsOf(await provider!.run(context));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -351,7 +351,7 @@ describe('mapRequirementsToProviders', () => {
       }),
     });
 
-    const drafts = await provider!.run(context);
+    const drafts = draftsOf(await provider!.run(context));
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
       rule: 'intake:flow-save',
@@ -400,7 +400,7 @@ describe('mapRequirementsToProviders', () => {
       }),
     });
 
-    const drafts = await provider!.run(context);
+    const drafts = draftsOf(await provider!.run(context));
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
       rule: 'intake:flow-save',

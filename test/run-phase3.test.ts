@@ -76,6 +76,7 @@ function screenWith(drafts: Draft[]): ScreenScan {
     stops: [],
     drafts,
     gaps: [],
+    applicability: [],
   };
 }
 
