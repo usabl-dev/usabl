@@ -30,6 +30,7 @@ describe('usabl doctor command wiring', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     process.chdir(originalCwd);
     await rm(workspace, { recursive: true, force: true });
   });
@@ -61,5 +62,31 @@ describe('usabl doctor command wiring', () => {
     expect(code).toBe(0);
     const out = stdout.join('');
     expect(out).toContain('[wired] usabl config');
+  });
+
+  it('reads the session variable from the real environment and never prints its value', async () => {
+    // This is the glue the collector cannot test for itself: doctor takes the environment as
+    // an injected value, so only the command wiring proves an operator's exported session is
+    // the one being reported on. The path stays out of stdout in every state.
+    const sessionPath = join(workspace, 'storage-state.json');
+    await writeFile(sessionPath, JSON.stringify({ cookies: [], origins: [] }), 'utf8');
+    vi.stubEnv('USABL_STORAGE_STATE', sessionPath);
+
+    const code = await main(['doctor']);
+
+    expect(code).toBe(0);
+    const out = stdout.join('');
+    expect(out).toContain('[wired] authenticated session (USABL_STORAGE_STATE)');
+    expect(out).not.toContain(sessionPath);
+  });
+
+  it('reports no session as missing when the variable is not exported', async () => {
+    vi.stubEnv('USABL_STORAGE_STATE', '');
+
+    const code = await main(['doctor']);
+
+    expect(code).toBe(0);
+    const out = stdout.join('');
+    expect(out).toContain('[missing] authenticated session (USABL_STORAGE_STATE)');
   });
 });
