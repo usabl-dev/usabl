@@ -10,8 +10,8 @@
  * `not_covered` means there was something to prove and we could not.
  * Dirty guarded paths are `approval_required` and still carry accessibility findings.
  */
-import type { AccessibilityExitCode, AccessibilityVerdict, Draft, EvidenceFacts, Finding, FloorEntry, GateInput, GateOutput, Waiver } from '../contracts/index.js';
-import { coverageIncomplete, decideAccessibilityVerdict } from '../coverage/completeness.js';
+import type { AccessibilityExitCode, AccessibilityVerdict, Coverage, Draft, EvidenceFacts, Finding, FloorEntry, GateInput, GateOutput, Waiver } from '../contracts/index.js';
+import { coverageIncomplete, decideAccessibilityVerdict, notEvaluatedCounts } from '../coverage/completeness.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { computeIdentity } from '../primitives/identity.js';
 
@@ -61,7 +61,7 @@ function accessibilityOutcome(input: GateInput): {
     hasBlockingFailure: hasNewFail,
     hasUnverified,
   });
-  return { verdict, findings, exitCode, summary: verdictSummary(verdict, gating) };
+  return { verdict, findings, exitCode, summary: verdictSummary(verdict, gating, input.coverage) };
 }
 
 /** Prefer PatternFly why/fix when axe and pf fire on the same identity. */
@@ -168,6 +168,39 @@ export function findingKey(f: Finding): string {
   return `${f.screenId}|${f.layer}|${f.rule}|${f.elementKey ?? 'count'}`;
 }
 
-function verdictSummary(verdict: AccessibilityVerdict, gating: Finding[]): string {
-  return `${verdict}: ${gating.length} gating finding(s)`;
+/**
+ * The one line an operator is most likely to read. It has to carry the cause of the verdict, not
+ * only a finding count: a run blocked purely on unreached screens used to report
+ * "not_covered: 0 gating finding(s)", which names a zero and no reason.
+ *
+ * The gap count is appended only when there is one. A clean run says nothing about coverage,
+ * because inventing "0 gap(s)" on a whole run trains the reader to skip the clause on the runs
+ * where it matters.
+ *
+ * Unseen coverage is reported as one number, not two. Unresolved files are not added to the gap
+ * count: both coverage planners record an unmapped file in unresolvedFiles and disclose that same
+ * file as a gap, so gaps already contains every unresolved file plus the surfaces and checks that
+ * failed for other reasons. Adding the two counts would report one unmapped file as two problems.
+ * The per-gap breakdown, including which gaps are unmapped files, is already rendered for every
+ * gap by the PR comment and the overlay.
+ */
+function verdictSummary(
+  verdict: AccessibilityVerdict,
+  gating: Finding[],
+  coverage: Coverage,
+): string {
+  const notEvaluated = notEvaluatedCounts(coverage);
+  const head = `${verdict}: ${gating.length} gating finding(s)`;
+
+  if (notEvaluated.gaps > 0) {
+    return `${head}, ${notEvaluated.gaps} gap(s)`;
+  }
+  // Unreachable while every unmapped file is also disclosed as a gap, which is what both planners
+  // do today. It is written out rather than assumed so that the guarantee this function owes the
+  // operator, that a blocked run always names its cause, does not rest on a rule enforced in
+  // another module.
+  if (notEvaluated.unresolvedFiles > 0) {
+    return `${head}, ${notEvaluated.unresolvedFiles} unmapped file(s)`;
+  }
+  return head;
 }

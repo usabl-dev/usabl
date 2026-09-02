@@ -171,7 +171,7 @@ silent pass.
 2. **Message to the developer:** state that the change is not verified and give the summary,
    for example "NOT verified - " plus the crash or gap reason, then "Run again or check
    manually."
-3. **Timeouts:** the shipped bounds are the keyboard-walk 4s wall-clock cap and the 50-tab
+3. **Timeouts:** the shipped bounds are the keyboard-walk 15s wall-clock cap and the 50-tab
    transcript cap. A timed-out scan becomes a gap and lands on `not_covered`, which blocks.
    There is no timeout-as-warn mode and no configurable per-surface budget yet; usabl is on
    or off.
@@ -179,7 +179,12 @@ silent pass.
    a single-line banner, for example "Cannot reach [url] - check not running." No phantom
    findings.
 5. **Partial results:** if some screens scan and others gap, the scanned findings are still
-   surfaced but any gap holds the verdict at `not_covered` (incomplete proof).
+   surfaced. With no new failure, a gap holds the verdict at `not_covered` (incomplete proof).
+   With a new deterministic failure, the failure outranks the gap and the verdict is
+   `regression`. A gap is usually infrastructure, and a new failure is usually the change under
+   test, so letting an unrelated broken screen hide "you broke this" would quiet usabl exactly
+   when it has the most useful thing to say. Both verdicts block, and the summary line reports
+   the gap count under either verdict, so a partial run is never presented as a whole one.
 6. **Stop hook and self-check always exit 0.** They never block through an exit code. The
    stop hook blocks by emitting a `{ decision: 'block' }` object on stdout, so a wedged
    hook can never trap the operator with a non-zero exit.

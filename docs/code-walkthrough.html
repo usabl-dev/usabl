@@ -426,7 +426,7 @@
       <div class="body">
         <p class="eyebrow">src/coverage/</p>
         <h2 id="coverage-title">Coverage answers one question: which screens must be checked?</h2>
-        <p class="lede">Three files do this work. When they cannot connect a changed file to a screen, they record a gap. A gap means: something changed and the tool could not check it. Any gap turns the verdict into "not covered".</p>
+        <p class="lede">Three files do this work. When they cannot connect a changed file to a screen, they record a gap. A gap means: something changed and the tool could not check it. On a run with no new failure, a gap turns the verdict into "not covered". When there is a new failure, the failure wins the verdict and the gap is still counted in the summary line.</p>
         <div class="cards">
           <article class="card">
             <h3>route-manifest.ts</h3>
