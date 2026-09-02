@@ -37,7 +37,15 @@ function notCoveredGap(ref: string, reason: string): CoverageGap {
 }
 
 function failedScan(screen: { id: string; url: string }, reason: string): ScreenScan {
-  return { screenId: screen.id, url: screen.url, stops: [], drafts: [], gaps: [notCoveredGap(screen.url, reason)] };
+  // A scan that failed knows nothing about which rules applied, so it claims nothing.
+  return {
+    screenId: screen.id,
+    url: screen.url,
+    stops: [],
+    drafts: [],
+    gaps: [notCoveredGap(screen.url, reason)],
+    applicability: [],
+  };
 }
 
 function makeTabSteps(tabCap: number): Step[] {
@@ -68,7 +76,14 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
         return failedScan(screen, `screen failed to open: ${errorMessage(err)}`);
       }
 
-      let result: ScreenScan = { screenId: screen.id, url: screen.url, stops: [], drafts: [], gaps: [] };
+      let result: ScreenScan = {
+        screenId: screen.id,
+        url: screen.url,
+        stops: [],
+        drafts: [],
+        gaps: [],
+        applicability: [],
+      };
       try {
         await page.gotoReady();
         await page.armAnnouncementCapture();
@@ -89,6 +104,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           stops,
           drafts: providerResult.drafts,
           gaps: providerResult.gaps,
+          applicability: providerResult.applicability,
         };
       } catch (err) {
         result = failedScan(screen, `scan failed: ${errorMessage(err)}`);

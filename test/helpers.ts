@@ -1,4 +1,14 @@
-import type { UsablConfig } from '../src/contracts/index.js';
+import type { Draft, ProviderOutput, RuleApplicability, UsablConfig } from '../src/contracts/index.js';
+
+/** Reads the drafts out of either provider return shape, for tests that only assert on drafts. */
+export function draftsOf(output: Draft[] | ProviderOutput): Draft[] {
+  return Array.isArray(output) ? output : output.drafts;
+}
+
+/** Reads the applicability a provider reported. A bare Draft[] reported none. */
+export function applicabilityOf(output: Draft[] | ProviderOutput): RuleApplicability[] {
+  return Array.isArray(output) ? [] : (output.applicability ?? []);
+}
 
 const BASE_CONFIG: UsablConfig = {
   appBaseUrl: 'http://127.0.0.1:5173',

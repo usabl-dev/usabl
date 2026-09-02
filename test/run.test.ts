@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { run } from '../src/run.js';
 import { makeFakeDeps } from '../src/deps/fakes.js';
-import type { Draft, ScreenScan, UsablConfig } from '../src/contracts/index.js';
+import type { Draft, RuleApplicability, ScreenScan, UsablConfig } from '../src/contracts/index.js';
 
 const config: UsablConfig = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -31,6 +31,7 @@ const scanWith = (drafts: Draft[], gaps: ScreenScan['gaps'] = []): ScreenScan =>
   stops: [],
   drafts,
   gaps,
+  applicability: [],
 });
 const guardOk = { files: { 'usabl.config.json': '{}' }, headContents: { 'usabl.config.json': '{}' } };
 
@@ -90,6 +91,34 @@ describe('run', () => {
       { ref: config.surfaces[0]!.url, state: 'not-covered', reason: 'screen failed to open: timeout' },
     ]);
     expect(r.exitCode).toBe(3);
+  });
+
+  it('carries applicability to the Result without moving any verdict', async () => {
+    // Applicability is recorded, never judged. Every other field of the Result has to come
+    // out byte-identical whether or not the scan reported which rules applied.
+    const applicability: RuleApplicability[] = [
+      { screenId: 'clusters', layer: 'axe', rule: 'video-caption', outcome: 'inapplicable', elementCount: 0 },
+      { screenId: 'clusters', layer: 'axe', rule: 'html-has-lang', outcome: 'passed', elementCount: 1 },
+      { screenId: 'clusters', layer: 'axe', rule: 'color-contrast', outcome: 'failed', elementCount: 1 },
+    ];
+    const depsFor = (drafts: Draft[], entries?: RuleApplicability[]) =>
+      makeFakeDeps({
+        ...guardOk,
+        writeTree: 'tree-1',
+        changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
+        scans: {
+          clusters: entries === undefined ? scanWith(drafts) : { ...scanWith(drafts), applicability: entries },
+        },
+      });
+
+    for (const drafts of [[], [failDraft]]) {
+      const without = await run(depsFor(drafts), config);
+      const withEntries = await run(depsFor(drafts, applicability), config);
+
+      expect({ ...withEntries, screens: [] }).toEqual({ ...without, screens: [] });
+      expect(withEntries.screens[0]?.applicability).toEqual(applicability);
+      expect(without.screens[0]?.applicability).toEqual([]);
+    }
   });
 
   it('is approval_required (exit 2) when a guarded path diverged', async () => {
@@ -247,6 +276,7 @@ describe('run', () => {
           stops: [],
           drafts: [],
           gaps: [],
+          applicability: [],
         },
         settings: {
           screenId: 'settings',
@@ -254,6 +284,7 @@ describe('run', () => {
           stops: [],
           drafts: [],
           gaps: [{ ref: 'http://127.0.0.1:5173/settings', state: 'not-covered', reason: 'browser failed to load' }],
+          applicability: [],
         },
       },
     });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Finding, Result } from '../../src/contracts/index.js';
+import type { Finding, Result, RuleApplicability } from '../../src/contracts/index.js';
 import { frameUntrusted, redactSecrets, scrubResult } from '../../src/surfaces/scrub.js';
 
 function buildJwtLikeValue(): string {
@@ -87,6 +87,23 @@ describe('scrubResult', () => {
     expect(scrubbed.schemaVersion).toBe('usabl.result.v1');
     expect(scrubbed.verdict).toBe('approval_required');
     expect(scrubbed.exitCode).toBe(2);
+  });
+
+  it('carries screen applicability through egress unchanged', () => {
+    const applicability: RuleApplicability[] = [
+      { screenId: 'clusters', layer: 'axe', rule: 'video-caption', outcome: 'inapplicable', elementCount: 0 },
+      { screenId: 'clusters', layer: 'axe', rule: 'html-has-lang', outcome: 'passed', elementCount: 1 },
+    ];
+    const raw = baseResult({
+      screens: [
+        { screenId: 'clusters', url: 'http://app/clusters', stops: [], drafts: [], gaps: [], applicability },
+      ],
+    });
+
+    const scrubbed = scrubResult(raw);
+
+    expect(scrubbed.screens[0]?.applicability).toEqual(applicability);
+    expect(scrubbed.screens[0]?.applicability).not.toBe(applicability);
   });
 
   it('redacts nested credential values but keeps non-secret evidence html', () => {
