@@ -31,6 +31,7 @@ describe('formatIntegrationSmokeEgress', () => {
       stops: [],
       drafts: [draft],
       gaps: [gap],
+      applicability: [],
     };
     const seen: string[] = [];
     const sanitize = (value: string): string => {
@@ -70,6 +71,7 @@ describe('formatIntegrationSmokeEgress', () => {
           reason: 'scan failed\u001b[31m: provider crashed',
         },
       ],
+      applicability: [],
     };
 
     const out = formatIntegrationSmokeEgress(scan);

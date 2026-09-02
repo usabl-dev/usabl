@@ -602,6 +602,7 @@ function makeDeps(): Deps {
         stops: [],
         drafts: [],
         gaps: [],
+        applicability: [],
       }),
     },
   };

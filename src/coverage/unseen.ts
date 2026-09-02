@@ -21,7 +21,7 @@ import type { CoverageGap, Draft, ScreenScan } from '../contracts/index.js';
 import { computeIdentity } from '../primitives/identity.js';
 
 export interface UnseenPass {
-  screens: ScreenScan[]; // same order as the input, with unseen screens stripped of drafts
+  screens: ScreenScan[]; // same order as the input, unseen screens stripped of drafts and applicability
   unseenScreenIds: string[];
 }
 
@@ -112,8 +112,8 @@ function unseenGap(scan: ScreenScan, detectorSentences: string[]): CoverageGap {
 }
 
 /**
- * Strip drafts from every screen the engine cannot claim it saw and disclose each one as a
- * coverage gap. Screens that were really walked pass through untouched, gaps and all.
+ * Strip drafts and applicability from every screen the engine cannot claim it saw and disclose
+ * each one as a coverage gap. Screens that were really walked pass through untouched, gaps and all.
  *
  * The duplicate-render check compares screens to each other, so it cannot live inside a single
  * screen's scan and this pass runs over the whole collected set.
@@ -141,7 +141,10 @@ export function markUnseenScreens(screens: ScreenScan[]): UnseenPass {
       return scan;
     }
     unseenScreenIds.push(scan.screenId);
-    return { ...scan, drafts: [], gaps: [...scan.gaps, unseenGap(scan, sentences)] };
+    // Applicability goes with the drafts, for the same reason. Sixty rules reported inapplicable
+    // against a document that never rendered is a fact about a blank page, not about the
+    // application, and keeping it would put the dropped claim back in a quieter form.
+    return { ...scan, drafts: [], applicability: [], gaps: [...scan.gaps, unseenGap(scan, sentences)] };
   });
 
   return { screens: marked, unseenScreenIds };

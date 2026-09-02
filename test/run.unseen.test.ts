@@ -66,6 +66,7 @@ function blankScreen(screenId: string): ScreenScan {
     stops: bodyOnlyStops,
     drafts: BLANK_PAGE_RULES.map((rule) => draft(screenId, rule)),
     gaps: [],
+    applicability: [],
   };
 }
 
@@ -110,13 +111,14 @@ describe('unseen screens', () => {
       scans: {
         overview: blankScreen('overview'),
         // Two screens that were really walked, so the whole run is not refused.
-        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('button:nth-child(1)'), drafts: [], gaps: [] },
+        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('button:nth-child(1)'), drafts: [], gaps: [], applicability: [] },
         inventories: {
           screenId: 'inventories',
           url: config.surfaces[2]!.url,
           stops: realStops('a:nth-child(3)'),
           drafts: [],
           gaps: [],
+          applicability: [],
         },
       },
     });
@@ -144,6 +146,7 @@ describe('unseen screens', () => {
       stops: realStops('button:nth-child(1)'),
       drafts: [draft(screenId, 'landmark-one-main')],
       gaps: [],
+      applicability: [],
     });
     const deps = makeFakeDeps({
       ...guardOk,
@@ -157,6 +160,7 @@ describe('unseen screens', () => {
           stops: realStops('a:nth-child(3)'),
           drafts: [],
           gaps: [],
+          applicability: [],
         },
       },
     });
@@ -194,6 +198,7 @@ describe('unseen screens', () => {
           stops: realStops('button:nth-child(1)'),
           drafts: [barrier],
           gaps: [],
+          applicability: [],
         },
         inventories: {
           screenId: 'inventories',
@@ -201,6 +206,7 @@ describe('unseen screens', () => {
           stops: realStops('a:nth-child(3)'),
           drafts: [],
           gaps: [],
+          applicability: [],
         },
       },
     });
@@ -224,14 +230,16 @@ describe('unseen screens', () => {
           stops: realStops('button:nth-child(1)'),
           drafts: [draft('overview', 'landmark-one-main')],
           gaps: [],
+          applicability: [],
         },
-        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [] },
+        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [] },
         inventories: {
           screenId: 'inventories',
           url: config.surfaces[2]!.url,
           stops: realStops('a:nth-child(3)'),
           drafts: [],
           gaps: [],
+          applicability: [],
         },
       },
     });
@@ -256,14 +264,16 @@ describe('unseen screens', () => {
           stops: realStops('button:nth-child(1)'),
           drafts: [],
           gaps: [],
+          applicability: [],
         },
-        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [] },
+        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [] },
         inventories: {
           screenId: 'inventories',
           url: config.surfaces[2]!.url,
           stops: realStops('a:nth-child(3)'),
           drafts: [],
           gaps: [],
+          applicability: [],
         },
       },
     });
@@ -297,6 +307,7 @@ describe('baseline against unseen screens', () => {
           stops: realStops('button:nth-child(1)'),
           drafts: [draft('jobs', 'color-contrast', { elementPath: 'button', elementName: 'Save', role: 'button' })],
           gaps: [],
+          applicability: [],
         },
         inventories: {
           screenId: 'inventories',
@@ -304,6 +315,7 @@ describe('baseline against unseen screens', () => {
           stops: realStops('a:nth-child(3)'),
           drafts: [],
           gaps: [],
+          applicability: [],
         },
       },
     });

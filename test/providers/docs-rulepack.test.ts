@@ -9,7 +9,7 @@ import type {
 } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeDocsRulepackProvider } from '../../src/providers/docs-rulepack/index.js';
-import { testConfig } from '../helpers.js';
+import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'guide', url: 'http://127.0.0.1:5173/docs/guide' };
 
@@ -109,7 +109,7 @@ describe('makeDocsRulepackProvider', () => {
       'docs',
     );
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -159,7 +159,7 @@ describe('makeDocsRulepackProvider', () => {
       'docs',
     );
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     // The level 3 is still compared against the last KNOWN level 1, so the 1->3 skip is caught.
     expect(drafts).toHaveLength(1);
@@ -187,7 +187,7 @@ describe('makeDocsRulepackProvider', () => {
       'docs',
     );
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -214,7 +214,7 @@ describe('makeDocsRulepackProvider', () => {
       'docs',
     );
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     // 2->4 skips a level. 4->3 climbs back up and re-anchors previousLevel to 3.
     // 3->5 then skips again against that re-anchored level, so two drafts emit in one page.
@@ -271,7 +271,7 @@ describe('makeDocsRulepackProvider', () => {
     const provider = makeDocsRulepackProvider([extra]);
     const ctx = await makeContext([], {}, 'docs');
 
-    const drafts = await provider.run(ctx);
+    const drafts = draftsOf(await provider.run(ctx));
 
     expect(extra).toHaveBeenCalledTimes(1);
     expect(drafts).toEqual([draftFrom('extra-ran-docs')]);

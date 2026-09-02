@@ -2,8 +2,18 @@
  * axe-core baseline provider that projects raw axe issue nodes into Drafts.
  * It must never mint a verdict, and it must never drop incomplete findings.
  * Incomplete nodes stay unverified so the gate can disclose not-covered honestly.
+ * It also records which rules axe reached a conclusion about. That record is evidence about
+ * coverage, not a judgment: nothing here decides whether an outcome is expected.
  */
-import type { Draft, Provider, ProviderContext, Severity } from '../../contracts/index.js';
+import type {
+  Draft,
+  Provider,
+  ProviderContext,
+  ProviderOutput,
+  RuleApplicability,
+  RuleOutcome,
+  Severity,
+} from '../../contracts/index.js';
 import { noteFor } from './notes.js';
 
 export interface AxeCheck {
@@ -24,8 +34,29 @@ export interface AxeIssue {
   nodes: AxeNode[];
 }
 
+/**
+ * A rule axe reached a conclusion about without producing a finding. Deliberately not an AxeIssue:
+ * a passing rule can carry hundreds of nodes per rule per screen and none of them are needed to
+ * record that the rule ran. The count is what applicability is about.
+ *
+ * No description. It is static per rule id, so carrying one per rule per screen would be the same
+ * bulk the node list was, and a field the record does not contain must never be able to drop an
+ * entry from the record.
+ */
+export interface AxeRuleSummary {
+  id: string;
+  nodeCount: number;
+}
+
+export interface AxeRunResult {
+  violations: AxeIssue[];
+  incomplete: AxeIssue[];
+  passes: AxeRuleSummary[];
+  inapplicable: AxeRuleSummary[];
+}
+
 export interface AxePage {
-  runAxe(options?: { tags?: readonly string[] }): Promise<{ violations: AxeIssue[]; incomplete: AxeIssue[] }>;
+  runAxe(options?: { tags?: readonly string[] }): Promise<AxeRunResult>;
 }
 
 // The Red Hat WCAG 2.2 AA bar for the docs surface. WCAG conformance is cumulative, so 2.2 AA
@@ -109,11 +140,41 @@ function mapIssueToDrafts(
   return issue.nodes.map((node) => mapNodeToDraft(issue, node, confidence, ctx));
 }
 
+const AXE_LAYER = 'axe';
+
+function issueApplicability(
+  issue: AxeIssue,
+  outcome: RuleOutcome,
+  ctx: ProviderContext,
+): RuleApplicability {
+  return {
+    screenId: ctx.screen.id,
+    layer: AXE_LAYER,
+    rule: issue.id,
+    outcome,
+    elementCount: issue.nodes.length,
+  };
+}
+
+function summaryApplicability(
+  summary: AxeRuleSummary,
+  outcome: RuleOutcome,
+  ctx: ProviderContext,
+): RuleApplicability {
+  return {
+    screenId: ctx.screen.id,
+    layer: AXE_LAYER,
+    rule: summary.id,
+    outcome,
+    elementCount: summary.nodeCount,
+  };
+}
+
 export const axeProvider: Provider = {
   id: 'axe-core',
-  layer: 'axe',
+  layer: AXE_LAYER,
   capabilities: ['live'],
-  async run(ctx: ProviderContext): Promise<Draft[]> {
+  async run(ctx: ProviderContext): Promise<ProviderOutput> {
     if (!isAxePage(ctx.page)) {
       throw new Error('axe provider requires page.runAxe()');
     }
@@ -124,16 +185,29 @@ export const axeProvider: Provider = {
         ? await ctx.page.runAxe({ tags: DOCS_AXE_TAGS })
         : await ctx.page.runAxe();
     const drafts: Draft[] = [];
+    // One entry per rule axe reached a conclusion about, in axe's own four buckets. This records
+    // what ran; it never decides whether an outcome is expected, and it never becomes a finding.
+    const applicability: RuleApplicability[] = [];
 
     for (const issue of axeResult.violations) {
       drafts.push(...mapIssueToDrafts(issue, 'fail', ctx));
+      applicability.push(issueApplicability(issue, 'failed', ctx));
     }
 
     // Incomplete stays visible as unverified. Dropping it would silently claim clean coverage.
     for (const issue of axeResult.incomplete) {
       drafts.push(...mapIssueToDrafts(issue, 'unverified', ctx));
+      applicability.push(issueApplicability(issue, 'incomplete', ctx));
     }
 
-    return drafts;
+    for (const summary of axeResult.passes) {
+      applicability.push(summaryApplicability(summary, 'passed', ctx));
+    }
+
+    for (const summary of axeResult.inapplicable) {
+      applicability.push(summaryApplicability(summary, 'inapplicable', ctx));
+    }
+
+    return { drafts, applicability };
   },
 };

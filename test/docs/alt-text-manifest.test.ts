@@ -33,6 +33,7 @@ function makeResult(receipt: Receipt | null): Result {
         stops: [],
         drafts: [],
         gaps: [],
+        applicability: [],
       },
     ],
     coverage: {

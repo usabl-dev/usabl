@@ -17,7 +17,7 @@ const fail: Draft = {
   whatUserExperiences: 'Low contrast', why: 'ratio 2:1', fix: 'Raise to 4.5:1',
   evidence: { name: { value: 'Save', source: 'ax-tree', fromTree: true } }, confidence: 'fail',
 };
-const scan = (drafts: Draft[]): ScreenScan => ({ screenId: 'clusters', url: config.surfaces[0]!.url, stops: [], drafts, gaps: [] });
+const scan = (drafts: Draft[]): ScreenScan => ({ screenId: 'clusters', url: config.surfaces[0]!.url, stops: [], drafts, gaps: [], applicability: [] });
 const guardOk = { files: { 'usabl.config.json': '{}' }, headContents: { 'usabl.config.json': '{}' }, writeTree: 'tree-fixed', now: '2026-08-19T00:00:00.000Z' };
 
 const scenarios: Record<string, () => ReturnType<typeof makeFakeDeps>> = {

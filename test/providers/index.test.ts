@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Draft, Page, Provider, ProviderContext } from '../../src/contracts/index.js';
+import type {
+  Draft,
+  Page,
+  Provider,
+  ProviderContext,
+  ProviderOutput,
+  RuleApplicability,
+} from '../../src/contracts/index.js';
 import { makeFakeDeps, makeFakePage } from '../../src/deps/fakes.js';
 import { runProviders } from '../../src/providers/index.js';
 import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
@@ -23,6 +30,14 @@ const draft: Draft = {
   fix: 'add an accessible name',
   evidence: {},
   confidence: 'fail',
+};
+
+const applicability: RuleApplicability = {
+  screenId: SCREEN.id,
+  layer: 'fake',
+  rule: 'button-name',
+  outcome: 'inapplicable',
+  elementCount: 0,
 };
 
 async function makeContext(): Promise<ProviderContext> {
@@ -117,6 +132,98 @@ describe('runProviders', () => {
     expect(run).toHaveBeenCalledWith(ctx);
     expect(result.drafts).toEqual([draft]);
     expect(result.gaps).toEqual([]);
+    // A provider that returns a bare Draft[] reports nothing about applicability, and an
+    // empty list is the honest reading of that: it did not say, so nothing is claimed.
+    expect(result.applicability).toEqual([]);
+  });
+
+  it('collects drafts and applicability from a provider that returns both', async () => {
+    const provider: Provider = {
+      id: 'fake-live',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> => ({ drafts: [draft], applicability: [applicability] }),
+    };
+    const ctx = await makeContext();
+
+    const result = await runProviders([provider], ctx, ['live']);
+
+    expect(result.drafts).toEqual([draft]);
+    expect(result.applicability).toEqual([applicability]);
+    expect(result.gaps).toEqual([]);
+  });
+
+  it('treats a provider output with no applicability key as reporting none', async () => {
+    const provider: Provider = {
+      id: 'fake-live',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> => ({ drafts: [draft] }),
+    };
+    const ctx = await makeContext();
+
+    const result = await runProviders([provider], ctx, ['live']);
+
+    expect(result.drafts).toEqual([draft]);
+    expect(result.applicability).toEqual([]);
+  });
+
+  it('ignores an applicability field that is not an array', async () => {
+    // Provider is an exported contract, so a provider written outside this package is a real
+    // shape the compiler never saw. A string here used to spread character by character into
+    // the record, which is worse than reporting nothing.
+    const provider: Provider = {
+      id: 'fake-live',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> =>
+        ({ drafts: [draft], applicability: 'oops' } as unknown as ProviderOutput),
+    };
+    const ctx = await makeContext();
+
+    const result = await runProviders([provider], ctx, ['live']);
+
+    expect(result.applicability).toEqual([]);
+    expect(result.drafts).toEqual([draft]);
+  });
+
+  it('ignores a drafts field that is not an array', async () => {
+    const provider: Provider = {
+      id: 'fake-live',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> =>
+        ({ drafts: 'oops', applicability: [applicability] } as unknown as ProviderOutput),
+    };
+    const ctx = await makeContext();
+
+    const result = await runProviders([provider], ctx, ['live']);
+
+    expect(result.drafts).toEqual([]);
+    expect(result.applicability).toEqual([applicability]);
+  });
+
+  it('keeps applicability from providers that reported it when another provider throws', async () => {
+    const reporter: Provider = {
+      id: 'reporter',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> => ({ drafts: [], applicability: [applicability] }),
+    };
+    const thrower: Provider = {
+      id: 'thrower',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<Draft[]> => {
+        throw new Error('runner exploded');
+      },
+    };
+    const ctx = await makeContext();
+
+    const result = await runProviders([reporter, thrower], ctx, ['live']);
+
+    expect(result.applicability).toEqual([applicability]);
+    expect(result.gaps).toHaveLength(1);
   });
 
   it('records not-covered when a provider throws', async () => {

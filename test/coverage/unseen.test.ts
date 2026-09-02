@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { markUnseenScreens } from '../../src/coverage/unseen.js';
-import type { Draft, ScreenScan, TranscriptStop } from '../../src/contracts/index.js';
+import type {
+  Draft,
+  RuleApplicability,
+  RuleOutcome,
+  ScreenScan,
+  TranscriptStop,
+} from '../../src/contracts/index.js';
 
 function draft(screenId: string, overrides: Partial<Draft> = {}): Draft {
   return {
@@ -24,7 +30,11 @@ function draft(screenId: string, overrides: Partial<Draft> = {}): Draft {
 const stop = (elementPath: string): TranscriptStop => ({ index: 0, elementPath, announcement: [] });
 
 function scan(overrides: Partial<ScreenScan> & { screenId: string; url: string }): ScreenScan {
-  return { stops: [], drafts: [], gaps: [], ...overrides };
+  return { stops: [], drafts: [], gaps: [], applicability: [], ...overrides };
+}
+
+function applicability(screenId: string, rule: string, outcome: RuleOutcome): RuleApplicability {
+  return { screenId, layer: 'axe', rule, outcome, elementCount: outcome === 'inapplicable' ? 0 : 1 };
 }
 
 describe('markUnseenScreens', () => {
@@ -75,6 +85,44 @@ describe('markUnseenScreens', () => {
       expect(screen.gaps[0]?.reason).toContain('keyboard stop');
       expect(screen.gaps[0]?.reason).toContain('same finding identities');
     }
+  });
+
+  it('strips applicability as well as drafts from a screen it cannot claim it saw', () => {
+    // axe reporting sixty inapplicable rules on a document that never rendered is a statement
+    // about a blank page, not about the application. Keeping it would be the same lie the
+    // dropped drafts were.
+    const pass = markUnseenScreens([
+      scan({
+        screenId: 'overview',
+        url: 'http://app/overview',
+        stops: [stop('html > body:nth-child(2)')],
+        drafts: [draft('overview')],
+        applicability: [
+          applicability('overview', 'video-caption', 'inapplicable'),
+          applicability('overview', 'html-has-lang', 'passed'),
+        ],
+      }),
+    ]);
+
+    expect(pass.unseenScreenIds).toEqual(['overview']);
+    expect(pass.screens[0]?.drafts).toEqual([]);
+    expect(pass.screens[0]?.applicability).toEqual([]);
+  });
+
+  it('keeps applicability on a screen it did see', () => {
+    const entry = applicability('overview', 'video-caption', 'inapplicable');
+    const pass = markUnseenScreens([
+      scan({
+        screenId: 'overview',
+        url: 'http://app/overview',
+        stops: [stop('#save')],
+        drafts: [draft('overview')],
+        applicability: [entry],
+      }),
+    ]);
+
+    expect(pass.unseenScreenIds).toEqual([]);
+    expect(pass.screens[0]?.applicability).toEqual([entry]);
   });
 
   it('keeps the gaps a scan already reported', () => {

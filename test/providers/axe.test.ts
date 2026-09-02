@@ -1,20 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import type { Page, ProfileName, ProviderContext } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
-import type { AxeIssue } from '../../src/providers/axe/index.js';
+import type { AxeIssue, AxeRunResult, AxeRuleSummary } from '../../src/providers/axe/index.js';
 import { applyAxeTags, axeProvider, DOCS_AXE_TAGS } from '../../src/providers/axe/index.js';
-import { testConfig } from '../helpers.js';
+import { applicabilityOf, draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 
 type RunAxeOptions = { tags?: readonly string[] } | undefined;
 
-interface AxeResult {
-  violations: AxeIssue[];
-  incomplete: AxeIssue[];
+const EMPTY_AXE_RESULT: AxeRunResult = {
+  violations: [],
+  incomplete: [],
+  passes: [],
+  inapplicable: [],
+};
+
+function axeResult(parts: Partial<AxeRunResult>): AxeRunResult {
+  return { ...EMPTY_AXE_RESULT, ...parts };
 }
 
-function withRunAxe(page: Page, result: AxeResult): Page & { runAxe: () => Promise<AxeResult> } {
+function withRunAxe(page: Page, result: AxeRunResult): Page & { runAxe: () => Promise<AxeRunResult> } {
   return Object.assign(page, {
     runAxe: async () => result,
   });
@@ -24,11 +30,11 @@ function withRunAxe(page: Page, result: AxeResult): Page & { runAxe: () => Promi
 function withRecordingRunAxe(
   page: Page,
   calls: RunAxeOptions[],
-): Page & { runAxe: (options?: RunAxeOptions) => Promise<AxeResult> } {
+): Page & { runAxe: (options?: RunAxeOptions) => Promise<AxeRunResult> } {
   return Object.assign(page, {
     runAxe: async (options?: RunAxeOptions) => {
       calls.push(options);
-      return { violations: [], incomplete: [] };
+      return EMPTY_AXE_RESULT;
     },
   });
 }
@@ -47,11 +53,11 @@ async function makeRecordingContext(
   };
 }
 
-async function makeContext(result: AxeResult): Promise<ProviderContext> {
+async function makeContext(result: Partial<AxeRunResult>): Promise<ProviderContext> {
   const deps = makeFakeDeps();
   const page = await deps.browser.open(SCREEN.url);
   return {
-    page: withRunAxe(page, result),
+    page: withRunAxe(page, axeResult(result)),
     screen: SCREEN,
     config: testConfig(),
   };
@@ -80,11 +86,23 @@ const VIOLATION: AxeIssue = {
   ],
 };
 
+// A second issue with two nodes, so elementCount cannot pass by always being one.
+const INCOMPLETE_ISSUE: AxeIssue = {
+  id: 'color-contrast',
+  impact: 'serious',
+  description: 'Text needs enough contrast against its background to be readable.',
+  nodes: [{ target: ['.header'] }, { target: ['.footer'] }],
+};
+
+const PASSED_RULE: AxeRuleSummary = { id: 'html-has-lang', nodeCount: 1 };
+
+const INAPPLICABLE_RULE: AxeRuleSummary = { id: 'video-caption', nodeCount: 0 };
+
 describe('axeProvider', () => {
   it('maps one violation node to one fail Draft', async () => {
-    const ctx = await makeContext({ violations: [VIOLATION], incomplete: [] });
+    const ctx = await makeContext({ violations: [VIOLATION] });
 
-    const drafts = await axeProvider.run(ctx);
+    const drafts = draftsOf(await axeProvider.run(ctx));
 
     expect(drafts).toHaveLength(1);
     const first = drafts[0];
@@ -106,9 +124,9 @@ describe('axeProvider', () => {
   });
 
   it('maps incomplete findings as unverified and never drops them', async () => {
-    const ctx = await makeContext({ violations: [], incomplete: [VIOLATION] });
+    const ctx = await makeContext({ incomplete: [VIOLATION] });
 
-    const drafts = await axeProvider.run(ctx);
+    const drafts = draftsOf(await axeProvider.run(ctx));
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -119,12 +137,44 @@ describe('axeProvider', () => {
   });
 
   it('returns empty drafts for a clean page and advertises live capability', async () => {
-    const ctx = await makeContext({ violations: [], incomplete: [] });
+    const ctx = await makeContext({});
 
-    const drafts = await axeProvider.run(ctx);
+    const drafts = draftsOf(await axeProvider.run(ctx));
 
     expect(drafts).toEqual([]);
     expect(axeProvider.capabilities).toContain('live');
+  });
+
+  it('records one applicability entry per rule for all four axe outcomes', async () => {
+    const ctx = await makeContext({
+      violations: [VIOLATION],
+      incomplete: [INCOMPLETE_ISSUE],
+      passes: [PASSED_RULE],
+      inapplicable: [INAPPLICABLE_RULE],
+    });
+
+    const applicability = applicabilityOf(await axeProvider.run(ctx));
+
+    expect(applicability).toEqual([
+      { screenId: SCREEN.id, layer: 'axe', rule: 'button-name', outcome: 'failed', elementCount: 1 },
+      { screenId: SCREEN.id, layer: 'axe', rule: 'color-contrast', outcome: 'incomplete', elementCount: 2 },
+      { screenId: SCREEN.id, layer: 'axe', rule: 'html-has-lang', outcome: 'passed', elementCount: 1 },
+      { screenId: SCREEN.id, layer: 'axe', rule: 'video-caption', outcome: 'inapplicable', elementCount: 0 },
+    ]);
+  });
+
+  it('records what axe checked on a page that produced no drafts', async () => {
+    // Silence from a rule that matched nothing and silence from a rule that matched and passed
+    // are different facts, and a clean page is exactly where they are indistinguishable today.
+    const ctx = await makeContext({ passes: [PASSED_RULE], inapplicable: [INAPPLICABLE_RULE] });
+
+    const output = await axeProvider.run(ctx);
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(applicabilityOf(output).map((entry) => [entry.rule, entry.outcome, entry.elementCount])).toEqual([
+      ['html-has-lang', 'passed', 1],
+      ['video-caption', 'inapplicable', 0],
+    ]);
   });
 
   it('throws when the page does not provide runAxe', async () => {

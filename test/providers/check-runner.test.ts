@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AxNode, Draft, Page, Provider } from '../../src/contracts/index.js';
+import type {
+  AxNode,
+  Draft,
+  Page,
+  Provider,
+  ProviderOutput,
+  RuleApplicability,
+} from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -100,6 +107,36 @@ describe('makeCheckRunner', () => {
     ]);
   });
 
+  it('carries provider applicability onto the scan', async () => {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    const entry: RuleApplicability = {
+      screenId: SCREEN.id,
+      layer: 'fake',
+      rule: 'video-caption',
+      outcome: 'inapplicable',
+      elementCount: 0,
+    };
+    const reporter: Provider = {
+      id: 'reporter',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> => ({ drafts: [], applicability: [entry] }),
+    };
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [reporter],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.applicability).toEqual([entry]);
+    expect(scan.drafts).toEqual([]);
+    expect(scan.gaps).toEqual([]);
+  });
+
   it('turns provider throws into not-covered gaps and closes the page', async () => {
     let closeCalls = 0;
     const page = await makeScriptedPage({
@@ -189,6 +226,7 @@ describe('makeCheckRunner', () => {
 
     // A page that never settled is disclosed, never scanned and reported as clean.
     expect(scan.stops).toEqual([]);
+    expect(scan.applicability).toEqual([]);
     expect(scan.gaps).toHaveLength(1);
     expect(scan.gaps[0]).toMatchObject({ ref: SCREEN.url, state: 'not-covered' });
     expect(scan.gaps[0]?.reason).toContain('page did not stop changing');
@@ -213,6 +251,8 @@ describe('makeCheckRunner', () => {
       url: SCREEN.url,
       stops: [],
       drafts: [],
+      // Nothing was opened, so nothing is known about which rules applied here.
+      applicability: [],
       gaps: [
         {
           ref: SCREEN.url,

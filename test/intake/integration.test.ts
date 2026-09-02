@@ -6,7 +6,7 @@ import { generateKeyboardPaths } from '../../src/docs/keyboard-paths.js';
 import { makeFakePage, makeFakeDeps } from '../../src/deps/fakes.js';
 import { loadRequirements } from '../../src/intake/load.js';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
-import { testConfig } from '../helpers.js';
+import { draftsOf, testConfig } from '../helpers.js';
 
 const REQUIREMENTS_YAML = `
 version: 1
@@ -42,6 +42,7 @@ function fixtureResult(stops: ScreenScan['stops']): Result {
         stops,
         drafts: [],
         gaps: [],
+        applicability: [],
       },
     ],
     coverage: {
@@ -95,13 +96,15 @@ describe('intake integration', () => {
     const providers = mapRequirementsToProviders(loaded.bundle);
     expect(providers).toHaveLength(1);
 
-    const drafts = await providers[0]!.run({
-      page: makeFakePage({
-        axAt: async () => ({ name: 'Home', role: 'heading', states: {} }),
+    const drafts = draftsOf(
+      await providers[0]!.run({
+        page: makeFakePage({
+          axAt: async () => ({ name: 'Home', role: 'heading', states: {} }),
+        }),
+        screen: { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' },
+        config: testConfig({ requirements: 'requirements/' }),
       }),
-      screen: { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' },
-      config: testConfig({ requirements: 'requirements/' }),
-    });
+    );
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({

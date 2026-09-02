@@ -59,6 +59,7 @@ function scanOf(draft: Draft): ScreenScan {
     stops: [],
     drafts: [draft],
     gaps: [],
+    applicability: [],
   };
 }
 

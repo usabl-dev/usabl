@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AnnouncementToken, InteractionContract, SpeechObligation, StepRunner, TranscriptStop } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeVirtualSrProvider } from '../../src/voicing/virtual-sr-provider.js';
-import { testConfig } from '../helpers.js';
+import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 
@@ -57,7 +57,7 @@ async function runProvider(promotedObligations?: string[]) {
   );
   const page = await makeFakeDeps().browser.open('http://127.0.0.1:5173/clusters');
   const config = promotedObligations === undefined ? testConfig() : testConfig({ promotedObligations });
-  return provider.run({ page, screen: SCREEN, config });
+  return draftsOf(await provider.run({ page, screen: SCREEN, config }));
 }
 
 describe('virtual SR promotion invariants', () => {

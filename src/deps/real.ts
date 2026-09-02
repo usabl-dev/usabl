@@ -7,7 +7,7 @@
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
 import type { AxNode, BrowserDriver, Page } from '../contracts/index.js';
-import { applyAxeTags, type AxeIssue } from '../providers/axe/index.js';
+import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
 // Ansible Automation Platform screen measured 12.4 s to network idle plus 13.3 s to a DOM that
@@ -108,6 +108,11 @@ const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
 interface AxeResult {
   violations: AxeIssue[];
   incomplete: AxeIssue[];
+  // axe classifies every rule it loaded, not only the ones that produced findings. Keeping the
+  // other two buckets is what lets a later reader tell a rule that ran and passed from a rule
+  // that never matched anything on this screen.
+  passes: AxeRuleSummary[];
+  inapplicable: AxeRuleSummary[];
 }
 
 function mapAxeCheck(rawCheck: unknown): { data?: unknown } {
@@ -162,6 +167,39 @@ function mapAxeIssues(rawIssues: unknown): AxeIssue[] {
   }
 
   return issues;
+}
+
+/**
+ * Maps an axe rule bucket to the light record applicability needs: which rule, and how many
+ * elements it matched. Nodes are counted, never mapped, because a passing rule can carry
+ * hundreds of them per screen and none of them are evidence of anything.
+ *
+ * Exported so the mapping can be proven without a browser. Same defensive contract as
+ * mapAxeIssues: raw axe output is untyped and input that is not an array yields nothing. Only
+ * the rule id is required, because it is the whole identity of the record. Nothing else about
+ * the entry is read, so nothing else can decide whether the entry is kept.
+ */
+export function mapAxeRuleSummaries(rawRules: unknown): AxeRuleSummary[] {
+  if (!Array.isArray(rawRules)) {
+    return [];
+  }
+
+  const summaries: AxeRuleSummary[] = [];
+  for (const rawRule of rawRules) {
+    const id = readString(getProp(rawRule, 'id'));
+    if (id === null) {
+      continue;
+    }
+
+    // inapplicable entries always arrive with an empty node list, but the length is read rather
+    // than assumed so this stays true of whatever bucket it is handed.
+    const rawNodes = getProp(rawRule, 'nodes');
+    const nodeCount = Array.isArray(rawNodes) ? rawNodes.length : 0;
+
+    summaries.push({ id, nodeCount });
+  }
+
+  return summaries;
 }
 
 function getProp(value: unknown, key: string): unknown {
@@ -365,6 +403,8 @@ function attachAxeBridge(page: Page, pw: PwPage): void {
       return {
         violations: mapAxeIssues(result.violations),
         incomplete: mapAxeIssues(result.incomplete),
+        passes: mapAxeRuleSummaries(result.passes),
+        inapplicable: mapAxeRuleSummaries(result.inapplicable),
       };
     },
   });

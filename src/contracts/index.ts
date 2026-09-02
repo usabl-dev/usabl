@@ -94,12 +94,32 @@ export interface TranscriptStop {
   elementPath: string;
   announcement: AnnouncementToken[];
 }
+// ---- applicability (what a rule did on a screen, recorded and never judged) ----
+// Silence from a check has two meanings that look identical in a findings list: the rule ran
+// against matching elements and found nothing wrong, or the rule matched nothing at all and
+// never had an opinion. Recording the outcome per rule per screen keeps those apart.
+// Nothing here classifies an outcome as expected or suspicious, and nothing here gates.
+export type RuleOutcome = 'failed' | 'incomplete' | 'passed' | 'inapplicable';
+export interface RuleApplicability {
+  screenId: string;
+  layer: string;
+  rule: string;
+  outcome: RuleOutcome;
+  // Elements the rule matched on this screen. axe reports zero for an inapplicable rule, and the
+  // count is read from what the run returned rather than assumed from the outcome.
+  elementCount: number;
+}
+
 export interface ScreenScan {
   screenId: string;
   url: string;
   stops: TranscriptStop[];
   drafts: Draft[];
   gaps: CoverageGap[];
+  // Required, never optional. An absent field would read as "nothing applied here", which is the
+  // confusion this record exists to remove. Empty means nothing was reported, which is honest for
+  // a scan that failed or for providers that say nothing about applicability.
+  applicability: RuleApplicability[];
 }
 
 // ---- coverage ----
@@ -387,12 +407,22 @@ export interface Provider {
   // Set when the provider's evidence only holds on the page as it loaded, such as a walk of the
   // real focus order. Running it on a changed page yields thin or empty results that read as clean.
   requiresPristinePage?: boolean;
-  run(ctx: ProviderContext): Promise<Draft[]>;
+  run(ctx: ProviderContext): Promise<Draft[] | ProviderOutput>;
+}
+
+// A provider that knows which rules applied returns them beside its drafts, from the same run.
+// The union keeps providers with nothing to report on the plain Draft[] return, and it keeps
+// applicability out of a second method: axe computes both in one analyze() call, and asking
+// twice would mean a second full axe run per screen.
+export interface ProviderOutput {
+  drafts: Draft[];
+  applicability?: RuleApplicability[];
 }
 
 export interface ProviderRunResult {
   drafts: Draft[];
   gaps: CoverageGap[];
+  applicability: RuleApplicability[];
 }
 
 // ---- gate I/O ----
