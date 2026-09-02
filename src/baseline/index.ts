@@ -4,6 +4,7 @@
  * It must never mint a verdict, write waivers, or re-consume newly written floor bytes in the same process.
  */
 import type { Deps, EvidenceFloor, FloorEntry, Finding, Result, UsablConfig } from '../contracts/index.js';
+import { coverageIncomplete } from '../coverage/completeness.js';
 import { parseDocsManifest } from '../coverage/docs-manifest.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { computeIdentity } from '../primitives/identity.js';
@@ -160,9 +161,6 @@ export async function runBaseline(
     exitCode: 0,
     wrote: true,
     entryCount: floor.entries.length,
-    message: formatSuccessReport(
-      floor.entries.length,
-      result.coverage.unresolvedFiles.length > 0 || result.coverage.gaps.length > 0,
-    ),
+    message: formatSuccessReport(floor.entries.length, coverageIncomplete(result.coverage)),
   };
 }
