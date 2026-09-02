@@ -17,6 +17,25 @@
   a coverage gap and `not_covered` rather than an unprovable green. Run
   `usabl baseline` to regenerate the floor at version 2. Version 1 files still
   parse, and they still gate on new identities and identity-weak counts.
+- usabl can scan a login-gated application. The browser adapter already accepted a
+  Playwright storage state, but no operator entry point supplied one, so a run
+  against an application behind a login scanned signed out and could mint a verdict
+  from the pages a signed-out visitor sees. `USABL_STORAGE_STATE` now names a
+  storage state file, and the composition root every surface funnels through reads
+  it, so the CLI, the Vite overlay, and the Claude Stop hook all reach the same
+  signed-in screens. A path passed directly in code still wins over the variable.
+  An empty value means no session. A path usabl cannot read, or one that is not
+  JSON, stops the run rather than producing another signed-out scan. Neither the
+  path nor the file contents are ever printed, because the file holds live session
+  tokens.
+
+### Added
+
+- `usabl doctor` reports the authenticated session as a surface of its own. Unset
+  reads as missing and names the consequence: usabl will scan signed out, so a
+  login-gated screen is measured as whatever a signed-out visitor sees. Set but
+  absent or unparseable reads as drifted, never wired. Doctor says whether a
+  session is configured, never what it is.
 
 ## 0.2.1 - 2026-09-01
 

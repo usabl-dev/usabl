@@ -112,8 +112,10 @@ A pull request that edits `usabl.config.json`, `usabl.routes.json`,
 the configured requirements path, `.usabl-evidence.json`, or
 `.usabl-waivers.json` is `approval_required`.
 That is not a merge dead-end. This is the consumer gate (the app that
-runs `usabl enforce policy`). This repository's org-team CODEOWNERS is
-engine governance and is a separate file.
+runs `usabl enforce policy`). This repository's own `.github/CODEOWNERS`
+is engine governance and is a separate file. It names individual logins,
+never org teams, because the org has no teams and a team reference would
+route no review at all.
 
 Two commands draft and maintain that evidence floor. `usabl baseline` runs a
 full scan and drafts the accepted accessibility floor in `.usabl-evidence.json`

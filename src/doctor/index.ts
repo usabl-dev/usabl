@@ -21,6 +21,7 @@ import { parseUsablConfig } from '../intake/config.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
 import { parseWaiverLedger } from '../run.js';
+import { readStorageStateEnv, STORAGE_STATE_ENV_VAR, type EnvReader } from '../deps/session.js';
 import { neutralize } from '../primitives/neutralize.js';
 
 // The waiver ledger path the gate reads. There is no shared constant for it today (run.ts,
@@ -31,6 +32,9 @@ const WAIVERS_PATH = '.usabl-waivers.json';
 // Surface labels are named once and reused by both the collector and the read-failure guard,
 // so an unreadable surface reports the same label as a readable one and the two never drift.
 const CONFIG_LABEL = 'usabl config';
+// The label names the variable, never its value. The value is a path the operator chose and
+// the file it names holds live session cookies, so neither belongs in a printed report.
+const SESSION_LABEL = `authenticated session (${STORAGE_STATE_ENV_VAR})`;
 const ROUTES_LABEL = 'route manifest (usabl.routes.json)';
 const EVIDENCE_FLOOR_LABEL = `evidence floor (${EVIDENCE_FLOOR_PATH})`;
 const WAIVERS_LABEL = `waiver ledger (${WAIVERS_PATH})`;
@@ -64,6 +68,9 @@ export interface DoctorDeps {
   // The config path to inspect. Defaults to usabl.config.json at the call site, or whatever
   // the operator passed via --config.
   configPath: string;
+  // The process environment, injected for the same reason fs and gh are: a collector that
+  // reached for process.env directly would be a surface no test could set up honestly.
+  env: EnvReader;
 }
 
 function isFsReadError(error: unknown): boolean {
@@ -125,6 +132,53 @@ async function collectConfig(deps: DoctorDeps): Promise<SurfaceReport> {
     };
   }
   return { id: 'config', label: CONFIG_LABEL, state: 'wired', nextStep: '' };
+}
+
+async function collectSession(deps: DoctorDeps): Promise<SurfaceReport> {
+  // Without a session usabl scans signed out, which is how a login-gated application was
+  // measured as three blank pages and still received a verdict. So the missing state carries
+  // the consequence, not just the variable name. Nothing here prints the path or the file:
+  // the path can name a private location and the file holds live session tokens, so doctor
+  // reports whether a session is set, never what it is.
+  const path = readStorageStateEnv(deps.env);
+  if (path === null) {
+    return {
+      id: 'session',
+      label: SESSION_LABEL,
+      state: 'missing',
+      nextStep: `No ${STORAGE_STATE_ENV_VAR}. usabl will scan signed out, so a login-gated screen is measured as whatever a signed-out visitor sees, often a blank or redirected page that still mints a verdict. Export ${STORAGE_STATE_ENV_VAR} with the path to a Playwright storage state JSON file to scan signed in.`,
+    };
+  }
+  // A real read error (EACCES and the like) propagates to guardRead as unknown. This fs port
+  // returns null for a missing file, which is the confident "the path names nothing" signal.
+  const raw = await deps.fs.readFile(path);
+  if (raw === null) {
+    return {
+      id: 'session',
+      label: SESSION_LABEL,
+      state: 'drifted',
+      nextStep: `${STORAGE_STATE_ENV_VAR} is set but no file exists at the path it names (the path is not printed here). Re-export the session file, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
+    };
+  }
+  try {
+    JSON.parse(raw);
+  } catch {
+    return {
+      id: 'session',
+      label: SESSION_LABEL,
+      state: 'drifted',
+      nextStep: `${STORAGE_STATE_ENV_VAR} names a file that is not JSON, so it is not a Playwright storage state. Re-export the session file, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
+    };
+  }
+  return {
+    id: 'session',
+    label: SESSION_LABEL,
+    state: 'wired',
+    // Present and parsing is all doctor can confirm. Whether the session is still accepted by
+    // the application is a live question no read of the file can answer, and an expired
+    // session scans signed out, so the wired state says so instead of implying more.
+    nextStep: `Set, readable, and parses. usabl cannot tell whether the session is still valid; an expired session scans signed out.`,
+  };
 }
 
 async function collectRoutes(deps: DoctorDeps): Promise<SurfaceReport> {
@@ -374,13 +428,16 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
 }
 
 export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceReport[]> {
-  // Order mirrors the slice: config, routes, evidence floor, waivers, overlay, stop hook,
-  // usabl-check skill, ci workflow, branch rule. Each collector is self-contained health logic with no printing,
+  // Order mirrors the slice: config, authenticated session, routes, evidence floor, waivers,
+  // overlay, stop hook, usabl-check skill, ci workflow, branch rule. The session sits second
+  // because it decides what every later scan actually measures. Each collector is
+  // self-contained health logic with no printing,
   // so tests can target the states directly. guardRead absorbs an unexpected fs read error as
   // an honest unknown; every recognized state (including drifted and unknown) is returned, and
   // only a real programmer error propagates.
   return [
     await guardRead('config', CONFIG_LABEL, () => collectConfig(deps)),
+    await guardRead('session', SESSION_LABEL, () => collectSession(deps)),
     await guardRead('routes', ROUTES_LABEL, () => collectRoutes(deps)),
     await guardRead('evidence-floor', EVIDENCE_FLOOR_LABEL, () => collectEvidenceFloor(deps)),
     await guardRead('waivers', WAIVERS_LABEL, () => collectWaivers(deps)),
