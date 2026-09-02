@@ -23,3 +23,14 @@
 
 # The gate protects itself: changing who can approve policy needs owner review.
 /.github/CODEOWNERS  @eparenti @nitin-dhevar @vishsanghishetty
+
+# Every guarded path needs an owner or `usabl enforce policy` cannot be satisfied for it.
+# The four below are guarded (the first two by guardedPaths in usabl.config.json, the last
+# two by ALWAYS_GUARDED) and were named by no rule here, so any change to them refused
+# forever with no reviewer able to clear it. The evidence floor and the waiver ledger decide
+# which barriers are already accepted, and the docs and routes manifests decide what gets
+# scanned at all, so a quiet edit to any of them weakens a verdict without changing a rule.
+/.usabl-evidence.json @eparenti @nitin-dhevar @vishsanghishetty
+/.usabl-waivers.json  @eparenti @nitin-dhevar @vishsanghishetty
+/usabl.docs.json      @eparenti @nitin-dhevar @vishsanghishetty
+/usabl.routes.json    @eparenti @nitin-dhevar @vishsanghishetty
