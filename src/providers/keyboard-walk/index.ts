@@ -87,30 +87,76 @@ function unnamedInteractiveDraft(screenId: string, elementPath: string, node: Ax
   };
 }
 
+// Why the walk stopped. Only 'complete' means the focus order itself ended, by cycling back to a
+// path already seen or by handing focus to the body. The other two mean evidence is missing.
+type StopReason = 'complete' | 'wall-clock' | 'tab-cap';
+
+const TRUNCATION_CAUSE: Record<Exclude<StopReason, 'complete'>, string> = {
+  'wall-clock': 'The keyboard walk ran out of its time budget',
+  'tab-cap': 'The keyboard walk reached its limit on tab stops',
+};
+
+function truncatedWalkDraft(
+  screenId: string,
+  reason: Exclude<StopReason, 'complete'>,
+  stopsWalked: number,
+): Draft {
+  return {
+    rule: 'keyboard-walk-truncated',
+    layer: 'walk',
+    severity: 'serious',
+    evidenceClass: 'deterministic',
+    screenId,
+    elementPath: '',
+    elementName: null,
+    role: null,
+    whatUserExperiences:
+      'Part of the keyboard path through this screen was never walked, so barriers past that point are unknown.',
+    why: `${TRUNCATION_CAUSE[reason]} after ${stopsWalked} tab stop(s), before focus reached the end of the page.`,
+    fix: 'Raise the keyboard walk budget for this screen, or split the screen so its focus order fits one walk.',
+    evidence: {},
+    confidence: 'unverified',
+  };
+}
+
 export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = {}): Provider {
   const tabCap = options.tabCap ?? 200;
   const now = options.now ?? (() => Date.now());
-  const deadline = options.wallClockMs === undefined ? null : now() + options.wallClockMs;
+  const wallClockMs = options.wallClockMs;
   const stepRunner = makeStepRunner();
 
   return {
     id: 'keyboard-walk',
     layer: 'walk',
     capabilities: ['live'],
+    // This walk traverses the real focus order, which only describes what a keyboard user meets
+    // when it starts from the page as loaded. An opened or dismissed widget rewrites that order.
+    requiresPristinePage: true,
     async run(ctx): Promise<Draft[]> {
       await ctx.page.focusBody();
 
+      // The budget is anchored per run, not per provider. One instance walks every screen in a
+      // run, and page loads, transcripts, and other providers spend real time between screens.
+      // Anchored at construction, that time is already gone when the first walk starts, so the
+      // walk returns nothing on every screen while coverage still reads clean.
+      const deadline = wallClockMs === undefined ? null : now() + wallClockMs;
+
       const drafts: Draft[] = [];
       const seenPaths = new Set<string>();
+      let stopsWalked = 0;
+      // Falling out of the loop means the cap ran out, so that is the honest default.
+      let stopReason: StopReason = 'tab-cap';
 
       for (let i = 0; i < tabCap; i += 1) {
         if (deadline !== null && now() >= deadline) {
+          stopReason = 'wall-clock';
           break;
         }
 
         const stops = await stepRunner.run(ctx.page, [{ do: 'tab' }]);
         const path = tabStopPath(stops[0]?.elementPath ?? '', i);
         if (seenPaths.has(path)) {
+          stopReason = 'complete';
           break;
         }
         seenPaths.add(path);
@@ -118,7 +164,12 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         // Browsers move focus to the document body after the last Tab stop and
         // before cycling to the first control. That ends the walk. It is not an
         // unnamed focusable element.
-        if (await ctx.page.activeElementIs('body')) break;
+        if (await ctx.page.activeElementIs('body')) {
+          stopReason = 'complete';
+          break;
+        }
+
+        stopsWalked += 1;
 
         const node = await ctx.page.activeNode();
         if (node === null) {
@@ -129,6 +180,12 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         if (isUnnamedInteractive(node)) {
           drafts.push(unnamedInteractiveDraft(ctx.screen.id, path, node));
         }
+      }
+
+      // A walk cut short returns the same empty or short list as a clean screen. Saying so as an
+      // unverified deterministic finding puts the gate on not_covered instead of a false pass.
+      if (stopReason !== 'complete') {
+        drafts.push(truncatedWalkDraft(ctx.screen.id, stopReason, stopsWalked));
       }
 
       return drafts;

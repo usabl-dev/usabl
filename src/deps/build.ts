@@ -32,7 +32,14 @@ const RUNNER_PACKAGE_PATHS = [
   // Source imports during Vitest live in src/deps/.
   fileURLToPath(new URL("../../package.json", import.meta.url)),
 ];
-const KEYBOARD_WALL_CLOCK_MS = 4_000;
+// Per-screen budget for the keyboard walk, anchored when each walk starts. It guards against a
+// focus order that never cycles back; it is not a throttle on normal screens, which end on their
+// own once focus returns to a stop already seen. Wall clock binds before the 200 tab-stop cap does.
+// Measured screens carry up to about 145 focusable elements, and every stop costs several browser
+// round trips, so a large screen on a busy main thread needs seconds, not milliseconds. This is
+// also the budget the real-browser smoke entry uses, so the shipped path and the path we actually
+// exercise against Chromium agree.
+const KEYBOARD_WALL_CLOCK_MS = 15_000;
 
 function readVersion(value: unknown): string | null {
   if (typeof value !== "string") {

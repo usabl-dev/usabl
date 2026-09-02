@@ -11,6 +11,29 @@ interface ScriptedPageSpec {
   activePaths: string[];
   activeNodes: Array<AxNode | null>;
   announcements: string[][];
+  onTab?: () => void;
+}
+
+function makeClock(): { now: () => number; advance: (ms: number) => void } {
+  let value = 0;
+  return {
+    now: () => value,
+    advance: (ms) => {
+      value += ms;
+    },
+  };
+}
+
+function unnamedLinkPage(paths: string[]): ScriptedPageSpec {
+  return {
+    activePaths: paths,
+    activeNodes: paths.map(() => ({ name: null, role: 'link', states: {} })),
+    announcements: paths.map(() => []),
+  };
+}
+
+function rules(drafts: Array<{ rule: string }>): string[] {
+  return drafts.map((draft) => draft.rule);
 }
 
 function currentIndex(cursor: number): number {
@@ -31,6 +54,7 @@ async function makeScriptedPage(spec: ScriptedPageSpec): Promise<Page> {
 
   return Object.assign(page, {
     tab: async () => {
+      spec.onTab?.();
       advance();
     },
     press: async () => {
@@ -111,11 +135,13 @@ describe('keyboard walk StepRunner', () => {
 
 describe('makeKeyboardWalkProvider', () => {
   it('emits unverified draft when activeNode is null at a tab stop', async () => {
-    const provider = makeKeyboardWalkProvider({ tabCap: 1 });
+    // The repeated path ends the walk on a completed focus cycle, so this case reads only the
+    // detection behavior and never the separate disclosure a cut-short walk owes the operator.
+    const provider = makeKeyboardWalkProvider({ tabCap: 5 });
     const page = await makeScriptedPage({
-      activePaths: ['#mystery-focus'],
-      activeNodes: [null],
-      announcements: [[]],
+      activePaths: ['#mystery-focus', '#mystery-focus'],
+      activeNodes: [null, null],
+      announcements: [[], []],
     });
 
     const drafts = await provider.run(makeContext(page));
@@ -154,11 +180,14 @@ describe('makeKeyboardWalkProvider', () => {
   });
 
   it('emits fail draft for unnamed interactive role reached by Tab', async () => {
-    const provider = makeKeyboardWalkProvider({ tabCap: 1 });
+    const provider = makeKeyboardWalkProvider({ tabCap: 5 });
     const page = await makeScriptedPage({
-      activePaths: ['#empty-link'],
-      activeNodes: [{ name: null, role: 'link', states: {} }],
-      announcements: [[]],
+      activePaths: ['#empty-link', '#empty-link'],
+      activeNodes: [
+        { name: null, role: 'link', states: {} },
+        { name: null, role: 'link', states: {} },
+      ],
+      announcements: [[], []],
     });
 
     const drafts = await provider.run(makeContext(page));
@@ -202,5 +231,89 @@ describe('makeKeyboardWalkProvider', () => {
     const drafts = await provider.run(makeContext(page));
 
     expect(drafts.length).toBeLessThanOrEqual(5);
+  });
+
+  it('gives every run its own wall-clock budget when one provider walks several screens', async () => {
+    const clock = makeClock();
+    const provider = makeKeyboardWalkProvider({ tabCap: 10, wallClockMs: 1_000, now: clock.now });
+
+    // A real run opens the page, collects a transcript, and runs other providers before this walk,
+    // and it does that again for every screen. All of that time is spent on one provider instance.
+    clock.advance(30_000);
+    const first = await provider.run(makeContext(await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#b']))));
+
+    clock.advance(30_000);
+    const second = await provider.run(makeContext(await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#b']))));
+
+    expect(rules(first)).toEqual([
+      'keyboard-walk-unnamed-interactive',
+      'keyboard-walk-unnamed-interactive',
+    ]);
+    expect(second).toEqual(first);
+  });
+
+  it('discloses truncation when the wall-clock budget runs out mid walk', async () => {
+    const clock = makeClock();
+    const provider = makeKeyboardWalkProvider({ tabCap: 50, wallClockMs: 200, now: clock.now });
+    const paths = Array.from({ length: 50 }, (_, i) => `#stop-${i}`);
+    const page = await makeScriptedPage({
+      ...unnamedLinkPage(paths),
+      onTab: () => clock.advance(60),
+    });
+
+    const drafts = await provider.run(makeContext(page));
+
+    const walked = drafts.filter((d) => d.rule === 'keyboard-walk-unnamed-interactive');
+    expect(walked.length).toBeGreaterThan(0);
+    expect(walked.length).toBeLessThan(paths.length);
+
+    const truncated = drafts.filter((d) => d.rule === 'keyboard-walk-truncated');
+    expect(truncated).toHaveLength(1);
+    expect(truncated[0]).toMatchObject({
+      layer: 'walk',
+      evidenceClass: 'deterministic',
+      confidence: 'unverified',
+      screenId: SCREEN.id,
+    });
+    expect(truncated[0]?.why).toMatch(/\d+ tab stop/);
+  });
+
+  it('discloses truncation when the walk stops at the tab cap', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 2 });
+    const page = await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#c', '#d']));
+
+    const drafts = await provider.run(makeContext(page));
+
+    expect(drafts.filter((d) => d.rule === 'keyboard-walk-unnamed-interactive')).toHaveLength(2);
+    const truncated = drafts.filter((d) => d.rule === 'keyboard-walk-truncated');
+    expect(truncated).toHaveLength(1);
+    expect(truncated[0]).toMatchObject({
+      evidenceClass: 'deterministic',
+      confidence: 'unverified',
+    });
+    expect(truncated[0]?.why).toMatch(/\d+ tab stop/);
+  });
+
+  it('emits no truncation draft when the focus cycle completes inside the budget', async () => {
+    const clock = makeClock();
+    const provider = makeKeyboardWalkProvider({ tabCap: 10, wallClockMs: 1_000, now: clock.now });
+    const page = await makeScriptedPage({
+      ...unnamedLinkPage(['#only-link', '#only-link']),
+      onTab: () => clock.advance(10),
+    });
+
+    const drafts = await provider.run(makeContext(page));
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-unnamed-interactive']);
+  });
+
+  it('emits no truncation draft when the walk ends on the document body', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage(unnamedLinkPage(['html > body:nth-child(2)']));
+    page.activeElementIs = async (selector) => selector === 'body';
+
+    const drafts = await provider.run(makeContext(page));
+
+    expect(drafts).toEqual([]);
   });
 });
