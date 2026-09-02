@@ -236,10 +236,14 @@ comment step share a job, so a hostile PR could try to spoof the comment. That j
 the comment but does not decide the gate; the required `usabl-policy` job is isolated and
 does not trust the comment. Accepted for the private team fixture.
 
-Note the difference from the engine's own checked-in `.github/workflows/usabl-gate.yml`.
-That dogfood workflow is a single `gate-comment` job that builds the engine locally with
-`npm ci && npm run build`. It has no external-engine pin and no `usabl-policy` job, because
-the engine is testing itself rather than a separate fixture.
+The engine's own checked-in `.github/workflows/usabl-gate.yml` runs the same two jobs with
+the same event fence, the same numeric PR guard, the same artifact handoff, and the same
+policy isolation. It differs in one way, because the engine is the repository: there is no
+external-engine pin and no `USABL_ENGINE_CHECKOUT_TOKEN`. `usabl-policy` builds the base
+commit it has already checked out, which is trusted by definition, and `gate-comment`
+builds the head tree it is fenced to. It also starts no fixture server and needs no
+read-only `/opt/usabl-trusted` snapshot, because that job runs no separate application
+alongside the checker.
 
 **Status:** [x] Recorded. The generated draft already isolates the policy decision; the
 operator must set the engine SHA before the gate can run.

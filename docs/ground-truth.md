@@ -1035,22 +1035,25 @@ noise budget. All page-derived text passes through `neutralize()`. Sticky commen
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
 
-**Two different workflows, do not conflate them.** The engine's own repo checks in
-`.github/workflows/usabl-gate.yml`, which is a single-job (`gate-comment`) dogfood
-workflow: it builds the engine locally with `npm ci && npm run build`, runs
-`node dist/cli.js check --ci --trusted-ref "origin/<base>" --json`, posts the sticky
-comment, and enforces the verdict in a final step (fail closed if the exit code is
-missing). It has no external-engine pin and no `usabl-policy` job. Separately, `usabl
-install --ci` *generates* a different, hardened, two-job workflow (written to the same
-`.github/workflows/usabl-gate.yml` path in the consuming repo): a `gate-comment` job
-fenced to `pull_request` that clones and pins the engine at the
-`PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel (the operator must replace it with a full
-40-char SHA), runs the scan, posts the comment, and runs `usabl enforce accessibility`
-as a step; and a `usabl-policy` job (`needs: gate-comment`, `if: always()`) that checks
-out the trusted base only and runs `usabl enforce policy --trusted-ref`, never executing
-PR head code. The required status check named in branch protection is `usabl-policy`
-(the workflow *file* is named `usabl-gate`), and the protected branch is `main`. Both
-`enforce` commands read Result JSON from stdin and never call the gate.
+**One shape, two renderings.** `usabl install --ci` *generates* a two-job workflow at
+`.github/workflows/usabl-gate.yml` in the consuming repo: a `gate-comment` job fenced to
+`pull_request` that clones and pins the engine at the `PIN_TO_A_TRUSTED_USABL_COMMIT`
+sentinel (the operator must replace it with a full 40-char SHA), runs the scan, posts the
+comment, uploads the Result as an artifact, and runs `usabl enforce accessibility` as a
+final step that never exits 2; and a `usabl-policy` job (`needs: gate-comment`,
+`if: always()`) that also fires on `pull_request_review`, checks out the trusted base
+only, fetches the head as git objects, and runs `usabl enforce policy --trusted-ref`,
+never executing PR head code. The engine's own repo checks in the same two jobs, with the
+same fences, artifact handoff, and policy isolation. One thing differs: a consuming repo
+has no engine, so the draft clones `usabl-dev/usabl` at a pinned commit using
+`USABL_ENGINE_CHECKOUT_TOKEN`, while in the engine repo the checked-out tree already is
+the engine, so each job builds that tree with `npm ci && npm run build` and there is no
+engine pin and no token. Because `classifyGateWorkflow` compares a workflow line for line
+against the draft, `usabl doctor` reads the engine's own gate as `drifted`. That is the
+expected reading for the one repository that is its own engine. The required status check
+named in branch protection is `usabl-policy` (the workflow *file* is named `usabl-gate`),
+and the protected branch is `main`. Both `enforce` commands read Result JSON from stdin
+and never call the gate.
 
 ### 11.5 Mid-task self-check (CLI; MCP optional)
 
