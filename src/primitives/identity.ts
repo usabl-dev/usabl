@@ -13,9 +13,30 @@ import { slug } from './slug.js';
  */
 export const IDENTITY_WEAK = new Set<string>(['button-name', 'pf-icon-button-name']);
 
-/** Drop volatile positional selectors so the same control keeps the same structural key. */
+/**
+ * Framework ids that are minted fresh on every mount, listed by producer rather than
+ * guessed at. React's `useId` returns `:r<base36 counter>:`, which a CSS selector
+ * escapes to `\:r39\:`, and that escaped form is what the page driver hands us.
+ * PatternFly wraps the same value as `pf-random-id-<useId>` and older builds use a
+ * plain counter. Nothing else is treated as generated: a rule like "ids with digits
+ * are volatile" would also erase `#cluster-list-2`, which an author wrote and which
+ * is real identity. Requiring the escaped colon also keeps `input:required:focus`
+ * out of the React pattern.
+ */
+const GENERATED_IDS: Array<[RegExp, string]> = [
+  [/pf-random-id-[\\:0-9a-z]+/g, 'pf-random-id-{generated-id}'],
+  [/\\:r[0-9a-z]+\\:/g, '{generated-id}'],
+];
+
+/**
+ * Drop volatile positional selectors so the same control keeps the same structural key.
+ * Generated ids become a placeholder rather than being deleted, because the segment
+ * still separates siblings whose paths are otherwise identical.
+ */
 function neutralizePath(path: string): string {
-  return path
+  let out = path;
+  for (const [pattern, placeholder] of GENERATED_IDS) out = out.replace(pattern, placeholder);
+  return out
     .replace(/:nth-of-type\(\d+\)/g, '')
     .replace(/:nth-child\(\d+\)/g, '')
     .replace(/\s*>\s*/g, '>')
