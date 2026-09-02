@@ -1132,9 +1132,13 @@ is insufficient.
 `usabl doctor` is a read-only projection that reports the state of each wired
 integration surface. It always exits 0, because a missing surface is information, not a
 failure; its filesystem port throws on any write so an accidental write fails loudly. It
-reports eight surfaces: config, route manifest, evidence floor, waivers, overlay,
-stop-hook, ci, and branch-rule, each with a state such as wired, missing, drifted, or
-unknown. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
+reports ten surfaces: config, authenticated session, route manifest, evidence floor,
+waivers, overlay, stop-hook, usabl-check skill, ci, and branch-rule, each with a state
+such as wired, missing, drifted, or unknown. The session surface reads the
+`USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file:
+unset is missing, a readable JSON file is wired, and a path that names no file or names a
+file that is not JSON is drifted. Doctor reports whether a session is set and never prints
+the path or the file contents. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
 engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the pin
 sentinel), or `drifted` (any other shape). Doctor never mints a verdict or a receipt.
 

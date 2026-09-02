@@ -64,6 +64,14 @@ function fsThrowingProgrammerError(): InstallFs {
   };
 }
 
+// The two environments doctor is asked about. An operator with no session exported has an
+// environment with nothing in it; a wired operator has USABL_STORAGE_STATE naming a readable
+// storage state file. Doctor never reads process.env itself, so both arrive injected.
+const NO_SESSION: Record<string, string | undefined> = {};
+const SESSION_PATH = '/home/operator/.usabl/fleet-insights-session.json';
+const WIRED_SESSION: Record<string, string | undefined> = { USABL_STORAGE_STATE: SESSION_PATH };
+const VALID_SESSION_FILE = JSON.stringify({ cookies: [], origins: [] });
+
 function ghReplying(reply: (endpoint: string) => GhResult | null): GhReader {
   return { getJson: async (endpoint) => reply(endpoint) };
 }
@@ -132,6 +140,9 @@ const FULLY_WIRED_FILES: Record<string, string> = {
   '.claude/settings.json': WIRED_CLAUDE,
   [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS,
   '.github/workflows/usabl-gate.yml': PINNED_WORKFLOW,
+  // The storage state lives outside the repository on purpose: it holds live session tokens
+  // and must never be committed. Doctor reads it through the same fs port, by absolute path.
+  [SESSION_PATH]: VALID_SESSION_FILE,
 };
 
 function byId(reports: SurfaceReport[], id: string): SurfaceReport {
@@ -152,6 +163,7 @@ describe('collectDoctorReport', () => {
       fs: readOnlyFs(FULLY_WIRED_FILES),
       gh: GH_VERIFIED,
       configPath: 'usabl.config.json',
+      env: WIRED_SESSION,
     });
 
     expect(reports.length).toBeGreaterThanOrEqual(8);
@@ -167,6 +179,7 @@ describe('collectDoctorReport', () => {
       fs: readOnlyFs({}),
       gh: GH_NOT_PROTECTED,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
 
     for (const report of reports) {
@@ -183,6 +196,7 @@ describe('collectDoctorReport', () => {
       }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
 
     expect(stateOf(reports, 'config')).toBe('wired');
@@ -190,6 +204,103 @@ describe('collectDoctorReport', () => {
     expect(stateOf(reports, 'ci')).toBe('missing');
     expect(stateOf(reports, 'routes')).toBe('missing');
     expect(stateOf(reports, 'branch-rule')).toBe('unknown');
+  });
+});
+
+describe('authenticated session surface', () => {
+  it('reports a readable storage state as wired', async () => {
+    const reports = await collectDoctorReport({
+      fs: readOnlyFs({ [SESSION_PATH]: VALID_SESSION_FILE }),
+      gh: GH_UNAVAILABLE,
+      configPath: 'usabl.config.json',
+      env: WIRED_SESSION,
+    });
+    expect(stateOf(reports, 'session')).toBe('wired');
+  });
+
+  it('reports no session as missing and says what a run without one measures', async () => {
+    // The operator-facing half of issue #152. A signed-out run against a login-gated app
+    // still mints a verdict, so the next step has to name that consequence rather than
+    // only naming the variable.
+    const reports = await collectDoctorReport({
+      fs: readOnlyFs({}),
+      gh: GH_UNAVAILABLE,
+      configPath: 'usabl.config.json',
+      env: NO_SESSION,
+    });
+    expect(stateOf(reports, 'session')).toBe('missing');
+    const step = byId(reports, 'session').nextStep.toLowerCase();
+    expect(step).toContain('usabl_storage_state');
+    expect(step).toContain('signed out');
+    expect(step).toContain('blank');
+  });
+
+  it('treats an empty or whitespace-only variable as no session, never as wired', async () => {
+    for (const value of ['', '   ']) {
+      const reports = await collectDoctorReport({
+        fs: readOnlyFs({}),
+        gh: GH_UNAVAILABLE,
+        configPath: 'usabl.config.json',
+        env: { USABL_STORAGE_STATE: value },
+      });
+      expect(stateOf(reports, 'session')).toBe('missing');
+    }
+  });
+
+  it('reports a configured path with no file as drifted, never wired', async () => {
+    // Set but unusable is the worst case to get wrong: the operator believes the scan is
+    // authenticated. It is drift, not an absence, and never a wired session.
+    const reports = await collectDoctorReport({
+      fs: readOnlyFs({}),
+      gh: GH_UNAVAILABLE,
+      configPath: 'usabl.config.json',
+      env: WIRED_SESSION,
+    });
+    expect(stateOf(reports, 'session')).toBe('drifted');
+  });
+
+  it('reports a configured path that is not JSON as drifted', async () => {
+    const reports = await collectDoctorReport({
+      fs: readOnlyFs({ [SESSION_PATH]: 'session=letmein' }),
+      gh: GH_UNAVAILABLE,
+      configPath: 'usabl.config.json',
+      env: WIRED_SESSION,
+    });
+    expect(stateOf(reports, 'session')).toBe('drifted');
+  });
+
+  it('reports an unreadable storage state as unknown, never wired', async () => {
+    const reports = await collectDoctorReport({
+      fs: fsFailingWith('EACCES'),
+      gh: GH_UNAVAILABLE,
+      configPath: 'usabl.config.json',
+      env: WIRED_SESSION,
+    });
+    expect(stateOf(reports, 'session')).toBe('unknown');
+  });
+
+  it('never prints the storage state path or its contents', async () => {
+    // The path can name a private location and the file holds live session tokens. Doctor
+    // says whether a session is set, never what it is. This holds in every state, including
+    // the two that know the path is unusable.
+    const secretPath = '/home/operator/.usabl/very-secret-session.json';
+    const environments = [
+      { USABL_STORAGE_STATE: secretPath },
+      { USABL_STORAGE_STATE: secretPath },
+    ];
+    const filesystems = [readOnlyFs({}), readOnlyFs({ [secretPath]: '{"cookies":' })];
+    for (const [index, env] of environments.entries()) {
+      const reports = await collectDoctorReport({
+        fs: filesystems[index] as InstallFs,
+        gh: GH_UNAVAILABLE,
+        configPath: 'usabl.config.json',
+        env,
+      });
+      const text = formatDoctorReport(reports);
+      expect(byId(reports, 'session').nextStep).not.toContain(secretPath);
+      expect(text).not.toContain(secretPath);
+      expect(text).not.toContain('cookies');
+    }
   });
 });
 
@@ -207,6 +318,7 @@ export default defineConfig({
       fs: readOnlyFs({ 'vite.config.ts': commented }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     const overlay = stateOf(reports, 'overlay');
     expect(overlay).not.toBe('wired');
@@ -219,6 +331,7 @@ export default defineConfig({
       fs: readOnlyFs({ [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'claude-skill')).toBe('wired');
   });
@@ -228,6 +341,7 @@ export default defineConfig({
       fs: readOnlyFs({}),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'claude-skill')).toBe('missing');
     expect(byId(reports, 'claude-skill').nextStep).toContain('--claude-skill');
@@ -241,6 +355,7 @@ export default defineConfig({
       fs: readOnlyFs({ [CLAUDE_SKILL_PATH]: '---\nname: usabl-check\n---\n\nOld version.\n' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'claude-skill')).toBe('drifted');
   });
@@ -250,6 +365,7 @@ export default defineConfig({
       fs: readOnlyFs({ '.claude/settings.json': FOREIGN_CLAUDE }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'stop-hook')).toBe('unknown');
   });
@@ -259,6 +375,7 @@ export default defineConfig({
       fs: readOnlyFs({ '.claude/settings.json': RETIRED_CLAUDE }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'stop-hook')).toBe('drifted');
     // The retired path is one normalize case among several. The step must not overclaim it
@@ -271,6 +388,7 @@ export default defineConfig({
       fs: readOnlyFs({ '.claude/settings.json': CLAUDE_WITHOUT_HOOK }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     // Load-bearing: the file exists but has no usabl Stop hook, so the surface is missing, not
     // drifted. The old code collapsed this into a single "retired dist path" drift.
@@ -283,6 +401,7 @@ export default defineConfig({
       fs: readOnlyFs({ '.claude/settings.json': BARE_CLAUDE }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'stop-hook')).toBe('drifted');
     const step = byId(reports, 'stop-hook').nextStep.toLowerCase();
@@ -295,6 +414,7 @@ export default defineConfig({
       fs: readOnlyFs(FULLY_WIRED_FILES),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     const branchRule = stateOf(reports, 'branch-rule');
     expect(branchRule).toBe('unknown');
@@ -307,6 +427,7 @@ export default defineConfig({
       fs: readOnlyFs({ 'usabl.config.json': '{ this is not valid json' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'config')).toBe('drifted');
   });
@@ -316,6 +437,7 @@ export default defineConfig({
       fs: readOnlyFs({ 'usabl.routes.json': '{ broken' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'routes')).toBe('drifted');
   });
@@ -325,6 +447,7 @@ export default defineConfig({
       fs: readOnlyFs({ '.usabl-evidence.json': '{ "version": 2 }' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'evidence-floor')).toBe('drifted');
   });
@@ -334,6 +457,7 @@ export default defineConfig({
       fs: readOnlyFs({ '.usabl-waivers.json': '{ "version": 1, "waivers": "nope" }' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'waivers')).toBe('drifted');
   });
@@ -343,6 +467,7 @@ export default defineConfig({
       fs: readOnlyFs({ '.github/workflows/usabl-gate.yml': 'name: something-else\n' }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'ci')).toBe('drifted');
   });
@@ -355,6 +480,7 @@ export default defineConfig({
       fs: readOnlyFs({ '.github/workflows/usabl-gate.yml': PINNED_WORKFLOW }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'ci')).toBe('wired');
   });
@@ -366,6 +492,7 @@ export default defineConfig({
       fs: readOnlyFs({ '.github/workflows/usabl-gate.yml': USABL_GATE_WORKFLOW }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'ci')).toBe('drifted');
     const step = byId(reports, 'ci').nextStep;
@@ -381,6 +508,7 @@ export default defineConfig({
       fs: readOnlyFs({ '.github/workflows/usabl-gate.yml': tampered }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'ci')).toBe('drifted');
   });
@@ -392,6 +520,7 @@ export default defineConfig({
       fs: fsFailingWith('EACCES'),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(stateOf(reports, 'config')).toBe('unknown');
     expect(byId(reports, 'config').nextStep.toLowerCase()).toContain('permission');
@@ -405,6 +534,7 @@ export default defineConfig({
         fs: fsThrowingProgrammerError(),
         gh: GH_UNAVAILABLE,
         configPath: 'usabl.config.json',
+        env: NO_SESSION,
       }),
     ).rejects.toThrow('programmer error');
   });
@@ -416,6 +546,7 @@ describe('runDoctor', () => {
       fs: readOnlyFs({}),
       gh: GH_NOT_PROTECTED,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(outcome.exitCode).toBe(0);
     expect(outcome.stdout.length).toBeGreaterThan(0);
@@ -426,6 +557,7 @@ describe('runDoctor', () => {
       fs: readOnlyFs({ 'usabl.config.json': VALID_CONFIG }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(outcome.exitCode).toBe(0);
   });
@@ -435,6 +567,7 @@ describe('runDoctor', () => {
       fs: readOnlyFs(FULLY_WIRED_FILES),
       gh: GH_VERIFIED,
       configPath: 'usabl.config.json',
+      env: NO_SESSION,
     });
     expect(outcome.stdout.toLowerCase()).toContain('doctor');
     expect(outcome.stdout.toLowerCase()).toContain('no verdict');
@@ -463,6 +596,7 @@ describe('formatDoctorReport neutralization', () => {
       fs: readOnlyFs({}),
       gh: GH_UNAVAILABLE,
       configPath: evilPath,
+      env: NO_SESSION,
     });
     const text = formatDoctorReport(reports);
     expect(text).not.toContain('\x1b');
