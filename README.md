@@ -54,6 +54,22 @@ npm run check      # optional: typecheck, tests, build, and a package smoke test
 
 To watch the full loop end to end, from a live barrier through a blocked assistant to a verified receipt, follow the [team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md) in the companion fixture app. See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete development setup, including pre-commit.
 
+## Scanning a signed-in application
+
+Most applications worth gating sit behind a login. usabl scans signed out unless you give it a session, and a signed-out scan of a login-gated screen measures the sign-in page or an empty redirect, not your product.
+
+Export a [Playwright storage state](https://playwright.dev/docs/auth) file and point `USABL_STORAGE_STATE` at it:
+
+```bash
+export USABL_STORAGE_STATE="$HOME/.usabl/my-app-session.json"
+usabl doctor   # confirms a session is configured
+usabl check
+```
+
+usabl reads the variable once, where it builds its dependencies, so every surface picks up the same session: the CLI, the Vite overlay, and the Claude Stop hook. It is an environment variable rather than a flag because the overlay and the Stop hook have no command line, and rather than a config field because the file holds live cookies and tokens. A path to a storage state never enters committed config, and the file itself never enters the repository.
+
+If the variable names a file usabl cannot read, or a file that is not JSON, the run stops with an error instead of quietly scanning signed out. usabl prints neither the path nor the contents, in errors or in reports. It also cannot tell whether a session is still accepted by your application: an expired session scans signed out.
+
 ## Command surface
 
 These commands draft, inspect, wire, and report. Only `usabl check` decides a verdict.
@@ -64,7 +80,7 @@ These commands draft, inspect, wire, and report. Only `usabl check` decides a ve
 | `usabl init`                          | Drafts coverage and policy from the application tree. Runs no gate and writes no evidence.                                                                                                                                                                                                                                                                                                                                                          |
 | `usabl baseline`                      | Runs a full scan and drafts the accepted accessibility floor as a reviewable working-tree diff.                                                                                                                                                                                                                                                                                                                                                     |
 | `usabl install <target>`              | Wires one integration surface as a draft, exactly one per run. Targets: `--overlay`, `--claude`, `--claude-skill`, `--cursor`, `--ci`, `--docs-ci`, `--branch-rule`. `--claude-skill` writes the on-demand `/usabl-check` skill; `--cursor` writes the Cursor `/usabl-check` command and a UI rule whose globs are derived from `uiFileGlobs` in `usabl.config.json` (defaulting to `src/**` when config is absent); `--branch-rule` only verifies. |
-| `usabl doctor`                        | Read-only self-check. Reports each surface as wired, missing, drifted, or unknown, and mints no verdict.                                                                                                                                                                                                                                                                                                                                            |
+| `usabl doctor`                        | Read-only self-check. Reports each surface as wired, missing, drifted, or unknown, including whether an authenticated session is configured, and mints no verdict.                                                                                                                                                                                                                                                                                  |
 | `usabl floor prune`                   | Re-arms the floor after a full scan so a reintroduced barrier gates as new instead of staying carried.                                                                                                                                                                                                                                                                                                                                              |
 | `usabl drift routes`                  | Reports drift between the route manifest and the application router. Read-only.                                                                                                                                                                                                                                                                                                                                                                     |
 | `usabl comment`                       | Projects a run read from stdin into a pull request comment.                                                                                                                                                                                                                                                                                                                                                                                         |

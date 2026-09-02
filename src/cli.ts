@@ -415,7 +415,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         throw new Error('doctor is read-only and never writes');
       },
     };
-    const deps: DoctorDeps = { fs: doctorFs, gh: makeGhReader(), configPath: opts.configPath };
+    // The environment is read here, at the edge, so no collector reaches for a global.
+    const deps: DoctorDeps = {
+      fs: doctorFs,
+      gh: makeGhReader(),
+      configPath: opts.configPath,
+      env: process.env,
+    };
     const outcome = await runDoctor(deps);
     process.stdout.write(outcome.stdout);
     return outcome.exitCode;

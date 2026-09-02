@@ -52,12 +52,11 @@ function countDeterministicDrafts(result: Result): Map<string, number> {
 }
 
 function toFloorEntry(finding: Finding, deterministicDraftCounts: Map<string, number>): FloorEntry {
-  // Count-basis findings collapse to one identity in gate output.
-  // The floor keeps observed debt count from raw deterministic drafts so count-compare stays honest.
-  const count =
-    finding.identityBasis === 'count'
-      ? (deterministicDraftCounts.get(identityKey(finding)) ?? 0)
-      : 1;
+  // Every basis can collapse several drafts onto one identity, not just the count basis.
+  // Two dialogs at the same neutralized path share a structural key; two controls with the
+  // same accessible name share a name key. Recording the observed count for all of them is
+  // what lets the gate tell one accepted barrier from three.
+  const count = deterministicDraftCounts.get(identityKey(finding)) ?? 0;
   return {
     screenId: finding.screenId,
     layer: finding.layer,
@@ -76,7 +75,7 @@ export function buildEvidenceFloorDraft(result: Result): EvidenceFloor {
     .filter((finding) => finding.evidenceClass === 'deterministic' && finding.status !== 'fixed')
     .map((finding) => toFloorEntry(finding, deterministicDraftCounts));
   return {
-    version: 1,
+    version: 2,
     entries: sortBy(entries, findingKey),
   };
 }

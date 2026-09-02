@@ -151,9 +151,64 @@ describe('run phase 3 wiring', () => {
     expect(result.findings.find((f) => f.rule === 'button-name')?.status).toBe('carried');
   });
 
-  it('converges to verified for name-keyed floor entries on color-contrast', async () => {
+  it('discloses a coverage gap instead of verifying against a version 1 floor', async () => {
+    const floor = {
+      version: 1,
+      entries: [
+        {
+          screenId: 'clusters',
+          layer: 'axe',
+          rule: 'color-contrast',
+          elementKey: 'clusters|color-contrast|name:clusters',
+          identityBasis: 'name',
+          count: 1,
+        },
+      ],
+    };
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': JSON.stringify(floor) }, { '.usabl-evidence.json': JSON.stringify(floor) }),
+      scans: { clusters: screenWith([colorContrastClustersDraft]) },
+    });
+
+    const result = await run(deps, baseConfig, { changedFiles: ['src/ClustersPage.tsx'] });
+
+    const gap = result.coverage.gaps.find((g) => g.ref === '.usabl-evidence.json');
+    expect(gap).toBeDefined();
+    expect(gap?.state).toBe('not-covered');
+    expect(gap?.reason).toContain('predates count tracking');
+    expect(gap?.reason).toContain('usabl baseline');
+    expect(result.verdict).toBe('not_covered');
+    expect(result.receipt).toBeNull();
+  });
+
+  it('does not disclose a version 1 gap when the floor holds only count-basis entries', async () => {
     const floor: EvidenceFloor = {
       version: 1,
+      entries: [
+        {
+          screenId: 'clusters',
+          layer: 'axe',
+          rule: 'button-name',
+          elementKey: null,
+          identityBasis: 'count',
+          count: 1,
+        },
+      ],
+    };
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': JSON.stringify(floor) }, { '.usabl-evidence.json': JSON.stringify(floor) }),
+      scans: { clusters: screenWith([unnamedButtonDraft]) },
+    });
+
+    const result = await run(deps, baseConfig, { changedFiles: ['src/ClustersPage.tsx'] });
+
+    expect(result.coverage.gaps.find((g) => g.ref === '.usabl-evidence.json')).toBeUndefined();
+    expect(result.verdict).toBe('verified');
+  });
+
+  it('converges to verified for name-keyed floor entries on color-contrast', async () => {
+    const floor: EvidenceFloor = {
+      version: 2,
       entries: [
         {
           screenId: 'clusters',

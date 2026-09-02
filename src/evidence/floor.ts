@@ -39,12 +39,15 @@ export function parseEvidenceFloor(value: unknown): EvidenceFloor {
   if (!isRecord(value)) {
     throw new Error('evidence floor must be an object');
   }
-  if (value['version'] !== 1) {
-    throw new Error('evidence floor version must be 1');
+  const version = value['version'];
+  if (version !== 1 && version !== 2) {
+    throw new Error('evidence floor version must be 1 or 2');
   }
   const entriesRaw = value['entries'];
   if (!Array.isArray(entriesRaw)) {
     throw new Error('evidence floor entries must be an array');
   }
-  return { version: 1, entries: entriesRaw.map((entry) => parseFloorEntry(entry)) };
+  // The version is carried through, not normalized. Readers need it to know whether the
+  // per-entry counts are observed debt (version 2) or a placeholder 1 (version 1).
+  return { version, entries: entriesRaw.map((entry) => parseFloorEntry(entry)) };
 }

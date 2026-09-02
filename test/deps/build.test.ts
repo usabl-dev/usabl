@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { chromium } from "playwright";
+import { chromium, type Browser } from "playwright";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildDeps,
@@ -90,6 +90,43 @@ describe("buildDeps", () => {
     } finally {
       await deps.browser.close();
       await rm(fixtureRepo, { recursive: true, force: true });
+    }
+  });
+
+  it("carries USABL_STORAGE_STATE into the browser context it opens", async () => {
+    // The defect this locks: the adapter accepts a storage state, but no operator entry
+    // point supplied one, so a login-gated application was scanned signed out and the
+    // engine measured blank pages. The assertion sits at the seam that decides it, the
+    // Playwright context options, so it holds for every surface that funnels through
+    // buildDeps. The fake browser records those options and then stops, because the
+    // question is what the context was asked for, not what the page rendered.
+    const sessionDir = await mkdtemp(join(tmpdir(), "usabl-session-env-"));
+    const storageStatePath = join(sessionDir, "storage-state.json");
+    await writeFile(
+      storageStatePath,
+      JSON.stringify({ cookies: [], origins: [] }),
+      "utf8",
+    );
+    const contextOptions: Array<Record<string, unknown>> = [];
+    const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue({
+      newContext: async (options: Record<string, unknown>) => {
+        contextOptions.push(options);
+        throw new Error("context options recorded");
+      },
+      close: async () => {},
+    } as unknown as Browser);
+    vi.stubEnv("USABL_STORAGE_STATE", storageStatePath);
+
+    try {
+      const deps = await buildDeps(testConfig());
+      await expect(
+        deps.browser.open("http://127.0.0.1:5173/clusters"),
+      ).rejects.toThrow("context options recorded");
+      expect(contextOptions).toEqual([{ storageState: storageStatePath }]);
+    } finally {
+      vi.unstubAllEnvs();
+      launchSpy.mockRestore();
+      await rm(sessionDir, { recursive: true, force: true });
     }
   });
 

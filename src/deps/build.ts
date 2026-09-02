@@ -24,6 +24,7 @@ import { resolveIntakeConfig } from "../intake/trusted-config.js";
 import { makeRealBrowserDriver } from "./real.js";
 import { makeGitReader } from "./git.js";
 import { makeFsGlob } from "./fs.js";
+import { resolveStorageStatePath, type EnvReader } from "./session.js";
 
 const require = createRequire(import.meta.url);
 const RUNNER_PACKAGE_PATHS = [
@@ -184,14 +185,20 @@ export async function buildDeps(
     allowedCapabilities?: Capability[];
     storageStatePath?: string;
     trustedRef?: string;
+    env?: EnvReader;
   } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
   const allowedCapabilities = options.allowedCapabilities ?? ["live"];
+  // Every operator surface funnels through here, so this is the one place a session has to
+  // be picked up for the CLI, the Vite overlay, and the Stop hook to all reach a login-gated
+  // screen. The environment defaults like cwd does, and stays injectable for tests.
+  const storageStatePath = await resolveStorageStatePath({
+    explicit: options.storageStatePath,
+    env: options.env ?? process.env,
+  });
   const browser = makeRealBrowserDriver({
-    ...(options.storageStatePath === undefined
-      ? {}
-      : { storageStatePath: options.storageStatePath }),
+    ...(storageStatePath === null ? {} : { storageStatePath }),
     // The operator's app is what decides how long a screen takes to render, so the budget rides
     // the config the run was started with.
     ...(config.readyTimeoutMs === undefined

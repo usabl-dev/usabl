@@ -848,6 +848,12 @@ Identity-weak rules are an allow-list of "this element has no accessible name" c
 element by name. A count increase is a regression. Named rules still catch a swap
 (one fixed, one newly broken, count unchanged).
 
+Every basis can collapse several barriers onto one key, not just `count`. Two dialogs at
+the same neutralized path share a structural key; two controls with the same accessible
+name share a name key. So the floor records the observed barrier count for every entry and
+the gate compares it for every basis: more than the floor accepted is `new`, equal or fewer
+is `carried`. Fewer is progress and never a regression.
+
 Contest layer ids are stable (`axe`, `pf`, `walk`) so dedup and identity do not churn.
 The field stays `string` so a later provider can add a layer without a gate change.
 
@@ -860,11 +866,17 @@ the PatternFly why/fix when both axe and the rulepack fire on the same control.
 
 `.usabl-evidence.json` is the accepted deterministic finding set for a surface. A code
 owner writes it in an `approval_required` accept commit. The floor never grows
-silently: new identities (or a higher identity-weak count) are `regression`;
-disappeared identities are `fixed`. Advisory findings are never written to the floor.
-The accept loop converges: after the acceptance commit lands, the next unchanged run
-sees the same floor and settles to `verified` (or `not_covered` only if coverage
-cannot be re-established).
+silently: new identities, or a count above the floor at a known identity, are
+`regression`; disappeared identities are `fixed`. Advisory findings are never written to
+the floor. The accept loop converges: after the acceptance commit lands, the next
+unchanged run sees the same floor and settles to `verified` (or `not_covered` only if
+coverage cannot be re-established).
+
+The file carries a `version`. Version 1 wrote a placeholder count of 1 for every name and
+structural entry, so those counts are not observations and the gate must not compare them.
+Version 2 writes the observed count for every entry. Reading a version 1 floor that holds
+name or structural entries produces a coverage gap, so the run reports `not_covered`
+instead of a green it cannot support. `usabl baseline` regenerates the floor at version 2.
 
 ### Failure taxonomy
 
@@ -1132,9 +1144,13 @@ is insufficient.
 `usabl doctor` is a read-only projection that reports the state of each wired
 integration surface. It always exits 0, because a missing surface is information, not a
 failure; its filesystem port throws on any write so an accidental write fails loudly. It
-reports eight surfaces: config, route manifest, evidence floor, waivers, overlay,
-stop-hook, ci, and branch-rule, each with a state such as wired, missing, drifted, or
-unknown. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
+reports ten surfaces: config, authenticated session, route manifest, evidence floor,
+waivers, overlay, stop-hook, usabl-check skill, ci, and branch-rule, each with a state
+such as wired, missing, drifted, or unknown. The session surface reads the
+`USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file:
+unset is missing, a readable JSON file is wired, and a path that names no file or names a
+file that is not JSON is drifted. Doctor reports whether a session is set and never prints
+the path or the file contents. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
 engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the pin
 sentinel), or `drifted` (any other shape). Doctor never mints a verdict or a receipt.
 

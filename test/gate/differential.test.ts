@@ -127,3 +127,59 @@ describe('gate differential', () => {
     expect(out.verdict).toBe('verified');
   });
 });
+
+// Three barriers on different nodes can neutralize to one structural key. They collapse to a
+// single finding in gate output, so only a count comparison can tell one floored barrier from three.
+const STRUCT_KEY = 'clusters|pf-focus-into-dialog|struct:dialog:main>div>section';
+function structDraft(nth: number): Draft {
+  return d({
+    rule: 'pf-focus-into-dialog',
+    layer: 'pf',
+    evidence: {},
+    elementName: null,
+    role: 'dialog',
+    elementPath: `main > div:nth-child(${nth}) > section`,
+  });
+}
+function structEntry(version: 1 | 2, count: number): EvidenceFloor {
+  return { version, entries: [
+    { screenId: 'clusters', layer: 'pf', rule: 'pf-focus-into-dialog', elementKey: STRUCT_KEY, identityBasis: 'structural', count },
+  ] };
+}
+
+describe('gate collapsed identity counts', () => {
+  it('gates three collapsed structural findings as new against a version 2 floor of one', () => {
+    const out = gate({ ...base, floor: structEntry(2, 1), drafts: [structDraft(1), structDraft(2), structDraft(3)] });
+    const collapsed = find(out, 'pf-focus-into-dialog');
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0]!.status).toBe('new');
+    expect(out.verdict).toBe('regression');
+  });
+
+  it('keeps three collapsed structural findings carried against a version 1 floor', () => {
+    const out = gate({ ...base, floor: structEntry(1, 1), drafts: [structDraft(1), structDraft(2), structDraft(3)] });
+    expect(find(out, 'pf-focus-into-dialog')[0]!.status).toBe('carried');
+    expect(out.verdict).toBe('verified');
+  });
+
+  it('keeps an equal structural count carried against a version 2 floor', () => {
+    const out = gate({ ...base, floor: structEntry(2, 3), drafts: [structDraft(1), structDraft(2), structDraft(3)] });
+    expect(find(out, 'pf-focus-into-dialog')[0]!.status).toBe('carried');
+    expect(out.verdict).toBe('verified');
+  });
+
+  it('keeps a reduced structural count carried against a version 2 floor', () => {
+    const out = gate({ ...base, floor: structEntry(2, 3), drafts: [structDraft(1)] });
+    expect(find(out, 'pf-focus-into-dialog')[0]!.status).toBe('carried');
+    expect(out.verdict).toBe('verified');
+  });
+
+  it('gates duplicate name-basis findings as new against a version 2 floor of one', () => {
+    const floor: EvidenceFloor = { version: 2, entries: [
+      { screenId: 'clusters', layer: 'axe', rule: 'color-contrast', elementKey: 'clusters|color-contrast|name:save', identityBasis: 'name', count: 1 },
+    ] };
+    const out = gate({ ...base, floor, drafts: [d({}), d({ elementPath: 'footer button' })] });
+    expect(find(out, 'color-contrast')[0]!.status).toBe('new');
+    expect(out.verdict).toBe('regression');
+  });
+});
