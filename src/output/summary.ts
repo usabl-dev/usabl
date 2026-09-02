@@ -48,7 +48,16 @@ function sourceLocation(source: DocsSourceMapping): string {
  */
 export function formatSummary(result: Result): string {
   const lines: string[] = [];
-  const head = result.verdict === null ? 'IDLE' : HEADLINE[result.verdict] ?? result.verdict;
+  // Idle and a failed run both leave verdict null, and they are opposite facts: idle means there
+  // was nothing to prove, exit 4 means there was something and the run could not prove it. The
+  // headline reads the exit code so a crash, or a run that never saw the application, cannot be
+  // mistaken for a quiet pass.
+  const head =
+    result.exitCode === 4
+      ? 'FAILED'
+      : result.verdict === null
+        ? 'IDLE'
+        : HEADLINE[result.verdict] ?? result.verdict;
   lines.push(`usabl: ${head} - ${result.summary}`);
 
   const gating = result.findings.filter(

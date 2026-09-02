@@ -61,11 +61,20 @@ describe('formatSummary', () => {
   });
 
   it('names the idle state distinctly', () => {
-    expect(
-      formatSummary(
-        baseResult({ verdict: null, summary: 'nothing to check (no UI-touching files)' }),
-      ),
-    ).toContain('nothing to check');
+    const out = formatSummary(
+      baseResult({ verdict: null, summary: 'nothing to check (no UI-touching files)' }),
+    );
+    expect(out).toContain('nothing to check');
+    expect(out).toContain('IDLE');
+  });
+
+  it('separates a failed run from idle even though both carry no verdict', () => {
+    const out = formatSummary(
+      baseResult({ verdict: null, exitCode: 4, summary: 'usabl never saw the application: all 3 affected screens' }),
+    );
+    expect(out).toContain('FAILED');
+    expect(out).not.toContain('IDLE');
+    expect(out).toContain('never saw the application');
   });
 
   it('neutralizes page-derived finding text at terminal egress', () => {

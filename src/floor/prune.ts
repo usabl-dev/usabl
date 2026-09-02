@@ -113,11 +113,13 @@ export async function runFloorPrune(
       ...(opts.trustedRef === undefined ? {} : { trustedRef: opts.trustedRef }),
       changedFiles,
     });
+    // Exit 4 covers a crash and a run that never saw the application. Either way there is no
+    // observation to prune against, and the run's own summary says which one happened.
     if (result.exitCode === 4) {
       return {
         exitCode: 4,
         wrote: false,
-        message: 'refused: scan crashed, so no floor entries were pruned.',
+        message: `refused: ${result.summary}. No floor entries were pruned.`,
         prunedCount: 0,
       };
     }

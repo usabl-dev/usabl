@@ -134,12 +134,14 @@ export async function runBaseline(
     ...(opts.trustedRef === undefined ? {} : { trustedRef: opts.trustedRef }),
     changedFiles,
   });
-  // A crash is not evidence of clean debt. Refuse instead of snapshotting a broken run as an empty floor.
+  // A run that produced no verdict is not evidence of clean debt. Refuse instead of snapshotting
+  // it as an empty floor. Exit 4 covers a crash and a run that never saw the application, and the
+  // run's own summary says which, so the operator is not sent to look for the wrong failure.
   if (result.exitCode === 4) {
     return {
       exitCode: 4,
       wrote: false,
-      message: 'refused: scan crashed, so no baseline floor was written.',
+      message: `refused: ${result.summary}. No baseline floor was written.`,
       entryCount: 0,
     };
   }
