@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- The gate no longer reports green when several new barriers hide behind one
+  accepted floor entry. Barriers on different nodes can neutralize to the same
+  name or structural identity and collapse into a single finding. The floor
+  recorded a placeholder count of 1 for those entries and the gate compared
+  counts only for identity-weak rules, so adding barriers at an accepted
+  identity passed silently. The floor now records the observed count for every
+  entry and the gate compares it for every basis. More barriers than the floor
+  accepted is `new`; equal or fewer stays `carried`.
+- The evidence floor is now version 2. A version 1 floor cannot prove that no
+  barrier is hiding behind an accepted identity, so a run that reads one reports
+  a coverage gap and `not_covered` rather than an unprovable green. Run
+  `usabl baseline` to regenerate the floor at version 2. Version 1 files still
+  parse, and they still gate on new identities and identity-weak counts.
 - usabl can scan a login-gated application. The browser adapter already accepted a
   Playwright storage state, but no operator entry point supplied one, so a run
   against an application behind a login scanned signed out and could mint a verdict

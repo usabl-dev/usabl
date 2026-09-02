@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Draft, ScreenScan, UsablConfig, WaiverLedger } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { runBaseline } from '../../src/baseline/index.js';
+import { parseEvidenceFloor } from '../../src/evidence/floor.js';
+import { gate } from '../../src/gate/index.js';
 import { testConfig } from '../helpers.js';
 
 class MemoryBaselineFs {
@@ -65,7 +67,7 @@ function withPolicyFiles(
   };
 }
 
-function parseWrittenFloor(writer: MemoryBaselineFs): { version: 1; entries: Array<Record<string, unknown>> } {
+function parseWrittenFloor(writer: MemoryBaselineFs): { version: number; entries: Array<Record<string, unknown>> } {
   const raw = writer.read('.usabl-evidence.json');
   if (raw === null) {
     throw new Error('expected .usabl-evidence.json to be written');
@@ -76,18 +78,18 @@ function parseWrittenFloor(writer: MemoryBaselineFs): { version: 1; entries: Arr
   }
   const version = Reflect.get(parsed, 'version');
   const entries = Reflect.get(parsed, 'entries');
-  if (version !== 1 || !Array.isArray(entries)) {
+  if (typeof version !== 'number' || !Array.isArray(entries)) {
     throw new Error('expected floor shape');
   }
   const normalizedEntries = entries.filter(
     (entry): entry is Record<string, unknown> =>
       typeof entry === 'object' && entry !== null && !Array.isArray(entry),
   );
-  return { version: 1, entries: normalizedEntries };
+  return { version, entries: normalizedEntries };
 }
 
 describe('runBaseline', () => {
-  it('copies deterministic identity fields and sets count=1 for name and structural findings', async () => {
+  it('copies deterministic identity fields and records the observed count for every basis', async () => {
     const config = testConfig();
     const deps = makeFakeDeps({
       ...withPolicyFiles({}),
@@ -115,7 +117,7 @@ describe('runBaseline', () => {
     const floor = parseWrittenFloor(writer);
 
     expect(result.exitCode).toBe(0);
-    expect(floor.version).toBe(1);
+    expect(floor.version).toBe(2);
     expect(floor.entries).toEqual([
       {
         screenId: 'clusters',
@@ -134,6 +136,84 @@ describe('runBaseline', () => {
         count: 1,
       },
     ]);
+  });
+
+  it('records the true count when several structural findings collapse to one identity', async () => {
+    const config = testConfig();
+    const collapsing = [1, 2, 3].map((nth) =>
+      draft({
+        rule: 'pf-focus-into-dialog',
+        layer: 'pf',
+        evidence: {},
+        elementName: null,
+        role: 'dialog',
+        elementPath: `main > div:nth-child(${nth}) > section`,
+      }),
+    );
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({}),
+      scans: { clusters: scanWith(collapsing) },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const result = await runBaseline(deps, config, writer);
+    const floor = parseWrittenFloor(writer);
+
+    expect(result.exitCode).toBe(0);
+    expect(floor.entries).toEqual([
+      {
+        screenId: 'clusters',
+        layer: 'pf',
+        rule: 'pf-focus-into-dialog',
+        elementKey: 'clusters|pf-focus-into-dialog|struct:dialog:main>div>section',
+        identityBasis: 'structural',
+        count: 3,
+      },
+    ]);
+  });
+
+  it('round trips: a floor it writes reads back and compares collapsed counts honestly', async () => {
+    const config = testConfig();
+    const structural = (nth: number): Draft =>
+      draft({
+        rule: 'pf-focus-into-dialog',
+        layer: 'pf',
+        evidence: {},
+        elementName: null,
+        role: 'dialog',
+        elementPath: `main > div:nth-child(${nth}) > section`,
+      });
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({}),
+      scans: { clusters: scanWith([structural(1), structural(2)]) },
+    });
+    const writer = new MemoryBaselineFs();
+    await runBaseline(deps, config, writer);
+
+    const written = writer.read('.usabl-evidence.json');
+    expect(written).not.toBeNull();
+    const floor = parseEvidenceFloor(JSON.parse(written ?? ''));
+    const gateBase = {
+      coverage: {
+        changedFiles: ['x'],
+        affected: [{ screenId: 'clusters', url: 'u', provenance: 'manual' as const }],
+        unresolvedFiles: [],
+        gaps: [],
+        nothingToCheck: false,
+      },
+      guardDivergedPaths: [],
+      waivers: [],
+      now: '2026-01-01T00:00:00.000Z',
+      floor,
+    };
+
+    const same = gate({ ...gateBase, drafts: [structural(1), structural(2)] });
+    expect(same.findings[0]?.status).toBe('carried');
+    expect(same.verdict).toBe('verified');
+
+    const more = gate({ ...gateBase, drafts: [structural(1), structural(2), structural(3)] });
+    expect(more.findings[0]?.status).toBe('new');
+    expect(more.verdict).toBe('regression');
   });
 
   it('writes one count-basis entry with draft count for identity-weak rules', async () => {

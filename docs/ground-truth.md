@@ -848,6 +848,12 @@ Identity-weak rules are an allow-list of "this element has no accessible name" c
 element by name. A count increase is a regression. Named rules still catch a swap
 (one fixed, one newly broken, count unchanged).
 
+Every basis can collapse several barriers onto one key, not just `count`. Two dialogs at
+the same neutralized path share a structural key; two controls with the same accessible
+name share a name key. So the floor records the observed barrier count for every entry and
+the gate compares it for every basis: more than the floor accepted is `new`, equal or fewer
+is `carried`. Fewer is progress and never a regression.
+
 Contest layer ids are stable (`axe`, `pf`, `walk`) so dedup and identity do not churn.
 The field stays `string` so a later provider can add a layer without a gate change.
 
@@ -860,11 +866,17 @@ the PatternFly why/fix when both axe and the rulepack fire on the same control.
 
 `.usabl-evidence.json` is the accepted deterministic finding set for a surface. A code
 owner writes it in an `approval_required` accept commit. The floor never grows
-silently: new identities (or a higher identity-weak count) are `regression`;
-disappeared identities are `fixed`. Advisory findings are never written to the floor.
-The accept loop converges: after the acceptance commit lands, the next unchanged run
-sees the same floor and settles to `verified` (or `not_covered` only if coverage
-cannot be re-established).
+silently: new identities, or a count above the floor at a known identity, are
+`regression`; disappeared identities are `fixed`. Advisory findings are never written to
+the floor. The accept loop converges: after the acceptance commit lands, the next
+unchanged run sees the same floor and settles to `verified` (or `not_covered` only if
+coverage cannot be re-established).
+
+The file carries a `version`. Version 1 wrote a placeholder count of 1 for every name and
+structural entry, so those counts are not observations and the gate must not compare them.
+Version 2 writes the observed count for every entry. Reading a version 1 floor that holds
+name or structural entries produces a coverage gap, so the run reports `not_covered`
+instead of a green it cannot support. `usabl baseline` regenerates the floor at version 2.
 
 ### Failure taxonomy
 

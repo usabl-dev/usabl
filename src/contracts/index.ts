@@ -186,10 +186,12 @@ export interface FloorEntry {
   rule: string;
   elementKey: string | null;
   identityBasis: IdentityBasis;
-  count: number;
+  count: number; // observed barriers at this identity; version 1 floors only recorded it for count basis
 }
 export interface EvidenceFloor {
-  version: 1;
+  // Version 1 recorded a literal 1 for name and structural entries, so those counts prove nothing.
+  // Version 2 records the observed count for every basis, so the gate can compare all of them.
+  version: 1 | 2;
   entries: FloorEntry[];
 }
 export interface Waiver {
