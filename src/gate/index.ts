@@ -11,6 +11,7 @@
  * Dirty guarded paths are `approval_required` and still carry accessibility findings.
  */
 import type { AccessibilityExitCode, AccessibilityVerdict, Draft, EvidenceFacts, Finding, FloorEntry, GateInput, GateOutput, Waiver } from '../contracts/index.js';
+import { coverageIncomplete, decideAccessibilityVerdict } from '../coverage/completeness.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { computeIdentity } from '../primitives/identity.js';
 
@@ -54,17 +55,13 @@ function accessibilityOutcome(input: GateInput): {
   const gating = findings.filter((f) => GATES(f.evidenceClass) && f.status !== 'waived' && f.status !== 'fixed');
   const hasNewFail = gating.some((f) => f.confidence === 'fail' && f.status === 'new');
   const hasUnverified =
-    gating.some((f) => f.confidence === 'unverified') ||
-    input.coverage.unresolvedFiles.length > 0 ||
-    input.coverage.gaps.length > 0;
+    gating.some((f) => f.confidence === 'unverified') || coverageIncomplete(input.coverage);
 
-  if (hasNewFail) {
-    return { verdict: 'regression', findings, exitCode: 1, summary: verdictSummary('regression', gating) };
-  }
-  if (hasUnverified) {
-    return { verdict: 'not_covered', findings, exitCode: 3, summary: verdictSummary('not_covered', gating) };
-  }
-  return { verdict: 'verified', findings, exitCode: 0, summary: verdictSummary('verified', gating) };
+  const { verdict, exitCode } = decideAccessibilityVerdict({
+    hasBlockingFailure: hasNewFail,
+    hasUnverified,
+  });
+  return { verdict, findings, exitCode, summary: verdictSummary(verdict, gating) };
 }
 
 /** Prefer PatternFly why/fix when axe and pf fire on the same identity. */

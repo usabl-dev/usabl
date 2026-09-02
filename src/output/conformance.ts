@@ -4,6 +4,7 @@
  * It must never recompute findings, collapse into one score, or mint a verdict.
  */
 import type { ConformanceSummary, Finding, Result } from '../contracts/index.js';
+import { notEvaluatedCounts } from '../coverage/completeness.js';
 
 const isDeterministic = (f: Finding): boolean => f.evidenceClass === 'deterministic';
 
@@ -29,6 +30,6 @@ export function computeConformance(result: Result): ConformanceSummary {
       modelJudgment: result.findings.filter((f) => f.evidenceClass === 'model-judgment').length,
       preview: result.findings.filter((f) => f.evidenceClass === 'preview').length,
     },
-    notEvaluated: { unresolvedFiles: result.coverage.unresolvedFiles.length, gaps: result.coverage.gaps.length },
+    notEvaluated: notEvaluatedCounts(result.coverage),
   };
 }

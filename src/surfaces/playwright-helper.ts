@@ -14,6 +14,7 @@ import type {
   Result,
   UsablConfig,
 } from '../contracts/index.js';
+import { decideAccessibilityVerdict } from '../coverage/completeness.js';
 import { adoptPage } from '../deps/real.js';
 import { axeProvider } from '../providers/axe/index.js';
 import { runProviders } from '../providers/index.js';
@@ -21,10 +22,11 @@ import { makeKeyboardWalkProvider } from '../providers/keyboard-walk/index.js';
 import { makeRulepackProvider } from '../providers/rulepack/index.js';
 import { scrubResult } from './scrub.js';
 
-// A single-page check outcome for a live Playwright page. This mirrors the gate's precedence
-// (fail outranks unverified outranks clean) so a page check never disagrees with a full run.
-// It is not a gated Result: there is no floor, no waivers, and no coverage graph for a page a
-// caller handed us, so it reports exactly what the providers observed and nothing more.
+// A single-page check outcome for a live Playwright page. It calls the same precedence function
+// as the gate, so the two can never rank a blocking failure and a coverage gap differently.
+// Their verdicts can still differ, and that is expected: a page check has no floor and no
+// waivers, so a barrier the gate has already accepted still reads as a regression here.
+// This is not a gated Result. It reports what the providers observed on one page, nothing more.
 export interface PageCheckResult {
   verdict: AccessibilityVerdict; // 'verified' | 'regression' | 'not_covered'
   failures: Draft[]; // confidence 'fail'; the deterministic misses that set a regression
@@ -36,16 +38,21 @@ export interface PageCheckResult {
 
 /**
  * Decides a page-check verdict from raw provider output. Pure so the precedence is testable
- * without a browser. The ordering matches src/gate/index.ts: a deterministic fail is a regression;
- * otherwise any unverified draft or coverage gap is not_covered; a clean, fully covered page is
- * verified. usabl never upgrades unverified or a gap into verified.
+ * without a browser. The ordering is not restated here: decideAccessibilityVerdict owns it, and
+ * the gate calls the same function.
+ *
+ * What this unit does decide is what counts as blocking on a page, and it is broader than the
+ * gate's rule. Any draft with `confidence === 'fail'` blocks, because there is no evidence floor
+ * and no waiver list to check it against. usabl never upgrades unverified or a gap into verified.
  */
 export function summarizePageCheck(drafts: Draft[], gaps: CoverageGap[]): PageCheckResult {
   const failures = drafts.filter((d) => d.confidence === 'fail');
   const needsReview = drafts.filter((d) => d.confidence === 'unverified');
 
-  const verdict: AccessibilityVerdict =
-    failures.length > 0 ? 'regression' : needsReview.length > 0 || gaps.length > 0 ? 'not_covered' : 'verified';
+  const { verdict } = decideAccessibilityVerdict({
+    hasBlockingFailure: failures.length > 0,
+    hasUnverified: needsReview.length > 0 || gaps.length > 0,
+  });
 
   const summary = `${verdict}: ${failures.length} blocking, ${needsReview.length} needs review, ${gaps.length} gap(s)`;
 

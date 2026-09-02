@@ -5,6 +5,7 @@
  */
 import type { Deps, ScreenScan, UsablConfig } from '../contracts/index.js';
 import { EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
+import { coverageIncomplete } from '../coverage/completeness.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { computeIdentity } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
@@ -162,7 +163,7 @@ export async function runFloorPrune(
       return { exitCode: 0, wrote: false, message: formatNoopReport(), prunedCount: 0 };
     }
 
-    const hasCoverageGaps = result.coverage.unresolvedFiles.length > 0 || result.coverage.gaps.length > 0;
+    const hasCoverageGaps = coverageIncomplete(result.coverage);
     // Prune only removes entries, so it must keep the version it read. Claiming version 2
     // over version 1 counts would present placeholder counts as observed debt.
     const nextFloor = { version: floor.version, entries: sortBy(keptEntries, floorEntrySortKey) };
