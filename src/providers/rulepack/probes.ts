@@ -68,10 +68,18 @@ export async function probeDialogs(ctx: ProviderContext): Promise<Draft[]> {
   for (const trigger of triggers) {
     try {
       const triggerNode = await ctx.page.axAt(trigger.selector);
+      // SEL.dialogTrigger has two arms and they mean different things when no dialog opens.
+      // aria-haspopup="dialog" is a promise, so a dialog that never appears is a broken promise.
+      // A plain disclosure control is only a candidate for being a dialog trigger, so it
+      // showing something that is not a dialog says nothing about the page and is not reported.
+      const declaresDialog = (await ctx.page.getAttribute(trigger.selector, 'aria-haspopup')) === 'dialog';
       await ctx.page.click(trigger.selector);
 
       const dialogAppeared = await waitFor(async () => (await ctx.page.queryAll(SEL.dialog)).length > 0);
       if (!dialogAppeared) {
+        if (!declaresDialog) {
+          continue;
+        }
         drafts.push(
           draft(
             ctx,
