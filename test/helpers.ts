@@ -27,6 +27,7 @@ export function testConfig(overrides: Partial<UsablConfig> = {}): UsablConfig {
     },
     surfaces: overrides.surfaces ?? BASE_CONFIG.surfaces,
     guardedPaths: overrides.guardedPaths ?? BASE_CONFIG.guardedPaths,
+    ...(overrides.readyTimeoutMs !== undefined ? { readyTimeoutMs: overrides.readyTimeoutMs } : {}),
     ...(overrides.requirements !== undefined ? { requirements: overrides.requirements } : {}),
     ...(overrides.promotedObligations !== undefined
       ? { promotedObligations: overrides.promotedObligations }

@@ -167,6 +167,33 @@ describe('makeCheckRunner', () => {
     expect(seen).toEqual(['app']);
   });
 
+  it('returns a not-covered gap when the page never becomes ready', async () => {
+    const page = await makeScriptedPage({ activePaths: ['#first'], activeNodes: [null] });
+    const runner = makeCheckRunner({
+      browser: {
+        open: async (): Promise<Page> =>
+          Object.assign(page, {
+            gotoReady: async (): Promise<void> => {
+              throw new Error('page did not stop changing within 15000ms');
+            },
+          }),
+        close: async () => {},
+      },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    // A page that never settled is disclosed, never scanned and reported as clean.
+    expect(scan.stops).toEqual([]);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: SCREEN.url, state: 'not-covered' });
+    expect(scan.gaps[0]?.reason).toContain('page did not stop changing');
+  });
+
   it('returns a not-covered gap when browser.open throws and never rejects', async () => {
     const runner = makeCheckRunner({
       browser: {

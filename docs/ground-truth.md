@@ -1527,7 +1527,8 @@ self-check.
     ".usabl-waivers.json",
     ".github/workflows/usabl-gate.yml",
     "requirements/"
-  ]
+  ],
+  "readyTimeoutMs": 60000
 }
 ```
 
@@ -1536,6 +1537,15 @@ self-check.
 `ALWAYS_GUARDED` whether or not they are listed here, and the requirements directory is
 added when `requirements` is set. Listing rule modules, the gate, the trust code, and the
 gate workflow puts them under the same `approval_required` review.
+
+`readyTimeoutMs` is optional and defaults to 60000. It is the whole budget for one screen
+to navigate, for its network to go quiet, and for its DOM to stop changing. How long that
+takes is a property of the application, so a heavy authenticated app on a loaded lab may
+need more: an Ansible Automation Platform screen measured 25.7 seconds. A screen that runs
+out of budget is disclosed as `not-covered` with a reason naming which of the two phases
+ran out, never scanned as if it had finished rendering. The value must be a positive whole
+number of milliseconds; anything else is refused when the config is read, before a run
+opens a browser.
 
 There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 (nothing to check) is an explicit informational allow. That is code, not a config dial.

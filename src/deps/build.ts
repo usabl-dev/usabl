@@ -188,11 +188,16 @@ export async function buildDeps(
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
   const allowedCapabilities = options.allowedCapabilities ?? ["live"];
-  const browser = makeRealBrowserDriver(
-    options.storageStatePath === undefined
+  const browser = makeRealBrowserDriver({
+    ...(options.storageStatePath === undefined
       ? {}
-      : { storageStatePath: options.storageStatePath },
-  );
+      : { storageStatePath: options.storageStatePath }),
+    // The operator's app is what decides how long a screen takes to render, so the budget rides
+    // the config the run was started with.
+    ...(config.readyTimeoutMs === undefined
+      ? {}
+      : { readyTimeoutMs: config.readyTimeoutMs }),
+  });
   const fs = makeFsGlob({ cwd });
   const git = makeGitReader({ cwd });
   const intakeConfig = await resolveIntakeConfig(
