@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { gate } from '../../src/gate/index.js';
+import { computeIdentity } from '../../src/primitives/identity.js';
 import type { Coverage, Draft, EvidenceFloor, Finding } from '../../src/contracts/index.js';
 
 const covered: Coverage = {
@@ -87,6 +88,26 @@ describe('gate differential', () => {
     expect(kept.evidence.state).toEqual({
       expanded: { value: false, source: 'attribute', fromTree: true },
     });
+  });
+
+  it('carries a structural finding across a rescan that remounted generated ids', () => {
+    // Round one recorded the floor. Round two saw the same unchanged screen with a
+    // fresh React generated id. Identity must not move, or the same barrier reads
+    // as fixed and new at once and a clean tree reports a regression.
+    const roundOne = d({ role: 'generic', evidence: {}, elementPath: '#pf-random-id-\\:r39\\:' });
+    const roundTwo = d({ role: 'generic', evidence: {}, elementPath: '#pf-random-id-\\:r3v\\:' });
+    const floor: EvidenceFloor = { version: 1, entries: [
+      {
+        screenId: 'clusters', layer: 'axe', rule: 'color-contrast',
+        elementKey: computeIdentity(roundOne).elementKey,
+        identityBasis: 'structural', count: 1,
+      },
+    ] };
+    const out = gate({ ...base, floor, drafts: [roundTwo] });
+    const kept = find(out, 'color-contrast');
+    expect(kept).toHaveLength(1);
+    expect(kept[0]!.status).toBe('carried');
+    expect(out.verdict).toBe('verified');
   });
 
   it('regresses when a count-based rule increases over the floor', () => {
