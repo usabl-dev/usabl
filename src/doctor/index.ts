@@ -14,6 +14,7 @@ import type { InstallFs } from '../install/index.js';
 import { planOverlay } from '../install/overlay.js';
 import { planClaude } from '../install/claude.js';
 import { planClaudeSkill } from '../install/claude-skill.js';
+import { planCursor, readCursorUiFileGlobs } from '../install/cursor.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { verifyBranchRule, type GhReader } from '../install/branch-rule.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
@@ -37,6 +38,7 @@ const WAIVERS_LABEL = `waiver ledger (${WAIVERS_PATH})`;
 const OVERLAY_LABEL = 'vite overlay plugin';
 const STOP_HOOK_LABEL = 'claude stop hook (.claude/settings.json)';
 const CLAUDE_SKILL_LABEL = 'claude usabl-check skill (.claude/skills/usabl-check/SKILL.md)';
+const CURSOR_LABEL = 'cursor assistant (.cursor/commands + rules)';
 const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
 const BRANCH_RULE_LABEL = 'branch protection (main requires usabl-policy)';
 
@@ -309,6 +311,28 @@ async function collectClaudeSkill(deps: DoctorDeps): Promise<SurfaceReport> {
   };
 }
 
+async function collectCursor(deps: DoctorDeps): Promise<SurfaceReport> {
+  const uiFileGlobs = await readCursorUiFileGlobs(deps.fs, deps.configPath);
+  const plan = await planCursor(deps.fs, uiFileGlobs);
+  if (plan.action === 'already-wired') {
+    return { id: 'cursor', label: CURSOR_LABEL, state: 'wired', nextStep: '' };
+  }
+  if (plan.action === 'refuse') {
+    return {
+      id: 'cursor',
+      label: CURSOR_LABEL,
+      state: 'drifted',
+      nextStep: `${plan.path} is present but is not the canonical Cursor wiring. Reconcile it by hand, or delete it and run "usabl install --cursor".`,
+    };
+  }
+  return {
+    id: 'cursor',
+    label: CURSOR_LABEL,
+    state: 'missing',
+    nextStep: 'No Cursor assistant wiring. Run "usabl install --cursor" to write the /usabl-check command and UI rule.',
+  };
+}
+
 async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
   // doctor asks a finer question than planCi: is the gate workflow present, structurally
   // correct, AND pinned to a trusted engine commit? classifyGateWorkflow answers that from the
@@ -375,7 +399,7 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
 
 export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceReport[]> {
   // Order mirrors the slice: config, routes, evidence floor, waivers, overlay, stop hook,
-  // usabl-check skill, ci workflow, branch rule. Each collector is self-contained health logic with no printing,
+  // usabl-check skill, cursor assistant, ci workflow, branch rule. Each collector is self-contained health logic with no printing,
   // so tests can target the states directly. guardRead absorbs an unexpected fs read error as
   // an honest unknown; every recognized state (including drifted and unknown) is returned, and
   // only a real programmer error propagates.
@@ -387,6 +411,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     await guardRead('overlay', OVERLAY_LABEL, () => collectOverlay(deps)),
     await guardRead('stop-hook', STOP_HOOK_LABEL, () => collectStopHook(deps)),
     await guardRead('claude-skill', CLAUDE_SKILL_LABEL, () => collectClaudeSkill(deps)),
+    await guardRead('cursor', CURSOR_LABEL, () => collectCursor(deps)),
     await guardRead('ci', CI_LABEL, () => collectCi(deps)),
     await guardRead('branch-rule', BRANCH_RULE_LABEL, () => collectBranchRule(deps)),
   ];

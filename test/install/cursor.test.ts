@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { matchGlob } from '../../src/primitives/match-glob.js';
 import type { InstallFs } from '../../src/install/index.js';
 import {
+  buildCursorRuleContents,
   CURSOR_COMMAND_CONTENTS,
   CURSOR_COMMAND_PATH,
   CURSOR_RULE_CONTENTS,
   CURSOR_RULE_PATH,
+  cursorRuleGlobs,
+  DEFAULT_CURSOR_UI_FILE_GLOBS,
   planCursor,
   writeCursor,
 } from '../../src/install/cursor.js';
@@ -30,6 +33,13 @@ describe('CURSOR assistant contents', () => {
     expect(CURSOR_RULE_CONTENTS).toContain('/usabl-check');
   });
 
+  it('derives rule globs from uiFileGlobs instead of hardcoding src/', () => {
+    expect(cursorRuleGlobs(['fixtures/app/src/**'])).toBe('fixtures/app/src/**/*.{tsx,jsx,css}');
+    expect(buildCursorRuleContents(['fixtures/app/src/**'])).toContain(
+      'globs: fixtures/app/src/**/*.{tsx,jsx,css}',
+    );
+  });
+
   it('states the command is advisory and that the gate decides proof', () => {
     expect(CURSOR_COMMAND_CONTENTS.toLowerCase()).toContain('advisory');
     expect(CURSOR_COMMAND_CONTENTS).toContain('gate');
@@ -38,7 +48,7 @@ describe('CURSOR assistant contents', () => {
 
 describe('planCursor', () => {
   it('plans full drafts when both Cursor files are absent', async () => {
-    const plan = await planCursor(memoryFs({}));
+    const plan = await planCursor(memoryFs({}), DEFAULT_CURSOR_UI_FILE_GLOBS);
     expect(plan.action).toBe('write');
     if (plan.action === 'write') {
       expect(plan.files).toHaveLength(2);
@@ -52,6 +62,7 @@ describe('planCursor', () => {
         [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
         [CURSOR_RULE_PATH]: CURSOR_RULE_CONTENTS,
       }),
+      DEFAULT_CURSOR_UI_FILE_GLOBS,
     );
     expect(plan.action).toBe('already-wired');
   });
@@ -62,6 +73,7 @@ describe('planCursor', () => {
         [CURSOR_COMMAND_PATH]: '# custom command\n',
         [CURSOR_RULE_PATH]: CURSOR_RULE_CONTENTS,
       }),
+      DEFAULT_CURSOR_UI_FILE_GLOBS,
     );
     expect(plan.action).toBe('refuse');
     if (plan.action !== 'refuse') {
@@ -69,19 +81,46 @@ describe('planCursor', () => {
     }
     expect(plan.path).toBe(CURSOR_COMMAND_PATH);
   });
+
+  it('plans a write for only the missing file when one canonical file is already present', async () => {
+    const plan = await planCursor(
+      memoryFs({
+        [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
+      }),
+      DEFAULT_CURSOR_UI_FILE_GLOBS,
+    );
+    expect(plan.action).toBe('write');
+    if (plan.action === 'write') {
+      expect(plan.files).toHaveLength(1);
+      expect(plan.files[0]?.path).toBe(CURSOR_RULE_PATH);
+      expect(plan.files[0]?.draft).toBe(CURSOR_RULE_CONTENTS);
+    }
+  });
 });
 
 describe('writeCursor', () => {
   it('writes both drafts when absent and stays idempotent on a second run', async () => {
     const fs = memoryFs({});
-    const first = await writeCursor(fs, await planCursor(fs));
+    const first = await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
     expect(first.exitCode).toBe(0);
     expect(first.action).toBe('written');
     expect(fs.store[CURSOR_COMMAND_PATH]).toBe(CURSOR_COMMAND_CONTENTS);
     expect(fs.store[CURSOR_RULE_PATH]).toBe(CURSOR_RULE_CONTENTS);
 
-    const second = await writeCursor(fs, await planCursor(fs));
+    const second = await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
     expect(second.exitCode).toBe(0);
     expect(second.action).toBe('already-wired');
+  });
+
+  it('writes only the missing file when the other canonical file is already present', async () => {
+    const fs = memoryFs({
+      [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
+    });
+    const result = await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
+    expect(result.exitCode).toBe(0);
+    expect(result.action).toBe('written');
+    expect(fs.store[CURSOR_COMMAND_PATH]).toBe(CURSOR_COMMAND_CONTENTS);
+    expect(fs.store[CURSOR_RULE_PATH]).toBe(CURSOR_RULE_CONTENTS);
+    expect(result.message).toContain(CURSOR_RULE_PATH);
   });
 });

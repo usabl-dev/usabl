@@ -35,7 +35,7 @@ import { formatInstallReport, type InstallFs, type InstallResult } from './insta
 import { planOverlay, writeOverlay } from './install/overlay.js';
 import { planClaude, writeClaude } from './install/claude.js';
 import { planClaudeSkill, writeClaudeSkill } from './install/claude-skill.js';
-import { planCursor, writeCursor } from './install/cursor.js';
+import { planCursor, readCursorUiFileGlobs, writeCursor } from './install/cursor.js';
 import { planCi, planDocsCi, writeCi, writeDocsCi } from './install/ci.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { projectDocs } from './surfaces/docs.js';
@@ -210,7 +210,8 @@ async function runInstall(opts: CliOptions): Promise<number> {
   } else if (opts.installTarget === 'claude-skill') {
     result = await writeClaudeSkill(installFs, await planClaudeSkill(installFs));
   } else if (opts.installTarget === 'cursor') {
-    result = await writeCursor(installFs, await planCursor(installFs));
+    const uiFileGlobs = await readCursorUiFileGlobs(installFs, opts.configPath);
+    result = await writeCursor(installFs, await planCursor(installFs, uiFileGlobs));
   } else if (opts.installTarget === 'docs-ci') {
     result = await writeDocsCi(installFs, await planDocsCi(installFs));
   } else {

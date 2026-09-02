@@ -6,10 +6,14 @@
  * refuse. The paths are usabl-owned, but a differing file may be an operator edit or an older
  * engine version, so the generator refuses rather than clobber it.
  */
+import { parseUsablConfig } from '../intake/config.js';
 import type { InstallFs, InstallResult } from './index.js';
 
 export const CURSOR_COMMAND_PATH = '.cursor/commands/usabl-check.md';
 export const CURSOR_RULE_PATH = '.cursor/rules/usabl-accessibility.mdc';
+
+// Used when usabl.config.json is absent, unreadable, or has no uiFileGlobs.
+export const DEFAULT_CURSOR_UI_FILE_GLOBS = ['src/**'];
 
 export const CURSOR_COMMAND_CONTENTS = `# usabl-check
 
@@ -27,9 +31,46 @@ advisory. Do not call the work verified from this command alone. The accessibili
 gate (\`usabl check\` / CI) decides proof.
 `;
 
-export const CURSOR_RULE_CONTENTS = `---
+export function resolveCursorUiFileGlobs(uiFileGlobs: string[]): string[] {
+  return uiFileGlobs.length > 0 ? uiFileGlobs : DEFAULT_CURSOR_UI_FILE_GLOBS;
+}
+
+export async function readCursorUiFileGlobs(fs: InstallFs, configPath: string): Promise<string[]> {
+  const raw = await fs.readFile(configPath);
+  if (raw === null) {
+    return DEFAULT_CURSOR_UI_FILE_GLOBS;
+  }
+  try {
+    return resolveCursorUiFileGlobs(parseUsablConfig(raw).uiFileGlobs);
+  } catch {
+    return DEFAULT_CURSOR_UI_FILE_GLOBS;
+  }
+}
+
+// Derive Cursor rule globs from usabl.config.json uiFileGlobs so the rule attaches to the UI
+// tree the gate already tracks, not a hardcoded src/ layout.
+export function cursorRuleGlobs(uiFileGlobs: string[]): string {
+  const sources = resolveCursorUiFileGlobs(uiFileGlobs);
+  return sources
+    .map((glob) => {
+      if (glob.includes('{') || /\.(tsx|jsx|css)(\*|$)/.test(glob)) {
+        return glob;
+      }
+      if (glob.endsWith('/**')) {
+        return `${glob}/*.{tsx,jsx,css}`;
+      }
+      if (glob.endsWith('/*')) {
+        return `${glob.slice(0, -2)}/**/*.{tsx,jsx,css}`;
+      }
+      return `${glob}/**/*.{tsx,jsx,css}`;
+    })
+    .join(',');
+}
+
+export function buildCursorRuleContents(uiFileGlobs: string[]): string {
+  return `---
 description: Run usabl accessibility self-checks while editing UI and before claiming work is done
-globs: src/**/*.{tsx,jsx,css}
+globs: ${cursorRuleGlobs(uiFileGlobs)}
 alwaysApply: false
 ---
 
@@ -43,26 +84,32 @@ When changing user interface code:
 - Do not call work verified from the self-check alone. The gate (\`usabl check\` / CI) decides proof.
 - Prefer fixing source over query-parameter previews or disabling checks.
 `;
+}
 
-const CURSOR_FILES = [
-  { path: CURSOR_COMMAND_PATH, draft: CURSOR_COMMAND_CONTENTS },
-  { path: CURSOR_RULE_PATH, draft: CURSOR_RULE_CONTENTS },
-] as const;
+export const CURSOR_RULE_CONTENTS = buildCursorRuleContents(DEFAULT_CURSOR_UI_FILE_GLOBS);
+
+function cursorFiles(uiFileGlobs: string[]) {
+  return [
+    { path: CURSOR_COMMAND_PATH, draft: CURSOR_COMMAND_CONTENTS },
+    { path: CURSOR_RULE_PATH, draft: buildCursorRuleContents(uiFileGlobs) },
+  ] as const;
+}
 
 export type CursorPlan =
   | { action: 'write'; files: Array<{ path: string; draft: string }> }
   | { action: 'already-wired'; paths: string[] }
   | { action: 'refuse'; path: string };
 
-export async function planCursor(fs: InstallFs): Promise<CursorPlan> {
+export async function planCursor(fs: InstallFs, uiFileGlobs: string[]): Promise<CursorPlan> {
+  const files = cursorFiles(uiFileGlobs);
   const existing: Array<{ path: string; draft: string; contents: string | null }> = [];
-  for (const file of CURSOR_FILES) {
+  for (const file of files) {
     existing.push({ ...file, contents: await fs.readFile(file.path) });
   }
 
   const missing = existing.filter((file) => file.contents === null);
-  if (missing.length === CURSOR_FILES.length) {
-    return { action: 'write', files: CURSOR_FILES.map((file) => ({ path: file.path, draft: file.draft })) };
+  if (missing.length === files.length) {
+    return { action: 'write', files: files.map((file) => ({ path: file.path, draft: file.draft })) };
   }
 
   for (const file of existing) {
@@ -78,7 +125,7 @@ export async function planCursor(fs: InstallFs): Promise<CursorPlan> {
     };
   }
 
-  return { action: 'already-wired', paths: CURSOR_FILES.map((file) => file.path) };
+  return { action: 'already-wired', paths: files.map((file) => file.path) };
 }
 
 function cursorRefusalMessage(path: string): string {

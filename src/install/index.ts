@@ -23,6 +23,8 @@ export interface InstallResult {
   // 0 = draft written or already wired; 2 = refusal that needs a manual step.
   exitCode: 0 | 2;
   action: InstallAction;
+  // Primary affected path for single-file installers. When a generator writes multiple files,
+  // message names every path; path is the first one for structured consumers.
   path: string;
   message: string;
 }
