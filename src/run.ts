@@ -27,6 +27,7 @@ import type {
 import { computeCoverage } from './coverage/planner.js';
 import { parseDocsManifest, type DocsManifest } from './coverage/docs-manifest.js';
 import { computeDocsCoverage } from './coverage/docs-planner.js';
+import { markUnseenScreens } from './coverage/unseen.js';
 import { mapFindingToSource, type DocsPageClosure } from './docs/source-map.js';
 import { gate } from './gate/index.js';
 import { mintReceipt } from './evidence/receipt.js';
@@ -122,17 +123,21 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
 
     // Malformed intake cannot self-grade. The harness stays closed until policy is valid.
     // Guarded-file edits still scan affected UI so mixed PRs keep accessibility findings.
-    const screens: ScreenScan[] = [];
+    const scanned: ScreenScan[] = [];
     const canScan = loadedRequirements.ok && !nothingToCheck;
     if (canScan) {
       for (const s of affected) {
-        screens.push(await deps.checkRunner.scan({
+        scanned.push(await deps.checkRunner.scan({
           id: s.screenId,
           url: s.url,
           ...(s.profile !== undefined ? { profile: s.profile } : {}),
         }));
       }
     }
+    // A screen the engine never reached still returns a scan, and axe still fires document-level
+    // rules on the blank document it got. Those drafts are removed here, before the gate sees
+    // them, because a finding about a page nobody rendered is not evidence at all.
+    const { screens, unseenScreenIds } = markUnseenScreens(scanned);
     const drafts = screens.flatMap((s) => s.drafts);
 
     const policyUntrusted = policyDivergedPaths.length > 0;
@@ -162,6 +167,28 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
         ...staleFloorGaps(floor),
       ],
     };
+
+    // Some screens unseen is a partial run: the gaps above carry it to not_covered and the screens
+    // that were reached still report. Every screen unseen is not a partial run. Nothing was
+    // measured, so no accessibility verdict would be honest and there is nothing for the gate to
+    // weigh. Refuse on the channel a crash already uses: no verdict, exit 4, the reason in the
+    // summary. This is not idle, because nothingToCheck stays false when UI files did change.
+    if (screens.length > 0 && unseenScreenIds.length === screens.length) {
+      return {
+        schemaVersion: 'usabl.result.v1',
+        verdict: null,
+        summary: unseenRunSummary(unseenScreenIds),
+        screens,
+        coverage,
+        findings: [],
+        receipt: null,
+        dirtyGuardedPaths: policyDivergedPaths,
+        exitCode: 4,
+        accessibilityVerdict: null,
+        accessibilityExitCode: 4,
+        paidDownCount: 0,
+      };
+    }
 
     const gated = gate({ coverage, guardDivergedPaths: policyDivergedPaths, drafts, floor, waivers, now: deps.clock() });
 
@@ -227,6 +254,17 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       paidDownCount: 0,
     };
   }
+}
+
+// Read by the CLI, by `usabl enforce`, and by the baseline and prune refusals, so it has to say
+// what happened on its own. Per-screen detail is already on coverage.gaps.
+function unseenRunSummary(unseenScreenIds: string[]): string {
+  const count = unseenScreenIds.length;
+  return (
+    `usabl never saw the application: all ${count} affected screen${count === 1 ? '' : 's'} ` +
+    `(${unseenScreenIds.join(', ')}) scanned without rendering, so nothing was measured and no ` +
+    'accessibility verdict would be honest. See coverage gaps for what each screen returned.'
+  );
 }
 
 // A version 1 floor recorded a literal 1 for every name and structural entry instead of the
