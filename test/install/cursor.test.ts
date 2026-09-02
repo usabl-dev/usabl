@@ -64,6 +64,9 @@ describe('planCursor', () => {
       }),
     );
     expect(plan.action).toBe('refuse');
+    if (plan.action !== 'refuse') {
+      throw new Error('expected refuse plan');
+    }
     expect(plan.path).toBe(CURSOR_COMMAND_PATH);
   });
 });
