@@ -4,6 +4,7 @@
  * It must never mint a verdict or choose scan targets on its own.
  */
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
+import { expandBraces } from '../primitives/match-glob.js';
 
 function expectObject(value: unknown, label: string): object {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -24,6 +25,40 @@ function expectStringArray(value: unknown, label: string): string[] {
     throw new Error(`${label} must be a string array`);
   }
   return value;
+}
+
+// matchGlob supports `*`, `**`, and `{a,b}` brace groups only. File discovery uses Node's
+// glob, which supports more. A glob usabl cannot match the same way discovery does would
+// select files at discovery and then drop them at enforcement, a silent mismatch that can
+// pass a run that should gate. Refuse such a glob here, at config load, before any run
+// launches. These are the characters matchGlob cannot faithfully evaluate after braces.
+const UNSUPPORTED_GLOB_CHARS = ['[', ']', '(', ')', '?'];
+
+function checkGlobSupported(pattern: string, label: string): void {
+  for (const char of UNSUPPORTED_GLOB_CHARS) {
+    if (pattern.includes(char)) {
+      throw new Error(
+        `${label} pattern "${pattern}" uses unsupported glob character "${char}". ` +
+          `usabl globs support only *, **, and {a,b} brace groups.`,
+      );
+    }
+  }
+  // A nested or unbalanced brace cannot be expanded, so matchGlob would treat the braces
+  // as literal text while discovery would not. Refuse it for the same reason.
+  if (pattern.includes('{') && expandBraces(pattern) === null) {
+    throw new Error(
+      `${label} pattern "${pattern}" uses an unsupported brace form. ` +
+        `usabl globs support only *, **, and single-level {a,b} brace groups.`,
+    );
+  }
+}
+
+function expectGlobArray(value: unknown, label: string): string[] {
+  const patterns = expectStringArray(value, label);
+  for (const pattern of patterns) {
+    checkGlobSupported(pattern, label);
+  }
+  return patterns;
 }
 
 // A budget of zero, a negative, a fraction, or a string would either fail every screen or fail
@@ -86,13 +121,16 @@ export function parseUsablConfig(raw: string): UsablConfig {
 
   return {
     appBaseUrl: expectString(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
-    uiFileGlobs: expectStringArray(Reflect.get(root, 'uiFileGlobs'), 'uiFileGlobs'),
+    uiFileGlobs: expectGlobArray(Reflect.get(root, 'uiFileGlobs'), 'uiFileGlobs'),
     discovery: {
+      // routerFile is an exact path read with fs.readFile, never matched by matchGlob, so it
+      // is not glob-validated. surfaces[].files are compared with exact string equality in the
+      // planner, so they are exact paths too and stay plain string arrays.
       routerFile: expectString(Reflect.get(discovery, 'routerFile'), 'discovery.routerFile'),
-      wideBlastGlobs: expectStringArray(Reflect.get(discovery, 'wideBlastGlobs'), 'discovery.wideBlastGlobs'),
+      wideBlastGlobs: expectGlobArray(Reflect.get(discovery, 'wideBlastGlobs'), 'discovery.wideBlastGlobs'),
     },
     surfaces: surfacesRaw.map((surface, index) => parseSurface(surface, index)),
-    guardedPaths: expectStringArray(Reflect.get(root, 'guardedPaths'), 'guardedPaths'),
+    guardedPaths: expectGlobArray(Reflect.get(root, 'guardedPaths'), 'guardedPaths'),
     ...(requirements === undefined ? {} : { requirements }),
     ...(promotedObligations === undefined ? {} : { promotedObligations }),
     ...(readyTimeoutMs === undefined ? {} : { readyTimeoutMs }),
