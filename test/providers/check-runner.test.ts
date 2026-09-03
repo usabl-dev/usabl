@@ -253,6 +253,9 @@ describe('makeCheckRunner', () => {
       drafts: [],
       // Nothing was opened, so nothing is known about which rules applied here.
       applicability: [],
+      // Nothing rendered, so no reachability claim is made either way.
+      reachedSelectorPresent: null,
+      reachedWhenSelector: null,
       gaps: [
         {
           ref: SCREEN.url,
@@ -261,5 +264,86 @@ describe('makeCheckRunner', () => {
         },
       ],
     });
+  });
+
+  it('makes no reachability claim when the surface declares no reachedWhen', async () => {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.reachedSelectorPresent).toBeNull();
+    expect(scan.reachedWhenSelector).toBeNull();
+  });
+
+  it('records reachedSelectorPresent true when a declared reachedWhen matches the DOM', async () => {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    // queryAll returns one match for the declared selector, so the screen provably rendered.
+    Object.assign(page, { queryAll: async () => [{ selector: 'main#app-root' }] });
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig({
+        surfaces: [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: 'main#app-root' }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.reachedSelectorPresent).toBe(true);
+    expect(scan.reachedWhenSelector).toBe('main#app-root');
+  });
+
+  it('records reachedSelectorPresent false when a declared reachedWhen matches nothing', async () => {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    // queryAll returns no matches, so the element the operator said proves the load was absent.
+    Object.assign(page, { queryAll: async () => [] });
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig({
+        surfaces: [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: 'main#app-root' }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.reachedSelectorPresent).toBe(false);
+    expect(scan.reachedWhenSelector).toBe('main#app-root');
+  });
+
+  it('reads a reachedWhen that throws in the DOM as absent, not a scan failure', async () => {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    // A malformed selector makes the browser query throw. It cannot match, so it reads as absent
+    // and the scan still completes rather than failing the whole screen.
+    Object.assign(page, {
+      queryAll: async () => {
+        throw new Error('invalid selector');
+      },
+    });
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig({
+        surfaces: [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: ':::bad' }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.reachedSelectorPresent).toBe(false);
+    expect(scan.gaps).toEqual([]);
   });
 });

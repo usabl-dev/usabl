@@ -162,6 +162,42 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     });
   });
 
+  it('measures reachedSelectorPresent true when the selector is in the rendered DOM', async () => {
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [],
+      config: testConfig({
+        surfaces: [{ id: 'integration-screen', url: fixture.url, files: [], reachedWhen: '#labelledby-button' }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 2,
+    });
+
+    const scan = await runner.scan({ id: 'integration-screen', url: fixture.url });
+
+    expect(scan.reachedSelectorPresent).toBe(true);
+    expect(scan.reachedWhenSelector).toBe('#labelledby-button');
+  });
+
+  it('measures reachedSelectorPresent false when the selector is absent from the DOM', async () => {
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [],
+      config: testConfig({
+        surfaces: [{ id: 'integration-screen', url: fixture.url, files: [], reachedWhen: '#never-rendered-marker' }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 2,
+    });
+
+    const scan = await runner.scan({ id: 'integration-screen', url: fixture.url });
+
+    expect(scan.reachedSelectorPresent).toBe(false);
+    expect(scan.reachedWhenSelector).toBe('#never-rendered-marker');
+  });
+
   it('waits for a page that keeps mounting after the network is quiet', async () => {
     const page = await driver.open(fixture.lateMountUrl);
     try {

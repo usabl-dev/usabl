@@ -110,7 +110,16 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     requirements: spec.requirements ?? { version: 1, requirements: [] },
     checkRunner: {
       scan: async ({ id, url }) =>
-        spec.scans[id] ?? { screenId: id, url, stops: [], drafts: [], gaps: [], applicability: [] },
+        spec.scans[id] ?? {
+          screenId: id,
+          url,
+          stops: [],
+          drafts: [],
+          gaps: [],
+          applicability: [],
+          reachedSelectorPresent: null,
+          reachedWhenSelector: null,
+        },
     },
   };
 }

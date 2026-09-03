@@ -34,6 +34,7 @@ function makeResult(receipt: Receipt | null): Result {
         drafts: [],
         gaps: [],
         applicability: [],
+        reachedSelectorPresent: null,
       },
     ],
     coverage: {

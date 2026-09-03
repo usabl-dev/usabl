@@ -56,6 +56,7 @@ describe('run with docs manifest trust overlay', () => {
       drafts: [],
       gaps: [],
       applicability: [],
+      reachedSelectorPresent: null,
     };
 
     const deps = makeFakeDeps({

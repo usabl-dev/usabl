@@ -43,6 +43,7 @@ function fixtureResult(stops: ScreenScan['stops']): Result {
         drafts: [],
         gaps: [],
         applicability: [],
+        reachedSelectorPresent: null,
       },
     ],
     coverage: {

@@ -67,6 +67,7 @@ function blankScreen(screenId: string): ScreenScan {
     drafts: BLANK_PAGE_RULES.map((rule) => draft(screenId, rule)),
     gaps: [],
     applicability: [],
+    reachedSelectorPresent: null,
   };
 }
 
@@ -111,7 +112,7 @@ describe('unseen screens', () => {
       scans: {
         overview: blankScreen('overview'),
         // Two screens that were really walked, so the whole run is not refused.
-        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('button:nth-child(1)'), drafts: [], gaps: [], applicability: [] },
+        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('button:nth-child(1)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
         inventories: {
           screenId: 'inventories',
           url: config.surfaces[2]!.url,
@@ -119,6 +120,7 @@ describe('unseen screens', () => {
           drafts: [],
           gaps: [],
           applicability: [],
+          reachedSelectorPresent: null,
         },
       },
     });
@@ -137,16 +139,26 @@ describe('unseen screens', () => {
     expect(r.screens.filter((screen) => screen.gaps.length > 0)).toHaveLength(1);
   });
 
-  it('drops drafts from screens at distinct URLs that measured identically', async () => {
-    // No body-only signature here: the transcript looks like a real walk. Only the fact that two
-    // distinct URLs produced byte-identical identities gives the duplicate render away.
+  it('keeps drafts on screens at distinct URLs that measured identically', async () => {
+    // Two different URLs that carry the same barrier produce byte-identical finding identities. That
+    // is real coverage, not a blank page: a templated route, a shared app shell, and two pages with
+    // the same barrier all look like this. The removed duplicate-render heuristic wrongly dropped
+    // both. With positive reachability, identical drafts across URLs are kept and still gate.
     const cloned = (screenId: string): ScreenScan => ({
       screenId,
       url: config.surfaces.find((s) => s.id === screenId)?.url ?? '',
       stops: realStops('button:nth-child(1)'),
-      drafts: [draft(screenId, 'landmark-one-main')],
+      drafts: [
+        draft(screenId, 'color-contrast', {
+          elementPath: 'button',
+          elementName: 'Save',
+          role: 'button',
+          evidence: { name: { value: 'Save', source: 'ax-tree', fromTree: true } },
+        }),
+      ],
       gaps: [],
       applicability: [],
+      reachedSelectorPresent: null,
     });
     const deps = makeFakeDeps({
       ...guardOk,
@@ -161,21 +173,22 @@ describe('unseen screens', () => {
           drafts: [],
           gaps: [],
           applicability: [],
+          reachedSelectorPresent: null,
         },
       },
     });
 
     const r = await run(deps, config);
 
-    expect(r.verdict).toBe('not_covered');
+    // Both screens are seen, their drafts survive, and a real barrier gates.
+    expect(r.verdict).toBe('regression');
     for (const screenId of ['overview', 'jobs']) {
       const screen = r.screens.find((s) => s.screenId === screenId);
-      expect(screen?.drafts).toEqual([]);
-      expect(screen?.gaps).toHaveLength(1);
-      expect(screen?.gaps[0]?.reason).toContain('same finding identities');
-      expect(screen?.gaps[0]?.reason).toContain('did not see');
+      expect(screen?.drafts).toHaveLength(1);
+      expect(screen?.gaps).toEqual([]);
     }
     expect(r.screens.find((s) => s.screenId === 'inventories')?.gaps).toEqual([]);
+    expect(r.coverage.gaps).toEqual([]);
   });
 
   it('still reports regression when a real barrier sits beside an unseen screen', async () => {
@@ -199,6 +212,7 @@ describe('unseen screens', () => {
           drafts: [barrier],
           gaps: [],
           applicability: [],
+          reachedSelectorPresent: null,
         },
         inventories: {
           screenId: 'inventories',
@@ -207,6 +221,7 @@ describe('unseen screens', () => {
           drafts: [],
           gaps: [],
           applicability: [],
+          reachedSelectorPresent: null,
         },
       },
     });
@@ -231,8 +246,9 @@ describe('unseen screens', () => {
           drafts: [draft('overview', 'landmark-one-main')],
           gaps: [],
           applicability: [],
+          reachedSelectorPresent: null,
         },
-        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [] },
+        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
         inventories: {
           screenId: 'inventories',
           url: config.surfaces[2]!.url,
@@ -240,6 +256,7 @@ describe('unseen screens', () => {
           drafts: [],
           gaps: [],
           applicability: [],
+          reachedSelectorPresent: null,
         },
       },
     });
@@ -265,8 +282,9 @@ describe('unseen screens', () => {
           drafts: [],
           gaps: [],
           applicability: [],
+          reachedSelectorPresent: null,
         },
-        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [] },
+        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
         inventories: {
           screenId: 'inventories',
           url: config.surfaces[2]!.url,
@@ -274,6 +292,7 @@ describe('unseen screens', () => {
           drafts: [],
           gaps: [],
           applicability: [],
+          reachedSelectorPresent: null,
         },
       },
     });
@@ -282,6 +301,57 @@ describe('unseen screens', () => {
 
     expect(r.verdict).toBe('verified');
     expect(r.coverage.gaps).toEqual([]);
+  });
+
+  it('never mints verified with a receipt for a body-only screen whose reachedWhen matched the app shell', async () => {
+    // A reachedWhen aimed at a persistent app shell element (header, nav, footer) matches on every
+    // route, including a login wall or a screen that threw on mount while the shell survived. That
+    // screen is still body-only, so it was never reached. The run must not mint verified for it. This
+    // guards the receipt-level false green: a matched shell selector must not cancel the body-only
+    // gap. Two genuinely walked screens sit beside it so the run does not take the refuse-all path.
+    // The blank document carries no failing drafts, which is the reviewer's proven false green: with
+    // the bug the run mints verified with a receipt, exit 0. axe firing nothing on a bare shell is
+    // exactly the login-wall case the body-only floor exists to catch.
+    const bodyOnlyButShellMatched: ScreenScan = {
+      screenId: 'overview',
+      url: config.surfaces[0]!.url,
+      stops: bodyOnlyStops,
+      drafts: [],
+      gaps: [],
+      applicability: [],
+      // The operator pointed reachedWhen at header.app-shell, which the surviving shell still carries.
+      reachedSelectorPresent: true,
+      reachedWhenSelector: 'header.app-shell',
+    };
+    const deps = makeFakeDeps({
+      ...guardOk,
+      changed: changedAll,
+      scans: {
+        overview: bodyOnlyButShellMatched,
+        jobs: { screenId: 'jobs', url: config.surfaces[1]!.url, stops: realStops('a:nth-child(2)'), drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
+        inventories: {
+          screenId: 'inventories',
+          url: config.surfaces[2]!.url,
+          stops: realStops('a:nth-child(3)'),
+          drafts: [],
+          gaps: [],
+          applicability: [],
+          reachedSelectorPresent: null,
+        },
+      },
+    });
+
+    const r = await run(deps, config);
+
+    // The body-only screen is not covered, so the run cannot verify and mints no receipt.
+    expect(r.verdict).not.toBe('verified');
+    expect(r.receipt).toBeNull();
+    expect(r.verdict).toBe('not_covered');
+    expect(r.exitCode).toBe(3);
+    const overview = r.screens.find((s) => s.screenId === 'overview');
+    expect(overview?.drafts).toEqual([]);
+    const gap = overview?.gaps.find((g) => g.state === 'not-covered');
+    expect(gap?.reason).toContain('keyboard stop');
   });
 });
 
@@ -308,6 +378,7 @@ describe('baseline against unseen screens', () => {
           drafts: [draft('jobs', 'color-contrast', { elementPath: 'button', elementName: 'Save', role: 'button' })],
           gaps: [],
           applicability: [],
+          reachedSelectorPresent: null,
         },
         inventories: {
           screenId: 'inventories',
@@ -316,6 +387,7 @@ describe('baseline against unseen screens', () => {
           drafts: [],
           gaps: [],
           applicability: [],
+          reachedSelectorPresent: null,
         },
       },
     });

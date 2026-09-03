@@ -32,6 +32,7 @@ const scanWith = (drafts: Draft[], gaps: ScreenScan['gaps'] = []): ScreenScan =>
   drafts,
   gaps,
   applicability: [],
+  reachedSelectorPresent: null,
 });
 const guardOk = { files: { 'usabl.config.json': '{}' }, headContents: { 'usabl.config.json': '{}' } };
 
@@ -279,6 +280,7 @@ describe('run', () => {
           drafts: [],
           gaps: [],
           applicability: [],
+          reachedSelectorPresent: null,
         },
         settings: {
           screenId: 'settings',
@@ -287,6 +289,7 @@ describe('run', () => {
           drafts: [],
           gaps: [{ ref: 'http://127.0.0.1:5173/settings', state: 'not-covered', reason: 'browser failed to load' }],
           applicability: [],
+          reachedSelectorPresent: null,
         },
       },
     });
