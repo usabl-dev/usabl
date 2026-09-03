@@ -115,11 +115,10 @@ export function formatSummary(result: Result): string {
     lines.push(`  guarded paths changed: ${result.dirtyGuardedPaths.join(', ')}`);
   }
   if (result.verdict === 'approval_required') {
-    const accessibility =
-      result.accessibilityVerdict === null
-        ? 'IDLE'
-        : (HEADLINE[result.accessibilityVerdict] ?? result.accessibilityVerdict);
-    lines.push(`  accessibility ${accessibility} (${result.accessibilityExitCode})`);
+    // result.summary already states the accessibility verdict on the headline line, so a
+    // second verdict word here would repeat it. Print only the exit code, which the summary
+    // does not carry.
+    lines.push(`  accessibility exit code: ${result.accessibilityExitCode}`);
   }
   if (result.paidDownCount > 0) {
     lines.push(`  floor debt resolved: ${result.paidDownCount} (run usabl floor prune to re-arm)`);

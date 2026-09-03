@@ -164,6 +164,28 @@ describe('projectPrComment', () => {
     expect(markdown).toContain('CODEOWNERS user approval');
   });
 
+  it('carries the accessibility verdict and the CODEOWNERS instruction, both exactly once', () => {
+    // Guard against removing the split by accident. The PR comment is the sole carrier of the
+    // accessibility verdict and the CODEOWNERS approval instruction on this surface. It does not
+    // render result.summary, so nothing else here would restate the verdict.
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'approval_required',
+        summary:
+          'approval required: 1 guarded path(s) changed; accessibility not_covered: 0 gating finding(s), 2 gap(s)',
+        exitCode: 2,
+        receipt: null,
+        accessibilityVerdict: 'not_covered',
+        accessibilityExitCode: 3,
+        dirtyGuardedPaths: ['.usabl-evidence.json'],
+      }),
+    );
+    const verdictMentions = markdown.match(/NOT COVERED|not_covered/g) ?? [];
+    expect(verdictMentions.length).toBe(1);
+    const codeownersMentions = markdown.match(/CODEOWNERS user approval/g) ?? [];
+    expect(codeownersMentions.length).toBe(1);
+  });
+
   it('shows the floor pay-down count when greater than zero', () => {
     const markdown = projectPrComment(
       baseResult({
