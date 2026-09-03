@@ -47,6 +47,7 @@ function scanWith(drafts: Draft[], gaps: ScreenScan['gaps'] = []): ScreenScan {
     drafts,
     gaps,
     applicability: [],
+    reachedSelectorPresent: null,
   };
 }
 

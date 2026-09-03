@@ -63,6 +63,7 @@ function screenWith(drafts: Draft[]): ScreenScan {
     drafts,
     gaps: [],
     applicability: [],
+    reachedSelectorPresent: null,
   };
 }
 

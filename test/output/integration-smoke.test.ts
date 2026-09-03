@@ -32,6 +32,7 @@ describe('formatIntegrationSmokeEgress', () => {
       drafts: [draft],
       gaps: [gap],
       applicability: [],
+      reachedSelectorPresent: null,
     };
     const seen: string[] = [];
     const sanitize = (value: string): string => {
@@ -72,6 +73,7 @@ describe('formatIntegrationSmokeEgress', () => {
         },
       ],
       applicability: [],
+      reachedSelectorPresent: null,
     };
 
     const out = formatIntegrationSmokeEgress(scan);

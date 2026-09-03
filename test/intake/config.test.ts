@@ -33,3 +33,42 @@ describe('parseUsablConfig readyTimeoutMs', () => {
     }
   });
 });
+
+describe('parseUsablConfig surface reachedWhen', () => {
+  it('reads an optional reachedWhen selector on a surface', () => {
+    const config = parseUsablConfig(
+      configJson({
+        surfaces: [
+          { id: 'overview', url: 'http://127.0.0.1:5173/overview', files: ['src/Overview.tsx'], reachedWhen: 'main#root' },
+        ],
+      }),
+    );
+    expect(config.surfaces[0]?.reachedWhen).toBe('main#root');
+  });
+
+  it('leaves reachedWhen unset when the surface omits it', () => {
+    expect(parseUsablConfig(configJson()).surfaces[0]?.reachedWhen).toBeUndefined();
+  });
+
+  it('refuses an empty or whitespace-only reachedWhen', () => {
+    for (const bad of ['', '   ']) {
+      expect(() =>
+        parseUsablConfig(
+          configJson({
+            surfaces: [{ id: 'overview', url: 'http://127.0.0.1:5173/overview', files: ['src/Overview.tsx'], reachedWhen: bad }],
+          }),
+        ),
+      ).toThrow(/reachedWhen/);
+    }
+  });
+
+  it('refuses a non-string reachedWhen', () => {
+    expect(() =>
+      parseUsablConfig(
+        configJson({
+          surfaces: [{ id: 'overview', url: 'http://127.0.0.1:5173/overview', files: ['src/Overview.tsx'], reachedWhen: 42 }],
+        }),
+      ),
+    ).toThrow(/reachedWhen/);
+  });
+});

@@ -603,6 +603,7 @@ function makeDeps(): Deps {
         drafts: [],
         gaps: [],
         applicability: [],
+        reachedSelectorPresent: null,
       }),
     },
   };

@@ -120,6 +120,20 @@ export interface ScreenScan {
   // confusion this record exists to remove. Empty means nothing was reported, which is honest for
   // a scan that failed or for providers that say nothing about applicability.
   applicability: RuleApplicability[];
+  // Positive reachability evidence, measured during the scan while the live DOM was available.
+  // The tri-state is deliberate:
+  //   null  = the surface declared no reachedWhen selector, so we make no claim either way.
+  //   true  = a reachedWhen selector was declared and at least one element matched it, so the
+  //           screen provably rendered.
+  //   false = a reachedWhen selector was declared and nothing matched it, so the screen did not
+  //           render what the operator said proves it loaded.
+  // Only false triggers an unseen gap in markUnseenScreens. The value is a plain presence test,
+  // never a count or a DOM walk, so a verdict that leans on it cannot depend on iteration order.
+  reachedSelectorPresent: boolean | null;
+  // The reachedWhen selector the surface declared, carried so a coverage gap can name it in plain
+  // English. Optional and only meaningful when reachedSelectorPresent is false. Absent or null when
+  // the surface declared no selector.
+  reachedWhenSelector?: string | null;
 }
 
 // ---- coverage ----
@@ -367,6 +381,11 @@ export interface SurfaceConfig {
   id: string;
   url: string;
   files: string[];
+  // Optional positive reachability assertion: a CSS selector that must match at least one element
+  // once the screen has loaded and the walk has run. If it is absent from the rendered DOM, the
+  // screen is marked unseen and its findings are dropped. Absent means the body-only floor is the
+  // only unseen detector for this surface. When present it must be a non-empty string.
+  reachedWhen?: string;
 }
 export interface UsablConfig {
   appBaseUrl: string;

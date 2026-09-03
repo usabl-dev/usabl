@@ -7,6 +7,19 @@
  * every one of them. Readiness cannot separate those cases from a legitimately empty list,
  * because all four settle, so the split is made here from what the scan actually returned.
  *
+ * Reachability rests on positive evidence that a screen rendered, never on absence of difference
+ * between screens. Two screens that measured identically at different URLs are not proof of a blank
+ * page: a templated route, a shared application shell, and two pages that carry the same barrier all
+ * produce identical findings while rendering correctly. Equality of what we did not find is not
+ * evidence of unreachability, so this unit does not infer from it.
+ *
+ * Two detectors run, both positive observations about one screen:
+ *   1. isBodyOnly reads the keyboard transcript. Every stop stayed on the document body, so the page
+ *      had nothing to walk. This is the sound floor and runs for every screen.
+ *   2. reachedSelectorPresent reads a per-surface assertion the operator declared and the scan
+ *      measured against the live DOM. Only an explicit false (declared and absent) marks a screen
+ *      unseen. A true value is positive proof the screen rendered and overrides the body-only floor.
+ *
  * The findings are dropped, not downgraded. The gate weighs a new failure before it weighs
  * missing coverage on purpose, because a real new barrier is the actionable answer. Leaving
  * these drafts in place with a gap beside them would still mint regression from a document
@@ -17,8 +30,7 @@
  *
  * This unit reports coverage. It must never mint a verdict.
  */
-import type { CoverageGap, Draft, ScreenScan } from '../contracts/index.js';
-import { computeIdentity } from '../primitives/identity.js';
+import type { CoverageGap, ScreenScan } from '../contracts/index.js';
 
 export interface UnseenPass {
   screens: ScreenScan[]; // same order as the input, unseen screens stripped of drafts and applicability
@@ -47,58 +59,6 @@ function isBodyOnly(scan: ScreenScan): boolean {
   return scan.stops.length > 0 && scan.stops.every((stop) => isDocumentBody(stop.elementPath));
 }
 
-/**
- * A screen-independent identity for a draft. computeIdentity keys on the screen id, which is
- * exactly what makes two renders of the same blank document look like two different findings,
- * so the screen id is blanked before comparing screens to each other.
- */
-function identityAcrossScreens(draft: Draft): string {
-  const { elementKey } = computeIdentity({ ...draft, screenId: '' });
-  return `${draft.layer}|${draft.rule}|${elementKey ?? 'count'}`;
-}
-
-/**
- * What a screen measured, independent of which screen it was. Null when the screen produced no
- * drafts: two clean screens share an empty result, and that is the absence of evidence, not
- * evidence that they are the same page.
- */
-function measuredFingerprint(scan: ScreenScan): string | null {
-  if (scan.drafts.length === 0) {
-    return null;
-  }
-  return scan.drafts.map(identityAcrossScreens).sort().join('\n');
-}
-
-/**
- * Screens that measured identically at different URLs, keyed by screen id to the other screen
- * ids in the same group. Distinct URLs are the whole point: one URL scanned under two profiles
- * can honestly report the same identities, two different URLs cannot.
- */
-function duplicateRenders(screens: ScreenScan[]): Map<string, string[]> {
-  const byFingerprint = new Map<string, ScreenScan[]>();
-  for (const scan of screens) {
-    const fingerprint = measuredFingerprint(scan);
-    if (fingerprint === null) {
-      continue;
-    }
-    byFingerprint.set(fingerprint, [...(byFingerprint.get(fingerprint) ?? []), scan]);
-  }
-
-  const duplicates = new Map<string, string[]>();
-  for (const group of byFingerprint.values()) {
-    if (new Set(group.map((scan) => scan.url)).size < 2) {
-      continue;
-    }
-    for (const scan of group) {
-      duplicates.set(
-        scan.screenId,
-        group.filter((other) => other.screenId !== scan.screenId).map((other) => other.screenId),
-      );
-    }
-  }
-  return duplicates;
-}
-
 function unseenGap(scan: ScreenScan, detectorSentences: string[]): CoverageGap {
   return {
     ref: scan.url,
@@ -115,14 +75,20 @@ function unseenGap(scan: ScreenScan, detectorSentences: string[]): CoverageGap {
  * Strip drafts and applicability from every screen the engine cannot claim it saw and disclose
  * each one as a coverage gap. Screens that were really walked pass through untouched, gaps and all.
  *
- * The duplicate-render check compares screens to each other, so it cannot live inside a single
- * screen's scan and this pass runs over the whole collected set.
+ * A surface that declared a reachability selector and matched it (reachedSelectorPresent === true)
+ * has proved it rendered, so it passes through untouched even if the keyboard walk found nowhere to
+ * go. Only an explicit false triggers the reachability gap.
  */
 export function markUnseenScreens(screens: ScreenScan[]): UnseenPass {
-  const duplicates = duplicateRenders(screens);
   const unseenScreenIds: string[] = [];
 
   const marked = screens.map((scan) => {
+    // Positive proof of render. A declared selector that matched settles the question, so no
+    // detector runs and the screen keeps its drafts.
+    if (scan.reachedSelectorPresent === true) {
+      return scan;
+    }
+
     const sentences: string[] = [];
     if (isBodyOnly(scan)) {
       sentences.push(
@@ -130,11 +96,11 @@ export function markUnseenScreens(screens: ScreenScan[]): UnseenPass {
           'that never rendered, one behind a login, and one that threw on mount all look like this.',
       );
     }
-    const sameAs = duplicates.get(scan.screenId);
-    if (sameAs !== undefined) {
+    if (scan.reachedSelectorPresent === false) {
+      const selector = scan.reachedWhenSelector ?? 'the declared reachedWhen selector';
       sentences.push(
-        `It reported the same finding identities as ${sameAs.join(', ')}, which are different URLs, ` +
-          'and two different screens do not measure identically.',
+        `Nothing matched reachedWhen selector ${selector} in the rendered page, so the element the ` +
+          'operator said proves this screen loaded was absent.',
       );
     }
     if (sentences.length === 0) {

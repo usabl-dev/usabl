@@ -96,7 +96,7 @@ describe('scrubResult', () => {
     ];
     const raw = baseResult({
       screens: [
-        { screenId: 'clusters', url: 'http://app/clusters', stops: [], drafts: [], gaps: [], applicability },
+        { screenId: 'clusters', url: 'http://app/clusters', stops: [], drafts: [], gaps: [], applicability, reachedSelectorPresent: null },
       ],
     });
 

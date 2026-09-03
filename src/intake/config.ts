@@ -36,12 +36,28 @@ function expectPositiveWholeNumber(value: unknown, label: string): number {
   return value;
 }
 
+// An empty reachedWhen would match nothing and mark every scan of the surface unseen, which is a
+// silent failure hiding as coverage loss. Refuse it at config load so the operator fixes it before
+// a run.
+function parseReachedWhen(raw: unknown, index: number): string | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const selector = expectString(raw, `surfaces[${index}].reachedWhen`);
+  if (selector.trim().length === 0) {
+    throw new Error(`surfaces[${index}].reachedWhen must be a non-empty string`);
+  }
+  return selector;
+}
+
 function parseSurface(raw: unknown, index: number): SurfaceConfig {
   const surface = expectObject(raw, `surfaces[${index}]`);
+  const reachedWhen = parseReachedWhen(Reflect.get(surface, 'reachedWhen'), index);
   return {
     id: expectString(Reflect.get(surface, 'id'), `surfaces[${index}].id`),
     url: expectString(Reflect.get(surface, 'url'), `surfaces[${index}].url`),
     files: expectStringArray(Reflect.get(surface, 'files'), `surfaces[${index}].files`),
+    ...(reachedWhen === undefined ? {} : { reachedWhen }),
   };
 }
 

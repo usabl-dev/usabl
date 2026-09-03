@@ -15,6 +15,7 @@ import type {
   StepRunner,
   UsablConfig,
 } from '../contracts/index.js';
+import { measureReachability } from './reachability.js';
 import { runProviders } from './index.js';
 
 export interface CheckRunnerDeps {
@@ -37,7 +38,9 @@ function notCoveredGap(ref: string, reason: string): CoverageGap {
 }
 
 function failedScan(screen: { id: string; url: string }, reason: string): ScreenScan {
-  // A scan that failed knows nothing about which rules applied, so it claims nothing.
+  // A scan that failed knows nothing about which rules applied, so it claims nothing. It also made
+  // no reachability observation, so both reachability fields stay null. The gap here already tells
+  // the operator the screen failed to open.
   return {
     screenId: screen.id,
     url: screen.url,
@@ -45,6 +48,8 @@ function failedScan(screen: { id: string; url: string }, reason: string): Screen
     drafts: [],
     gaps: [notCoveredGap(screen.url, reason)],
     applicability: [],
+    reachedSelectorPresent: null,
+    reachedWhenSelector: null,
   };
 }
 
@@ -76,6 +81,11 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
         return failedScan(screen, `screen failed to open: ${errorMessage(err)}`);
       }
 
+      // Look up the surface's optional reachedWhen selector by screen id. Only manually declared
+      // surfaces set an id that matches a scan target, so route-discovered screens find nothing here
+      // and make no reachability claim.
+      const reachedWhen = deps.config.surfaces.find((surface) => surface.id === screen.id)?.reachedWhen;
+
       let result: ScreenScan = {
         screenId: screen.id,
         url: screen.url,
@@ -83,6 +93,8 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
         drafts: [],
         gaps: [],
         applicability: [],
+        reachedSelectorPresent: null,
+        reachedWhenSelector: reachedWhen ?? null,
       };
       try {
         await page.gotoReady();
@@ -98,6 +110,11 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           deps.allowedCapabilities,
         );
 
+        // Measure reachability after the walk and providers have run, while the page is still open.
+        // This is the only place the live DOM exists; markUnseenScreens runs later over collected
+        // scans and cannot query the page.
+        const reachedSelectorPresent = await measureReachability(page, reachedWhen);
+
         result = {
           screenId: screen.id,
           url: screen.url,
@@ -105,6 +122,8 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           drafts: providerResult.drafts,
           gaps: providerResult.gaps,
           applicability: providerResult.applicability,
+          reachedSelectorPresent,
+          reachedWhenSelector: reachedWhen ?? null,
         };
       } catch (err) {
         result = failedScan(screen, `scan failed: ${errorMessage(err)}`);
