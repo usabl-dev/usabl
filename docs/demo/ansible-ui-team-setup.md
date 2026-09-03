@@ -1,48 +1,413 @@
 # usabl on ansible-ui: team setup
 
-Goal: run usabl against the ansible-ui app on your machine, with the app's API served by the shared
-lab AAP backend over an SSH tunnel.
+Run usabl against ansible-ui on your machine. The app's API comes from a shared lab AAP backend over
+an SSH tunnel.
 
-Download the lab SSH key from Ed's Drive folder (keep it local. do not commit or
-repost the key file):
+**Secrets**
 
-https://drive.google.com/drive/folders/1hz_F6ZX_LjJe0mkx7SVPv9x9wDw6V4Sm?usp=drive_link
-
-Shared lab AAP login (classroom default):
-
-| Field | Value |
+| What | Where |
 | --- | --- |
-| Username | `admin` |
-| Password | `redhat` |
+| SSH private key (`rht_classroom.rsa`) | [Drive folder](https://drive.google.com/drive/folders/1hz_F6ZX_LjJe0mkx7SVPv9x9wDw6V4Sm?usp=drive_link) (download only, do not commit this key to any repo) |
+| AAP login | `admin` / `redhat` |
 
-Everything else (config, login script, tunnel script, public key fingerprint) is in the
-`usabl-dev/ansible-ui` fork.
-
-Session files hold live tokens; keep them local.
-
-Time: about 20 minutes the first time, most of it `npm ci`. Or run the bootstrap script
-(see **Quick setup** below) and follow the printed next steps.
+Everything else lives in the `usabl-dev/ansible-ui` fork (`usabl.config.json`, tunnel script, login
+script, public key fingerprint).
 
 ---
 
-## Quick setup
+## Setup (four steps)
 
-From a usabl clone, after you install `~/.ssh/rht_classroom.rsa` from Drive:
+**1. Install the SSH key** (one time)
 
 ```
-./docs/demo/setup-ansible-ui-team.sh
+mkdir -p ~/.ssh
+cp ~/Downloads/rht_classroom.rsa ~/.ssh/rht_classroom.rsa
+chmod 600 ~/.ssh/rht_classroom.rsa
 ```
 
-The script clones `ansible-ui` and `usabl` into `~/usabl-team` by default, runs `npm ci`,
-links the `usabl` CLI, installs Playwright Chromium, and opens the lab tunnel. If the dev server
-is already running on port 4100, it also mints `.usabl-session.json`.
+**2. Run the bootstrap script** (from a usabl clone)
 
-Use `--workdir DIR` to choose a different parent directory. Use `--skip-session` on the first run
-if the dev server is not up yet; start the server, then re-run with `--skip-clone --skip-tunnel`.
+```
+./docs/demo/setup-ansible-ui-team.sh --skip-session
+```
+
+Clones into `~/usabl-team` by default, installs deps, links `usabl`, and opens the lab tunnel. If it
+asks for `/etc/hosts`, run:
+
+```
+echo '127.0.0.1 aap.lab.example.com' | sudo tee -a /etc/hosts
+```
+
+**3. Start the dev server** (leave running in a second terminal)
+
+```
+cd ~/usabl-team/ansible-ui
+PLATFORM_SERVER=https://aap.lab.example.com:8443/ DEV_SERVER_PROTOCOL=http npm start
+```
+
+**4. Mint a session and run usabl**
+
+If step 2 ran before the dev server was up, mint the session now (from your usabl clone):
+
+```
+./docs/demo/setup-ansible-ui-team.sh --workdir ~/usabl-team --skip-clone --skip-tunnel
+```
+
+Then check:
+
+```
+cd ~/usabl-team/ansible-ui
+USABL_STORAGE_STATE=./.usabl-session.json usabl check
+```
+
+First time on the evidence floor? Run `usabl baseline` before you treat failures as regressions.
 
 ---
 
-## 0. Prerequisites
+## Wire Claude Code and Cursor
+
+Run these from the **ansible-ui** clone after setup. Each `usabl install` command wires one surface
+and writes a draft for review.
+
+### Claude Code
+
+```
+cd ~/usabl-team/ansible-ui
+usabl install --claude
+usabl install --claude-skill
+```
+
+- `--claude` wires the **Stop hook** (`.claude/settings.json`) so Claude cannot finish while the gate
+  is red. It runs `npx usabl stop-hook`.
+- `--claude-skill` writes the **`/usabl-check` skill** (`.claude/skills/usabl-check/SKILL.md`) for an
+  advisory mid-task scan via `npx usabl check --self-check`.
+
+Review the generated files, then commit them on your branch in the ansible-ui fork. Start Claude Code
+from the ansible-ui root so it picks up the hook and skill.
+
+Mid-task: type `/usabl-check` or ask Claude to run `npx usabl check --self-check`.
+
+Confirm wiring:
+
+```
+cd ~/usabl-team/ansible-ui
+USABL_STORAGE_STATE=./.usabl-session.json usabl doctor
+```
+
+Look for `stop-hook` and `claude usabl-check skill` as **wired**.
+
+### Cursor
+
+usabl does not ship `usabl install --cursor` yet. Copy the Cursor hook template from this repo into
+your ansible-ui clone:
+
+```
+cd ~/usabl-team/ansible-ui
+mkdir -p .cursor/hooks
+cp ~/usabl-team/usabl/docs/demo/cursor/hooks.json .cursor/hooks.json
+cp ~/usabl-team/usabl/docs/demo/cursor/hooks/usabl-stop.sh .cursor/hooks/usabl-stop.sh
+chmod +x .cursor/hooks/usabl-stop.sh
+```
+
+The `stop` hook runs `npx usabl stop-hook` with the same gate as Claude Code. Set
+`USABL_STORAGE_STATE=./.usabl-session.json` in your shell profile or prefix it when you open Cursor.
+
+Mid-task in Cursor: ask the agent to run:
+
+```
+USABL_STORAGE_STATE=./.usabl-session.json npx usabl check --self-check
+```
+
+That command is advisory. It does not verify work. Only `usabl check` (and the Stop hook) can block a
+regression.
+
+Optional: add a project rule under `.cursor/rules/` reminding the agent to run `--self-check` after
+UI edits and never call work verified from self-check alone.
+
+---
+
+## Test ansible-ui as a brownfield app
+
+ansible-ui is a real, login-gated monorepo. usabl treats it as **brownfield**: existing accessibility
+debt is expected until you baseline it. The gate then blocks only **new** barriers on touched surfaces.
+
+### What to expect on first run
+
+| First `usabl check` | Meaning |
+| --- | --- |
+| `regression` | Real findings, no evidence floor yet. Normal for brownfield. |
+| `not_covered` | A changed file mapped to no screen, or Chromium/session/tunnel missing. |
+| `approval required` | You edited guarded policy (`usabl.config.json`, routes, evidence). |
+
+Do **not** run `usabl init` on ansible-ui. The fork already ships `usabl.config.json` and
+`usabl.routes.json`.
+
+### Brownfield loop (recommended order)
+
+**1. Baseline the floor** (once per team, after setup works)
+
+```
+cd ~/usabl-team/ansible-ui
+USABL_STORAGE_STATE=./.usabl-session.json usabl baseline
+```
+
+Review `.usabl-evidence.json`, commit through a PR in the ansible-ui fork. After merge, carried debt
+no longer gates; only new barriers do.
+
+**2. Map fixes before you chase axe noise**
+
+If changed files show `not_covered`, fix the route map first:
+
+```
+usabl drift routes
+```
+
+Add missing surfaces to `usabl.config.json` through a PR. Each map edit is guarded.
+
+**3. Daily dev loop**
+
+With dev server, tunnel, and session running:
+
+```
+# advisory mid-task (assistant or you)
+USABL_STORAGE_STATE=./.usabl-session.json npx usabl check --self-check
+
+# gate before you call UI work done
+USABL_STORAGE_STATE=./.usabl-session.json usabl check
+```
+
+Touch a `platform/**/*.tsx` or `frontend/**/*.tsx` file in your branch, then run `usabl check` to scan
+the surfaces that file maps to.
+
+**4. Pay down debt**
+
+When you fix a floored finding, run a full scan and prune paid-down identities:
+
+```
+USABL_STORAGE_STATE=./.usabl-session.json usabl check
+USABL_STORAGE_STATE=./.usabl-session.json usabl floor prune
+```
+
+Merge the `.usabl-evidence.json` diff with your fix PR so the floor ratchets down.
+
+### Rules for this test subject
+
+- Work only in the **`usabl-dev/ansible-ui` fork**. Never push to `ansible/ansible-ui`.
+- Never commit `.usabl-session.json`, the SSH private key, or raw scan output that names product
+  findings you should not publish.
+- Keep tunnel + dev server + `USABL_STORAGE_STATE` exported for every scan.
+- A login-gated page scanned signed-out measures the login screen, not the product. Re-mint the session
+  if you change dev server port.
+
+### Sanity checks
+
+```
+USABL_STORAGE_STATE=./.usabl-session.json usabl doctor
+USABL_STORAGE_STATE=./.usabl-session.json usabl check
+```
+
+Doctor should show config, session, and Chromium as wired. Check should return a verdict (any of the
+four), not a silent pass on zero work.
+
+---
+
+## Wire the Vite overlay
+
+The overlay is an **advisory** badge inside the running dev server. It shows findings live while you
+code but never changes exit codes.
+
+```
+cd ~/usabl-team/ansible-ui
+usabl install --overlay
+```
+
+If `platform/vite.config.ts` already exists (it does in ansible-ui), the command refuses to clobber it
+and prints the exact two lines to add by hand:
+
+```ts
+import { usablVitePluginFromConfig } from 'usabl/vite'
+// then inside defineConfig plugins array:
+usablVitePluginFromConfig({ cwd: import.meta.dirname }),
+```
+
+Restart the dev server after adding the plugin. The badge appears at the bottom of every page in dev.
+Hide it with `?usabl=off` in the URL. Automated browser sessions (Playwright, usabl check) skip it
+automatically.
+
+---
+
+## Wire CI and the PR gate
+
+The CI gate is a GitHub Actions workflow that scans every PR and posts a sticky comment with the
+verdict and findings. It is the merge-time surface.
+
+### Install the workflow
+
+```
+cd ~/usabl-team/ansible-ui
+usabl install --ci
+```
+
+This writes `.github/workflows/usabl-gate.yml` with two jobs:
+
+| Job | Purpose |
+| --- | --- |
+| `gate-comment` | Checks out PR head, runs `usabl check --ci --trusted-ref origin/<base>`, posts a sticky PR comment with the Result. Runs only on `pull_request` events so fork head code never sees secrets. |
+| `usabl-policy` | The **required status check**. Reads only git objects from head, evaluates policy against the base branch. Never checks out PR head code. |
+
+**Before the gate can run**, replace `PIN_TO_A_TRUSTED_USABL_COMMIT` (appears twice) with a full
+40-character SHA from the usabl repo that you trust. This pin stops the gate from running an
+attacker-supplied engine.
+
+You also need a `USABL_ENGINE_CHECKOUT_TOKEN` repo secret that can clone `usabl-dev/usabl`. Ask Ed
+for a PAT, or use a fine-grained GitHub App token scoped to that repo.
+
+### Turn on branch protection
+
+After the workflow runs green once:
+
+1. Go to **Settings > Branches > Branch protection rules** for `devel` (or `main`).
+2. Check **Require status checks to pass before merging**.
+3. Add `usabl-policy` as a required check.
+4. Confirm with:
+
+```
+usabl install --branch-rule
+```
+
+That target is **read-only**: it checks the GitHub API and writes nothing. It reports whether the
+required check is wired.
+
+### What the PR comment looks like
+
+Every PR gets a sticky bot comment that starts with:
+
+```
+## usabl report: VERIFIED
+```
+
+or `REGRESSION`, `NOT COVERED`, `APPROVAL REQUIRED`, or `IDLE`.
+
+The comment includes:
+- **Conformance summary** - deterministic new/carried/waived/fixed counts, judged counts, unresolved
+  files, gaps, and whether the change is blocked.
+- **Receipt** (verified only) - `sourceTree`, `policyHash`, `runnerVersion`, `mintedAt`. This receipt
+  is bound to the exact code, policy, and engine. Change any of them and it stops verifying.
+- **Findings** - each new or carried finding with rule, impact, surface, and page-derived help text
+  (neutralized for terminal safety).
+- **Model suggestions** - grouped under "Model suggestions (not blocking)" when present. These are
+  advisory and never decide a verdict.
+
+The `gate-comment` job updates the same comment on each push (it finds the existing one by a hidden
+HTML marker). You will never get comment spam.
+
+### How CI verdicts map to the merge gate
+
+| Verdict | `gate-comment` job | `usabl-policy` check | Merge |
+| --- | --- | --- | --- |
+| `verified` | Green, posts receipt | Green | Allowed |
+| `regression` | Red, posts findings | Red | Blocked (if required) |
+| `not_covered` | Red, posts disclosure | Red | Blocked |
+| `approval_required` | Red, names changed policy | Red | Blocked until CODEOWNERS approve |
+
+The `usabl-policy` check is the one you make required in branch protection. `gate-comment` posts the
+readable result but is not required by itself.
+
+---
+
+## Push a fix and see the whole loop
+
+This is the day-one workflow for fixing an accessibility barrier on a PR.
+
+### 1. Branch
+
+```
+cd ~/usabl-team/ansible-ui
+git checkout -b fix/a11y-missing-label
+```
+
+### 2. Make the change
+
+Edit a `.tsx` file (e.g. add an `aria-label`). The overlay shows findings live if wired.
+
+### 3. Self-check (advisory)
+
+```
+USABL_STORAGE_STATE=./.usabl-session.json npx usabl check --self-check
+```
+
+This exits 0 always. It tells you the verdict mid-task without blocking. If you are in Claude Code,
+type `/usabl-check`. In Cursor, ask the agent to run the command above.
+
+### 4. Gate check (local)
+
+```
+USABL_STORAGE_STATE=./.usabl-session.json usabl check
+```
+
+This is the real gate. `verified` means the fix worked. `regression` means new barriers remain.
+Fix them before pushing.
+
+### 5. Commit and push
+
+```
+git add -p
+git commit -m "fix(a11y): add missing label to ..."
+git push origin fix/a11y-missing-label
+```
+
+### 6. Open a PR
+
+```
+gh pr create --base devel --fill
+```
+
+CI runs `usabl-gate`. Watch for:
+- The sticky bot comment with the verdict.
+- The `usabl-policy` check (green or red) in the PR checks tab.
+
+### 7. Interpret the result
+
+- **VERIFIED** with a receipt: merge when ready.
+- **REGRESSION**: the comment lists each new finding with rule, impact, and repair. Fix locally, push,
+  CI re-runs.
+- **NOT COVERED**: a changed file maps to no screen, or the scan could not run. Check
+  `usabl.config.json` surfaces and `usabl drift routes`.
+- **APPROVAL REQUIRED**: you touched a guarded file (`usabl.config.json`, evidence, waivers). A
+  CODEOWNERS approval is required before merge.
+
+### 8. Pay down debt (optional, after a fix lands)
+
+```
+USABL_STORAGE_STATE=./.usabl-session.json usabl floor prune
+```
+
+Commit the `.usabl-evidence.json` diff alongside the fix PR so the floor ratchets down.
+
+---
+
+## All surfaces at a glance
+
+| Surface | Command | Blocking? | When it runs |
+| --- | --- | --- | --- |
+| CLI | `usabl check` | Yes (exit code) | You run it |
+| Self-check | `usabl check --self-check` | No (always exit 0) | You or the assistant runs it mid-task |
+| Stop hook (Claude) | `npx usabl stop-hook` | Yes (stdout decision) | Claude tries to finish a turn |
+| Stop hook (Cursor) | `.cursor/hooks/usabl-stop.sh` | Yes (hook exit) | Agent completes a turn |
+| Vite overlay | `usabl install --overlay` | No (advisory badge) | Dev server is running |
+| PR comment | `usabl comment` (via CI) | No (informational) | Every PR push |
+| CI gate | `usabl-policy` (via CI) | Yes (required check) | Every PR push + review |
+| Doctor | `usabl doctor` | No (read-only report) | You run it to diagnose setup |
+| Baseline | `usabl baseline` | No (drafts evidence floor) | Once, at brownfield adoption |
+| Floor prune | `usabl floor prune` | No (removes paid debt) | After fixing a floored finding |
+
+---
+
+## Manual setup (reference)
+
+Use these if the script fails or you want to understand each step.
+
+### 0. Prerequisites
 
 - Node **22** or newer, and git. (`usabl` requires Node 22; ansible-ui requires Node 20+.)
 - Access to the usabl-dev org on GitHub
@@ -63,7 +428,7 @@ ssh-keygen -lf keys/rht_classroom.rsa.pub    # run inside your ansible-ui clone
 ```
 Both must print the same `SHA256:` fingerprint. See `keys/README.md` in the fork.
 
-## 1. Get the code
+### 1. Get the code
 
 The ansible-ui fork (public, in usabl-dev). This repo ships `usabl.config.json`,
 `scripts/aap-login.mjs`, `scripts/open-aap-tunnel.sh`, and `keys/rht_classroom.rsa.pub`:
@@ -98,7 +463,7 @@ usabl doctor
 
 The fork `.gitignore` already excludes `.usabl-session.json`. Do not commit session files.
 
-## 2. Open the tunnel to the lab
+### 2. Open the tunnel to the lab
 
 The AAP backend runs in the lab, not on your machine. From the ansible-ui clone:
 ```
@@ -122,7 +487,7 @@ curl -sk -o /dev/null -w "%{http_code}\n" https://127.0.0.1:8443/api/
 If the hostname check fails but `127.0.0.1` works, add the `/etc/hosts` line. Every teammate runs
 their own tunnel on local port 8443; they do not conflict.
 
-## 3. Start the ansible-ui dev server
+### 3. Start the ansible-ui dev server
 
 `PLATFORM_SERVER` points the app at the tunnel. `DEV_SERVER_PROTOCOL=http` is required, because the
 default is https and usabl's browser does not accept the dev server's self-signed cert.
@@ -132,7 +497,7 @@ PLATFORM_SERVER=https://aap.lab.example.com:8443/ DEV_SERVER_PROTOCOL=http npm s
 ```
 This serves the app on http://localhost:4100. Leave it running in its own terminal.
 
-## 4. Log in and save a session
+### 4. Log in and save a session
 
 usabl scans as a logged-in user. Mint a session with the script in the fork:
 ```
@@ -147,7 +512,7 @@ node scripts/aap-login.mjs
 `localhost:4100` will not authenticate `localhost:4200`. If you scan a different port, re-mint against
 that port, or every page loads logged-out and renders nothing.
 
-## 5. Run usabl
+### 5. Run usabl
 
 usabl reads its target from `usabl.config.json` (already in the fork). It reads your session from the
 `USABL_STORAGE_STATE` environment variable on purpose, because the file holds live tokens.
@@ -161,6 +526,8 @@ floor. `usabl doctor` diagnoses setup problems.
 
 **Do not run `usabl init` on ansible-ui.** The monorepo layout drafts the wrong dev URL and empty
 surfaces. Use the committed `usabl.config.json`.
+
+---
 
 ## Safety rules
 
