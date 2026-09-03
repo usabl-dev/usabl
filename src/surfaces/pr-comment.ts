@@ -12,6 +12,7 @@ import type {
 } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { computeConformance } from '../output/conformance.js';
+import { fixOrAbsence } from '../output/disclosure.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 
 const COMMENT_MARKER = '<!-- usabl-report -->';
@@ -108,7 +109,9 @@ function formatFinding(finding: Finding): string[] {
   // Docs findings speak the author's markup: a source line and a syntax-aware fix. App findings
   // have no docsSource and fall back to finding.fix.
   const source = finding.docsSource;
-  const fix = neutralize(source ? source.fix : finding.fix);
+  // Most axe rules carry no curated note, so an absent fix is a real and common state. It is
+  // stated rather than left blank, because a blank reads as a rendering fault.
+  const fix = neutralize(fixOrAbsence(finding));
   const why = neutralize(finding.why);
   const framed = frameUntrusted(finding.whatUserExperiences).split('\n');
   return [
