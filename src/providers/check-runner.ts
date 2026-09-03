@@ -15,6 +15,7 @@ import type {
   StepRunner,
   UsablConfig,
 } from '../contracts/index.js';
+import { attachDomSourceToDrafts } from './dom-source.js';
 import { measureReachability } from './reachability.js';
 import { runProviders } from './index.js';
 
@@ -109,6 +110,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
           deps.allowedCapabilities,
         );
+        const drafts = await attachDomSourceToDrafts(page, providerResult.drafts);
 
         // Measure reachability after the walk and providers have run, while the page is still open.
         // This is the only place the live DOM exists; markUnseenScreens runs later over collected
@@ -119,7 +121,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           screenId: screen.id,
           url: screen.url,
           stops,
-          drafts: providerResult.drafts,
+          drafts,
           gaps: providerResult.gaps,
           applicability: providerResult.applicability,
           reachedSelectorPresent,

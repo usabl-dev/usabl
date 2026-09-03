@@ -3,9 +3,10 @@
  * This unit renders operator-facing text only.
  * It must never mutate Result, mint a verdict, or pass through untrusted text unsanitized.
  */
-import type { DocsSourceMapping, Result } from '../contracts/index.js';
+import type { Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { discloseGaps, fixOrAbsence, gapDetail, gapHeadline } from './disclosure.js';
+import { formatAppSourceLocation, formatDocsSourceLocation } from './source-location.js';
 
 /**
  * CLI summary output for a Result.
@@ -28,22 +29,6 @@ const HEADLINE: Record<string, string> = {
  */
 export function neutralizePrintedText(text: string): string {
   return neutralize(text);
-}
-
-/**
- * The source location line for a docs finding: the file plus the author's construct when known,
- * the file plus the exact line when the renderer supplied one, otherwise the file alone. Kept raw
- * here; the caller neutralizes before printing.
- */
-function sourceLocation(source: DocsSourceMapping): string {
-  const file = source.file ?? '';
-  if (source.construct !== null) {
-    return `${file} -> ${source.construct}`;
-  }
-  if (source.line !== null) {
-    return `${file}:${source.line}`;
-  }
-  return file;
 }
 
 /**
@@ -100,14 +85,25 @@ export function formatSummary(result: Result): string {
     // A docs finding carries a source mapping and a syntax-aware fix; prefer both so the author
     // reads their own markup, not the DOM. App findings have no docsSource and keep finding.fix.
     const source = f.docsSource;
+    const appSource = f.appSource;
     const fix = neutralizePrintedText(fixOrAbsence(f));
     lines.push(
       `  [${f.status}] ${f.screenId} · ${f.layer}/${rule} (${f.severity}) - ${whatUserExperiences}`,
     );
     if (source && source.file) {
-      lines.push(`      source: ${neutralizePrintedText(sourceLocation(source))}`);
+      lines.push(`      source: ${neutralizePrintedText(formatDocsSourceLocation(source))}`);
       if (source.candidates.length > 1) {
         lines.push(`      candidates: ${source.candidates.map(neutralizePrintedText).join(', ')}`);
+      }
+    } else if (appSource) {
+      if (appSource.file) {
+        lines.push(`      source: ${neutralizePrintedText(formatAppSourceLocation(appSource))}`);
+      }
+      if (
+        appSource.candidates.length > 0 &&
+        (appSource.file === null || appSource.candidates.length > 1)
+      ) {
+        lines.push(`      candidates: ${appSource.candidates.map(neutralizePrintedText).join(', ')}`);
       }
     }
     // Always printed. Most axe rules carry no curated note, so an absent fix is a common and
