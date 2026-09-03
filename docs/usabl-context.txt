@@ -1,0 +1,334 @@
+usabl-context
+=============
+Written 2026-09-03 from a scan of this checkout (usabl-dev/usabl @ main,
+v0.2.1 team preview) plus GitHub org/repo metadata this agent can see.
+This is an understanding dump, not product ground truth. When this file
+and the source disagree, the source wins. docs/ground-truth.md is the
+project's own design document.
+
+1. Workspace and the three repositories
+---------------------------------------
+The orientation page names three jobs, three repos:
+
+  usabl
+    Proof engine. Providers, coverage, gate, receipts, operator surfaces,
+    engine tests, and the product documentation that ships with this
+    package. Primary check: npm run check. This is the only repo checked
+    out in /workspace.
+
+  usabl-app
+    PatternFly 6 fixture application. Demo scenarios, overlay, inspector,
+    and the live hero loop (demo:break / demo:repair). Primary checks:
+    npm test, npm run build. Referenced throughout README and guides as
+    https://github.com/usabl-dev/usabl-app. This agent could not clone it
+    (GitHub: repository not found with the run token).
+
+  usabl-plans
+    Product decisions, phased architecture, team roles, quality bar,
+    contest record, human-tasks.md. Plans do not ship in the npm package.
+    Also not cloneable with this token.
+
+Org repos visible to this token:
+  usabl-dev/usabl (private) — this engine
+  usabl-dev/ansible-ui (public fork of ansible/ansible-ui) — brownfield /
+    PatternFly host the demo docs talk about, not one of the three named
+    product repos.
+
+Contribution routing:
+  Change evidence, gate, receipt, surfaces, engine tests, product docs
+    -> usabl
+  Change fixture behavior, demo scenarios, overlay-in-app, app tests
+    -> usabl-app
+  Change agreed plans, ownership, decisions, history
+    -> usabl-plans
+  Ask a human before changing product language, verdict meaning, security
+  policy, or architecture.
+
+2. Product in one paragraph
+---------------------------
+usabl is an accessibility proof engine for product development. It does
+not grade "is this app accessible." It answers: did this change add new
+machine-checkable accessibility barriers on the surfaces it touched?
+Scope is WCAG 2.2 AA-aligned machine checks. Screen-reader announcement
+(voicing) is the differentiating layer and is built but not in the gate
+until a later version (planned v0.3.0). Tagline: usable by default.
+Supporting line: don't ship until it's usabl. License Apache-2.0.
+Node >= 22. Package is ESM, bin `usabl` -> dist/cli.js. Not published
+to a registry in this preview; build from source.
+
+The load-bearing claim: the AI can suggest fixes; it does not get to
+grade its own work. Only the gate mints a verdict. Providers return
+Drafts. Surfaces project or enforce a Result. Receipts bind a verified
+run to the exact tree, committed policy, runner version, and scanner
+versions.
+
+3. Four verdicts (and idle, which is not a fifth)
+-------------------------------------------------
+Every usabl check ends in exactly one of:
+
+  verified            No new gating barriers on touched surfaces, coverage
+                      complete. A receipt is minted. Exit 0.
+  regression          A new machine-checkable barrier appeared. Blocked.
+                      Exit 1.
+  not_covered         There was something to prove and usabl could not
+                      check a touched surface. Honest uncertainty, not a
+                      pass. Exit 3.
+  approval_required   The change edits policy (guarded paths / CODEOWNERS
+                      trust). A human code-owner must decide. Exit 2.
+                      Accessibility findings still ride along so a mixed
+                      policy+UI PR is not silent on a11y.
+
+Idle is not a verdict:
+  verdict: null, exit 0, coverage.nothingToCheck true, summary
+  "nothing to check". No UI-touching files (and no docs-manifest pages)
+  changed.
+
+Fail-open crash:
+  verdict: null, exit 4, nothingToCheck false. Distinguished from idle
+  by coverage.nothingToCheck, never by the null itself. Stop hook always
+  exits 0 so a wedged hook fails open with disclosure rather than
+  trapping the assistant.
+
+Accessibility fields never carry approval_required. Result splits:
+  verdict / exitCode                 overall (may be approval_required)
+  accessibilityVerdict / accessibilityExitCode
+                                     scan outcome only (0|1|3|4)
+
+4. End-to-end run (what actually happens)
+-----------------------------------------
+Entry: CLI `usabl check` (default command) -> src/cli.ts -> run() in
+src/run.ts. run() sequences I/O. It never decides a verdict.
+
+  1. Git status (or caller-supplied changedFiles).
+  2. Trust guard (src/trust/guard.ts). Always-guarded:
+       usabl.config.json
+       .usabl-evidence.json
+       .usabl-waivers.json
+       usabl.docs.json
+       usabl.routes.json
+     plus config.guardedPaths (this repo also guards src/gate/index.ts
+     and src/trust/guard.ts). Diverged guarded bytes => later
+     approval_required. Working-tree floor/waiver bytes that diverged
+     are not parsed (a crash would fail open instead of blocking).
+  3. Coverage planner (src/coverage/planner.ts) maps changed UI files to
+     screens via usabl.config.json (uiFileGlobs, discovery.routerFile,
+     surfaces[], wideBlastGlobs). Docs planner (docs-manifest +
+     docs-planner) adds documentation pages from usabl.docs.json when
+     present. One run, one verdict over app + docs.
+  4. Design-intake requirements load (fail closed on malformed bundles).
+  5. For each affected surface, deps.checkRunner.scan (Playwright +
+     providers). Unseen screens (never reached / reachedWhen selector
+     missing) are stripped of document-level false findings before the
+     gate. If every screen is unseen: no verdict, exit 4.
+  6. Floor (.usabl-evidence.json, version 2) and waivers
+     (.usabl-waivers.json) are read from the trusted ref when CI passes
+     trustedRef, else from the working tree only if policy is trusted.
+  7. gate() in src/gate/index.ts:
+       - identity: name / structural / count (src/primitives/identity.ts)
+       - collapse cross-layer (axe + PatternFly) on the same identity
+       - compare counts against the floor for every identity basis
+         (v2 floor; a v1 floor is a coverage gap -> not_covered)
+       - status: new | carried | fixed | waived
+       - only evidenceClass === 'deterministic' gates
+       - waived and fixed stay visible but do not block and do not mint
+         verified
+       - coverageIncomplete -> not_covered
+       - new fail -> regression
+       - else verified
+       - if guarded paths diverged: wrap as approval_required while
+         keeping accessibilityVerdict
+  8. If verified, mint receipt (src/evidence/receipt.ts) bound to tree,
+     policy, runnerVersion, scanner versions.
+  9. Presentation-only source maps attached after the gate (app:
+     src/app/source-map.ts; docs: src/docs/source-map.ts). They never
+     change identity, floor, or verdict.
+
+Sampling is forbidden: every affected surface is scanned, or the run
+does not claim verified.
+
+5. Scan layers (providers)
+--------------------------
+Seam: Provider returns Draft[] (or {drafts, applicability, gaps}).
+src/providers/index.ts runs them. Page-mutating providers run last.
+Denied capabilities and provider failures become CoverageGaps, not
+silent skips.
+
+Layers shipped:
+
+  axe-core (@axe-core/playwright 4.13.0)
+    General WCAG-oriented rules.
+
+  PatternFly rulepack (src/providers/rulepack/)
+    Composition rules keyed on markup PatternFly actually emits, not
+    BEM children. Examples in this tree:
+      pf-icon-button-name
+      pf-kebab-expanded-state
+      pf-row-action-name-unique
+      pf-table-header-assoc
+      pf-toast-live-region
+      pf-toolbar-labeled-when-repeated
+    Checks are isolated so one check failure does not drop the rest of
+    the provider (PR #199).
+
+  keyboard-walk (src/providers/keyboard-walk/)
+    Pattern-aware keyboard and announcement walk. Must run on a real
+    document, stop at document body.
+
+  docs-rulepack
+    Heading-order and related docs rules, profile-gated so they do not
+    bleed onto app screens.
+
+Applicability (passed / failed / inapplicable / incomplete per rule per
+screen) is recorded and never judged. Silence of a rule is not a pass.
+
+Voicing (src/voicing/) and fleet-insights (src/measure/) are exported
+and built. Neither is on the gate path today. Fleet-insights aggregates
+committed findings for reporting only.
+
+6. Operator surfaces (one engine, different enforcement)
+--------------------------------------------------------
+The gate always decides. Surfaces choose whether to enforce.
+
+  CLI (usabl check)
+    Enforces by exit code. Same engine as /usabl-check.
+
+  Overlay (usabl/vite)
+    Advisory in the running app. ?usabl=off hides it. Automated browser
+    sessions skip it.
+
+  Stop hook (usabl stop-hook, usabl install --claude / --cursor)
+    Blocks the assistant from calling work done on regression,
+    not_covered, or approval_required. Always process-exits 0. Cursor
+    uses followup_message protocol (PR #194). Bypass is one-time,
+    next-stop-only, and does not verify.
+
+  CI / PR
+    Two-job model: accessibility enforce and policy enforce read a
+    Result from stdin and never re-run the gate (usabl enforce
+    accessibility|policy). Policy is read from the protected base, not
+    the PR head. usabl comment projects the Result into a sticky PR
+    comment. On GitHub Free private, required checks may be unset; CI
+    still runs and comments.
+
+  Playwright helper (usabl/playwright)
+    Same check on a live Playwright page.
+
+  Reports (usabl docs [--html])
+    Projects design-intake / transcript artifacts. Exit 0 always. Only
+    receipt-bound artifacts read as verified on the HTML page.
+
+  Mid-task self-check
+    usabl check via Bash, plus install --claude-skill and --cursor
+    writing /usabl-check. Stop still decides.
+
+Doctor (usabl doctor) is read-only: wired / missing / drifted / unknown
+per surface, including whether USABL_STORAGE_STATE is configured. It
+mints no verdict.
+
+Signed-in scans: USABL_STORAGE_STATE points at a Playwright storage
+state JSON. Composition root (deps/build) reads it once so CLI, overlay,
+and Stop hook share the session. Unreadable/non-JSON fails closed
+rather than scanning signed out. Path and contents are never printed.
+Expired sessions still scan signed out; usabl cannot tell.
+
+7. Commands (only check decides)
+--------------------------------
+  usabl check                 Gate. Default.
+  usabl init [--docs]         Draft coverage/policy from the tree. No
+                              gate, no evidence.
+  usabl baseline              Full scan; draft .usabl-evidence.json as a
+                              working-tree diff. Refuses to write a floor
+                              when coverage is incomplete (PR #197).
+  usabl install <one target>  --overlay --claude --claude-skill --cursor
+                              --ci --docs-ci --branch-rule (verify only)
+  usabl doctor                Read-only self-check.
+  usabl floor prune           Re-arm floor after a full scan so paid-down
+                              identities gate as new if they return.
+  usabl drift routes          Route manifest vs application router.
+  usabl comment               PR comment from stdin Result.
+  usabl stop-hook             Stable Stop hook entry.
+  usabl enforce a11y|policy   CI status from stdin Result.
+  usabl docs [--html]         Reports projection.
+  usabl bypass                One-time next-stop skip; not verification.
+
+8. Adoption / brownfield
+------------------------
+adoption-model.md is the sequence for an existing app: init, baseline
+(reviewed floor), install surfaces, doctor, floor prune as debt is paid,
+drift routes as the router moves. Floor is a ratchet: known issues sit
+with owners and expiry via waivers; new barriers block; the floor must
+not grow silently.
+
+This engine's own usabl.config.json points at a fixture path
+(fixtures/app/...) and appBaseUrl http://127.0.0.1:5173 — that origin is
+the companion app's Vite origin, not a hardcoded engine target.
+
+9. Honesty / trust rules this codebase treats as invariants
+-----------------------------------------------------------
+  Providers draft. Gate verdicts. Surfaces project.
+  Verified, not_covered, and merely observed stay apart in words, never
+    by color. No compliance claim.
+  Untrusted page text is framed item-by-item so a forged close marker
+    cannot escape the rest of a Stop-hook message (PR #175).
+  CODEOWNERS + guarded paths make policy self-grading impossible.
+  Receipt re-verification fails if tree, policy, runner, or scanners
+    change.
+  Conventional Commits, TDD (failing test first), no AI Co-authored-by
+    trailers, three lanes (implement / review / security review). The
+    lane that writes a change does not review it or grade it.
+
+10. Tests and CI in this repo
+-----------------------------
+vitest, tsup build, package smoke, typecheck. npm run check runs all
+four. Pre-commit: hygiene, gitleaks, YAML/JSON, actionlint, conventional
+commits. Workflows: usabl.yml (engine CI), usabl-gate.yml (the two-job
+gate the engine ships), pages.yml (GitHub Pages for team-orientation,
+how-usabl-works, code-walkthrough, product deck).
+
+11. Issues #181, #182, #100 — access status
+-------------------------------------------
+Requested: work issues https://github.com/usabl-dev/usabl/issues/181
+#182 and #100.
+
+This cloud-agent GitHub token can list pull requests and clone usabl.
+It cannot read Issues (REST 403 "Resource not accessible by integration",
+GraphQL FORBIDDEN on repository.issues, gh search issues empty).
+Pulls 181 / 182 / 100 do not exist (REST 404). GitHub issue and PR
+numbers share a sequence; nearby closed PRs are 183, 185, 187, 199, so
+181 and 182 are almost certainly open Issues, not PRs. Issue 100 is
+older than the feat/docs wave around PR 113–127.
+
+open_issues_count on the repo was 39 at scan time, including a few
+open dependabot PRs (189, 190, 191), so there is a real issue tracker
+this agent cannot read.
+
+Companion repos usabl-app and usabl-plans are not visible to this token,
+so fixture-side or plan-side work for those issues cannot be done here
+until access is granted.
+
+12. What I will do next on those issues
+---------------------------------------
+  If issue bodies become readable: implement in the repo each issue
+    names (usabl vs usabl-app vs usabl-plans), failing test first,
+    Conventional Commit, PR against main.
+  Until then: this file is the working understanding of the engine so
+    implementation can start the moment the issue text is available,
+    without re-deriving the invariants above.
+
+13. Source map (where to look)
+------------------------------
+  src/contracts/index.ts     vocabulary (Draft, Finding, Result, Deps)
+  src/run.ts                 sequencer
+  src/gate/index.ts          only verdict constructor
+  src/coverage/*             app + docs coverage, completeness, unseen
+  src/providers/*            axe, rulepack, keyboard-walk, docs-rulepack
+  src/trust/guard.ts         policy drift
+  src/evidence/*             floor + receipt
+  src/surfaces/*             CLI, overlay, stop-hook, PR, playwright, docs
+  src/install/*              adoption drafts
+  src/init/*                 init + docs init
+  src/voicing/*              announcement preview (not gated)
+  src/measure/*              fleet-insights, identity-stability harness
+  docs/ground-truth.md       design
+  docs/team-orientation.html three-repo map and hero loop
+  CONTRIBUTING.md            how work is done
