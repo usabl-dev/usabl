@@ -64,12 +64,15 @@ First time on the evidence floor? Run `usabl baseline` before you treat failures
 
 ---
 
-## Wire Claude Code and Cursor
+## Wire your editor
 
-Run these from the **ansible-ui** clone after setup. Each `usabl install` command wires one surface
-and writes a draft for review.
+The fork already ships Claude Code and Cursor integration files. When you clone, the hooks and
+commands are ready. If they are missing or you need to regenerate them, run the install commands
+below from the ansible-ui clone.
 
 ### Claude Code
+
+Already wired in the fork. If missing, run:
 
 ```
 cd ~/usabl-team/ansible-ui
@@ -78,51 +81,42 @@ usabl install --claude-skill
 ```
 
 - `--claude` wires the **Stop hook** (`.claude/settings.json`) so Claude cannot finish while the gate
-  is red. It runs `npx usabl stop-hook`.
-- `--claude-skill` writes the **`/usabl-check` skill** (`.claude/skills/usabl-check/SKILL.md`) for an
-  advisory mid-task scan via `npx usabl check --self-check`.
-
-Review the generated files, then commit them on your branch in the ansible-ui fork. Start Claude Code
-from the ansible-ui root so it picks up the hook and skill.
+  is red.
+- `--claude-skill` writes the **`/usabl-check` skill** for advisory mid-task scans.
 
 Mid-task: type `/usabl-check` or ask Claude to run `npx usabl check --self-check`.
 
-Confirm wiring:
+### Cursor
+
+Already wired in the fork. If missing, run:
+
+```
+cd ~/usabl-team/ansible-ui
+usabl install --cursor
+chmod +x .cursor/hooks/usabl-stop.sh
+```
+
+This writes four files:
+- `.cursor/hooks.json` - declares the `stop` event with a loop limit
+- `.cursor/hooks/usabl-stop.sh` - pipes stdin through `npx usabl stop-hook --cursor`
+- `.cursor/commands/usabl-check.md` - the `/usabl-check` slash command
+- `.cursor/rules/usabl-accessibility.mdc` - a rule reminding the agent to self-check after UI edits
+
+The stop hook uses Cursor's `followup_message` protocol to loop the agent until the gate is green
+(up to 3 times). Set `USABL_STORAGE_STATE=./.usabl-session.json` in your shell profile or prefix it
+when you open Cursor.
+
+Mid-task: type `/usabl-check` or ask the agent to run `npx usabl check --self-check`. That command
+is advisory. Only `usabl check` (and the stop hook) can block a regression.
+
+### Confirm wiring
 
 ```
 cd ~/usabl-team/ansible-ui
 USABL_STORAGE_STATE=./.usabl-session.json usabl doctor
 ```
 
-Look for `stop-hook` and `claude usabl-check skill` as **wired**.
-
-### Cursor
-
-usabl does not ship `usabl install --cursor` yet. Copy the Cursor hook template from this repo into
-your ansible-ui clone:
-
-```
-cd ~/usabl-team/ansible-ui
-mkdir -p .cursor/hooks
-cp ~/usabl-team/usabl/docs/demo/cursor/hooks.json .cursor/hooks.json
-cp ~/usabl-team/usabl/docs/demo/cursor/hooks/usabl-stop.sh .cursor/hooks/usabl-stop.sh
-chmod +x .cursor/hooks/usabl-stop.sh
-```
-
-The `stop` hook runs `npx usabl stop-hook` with the same gate as Claude Code. Set
-`USABL_STORAGE_STATE=./.usabl-session.json` in your shell profile or prefix it when you open Cursor.
-
-Mid-task in Cursor: ask the agent to run:
-
-```
-USABL_STORAGE_STATE=./.usabl-session.json npx usabl check --self-check
-```
-
-That command is advisory. It does not verify work. Only `usabl check` (and the Stop hook) can block a
-regression.
-
-Optional: add a project rule under `.cursor/rules/` reminding the agent to run `--self-check` after
-UI edits and never call work verified from self-check alone.
+Look for `stop-hook`, `claude usabl-check skill`, and `cursor stop hook + assistant` as **wired**.
 
 ---
 
@@ -144,15 +138,11 @@ Do **not** run `usabl init` on ansible-ui. The fork already ships `usabl.config.
 
 ### Brownfield loop (recommended order)
 
-**1. Baseline the floor** (once per team, after setup works)
+**1. Baseline the floor** (already done - Ed committed `.usabl-evidence.json` to the fork)
 
-```
-cd ~/usabl-team/ansible-ui
-USABL_STORAGE_STATE=./.usabl-session.json usabl baseline
-```
-
-Review `.usabl-evidence.json`, commit through a PR in the ansible-ui fork. After merge, carried debt
-no longer gates; only new barriers do.
+The baseline records existing accessibility debt so it does not block your PRs. Carried debt no
+longer gates; only **new** barriers do. You do not need to run `usabl baseline` unless the floor is
+missing or you are resetting it.
 
 **2. Map fixes before you chase axe noise**
 
@@ -211,18 +201,18 @@ four), not a silent pass on zero work.
 
 ---
 
-## Wire the Vite overlay
+## Surfaces already wired in the fork
 
-The overlay is an **advisory** badge inside the running dev server. It shows findings live while you
-code but never changes exit codes.
+Ed has already set up the CI gate, Vite overlay, baseline, and branch protection. You do not need to
+run the install commands below. This section explains what each surface does so you know what you are
+looking at.
 
-```
-cd ~/usabl-team/ansible-ui
-usabl install --overlay
-```
+### Vite overlay (advisory)
 
-If `platform/vite.config.ts` already exists (it does in ansible-ui), the command refuses to clobber it
-and prints the exact two lines to add by hand:
+The overlay is an advisory badge inside the running dev server. It shows findings live while you code
+but never changes exit codes. Hide it with `?usabl=off` in the URL.
+
+If it is missing, the two lines to add by hand are:
 
 ```ts
 import { usablVitePluginFromConfig } from 'usabl/vite'
@@ -230,53 +220,27 @@ import { usablVitePluginFromConfig } from 'usabl/vite'
 usablVitePluginFromConfig({ cwd: import.meta.dirname }),
 ```
 
-Restart the dev server after adding the plugin. The badge appears at the bottom of every page in dev.
-Hide it with `?usabl=off` in the URL. Automated browser sessions (Playwright, usabl check) skip it
-automatically.
+Restart the dev server after adding the plugin.
 
----
+### CI gate (blocking)
 
-## Wire CI and the PR gate
-
-The CI gate is a GitHub Actions workflow that scans every PR and posts a sticky comment with the
-verdict and findings. It is the merge-time surface.
-
-### Install the workflow
-
-```
-cd ~/usabl-team/ansible-ui
-usabl install --ci
-```
-
-This writes `.github/workflows/usabl-gate.yml` with two jobs:
+`.github/workflows/usabl-gate.yml` runs on every PR with two jobs:
 
 | Job | Purpose |
 | --- | --- |
 | `gate-comment` | Checks out PR head, runs `usabl check --ci --trusted-ref origin/<base>`, posts a sticky PR comment with the Result. Runs only on `pull_request` events so fork head code never sees secrets. |
 | `usabl-policy` | The **required status check**. Reads only git objects from head, evaluates policy against the base branch. Never checks out PR head code. |
 
-**Before the gate can run**, replace `PIN_TO_A_TRUSTED_USABL_COMMIT` (appears twice) with a full
-40-character SHA from the usabl repo that you trust. This pin stops the gate from running an
-attacker-supplied engine.
+The workflow is already pinned to a trusted usabl commit and `USABL_ENGINE_CHECKOUT_TOKEN` is set as
+a repo secret. Branch protection requires the `usabl-policy` check to pass before merge.
 
-You also need a `USABL_ENGINE_CHECKOUT_TOKEN` repo secret that can clone `usabl-dev/usabl`. Ask Ed
-for a PAT, or use a fine-grained GitHub App token scoped to that repo.
-
-### Turn on branch protection
-
-After the workflow runs green once:
-
-1. Go to **Settings > Branches > Branch protection rules** for `devel` (or `main`).
-2. Check **Require status checks to pass before merging**.
-3. Add `usabl-policy` as a required check.
-4. Confirm with:
+You can verify the branch rule is active:
 
 ```
 usabl install --branch-rule
 ```
 
-That target is **read-only**: it checks the GitHub API and writes nothing. It reports whether the
-required check is wired.
+That target is **read-only**: it checks the GitHub API and writes nothing.
 
 ### What the PR comment looks like
 
@@ -393,7 +357,7 @@ Commit the `.usabl-evidence.json` diff alongside the fix PR so the floor ratchet
 | CLI | `usabl check` | Yes (exit code) | You run it |
 | Self-check | `usabl check --self-check` | No (always exit 0) | You or the assistant runs it mid-task |
 | Stop hook (Claude) | `npx usabl stop-hook` | Yes (stdout decision) | Claude tries to finish a turn |
-| Stop hook (Cursor) | `.cursor/hooks/usabl-stop.sh` | Yes (hook exit) | Agent completes a turn |
+| Stop hook (Cursor) | `npx usabl stop-hook --cursor` | Yes (followup_message loop) | Agent completes a turn |
 | Vite overlay | `usabl install --overlay` | No (advisory badge) | Dev server is running |
 | PR comment | `usabl comment` (via CI) | No (informational) | Every PR push |
 | CI gate | `usabl-policy` (via CI) | Yes (required check) | Every PR push + review |
