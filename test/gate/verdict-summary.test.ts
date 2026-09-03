@@ -17,6 +17,7 @@ const base = {
   floor: emptyFloor,
   waivers: [],
   now: '2026-01-01T00:00:00.000Z',
+  cleanlyScannedScreens: new Set<string>(),
 };
 
 function d(over: Partial<Draft> = {}): Draft {

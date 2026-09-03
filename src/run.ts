@@ -190,7 +190,24 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       };
     }
 
-    const gated = gate({ coverage, guardDivergedPaths: policyDivergedPaths, drafts, floor, waivers, now: deps.clock() });
+    // One definition of "measured this run and clean": a scanned screen with no coverage gap. The
+    // gate uses it to decide which floored identities it may claim `fixed`, and paidDownCount below
+    // reuses the `fixed` status the gate produced, so the two cannot drift. A cleanly scanned screen
+    // with no barrier and a screen nobody scanned both produce zero drafts, which is why the gate
+    // cannot infer this from the drafts and needs it as input.
+    const cleanlyScannedScreens = new Set(
+      screens.filter((screen) => screen.gaps.length === 0).map((screen) => screen.screenId),
+    );
+
+    const gated = gate({
+      coverage,
+      guardDivergedPaths: policyDivergedPaths,
+      drafts,
+      floor,
+      waivers,
+      now: deps.clock(),
+      cleanlyScannedScreens,
+    });
 
     // Enrich docs findings so they speak the author's markup: source file, AsciiDoc construct, and a
     // syntax-aware fix. This runs after the gate on purpose. It reads source, never a verdict, and
@@ -210,16 +227,11 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
           })
         : null;
 
-    // Count previously floored barriers that this run confirms are resolved. A barrier is
-    // confirmed resolved only when its screen was scanned cleanly (no coverage gaps) AND
-    // the barrier was not observed. A gapped screen produces no drafts, so an absent barrier
-    // there is unproven (not resolved). Counting it would claim progress that did not happen.
-    const cleanlyScannedScreens = new Set(
-      screens.filter((screen) => screen.gaps.length === 0).map((screen) => screen.screenId),
-    );
-    const paidDownCount = gated.findings.filter(
-      (f) => f.status === 'fixed' && cleanlyScannedScreens.has(f.screenId),
-    ).length;
+    // Count previously floored barriers this run confirms are resolved. The gate already marks an
+    // identity `fixed` only when its screen was scanned cleanly and the barrier was not observed, so
+    // every `fixed` finding here is a confirmed pay-down. Counting the status directly keeps this on
+    // the same single definition the gate used, rather than re-deriving the cleanly-scanned filter.
+    const paidDownCount = gated.findings.filter((f) => f.status === 'fixed').length;
 
     return {
       schemaVersion: 'usabl.result.v1',

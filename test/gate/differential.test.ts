@@ -15,7 +15,16 @@ function d(over: Partial<Draft>): Draft {
     evidence: { name: { value: 'Save', source: 'ax-tree', fromTree: true } }, confidence: 'fail', ...over,
   };
 }
-const base = { guardDivergedPaths: [] as string[], waivers: [], now: '2026-01-01T00:00:00.000Z', coverage: covered };
+// clusters is the only screen these cases measure, and they measure it cleanly. Stating that here
+// is the precondition a `fixed` claim depends on: the gate marks a disappeared floor identity fixed
+// only for a screen it was told was scanned clean this run.
+const base = {
+  guardDivergedPaths: [] as string[],
+  waivers: [],
+  now: '2026-01-01T00:00:00.000Z',
+  coverage: covered,
+  cleanlyScannedScreens: new Set(['clusters']),
+};
 const find = (out: { findings: Finding[] }, rule: string) => out.findings.filter((f) => f.rule === rule);
 
 describe('gate differential', () => {
