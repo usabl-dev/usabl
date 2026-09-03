@@ -44,6 +44,7 @@ describe('parseCliArgs', () => {
       force: false,
       enforceCheck: null,
       floorSubcommand: null,
+      partial: false,
       driftSubcommand: null,
       installTarget: null,
       cursorStopHook: false,
@@ -76,6 +77,7 @@ describe('parseCliArgs', () => {
       force: false,
       enforceCheck: null,
       floorSubcommand: null,
+      partial: false,
       driftSubcommand: null,
       installTarget: null,
       cursorStopHook: false,
@@ -104,6 +106,16 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['baseline']).command).toBe('baseline');
   });
 
+  it('parses --partial for the baseline command', () => {
+    const parsed = parseCliArgs(['baseline', '--partial']);
+    expect(parsed.command).toBe('baseline');
+    expect(parsed.partial).toBe(true);
+  });
+
+  it('defaults partial to false', () => {
+    expect(parseCliArgs(['baseline']).partial).toBe(false);
+  });
+
   it('parses floor prune as the floor command', () => {
     const parsed = parseCliArgs(['floor', 'prune']);
     expect(parsed.command).toBe('floor');
@@ -130,6 +142,7 @@ describe('parseCliArgs', () => {
       force: false,
       enforceCheck: null,
       floorSubcommand: null,
+      partial: false,
       driftSubcommand: null,
       installTarget: null,
       cursorStopHook: false,

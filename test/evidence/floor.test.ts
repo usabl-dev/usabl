@@ -22,4 +22,18 @@ describe('parseEvidenceFloor', () => {
   it('rejects a version it cannot interpret', () => {
     expect(() => parseEvidenceFloor({ version: 3, entries: [] })).toThrow(/version/);
   });
+
+  it('carries a partial scope through when present', () => {
+    const parsed = parseEvidenceFloor({ version: 2, scope: 'partial', entries: [entry] });
+    expect(parsed.scope).toBe('partial');
+  });
+
+  it('leaves scope undefined for a complete floor with no scope field', () => {
+    const parsed = parseEvidenceFloor({ version: 2, entries: [entry] });
+    expect(parsed.scope).toBeUndefined();
+  });
+
+  it('rejects a scope value other than partial', () => {
+    expect(() => parseEvidenceFloor({ version: 2, scope: 'full', entries: [entry] })).toThrow(/scope/);
+  });
 });
