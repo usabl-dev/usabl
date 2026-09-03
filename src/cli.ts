@@ -338,6 +338,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       };
       const outcome = await runBaseline(deps, config, baselineFs, {
         ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
+        partial: opts.partial,
       });
       if (outcome.exitCode === 0) {
         process.stdout.write(`${outcome.message}\n`);

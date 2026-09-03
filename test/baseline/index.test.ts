@@ -51,6 +51,30 @@ function scanWith(drafts: Draft[], gaps: ScreenScan['gaps'] = []): ScreenScan {
   };
 }
 
+// A scan for an arbitrary screen id and url, so tests can hold two screens at once.
+function scanFor(
+  screenId: string,
+  url: string,
+  drafts: Draft[],
+  gaps: ScreenScan['gaps'] = [],
+): ScreenScan {
+  return {
+    screenId,
+    url,
+    stops: [],
+    drafts,
+    gaps,
+    applicability: [],
+    reachedSelectorPresent: null,
+  };
+}
+
+// A coverage gap on a screen, which makes that screen not cleanly scanned and makes the run
+// report incomplete coverage.
+const SCAN_GAP: ScreenScan['gaps'] = [
+  { ref: 'clusters', state: 'not-covered', reason: 'page rendered nothing under the session' },
+];
+
 function withPolicyFiles(
   files: Record<string, string>,
   headContents: Record<string, string> = files,
@@ -275,8 +299,10 @@ describe('runBaseline', () => {
       ...withPolicyFiles(
         {
           '.usabl-waivers.json': JSON.stringify(waivers),
+          // Version 2 so the seeded floor produces no stale-floor coverage gap. This test is about
+          // which findings enter the new floor, not about coverage completeness.
           '.usabl-evidence.json':
-            '{"version":1,"entries":[{"screenId":"clusters","layer":"axe","rule":"pf-kebab-expanded-state","elementKey":"clusters|pf-kebab-expanded-state|name:menu","identityBasis":"name","count":1}]}',
+            '{"version":2,"entries":[{"screenId":"clusters","layer":"axe","rule":"pf-kebab-expanded-state","elementKey":"clusters|pf-kebab-expanded-state|name:menu","identityBasis":"name","count":1}]}',
         },
       ),
       scans: {
@@ -431,5 +457,124 @@ describe('runBaseline', () => {
     expect(result.wrote).toBe(false);
     expect(writer.writes).toHaveLength(0);
     expect(result.message).toContain('no UI files matched');
+  });
+
+  it('refuses with exit 3 and writes nothing when the run reports a coverage gap', async () => {
+    const config = testConfig();
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({}),
+      scans: {
+        clusters: scanWith([draft()], SCAN_GAP),
+      },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const result = await runBaseline(deps, config, writer);
+
+    expect(result.exitCode).toBe(3);
+    expect(result.wrote).toBe(false);
+    expect(writer.writes).toHaveLength(0);
+    expect(result.message).toContain('coverage gaps remain');
+    expect(result.message).toContain('--partial');
+  });
+
+  it('with --partial writes only cleanly scanned screens and marks the floor partial', async () => {
+    const config = testConfig({
+      surfaces: [
+        { id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['fixtures/app/src/ClustersPage.tsx'] },
+        { id: 'reports', url: 'http://127.0.0.1:5173/reports', files: ['fixtures/app/src/ReportsPage.tsx'] },
+      ],
+    });
+    const deps = makeFakeDeps({
+      files: {
+        'usabl.config.json': '{}',
+        'fixtures/app/src/ClustersPage.tsx': 'export {};\n',
+        'fixtures/app/src/ReportsPage.tsx': 'export {};\n',
+      },
+      headContents: {
+        'usabl.config.json': '{}',
+        'fixtures/app/src/ClustersPage.tsx': 'export {};\n',
+        'fixtures/app/src/ReportsPage.tsx': 'export {};\n',
+      },
+      scans: {
+        clusters: scanFor('clusters', 'http://127.0.0.1:5173/clusters', [
+          draft({ screenId: 'clusters', rule: 'button-name', evidence: {}, elementName: null, role: null }),
+        ]),
+        reports: scanFor(
+          'reports',
+          'http://127.0.0.1:5173/reports',
+          [draft({ screenId: 'reports', rule: 'color-contrast' })],
+          [{ ref: 'reports', state: 'not-covered', reason: 'page rendered nothing under the session' }],
+        ),
+      },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const result = await runBaseline(deps, config, writer, { partial: true });
+    const raw = writer.read('.usabl-evidence.json');
+    const parsed = JSON.parse(raw ?? '') as { scope?: string; entries: Array<Record<string, unknown>> };
+
+    expect(result.exitCode).toBe(0);
+    expect(result.wrote).toBe(true);
+    expect(parsed.scope).toBe('partial');
+    expect(parsed.entries.map((e) => e['screenId'])).toEqual(['clusters']);
+    expect(result.message).toContain('partial baseline');
+    expect(result.message).toContain('clusters');
+    expect(result.message).toContain('reports');
+  });
+
+  it('with --partial refuses with exit 3 when no screen was cleanly scanned', async () => {
+    const config = testConfig();
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({}),
+      scans: {
+        clusters: scanWith([draft()], SCAN_GAP),
+      },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const result = await runBaseline(deps, config, writer, { partial: true });
+
+    expect(result.exitCode).toBe(3);
+    expect(result.wrote).toBe(false);
+    expect(writer.writes).toHaveLength(0);
+    expect(result.message).toContain('nothing was cleanly scanned');
+  });
+
+  it('a clean baseline writes no scope field, so the bytes match a complete floor', async () => {
+    const config = testConfig();
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({}),
+      scans: {
+        clusters: scanWith([draft()]),
+      },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const result = await runBaseline(deps, config, writer);
+    const raw = writer.read('.usabl-evidence.json');
+    const parsed = JSON.parse(raw ?? '') as Record<string, unknown>;
+
+    expect(result.exitCode).toBe(0);
+    expect(Object.prototype.hasOwnProperty.call(parsed, 'scope')).toBe(false);
+  });
+
+  it('with --partial on a fully clean run writes the complete floor with no scope field', async () => {
+    const config = testConfig();
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({}),
+      scans: {
+        clusters: scanWith([draft()]),
+      },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const result = await runBaseline(deps, config, writer, { partial: true });
+    const raw = writer.read('.usabl-evidence.json');
+    const parsed = JSON.parse(raw ?? '') as Record<string, unknown>;
+
+    expect(result.exitCode).toBe(0);
+    expect(result.wrote).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(parsed, 'scope')).toBe(false);
   });
 });

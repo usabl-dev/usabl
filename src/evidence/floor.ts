@@ -47,7 +47,14 @@ export function parseEvidenceFloor(value: unknown): EvidenceFloor {
   if (!Array.isArray(entriesRaw)) {
     throw new Error('evidence floor entries must be an array');
   }
+  const scope = value['scope'];
+  if (scope !== undefined && scope !== 'partial') {
+    throw new Error("evidence floor scope must be 'partial' when present");
+  }
+  const entries = entriesRaw.map((entry) => parseFloorEntry(entry));
   // The version is carried through, not normalized. Readers need it to know whether the
   // per-entry counts are observed debt (version 2) or a placeholder 1 (version 1).
-  return { version, entries: entriesRaw.map((entry) => parseFloorEntry(entry)) };
+  // Scope is optional. Absent means a complete whole-application floor, so it is left off the
+  // parsed object rather than defaulted, and no consumer changes behavior on it.
+  return scope === undefined ? { version, entries } : { version, scope, entries };
 }

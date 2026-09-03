@@ -364,32 +364,36 @@ describe('baseline against unseen screens', () => {
     'fixtures/app/src/InventoriesPage.tsx': 'export {};\n',
   };
 
-  it('writes no floor entry for an unseen screen', async () => {
+  // One screen is unseen (a body-only blank page, which becomes a coverage gap), the other two are
+  // clean. Overview contributes nothing to any floor.
+  const unseenAndCleanScans = {
+    overview: blankScreen('overview'),
+    jobs: {
+      screenId: 'jobs',
+      url: baselineConfig.surfaces[1]!.url,
+      stops: realStops('button:nth-child(1)'),
+      drafts: [draft('jobs', 'color-contrast', { elementPath: 'button', elementName: 'Save', role: 'button' })],
+      gaps: [],
+      applicability: [],
+      reachedSelectorPresent: null,
+    },
+    inventories: {
+      screenId: 'inventories',
+      url: baselineConfig.surfaces[2]!.url,
+      stops: realStops('a:nth-child(3)'),
+      drafts: [],
+      gaps: [],
+      applicability: [],
+      reachedSelectorPresent: null,
+    },
+  };
+
+  it('refuses by default when a screen is unseen, and writes nothing', async () => {
     const written: Record<string, string> = {};
     const deps = makeFakeDeps({
       files: baselineFiles,
       headContents: baselineFiles,
-      scans: {
-        overview: blankScreen('overview'),
-        jobs: {
-          screenId: 'jobs',
-          url: baselineConfig.surfaces[1]!.url,
-          stops: realStops('button:nth-child(1)'),
-          drafts: [draft('jobs', 'color-contrast', { elementPath: 'button', elementName: 'Save', role: 'button' })],
-          gaps: [],
-          applicability: [],
-          reachedSelectorPresent: null,
-        },
-        inventories: {
-          screenId: 'inventories',
-          url: baselineConfig.surfaces[2]!.url,
-          stops: realStops('a:nth-child(3)'),
-          drafts: [],
-          gaps: [],
-          applicability: [],
-          reachedSelectorPresent: null,
-        },
-      },
+      scans: unseenAndCleanScans,
     });
 
     const outcome = await runBaseline(deps, baselineConfig, {
@@ -398,10 +402,39 @@ describe('baseline against unseen screens', () => {
       },
     });
 
+    // A floor accepts existing debt, so a run that did not see every screen must not mint one.
+    expect(outcome.wrote).toBe(false);
+    expect(outcome.exitCode).toBe(3);
+    expect(outcome.message).toContain('coverage gaps remain');
+    expect(written).toEqual({});
+  });
+
+  it('with --partial writes a floor from only the cleanly scanned screens', async () => {
+    const written: Record<string, string> = {};
+    const deps = makeFakeDeps({
+      files: baselineFiles,
+      headContents: baselineFiles,
+      scans: unseenAndCleanScans,
+    });
+
+    const outcome = await runBaseline(
+      deps,
+      baselineConfig,
+      {
+        writeFile: async (path, contents) => {
+          written[path] = contents;
+        },
+      },
+      { partial: true },
+    );
+
     expect(outcome.wrote).toBe(true);
+    expect(outcome.exitCode).toBe(0);
     const floor = JSON.parse(written['.usabl-evidence.json'] ?? '{}');
+    expect(floor.scope).toBe('partial');
+    // The unseen overview contributes nothing. Only the clean jobs screen has a barrier to floor.
     expect(floor.entries.map((entry: { screenId: string }) => entry.screenId)).toEqual(['jobs']);
-    expect(outcome.message).toContain('incomplete');
+    expect(outcome.message).toContain('partial baseline');
   });
 
   it('writes no floor at all when every screen is unseen', async () => {

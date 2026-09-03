@@ -241,6 +241,11 @@ export interface EvidenceFloor {
   // Version 1 recorded a literal 1 for name and structural entries, so those counts prove nothing.
   // Version 2 records the observed count for every basis, so the gate can compare all of them.
   version: 1 | 2;
+  // Present and 'partial' only when `usabl baseline --partial` wrote a floor from a subset of the
+  // application, the screens that were cleanly scanned. A complete whole-application floor omits
+  // this field entirely, so its bytes stay identical to floors written before this field existed.
+  // No consumer changes behavior on scope. It is a label a reader can see in the committed file.
+  scope?: 'partial';
   entries: FloorEntry[];
 }
 export interface Waiver {
