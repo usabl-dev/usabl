@@ -46,6 +46,7 @@ describe('parseCliArgs', () => {
       floorSubcommand: null,
       driftSubcommand: null,
       installTarget: null,
+      cursorStopHook: false,
     });
   });
 
@@ -77,6 +78,7 @@ describe('parseCliArgs', () => {
       floorSubcommand: null,
       driftSubcommand: null,
       installTarget: null,
+      cursorStopHook: false,
     });
   });
 
@@ -130,6 +132,7 @@ describe('parseCliArgs', () => {
       floorSubcommand: null,
       driftSubcommand: null,
       installTarget: null,
+      cursorStopHook: false,
     });
   });
 
