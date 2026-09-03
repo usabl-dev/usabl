@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { matchGlob } from '../../src/primitives/match-glob.js';
 import type { InstallFs } from '../../src/install/index.js';
 import type { GhReader, GhResult } from '../../src/install/branch-rule.js';
+import { REQUIRED_CHECK } from '../../src/install/branch-rule.js';
 import { ENGINE_REF_PLACEHOLDER, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
 import { CLAUDE_SKILL_CONTENTS, CLAUDE_SKILL_PATH } from '../../src/install/claude-skill.js';
 import {
@@ -86,7 +87,7 @@ function ghReplying(reply: (endpoint: string) => GhResult | null): GhReader {
 const GH_VERIFIED = ghReplying(() => ({
   code: 0,
   stdout: JSON.stringify({
-    required_status_checks: { strict: true, checks: [{ context: 'usabl-policy', app_id: -1 }] },
+    required_status_checks: { strict: true, checks: [{ context: REQUIRED_CHECK, app_id: -1 }] },
   }),
   stderr: '',
 }));

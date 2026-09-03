@@ -107,7 +107,9 @@ semgrep scan --config p/typescript --config p/javascript --config p/github-actio
 
 ## CI
 
-Pull requests and pushes to `main` run the `usabl` workflow. The required status check name is **`check`**.
+Pull requests and pushes to `main` run the `usabl` workflow. Its required status check name
+is **`check`**. Pull requests also run the `usabl-gate` workflow, whose required status check
+name is **`usabl-required`**. Both must be required on `main`.
 
 CI runs, in order:
 
@@ -138,8 +140,9 @@ Individual logins, never org teams. The usabl-dev org has no teams, so a
 `usabl enforce policy` refuses a CODEOWNERS file that names one.
 
 Code owner review is a merge requirement: the `main` ruleset requires it, and
-`usabl-policy` is a required status that refuses any guarded path without an owner
-approval of the current head.
+`usabl-required` is a required status that stays red unless the accessibility verdict
+passes and `usabl-policy` has an owner approval of the current head for every guarded
+path.
 
 ## Security
 

@@ -16,7 +16,7 @@ import { planClaude } from '../install/claude.js';
 import { planClaudeSkill } from '../install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs } from '../install/cursor.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
-import { verifyBranchRule, type GhReader } from '../install/branch-rule.js';
+import { verifyBranchRule, REQUIRED_CHECK, type GhReader } from '../install/branch-rule.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
@@ -45,7 +45,9 @@ const STOP_HOOK_LABEL = 'claude stop hook (.claude/settings.json)';
 const CLAUDE_SKILL_LABEL = 'claude usabl-check skill (.claude/skills/usabl-check/SKILL.md)';
 const CURSOR_LABEL = 'cursor assistant (.cursor/commands + rules)';
 const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
-const BRANCH_RULE_LABEL = 'branch protection (main requires usabl-policy)';
+// The label names the check the operator must require. It reads that name from branch-rule
+// rather than spelling it out, so doctor can never tell someone to require a stale job name.
+const BRANCH_RULE_LABEL = `branch protection (main requires ${REQUIRED_CHECK})`;
 const PLAYWRIGHT_CHROMIUM_LABEL = 'playwright chromium (headless browser)';
 
 // Four states, and unknown is first class. wired is a positive confirmation. missing is a
@@ -468,7 +470,7 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'branch-rule',
       label: BRANCH_RULE_LABEL,
       state: 'missing',
-      nextStep: 'The main branch does not require the usabl-policy check. Run "usabl install --branch-rule" for the exact setting.',
+      nextStep: `The main branch does not require the ${REQUIRED_CHECK} check, so an accessibility regression can still merge. Run "usabl install --branch-rule" for the exact setting.`,
     };
   }
   return {

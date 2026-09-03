@@ -1,16 +1,103 @@
 /**
  * CI gate install generator for `usabl install --ci`.
- * It emits the two-job gate workflow that keeps fork head code away from base-repo
+ * It emits the three-job gate workflow that keeps fork head code away from base-repo
  * secrets. gate-comment is the only job allowed to run head code and is fenced to the
- * pull_request event; usabl-policy is the required status check that re-runs on review
- * and reads the head only as git objects. The engine SHA is a security pin the operator
- * must choose, so this draft carries a documented sentinel instead of a fabricated value.
- * Workflows are security-critical, so this writes only when absent, no-ops when identical,
- * and refuses when a hand-tuned workflow differs rather than overwrite it.
+ * pull_request event; usabl-policy re-runs on review and reads the head only as git
+ * objects; usabl-required is the aggregate an operator makes their required status check,
+ * and it is red unless the accessibility verdict and the policy verdict both pass. The
+ * engine SHA is a security pin the operator must choose, so this draft carries a documented
+ * sentinel instead of a fabricated value. Workflows are security-critical, so this writes
+ * only when absent, no-ops when identical, and refuses when a hand-tuned workflow differs
+ * rather than overwrite it.
  */
 import type { InstallFs, InstallResult } from './index.js';
 
 export const USABL_GATE_WORKFLOW_PATH = '.github/workflows/usabl-gate.yml';
+
+// The name of the required status check. Every consuming repository names this string in its
+// branch protection or ruleset, so renaming it forces all of them to edit a setting by hand.
+// Treat it as a published interface: stable, and changed only with a migration note.
+export const REQUIRED_GATE_JOB = 'usabl-required';
+
+// The one merge decision usabl ships, and the only place it exists. Both generated gate
+// workflows and the engine's own checked-in gate embed these exact bytes, and the tests
+// execute them, so the rule that is tested is the rule that runs.
+//
+// The rule, and why it reads the way it does.
+//
+// Accessibility enforcement runs inside gate-comment, which starts the app and executes PR
+// head code. Only a pull_request event denies base-repo secrets to fork head code, so
+// gate-comment is fenced to that event and cannot run on a pull_request_review. That fence
+// is a security control, and it is what makes a naive aggregate wrong in both directions.
+// Demanding gate-comment success would fail every approval-driven review re-run, where the
+// job is correctly skipped. Accepting anything short of failure would pass on a cancelled
+// run and on a scan that never happened.
+//
+// So the scan job's result is used here as an event-shape check and never as a verdict: on
+// pull_request it must have succeeded, on pull_request_review it must have been skipped by
+// the fence, and any other event or outcome, cancelled included, blocks. The accessibility
+// verdict itself arrives as data on usabl-policy's `accessibility` output, computed by
+// running `usabl enforce accessibility` over the Result artifact for this exact head, which
+// usabl-policy already resolves on both events. That keeps the verdict on one owned path
+// instead of being inferred from a GitHub job result. A verdict that is missing, empty, or
+// anything other than the exact string "pass" blocks.
+export const REQUIRED_GATE_SCRIPT = `const event = process.env.EVENT_NAME || '';
+const scan = process.env.SCAN_RESULT || '';
+const policy = process.env.POLICY_RESULT || '';
+const accessibility = process.env.ACCESSIBILITY_VERDICT || '';
+const blockers = [];
+
+// The scan job runs PR head code, so it is fenced to the pull_request event and cannot run
+// on a review. Its result is an event-shape check here, never a verdict. Requiring success
+// on a review event would break every approval re-run; accepting "not failure" would pass
+// on cancelled and on a scan that never ran. Both are wrong, so neither is written here.
+if (event === 'pull_request') {
+  if (scan !== 'success') {
+    blockers.push('the accessibility scan job did not succeed on this pull_request event (result: ' + (scan || 'none') + ')');
+  }
+} else if (event === 'pull_request_review') {
+  if (scan !== 'skipped') {
+    blockers.push('the accessibility scan job was not skipped on this pull_request_review event (result: ' + (scan || 'none') + '), so the head-code fence did not hold');
+  }
+} else {
+  blockers.push('unexpected event ' + (event || 'none') + '; this gate reasons about pull_request and pull_request_review only');
+}
+
+// usabl-policy resolves the Result artifact for this head on both events, so it is the job
+// that carries both verdicts out. Its outputs mean something only if it finished cleanly:
+// failure, cancelled, and skipped all block.
+if (policy !== 'success') {
+  blockers.push('the policy job did not succeed (result: ' + (policy || 'none') + ')');
+}
+
+// The accessibility verdict is data read from the Result artifact, never inferred from a job
+// status. On a review re-run it is the only accessibility authority that exists, because the
+// scan job is skipped. Only the exact string "pass" passes, so a missing, empty, or
+// unreadable verdict blocks.
+if (accessibility !== 'pass') {
+  blockers.push('the accessibility verdict from the Result artifact is not a pass (verdict: ' + (accessibility || 'none') + ')');
+}
+
+if (blockers.length > 0) {
+  console.error('usabl required gate: NOT verified');
+  for (const blocker of blockers) {
+    console.error('  - ' + blocker);
+  }
+  process.exit(1);
+}
+console.log('usabl required gate: verified. Accessibility and policy both pass for this head.');`;
+
+// Indent a script for embedding in a YAML block scalar. Blank lines stay blank so the
+// trailing-whitespace hook has nothing to strip and the embedded bytes stay stable.
+export function indentScript(script: string, indent: string): string {
+  return script
+    .split('\n')
+    .map((line) => (line === '' ? '' : `${indent}${line}`))
+    .join('\n');
+}
+
+// The embedded form used by every gate workflow: ten spaces, the depth of a step `run:` body.
+const EMBEDDED_GATE_SCRIPT = indentScript(REQUIRED_GATE_SCRIPT, '          ');
 
 // usabl is not published yet, so the gate clones the engine from a private repo and pins
 // it to a commit the operator trusts. We cannot know that commit, so the draft carries a
@@ -231,13 +318,21 @@ jobs:
           node /opt/usabl-trusted/dist/cli.js enforce accessibility < usabl-result.json
 
   usabl-policy:
-    # Required status. It re-runs on pull_request_review so a CODEOWNERS approval or
-    # dismissal flips the gate. Review events carry base-repo secrets, so this job
-    # must never check out or execute PR head code. It reads the head only as git
-    # objects and decides from the trusted base ref, CODEOWNERS, and the reviews API.
+    # The policy verdict, and the job that resolves the Result artifact for this head. It
+    # re-runs on pull_request_review so a CODEOWNERS approval or dismissal flips the gate.
+    # Review events carry base-repo secrets, so this job must never check out or execute PR
+    # head code. It reads the head only as git objects and decides from the trusted base ref,
+    # CODEOWNERS, and the reviews API. Do not make this the required check on its own: it
+    # returns success whenever no guarded path diverged, which says nothing about
+    # accessibility. usabl-required is the check to require.
     needs: gate-comment
     if: always()
     runs-on: ubuntu-latest
+    outputs:
+      # The accessibility verdict travels to usabl-required as data. Inferring it from a job
+      # status would be a second verdict path, and on a review event the scan job is skipped
+      # so there is no status to infer it from.
+      accessibility: \${{ steps.accessibility.outputs.verdict }}
     permissions:
       contents: read
       pull-requests: read
@@ -322,6 +417,32 @@ jobs:
           run-id: \${{ env.SCAN_RUN_ID }}
           github-token: \${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve the accessibility verdict from the Result artifact
+        id: accessibility
+        run: |
+          # Publish the accessibility verdict for usabl-required. The scan job runs head code
+          # and is fenced to pull_request, so on a review re-run it never runs and there is no
+          # job status to read. The Result artifact for this exact head, downloaded above on
+          # either event, is the authority instead, and the verdict is the engine's own
+          # "enforce accessibility" over it rather than anything re-derived here.
+          #
+          # This step never fails the job. It reports a verdict and usabl-required decides.
+          # The verdict starts at fail and only a clean exit moves it, so a missing, empty, or
+          # unparseable artifact stays a fail. A verdict usabl cannot compute is not a pass.
+          verdict=fail
+          if [ ! -s usabl-result.json ]; then
+            echo "no Result JSON for this head; reporting the accessibility verdict as fail"
+          else
+            code=0
+            # Keep || code=$? on the same line, because a next-line $? becomes 0 under set -e.
+            node .usabl-engine/dist/cli.js enforce accessibility < usabl-result.json || code=$?
+            if [ "\${code}" = "0" ]; then
+              verdict=pass
+            fi
+          fi
+          echo "accessibility verdict: \${verdict}"
+          echo "verdict=\${verdict}" >> "$GITHUB_OUTPUT"
+
       - name: Enforce policy
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
@@ -329,12 +450,40 @@ jobs:
           # Git refs and CODEOWNERS are the source of truth. The Result on stdin is
           # consumed only for the exit-4 crash short-circuit, never to skip owners.
           node .usabl-engine/dist/cli.js enforce policy --trusted-ref "origin/\${BASE_REF}" < usabl-result.json
+
+  ${REQUIRED_GATE_JOB}:
+    # THE REQUIRED STATUS CHECK. Require this one in branch protection or your ruleset.
+    #
+    # Requiring gate-comment or usabl-policy instead leaves a hole. Accessibility is enforced
+    # inside gate-comment, which is fenced to pull_request and so cannot be required on a
+    # review event, and usabl-policy returns success whenever no guarded path diverged, which
+    # says nothing about accessibility. Only this job sees both verdicts.
+    #
+    # always() is load-bearing. GitHub counts a skipped job as a satisfied required check, so
+    # an aggregate that could be skipped would be an open gate. This one always runs and
+    # always decides.
+    needs: [gate-comment, usabl-policy]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Decide the merge gate
+        env:
+          EVENT_NAME: \${{ github.event_name }}
+          SCAN_RESULT: \${{ needs.gate-comment.result }}
+          POLICY_RESULT: \${{ needs.usabl-policy.result }}
+          ACCESSIBILITY_VERDICT: \${{ needs.usabl-policy.outputs.accessibility }}
+        run: |
+          node <<'NODE'
+${EMBEDDED_GATE_SCRIPT}
+          NODE
 `;
 
 export const USABL_DOCS_GATE_WORKFLOW_PATH = '.github/workflows/usabl-docs-gate.yml';
 
 // The docs gate is the sibling of the app gate for a rendered-documentation repository.
-// It reproduces every fork-safety property of the app gate byte for byte: the two-job model,
+// It reproduces every fork-safety property of the app gate byte for byte: the three-job model,
 // the pull_request fence on head-code execution, the pinned action SHAs, persist-credentials
 // false, the numeric guard, the read-only engine snapshot, and the pull_request_review policy
 // job that reads head as objects only. Only two things differ, because usabl does not serve the
@@ -575,13 +724,21 @@ jobs:
           node /opt/usabl-trusted/dist/cli.js enforce accessibility < usabl-result.json
 
   usabl-policy:
-    # Required status. It re-runs on pull_request_review so a CODEOWNERS approval or
-    # dismissal flips the gate. Review events carry base-repo secrets, so this job
-    # must never check out or execute PR head code. It reads the head only as git
-    # objects and decides from the trusted base ref, CODEOWNERS, and the reviews API.
+    # The policy verdict, and the job that resolves the Result artifact for this head. It
+    # re-runs on pull_request_review so a CODEOWNERS approval or dismissal flips the gate.
+    # Review events carry base-repo secrets, so this job must never check out or execute PR
+    # head code. It reads the head only as git objects and decides from the trusted base ref,
+    # CODEOWNERS, and the reviews API. Do not make this the required check on its own: it
+    # returns success whenever no guarded path diverged, which says nothing about
+    # accessibility. usabl-required is the check to require.
     needs: gate-comment
     if: always()
     runs-on: ubuntu-latest
+    outputs:
+      # The accessibility verdict travels to usabl-required as data. Inferring it from a job
+      # status would be a second verdict path, and on a review event the scan job is skipped
+      # so there is no status to infer it from.
+      accessibility: \${{ steps.accessibility.outputs.verdict }}
     permissions:
       contents: read
       pull-requests: read
@@ -666,6 +823,32 @@ jobs:
           run-id: \${{ env.SCAN_RUN_ID }}
           github-token: \${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve the accessibility verdict from the Result artifact
+        id: accessibility
+        run: |
+          # Publish the accessibility verdict for usabl-required. The scan job runs head code
+          # and is fenced to pull_request, so on a review re-run it never runs and there is no
+          # job status to read. The Result artifact for this exact head, downloaded above on
+          # either event, is the authority instead, and the verdict is the engine's own
+          # "enforce accessibility" over it rather than anything re-derived here.
+          #
+          # This step never fails the job. It reports a verdict and usabl-required decides.
+          # The verdict starts at fail and only a clean exit moves it, so a missing, empty, or
+          # unparseable artifact stays a fail. A verdict usabl cannot compute is not a pass.
+          verdict=fail
+          if [ ! -s usabl-result.json ]; then
+            echo "no Result JSON for this head; reporting the accessibility verdict as fail"
+          else
+            code=0
+            # Keep || code=$? on the same line, because a next-line $? becomes 0 under set -e.
+            node .usabl-engine/dist/cli.js enforce accessibility < usabl-result.json || code=$?
+            if [ "\${code}" = "0" ]; then
+              verdict=pass
+            fi
+          fi
+          echo "accessibility verdict: \${verdict}"
+          echo "verdict=\${verdict}" >> "$GITHUB_OUTPUT"
+
       - name: Enforce policy
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
@@ -673,6 +856,34 @@ jobs:
           # Git refs and CODEOWNERS are the source of truth. The Result on stdin is
           # consumed only for the exit-4 crash short-circuit, never to skip owners.
           node .usabl-engine/dist/cli.js enforce policy --trusted-ref "origin/\${BASE_REF}" < usabl-result.json
+
+  ${REQUIRED_GATE_JOB}:
+    # THE REQUIRED STATUS CHECK. Require this one in branch protection or your ruleset.
+    #
+    # Requiring gate-comment or usabl-policy instead leaves a hole. Accessibility is enforced
+    # inside gate-comment, which is fenced to pull_request and so cannot be required on a
+    # review event, and usabl-policy returns success whenever no guarded path diverged, which
+    # says nothing about accessibility. Only this job sees both verdicts.
+    #
+    # always() is load-bearing. GitHub counts a skipped job as a satisfied required check, so
+    # an aggregate that could be skipped would be an open gate. This one always runs and
+    # always decides.
+    needs: [gate-comment, usabl-policy]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Decide the merge gate
+        env:
+          EVENT_NAME: \${{ github.event_name }}
+          SCAN_RESULT: \${{ needs.gate-comment.result }}
+          POLICY_RESULT: \${{ needs.usabl-policy.result }}
+          ACCESSIBILITY_VERDICT: \${{ needs.usabl-policy.outputs.accessibility }}
+        run: |
+          node <<'NODE'
+${EMBEDDED_GATE_SCRIPT}
+          NODE
 `;
 
 export type CiPlan =
@@ -727,6 +938,7 @@ function writtenReport(): string {
     `Wrote ${USABL_GATE_WORKFLOW_PATH}. Review this draft before you merge it.`,
     `Set the trusted engine ref: replace ${ENGINE_REF_PLACEHOLDER} (it appears twice) with a full 40-character commit SHA from usabl-dev/usabl that you trust.`,
     'Confirm the engine repo slug (usabl-dev/usabl) is correct and that the USABL_ENGINE_CHECKOUT_TOKEN secret exists in this repository.',
+    `Make "${REQUIRED_GATE_JOB}" the required status check on your protected branch. It is the only job that sees both the accessibility verdict and the policy verdict, so requiring gate-comment or usabl-policy instead lets an accessibility regression merge. Run "usabl install --branch-rule" for the exact setting.`,
   ].join('\n');
 }
 
@@ -735,6 +947,7 @@ function docsWrittenReport(): string {
     `Wrote ${USABL_DOCS_GATE_WORKFLOW_PATH}. Review this draft before you merge it.`,
     `Set the trusted engine ref: replace ${ENGINE_REF_PLACEHOLDER} (it appears twice) with a full 40-character commit SHA from usabl-dev/usabl that you trust.`,
     'Confirm the engine repo slug (usabl-dev/usabl) is correct and that the USABL_ENGINE_CHECKOUT_TOKEN secret exists in this repository.',
+    `Make "${REQUIRED_GATE_JOB}" the required status check on your protected branch. It is the only job that sees both the accessibility verdict and the policy verdict, so requiring gate-comment or usabl-policy instead lets an accessibility regression merge. Run "usabl install --branch-rule" for the exact setting.`,
     'Set three repository variables the docs gate reads: USABL_DOCS_BUILD_COMMAND (for example "ccutil compile"), USABL_DOCS_BUILT_ROOT (the directory the build renders HTML into), and USABL_DOCS_SERVE_PORT (a free port).',
     'Point usabl.docs.json docsBaseUrl at http://127.0.0.1:<USABL_DOCS_SERVE_PORT> so the scan targets the served docs. usabl does not serve the docs itself.',
   ].join('\n');

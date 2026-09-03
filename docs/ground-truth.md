@@ -1060,25 +1060,42 @@ noise budget. All page-derived text passes through `neutralize()`. Sticky commen
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
 
-**One shape, two renderings.** `usabl install --ci` *generates* a two-job workflow at
+**One shape, two renderings.** `usabl install --ci` *generates* a three-job workflow at
 `.github/workflows/usabl-gate.yml` in the consuming repo: a `gate-comment` job fenced to
 `pull_request` that clones and pins the engine at the `PIN_TO_A_TRUSTED_USABL_COMMIT`
 sentinel (the operator must replace it with a full 40-char SHA), runs the scan, posts the
 comment, uploads the Result as an artifact, and runs `usabl enforce accessibility` as a
 final step that never exits 2; and a `usabl-policy` job (`needs: gate-comment`,
 `if: always()`) that also fires on `pull_request_review`, checks out the trusted base
-only, fetches the head as git objects, and runs `usabl enforce policy --trusted-ref`,
-never executing PR head code. The engine's own repo checks in the same two jobs, with the
-same fences, artifact handoff, and policy isolation. One thing differs: a consuming repo
+only, fetches the head as git objects, runs `usabl enforce accessibility` over the
+downloaded Result to publish an `accessibility` job output, and runs `usabl enforce policy
+--trusted-ref`, never executing PR head code; and a `usabl-required` job
+(`needs: [gate-comment, usabl-policy]`, `if: always()`) that decides the merge from those
+two verdicts and runs no head code at all. The engine's own repo checks in the same three
+jobs, with the same fences, artifact handoff, and policy isolation. One thing differs: a consuming repo
 has no engine, so the draft clones `usabl-dev/usabl` at a pinned commit using
 `USABL_ENGINE_CHECKOUT_TOKEN`, while in the engine repo the checked-out tree already is
 the engine, so each job builds that tree with `npm ci && npm run build` and there is no
 engine pin and no token. Because `classifyGateWorkflow` compares a workflow line for line
 against the draft, `usabl doctor` reads the engine's own gate as `drifted`. That is the
 expected reading for the one repository that is its own engine. The required status check
-named in branch protection is `usabl-policy` (the workflow *file* is named `usabl-gate`),
-and the protected branch is `main`. Both `enforce` commands read Result JSON from stdin
-and never call the gate.
+named in branch protection is `usabl-required` (the workflow *file* is named `usabl-gate`),
+and the protected branch is `main`. Requiring `usabl-policy` instead is the defect that job
+exists to close: accessibility is enforced inside `gate-comment`, which is fenced to
+`pull_request` and so cannot be required on a review event, and `usabl-policy` returns
+success whenever no guarded path diverged, so on its own it can be green while the scan is
+red. Both `enforce` commands read Result JSON from stdin and never call the gate.
+
+`usabl-required` reads three values and nothing else: the event name, the `gate-comment`
+job result, and `usabl-policy`'s `accessibility` output. The scan job result is an
+event-shape check, never a verdict, because the fence means the scan cannot run on a review
+event: on `pull_request` it must be `success`, on `pull_request_review` it must be
+`skipped`. The accessibility verdict itself comes from the Result artifact for that exact
+head, which `usabl-policy` already resolves on both events, so the verdict is data and not
+something inferred from a GitHub job status. Anything else, an unknown event, a cancelled
+job, a missing or unparseable artifact, or any verdict that is not exactly `pass`, blocks.
+The rule is one string, `REQUIRED_GATE_SCRIPT` in `src/install/ci.ts`, embedded verbatim in
+all three workflows so the rule that is tested is the rule that runs.
 
 ### 11.5 Mid-task self-check (CLI; MCP optional)
 
@@ -1169,7 +1186,7 @@ Onboarding uses two distinct commands. `usabl init` scaffolds policy: it writes
 and refuses to overwrite without `--force`. `usabl install <target>` wires integrations,
 exactly one per run: `--overlay` (vite plugin), `--claude` (a Stop hook running `npx usabl
 stop-hook` in `.claude/settings.json`), `--ci` (the generated PR-gate workflow), or
-`--branch-rule` (a read-only check that the protected branch and the `usabl-policy`
+`--branch-rule` (a read-only check that the protected branch and the `usabl-required`
 required status check exist). `init` does not wire CI or overlays, and `install` does not
 scaffold policy.
 

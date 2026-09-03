@@ -33,10 +33,11 @@ function memoryFs(files: Record<string, string>): InstallFs & { store: Record<st
 }
 
 describe('USABL_GATE_WORKFLOW security properties', () => {
-  it('keeps the two-job pattern and every fork-safety property', () => {
+  it('keeps the three-job pattern and every fork-safety property', () => {
     // gate-comment is the only job allowed to run PR head code, fenced to pull_request.
     expect(USABL_GATE_WORKFLOW).toContain("if: github.event_name == 'pull_request'");
-    // usabl-policy is the required status check that re-runs on review and reads head as objects only.
+    // usabl-policy re-runs on review and reads head as objects only. The check an operator
+    // requires is the usabl-required aggregate; see gate-topology.test.ts for that shape.
     expect(USABL_GATE_WORKFLOW).toContain('usabl-policy:');
     expect(USABL_GATE_WORKFLOW).toContain('needs: gate-comment');
     expect(USABL_GATE_WORKFLOW).toContain('git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"');
