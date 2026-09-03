@@ -95,9 +95,14 @@ export function formatSummary(result: Result): string {
       if (source.candidates.length > 1) {
         lines.push(`      candidates: ${source.candidates.map(neutralizePrintedText).join(', ')}`);
       }
-    } else if (appSource && appSource.file) {
-      lines.push(`      source: ${neutralizePrintedText(formatAppSourceLocation(appSource))}`);
-      if (appSource.candidates.length > 1) {
+    } else if (appSource) {
+      if (appSource.file) {
+        lines.push(`      source: ${neutralizePrintedText(formatAppSourceLocation(appSource))}`);
+      }
+      if (
+        appSource.candidates.length > 0 &&
+        (appSource.file === null || appSource.candidates.length > 1)
+      ) {
         lines.push(`      candidates: ${appSource.candidates.map(neutralizePrintedText).join(', ')}`);
       }
     }

@@ -629,7 +629,7 @@ export const overlayClientSource = `(() => {
   }
 
   function editorDeepLink(workspaceRoot, source) {
-    if (!source || !source.file) {
+    if (!source || !source.file || source.tier !== 'renderer') {
       return null;
     }
     const line = source.line || 1;
@@ -881,10 +881,20 @@ export const overlayClientSource = `(() => {
     repair.appendChild(make('p', '', finding.fix));
     section.appendChild(repair);
 
-    if (finding.appSource && finding.appSource.file) {
+    if (finding.appSource && (finding.appSource.file || finding.appSource.candidates.length > 0)) {
       const sourceBlock = make('div', 'detail-block');
       sourceBlock.appendChild(make('h4', '', 'Source'));
-      sourceBlock.appendChild(make('p', '', formatAppSource(finding.appSource)));
+      if (finding.appSource.file) {
+        sourceBlock.appendChild(make('p', '', formatAppSource(finding.appSource)));
+      }
+      if (
+        finding.appSource.candidates.length > 0 &&
+        (finding.appSource.file === null || finding.appSource.candidates.length > 1)
+      ) {
+        sourceBlock.appendChild(
+          make('p', '', 'candidates: ' + finding.appSource.candidates.join(', ')),
+        );
+      }
       section.appendChild(sourceBlock);
     }
 

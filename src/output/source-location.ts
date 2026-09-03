@@ -29,7 +29,9 @@ export function editorDeepLink(
   workspaceRoot: string | null,
   source: AppSourceMapping
 ): string | null {
-  if (source.file === null || source.file === "") {
+  // Only renderer-tier mappings carry an observed file and line. Inferred tiers must not mint
+  // a clickable editor URL that reads as precise location.
+  if (source.tier !== "renderer" || source.file === null || source.file === "") {
     return null;
   }
   const line = source.line ?? 1;

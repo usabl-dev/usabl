@@ -96,6 +96,10 @@ function renderSource(source: DocsSourceMapping | undefined, appSource: AppSourc
     }
     return lines;
   }
+  if (appSource !== undefined && appSource.candidates.length > 0) {
+    const listed = appSource.candidates.map((candidate) => `\`${neutralize(candidate)}\``).join(', ');
+    return [`  - candidates: ${listed}`];
+  }
   return [];
 }
 

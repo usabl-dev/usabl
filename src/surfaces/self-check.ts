@@ -64,6 +64,8 @@ export function projectSelfCheck(result: Result): {
       lines.push(`source: ${formatDocsSourceLocation(finding.docsSource)}`);
     } else if (finding.appSource?.file) {
       lines.push(`source: ${formatAppSourceLocation(finding.appSource)}`);
+    } else if (finding.appSource && finding.appSource.candidates.length > 0) {
+      lines.push(`candidates: ${finding.appSource.candidates.join(', ')}`);
     }
     lines.push('Fix:');
     lines.push(framed(fixOrAbsence(finding)));

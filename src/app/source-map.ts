@@ -59,6 +59,9 @@ export function mapFindingToAppSource(
 
   const chain = screen?.importChain;
   if (chain !== undefined && chain.length > 0) {
+    // The route import chain orders files from the manifest entry toward the leaf page.
+    // The last changed file on that path is the screen component most likely to own UI on
+    // this route; earlier entries are layout or wrapper imports disclosed as candidates.
     const changedFile =
       chain.length > 1 ? chain[chain.length - 1] ?? null : chain[0] ?? null;
     if (changedFile !== null) {
@@ -76,7 +79,9 @@ export function mapFindingToAppSource(
     if (candidates.length > 0) {
       return {
         tier: "coverage",
-        file: candidates[0] ?? null,
+        // One changed file is a confident attribution. Several means ownership is ambiguous,
+        // so file stays null and candidates carries the list without minting a false primary.
+        file: candidates.length === 1 ? candidates[0]! : null,
         line: null,
         candidates,
       };
