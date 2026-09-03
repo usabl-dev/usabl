@@ -3,7 +3,7 @@ import type { AxNode, ElementRef, Page, ProviderContext } from '../../src/contra
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeRulepackProvider } from '../../src/providers/rulepack/index.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
-import { draftsOf, testConfig } from '../helpers.js';
+import { draftsOf, gapsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 
@@ -137,7 +137,9 @@ describe('rulepack interaction probes', () => {
       focusReturnsToTrigger: true,
     });
 
-    await expect(provider.run(ctx)).resolves.toEqual([]);
+    const output = await provider.run(ctx);
+    expect(draftsOf(output)).toEqual([]);
+    expect(gapsOf(output)).toEqual([]);
   });
 
   it('fails closed for open and close lifecycle when opening dialog does not move focus inside', async () => {

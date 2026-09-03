@@ -60,18 +60,19 @@ function orderByPageEffect(providers: Provider[]): Provider[] {
  * applied, and nothing is the honest reading of that, so it contributes no applicability.
  *
  * Provider is an exported contract of a published package, so a provider written outside this
- * repository is a real caller the compiler never checked. Both fields are read as the untyped
- * values they really are: anything that is not an array reports nothing, rather than spreading
- * a string into the record one character at a time. This is the only seam that reads a provider
- * return, so it is the only place that needs the check.
+ * repository is a real caller the compiler never checked. Drafts, applicability, and gaps are read
+ * as the untyped values they really are: anything that is not an array reports nothing, rather than
+ * spreading a string into the record one character at a time. This is the only seam that reads a
+ * provider return, so it is the only place that needs the check.
  */
 function normalizeOutput(output: Draft[] | ProviderOutput): Required<ProviderOutput> {
   if (Array.isArray(output)) {
-    return { drafts: output, applicability: [] };
+    return { drafts: output, applicability: [], gaps: [] };
   }
   return {
     drafts: Array.isArray(output.drafts) ? output.drafts : [],
     applicability: Array.isArray(output.applicability) ? output.applicability : [],
+    gaps: Array.isArray(output.gaps) ? output.gaps : [],
   };
 }
 
@@ -110,6 +111,9 @@ export async function runProviders(
       const output = normalizeOutput(await provider.run(ctx));
       drafts.push(...output.drafts);
       applicability.push(...output.applicability);
+      // A provider that isolates its own checks discloses each failed check as a scoped gap.
+      // Merge those beside the gaps this seam raises for a whole provider that threw or was denied.
+      gaps.push(...output.gaps);
     } catch (err) {
       // Thrown provider work is disclosed as a gap so we never silently pass coverage.
       const message = err instanceof Error ? err.message : String(err);

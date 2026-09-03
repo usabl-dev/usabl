@@ -226,6 +226,77 @@ describe('runProviders', () => {
     expect(result.gaps).toHaveLength(1);
   });
 
+  it('carries provider-returned gaps into the result', async () => {
+    const provider: Provider = {
+      id: 'fake-live',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> => ({
+        drafts: [draft],
+        gaps: [{ ref: 'provider:fake-live/check-x', state: 'not-covered', reason: 'check-x failed: boom' }],
+      }),
+    };
+    const ctx = await makeContext();
+
+    const result = await runProviders([provider], ctx, ['live']);
+
+    expect(result.drafts).toEqual([draft]);
+    expect(result.gaps).toEqual([
+      { ref: 'provider:fake-live/check-x', state: 'not-covered', reason: 'check-x failed: boom' },
+    ]);
+  });
+
+  it('ignores a gaps field that is not an array', async () => {
+    const provider: Provider = {
+      id: 'fake-live',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> =>
+        ({ drafts: [draft], gaps: 'oops' } as unknown as ProviderOutput),
+    };
+    const ctx = await makeContext();
+
+    const result = await runProviders([provider], ctx, ['live']);
+
+    expect(result.drafts).toEqual([draft]);
+    expect(result.gaps).toEqual([]);
+  });
+
+  it('merges provider-returned gaps with the gaps it raises itself', async () => {
+    // One provider returns drafts and its own scoped gap. A second provider throws, so
+    // runProviders raises a not-covered gap for it. The result carries both, and the good
+    // provider still contributes its draft.
+    const scoped: Provider = {
+      id: 'scoped',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> => ({
+        drafts: [draft],
+        gaps: [{ ref: 'provider:scoped/check-y', state: 'not-covered', reason: 'check-y failed: kaboom' }],
+      }),
+    };
+    const thrower: Provider = {
+      id: 'thrower',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<Draft[]> => {
+        throw new Error('runner exploded');
+      },
+    };
+    const ctx = await makeContext();
+
+    const result = await runProviders([scoped, thrower], ctx, ['live']);
+
+    expect(result.drafts).toEqual([draft]);
+    expect(result.gaps).toHaveLength(2);
+    expect(result.gaps).toEqual(
+      expect.arrayContaining([
+        { ref: 'provider:scoped/check-y', state: 'not-covered', reason: 'check-y failed: kaboom' },
+        expect.objectContaining({ ref: 'provider:thrower', state: 'not-covered' }),
+      ]),
+    );
+  });
+
   it('records not-covered when a provider throws', async () => {
     const run = vi.fn(async (): Promise<Draft[]> => {
       throw new Error('runner exploded');

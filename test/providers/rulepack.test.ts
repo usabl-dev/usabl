@@ -10,7 +10,7 @@ import type {
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeRulepackProvider } from '../../src/providers/rulepack/index.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
-import { draftsOf, testConfig } from '../helpers.js';
+import { draftsOf, gapsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 
@@ -100,7 +100,9 @@ describe('makeRulepackProvider', () => {
       [containedQuery]: [insideAlert],
     });
 
-    await expect(provider.run(insideOnlyContext)).resolves.toEqual([]);
+    const insideOnlyOutput = await provider.run(insideOnlyContext);
+    expect(draftsOf(insideOnlyOutput)).toEqual([]);
+    expect(gapsOf(insideOnlyOutput)).toEqual([]);
   });
 
   it('flags unnamed icon buttons and skips buttons with an AX name', async () => {
@@ -143,7 +145,9 @@ describe('makeRulepackProvider', () => {
       },
     );
 
-    await expect(provider.run(namedContext)).resolves.toEqual([]);
+    const namedOutput = await provider.run(namedContext);
+    expect(draftsOf(namedOutput)).toEqual([]);
+    expect(gapsOf(namedOutput)).toEqual([]);
   });
 
   it('flags kebab toggles missing expanded or haspopup state and skips complete toggles', async () => {
@@ -185,7 +189,9 @@ describe('makeRulepackProvider', () => {
       },
     );
 
-    await expect(provider.run(completeStatesContext)).resolves.toEqual([]);
+    const completeStatesOutput = await provider.run(completeStatesContext);
+    expect(draftsOf(completeStatesOutput)).toEqual([]);
+    expect(gapsOf(completeStatesOutput)).toEqual([]);
   });
 
   it('flags duplicated row action names within a table', async () => {
@@ -265,7 +271,9 @@ describe('makeRulepackProvider', () => {
       },
     );
 
-    await expect(provider.run(singleContext)).resolves.toEqual([]);
+    const singleOutput = await provider.run(singleContext);
+    expect(draftsOf(singleOutput)).toEqual([]);
+    expect(gapsOf(singleOutput)).toEqual([]);
     expect(provider.capabilities).toContain('live');
   });
 
@@ -287,7 +295,9 @@ describe('makeRulepackProvider', () => {
       'docs',
     );
 
-    await expect(provider.run(docsContext)).resolves.toEqual([]);
+    const docsOutput = await provider.run(docsContext);
+    expect(draftsOf(docsOutput)).toEqual([]);
+    expect(gapsOf(docsOutput)).toEqual([]);
     expect(extra).not.toHaveBeenCalled();
   });
 
@@ -309,5 +319,55 @@ describe('makeRulepackProvider', () => {
 
     expect(defaultExtra).toHaveBeenCalledTimes(1);
     expect(defaultDrafts).toEqual([draftFrom('extra-ran-default')]);
+  });
+
+  it('isolates a throwing check: good drafts survive and a disclosed gap names the failing check', async () => {
+    // One static check throws (the shape of #196: a duplicate id makes a selector match two
+    // elements and Playwright throws a strict-mode violation). The rest of the rulepack must
+    // still return its drafts, and the throw must be disclosed as a scoped gap, not swallowed.
+    const boom = vi.fn(async (): Promise<Draft[]> => {
+      throw new Error('strict mode violation: two elements');
+    });
+    const provider = makeRulepackProvider([boom]);
+    // An unnamed icon button so a real static check produces a draft on the same run.
+    const unnamedButton = element('.icon-button');
+    const ctx = await makeContext(
+      {
+        [SEL.unnamedButton]: [unnamedButton],
+      },
+      {
+        [unnamedButton.selector]: { name: null, role: 'button', states: {} },
+      },
+    );
+
+    const output = await provider.run(ctx);
+    const drafts = draftsOf(output);
+    const gaps = gapsOf(output);
+
+    expect(boom).toHaveBeenCalledTimes(1);
+    // The good check's draft survives the sibling check's throw.
+    expect(drafts.some((d) => d.rule === 'pf-icon-button-name')).toBe(true);
+    // The throw is disclosed, scoped to this provider, and names the failing check plus the message.
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]?.ref).toBe('provider:pf-rulepack/extra-check-1');
+    expect(gaps[0]?.state).toBe('not-covered');
+    expect(gaps[0]?.reason).toContain('extra-check-1');
+    expect(gaps[0]?.reason).toContain('strict mode violation: two elements');
+  });
+
+  it('happy path returns byte-identical drafts and no gaps when no check throws', async () => {
+    const unnamedButton = element('.icon-button');
+    const plan = {
+      [SEL.unnamedButton]: [unnamedButton],
+    };
+    const ax = {
+      [unnamedButton.selector]: { name: null, role: 'button', states: {} },
+    };
+    const bareProvider = makeRulepackProvider();
+    const bareOutput = await bareProvider.run(await makeContext(plan, ax));
+    const bareDrafts = draftsOf(bareOutput);
+
+    expect(gapsOf(bareOutput)).toEqual([]);
+    expect(bareDrafts.some((d) => d.rule === 'pf-icon-button-name')).toBe(true);
   });
 });

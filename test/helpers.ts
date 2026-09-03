@@ -1,4 +1,10 @@
-import type { Draft, ProviderOutput, RuleApplicability, UsablConfig } from '../src/contracts/index.js';
+import type {
+  CoverageGap,
+  Draft,
+  ProviderOutput,
+  RuleApplicability,
+  UsablConfig,
+} from '../src/contracts/index.js';
 
 /** Reads the drafts out of either provider return shape, for tests that only assert on drafts. */
 export function draftsOf(output: Draft[] | ProviderOutput): Draft[] {
@@ -8,6 +14,11 @@ export function draftsOf(output: Draft[] | ProviderOutput): Draft[] {
 /** Reads the applicability a provider reported. A bare Draft[] reported none. */
 export function applicabilityOf(output: Draft[] | ProviderOutput): RuleApplicability[] {
   return Array.isArray(output) ? [] : (output.applicability ?? []);
+}
+
+/** Reads the gaps a provider reported. A bare Draft[] reported none. */
+export function gapsOf(output: Draft[] | ProviderOutput): CoverageGap[] {
+  return Array.isArray(output) ? [] : (output.gaps ?? []);
 }
 
 const BASE_CONFIG: UsablConfig = {
