@@ -11,7 +11,7 @@ import {
   gapHeadline,
   pickBarrier,
 } from '../output/disclosure.js';
-import { frameUntrusted, scrubResult } from './scrub.js';
+import { frameUntrustedBlock, scrubResult } from './scrub.js';
 
 export interface HookContext {
   stopHookActive: boolean;
@@ -25,19 +25,6 @@ export interface StopDecision {
 const BLOCKING_VERDICTS: ReadonlySet<Verdict> = new Set(['regression', 'approval_required', 'not_covered']);
 
 /**
- * Every piece of page-derived text goes through here, one call per item.
- *
- * Per item, and deliberately not one frame around the whole message. frameUntrusted does not
- * escape its own markers, so page text carrying a literal close marker can forge one. Framing
- * each item separately holds that blast radius to the item that carried it, because the next
- * item opens its own frame. A single block frame would let one forged close escape everything
- * after it, including the coverage reasons.
- */
-function framed(text: string): string {
-  return frameUntrusted(text);
-}
-
-/**
  * What the run did not examine, one entry per gap state.
  *
  * The reader is a model deciding whether to keep working, so it gets a reason it can act on
@@ -45,45 +32,61 @@ function framed(text: string): string {
  * cluster: five screens behind one broken server produce five near-identical reasons, while a
  * denied capability is a different fact that must never be crowded out by them.
  *
+ * Each line pairs the gap headline, which is trusted usabl-chosen text, with the page-derived
+ * detail, so the model can still map each reason to its state inside the single frame.
+ *
  * The length is bounded by construction. There are four gap states, so there are at most four
  * entries, and no assembled string is ever cut to fit. Cutting could remove a closing frame
  * marker and hand the model an unterminated block of untrusted text.
  */
-function notEvaluatedLines(result: Result): string[] {
+function notEvaluatedPieces(result: Result): string[] {
   const disclosures = discloseGaps(result.coverage.gaps);
-  if (disclosures.length === 0) {
-    return [];
-  }
-
-  return [
-    'Not evaluated:',
-    ...disclosures.flatMap((disclosure) => [
-      `- ${gapHeadline(disclosure)}:`,
-      framed(gapDetail(disclosure)),
-    ]),
-  ];
+  return disclosures.map(
+    (disclosure) => `- ${gapHeadline(disclosure)}: ${gapDetail(disclosure)}`,
+  );
 }
 
+/**
+ * The whole block message, with at most one untrusted frame.
+ *
+ * The trusted engine scaffold stays outside the frame: the summary line, the Rule line, and the
+ * Not evaluated header. Every page-derived piece, the finding experience, the fix, and each gap
+ * detail, goes inside one frame, each with a short inline label so the model can map evidence to
+ * cause. The pieces are already bounded, and the assembled block is never cut to length. Cutting
+ * could remove the single closing marker and hand the model an unterminated block of untrusted
+ * text.
+ */
 function buildBlockMessage(result: Result): string {
-  const lines = [`NOT verified - ${result.summary}`];
+  const scaffold = [`NOT verified - ${result.summary}`];
+  const pieces: string[] = [];
+
   const finding = pickBarrier(result.findings);
   if (finding !== null) {
-    lines.push(`Rule: ${finding.rule}`);
-    lines.push(framed(finding.whatUserExperiences));
-    // The fix is framed like the experience above it. Only five axe rules carry a curated note,
-    // and for every other rule this text is axe's failureSummary, which comes from the page under
-    // test, so it is no more trustworthy than the line already inside a frame.
+    scaffold.push(`Rule: ${finding.rule}`);
+    pieces.push(`experience: ${finding.whatUserExperiences}`);
+    // The fix is page-derived like the experience above it. Only five axe rules carry a curated
+    // note, and for every other rule this text is axe's failureSummary, which comes from the page
+    // under test, so it is no more trustworthy than the experience already in the frame.
     //
     // When no fix was recorded this frames usabl's own sentence and so mislabels it as page text.
     // That is deliberate. A Finding carries no provenance saying where its fix came from, so the
     // alternative is a conditional framing path where the caller decides trust per string, and a
     // path that can choose not to frame is a worse shape than an over-label that errs toward
     // distrust.
-    lines.push('Fix:');
-    lines.push(framed(fixOrAbsence(finding)));
+    pieces.push(`fix: ${fixOrAbsence(finding)}`);
   }
-  lines.push(...notEvaluatedLines(result));
-  return lines.join('\n');
+
+  const gapPieces = notEvaluatedPieces(result);
+  if (gapPieces.length > 0) {
+    scaffold.push('Not evaluated:');
+    pieces.push(...gapPieces);
+  }
+
+  if (pieces.length === 0) {
+    return scaffold.join('\n');
+  }
+
+  return [...scaffold, frameUntrustedBlock(pieces)].join('\n');
 }
 
 export function evaluateStopDecision(result: Result, ctx: HookContext): StopDecision {
