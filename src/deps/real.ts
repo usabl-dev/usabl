@@ -26,6 +26,11 @@ const CLICK_TIMEOUT_MS = 3_000;
 // window once, which is small next to the rest of a screen scan.
 const SETTLE_SAMPLE_INTERVAL_MS = 500;
 const SETTLE_SAMPLES_REQUIRED = 4;
+// How long the in-flight request count has to hold at zero before the network counts as quiet.
+// This matches Playwright's own networkidle window, so a page that networkidle would have called
+// idle still reads as idle here, and the live signal only differs by catching requests that start
+// after that first idle.
+const NETWORK_QUIET_WINDOW_MS = 500;
 
 // Inject before app scripts run so the first live update is observable and not lost.
 // Late injection would under-report announcements and create a false sense of coverage.
@@ -314,8 +319,15 @@ async function stablePathsForSelector(pw: PwPage, selector: string): Promise<str
 
 // The readiness surface of a Playwright page. Narrow on purpose so the wait can be driven by a
 // scripted page in tests without a browser.
+//
+// networkQuietFor reports a live fact: whether the count of in-flight requests has been zero for at
+// least windowMs. It is deliberately not waitForLoadState('networkidle'). That lifecycle event
+// resolves once per navigation and then returns at once on every later call, so it cannot see a
+// request that starts after it first settles, which is the exact miss this fix exists to close.
+// Verified against real Chromium: a fetch fired 800ms after load, mounting the rest of the page,
+// was invisible to networkidle and caught only by a live in-flight counter.
 interface ReadinessPage {
-  waitForLoadState(state: 'networkidle', options: { timeout: number }): Promise<void>;
+  networkQuietFor(windowMs: number): boolean;
   evaluate(fn: () => number): Promise<number>;
 }
 
@@ -327,11 +339,52 @@ export function readyTimeoutMsFor(config: { readyTimeoutMs?: number }): number {
   return config.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
 }
 
-// Playwright marks its own timeouts with this name. Anything else out of a page call is a real
-// failure, such as a closed context, and relabelling it as a timeout would send the operator to
-// the wrong fix.
-function isTimeout(err: unknown): boolean {
-  return err instanceof Error && err.name === 'TimeoutError';
+// The live network signal for readiness.
+//
+// Playwright's waitForLoadState('networkidle') is a one-shot lifecycle event: it resolves once per
+// navigation and then returns at once, so it cannot see a request that starts after the page first
+// went idle. That is the exact miss #146 is about. This tracker instead counts requests that are
+// actually in flight, from the page request events, and reports whether that count has held at zero
+// for a quiet window. It re-evaluates every time it is asked, so a late request is seen.
+//
+// A request that errors or is aborted fires requestfailed rather than requestfinished, so both
+// decrement the count. Without that a failed request would pin the count above zero forever and a
+// page with one broken request would never read as idle.
+interface NetworkActivity {
+  networkQuietFor(windowMs: number): boolean;
+}
+
+// The subset of a Playwright page this tracker listens to. Narrow so a test can drive it.
+interface RequestEvents {
+  on(event: 'request' | 'requestfinished' | 'requestfailed', handler: () => void): void;
+}
+
+function makeNetworkActivityTracker(page: RequestEvents, now: () => number = Date.now): NetworkActivity {
+  let inFlight = 0;
+  // The last instant the count was zero. A page starts idle, so it begins now.
+  let idleSince = now();
+
+  const settled = (): void => {
+    inFlight = Math.max(0, inFlight - 1);
+    if (inFlight === 0) {
+      idleSince = now();
+    }
+  };
+
+  page.on('request', () => {
+    inFlight += 1;
+  });
+  page.on('requestfinished', settled);
+  page.on('requestfailed', settled);
+
+  return {
+    networkQuietFor(windowMs: number): boolean {
+      if (inFlight > 0) {
+        return false;
+      }
+      return now() - idleSince >= windowMs;
+    },
+  };
 }
 
 // "Timeout 15000ms exceeded" does not say whether the network never went quiet or the DOM never
@@ -342,36 +395,45 @@ function readinessTimeout(phase: string, timeoutMs: number, detail: string): str
 }
 
 /**
- * Waits for the network to go quiet and then for the DOM to stop changing, inside one budget.
+ * Waits until the DOM has stopped changing and the network has been quiet at the same moment,
+ * inside one budget.
  *
- * Network idle is a network fact. A client-rendered application mounts after the last response
- * settles because render is CPU work, so waiting on the network alone hands the scan an empty page:
- * every tab stop resolves to body and the run reports a clean screen it never saw.
+ * A client-rendered application mounts after its responses land because render is CPU work, so a
+ * page that has only loaded is empty: every tab stop resolves to body and the run would report a
+ * clean screen it never saw. Both facts have to hold together, because either one alone lies. A
+ * quiet network with a moving DOM is a page still rendering. A still DOM with a request in flight is
+ * a page waiting for data that will mount more.
  *
- * The stability signal is the total element count. It moves whenever a framework mounts or swaps a
- * subtree, it costs one live-collection read in page context, and no application has to cooperate.
- * Focusable count was the other candidate and it is weaker here: a screen with no focusable elements
- * reads a constant zero from the first sample, so it would be called ready while it was still
- * rendering. Stability is the test, not volume, so a page that settles at zero elements is ready
- * because an empty state is a real page.
+ * Both signals are read live on the same interval. The DOM signal is the total element count, which
+ * moves whenever a framework mounts or swaps a subtree, costs one live-collection read in page
+ * context, and needs no cooperation from the application. Stability is the test, not volume, so a
+ * page that settles at zero elements is ready, because an empty state is a real page. The network
+ * signal is whether the in-flight request count has been zero for a full quiet window. Reading it
+ * live is the whole point: a request that starts after the page first went idle, the case that used
+ * to slip through waitForLoadState, resets the window so the loop keeps waiting.
  *
- * Both phases share timeoutMs, so one operator number covers the whole cost of reaching a screen.
- * Running out throws, and the message names the phase that ran out because the fixes differ. The
- * caller discloses that as a coverage gap, which is honest, where returning quietly would publish
- * a measurement of a page that had not arrived.
+ * The signals gate each other, which is why neither is run to completion before the other. A
+ * request that starts during a DOM pause is caught because the next pass sees the network busy
+ * again, and the mounts it triggers are caught because they move the count.
+ *
+ * The budget is shared. Running out throws, and the message names the phase still unsatisfied,
+ * because the fixes differ: a stuck request wants a larger request budget, a slow render wants a
+ * larger render budget. The caller discloses that as a coverage gap, which is honest, where
+ * returning quietly would publish a measurement of a page that had not arrived.
+ *
+ * Known limit, stated so a reviewer can attack it (tracked as issue #184): a pause driven purely by
+ * client-side work with no request behind it is not covered. The network is genuinely quiet during
+ * it, so a client-side pause longer than the DOM window can still read as settled. The threshold is
+ * roughly that window, about 1.7 seconds of a frozen count that is also network-idle. Raising
+ * readyTimeoutMs does not help, because the loop already believes it is done and has returned rather
+ * than run out of budget. Closing this would need the application to signal its own render
+ * completion, which this design avoids on purpose so it can measure any application without
+ * cooperation.
  *
  * Exported for tests. Product code reaches this through Page.gotoReady().
  */
 export async function waitForRendered(pw: ReadinessPage, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  try {
-    await pw.waitForLoadState('networkidle', { timeout: timeoutMs });
-  } catch (err) {
-    if (!isTimeout(err)) {
-      throw err;
-    }
-    throw new Error(readinessTimeout('network activity did not go quiet', timeoutMs, ''));
-  }
 
   let previous: number | null = null;
   let repeats = 0;
@@ -379,12 +441,22 @@ export async function waitForRendered(pw: ReadinessPage, timeoutMs: number): Pro
     const elements = await pw.evaluate(() => document.getElementsByTagName('*').length);
     repeats = elements === previous ? repeats + 1 : 1;
     previous = elements;
-    if (repeats >= SETTLE_SAMPLES_REQUIRED) {
+
+    const domStable = repeats >= SETTLE_SAMPLES_REQUIRED;
+    // Read live every pass, so a request that started since the last read resets the window.
+    const networkQuiet = pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS);
+    if (domStable && networkQuiet) {
       return;
     }
 
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
+      // Name the phase still unsatisfied. A settled DOM waiting only on the network points the
+      // operator at a request budget; otherwise the DOM never stopped and its last count is the
+      // useful detail.
+      if (domStable && !networkQuiet) {
+        throw new Error(readinessTimeout('network activity did not go quiet', timeoutMs, ''));
+      }
       throw new Error(
         readinessTimeout('DOM did not stop changing', timeoutMs, `, last element count ${elements}`),
       );
@@ -410,10 +482,21 @@ function attachAxeBridge(page: Page, pw: PwPage): void {
   });
 }
 
-function wrapPage(pw: PwPage, context: BrowserContext, cdp: CDPSession, readyTimeoutMs: number): Page {
+function wrapPage(
+  pw: PwPage,
+  context: BrowserContext,
+  cdp: CDPSession,
+  readyTimeoutMs: number,
+  network: NetworkActivity,
+): Page {
+  // The readiness seam: the DOM read from the page, the network signal from the live tracker.
+  const readiness: ReadinessPage = {
+    evaluate: (fn) => pw.evaluate(fn),
+    networkQuietFor: (windowMs) => network.networkQuietFor(windowMs),
+  };
   const page: Page = {
     async gotoReady(): Promise<void> {
-      await waitForRendered(pw, readyTimeoutMs);
+      await waitForRendered(readiness, readyTimeoutMs);
     },
     async focusBody(): Promise<void> {
       await pw.evaluate(() => {
@@ -580,14 +663,23 @@ function installPathHelper(): void {
  * (for example from a Playwright test suite). It attaches a CDP session for AX reads and installs the
  * path helper, then returns a usabl Page whose close() is a no-op: the caller owns the page and its
  * context, so adoption must never close them. Navigation and readiness are the caller's job.
+ *
+ * The in-flight tracker starts at adoption, so it counts only requests fired after this call. The
+ * one caller today, checkPage in playwright-helper.ts, never calls gotoReady, so this is inert. A
+ * future caller that adopts a page mid-load and then calls gotoReady expecting the pre-adoption
+ * requests to count would read idle at once and could return on a half-rendered page. Such a caller
+ * must adopt before it navigates, or wait for readiness itself.
  */
 export async function adoptPage(pw: PwPage): Promise<Page> {
   const context = pw.context();
   const cdp = await context.newCDPSession(pw);
   await cdp.send('Accessibility.enable');
   await pw.evaluate(installPathHelper);
+  // The caller already navigated, so this tracker starts counting from adoption forward. A caller
+  // that then uses gotoReady gets readiness measured against requests fired after adoption.
+  const network = makeNetworkActivityTracker(pw);
   // Adoption has no operator config to read, so a caller that does use gotoReady gets the default.
-  const page = wrapPage(pw, context, cdp, readyTimeoutMsFor({}));
+  const page = wrapPage(pw, context, cdp, readyTimeoutMsFor({}), network);
   return { ...page, close: async (): Promise<void> => {} };
 }
 
@@ -605,12 +697,15 @@ export function makeRealBrowserDriver(
       );
       const page = await context.newPage();
       await page.addInitScript(LIVE_AND_PATH_INIT_SCRIPT);
+      // Attach the in-flight tracker before navigating, so the navigation's own requests are
+      // counted and readiness cannot read idle off a page whose first responses have not landed.
+      const network = makeNetworkActivityTracker(page);
       const cdp = await context.newCDPSession(page);
       await cdp.send('Accessibility.enable');
       // open() owns navigation and gotoReady() only waits for readiness. Navigation takes the same
       // budget, so one config number covers the whole cost of reaching a screen.
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });
-      return wrapPage(page, context, cdp, readyTimeoutMs);
+      return wrapPage(page, context, cdp, readyTimeoutMs, network);
     },
     async close(): Promise<void> {
       if (browser !== null) {
