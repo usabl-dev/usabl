@@ -22,29 +22,26 @@ interface MountStep {
 
 interface FakePageSpec {
   mounts?: MountStep[];
-  networkIdleAfterMs?: number;
+  // A single in-flight request that clears at this time. Before it, the network is not quiet; after
+  // it plus one quiet window, the network reads idle. This replaces the old networkIdleAfterMs, now
+  // that readiness reads a live in-flight signal rather than a one-shot networkidle event.
+  requestClearsAtMs?: number;
   networkNeverIdle?: boolean;
-  networkError?: Error;
   neverStops?: boolean;
+  // A page-side failure thrown from evaluate, such as a closed context. Readiness must let it
+  // through unchanged rather than swallow it or relabel it as a timeout.
+  evaluateError?: Error;
 }
 
 interface FakePage {
-  waitForLoadState(state: 'networkidle', options: { timeout: number }): Promise<void>;
+  networkQuietFor(windowMs: number): boolean;
   evaluate(fn: () => number): Promise<number>;
   elements(): number;
   events: string[];
 }
 
-// Playwright marks its own timeouts with this name. Confirmed against a real page whose request
-// never returns, which reports "page.waitForLoadState: Timeout 1500ms exceeded".
-function timeoutError(timeout: number): Error {
-  const error = new Error(`page.waitForLoadState: Timeout ${timeout}ms exceeded.`);
-  error.name = 'TimeoutError';
-  return error;
-}
-
-// A page whose element count follows the clock, not the number of times it is read, so the test
-// describes a page that mounts on its own timeline the way a real application does.
+// A page whose element count and network signal both follow the clock, not the number of times they
+// are read, so the test describes a page that mounts and fetches on its own timeline.
 function makeFakePage(spec: FakePageSpec): FakePage {
   const start = Date.now();
   const mounts = spec.mounts ?? [{ atMs: 0, elements: 0 }];
@@ -63,24 +60,30 @@ function makeFakePage(spec: FakePageSpec): FakePage {
     return current;
   };
 
+  // When the in-flight count was last zero. A network that never idles is never zero, so its quiet
+  // window can never be satisfied.
+  const idleSince = (elapsed: number): number | null => {
+    if (spec.networkNeverIdle === true) {
+      return null;
+    }
+    const clearsAt = spec.requestClearsAtMs ?? 0;
+    return elapsed >= clearsAt ? clearsAt : null;
+  };
+
   return {
     events,
     elements,
-    async waitForLoadState(_state: 'networkidle', options: { timeout: number }): Promise<void> {
-      if (spec.networkError !== undefined) {
-        throw spec.networkError;
-      }
-      if (spec.networkNeverIdle === true) {
-        await new Promise<void>((resolve) => setTimeout(resolve, options.timeout));
-        throw timeoutError(options.timeout);
-      }
-      if (spec.networkIdleAfterMs !== undefined) {
-        await new Promise<void>((resolve) => setTimeout(resolve, spec.networkIdleAfterMs));
-      }
-      events.push('networkidle');
+    networkQuietFor(windowMs: number): boolean {
+      events.push('network');
+      const elapsed = Date.now() - start;
+      const since = idleSince(elapsed);
+      return since !== null && elapsed - since >= windowMs;
     },
     async evaluate(): Promise<number> {
       events.push('sample');
+      if (spec.evaluateError !== undefined) {
+        throw spec.evaluateError;
+      }
       return elements();
     },
   };
@@ -95,16 +98,24 @@ describe('waitForRendered', () => {
     vi.useRealTimers();
   });
 
-  it('waits for the network to go quiet before it reads the page', async () => {
-    const page = makeFakePage({ networkIdleAfterMs: 300 });
-    const done = waitForRendered(page, TEST_BUDGET_MS);
+  it('does not return while a request is still in flight, even on a settled DOM', async () => {
+    // The DOM is settled from the start, but a request is in flight until 1500ms. Readiness must
+    // hold until the network is also quiet. The old ordering waited on the network before reading
+    // the DOM at all; the new loop reads both every pass and gates the return on both.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 80 }], requestClearsAtMs: 1_500 });
+    const start = Date.now();
+    const outcome = { readyAtMs: -1 };
+    const done = waitForRendered(page, TEST_BUDGET_MS).then(() => {
+      outcome.readyAtMs = Date.now() - start;
+    });
 
-    await vi.advanceTimersByTimeAsync(200);
-    expect(page.events).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_400);
+    expect(outcome.readyAtMs).toBe(-1);
 
     await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
     await done;
-    expect(page.events[0]).toBe('networkidle');
+    // Ready only after the request cleared at 1500ms plus one quiet window.
+    expect(outcome.readyAtMs).toBeGreaterThanOrEqual(2_000);
   });
 
   it('stays waiting while the page is still mounting and returns once it holds still', async () => {
@@ -152,8 +163,11 @@ describe('waitForRendered', () => {
     expect(outcome.failedAtMs).toBeLessThanOrEqual(TEST_BUDGET_MS + 500);
   });
 
-  it('names the network phase when the page never goes quiet', async () => {
-    const page = makeFakePage({ networkNeverIdle: true });
+  it('names the network phase when the DOM settled but the network never goes quiet', async () => {
+    // The DOM is stable from the start, so the only thing outstanding is the network. The phase
+    // named on timeout has to be the network, because a stuck request is fixed by a larger request
+    // budget, not by a slower render.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 60 }], networkNeverIdle: true });
     const done = waitForRendered(page, TEST_BUDGET_MS);
     const rejects = expect(done).rejects.toThrow(/network activity did not go quiet within 15000ms/);
 
@@ -162,14 +176,6 @@ describe('waitForRendered', () => {
     // The two phases have different fixes, so the message says which one ran out and how to give
     // the run more room.
     await expect(done).rejects.toThrow(/readyTimeoutMs/);
-    expect(page.events).not.toContain('sample');
-  });
-
-  it('passes a page failure that is not a timeout through unchanged', async () => {
-    const failure = new Error('Target page, context or browser has been closed');
-    const page = makeFakePage({ networkError: failure });
-
-    await expect(waitForRendered(page, TEST_BUDGET_MS)).rejects.toBe(failure);
   });
 
   it('honours the budget it is given rather than an engine constant', async () => {
@@ -218,6 +224,16 @@ describe('waitForRendered', () => {
     // An empty state is a real page. Stability is the test, not how much the page rendered.
     expect(outcome.readyAtMs).toBeGreaterThanOrEqual(0);
     expect(outcome.readyAtMs).toBeLessThanOrEqual(2_000);
+  });
+
+  it('passes a page failure out of evaluate through unchanged', async () => {
+    // A closed context or a detached frame throws from evaluate, not as a TimeoutError. Readiness
+    // must surface that as-is, so the caller can tell a broken page from a slow one. Nothing here
+    // catches it, so this pins that it stays uncaught and is not relabelled as a readiness timeout.
+    const failure = new Error('Target page, context or browser has been closed');
+    const page = makeFakePage({ evaluateError: failure });
+
+    await expect(waitForRendered(page, TEST_BUDGET_MS)).rejects.toBe(failure);
   });
 });
 
