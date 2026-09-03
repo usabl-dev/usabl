@@ -26,7 +26,7 @@ export function gate(input: GateInput): GateOutput {
       verdict: 'approval_required',
       findings: accessibility.findings,
       exitCode: 2,
-      summary: `approval required: ${input.guardDivergedPaths.length} guarded path(s) changed`,
+      summary: approvalSummary(input.guardDivergedPaths.length, accessibility),
       accessibilityVerdict: accessibility.verdict,
       accessibilityExitCode: accessibility.exitCode,
     };
@@ -184,6 +184,35 @@ export function findingKey(f: Finding): string {
  * The per-gap breakdown, including which gaps are unmapped files, is already rendered for every
  * gap by the PR comment and the overlay.
  */
+/**
+ * The approval line, carrying the accessibility outcome it used to discard.
+ *
+ * The gate already ran the accessibility side before reaching this branch, and already carries its
+ * findings, verdict and exit code through. Only the summary was dropped, so a run that diverged
+ * policy and also failed to reach some screens said nothing about the second fact. Nobody was
+ * misled about why they were blocked, because the guarded path is the block and the line names it.
+ * They were left to meet the incomplete coverage on the next run instead.
+ *
+ * The accessibility half is the untouched accessibility summary, not a second phrasing of it. That
+ * keeps one source for the coverage count and gives the line a property worth having: it is the
+ * same text the run will print once the approval lands and policy stops diverging.
+ *
+ * A run with no UI-touching file has no accessibility verdict and no coverage claim, so the clause
+ * is omitted rather than filled with "nothing to check". This is the same rule the accessibility
+ * summary already follows for a clean run, where inventing "0 gap(s)" would teach the reader to
+ * skip the clause on the runs where it carries something.
+ */
+function approvalSummary(
+  divergedPaths: number,
+  accessibility: { verdict: AccessibilityVerdict | null; summary: string },
+): string {
+  const head = `approval required: ${divergedPaths} guarded path(s) changed`;
+  if (accessibility.verdict === null) {
+    return head;
+  }
+  return `${head}; accessibility ${accessibility.summary}`;
+}
+
 function verdictSummary(
   verdict: AccessibilityVerdict,
   gating: Finding[],
