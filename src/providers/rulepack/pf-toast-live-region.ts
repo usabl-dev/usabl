@@ -12,7 +12,18 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Draf
   }
 
   // Set difference keeps this honest: only alerts outside any live container fail.
-  const containedAlerts = await ctx.page.queryAll(`${SEL.liveContainer} ${SEL.alert}`);
+  //
+  // The contained query pairs the descendant combinator with each live-container term
+  // separately. SEL.liveContainer is a comma group, and a comma binds looser than a descendant
+  // combinator, so `${SEL.liveContainer} ${SEL.alert}` would attach the alert only to the last
+  // term and read the other containers as bare matches. That left every real alert outside the
+  // contained set, so a contained alert was reported as loose. Distributing the descendant across
+  // each term matches an alert that sits inside any live container.
+  const containedQuery = SEL.liveContainer
+    .split(',')
+    .map((container) => `${container.trim()} ${SEL.alert}`)
+    .join(', ');
+  const containedAlerts = await ctx.page.queryAll(containedQuery);
   const containedSelectors = new Set(containedAlerts.map((candidate) => candidate.selector));
 
   const drafts: Draft[] = [];

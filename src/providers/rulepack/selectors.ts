@@ -14,9 +14,15 @@
  * Version assumption: PatternFly 6. Two things are pinned to it. OUIA type values carry a
  * "PF6/" prefix, written by getOUIAProps in @patternfly/react-core. Class names carry a
  * "pf-v6-c-" prefix. Both need review for PatternFly 7. The role and ARIA state arms do not.
+ *
+ * Block classes use the whole-token match [class~="pf-v6-c-block"], never the substring match
+ * [class*="pf-v6-c-block"]. PatternFly writes BEM child classes off the same stem, so
+ * pf-v6-c-toolbar also prefixes pf-v6-c-toolbar__content, __group and __item, and a substring
+ * match lands on every wrapper as well as the block. ~= matches one space-separated class token,
+ * so it hits the block element and skips its children.
  */
 export const SEL = {
-  alert: '[class*="pf-v6-c-alert"]',
+  alert: '[class~="pf-v6-c-alert"]',
   liveContainer: '[aria-live], [role="status"], [role="alert"], [role="log"]',
   unnamedButton: 'button[aria-label=""], button:not([aria-label]):not([aria-labelledby])',
 
@@ -71,7 +77,7 @@ export const SEL = {
 
   dialog: '[role="dialog"], [role="alertdialog"]',
   menu: '[role="menu"], [role="listbox"]',
-  toolbar: '[class*="pf-v6-c-toolbar"]',
+  toolbar: '[class~="pf-v6-c-toolbar"]',
   rowActionButton: 'td button, td [role="button"]',
   unscopedTh: 'table th:not([scope]):not([id])',
 } as const;

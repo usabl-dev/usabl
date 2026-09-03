@@ -69,12 +69,20 @@ function draftFrom(rule: string): Draft {
 
 describe('makeRulepackProvider', () => {
   it('flags alerts outside live regions and stays silent when all alerts are contained', async () => {
+    // The contained query is built by distributing the alert descendant across each live-container
+    // term, because a comma binds looser than a descendant combinator and the plain
+    // `${SEL.liveContainer} ${SEL.alert}` concatenation attached the alert only to the last term.
+    // This mock keys on the query the rule actually sends, so it must use the same distributed form.
+    const containedQuery = SEL.liveContainer
+      .split(',')
+      .map((container) => `${container.trim()} ${SEL.alert}`)
+      .join(', ');
     const outsideAlert = element('.outside-alert');
     const insideAlert = element('.inside-alert');
     const provider = makeRulepackProvider();
     const outsideContext = await makeContext({
       [SEL.alert]: [outsideAlert, insideAlert],
-      [`${SEL.liveContainer} ${SEL.alert}`]: [insideAlert],
+      [containedQuery]: [insideAlert],
     });
 
     const outsideDrafts = draftsOf(await provider.run(outsideContext));
@@ -89,7 +97,7 @@ describe('makeRulepackProvider', () => {
 
     const insideOnlyContext = await makeContext({
       [SEL.alert]: [insideAlert],
-      [`${SEL.liveContainer} ${SEL.alert}`]: [insideAlert],
+      [containedQuery]: [insideAlert],
     });
 
     await expect(provider.run(insideOnlyContext)).resolves.toEqual([]);
@@ -266,10 +274,14 @@ describe('makeRulepackProvider', () => {
     const provider = makeRulepackProvider([extra]);
     // A toast outside a live region would normally flag on the app profile.
     const outsideAlert = element('.outside-alert');
+    const containedQuery = SEL.liveContainer
+      .split(',')
+      .map((container) => `${container.trim()} ${SEL.alert}`)
+      .join(', ');
     const docsContext = await makeContext(
       {
         [SEL.alert]: [outsideAlert],
-        [`${SEL.liveContainer} ${SEL.alert}`]: [],
+        [containedQuery]: [],
       },
       {},
       'docs',
