@@ -41,6 +41,19 @@ describe('computeCoverage', () => {
     expect(cov.gaps).toHaveLength(0);
   });
 
+  it('classifies a changed .tsx file as UI under a {ts,tsx} brace glob rather than a false green', async () => {
+    // The common React glob src/**/*.{ts,tsx} must agree with discovery. If matchGlob
+    // could not expand the brace group, App.tsx would be dropped from uiFiles, the run
+    // would report nothingToCheck, and the exit code would be a silent green.
+    const braceConfig: UsablConfig = {
+      ...baseConfig,
+      uiFileGlobs: ['src/**/*.{ts,tsx}'],
+      discovery: { routerFile: 'src/router.tsx', wideBlastGlobs: ['src/**/*.{ts,tsx}'] },
+    };
+    const cov = await computeCoverage(fsOf({ 'src/router.tsx': '' }), braceConfig, ['src/App.tsx']);
+    expect(cov.nothingToCheck).toBe(false);
+  });
+
   it('maps a changed UI file to an affected screen via the sidecar route manifest', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({

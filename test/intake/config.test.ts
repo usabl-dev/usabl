@@ -72,3 +72,66 @@ describe('parseUsablConfig surface reachedWhen', () => {
     ).toThrow(/reachedWhen/);
   });
 });
+
+describe('parseUsablConfig glob syntax', () => {
+  it('loads a config using only stars and brace groups', () => {
+    const config = parseUsablConfig(
+      configJson({
+        uiFileGlobs: ['src/**/*.{ts,tsx}'],
+        discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: ['src/**/*.css'] },
+        guardedPaths: ['usabl.config.json', 'src/policy'],
+      }),
+    );
+    expect(config.uiFileGlobs).toEqual(['src/**/*.{ts,tsx}']);
+  });
+
+  it('rejects a uiFileGlobs pattern with an unsupported character', () => {
+    for (const bad of ['src/**/*.[jt]s', 'src/(a|b).ts', 'src/**/*.ts?']) {
+      expect(() => parseUsablConfig(configJson({ uiFileGlobs: [bad] })), bad).toThrow(/uiFileGlobs/);
+    }
+  });
+
+  it('names the offending pattern and the unsupported character', () => {
+    let message = '';
+    try {
+      parseUsablConfig(configJson({ uiFileGlobs: ['src/**/*.[jt]s'] }));
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('src/**/*.[jt]s');
+    expect(message).toContain('[');
+    expect(message).toMatch(/\{a,b\}/);
+  });
+
+  it('rejects an unsupported character in discovery.wideBlastGlobs', () => {
+    expect(() =>
+      parseUsablConfig(
+        configJson({ discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: ['src/**/*.[jt]s'] } }),
+      ),
+    ).toThrow(/wideBlastGlobs/);
+  });
+
+  it('rejects an unsupported character in guardedPaths', () => {
+    expect(() =>
+      parseUsablConfig(configJson({ guardedPaths: ['usabl.config.json', 'src/(a|b)'] })),
+    ).toThrow(/guardedPaths/);
+  });
+
+  it('rejects a nested brace form and names the brace syntax', () => {
+    let message = '';
+    try {
+      parseUsablConfig(configJson({ uiFileGlobs: ['src/{a,{b,c}}.ts'] }));
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('src/{a,{b,c}}.ts');
+    expect(message).toMatch(/brace/);
+  });
+
+  it('loads a config with a comma-less brace, which is a literal pattern', () => {
+    // A comma-less {tsx} is not a group. Node glob treats it as literal text and matchGlob
+    // now agrees, so it is a valid pattern and must load, not be refused.
+    const config = parseUsablConfig(configJson({ uiFileGlobs: ['src/App.{tsx}'] }));
+    expect(config.uiFileGlobs).toEqual(['src/App.{tsx}']);
+  });
+});
