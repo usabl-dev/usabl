@@ -116,4 +116,22 @@ describe('parseUsablConfig glob syntax', () => {
       parseUsablConfig(configJson({ guardedPaths: ['usabl.config.json', 'src/(a|b)'] })),
     ).toThrow(/guardedPaths/);
   });
+
+  it('rejects a nested brace form and names the brace syntax', () => {
+    let message = '';
+    try {
+      parseUsablConfig(configJson({ uiFileGlobs: ['src/{a,{b,c}}.ts'] }));
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('src/{a,{b,c}}.ts');
+    expect(message).toMatch(/brace/);
+  });
+
+  it('loads a config with a comma-less brace, which is a literal pattern', () => {
+    // A comma-less {tsx} is not a group. Node glob treats it as literal text and matchGlob
+    // now agrees, so it is a valid pattern and must load, not be refused.
+    const config = parseUsablConfig(configJson({ uiFileGlobs: ['src/App.{tsx}'] }));
+    expect(config.uiFileGlobs).toEqual(['src/App.{tsx}']);
+  });
 });

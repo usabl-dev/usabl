@@ -8,10 +8,16 @@
  * under the star rules. Multiple groups expand as a cartesian product. Nested braces are
  * not expanded here; the config-load guard refuses patterns with syntax this unit cannot
  * evaluate, so a caller never reaches matchGlob with an unsupported pattern.
+ *
+ * A brace expands only when its body contains a comma. Node's glob and minimatch treat a
+ * comma-less `{...}` as literal text, so `{tsx}` matches a filename that literally contains
+ * `{tsx}`, not one where the braces are stripped. matchGlob follows the same rule so it
+ * classifies files the same way discovery does.
  */
 
-// Expand one level of {a,b} groups into every literal combination. Returns null when the
-// braces are nested or malformed, which signals the caller to leave the pattern alone.
+// Expand one level of {a,b} groups into every literal combination. A comma-less {...} is
+// literal, so its braces stay in the output. Returns null when a brace is nested or
+// unbalanced, which signals the caller to leave the pattern alone.
 export function expandBraces(pattern: string): string[] | null {
   let results = [''];
   let i = 0;
@@ -30,6 +36,12 @@ export function expandBraces(pattern: string): string[] | null {
       // A nested open brace inside the group is not handled here.
       if (body.includes('{')) {
         return null;
+      }
+      // A comma-less brace is not a group. Keep the braces as literal text, matching Node.
+      if (!body.includes(',')) {
+        results = results.map((prefix) => prefix + '{' + body + '}');
+        i = close + 1;
+        continue;
       }
       const alternatives = body.split(',');
       const next: string[] = [];

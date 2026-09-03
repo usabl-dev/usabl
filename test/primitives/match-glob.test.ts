@@ -30,9 +30,30 @@ describe('matchGlob', () => {
       expect(matchGlob(pattern, 'src/run.js')).toBe(false);
     });
 
-    it('treats a single alternative brace like literal text', () => {
-      expect(matchGlob('src/{ts}/a.ts', 'src/ts/a.ts')).toBe(true);
-      expect(matchGlob('src/{ts}/a.ts', 'src/tsx/a.ts')).toBe(false);
+    it('treats a comma-less brace group as literal text, matching Node glob', () => {
+      // Node and minimatch expand {...} only when the body has a comma. A comma-less
+      // {tsx} is literal, so it matches a file that literally contains {tsx} and not one
+      // where the braces are stripped.
+      expect(matchGlob('src/App.{tsx}', 'src/App.{tsx}')).toBe(true);
+      expect(matchGlob('src/App.{tsx}', 'src/App.tsx')).toBe(false);
+      expect(matchGlob('src/{ts}/a.ts', 'src/{ts}/a.ts')).toBe(true);
+      expect(matchGlob('src/{ts}/a.ts', 'src/ts/a.ts')).toBe(false);
+    });
+
+    it('treats an empty brace {} as literal text', () => {
+      expect(matchGlob('src/App.{}', 'src/App.{}')).toBe(true);
+      expect(matchGlob('src/App.{}', 'src/App.')).toBe(false);
+    });
+
+    it('expands a brace with a comma even when an alternative is empty', () => {
+      // {,} has a comma, so it expands to two empty alternatives.
+      expect(matchGlob('src/App.{,}tsx', 'src/App.tsx')).toBe(true);
+      // {ts,} expands to "ts" or "".
+      expect(matchGlob('src/util.{ts,}', 'src/util.ts')).toBe(true);
+      expect(matchGlob('src/util.{ts,}', 'src/util.')).toBe(true);
+      // {,ts} expands to "" or "ts".
+      expect(matchGlob('src/util.{,ts}', 'src/util.ts')).toBe(true);
+      expect(matchGlob('src/util.{,ts}', 'src/util.')).toBe(true);
     });
   });
 
