@@ -177,10 +177,12 @@ describe('markUnseenScreens', () => {
     expect(notCovered[0]?.reason).toContain('#app-root');
   });
 
-  it('does not mark a body-only screen unseen if its reachability selector matched', () => {
-    // Positive proof of render overrides the body-only floor: if the operator declared a selector
-    // and it is present, the screen rendered even if the keyboard walk found nowhere to go.
-    // reachedSelectorPresent true means it matched, so the screen is seen.
+  it('still marks a body-only screen unseen even when its reachability selector matched', () => {
+    // The two signals are independent. reachedSelectorPresent true only means "do not raise the
+    // reachedWhen gap", never "cancel the body-only gap". A selector aimed at a persistent app shell
+    // element (header, nav, footer) matches on every route, including a login wall or a screen that
+    // threw on mount while the shell survived. Those screens are still body-only, so they stay unseen
+    // and their drafts are dropped. Suppressing the body-only gap here would mint a false green.
     const pass = markUnseenScreens([
       scan({
         screenId: 'overview',
@@ -190,8 +192,10 @@ describe('markUnseenScreens', () => {
         reachedSelectorPresent: true,
       }),
     ]);
-    expect(pass.unseenScreenIds).toEqual([]);
-    expect(pass.screens[0]?.drafts).toHaveLength(1);
+    expect(pass.unseenScreenIds).toEqual(['overview']);
+    expect(pass.screens[0]?.drafts).toEqual([]);
+    const gap = pass.screens[0]?.gaps.find((g) => g.state === 'not-covered');
+    expect(gap?.reason).toContain('keyboard stop');
   });
 
   it('strips applicability as well as drafts from a screen it cannot claim it saw', () => {

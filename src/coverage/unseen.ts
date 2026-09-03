@@ -16,9 +16,12 @@
  * Two detectors run, both positive observations about one screen:
  *   1. isBodyOnly reads the keyboard transcript. Every stop stayed on the document body, so the page
  *      had nothing to walk. This is the sound floor and runs for every screen.
+ *      A body-only screen is unseen even if reachedWhen matched, because a selector aimed at a
+ *      persistent app shell matches on a login wall too.
  *   2. reachedSelectorPresent reads a per-surface assertion the operator declared and the scan
  *      measured against the live DOM. Only an explicit false (declared and absent) marks a screen
- *      unseen. A true value is positive proof the screen rendered and overrides the body-only floor.
+ *      unseen. A true value only suppresses its own reachedWhen gap; it never cancels the body-only
+ *      floor. The two detectors are independent.
  *
  * The findings are dropped, not downgraded. The gate weighs a new failure before it weighs
  * missing coverage on purpose, because a real new barrier is the actionable answer. Leaving
@@ -75,20 +78,19 @@ function unseenGap(scan: ScreenScan, detectorSentences: string[]): CoverageGap {
  * Strip drafts and applicability from every screen the engine cannot claim it saw and disclose
  * each one as a coverage gap. Screens that were really walked pass through untouched, gaps and all.
  *
- * A surface that declared a reachability selector and matched it (reachedSelectorPresent === true)
- * has proved it rendered, so it passes through untouched even if the keyboard walk found nowhere to
- * go. Only an explicit false triggers the reachability gap.
+ * The two detectors are independent. reachedSelectorPresent === true means only "do not raise the
+ * reachedWhen gap", never "cancel the body-only gap". A reachedWhen aimed at a persistent app shell
+ * element (a header, nav, or footer present on every route) matches even on a login wall or a screen
+ * that threw on mount while the shell survived. Those screens are still body-only, so a matched
+ * selector must not suppress the body-only finding, or the run would mint a false green.
+ *
+ * A genuinely reached screen is not body-only in the first place, so it still passes through with its
+ * drafts. Only an explicit reachedSelectorPresent === false raises the reachability gap.
  */
 export function markUnseenScreens(screens: ScreenScan[]): UnseenPass {
   const unseenScreenIds: string[] = [];
 
   const marked = screens.map((scan) => {
-    // Positive proof of render. A declared selector that matched settles the question, so no
-    // detector runs and the screen keeps its drafts.
-    if (scan.reachedSelectorPresent === true) {
-      return scan;
-    }
-
     const sentences: string[] = [];
     if (isBodyOnly(scan)) {
       sentences.push(
