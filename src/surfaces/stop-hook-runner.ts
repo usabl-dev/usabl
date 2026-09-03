@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 /**
- * Stop-hook runner for Claude Code protocol integration.
+ * Stop-hook runner for Claude Code and Cursor protocol integration.
  * This unit projects existing trust signals and prints protocol output only.
  * It must never block via exit code or mint a verdict outside the gate.
+ *
+ * Two output protocols:
+ *   Claude Code (default): {"decision":"block","reason":"..."} on stdout to block.
+ *   Cursor (--cursor):     {"followup_message":"..."} on stdout to loop the agent,
+ *                          {} to allow it to finish. Cursor's stop event receives
+ *                          {"status":"...","loop_count":N} on stdin; loop_count > 0
+ *                          maps to stopHookActive to prevent recursive loops.
  */
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
@@ -86,9 +93,36 @@ async function writeStderr(ports: StopHookRunnerPorts, text: string): Promise<vo
   await ports.stderrWrite(text.endsWith('\n') ? text : `${text}\n`);
 }
 
+// Cursor stdin carries loop_count so we can detect re-entry. Claude stdin carries
+// stop_hook_active as a boolean. This parser reads both shapes into the shared input type.
+function parseCursorStopInput(raw: unknown): StopHookInput {
+  if (!isRecord(raw)) {
+    return { stopHookActive: false, sessionId: null };
+  }
+  // Cursor sends loop_count as an integer. Values above 0 mean the agent already looped,
+  // which maps to stopHookActive to prevent recursive block-loop cycles.
+  const loopCount = raw['loop_count'];
+  const stopHookActive = typeof loopCount === 'number' && loopCount > 0;
+  // Cursor does not send session_id today. If it does later, the same parse applies.
+  const sessionIdRaw = raw['conversation_id'] ?? raw['session_id'];
+  const sessionId = typeof sessionIdRaw === 'string' && sessionIdRaw.trim().length > 0 ? sessionIdRaw : null;
+  return { stopHookActive, sessionId };
+}
+
 async function emitBlock(ports: StopHookRunnerPorts, reason: string): Promise<void> {
   // Claude Code only blocks when stdout receives a decision object, so exit codes stay non-blocking.
   await ports.stdoutWrite(JSON.stringify({ decision: 'block', reason }) + '\n');
+}
+
+async function emitCursorBlock(ports: StopHookRunnerPorts, reason: string): Promise<void> {
+  // Cursor's stop hook loops the agent by receiving a followup_message. The message becomes
+  // additional context for the agent's next turn, telling it what failed and why.
+  await ports.stdoutWrite(JSON.stringify({ followup_message: reason }) + '\n');
+}
+
+async function emitCursorAllow(ports: StopHookRunnerPorts): Promise<void> {
+  // An empty object lets the agent finish. Cursor requires valid JSON on stdout.
+  await ports.stdoutWrite('{}\n');
 }
 
 async function consumeBypassOnce(fs: StopHookRunnerFs): Promise<boolean> {
@@ -186,12 +220,40 @@ export function makeStopHookRunnerPorts(): StopHookRunnerPorts {
   };
 }
 
-export async function runStopHook(input: StopHookInput, ports: StopHookRunnerPorts): Promise<number> {
+export interface StopHookOptions {
+  cursorMode: boolean;
+}
+
+const DEFAULT_OPTIONS: StopHookOptions = { cursorMode: false };
+
+// Protocol-aware block emitter. Claude uses decision: block, Cursor uses followup_message.
+async function emitProtocolBlock(ports: StopHookRunnerPorts, reason: string, options: StopHookOptions): Promise<void> {
+  if (options.cursorMode) {
+    await emitCursorBlock(ports, reason);
+  } else {
+    await emitBlock(ports, reason);
+  }
+}
+
+// Protocol-aware allow emitter. Claude emits nothing to stdout (stderr only).
+// Cursor must emit {} so the hook protocol response is valid JSON.
+async function emitProtocolAllow(ports: StopHookRunnerPorts, message: string, options: StopHookOptions): Promise<void> {
+  await writeStderr(ports, message);
+  if (options.cursorMode) {
+    await emitCursorAllow(ports);
+  }
+}
+
+export async function runStopHook(
+  input: StopHookInput,
+  ports: StopHookRunnerPorts,
+  options: StopHookOptions = DEFAULT_OPTIONS,
+): Promise<number> {
   let deps: Deps | null = null;
   try {
     if (await consumeBypassOnce(ports.fs)) {
       // One-shot bypass is loud so temporary overrides cannot become sticky silent greens.
-      await writeStderr(ports, 'NOT verified - BYPASS consumed for this stop only.');
+      await emitProtocolAllow(ports, 'NOT verified - BYPASS consumed for this stop only.', options);
       return 0;
     }
 
@@ -202,7 +264,7 @@ export async function runStopHook(input: StopHookInput, ports: StopHookRunnerPor
       // Receipt trust binds committed state, while checkGuard catches local guarded edits before any fast allow.
       const receiptCheck = await verifyStoredReceipt(ports, deps, config);
       if (receiptCheck.verified) {
-        await writeStderr(ports, receiptCheck.details);
+        await emitProtocolAllow(ports, receiptCheck.details, options);
         return 0;
       }
     }
@@ -230,11 +292,11 @@ export async function runStopHook(input: StopHookInput, ports: StopHookRunnerPor
             if (input.stopHookActive) {
               // Allow one continuation while active to avoid recursive stop-hook loops.
               // We keep the previous pins so a retry cannot convert detected drift into a silent allow.
-              await writeStderr(ports, `${message}. continuation already active.`);
+              await emitProtocolAllow(ports, `${message}. continuation already active.`, options);
               return 0;
             }
             // Drift is a trust boundary. Overwriting pins here would let "retry stop" clear the evidence.
-            await emitBlock(ports, message);
+            await emitProtocolBlock(ports, message, options);
             return 0;
           }
           await writeSessionPins(ports.fs, pinsPath, nextPins);
@@ -249,16 +311,16 @@ export async function runStopHook(input: StopHookInput, ports: StopHookRunnerPor
 
     const decision = ports.evaluateDecision(result, { stopHookActive: input.stopHookActive });
     if (decision.block) {
-      await emitBlock(ports, decision.message);
+      await emitProtocolBlock(ports, decision.message, options);
       return 0;
     }
 
-    await writeStderr(ports, decision.message);
+    await emitProtocolAllow(ports, decision.message, options);
     return 0;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // Hook errors fail open with disclosure because a wedged stop hook is worse than an honest unverified allow.
-    await writeStderr(ports, `NOT verified - stop hook error: ${message}`);
+    await emitProtocolAllow(ports, `NOT verified - stop hook error: ${message}`, options);
     return 0;
   } finally {
     if (deps !== null) {
@@ -270,12 +332,20 @@ export async function runStopHook(input: StopHookInput, ports: StopHookRunnerPor
 export async function runStopHookFromStdin(
   stdinText: string,
   ports: StopHookRunnerPorts = makeStopHookRunnerPorts(),
+  options: StopHookOptions = DEFAULT_OPTIONS,
 ): Promise<number> {
   try {
     const parsed: unknown = JSON.parse(stdinText);
-    return runStopHook(parseStopHookInput(parsed), ports);
+    // Cursor sends a different stdin shape (status, loop_count) than Claude (stop_hook_active, session_id).
+    const input = options.cursorMode ? parseCursorStopInput(parsed) : parseStopHookInput(parsed);
+    return runStopHook(input, ports, options);
   } catch {
-    await writeStderr(ports, 'NOT verified - invalid stop hook input JSON.');
+    if (options.cursorMode) {
+      await writeStderr(ports, 'NOT verified - invalid stop hook input JSON.');
+      await emitCursorAllow(ports);
+    } else {
+      await writeStderr(ports, 'NOT verified - invalid stop hook input JSON.');
+    }
     return 0;
   }
 }
@@ -289,5 +359,6 @@ async function readStdin(): Promise<string> {
 }
 
 export async function main(): Promise<number> {
-  return runStopHookFromStdin(await readStdin());
+  const cursorMode = process.argv.includes('--cursor');
+  return runStopHookFromStdin(await readStdin(), makeStopHookRunnerPorts(), { cursorMode });
 }

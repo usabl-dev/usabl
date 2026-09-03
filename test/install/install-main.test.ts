@@ -19,7 +19,7 @@ import {
 } from '../../src/install/ci.js';
 import { CLAUDE_SETTINGS_PATH } from '../../src/install/claude.js';
 import { CLAUDE_SKILL_CONTENTS, CLAUDE_SKILL_PATH } from '../../src/install/claude-skill.js';
-import { CURSOR_COMMAND_CONTENTS, CURSOR_COMMAND_PATH, CURSOR_RULE_CONTENTS, CURSOR_RULE_PATH } from '../../src/install/cursor.js';
+import { CURSOR_COMMAND_CONTENTS, CURSOR_COMMAND_PATH, CURSOR_HOOKS_JSON_PATH, CURSOR_RULE_CONTENTS, CURSOR_RULE_PATH, CURSOR_STOP_SCRIPT, CURSOR_STOP_SCRIPT_PATH } from '../../src/install/cursor.js';
 
 describe('usabl install command wiring', () => {
   let workspace: string;
@@ -120,13 +120,19 @@ describe('usabl install command wiring', () => {
     await expect(readFile(join(workspace, 'usabl.config.json'), 'utf8')).rejects.toThrow();
   });
 
-  it('routes --cursor to the cursor generator and writes the command and rule files', async () => {
+  it('routes --cursor to the cursor generator and writes the hook, command, and rule files', async () => {
     const code = await main(['install', '--cursor']);
     expect(code).toBe(0);
     const command = await readFile(join(workspace, CURSOR_COMMAND_PATH), 'utf8');
     const rule = await readFile(join(workspace, CURSOR_RULE_PATH), 'utf8');
+    const stopScript = await readFile(join(workspace, CURSOR_STOP_SCRIPT_PATH), 'utf8');
+    const hooksJson = await readFile(join(workspace, CURSOR_HOOKS_JSON_PATH), 'utf8');
     expect(command).toBe(CURSOR_COMMAND_CONTENTS);
     expect(rule).toBe(CURSOR_RULE_CONTENTS);
+    expect(stopScript).toBe(CURSOR_STOP_SCRIPT);
+    // hooks.json should wire the stop event.
+    const parsed = JSON.parse(hooksJson) as { hooks: { stop: Array<{ command: string }> } };
+    expect(parsed.hooks.stop[0]?.command).toBe('.cursor/hooks/usabl-stop.sh');
   });
 
   it('refuses with exit 2 when no install target flag is given', async () => {
