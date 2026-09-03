@@ -14,6 +14,7 @@ function emptyScan(): ScreenScan {
     drafts: [],
     gaps: [],
     applicability: [],
+    reachedSelectorPresent: null,
   };
 }
 

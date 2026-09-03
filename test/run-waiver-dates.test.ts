@@ -22,6 +22,7 @@ const cleanScan: ScreenScan = {
   drafts: [],
   gaps: [],
   applicability: [],
+  reachedSelectorPresent: null,
 };
 
 const failDraft: Draft = {

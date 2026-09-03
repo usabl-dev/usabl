@@ -29,6 +29,7 @@ function screenFixture(screenId: string, stops: ScreenScan['stops']): ScreenScan
     drafts: [],
     gaps: [],
     applicability: [],
+    reachedSelectorPresent: null,
   };
 }
 

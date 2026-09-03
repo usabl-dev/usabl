@@ -96,6 +96,7 @@ function blockedResult(over: Partial<Result> = {}): Result {
         drafts: [],
         gaps: [],
         applicability: [],
+        reachedSelectorPresent: null,
       },
     ],
     coverage: {

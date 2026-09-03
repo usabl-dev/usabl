@@ -60,6 +60,7 @@ function scanOf(draft: Draft): ScreenScan {
     drafts: [draft],
     gaps: [],
     applicability: [],
+    reachedSelectorPresent: null,
   };
 }
 
