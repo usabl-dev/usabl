@@ -3,7 +3,7 @@ import type { Page, ProviderContext } from '../../src/contracts/index.js'
 import { makeFakePage } from '../../src/deps/fakes.js'
 import { makeRulepackProvider } from '../../src/providers/rulepack/index.js'
 import { SEL } from '../../src/providers/rulepack/selectors.js'
-import { testConfig } from '../helpers.js'
+import { draftsOf, gapsOf, testConfig } from '../helpers.js'
 
 describe('menu toggle state attributes', () => {
   it('accepts valid false expanded state when Chromium omits it from AX properties', async () => {
@@ -23,8 +23,9 @@ describe('menu toggle state attributes', () => {
       config: testConfig(),
     }
 
-    const drafts = await makeRulepackProvider().run(context)
+    const output = await makeRulepackProvider().run(context)
 
-    expect(drafts).toEqual([])
+    expect(draftsOf(output)).toEqual([])
+    expect(gapsOf(output)).toEqual([])
   })
 })

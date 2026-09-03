@@ -456,6 +456,11 @@ export interface Provider {
 export interface ProviderOutput {
   drafts: Draft[];
   applicability?: RuleApplicability[];
+  // A provider that isolates its own checks returns a disclosed gap for each check that failed,
+  // so one failing check is scoped and named instead of dropping the whole provider's drafts.
+  // runProviders merges these with the gaps it raises itself. Absent means the provider reported
+  // no per-check failures, which is the honest reading of a provider that never sets it.
+  gaps?: CoverageGap[];
 }
 
 export interface ProviderRunResult {
