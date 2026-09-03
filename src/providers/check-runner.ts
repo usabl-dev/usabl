@@ -15,6 +15,7 @@ import type {
   StepRunner,
   UsablConfig,
 } from '../contracts/index.js';
+import { attachDomSourceToDrafts } from './dom-source.js';
 import { runProviders } from './index.js';
 
 export interface CheckRunnerDeps {
@@ -97,12 +98,13 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
           deps.allowedCapabilities,
         );
+        const drafts = await attachDomSourceToDrafts(page, providerResult.drafts);
 
         result = {
           screenId: screen.id,
           url: screen.url,
           stops,
-          drafts: providerResult.drafts,
+          drafts,
           gaps: providerResult.gaps,
           applicability: providerResult.applicability,
         };

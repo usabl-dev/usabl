@@ -80,6 +80,21 @@ export interface Finding extends Draft {
   // Docs findings only: source mapping run() attaches after the gate. Absent on app findings and on
   // docs findings whose page closure could not be resolved. Presentation only, never gates.
   docsSource?: DocsSourceMapping;
+  // App findings only: source mapping run() attaches after the gate. Uses renderer attrs on the
+  // DOM when present, otherwise the route import chain or coverage hints. Presentation only.
+  appSource?: AppSourceMapping;
+}
+
+// ---- app source mapping ----
+// renderer = data-source-file/line from the cooperating Vite dev transform or DOM attrs;
+// import-chain = the changed UI file on the route graph path to this screen;
+// coverage = changed UI files disclosed as candidates when ownership is ambiguous.
+export type AppSourceTier = 'renderer' | 'import-chain' | 'coverage';
+export interface AppSourceMapping {
+  tier: AppSourceTier;
+  file: string | null;
+  line: number | null;
+  candidates: string[];
 }
 
 // ---- announcement / transcript (voicing lane; unused until that lane is wired) ----

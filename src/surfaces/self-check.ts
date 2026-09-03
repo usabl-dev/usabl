@@ -11,6 +11,7 @@ import {
   gapHeadline,
   pickBarrier,
 } from '../output/disclosure.js';
+import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 
 const VERDICT_LABELS: Record<NonNullable<Result['verdict']>, string> = {
@@ -57,13 +58,13 @@ export function projectSelfCheck(result: Result): {
   const lines = [`usabl self-check: ${verdictLabel}`, 'advisory: the stop hook is the gate.', safe.summary];
   const finding = pickBarrier(safe.findings);
   if (finding !== null) {
-    // The rule name was missing here, so a reader could not even name the barrier they hit.
     lines.push(`Rule: ${finding.rule}`);
     lines.push(framed(finding.whatUserExperiences));
-    // When no fix was recorded this frames usabl's own sentence and so mislabels it as page text.
-    // That is deliberate, for the reason set out in stop-hook.ts: a Finding carries no provenance
-    // for its fix, and a framing path that can choose not to frame is a worse shape than an
-    // over-label that errs toward distrust.
+    if (finding.docsSource?.file) {
+      lines.push(`source: ${formatDocsSourceLocation(finding.docsSource)}`);
+    } else if (finding.appSource?.file) {
+      lines.push(`source: ${formatAppSourceLocation(finding.appSource)}`);
+    }
     lines.push('Fix:');
     lines.push(framed(fixOrAbsence(finding)));
   }

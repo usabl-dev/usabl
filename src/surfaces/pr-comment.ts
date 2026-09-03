@@ -4,6 +4,7 @@
  * It must never recompute findings, mint a verdict, or act as a second gate.
  */
 import type {
+  AppSourceMapping,
   DocsSourceMapping,
   Finding,
   Result,
@@ -13,6 +14,7 @@ import type {
 import { neutralize } from '../primitives/neutralize.js';
 import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence } from '../output/disclosure.js';
+import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 
 const COMMENT_MARKER = '<!-- usabl-report -->';
@@ -77,28 +79,24 @@ function renderConformance(result: Result): string[] {
 
 // The source location for a docs finding: file plus the author's construct when known, file plus
 // the exact line when the renderer supplied one, else the file alone. Neutralized by the caller.
-function sourceLocation(source: DocsSourceMapping): string {
-  const file = source.file ?? '';
-  if (source.construct !== null) {
-    return `${file} -> ${source.construct}`;
+function renderSource(source: DocsSourceMapping | undefined, appSource: AppSourceMapping | undefined): string[] {
+  if (source !== undefined && source.file !== null) {
+    const lines = [`  - source: \`${neutralize(formatDocsSourceLocation(source))}\``];
+    if (source.candidates.length > 1) {
+      const listed = source.candidates.map((candidate) => `\`${neutralize(candidate)}\``).join(', ');
+      lines.push(`  - candidates: ${listed}`);
+    }
+    return lines;
   }
-  if (source.line !== null) {
-    return `${file}:${source.line}`;
+  if (appSource !== undefined && appSource.file !== null) {
+    const lines = [`  - source: \`${neutralize(formatAppSourceLocation(appSource))}\``];
+    if (appSource.candidates.length > 1) {
+      const listed = appSource.candidates.map((candidate) => `\`${neutralize(candidate)}\``).join(', ');
+      lines.push(`  - candidates: ${listed}`);
+    }
+    return lines;
   }
-  return file;
-}
-
-function renderSource(source: DocsSourceMapping | undefined): string[] {
-  if (source === undefined || source.file === null) {
-    return [];
-  }
-  const lines = [`  - source: \`${neutralize(sourceLocation(source))}\``];
-  if (source.candidates.length > 1) {
-    // Ambiguous ownership is disclosed, never guessed away.
-    const listed = source.candidates.map((candidate) => `\`${neutralize(candidate)}\``).join(', ');
-    lines.push(`  - candidates: ${listed}`);
-  }
-  return lines;
+  return [];
 }
 
 function formatFinding(finding: Finding): string[] {
@@ -118,7 +116,7 @@ function formatFinding(finding: Finding): string[] {
     `- [${severity}] \`${screenId}\` - \`${layer}/${rule}\``,
     ...framed.map((line) => `  ${line}`),
     `  - why: ${why}`,
-    ...renderSource(source),
+    ...renderSource(source, finding.appSource),
     `  - fix: ${fix}`,
   ];
 }

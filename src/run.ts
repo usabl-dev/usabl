@@ -29,6 +29,7 @@ import { parseDocsManifest, type DocsManifest } from './coverage/docs-manifest.j
 import { computeDocsCoverage } from './coverage/docs-planner.js';
 import { markUnseenScreens } from './coverage/unseen.js';
 import { mapFindingToSource, type DocsPageClosure } from './docs/source-map.js';
+import { enrichAppFindings } from './app/source-map.js';
 import { gate } from './gate/index.js';
 import { mintReceipt } from './evidence/receipt.js';
 import { parseEvidenceFloor } from './evidence/floor.js';
@@ -213,7 +214,8 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     // syntax-aware fix. This runs after the gate on purpose. It reads source, never a verdict, and
     // never changes identity, status, or the floor. Source is read from the working tree (deps.fs),
     // where the author fixes it, even when the manifest itself was read from a trusted ref.
-    const findings = await enrichDocsFindings(gated.findings, docsManifest, deps.fs);
+    const docsEnriched = await enrichDocsFindings(gated.findings, docsManifest, deps.fs);
+    const findings = enrichAppFindings(docsEnriched, coverage);
 
     // Receipts are reserved for verified. Preview and model-judgment cannot mint one.
     const receipt =

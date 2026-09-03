@@ -464,6 +464,12 @@ export const overlayClientSource = `(() => {
         background: var(--cobalt-light);
       }
 
+      .editor-link {
+        display: inline-flex;
+        align-items: center;
+        text-decoration: none;
+      }
+
       .locate-button:active {
         transform: translateY(1px);
       }
@@ -610,6 +616,28 @@ export const overlayClientSource = `(() => {
     }
     const stale = document.getElementById('__usabl-highlight');
     if (stale) stale.remove();
+  }
+
+  function formatAppSource(source) {
+    if (!source || !source.file) {
+      return '';
+    }
+    if (source.line !== null && source.line !== undefined) {
+      return source.file + ':' + source.line;
+    }
+    return source.file;
+  }
+
+  function editorDeepLink(workspaceRoot, source) {
+    if (!source || !source.file) {
+      return null;
+    }
+    const line = source.line || 1;
+    const relative = String(source.file).replace(/^\\//, '');
+    const absolute = workspaceRoot
+      ? String(workspaceRoot).replace(/\\/$/, '') + '/' + relative
+      : relative;
+    return 'vscode://file/' + absolute + ':' + line + ':1';
   }
 
   function locateFinding(finding, statusHost) {
@@ -853,6 +881,13 @@ export const overlayClientSource = `(() => {
     repair.appendChild(make('p', '', finding.fix));
     section.appendChild(repair);
 
+    if (finding.appSource && finding.appSource.file) {
+      const sourceBlock = make('div', 'detail-block');
+      sourceBlock.appendChild(make('h4', '', 'Source'));
+      sourceBlock.appendChild(make('p', '', formatAppSource(finding.appSource)));
+      section.appendChild(sourceBlock);
+    }
+
     const actions = make('div', 'detail-actions');
     const locate = make('button', 'locate-button', 'Locate on page');
     locate.type = 'button';
@@ -861,11 +896,22 @@ export const overlayClientSource = `(() => {
     locate.addEventListener('click', () => locateFinding(finding, locateStatus));
     actions.appendChild(locate);
     actions.appendChild(locateStatus);
+    const editorHref = editorDeepLink(payload.workspaceRoot, finding.appSource);
+    if (editorHref) {
+      const openEditor = make('a', 'locate-button editor-link', 'Open in editor');
+      openEditor.href = editorHref;
+      openEditor.target = '_blank';
+      openEditor.rel = 'noopener noreferrer';
+      actions.appendChild(openEditor);
+    }
     section.appendChild(actions);
 
     const meta = make('dl', 'detail-meta');
     appendDefinition(meta, 'Screen', finding.screenId);
     appendDefinition(meta, 'Element', finding.elementName || finding.elementPath);
+    if (finding.appSource && finding.appSource.file) {
+      appendDefinition(meta, 'Source', formatAppSource(finding.appSource));
+    }
     appendDefinition(meta, 'Rule', finding.rule);
     appendDefinition(meta, 'Provider', finding.layer);
     appendDefinition(meta, 'Severity', finding.severity);

@@ -3,13 +3,14 @@
  * This unit serves read-only overlay assets and wires host config to run().
  * It must never convert advisory display state into process exits.
  */
-import { resolve } from 'node:path';
+import { resolve, relative } from 'node:path';
 import { loadConfig } from '../cli.js';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { run } from '../run.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 import { overlayClientSource } from './overlay-client.js';
+import { injectJsxSourceAttributes, shouldInjectJsxSource } from './vite-jsx-source.js';
 
 function overlayClientModuleSource(): string {
   return [
@@ -22,6 +23,7 @@ function overlayClientModuleSource(): string {
 export interface OverlayProjection {
   advisory: true;
   displayExitCode: 0;
+  workspaceRoot: string | null;
   exitCode: Result['exitCode'];
   verdict: Result['verdict'];
   schemaVersion: Result['schemaVersion'];
@@ -47,6 +49,7 @@ export interface OverlayProjection {
     whatUserExperiences: string;
     why: string;
     fix: string;
+    appSource: Result['findings'][number]['appSource'] | null;
   }>;
   receipt: {
     sourceTree: string;
@@ -92,7 +95,18 @@ interface UsablServer {
 export interface UsablVitePlugin {
   name: string;
   configureServer?: (server: UsablServer) => void;
+  configResolved?: (config: { command: string }) => void;
   transformIndexHtml?: (html: string) => string | Promise<string>;
+  transform?: (code: string, id: string) => { code: string; map: null } | null;
+}
+
+function toRepoRelativeSourcePath(workspaceRoot: string, id: string): string {
+  const normalizedId = id.replace(/\\/g, '/');
+  const normalizedRoot = workspaceRoot.replace(/\\/g, '/').replace(/\/$/, '');
+  if (normalizedRoot !== '' && normalizedId.startsWith(`${normalizedRoot}/`)) {
+    return normalizedId.slice(normalizedRoot.length + 1);
+  }
+  return relative(workspaceRoot || process.cwd(), id).replace(/\\/g, '/');
 }
 
 export interface UsablVitePluginFromConfigOptions {
@@ -121,12 +135,13 @@ function makeUsablVitePluginFactoryPorts(
   };
 }
 
-export function projectOverlay(result: Result): OverlayProjection {
+export function projectOverlay(result: Result, workspaceRoot: string | null = null): OverlayProjection {
   // Overlay is advisory only, so displayExitCode stays 0 even when the gated Result blocked.
   const safe = scrubResult(result);
   return {
     advisory: true,
     displayExitCode: 0,
+    workspaceRoot,
     exitCode: safe.exitCode,
     verdict: safe.verdict,
     schemaVersion: safe.schemaVersion,
@@ -152,6 +167,7 @@ export function projectOverlay(result: Result): OverlayProjection {
       whatUserExperiences: frameUntrusted(finding.whatUserExperiences),
       why: finding.why,
       fix: finding.fix,
+      appSource: finding.appSource ?? null,
     })),
     receipt:
       safe.receipt === null
@@ -202,9 +218,11 @@ function injectLoader(html: string): string {
   return html.includes('</body>') ? html.replace('</body>', `${loader}\n</body>`) : `${html}\n${loader}`;
 }
 
-export function usablVitePlugin(opts: { run: () => Promise<Result> }): UsablVitePlugin {
+export function usablVitePlugin(opts: { run: () => Promise<Result>; workspaceRoot?: string }): UsablVitePlugin {
   let runOnce = singleFlight(opts.run);
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let injectSourceAttributes = false;
+  const workspaceRoot = opts.workspaceRoot ?? '';
 
   const resetRun = (): void => {
     runOnce = singleFlight(opts.run);
@@ -213,6 +231,9 @@ export function usablVitePlugin(opts: { run: () => Promise<Result> }): UsablVite
   return {
     // We keep a minimal plugin shape so host apps provide Vite, and this package stays engine-focused.
     name: 'usabl-overlay',
+    configResolved(config) {
+      injectSourceAttributes = config.command === 'serve';
+    },
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const method = req.method ?? 'GET';
@@ -224,7 +245,7 @@ export function usablVitePlugin(opts: { run: () => Promise<Result> }): UsablVite
           return;
         }
         if (method === 'GET' && pathname === '/__usabl/result') {
-          const result = projectOverlay(await runOnce());
+          const result = projectOverlay(await runOnce(), opts.workspaceRoot ?? null);
           res.statusCode = 200;
           res.setHeader('content-type', 'application/json; charset=utf-8');
           res.end(JSON.stringify(result));
@@ -253,6 +274,15 @@ export function usablVitePlugin(opts: { run: () => Promise<Result> }): UsablVite
       // webdriver and usabl=off prevent the engine and Playwright oracles from grading the badge itself.
       return injectLoader(html);
     },
+    transform(code, id) {
+      if (!injectSourceAttributes || !shouldInjectJsxSource(id)) {
+        return null;
+      }
+      return {
+        code: injectJsxSourceAttributes(code, toRepoRelativeSourcePath(workspaceRoot, id)),
+        map: null,
+      };
+    },
   };
 }
 
@@ -268,6 +298,7 @@ export function usablVitePluginFromConfig(
   // Hosts should not assemble Deps. This factory keeps wiring in-package and
   // still returns a projection-only overlay backed by the gate-owned Result.
   return usablVitePlugin({
+    workspaceRoot: cwd,
     run: async () => {
       const config = await resolvedPorts.loadConfig(resolvedConfigPath);
       const deps = await resolvedPorts.buildDeps(config, { cwd });

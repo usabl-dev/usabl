@@ -420,7 +420,7 @@ describe('usablVitePluginFromConfig', () => {
     expect(runEngineConfig).toBe(config);
     expect(closeCalls).toBe(1);
     expect(calls).toEqual(['loadConfig', 'buildDeps', 'runEngine', 'close']);
-    expect(JSON.parse(response.body)).toEqual(projectOverlay(engineResult));
+    expect(JSON.parse(response.body)).toEqual(projectOverlay(engineResult, '/repo/app'));
   });
 
   it('closes browser when runEngine throws', async () => {
