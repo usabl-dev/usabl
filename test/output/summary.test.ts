@@ -183,7 +183,9 @@ describe('formatSummary', () => {
     const out = formatSummary(
       baseResult({
         verdict: 'approval_required',
-        summary: 'approval required: 1 guarded path(s) changed',
+        // The real summary carries the accessibility clause, so the verdict word
+        // already appears on the headline line.
+        summary: 'approval required: 1 guarded path(s) changed; accessibility regression: 1 gating finding(s)',
         exitCode: 2,
         accessibilityVerdict: 'regression',
         accessibilityExitCode: 1,
@@ -191,8 +193,29 @@ describe('formatSummary', () => {
       }),
     );
     expect(out).toContain('APPROVAL REQUIRED');
-    expect(out).toContain('accessibility REGRESSION');
     expect(out).toContain('.usabl-evidence.json');
+    // The accessibility exit code is the one fact the summary line does not carry.
+    expect(out).toContain('accessibility exit code: 1');
+  });
+
+  it('states the accessibility verdict once, not twice, under approval', () => {
+    // The summary line already carries the accessibility clause (added upstream),
+    // so a second restatement of the verdict word would be a duplicate.
+    const out = formatSummary(
+      baseResult({
+        verdict: 'approval_required',
+        summary:
+          'approval required: 1 guarded path(s) changed; accessibility not_covered: 0 gating finding(s), 2 gap(s)',
+        exitCode: 2,
+        accessibilityVerdict: 'not_covered',
+        accessibilityExitCode: 3,
+        dirtyGuardedPaths: ['.usabl-evidence.json'],
+      }),
+    );
+    const mentions = out.match(/NOT COVERED|not_covered/g) ?? [];
+    expect(mentions.length).toBe(1);
+    // The exit code is still present, in a form that does not repeat the verdict word.
+    expect(out).toContain('accessibility exit code: 3');
   });
 
   it('shows the floor pay-down count when greater than zero', () => {
