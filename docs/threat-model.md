@@ -156,10 +156,13 @@ the tool errored, not because the page is accessible.
 - No silent degradation: every gap and every crash is disclosed in the Result summary and
   its findings, so a green can never come from an error.
 - Partial results (some screens scanned, others gapped): the scanned findings are still
-  surfaced, but any gap holds the verdict at `not_covered`. Incomplete proof is not proof.
+  surfaced. With no new failure, a gap holds the verdict at `not_covered`. With a new
+  deterministic failure, the failure outranks the gap and the verdict is `regression`. Both
+  block, and the summary reports the gap count under either one, so incomplete proof is never
+  presented as proof.
 
 **Status:** [x] The `not_covered` gap path and exit-4 fail-open ship. [ ] A per-surface
-time budget is not yet a config knob; the shipped bound is the keyboard-walk 4s wall clock.
+time budget is not yet a config knob; the shipped bound is the keyboard-walk 15s wall clock.
 
 ---
 
@@ -170,7 +173,7 @@ blocking CI merge forever or holding the assistant in an infinite check loop.
 
 **Controls:**
 
-- The keyboard-walk provider ships a 4s wall-clock cap and the check runner caps transcript
+- The keyboard-walk provider ships a 15s wall-clock cap and the check runner caps transcript
   tabs at 50, so a single provider cannot spin forever.
 - A timed-out or failed scan becomes a coverage gap, which resolves to `not_covered`
   (exit 3), not an infinite block.
