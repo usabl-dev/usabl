@@ -18,7 +18,7 @@ const waiver = (over: Partial<Waiver>): Waiver => ({
   reason: 'tracked', owner: 'team', approvedBy: 'owner',
   created: '2026-01-01T00:00:00.000Z', expires: '2026-12-31T00:00:00.000Z', ...over,
 });
-const base = { guardDivergedPaths: [] as string[], coverage: covered, floor, drafts: [draft] };
+const base = { guardDivergedPaths: [] as string[], coverage: covered, floor, drafts: [draft], cleanlyScannedScreens: new Set<string>() };
 
 describe('gate waivers', () => {
   it('waives a matching active finding so it does not regress', () => {

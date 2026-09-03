@@ -28,7 +28,7 @@ function d(over: Partial<Draft>): Draft {
     ...over,
   };
 }
-const base = { guardDivergedPaths: [] as string[], floor: emptyFloor, waivers: [], now: '2026-01-01T00:00:00.000Z' };
+const base = { guardDivergedPaths: [] as string[], floor: emptyFloor, waivers: [], now: '2026-01-01T00:00:00.000Z', cleanlyScannedScreens: new Set<string>() };
 
 describe('gate verdict', () => {
   it('returns approval_required when a guarded path diverged', () => {

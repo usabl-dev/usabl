@@ -433,6 +433,12 @@ export interface GateInput {
   floor: EvidenceFloor;
   waivers: Waiver[];
   now: string; // clock() value, for waiver expiry
+  // Screen ids the run measured with no coverage gap. A floored identity may be marked `fixed`
+  // only when its screen is in this set, because a cleanly scanned screen with no barrier and a
+  // screen nobody scanned both produce zero drafts, so absence of a draft alone cannot tell them
+  // apart. Required, never optional: the gate must always be told which screens it may claim a
+  // paid-down `fixed` about, so a caller cannot leave the question unanswered and get a false green.
+  cleanlyScannedScreens: ReadonlySet<string>;
 }
 export interface GateOutput {
   verdict: Verdict | null;

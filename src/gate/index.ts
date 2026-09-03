@@ -144,21 +144,33 @@ export function buildFindings(input: GateInput): Finding[] {
     }
   }
 
-  // Disappeared identities are `fixed`: shown, never gating, never a silent pass.
+  // Disappeared identities are `fixed`: shown, never gating, never a silent pass. But only when the
+  // screen was actually measured this run. A floored identity is absent from the drafts either
+  // because the barrier is gone or because nobody scanned its screen, and those are opposite facts.
+  // cleanlyScannedScreens is the only signal that separates them, so an identity whose screen is not
+  // in it is omitted rather than claimed fixed: making no claim about a screen you did not measure is
+  // the honest default, and it matches the rule that silence is not evidence. Omitting cannot
+  // manufacture a green. A scanned-but-gapped screen already carries its gap into the verdict, and an
+  // out-of-scope screen is one the receipt makes no claim about at all, so neither reads as clean.
+  // One residual remains, tracked in #186: a screen whose chrome mounts but whose content silently
+  // fails to mount has no gap, so it enters cleanlyScannedScreens and a floored identity there is
+  // still claimed fixed. Catching a partial render needs a signal this gate does not have; membership
+  // in cleanlyScannedScreens is not a guarantee the screen was fully measured, only that nothing
+  // flagged it.
   for (const [key, e] of floorByKey) {
-    if (!byIdentity.has(key)) {
-      findings.push({
-        rule: e.rule, layer: e.layer, severity: 'minor', evidenceClass: 'deterministic',
-        screenId: e.screenId, elementPath: '', elementName: null, role: null,
-        // Surfaces render these fields. Blank strings look like a missing finding,
-        // not a paid-down identity the operator still needs to prune from the floor.
-        whatUserExperiences: 'This previously accepted finding is no longer present on the surface.',
-        why: 'The identity is on the evidence floor and was not observed in this run.',
-        fix: 'Remove this identity from the evidence floor after review so a reintroduced barrier can gate as new.',
-        evidence: {}, confidence: 'fail',
-        elementKey: e.elementKey, identityBasis: e.identityBasis, status: 'fixed',
-      });
-    }
+    if (byIdentity.has(key)) continue;
+    if (!input.cleanlyScannedScreens.has(e.screenId)) continue;
+    findings.push({
+      rule: e.rule, layer: e.layer, severity: 'minor', evidenceClass: 'deterministic',
+      screenId: e.screenId, elementPath: '', elementName: null, role: null,
+      // Surfaces render these fields. Blank strings look like a missing finding,
+      // not a paid-down identity the operator still needs to prune from the floor.
+      whatUserExperiences: 'This previously accepted finding is no longer present on the surface.',
+      why: 'The identity is on the evidence floor and was not observed in this run.',
+      fix: 'Remove this identity from the evidence floor after review so a reintroduced barrier can gate as new.',
+      evidence: {}, confidence: 'fail',
+      elementKey: e.elementKey, identityBasis: e.identityBasis, status: 'fixed',
+    });
   }
 
   return sortBy(applyWaivers(findings, input.waivers, input.now), findingKey);

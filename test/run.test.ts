@@ -203,11 +203,13 @@ describe('run', () => {
     expect(r.accessibilityVerdict).toBe('regression');
   });
 
-  it('counts only cleanly scanned screens when computing paidDownCount', async () => {
-    // Floor has one barrier. This run has two screens: clusters scans cleanly with no barrier
-    // (so the floored barrier is resolved), but settings gapped (browser failed). The gate marks
-    // both as 'fixed', but only the cleanly scanned one counts toward paidDownCount. A gapped
-    // screen produces no drafts, so an absent barrier there is unproven, not resolved.
+  it('marks fixed and counts pay-down only for a cleanly scanned screen, never a gapped one', async () => {
+    // Floor has one barrier per screen. This run has two screens: clusters scans cleanly with no
+    // barrier (so its floored barrier is resolved), but settings gapped (browser failed). A gapped
+    // screen produces no drafts, so an absent barrier there is unproven, not resolved. The gate must
+    // mark only the clusters barrier 'fixed' and must NOT emit a 'fixed' for the settings barrier,
+    // because that would be a false claim about a screen this run did not measure, and it would reach
+    // both Result.findings and the receipt findingsSummary.
     const configWithTwoScreens: UsablConfig = {
       ...config,
       surfaces: [
@@ -297,13 +299,69 @@ describe('run', () => {
     expect(settingsScreen).toBeDefined();
     expect(clustersScreen!.gaps).toHaveLength(0);
     expect(settingsScreen!.gaps).toHaveLength(1);
-    // The gate marks both floored barriers as 'fixed' because neither was observed.
+    // The gate marks only the cleanly scanned screen's barrier 'fixed'. The gapped screen's barrier
+    // is omitted entirely: no claim is made about a screen that was not measured.
     const fixedFindings = r.findings.filter((f) => f.status === 'fixed');
-    expect(fixedFindings).toHaveLength(2);
-    expect(fixedFindings.some((f) => f.screenId === 'clusters')).toBe(true);
-    expect(fixedFindings.some((f) => f.screenId === 'settings')).toBe(true);
-    // But paidDownCount counts only the cleanly scanned screen (clusters). The gapped screen
-    // (settings) is excluded because absence there is not proof of resolution.
+    expect(fixedFindings).toHaveLength(1);
+    expect(fixedFindings[0]!.screenId).toBe('clusters');
+    expect(fixedFindings.some((f) => f.screenId === 'settings')).toBe(false);
+    // No false 'fixed' reaches the Result findings for the unmeasured screen.
+    expect(r.findings.some((f) => f.status === 'fixed' && f.screenId === 'settings')).toBe(false);
+    // paidDownCount counts the one confirmed pay-down on the cleanly scanned screen.
+    expect(r.paidDownCount).toBe(1);
+  });
+
+  it('never writes a fixed for an out-of-scope screen into the Result or the receipt', async () => {
+    // The receipt is the proof artifact, so this is the security-critical case. Only ClustersPage
+    // changed, so only clusters is in scope and scanned clean with its barrier gone. The floor also
+    // carries a barrier on settings, a screen this run never scanned because nothing routed to it.
+    // The old gate emitted a 'fixed' for settings anyway, which reached both Result.findings and the
+    // receipt findingsSummary. It must now be omitted: no claim about a screen we did not measure.
+    // Version 2 so the floor's name-basis entries carry real observed counts and do not raise the
+    // version-1 stale-floor coverage gap, which would make the run not_covered and mint no receipt.
+    const floorJson = JSON.stringify({
+      version: 2,
+      entries: [
+        {
+          screenId: 'clusters',
+          layer: 'axe',
+          rule: 'color-contrast',
+          elementKey: 'clusters|color-contrast|name:save',
+          identityBasis: 'name',
+          count: 1,
+        },
+        {
+          screenId: 'settings',
+          layer: 'axe',
+          rule: 'aria-input-field-name',
+          elementKey: 'settings|aria-input-field-name|name:search',
+          identityBasis: 'name',
+          count: 1,
+        },
+      ],
+    });
+    const deps = makeFakeDeps({
+      ...guardOk,
+      writeTree: 'tree-164',
+      files: { 'usabl.config.json': '{}', '.usabl-evidence.json': floorJson },
+      headContents: { 'usabl.config.json': '{}', '.usabl-evidence.json': floorJson },
+      changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
+      scans: { clusters: scanWith([], []) },
+    });
+    const r = await run(deps, config);
+
+    // The run verified over the one clean in-scope screen and minted a receipt.
+    expect(r.verdict).toBe('verified');
+    expect(r.receipt).not.toBeNull();
+
+    // Result findings: exactly one fixed, on clusters. Nothing about settings.
+    const fixed = r.findings.filter((f) => f.status === 'fixed');
+    expect(fixed).toHaveLength(1);
+    expect(fixed[0]!.screenId).toBe('clusters');
+    expect(r.findings.some((f) => f.screenId === 'settings')).toBe(false);
+
+    // Receipt findingsSummary: the fixed tally is 1, not 2. No false pay-down is recorded as proof.
+    expect(r.receipt!.findingsSummary.fixed).toBe(1);
     expect(r.paidDownCount).toBe(1);
   });
 

@@ -206,6 +206,7 @@ describe('runBaseline', () => {
       waivers: [],
       now: '2026-01-01T00:00:00.000Z',
       floor,
+      cleanlyScannedScreens: new Set(['clusters']),
     };
 
     const same = gate({ ...gateBase, drafts: [structural(1), structural(2)] });
