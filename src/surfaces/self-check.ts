@@ -12,7 +12,7 @@ import {
   pickBarrier,
 } from '../output/disclosure.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
-import { frameUntrusted, scrubResult } from './scrub.js';
+import { frameUntrustedBlock, scrubResult } from './scrub.js';
 
 const VERDICT_LABELS: Record<NonNullable<Result['verdict']>, string> = {
   verified: 'VERIFIED',
@@ -22,29 +22,16 @@ const VERDICT_LABELS: Record<NonNullable<Result['verdict']>, string> = {
 };
 
 /**
- * Every piece of page-derived text goes through here, one call per item. Self check is read
- * mid-task by the same kind of reader as the stop hook, so it frames rather than neutralizes,
- * and it frames per item for the same reason: a forged close marker in page text can then only
- * escape the item that carried it.
+ * What the run did not examine, one entry per gap state, bounded by the number of states.
+ *
+ * Each entry pairs the trusted gap headline with the page-derived detail, so the model can map
+ * a reason to its state inside the single frame the caller builds.
  */
-function framed(text: string): string {
-  return frameUntrusted(text);
-}
-
-/** What the run did not examine, one entry per gap state, bounded by the number of states. */
-function notEvaluatedLines(result: Result): string[] {
+function notEvaluatedPieces(result: Result): string[] {
   const disclosures = discloseGaps(result.coverage.gaps);
-  if (disclosures.length === 0) {
-    return [];
-  }
-
-  return [
-    'Not evaluated:',
-    ...disclosures.flatMap((disclosure) => [
-      `- ${gapHeadline(disclosure)}:`,
-      framed(gapDetail(disclosure)),
-    ]),
-  ];
+  return disclosures.map(
+    (disclosure) => `- ${gapHeadline(disclosure)}: ${gapDetail(disclosure)}`,
+  );
 }
 
 export function projectSelfCheck(result: Result): {
@@ -55,25 +42,51 @@ export function projectSelfCheck(result: Result): {
   // Self-check is advisory by design so mid-task probes cannot bypass the stop-hook gate.
   const safe = scrubResult(result);
   const verdictLabel = safe.verdict === null ? 'IDLE' : VERDICT_LABELS[safe.verdict];
-  const lines = [`usabl self-check: ${verdictLabel}`, 'advisory: the stop hook is the gate.', safe.summary];
+
+  // The trusted engine scaffold stays outside the frame: the verdict line, the advisory line,
+  // the summary, the Rule line, the source location, and the Not evaluated header. Every
+  // page-derived piece goes inside one frame with a short inline label. The pieces are bounded
+  // and the assembled block is never cut, so the single closing marker cannot be lost.
+  const scaffold = [
+    `usabl self-check: ${verdictLabel}`,
+    'advisory: the stop hook is the gate.',
+    safe.summary,
+  ];
+  const pieces: string[] = [];
+
   const finding = pickBarrier(safe.findings);
   if (finding !== null) {
-    lines.push(`Rule: ${finding.rule}`);
-    lines.push(framed(finding.whatUserExperiences));
+    scaffold.push(`Rule: ${finding.rule}`);
+    pieces.push(`experience: ${finding.whatUserExperiences}`);
+    // The source location is derived from usabl's own source mapping, not from page text, so it
+    // stays in the scaffold outside the frame as it did before.
     if (finding.docsSource?.file) {
-      lines.push(`source: ${formatDocsSourceLocation(finding.docsSource)}`);
+      scaffold.push(`source: ${formatDocsSourceLocation(finding.docsSource)}`);
     } else if (finding.appSource?.file) {
-      lines.push(`source: ${formatAppSourceLocation(finding.appSource)}`);
+      scaffold.push(`source: ${formatAppSourceLocation(finding.appSource)}`);
     } else if (finding.appSource && finding.appSource.candidates.length > 0) {
-      lines.push(`candidates: ${finding.appSource.candidates.join(', ')}`);
+      scaffold.push(`candidates: ${finding.appSource.candidates.join(', ')}`);
     }
-    lines.push('Fix:');
-    lines.push(framed(fixOrAbsence(finding)));
+    // The fix is page-derived for most rules. When no fix was recorded this frames usabl's own
+    // sentence and mislabels it as page text, which is deliberate: it errs toward distrust
+    // rather than adding a per-string decide-trust path.
+    pieces.push(`fix: ${fixOrAbsence(finding)}`);
   }
-  lines.push(...notEvaluatedLines(safe));
+
+  const gapPieces = notEvaluatedPieces(safe);
+  if (gapPieces.length > 0) {
+    scaffold.push('Not evaluated:');
+    pieces.push(...gapPieces);
+  }
+
+  const message =
+    pieces.length === 0
+      ? scaffold.join('\n')
+      : [...scaffold, frameUntrustedBlock(pieces)].join('\n');
+
   return {
     advisoryExitCode: 0,
     verdict: safe.verdict,
-    message: lines.join('\n'),
+    message,
   };
 }

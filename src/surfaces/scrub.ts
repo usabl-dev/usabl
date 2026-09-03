@@ -143,3 +143,20 @@ export function scrubResult(result: Result): Result {
 export function frameUntrusted(text: string): string {
   return [UNTRUSTED_FRAME_START, scrubString(text), UNTRUSTED_FRAME_END].join('\n');
 }
+
+/**
+ * Frames several page-derived pieces inside a single untrusted frame.
+ *
+ * One open and one close for the whole block, so a model reader spends the 106 characters of
+ * markers once rather than once per piece. Each piece is scrubbed on its own, so no piece can
+ * close the frame: scrubString removes both markers from page text, and it runs before the
+ * pieces are joined. A piece carrying a literal close marker is therefore neutralized, and the
+ * only markers in the result are the two this function adds.
+ *
+ * The caller assembles pieces that are already bounded and must never cut the returned block to
+ * length. A cut could remove the single closing marker and hand the model an unterminated block
+ * of untrusted text.
+ */
+export function frameUntrustedBlock(pieces: string[]): string {
+  return [UNTRUSTED_FRAME_START, ...pieces.map(scrubString), UNTRUSTED_FRAME_END].join('\n');
+}
