@@ -15,10 +15,14 @@ import { REQUIRED_CHECK } from '../../src/install/branch-rule.js';
 import { ENGINE_REF_PLACEHOLDER, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
 import { CLAUDE_SKILL_CONTENTS, CLAUDE_SKILL_PATH } from '../../src/install/claude-skill.js';
 import {
+  buildCursorHooksJson,
   buildCursorRuleContents,
   CURSOR_COMMAND_CONTENTS,
   CURSOR_COMMAND_PATH,
+  CURSOR_HOOKS_JSON_PATH,
   CURSOR_RULE_PATH,
+  CURSOR_STOP_SCRIPT,
+  CURSOR_STOP_SCRIPT_PATH,
 } from '../../src/install/cursor.js';
 import { testConfig } from '../helpers.js';
 import {
@@ -147,6 +151,8 @@ const FULLY_WIRED_FILES: Record<string, string> = {
   'vite.config.ts': WIRED_OVERLAY,
   '.claude/settings.json': WIRED_CLAUDE,
   [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS,
+  [CURSOR_HOOKS_JSON_PATH]: buildCursorHooksJson(null),
+  [CURSOR_STOP_SCRIPT_PATH]: CURSOR_STOP_SCRIPT,
   [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
   [CURSOR_RULE_PATH]: buildCursorRuleContents(['fixtures/app/src/**']),
   '.github/workflows/usabl-gate.yml': PINNED_WORKFLOW,
@@ -408,6 +414,8 @@ export default defineConfig({
       doctorDeps({
         fs: readOnlyFs({
           'usabl.config.json': VALID_CONFIG,
+          [CURSOR_HOOKS_JSON_PATH]: buildCursorHooksJson(null),
+          [CURSOR_STOP_SCRIPT_PATH]: CURSOR_STOP_SCRIPT,
           [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
           [CURSOR_RULE_PATH]: buildCursorRuleContents(['fixtures/app/src/**']),
         }),
@@ -437,6 +445,8 @@ export default defineConfig({
       doctorDeps({
         fs: readOnlyFs({
           'usabl.config.json': VALID_CONFIG,
+          [CURSOR_HOOKS_JSON_PATH]: buildCursorHooksJson(null),
+          [CURSOR_STOP_SCRIPT_PATH]: CURSOR_STOP_SCRIPT,
           [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
           [CURSOR_RULE_PATH]: '---\nglobs: custom/**\n---\n',
         }),

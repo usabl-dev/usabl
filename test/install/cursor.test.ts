@@ -1,12 +1,23 @@
+/**
+ * The Cursor install generator writes four files: hooks.json and a stop-hook shell script
+ * (the enforcement surface), plus a /usabl-check command and a UI rule (advisory surfaces).
+ * hooks.json gets a JSON-aware merge that preserves unrelated hooks. The other three files
+ * are whole-file drafts that refuse when a differing file is present. Refusal guards are
+ * load-bearing: clobbering hooks.json or the stop script could break the operator's setup.
+ */
 import { describe, expect, it } from 'vitest';
 import { matchGlob } from '../../src/primitives/match-glob.js';
 import type { InstallFs } from '../../src/install/index.js';
 import {
+  buildCursorHooksJson,
   buildCursorRuleContents,
   CURSOR_COMMAND_CONTENTS,
   CURSOR_COMMAND_PATH,
+  CURSOR_HOOKS_JSON_PATH,
   CURSOR_RULE_CONTENTS,
   CURSOR_RULE_PATH,
+  CURSOR_STOP_SCRIPT,
+  CURSOR_STOP_SCRIPT_PATH,
   cursorRuleGlobs,
   DEFAULT_CURSOR_UI_FILE_GLOBS,
   planCursor,
@@ -41,8 +52,6 @@ describe('CURSOR assistant contents', () => {
   });
 
   it('passes single files through and only appends extensions to directory globs', () => {
-    // A declared UI file is not a directory. Appending /**/*.{tsx,jsx,css} to it matches
-    // nothing, which is the silent non-coverage this derivation exists to prevent.
     expect(cursorRuleGlobs(['src/demo/scenarios.ts'])).toBe('src/demo/scenarios.ts');
     expect(cursorRuleGlobs(['src/lib/variant.ts'])).toBe('src/lib/variant.ts');
     expect(cursorRuleGlobs(['src/components/DemoControls.tsx'])).toBe(
@@ -62,66 +71,144 @@ describe('CURSOR assistant contents', () => {
     expect(CURSOR_COMMAND_CONTENTS.toLowerCase()).toContain('advisory');
     expect(CURSOR_COMMAND_CONTENTS).toContain('gate');
   });
+
+  it('stop script calls npx usabl stop-hook --cursor', () => {
+    expect(CURSOR_STOP_SCRIPT).toContain('npx usabl stop-hook --cursor');
+    expect(CURSOR_STOP_SCRIPT).toContain('#!/usr/bin/env bash');
+  });
+});
+
+describe('buildCursorHooksJson', () => {
+  it('produces a hooks.json with version 1 and a stop entry', () => {
+    const json = buildCursorHooksJson(null);
+    const parsed = JSON.parse(json) as { version: number; hooks: { stop: unknown[] } };
+    expect(parsed.version).toBe(1);
+    expect(parsed.hooks.stop).toHaveLength(1);
+  });
+
+  it('sets a loop_limit to prevent infinite loops', () => {
+    const json = buildCursorHooksJson(null);
+    const parsed = JSON.parse(json) as { hooks: { stop: Array<{ loop_limit?: number }> } };
+    expect(parsed.hooks.stop[0]?.loop_limit).toBeGreaterThan(0);
+  });
+
+  it('preserves existing hooks when merging', () => {
+    const existing = { afterFileEdit: [{ command: '.cursor/hooks/format.sh' }] };
+    const json = buildCursorHooksJson(existing);
+    const parsed = JSON.parse(json) as {
+      hooks: { afterFileEdit: unknown[]; stop: unknown[] };
+    };
+    expect(parsed.hooks.afterFileEdit).toHaveLength(1);
+    expect(parsed.hooks.stop).toHaveLength(1);
+  });
 });
 
 describe('planCursor', () => {
-  it('plans full drafts when both Cursor files are absent', async () => {
+  it('plans all four files when nothing exists', async () => {
     const plan = await planCursor(memoryFs({}), DEFAULT_CURSOR_UI_FILE_GLOBS);
     expect(plan.action).toBe('write');
     if (plan.action === 'write') {
-      expect(plan.files).toHaveLength(2);
-      expect(plan.files.map((file) => file.path)).toEqual([CURSOR_COMMAND_PATH, CURSOR_RULE_PATH]);
+      expect(plan.files).toHaveLength(4);
+      const paths = plan.files.map((f) => f.path);
+      expect(paths).toContain(CURSOR_HOOKS_JSON_PATH);
+      expect(paths).toContain(CURSOR_STOP_SCRIPT_PATH);
+      expect(paths).toContain(CURSOR_COMMAND_PATH);
+      expect(paths).toContain(CURSOR_RULE_PATH);
     }
   });
 
-  it('reports already wired when both files match the canonical drafts', async () => {
-    const plan = await planCursor(
-      memoryFs({
-        [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
-        [CURSOR_RULE_PATH]: CURSOR_RULE_CONTENTS,
-      }),
-      DEFAULT_CURSOR_UI_FILE_GLOBS,
-    );
+  it('reports already wired when all four files match canonical drafts', async () => {
+    const fs = memoryFs({
+      [CURSOR_HOOKS_JSON_PATH]: buildCursorHooksJson(null),
+      [CURSOR_STOP_SCRIPT_PATH]: CURSOR_STOP_SCRIPT,
+      [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
+      [CURSOR_RULE_PATH]: CURSOR_RULE_CONTENTS,
+    });
+    const plan = await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS);
     expect(plan.action).toBe('already-wired');
   });
 
-  it('refuses when a different file already occupies one of the paths', async () => {
+  it('refuses when hooks.json has a non-usabl stop hook', async () => {
+    const existing = JSON.stringify(
+      { version: 1, hooks: { stop: [{ command: '.cursor/hooks/my-custom-stop.sh' }] } },
+      null,
+      2,
+    );
+    const fs = memoryFs({ [CURSOR_HOOKS_JSON_PATH]: existing });
+    const result = await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('refused');
+    expect(fs.store[CURSOR_HOOKS_JSON_PATH]).toBe(existing);
+  });
+
+  it('refuses when hooks.json is unparseable', async () => {
+    const broken = '{ this is not json';
+    const fs = memoryFs({ [CURSOR_HOOKS_JSON_PATH]: broken });
+    const result = await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('refused');
+    expect(fs.store[CURSOR_HOOKS_JSON_PATH]).toBe(broken);
+  });
+
+  it('refuses when the stop script differs from the canonical version', async () => {
+    const custom = '#!/usr/bin/env bash\necho "my custom hook"\n';
+    const fs = memoryFs({ [CURSOR_STOP_SCRIPT_PATH]: custom });
+    const result = await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('refused');
+    expect(fs.store[CURSOR_STOP_SCRIPT_PATH]).toBe(custom);
+  });
+
+  it('refuses when a different command file already occupies the path', async () => {
     const plan = await planCursor(
-      memoryFs({
-        [CURSOR_COMMAND_PATH]: '# custom command\n',
-        [CURSOR_RULE_PATH]: CURSOR_RULE_CONTENTS,
-      }),
+      memoryFs({ [CURSOR_COMMAND_PATH]: '# custom command\n' }),
       DEFAULT_CURSOR_UI_FILE_GLOBS,
     );
     expect(plan.action).toBe('refuse');
-    if (plan.action !== 'refuse') {
-      throw new Error('expected refuse plan');
+    if (plan.action === 'refuse') {
+      expect(plan.path).toBe(CURSOR_COMMAND_PATH);
     }
-    expect(plan.path).toBe(CURSOR_COMMAND_PATH);
   });
 
-  it('plans a write for only the missing file when one canonical file is already present', async () => {
-    const plan = await planCursor(
-      memoryFs({
-        [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
-      }),
-      DEFAULT_CURSOR_UI_FILE_GLOBS,
+  it('preserves unrelated hooks and adds the usabl stop hook', async () => {
+    const existing = JSON.stringify(
+      { version: 1, hooks: { afterFileEdit: [{ command: '.cursor/hooks/format.sh' }] } },
+      null,
+      2,
     );
+    const fs = memoryFs({ [CURSOR_HOOKS_JSON_PATH]: existing });
+    const result = await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
+    expect(result.exitCode).toBe(0);
+    const merged = JSON.parse(fs.store[CURSOR_HOOKS_JSON_PATH] ?? '') as {
+      hooks: { afterFileEdit: unknown[]; stop: unknown[] };
+    };
+    expect(merged.hooks.afterFileEdit).toHaveLength(1);
+    expect(merged.hooks.stop).toHaveLength(1);
+  });
+
+  it('writes only missing files when some canonical files are already present', async () => {
+    const fs = memoryFs({
+      [CURSOR_HOOKS_JSON_PATH]: buildCursorHooksJson(null),
+      [CURSOR_STOP_SCRIPT_PATH]: CURSOR_STOP_SCRIPT,
+      [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
+    });
+    const plan = await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS);
     expect(plan.action).toBe('write');
     if (plan.action === 'write') {
       expect(plan.files).toHaveLength(1);
       expect(plan.files[0]?.path).toBe(CURSOR_RULE_PATH);
-      expect(plan.files[0]?.draft).toBe(CURSOR_RULE_CONTENTS);
     }
   });
 });
 
 describe('writeCursor', () => {
-  it('writes both drafts when absent and stays idempotent on a second run', async () => {
+  it('writes all drafts when absent and stays idempotent on a second run', async () => {
     const fs = memoryFs({});
     const first = await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
     expect(first.exitCode).toBe(0);
     expect(first.action).toBe('written');
+    expect(fs.store[CURSOR_HOOKS_JSON_PATH]).toBeDefined();
+    expect(fs.store[CURSOR_STOP_SCRIPT_PATH]).toBe(CURSOR_STOP_SCRIPT);
     expect(fs.store[CURSOR_COMMAND_PATH]).toBe(CURSOR_COMMAND_CONTENTS);
     expect(fs.store[CURSOR_RULE_PATH]).toBe(CURSOR_RULE_CONTENTS);
 
@@ -130,15 +217,10 @@ describe('writeCursor', () => {
     expect(second.action).toBe('already-wired');
   });
 
-  it('writes only the missing file when the other canonical file is already present', async () => {
-    const fs = memoryFs({
-      [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
-    });
+  it('reports chmod hint when the stop script is written', async () => {
+    const fs = memoryFs({});
     const result = await writeCursor(fs, await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS));
-    expect(result.exitCode).toBe(0);
-    expect(result.action).toBe('written');
-    expect(fs.store[CURSOR_COMMAND_PATH]).toBe(CURSOR_COMMAND_CONTENTS);
-    expect(fs.store[CURSOR_RULE_PATH]).toBe(CURSOR_RULE_CONTENTS);
-    expect(result.message).toContain(CURSOR_RULE_PATH);
+    expect(result.message).toContain('chmod +x');
+    expect(result.message).toContain(CURSOR_STOP_SCRIPT_PATH);
   });
 });

@@ -40,6 +40,9 @@ export interface CliOptions {
   // The single install target for `usabl install`, or null when this is not an install
   // run or when zero or several target flags were given (installRefusal handles those).
   installTarget: InstallTarget | null;
+  // When true, `stop-hook` emits Cursor's followup_message protocol instead of Claude's
+  // decision: block. Set by --cursor on the stop-hook command.
+  cursorStopHook: boolean;
 }
 
 function isFlag(value: string): boolean {
@@ -214,8 +217,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
   }
 
   const installTarget = resolveInstallTarget(command, { overlay, claude, claudeSkill, cursor, ci, docsCi, branchRule });
+  // --cursor on stop-hook switches the output protocol. On install, it is consumed as a
+  // target flag and cursorStopHook stays false so the two uses never collide.
+  const cursorStopHook = command === 'stop-hook' && cursor;
 
-  return { command, staticOnly, html, docs, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, driftSubcommand, installTarget };
+  return { command, staticOnly, html, docs, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, driftSubcommand, installTarget, cursorStopHook };
 }
 
 export function installRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {

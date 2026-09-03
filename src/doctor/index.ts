@@ -43,7 +43,7 @@ const WAIVERS_LABEL = `waiver ledger (${WAIVERS_PATH})`;
 const OVERLAY_LABEL = 'vite overlay plugin';
 const STOP_HOOK_LABEL = 'claude stop hook (.claude/settings.json)';
 const CLAUDE_SKILL_LABEL = 'claude usabl-check skill (.claude/skills/usabl-check/SKILL.md)';
-const CURSOR_LABEL = 'cursor assistant (.cursor/commands + rules)';
+const CURSOR_LABEL = 'cursor stop hook + assistant (.cursor/hooks + commands + rules)';
 const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
 // The label names the check the operator must require. It reads that name from branch-rule
 // rather than spelling it out, so doctor can never tell someone to require a stale job name.
@@ -383,14 +383,14 @@ async function collectCursor(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'cursor',
       label: CURSOR_LABEL,
       state: 'drifted',
-      nextStep: `${plan.path} is present but is not the canonical Cursor wiring. Reconcile it by hand, or delete it and run "usabl install --cursor".`,
+      nextStep: `${plan.path} is present but is not the canonical usabl Cursor wiring. Reconcile it by hand, or delete it and run "usabl install --cursor".`,
     };
   }
   return {
     id: 'cursor',
     label: CURSOR_LABEL,
     state: 'missing',
-    nextStep: 'No Cursor assistant wiring. Run "usabl install --cursor" to write the /usabl-check command and UI rule.',
+    nextStep: 'No Cursor wiring. Run "usabl install --cursor" to write the stop hook, /usabl-check command, and UI rule.',
   };
 }
 

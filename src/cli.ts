@@ -255,10 +255,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   if (opts.command === 'stop-hook') {
-    // The stable entry point wired into .claude/settings.json. It reads stdin and hands
-    // off to the shared runner, which always returns 0 so a wedged hook can never block
-    // continuation through an exit code. No gate or verdict logic lives here.
-    return runStopHookFromStdin(await readStdin());
+    // The stable entry point wired into .claude/settings.json and .cursor/hooks.json.
+    // It reads stdin and hands off to the shared runner, which always returns 0 so a
+    // wedged hook can never block continuation through an exit code. --cursor switches
+    // the output protocol from Claude's decision: block to Cursor's followup_message.
+    return runStopHookFromStdin(await readStdin(), undefined, { cursorMode: opts.cursorStopHook });
   }
 
   if (opts.command === 'install') {
