@@ -8,6 +8,6 @@
   "surfaces": [
     { "id": "clusters", "url": "http://127.0.0.1:5173/clusters", "files": ["fixtures/app/src/ClustersPage.tsx"] }
   ],
-  "guardedPaths": ["usabl.config.json", "src/gate/index.ts", "src/trust/guard.ts", ".usabl-evidence.json", ".usabl-waivers.json"],
+  "guardedPaths": ["src/gate/", "src/trust/", "src/run.ts", ".github/workflows/", ".github/CODEOWNERS"],
   "promotedObligations": []
 }
