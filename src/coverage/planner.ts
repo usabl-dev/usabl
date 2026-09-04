@@ -5,7 +5,9 @@
  * Unmapped UI becomes a written gap so the gate can return not_covered.
  */
 import type { AffectedScreen, Coverage, CoverageGap, FsGlob, UsablConfig } from '../contracts/index.js';
-import { buildImportGraph } from './import-graph.js';
+import { loadAliasConfig } from './alias-config.js';
+import { buildUnresolvedReason } from './discovery-diagnostics.js';
+import { buildImportGraph, inspectDirectImports } from './import-graph.js';
 import { parseRouteManifest } from './route-manifest.js';
 import { matchGlob } from '../primitives/match-glob.js';
 
@@ -46,14 +48,6 @@ function manualUrlOverride(config: UsablConfig, file: string, screenId: string):
     }
   }
   return null;
-}
-
-function addGap(gaps: CoverageGap[], file: string): void {
-  gaps.push({
-    ref: file,
-    state: 'unresolved',
-    reason: 'changed UI file was not in any route closure, wide-blast glob, or manual surface mapping',
-  });
 }
 
 function importClosure(graph: { get(file: string): string[] }, entryFile: string): Set<string> {
@@ -108,7 +102,8 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
     (route): route is { screenId: string; url: string; entryFile: string } => route.entryFile !== null,
   );
   const routeEntries = [...new Set(attributedRoutes.map((route) => route.entryFile))];
-  const graph = await buildImportGraph(fs, routeEntries);
+  const aliasConfig = await loadAliasConfig(fs);
+  const graph = await buildImportGraph(fs, routeEntries, aliasConfig);
   // Graph unresolvable entries are diagnostics about discovery fidelity.
   // They are not coverage gaps unless a changed UI file maps to no screen.
   const routeClosures = new Map<string, Set<string>>();
@@ -179,7 +174,13 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
       // A changed UI file with no route-graph, wide-blast, or manual mapping is a
       // real coverage gap. Silent empties would let the gate misread this as safe.
       unresolvedFiles.push(file);
-      addGap(gaps, file);
+      const directDiagnostics = await inspectDirectImports(fs, file, aliasConfig);
+      const combinedUnresolvable = [...graph.unresolvable, ...directDiagnostics];
+      gaps.push({
+        ref: file,
+        state: 'unresolved',
+        reason: buildUnresolvedReason(file, combinedUnresolvable, graph.visited),
+      });
     }
   }
 

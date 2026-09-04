@@ -123,6 +123,50 @@ export function App() {
       true,
     );
   });
+
+  it('discovers createBrowserRouter route urls without inventing entry files', async () => {
+    const fs = memoryFs(
+      fixtureFiles({
+        'src/App.tsx': `export function App() { return null }\n`,
+        'src/router.tsx': `import { createBrowserRouter } from 'react-router-dom'
+import { Home } from './pages/Home'
+import { About } from './pages/About'
+
+const router = createBrowserRouter([
+  { path: '/home', element: <Home /> },
+  { path: '/about', element: <About /> },
+])
+`,
+        'src/pages/Home.tsx': 'export function Home() { return null }\n',
+        'src/pages/About.tsx': 'export function About() { return null }\n',
+      }),
+    );
+
+    const draft = await inferInit(fs);
+    expect(draft.config.discovery.routerFile).toBe('src/router.tsx');
+    // Data-router URLs are discovered, but entry files are NOT invented from inline elements.
+    // Attributing them by brace-slicing bound nested children to the wrong route (false coverage).
+    expect(draft.routes.routes).toEqual([
+      { screenId: 'home', url: '/home', entryFile: null },
+      { screenId: 'about', url: '/about', entryFile: null },
+    ]);
+    expect(draft.notes.some((note) => note.includes('data-router'))).toBe(true);
+    expect(draft.notes.some((note) => note.includes('no proven entry file'))).toBe(true);
+  });
+
+  it('detects a router file that only uses createBrowserRouter path literals', async () => {
+    const fs = memoryFs({
+      'vite.config.ts': `export default defineConfig({ server: { port: 3000 } })\n`,
+      'src/router.tsx': `import { createBrowserRouter } from 'react-router-dom'
+export const router = createBrowserRouter([{ path: '/only', element: <Page /> }])
+`,
+      'src/pages/Page.tsx': 'export function Page() { return null }\n',
+    });
+
+    const draft = await inferInit(fs);
+    expect(draft.config.discovery.routerFile).toBe('src/router.tsx');
+    expect(draft.routes.routes.some((route) => route.url === '/only')).toBe(true);
+  });
 });
 
 describe('writeInitDrafts', () => {

@@ -5,6 +5,7 @@
  * It must never invent entry-file attribution from router text.
  */
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
+import { parseRouterFallback } from './router-parse.js';
 
 export interface RouteEntry {
   screenId: string;
@@ -68,48 +69,6 @@ function parseSidecar(raw: string): RouteManifest {
       };
     }),
   };
-}
-
-function screenIdFromUrl(url: string): string {
-  // Stable id from URL path only. This is not a guessed source-file identity.
-  const trimmed = url.startsWith('/') ? url.slice(1) : url;
-  if (trimmed.length === 0) return 'root';
-  return trimmed.replace(/\//g, '-');
-}
-
-function parseRouterFallback(rawRouter: string): RouteManifest {
-  // Fallback reads literal path values from both JSX attribute form (path="...")
-  // and object-property form (path: '...') used by data-router APIs like React
-  // Router's createBrowserRouter. It cannot prove rendered component files, so
-  // entryFile remains null.
-  const attributeRe = /path=["'`](\/[^"'`]*)["'`]/g;
-  const objectRe = /path:\s*["'`](\/[^"'`]*)["'`]/g;
-  const urlsSeen = new Set<string>();
-  const routes: RouteEntry[] = [];
-
-  for (const match of rawRouter.matchAll(attributeRe)) {
-    const [, url] = match;
-    if (typeof url !== 'string' || urlsSeen.has(url)) continue;
-    urlsSeen.add(url);
-    routes.push({
-      screenId: screenIdFromUrl(url),
-      url,
-      entryFile: null,
-    });
-  }
-
-  for (const match of rawRouter.matchAll(objectRe)) {
-    const [, url] = match;
-    if (typeof url !== 'string' || urlsSeen.has(url)) continue;
-    urlsSeen.add(url);
-    routes.push({
-      screenId: screenIdFromUrl(url),
-      url,
-      entryFile: null,
-    });
-  }
-
-  return { routes };
 }
 
 function assertUniqueScreenIds(routes: RouteEntry[]): void {
