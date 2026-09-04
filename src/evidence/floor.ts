@@ -4,6 +4,7 @@
  * It must never decide verdicts, infer debt status, or mutate parsed entries.
  */
 import type { EvidenceFloor, FloorEntry } from '../contracts/index.js';
+import { identityKey } from '../primitives/identity.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -57,6 +58,18 @@ export function parseEvidenceFloor(value: unknown): EvidenceFloor {
     throw new Error("evidence floor scope must be 'partial' when present");
   }
   const entries = entriesRaw.map((entry) => parseFloorEntry(entry));
+  // The gate indexes the floor by screen|rule|elementKey (no layer). Two entries that share
+  // that key silently last-win today, so a hand-edited or corrupt floor can drop debt. Fail
+  // closed here so a quiet verdict cannot rest on an ambiguous floor. Use the shared identityKey
+  // so this check keys the floor exactly as the gate does.
+  const seenIdentities = new Set<string>();
+  for (const entry of entries) {
+    const key = identityKey(entry);
+    if (seenIdentities.has(key)) {
+      throw new Error(`evidence floor has duplicate identity: ${key}`);
+    }
+    seenIdentities.add(key);
+  }
   // The version is carried through, not normalized. Readers need it to know whether the
   // per-entry counts are observed debt (version 2) or a placeholder 1 (version 1).
   // Scope is optional. Absent means a complete whole-application floor, so it is left off the
