@@ -219,6 +219,19 @@ export default defineConfig({ plugins: [usablVitePluginFromConfig({ cwd: import.
     expect(isOverlayWired(commentedMultiLine)).toBe(false);
   });
 
+  it('refuses when the binding and the usabl/vite specifier are in different statements', () => {
+    // Semicolon-free source must not let the detector borrow the binding from an import of a
+    // different module and the specifier from an unrelated later re-export. The binding must sit
+    // in one import statement that itself closes on 'usabl/vite'.
+    const crossStatement = `import { usablVitePluginFromConfig } from './fake'
+export * from 'usabl/vite'
+export default {
+  plugins: [usablVitePluginFromConfig()],
+}
+`;
+    expect(isOverlayWired(crossStatement)).toBe(false);
+  });
+
   it('planOverlay returns already-wired for a multi-line import config', async () => {
     const multiLine = `import { defineConfig } from 'vite'
 import {
