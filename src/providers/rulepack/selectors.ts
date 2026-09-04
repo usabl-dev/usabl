@@ -23,7 +23,15 @@
  */
 export const SEL = {
   alert: '[class~="pf-v6-c-alert"]',
-  liveContainer: '[aria-live], [role="status"], [role="alert"], [role="log"]',
+  /**
+   * Live-region hosts that can announce a contained alert. aria-live="off" is not one of them:
+   * the region is present and silent, so an alert inside it is as unannounced as a loose alert.
+   * The exclusion is on every term, not only [aria-live], because a role="status" (or alert/log)
+   * host that also sets aria-live="off" overrides the role's implicit live value and would still
+   * match the role arm.
+   */
+  liveContainer:
+    '[aria-live]:not([aria-live="off"]), [role="status"]:not([aria-live="off"]), [role="alert"]:not([aria-live="off"]), [role="log"]:not([aria-live="off"])',
   unnamedButton: 'button[aria-label=""], button:not([aria-label]):not([aria-labelledby])',
 
   /**
