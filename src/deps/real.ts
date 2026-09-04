@@ -34,7 +34,7 @@ const NETWORK_QUIET_WINDOW_MS = 500;
 
 // Inject before app scripts run so the first live update is observable and not lost.
 // Late injection would under-report announcements and create a false sense of coverage.
-const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
+export const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
   const LIVE = '[aria-live],[role="status"],[role="alert"],[role="log"]';
   const buffer = [];
   const toText = (value) => {
@@ -77,17 +77,22 @@ const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
     return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => '\\\\' + ch);
   };
   // Paths use nth-child ancestry so selectors stay valid and comparable across calls.
+  // An id shortcut is only safe when the id is unique: duplicate ids produce the same selector
+  // for different elements, collapsing them in any set operation keyed on identity. A page with
+  // id="dup" on a contained alert and a loose alert would make the loose one inherit the
+  // contained alert's exemption, dropping it from the flagged set (false green / invariant 5).
+  const isUniqueId = (id) => document.querySelectorAll('#' + escapeCss(id)).length === 1;
   const pathFor = (element) => {
     if (!(element instanceof Element)) {
       return '';
     }
-    if (element.id) {
+    if (element.id && isUniqueId(element.id)) {
       return '#' + escapeCss(element.id);
     }
     const segments = [];
     let current = element;
     while (current instanceof Element) {
-      if (current.id) {
+      if (current.id && isUniqueId(current.id)) {
         segments.unshift('#' + escapeCss(current.id));
         break;
       }
@@ -614,7 +619,7 @@ function wrapPage(
 // so re-adopting the same page is a no-op. The announcement observer is intentionally left out:
 // a retroactive observer cannot capture live updates that already fired, and disclosing that
 // honestly beats arming a lane that would under-report.
-function installPathHelper(): void {
+export function installPathHelper(): void {
   const scope = window as unknown as { __usablPathFor?: (element: Element | null) => string };
   if (typeof scope.__usablPathFor === 'function') {
     return;
@@ -625,17 +630,22 @@ function installPathHelper(): void {
     }
     return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => '\\' + ch);
   };
+  // Duplicate ids produce the same selector for different elements, collapsing them in any set
+  // operation keyed on identity. Fall back to the structural nth-child path when an id is not
+  // unique, so each element gets a distinct, collision-resistant identity.
+  const isUniqueId = (id: string): boolean =>
+    document.querySelectorAll('#' + escapeCss(id)).length === 1;
   const pathFor = (element: Element | null): string => {
     if (!(element instanceof Element)) {
       return '';
     }
-    if (element.id) {
+    if (element.id && isUniqueId(element.id)) {
       return '#' + escapeCss(element.id);
     }
     const segments: string[] = [];
     let current: Element | null = element;
     while (current instanceof Element) {
-      if (current.id) {
+      if (current.id && isUniqueId(current.id)) {
         segments.unshift('#' + escapeCss(current.id));
         break;
       }
