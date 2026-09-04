@@ -315,7 +315,7 @@
   <a class="skip" href="#main">Skip to the code walkthrough</a>
   <header class="utility">
     <div class="utility-inner">
-      <div class="identity"><strong>usabl</strong><span>code walkthrough</span><span class="version">v0.2.0</span></div>
+      <div class="identity"><strong>usabl</strong><span>code walkthrough</span><span class="version">v0.2.1</span></div>
       <nav aria-label="Code walkthrough route">
         <ol class="route">
           <li><a href="#core">Core</a></li>
@@ -507,7 +507,7 @@
         <div class="two-col">
           <article class="list-card">
             <h3>Voicing: built and exported, not yet wired in</h3>
-            <p>The voicing lane is built and exported from the library, but v0.2.0 does not import it into the run path, so it does not affect the gate yet. It has two parts. <code>voicing/structural.ts</code> checks facts: did an announcement happen at the required moment, yes or no. Those drafts are deterministic, which means repeatable and machine-checked. <code>voicing/voicing.ts</code> compares the words of the announcement. Word matching is weaker evidence, so those drafts would be marked "preview" by default. A human can promote a word rule to a blocking rule in config, and the code never promotes itself. The lane and its calibration land in v0.3.0.</p>
+            <p>The voicing lane is built and exported from the library, but v0.2.1 does not import it into the run path, so it does not affect the gate yet. It has two parts. <code>voicing/structural.ts</code> checks facts: did an announcement happen at the required moment, yes or no. Those drafts are deterministic, which means repeatable and machine-checked. <code>voicing/voicing.ts</code> compares the words of the announcement. Word matching is weaker evidence, so those drafts would be marked "preview" by default. A human can promote a word rule to a blocking rule in config, and the code never promotes itself. The lane and its calibration land in v0.3.0.</p>
           </article>
           <article class="list-card">
             <h3>How announcements are captured</h3>
@@ -624,7 +624,7 @@
                 <rect x="20" y="214" width="880" height="44" rx="7" fill="#eef2fb" stroke="#cbd1da" stroke-width="1.5"></rect>
                 <text x="38" y="241" font-size="13.5" fill="#354156"><tspan font-weight="800" fill="#101827">7 · Adoption &amp; wiring: </tspan>gets usabl into a repository (init, install, doctor, drift).</text>
                 <rect x="20" y="272" width="880" height="44" rx="7" fill="#fbf3e6" stroke="#a95f00" stroke-width="1.5" stroke-dasharray="6 4"></rect>
-                <text x="38" y="299" font-size="13.5" fill="#5a3a00"><tspan font-weight="800">Dormant in v0.2.0: </tspan>voicing (a ready but unregistered check) and measure (a standalone harness). Neither runs today.</text>
+                <text x="38" y="299" font-size="13.5" fill="#5a3a00"><tspan font-weight="800">Dormant in v0.2.1: </tspan>voicing (a ready but unregistered check) and measure (a standalone harness). Neither runs today.</text>
               </g>
             </svg>
             <figcaption>The same eight systems that follow, arranged by the part they play in one run. The numbers match the cards below.</figcaption>
@@ -673,7 +673,7 @@
             <article class="owner dormant">
               <h3>Dormant lanes (built, not wired)</h3>
               <p class="owns"><code>voicing/</code> · <code>measure/fleet-insights.ts</code></p>
-              <p>Neither is on a production path in v0.2.0. <code>voicing/</code> is a complete check that is not yet registered in <code>deps/build.ts</code>; <code>measure/fleet-insights.ts</code> is a standalone scanning harness that nothing else imports. When they are switched on, voicing folds into Scan and providers, because it is already a valid provider, and measure folds into CLI and reporting. They are flagged here so nobody assumes they run today.</p>
+              <p>Neither is on a production path in v0.2.1. <code>voicing/</code> is a complete check that is not yet registered in <code>deps/build.ts</code>; <code>measure/fleet-insights.ts</code> is a standalone scanning harness that nothing else imports. When they are switched on, voicing folds into Scan and providers, because it is already a valid provider, and measure folds into CLI and reporting. They are flagged here so nobody assumes they run today.</p>
             </article>
           </div>
           <p class="idle-note"><strong>One caution for every maintainer:</strong> three names look alike but mean different things. The word "verified" in <code>install/branch-rule.ts</code> is that command's own outcome value, meaning it confirmed the required CI check (<code>usabl-required</code>) is in place, not a gate verdict. <code>CoverageGap</code> uses "not-covered" with a hyphen for an unchecked screen, while the gate verdict "not_covered" uses an underscore. <code>output/conformance.ts</code> echoes the verdict for display and sets a "blocked" flag, but it never mints one. When in doubt, the verdict comes from one place only: <code>gate/index.ts</code>.</p>

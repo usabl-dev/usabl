@@ -6,7 +6,7 @@ rip-out prevention.
 Personas are defined in [personas.md](./personas.md). The command arc a person types to
 reach these steady states is in [adoption-model.md](./adoption-model.md).
 
-Every command shown here is real in the current engine (v0.2.0). Only `usabl check`
+Every command shown here is real in the current engine (v0.2.1). Only `usabl check`
 mints a verdict; it emits `verified`, `regression`, `not_covered`, or
 `approval_required`, or `null` for idle or crash. The stop hook and the overlay are
 projections of that verdict and never mint their own.
