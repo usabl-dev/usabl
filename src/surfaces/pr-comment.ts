@@ -236,10 +236,13 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
   const advisory = safe.findings.filter(
     (finding) => finding.evidenceClass === 'preview' || finding.evidenceClass === 'model-judgment',
   );
-  const collapsedFindings = renderCollapsedFindings(safe.findings, config);
+  // Collapse only the gating (deterministic) lane. Advisory findings never gate, so they keep their
+  // own labeled section and are never mixed into the collapsed barrier list.
+  const gating = [...deterministicNew, ...deterministicCarried];
+  const collapsedGating = renderCollapsedFindings(gating, config);
   const findingSections =
-    collapsedFindings.length > 0
-      ? collapsedFindings
+    collapsedGating.length > 0
+      ? [...collapsedGating, '', ...renderFindingGroup('Advisory (non-gating)', advisory)]
       : [
           ...renderFindingGroup('New barriers', deterministicNew),
           '',

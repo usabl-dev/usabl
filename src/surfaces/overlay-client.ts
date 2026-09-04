@@ -852,8 +852,11 @@ export const overlayClientSource = `(() => {
     heading.appendChild(make('h3', '', 'Findings'));
     const shownCount = Array.isArray(payload.findings) ? payload.findings.length : 0;
     const totalCount = findingsCount(payload);
+    // Show "shown · total" whenever fewer rows are shown than findings exist, whether that is from
+    // grouping repeated rules or from the budget hiding groups. Keying only on collapsed left the
+    // header showing the group count while the launcher showed the finding total.
     const countLabel =
-      payload.noiseBudgetCollapsed && totalCount > shownCount
+      totalCount > shownCount
         ? shownCount + ' shown · ' + totalCount + ' total'
         : String(shownCount);
     heading.appendChild(make('span', 'section-count', countLabel));

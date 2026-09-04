@@ -16,6 +16,7 @@ export interface CollapsedFindingGroup {
   screenId: string;
   layer: string;
   rule: string;
+  evidenceClass: Finding['evidenceClass'];
   severity: Finding['severity'];
   status: Finding['status'];
   count: number;
@@ -26,6 +27,10 @@ export interface NoiseBudgetView {
   groups: CollapsedFindingGroup[];
   totalCount: number;
   shownCount: number;
+  // grouped: rules repeated, so a shown group stands for more than one finding.
+  // collapsed: the budget hid whole groups. Either one means the shown groups do not map one to one
+  // to findings, so the total count must be disclosed. The overlay reads both to stay consistent.
+  grouped: boolean;
   collapsed: boolean;
   maxShown: number;
   showAllHint: string | null;
@@ -45,12 +50,26 @@ const SEVERITY_RANK: Record<Finding['severity'], number> = {
   minor: 3,
 };
 
+// Gating (deterministic) findings rank before advisory ones, so a collapsed view never shows an
+// advisory finding ahead of a real gating barrier or lets advisory noise push a barrier out of the
+// budget. Only deterministic evidence gates the verdict.
+const EVIDENCE_RANK: Record<Finding['evidenceClass'], number> = {
+  deterministic: 0,
+  'human-confirmed': 1,
+  'model-judgment': 2,
+  preview: 3,
+};
+
+// Injective key: JSON-encode the tuple so a '|' inside a screenId, layer, or rule cannot collide
+// two distinct groups into one (the same delimiter trap the identity key avoids). evidenceClass is
+// part of the key so a deterministic finding and an advisory finding of the same rule never merge.
 function groupKey(finding: Finding): string {
-  return `${finding.screenId}|${finding.layer}|${finding.rule}`;
+  return JSON.stringify([finding.screenId, finding.layer, finding.rule, finding.evidenceClass]);
 }
 
 function groupRank(group: CollapsedFindingGroup): string {
   return [
+    String(EVIDENCE_RANK[group.evidenceClass]),
     String(STATUS_RANK[group.status]),
     String(SEVERITY_RANK[group.severity]),
     group.screenId,
@@ -71,9 +90,12 @@ export function resolveBudgetForSurface(
   config: UsablConfig | undefined,
   screenId: string,
 ): number {
-  const perSurface = config?.noiseBudget?.perSurface?.[screenId];
-  if (perSurface !== undefined) {
-    return perSurface;
+  // Object.hasOwn, not a bare index, so a screen id like "constructor" or "__proto__" reads an own
+  // configured budget only, never an inherited prototype member (which would be a function, not a
+  // number, and silently disable the budget for that screen).
+  const perSurface = config?.noiseBudget?.perSurface;
+  if (perSurface !== undefined && Object.hasOwn(perSurface, screenId)) {
+    return perSurface[screenId] as number;
   }
   return resolveNoiseBudgetDefault(config);
 }
@@ -88,11 +110,7 @@ export function collapseFindingsByRule(findings: readonly Finding[]): CollapsedF
   }
 
   const groups: CollapsedFindingGroup[] = [];
-  for (const [key, bucket] of byKey) {
-    const [screenId, layer, rule] = key.split('|');
-    if (screenId === undefined || layer === undefined || rule === undefined) {
-      continue;
-    }
+  for (const bucket of byKey.values()) {
     const representative = sortBy(bucket, (finding) =>
       [
         String(STATUS_RANK[finding.status]),
@@ -103,10 +121,13 @@ export function collapseFindingsByRule(findings: readonly Finding[]): CollapsedF
     if (representative === undefined) {
       continue;
     }
+    // Take the group fields from the representative, not from splitting the key. All findings in a
+    // bucket share these values, and reading them directly avoids decoding the injective key.
     groups.push({
-      screenId,
-      layer,
-      rule,
+      screenId: representative.screenId,
+      layer: representative.layer,
+      rule: representative.rule,
+      evidenceClass: representative.evidenceClass,
       severity: representative.severity,
       status: representative.status,
       count: bucket.length,
@@ -143,6 +164,7 @@ export function applyNoiseBudget(
       groups: [],
       totalCount: 0,
       shownCount: 0,
+      grouped: false,
       collapsed: false,
       maxShown,
       showAllHint: null,
@@ -150,30 +172,27 @@ export function applyNoiseBudget(
   }
 
   const groups = collapseFindingsByRule(findings);
-  const collapsed = findings.length > maxShown;
-  if (!collapsed) {
-    return {
-      groups,
-      totalCount: findings.length,
-      shownCount: groups.length,
-      collapsed: false,
-      maxShown,
-      showAllHint: null,
-    };
-  }
-
-  const shown = groups.slice(0, maxShown);
+  // grouped: a rule repeated, so a shown group stands for more than one finding.
+  // collapsed: the budget hides whole groups. Slice on group count so the flag and the slice agree.
+  const grouped = groups.length < findings.length;
+  const collapsed = groups.length > maxShown;
+  const shown = collapsed ? groups.slice(0, maxShown) : groups;
+  const showAllHint =
+    grouped || collapsed
+      ? formatShowAllHint({
+          totalFindingCount: findings.length,
+          shownGroupCount: shown.length,
+          totalGroupCount: groups.length,
+        })
+      : null;
   return {
     groups: shown,
     totalCount: findings.length,
     shownCount: shown.length,
-    collapsed: true,
+    grouped,
+    collapsed,
     maxShown,
-    showAllHint: formatShowAllHint({
-      totalFindingCount: findings.length,
-      shownGroupCount: shown.length,
-      totalGroupCount: groups.length,
-    }),
+    showAllHint,
   };
 }
 
@@ -192,6 +211,7 @@ export function applyNoiseBudgetPerSurface(
   let totalCount = 0;
   let totalGroupCount = 0;
   let collapsed = false;
+  let grouped = false;
 
   for (const [screenId, screenFindings] of byScreen) {
     const allScreenGroups = collapseFindingsByRule(screenFindings);
@@ -202,6 +222,9 @@ export function applyNoiseBudgetPerSurface(
     if (view.collapsed) {
       collapsed = true;
     }
+    if (view.grouped) {
+      grouped = true;
+    }
   }
 
   const sorted = sortBy(allGroups, (group) => groupRank(group));
@@ -209,21 +232,27 @@ export function applyNoiseBudgetPerSurface(
     groups: sorted,
     totalCount,
     shownCount: sorted.length,
+    grouped,
     collapsed,
     maxShown: resolveNoiseBudgetDefault(config),
-    showAllHint: collapsed
-      ? formatShowAllHint({
-          totalFindingCount: totalCount,
-          shownGroupCount: sorted.length,
-          totalGroupCount,
-        })
-      : null,
+    // Disclose the total whenever grouping or truncation means the shown groups do not map one to
+    // one to findings, so the overlay's group list and its finding count never disagree silently.
+    showAllHint:
+      grouped || collapsed
+        ? formatShowAllHint({
+            totalFindingCount: totalCount,
+            shownGroupCount: sorted.length,
+            totalGroupCount,
+          })
+        : null,
   };
 }
 
 export function formatCollapsedGroupHeadline(group: CollapsedFindingGroup): string {
+  // Show status alongside severity so a reader can tell a new gating barrier from carried debt or a
+  // waived item at a glance, rather than judging a collapsed group by severity alone.
   const countSuffix = group.count > 1 ? ` (×${group.count})` : '';
-  return `[${group.severity}] ${group.screenId}/${group.layer}/${group.rule}${countSuffix}`;
+  return `[${group.status} ${group.severity}] ${group.screenId}/${group.layer}/${group.rule}${countSuffix}`;
 }
 
 export function parseNoiseBudgetConfig(raw: unknown): NoiseBudgetConfig | undefined {
@@ -246,7 +275,9 @@ export function parseNoiseBudgetConfig(raw: unknown): NoiseBudgetConfig | undefi
     if (typeof perSurfaceRaw !== 'object' || perSurfaceRaw === null || Array.isArray(perSurfaceRaw)) {
       throw new Error('noiseBudget.perSurface must be an object');
     }
-    const perSurface: Record<string, number> = {};
+    // Null-prototype so a key like "__proto__" is stored as an own budget rather than mutating the
+    // prototype chain, and reads stay own-property lookups.
+    const perSurface: Record<string, number> = Object.create(null);
     for (const [screenId, value] of Object.entries(perSurfaceRaw)) {
       perSurface[screenId] = expectPositiveWholeNumber(value, `noiseBudget.perSurface.${screenId}`);
     }

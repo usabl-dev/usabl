@@ -28,6 +28,21 @@ export interface StopDecision {
 
 const BLOCKING_VERDICTS: ReadonlySet<Verdict> = new Set(['regression', 'approval_required', 'not_covered']);
 
+/**
+ * What the run did not examine, one entry per gap state.
+ *
+ * The reader is a model deciding whether to keep working, so it gets a reason it can act on
+ * rather than a count it cannot. One example per state and a count of the rest, because gaps
+ * cluster: five screens behind one broken server produce five near-identical reasons, while a
+ * denied capability is a different fact that must never be crowded out by them.
+ *
+ * Each line pairs the gap headline, which is trusted usabl-chosen text, with the page-derived
+ * detail, so the model can still map each reason to its state inside the single frame.
+ *
+ * The length is bounded by construction. There are four gap states, so there are at most four
+ * entries, and no assembled string is ever cut to fit. Cutting could remove a closing frame
+ * marker and hand the model an unterminated block of untrusted text.
+ */
 function notEvaluatedPieces(result: Result): string[] {
   const disclosures = discloseGaps(result.coverage.gaps);
   return disclosures.map(
@@ -35,11 +50,24 @@ function notEvaluatedPieces(result: Result): string[] {
   );
 }
 
+/**
+ * The whole block message, with at most one untrusted frame.
+ *
+ * The trusted engine scaffold stays outside the frame: the summary line, the Rule or Barriers
+ * headline lines, the show-all hint, and the Not evaluated header. Every page-derived piece, each
+ * finding experience, each fix, and each gap detail, goes inside one frame, each with a short inline
+ * label so the model can map evidence to cause. The noise budget bounds how many groups appear, and
+ * the assembled block is never cut to length. Cutting could remove the single closing marker and hand
+ * the model an unterminated block of untrusted text.
+ */
 function buildBlockMessage(result: Result, config?: UsablConfig): string {
   const scaffold = [`NOT verified - ${result.summary}`];
   const pieces: string[] = [];
   const budget = resolveNoiseBudgetDefault(config);
-  const view = applyNoiseBudget(result.findings, budget);
+  // Only gating (deterministic) findings are barriers this block is about. Advisory findings never
+  // gate, so listing one here would present it as a blocker it is not. They still surface elsewhere.
+  const gating = result.findings.filter((finding) => finding.evidenceClass === 'deterministic');
+  const view = applyNoiseBudget(gating, budget);
 
   if (view.groups.length === 1 && !view.collapsed) {
     const group = view.groups[0]!;
@@ -114,6 +142,7 @@ export function evaluateStopDecision(
   }
 
   if (ctx.stopHookActive) {
+    // A second block while continuation is active can loop the model and hide the real operator choice.
     return {
       block: false,
       message: `NOT verified - continuation already active. ${safe.summary}`,

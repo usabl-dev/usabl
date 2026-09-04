@@ -81,7 +81,7 @@ describe('applyNoiseBudget', () => {
     expect(view.showAllHint).toContain('5 of 7 rule groups shown');
   });
 
-  it('describes duplicate merges when over budget but every rule group fits', () => {
+  it('is grouped but not collapsed when rules repeat yet every rule group fits the budget', () => {
     const findings = [
       ...Array.from({ length: 2 }, (_, index) =>
         finding({ rule: 'color-contrast', elementKey: `k-${index}` }),
@@ -97,7 +97,10 @@ describe('applyNoiseBudget', () => {
     ];
     const view = applyNoiseBudget(findings, 8);
 
-    expect(view.collapsed).toBe(true);
+    // Seven groups fit under the budget of eight, so no group is hidden (not collapsed), but rules
+    // repeated across elements, so the view is grouped and still discloses the full finding count.
+    expect(view.collapsed).toBe(false);
+    expect(view.grouped).toBe(true);
     expect(view.groups).toHaveLength(7);
     expect(view.showAllHint).toContain('9 findings');
     expect(view.showAllHint).toContain('7 rule groups');
@@ -172,6 +175,42 @@ describe('resolveBudgetForSurface', () => {
       ),
     ).toBe(5);
     expect(resolveNoiseBudgetDefault(undefined)).toBe(DEFAULT_NOISE_BUDGET);
+  });
+
+  it('does not read a prototype member for a screen id like "constructor"', () => {
+    const config = {
+      appBaseUrl: 'http://127.0.0.1:5173',
+      uiFileGlobs: ['src/**'],
+      discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
+      surfaces: [],
+      guardedPaths: [],
+      noiseBudget: { default: 5, perSurface: {} },
+    };
+    // "constructor" is an inherited property on a plain object; a bare index would return a function
+    // and silently disable the budget. It must fall back to the default number instead.
+    expect(resolveBudgetForSurface(config, 'constructor')).toBe(5);
+    expect(resolveBudgetForSurface(config, '__proto__')).toBe(5);
+  });
+});
+
+describe('noise budget safety', () => {
+  it('never merges a deterministic and an advisory finding of the same rule', () => {
+    const groups = collapseFindingsByRule([
+      finding({ rule: 'color-contrast', evidenceClass: 'deterministic', elementKey: 'a' }),
+      finding({ rule: 'color-contrast', evidenceClass: 'preview', elementKey: 'b' }),
+    ]);
+    expect(groups).toHaveLength(2);
+    // Gating (deterministic) ranks first so an advisory finding never leads or displaces a barrier.
+    expect(groups[0]?.evidenceClass).toBe('deterministic');
+    expect(groups[1]?.evidenceClass).toBe('preview');
+  });
+
+  it('does not collide two distinct groups when a field contains the delimiter', () => {
+    const groups = collapseFindingsByRule([
+      finding({ screenId: 'a|b', layer: 'c', rule: 'd' }),
+      finding({ screenId: 'a', layer: 'b', rule: 'c|d' }),
+    ]);
+    expect(groups).toHaveLength(2);
   });
 });
 

@@ -38,6 +38,8 @@ function notEvaluatedPieces(result: Result): string[] {
   );
 }
 
+// The source location is derived from usabl's own source mapping, not from page text, so it stays
+// in the scaffold outside the untrusted frame.
 function appendSourceScaffold(scaffold: string[], finding: Result['findings'][number]): void {
   if (finding.docsSource?.file) {
     scaffold.push(`source: ${formatDocsSourceLocation(finding.docsSource)}`);
@@ -71,7 +73,10 @@ export function projectSelfCheck(
   ];
   const pieces: string[] = [];
   const budget = resolveNoiseBudgetDefault(config);
-  const view = applyNoiseBudget(safe.findings, budget);
+  // Gating (deterministic) findings only, as the stop hook does. Advisory findings never gate, so
+  // the assistant reading this snapshot to reach verified does not act on them here.
+  const gating = safe.findings.filter((finding) => finding.evidenceClass === 'deterministic');
+  const view = applyNoiseBudget(gating, budget);
 
   if (view.groups.length === 1 && !view.collapsed) {
     const group = view.groups[0]!;
