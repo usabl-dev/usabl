@@ -385,17 +385,18 @@ cp ~/Downloads/rht_classroom.rsa ~/.ssh/rht_classroom.rsa
 chmod 600 ~/.ssh/rht_classroom.rsa
 ```
 
-Verify the private key matches the public key in the fork:
+Verify the private key matches the public key (shipped in the usabl clone, not the fork):
 ```
 ssh-keygen -lf ~/.ssh/rht_classroom.rsa
-ssh-keygen -lf keys/rht_classroom.rsa.pub    # run inside your ansible-ui clone
+ssh-keygen -lf usabl/docs/demo/keys/rht_classroom.rsa.pub    # run from the usabl-team workdir
 ```
-Both must print the same `SHA256:` fingerprint. See `keys/README.md` in the fork.
+Both must print the same `SHA256:` fingerprint. See `docs/demo/keys/README.md` in the usabl clone.
 
 ### 1. Get the code
 
-The ansible-ui fork (public, in usabl-dev). This repo ships `usabl.config.json`,
-`scripts/aap-login.mjs`, `scripts/open-aap-tunnel.sh`, and `keys/rht_classroom.rsa.pub`:
+The ansible-ui fork (public, in usabl-dev). This repo ships `usabl.config.json` and the committed
+evidence floor. The demo helper scripts and the key live in the usabl clone (see below), so the fork
+stays a clean mirror:
 ```
 git clone https://github.com/usabl-dev/ansible-ui.git
 cd ansible-ui && npm ci
@@ -429,13 +430,17 @@ The fork `.gitignore` already excludes `.usabl-session.json`. Do not commit sess
 
 ### 2. Open the tunnel to the lab
 
-The AAP backend runs in the lab, not on your machine. From the ansible-ui clone:
+The AAP backend runs in the lab, not on your machine. The tunnel script lives in the usabl clone.
+Set your lab jump host first (its address changes each time the lab is provisioned; take it from the
+lab provisioning details), then run the script from the ansible-ui clone:
 ```
-./scripts/open-aap-tunnel.sh
+export AAP_LAB_HOST=<your lab jump host address>
+../usabl/docs/demo/open-aap-tunnel.sh
 ```
 
-The script checks your key fingerprint, starts the tunnel if it is not already running, and prints a
-`curl` check. It also reminds you to add the lab hostname to `/etc/hosts` if needed.
+The script checks the key exists, opens the tunnel unless local port 8443 is already forwarding, and
+reminds you to add the lab hostname to `/etc/hosts` if needed. Other lab values (`AAP_LAB_USER`,
+`AAP_LAB_PORT`, `AAP_SSH_KEY`) have sane defaults and can be overridden with environment variables.
 
 One-time on each machine (needs `sudo`):
 ```
@@ -463,13 +468,14 @@ This serves the app on http://localhost:4100. Leave it running in its own termin
 
 ### 4. Log in and save a session
 
-usabl scans as a logged-in user. Mint a session with the script in the fork:
+usabl scans as a logged-in user. Mint a session with the script from the usabl clone, run from the
+ansible-ui clone so the session file lands where usabl reads it:
 ```
 cd ansible-ui
 AUI_BASE_URL=http://localhost:4100 \
 AAP_USER=admin AAP_PASSWORD=redhat \
 AUI_STORAGE_STATE=./.usabl-session.json \
-node scripts/aap-login.mjs
+node ../usabl/docs/demo/aap-login.mjs
 ```
 
 **Important: the session is tied to the exact scheme, host, and port.** A session minted against
@@ -501,8 +507,8 @@ surfaces. Use the committed `usabl.config.json`.
 
 ## If something breaks
 
-- `curl` returns `000`: tunnel down, re-run `./scripts/open-aap-tunnel.sh`. If `127.0.0.1` works but
-  the hostname does not, add the `/etc/hosts` line.
+- `curl` returns `000`: tunnel down, re-run `../usabl/docs/demo/open-aap-tunnel.sh`. If `127.0.0.1`
+  works but the hostname does not, add the `/etc/hosts` line.
 - Key fingerprint mismatch: you have the wrong private key. Re-download from the team Drive folder,
   not a key from your own lab DOWNLOAD unless Ed confirms it is the same pair.
 - Login script times out on `#pf-login-username-id`: dev server not running, or API tunnel down. Open
