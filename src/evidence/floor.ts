@@ -30,7 +30,9 @@ export function parseFloorEntry(value: unknown): FloorEntry {
   if (identityBasis !== 'name' && identityBasis !== 'structural' && identityBasis !== 'count') {
     throw new Error('evidence floor entry identityBasis must be name, structural, or count');
   }
-  if (typeof count !== 'number') throw new Error('evidence floor entry count must be a number');
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
+    throw new Error('evidence floor entry count must be a non-negative integer');
+  }
 
   return { screenId, layer, rule, elementKey, identityBasis, count };
 }

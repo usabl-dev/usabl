@@ -36,4 +36,15 @@ describe('parseEvidenceFloor', () => {
   it('rejects a scope value other than partial', () => {
     expect(() => parseEvidenceFloor({ version: 2, scope: 'full', entries: [entry] })).toThrow(/scope/);
   });
+
+  it('rejects a floor entry count that is not a finite non-negative integer', () => {
+    for (const count of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, 1.5, '4']) {
+      expect(() => parseEvidenceFloor({ version: 2, entries: [{ ...entry, count }] })).toThrow(/count/);
+    }
+  });
+
+  it('accepts a zero count as a valid observed debt tally', () => {
+    const parsed = parseEvidenceFloor({ version: 2, entries: [{ ...entry, count: 0 }] });
+    expect(parsed.entries[0]?.count).toBe(0);
+  });
 });
