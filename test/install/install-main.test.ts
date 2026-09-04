@@ -18,7 +18,12 @@ import {
   USABL_GATE_WORKFLOW_PATH,
 } from '../../src/install/ci.js';
 import { CLAUDE_SETTINGS_PATH } from '../../src/install/claude.js';
-import { CLAUDE_SKILL_CONTENTS, CLAUDE_SKILL_PATH } from '../../src/install/claude-skill.js';
+import {
+  CLAUDE_FIX_SKILL_CONTENTS,
+  CLAUDE_FIX_SKILL_PATH,
+  CLAUDE_SKILL_CONTENTS,
+  CLAUDE_SKILL_PATH,
+} from '../../src/install/claude-skill.js';
 import { CURSOR_COMMAND_CONTENTS, CURSOR_COMMAND_PATH, CURSOR_HOOKS_JSON_PATH, CURSOR_RULE_CONTENTS, CURSOR_RULE_PATH, CURSOR_STOP_SCRIPT, CURSOR_STOP_SCRIPT_PATH } from '../../src/install/cursor.js';
 
 describe('usabl install command wiring', () => {
@@ -64,8 +69,29 @@ describe('usabl install command wiring', () => {
     expect(code).toBe(0);
     const written = await readFile(join(workspace, CLAUDE_SKILL_PATH), 'utf8');
     expect(written).toBe(CLAUDE_SKILL_CONTENTS);
-    // --claude-skill wires the on-demand command only; it must not also write settings.json.
+    // The same command must also write the first-class /usabl-fix skill.
+    const fixWritten = await readFile(join(workspace, CLAUDE_FIX_SKILL_PATH), 'utf8');
+    expect(fixWritten).toBe(CLAUDE_FIX_SKILL_CONTENTS);
+    // --claude-skill wires the on-demand commands only; it must not also write settings.json.
     await expect(readFile(join(workspace, CLAUDE_SETTINGS_PATH), 'utf8')).rejects.toThrow();
+  });
+
+  it('--claude-skill is a no-op on a clean second run and refuses (exit 2) when one skill differs', async () => {
+    // First run writes both skills.
+    expect(await main(['install', '--claude-skill'])).toBe(0);
+    // Second run finds both canonical: no change, exit 0.
+    expect(await main(['install', '--claude-skill'])).toBe(0);
+
+    // Now make usabl-check differ. The command must refuse that one (exit 2) while leaving the
+    // canonical usabl-fix in place.
+    await writeFile(join(workspace, CLAUDE_SKILL_PATH), '---\nname: usabl-check\n---\n\nEdited.\n', 'utf8');
+    expect(await main(['install', '--claude-skill'])).toBe(2);
+    // The differing file was not clobbered.
+    expect(await readFile(join(workspace, CLAUDE_SKILL_PATH), 'utf8')).toBe(
+      '---\nname: usabl-check\n---\n\nEdited.\n',
+    );
+    // The other skill stays canonical.
+    expect(await readFile(join(workspace, CLAUDE_FIX_SKILL_PATH), 'utf8')).toBe(CLAUDE_FIX_SKILL_CONTENTS);
   });
 
   it('routes --ci to the ci generator and writes the gate workflow, not a --trusted-ref refusal', async () => {

@@ -34,7 +34,7 @@ import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
 import { planOverlay, writeOverlay } from './install/overlay.js';
 import { planClaude, writeClaude } from './install/claude.js';
-import { planClaudeSkill, writeClaudeSkill } from './install/claude-skill.js';
+import { installClaudeSkills } from './install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs, writeCursor } from './install/cursor.js';
 import { planCi, planDocsCi, writeCi, writeDocsCi } from './install/ci.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
@@ -209,7 +209,7 @@ async function runInstall(opts: CliOptions): Promise<number> {
   } else if (opts.installTarget === 'claude') {
     result = await writeClaude(installFs, await planClaude(installFs));
   } else if (opts.installTarget === 'claude-skill') {
-    result = await writeClaudeSkill(installFs, await planClaudeSkill(installFs));
+    result = await installClaudeSkills(installFs);
   } else if (opts.installTarget === 'cursor') {
     const uiFileGlobs = await readCursorUiFileGlobs(installFs, opts.configPath);
     result = await writeCursor(installFs, await planCursor(installFs, uiFileGlobs));
