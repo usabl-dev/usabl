@@ -4,7 +4,7 @@
 set -euo pipefail
 
 WORKDIR="${WORKDIR:-${HOME}/usabl-team}"
-ANSIBLE_UI_REPO="${ANSIBLE_UI_REPO:-https://github.com/usabl-dev/ansible-ui.git}"
+ANSIBLE_UI_REPO="${ANSIBLE_UI_REPO:-https://github.com/usabl-dev/ansible-ui-demo.git}"
 USABL_REPO="${USABL_REPO:-https://github.com/usabl-dev/usabl.git}"
 SSH_KEY="${HOME}/.ssh/rht_classroom.rsa"
 AAP_USER="${AAP_USER:-admin}"
