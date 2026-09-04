@@ -161,8 +161,11 @@ function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
 }
 
 function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): string[] {
-  const view = applyNoiseBudget(findings, resolveNoiseBudgetDefault(config));
-  if (!view.collapsed) {
+  const view = applyNoiseBudget(findings, resolveNoiseBudgetDefault(config), 'gating findings');
+  // Render the collapsed view whenever the shown groups do not map one to one to findings, whether
+  // that is from grouping repeated rules or from the budget hiding groups. Checking only collapsed
+  // dropped the grouped-but-not-truncated case back to a raw, hint-less list.
+  if (!view.grouped && !view.collapsed) {
     return [];
   }
   return [

@@ -76,7 +76,7 @@ export function projectSelfCheck(
   // Gating (deterministic) findings only, as the stop hook does. Advisory findings never gate, so
   // the assistant reading this snapshot to reach verified does not act on them here.
   const gating = safe.findings.filter((finding) => finding.evidenceClass === 'deterministic');
-  const view = applyNoiseBudget(gating, budget);
+  const view = applyNoiseBudget(gating, budget, 'gating findings');
 
   if (view.groups.length === 1 && !view.collapsed) {
     const group = view.groups[0]!;

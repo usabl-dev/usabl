@@ -168,6 +168,6 @@ describe('evaluateStopDecision', () => {
     expect(decision.block).toBe(true);
     expect(decision.message).toContain('Barriers:');
     expect(decision.message).toContain('usabl check --json');
-    expect(decision.message).toContain('6 findings');
+    expect(decision.message).toContain('6 gating findings');
   });
 });

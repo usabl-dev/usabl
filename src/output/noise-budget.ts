@@ -144,20 +144,24 @@ export interface ShowAllHintCounts {
   totalGroupCount: number;
 }
 
-export function formatShowAllHint(counts: ShowAllHintCounts): string {
+// noun names the set being counted. Surfaces that collapse only the gating lane pass
+// "gating findings" so the count is not mislabeled as the whole Result when advisory findings also
+// exist. The overlay counts all findings and keeps the default.
+export function formatShowAllHint(counts: ShowAllHintCounts, noun = 'findings'): string {
   const { totalFindingCount, shownGroupCount, totalGroupCount } = counts;
   if (shownGroupCount < totalGroupCount) {
-    return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} findings (${shownGroupCount} of ${totalGroupCount} rule groups shown).`;
+    return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} ${noun} (${shownGroupCount} of ${totalGroupCount} rule groups shown).`;
   }
   if (totalFindingCount > shownGroupCount) {
-    return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} findings (${totalGroupCount} rule groups; some rules repeat across elements).`;
+    return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} ${noun} (${totalGroupCount} rule groups; some rules repeat across elements).`;
   }
-  return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} findings.`;
+  return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} ${noun}.`;
 }
 
 export function applyNoiseBudget(
   findings: readonly Finding[],
   maxShown: number,
+  noun = 'findings',
 ): NoiseBudgetView {
   if (findings.length === 0) {
     return {
@@ -179,11 +183,14 @@ export function applyNoiseBudget(
   const shown = collapsed ? groups.slice(0, maxShown) : groups;
   const showAllHint =
     grouped || collapsed
-      ? formatShowAllHint({
-          totalFindingCount: findings.length,
-          shownGroupCount: shown.length,
-          totalGroupCount: groups.length,
-        })
+      ? formatShowAllHint(
+          {
+            totalFindingCount: findings.length,
+            shownGroupCount: shown.length,
+            totalGroupCount: groups.length,
+          },
+          noun,
+        )
       : null;
   return {
     groups: shown,

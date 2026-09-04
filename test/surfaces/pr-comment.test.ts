@@ -238,6 +238,6 @@ describe('projectPrComment', () => {
     expect(markdown).toContain('### Findings (collapsed by rule)');
     expect(markdown).not.toContain('### New barriers');
     expect(markdown).toContain('usabl check --json');
-    expect(markdown).toContain('6 findings');
+    expect(markdown).toContain('6 gating findings');
   });
 });

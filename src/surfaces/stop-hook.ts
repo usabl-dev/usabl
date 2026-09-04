@@ -67,7 +67,7 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   // Only gating (deterministic) findings are barriers this block is about. Advisory findings never
   // gate, so listing one here would present it as a blocker it is not. They still surface elsewhere.
   const gating = result.findings.filter((finding) => finding.evidenceClass === 'deterministic');
-  const view = applyNoiseBudget(gating, budget);
+  const view = applyNoiseBudget(gating, budget, 'gating findings');
 
   if (view.groups.length === 1 && !view.collapsed) {
     const group = view.groups[0]!;
