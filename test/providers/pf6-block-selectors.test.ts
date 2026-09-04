@@ -272,4 +272,44 @@ describe('block selectors match blocks, not their BEM children', () => {
       await page.close();
     }
   });
+
+  it('pf-toast-live-region flags an alert inside aria-live="off", instead of exempting it', async () => {
+    // aria-live="off" is not a live region. An alert inside it is as unannounced as a loose
+    // alert. The bare [aria-live] term treated every aria-live value as a container, so the
+    // set-difference dropped this alert from the flagged set and the page passed clean. That
+    // is a false green: a real barrier is reported as fine.
+    const offRegion = `<!doctype html><html lang="en"><head><meta charset="utf-8" /></head><body><main>
+      <div aria-live="off">
+        <div class="pf-v6-c-alert pf-m-success"><div class="pf-v6-c-alert__icon"></div><h4 class="pf-v6-c-alert__title">Saved</h4></div>
+      </div>
+    </main></body></html>`;
+    const page = await openFixture(offRegion);
+    try {
+      const drafts = await checkPfToastLiveRegion(liveContext(page));
+      expect(drafts.length).toBe(1);
+      expect(drafts[0]?.rule).toBe('pf-toast-live-region');
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('pf-toast-live-region flags an alert inside a status region that sets aria-live="off"', async () => {
+    // PatternFly live regions typically carry both role="status" and aria-live. An explicit
+    // aria-live="off" overrides the role's implicit polite live value, so the region is not
+    // announced. Excluding off only from the [aria-live] term would still match [role="status"]
+    // and keep this as a false green.
+    const statusOff = `<!doctype html><html lang="en"><head><meta charset="utf-8" /></head><body><main>
+      <div role="status" aria-live="off">
+        <div class="pf-v6-c-alert pf-m-success"><div class="pf-v6-c-alert__icon"></div><h4 class="pf-v6-c-alert__title">Saved</h4></div>
+      </div>
+    </main></body></html>`;
+    const page = await openFixture(statusOff);
+    try {
+      const drafts = await checkPfToastLiveRegion(liveContext(page));
+      expect(drafts.length).toBe(1);
+      expect(drafts[0]?.rule).toBe('pf-toast-live-region');
+    } finally {
+      await page.close();
+    }
+  });
 });
