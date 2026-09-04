@@ -174,8 +174,23 @@ export async function probeMenus(ctx: ProviderContext): Promise<Draft[]> {
       await ctx.page.click(toggle.selector);
 
       const menus = await ctx.page.queryAll(SEL.menu);
-      const menu = menus[0];
-      if (menu !== undefined && !(await waitFor(() => ctx.page.activeElementWithin(menu.selector)))) {
+      if (menus.length === 0) {
+        await ctx.page.press('Escape');
+        continue;
+      }
+
+      // Do not pin to menus[0]. A prior role=menu (nav, another kebab, listbox) can sit
+      // ahead of the menu this toggle just opened; focus landing in that later menu is a pass.
+      const focusEnteredMenu = await waitFor(async () => {
+        for (const menu of await ctx.page.queryAll(SEL.menu)) {
+          if (await ctx.page.activeElementWithin(menu.selector)) {
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (!focusEnteredMenu) {
         drafts.push(
           draft(
             ctx,
