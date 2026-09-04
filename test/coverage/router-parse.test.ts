@@ -58,6 +58,11 @@ describe('router-parse', () => {
     ]);
   });
 
+  it('discovers the root path', () => {
+    const routes = parseDataRouterRoutes(`createBrowserRouter([{ path: '/', element: <Root /> }])`);
+    expect(routes).toEqual([{ path: '/', component: null }]);
+  });
+
   it('ignores path-like objects outside the create*Router call', () => {
     // A decoy object elsewhere in the module must not be read as a route.
     const routes = parseDataRouterRoutes(`

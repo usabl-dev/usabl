@@ -30,23 +30,12 @@ export interface ImportGraphView {
 // never invent import edges that were not proven by concrete source text and files.
 const FROM_IMPORT_RE = /\bimport\s+(?:type\s+)?[^"'`;\n]+?\sfrom\s*["'`]([^"'`]+)["'`]/g;
 const DYNAMIC_IMPORT_RE = /\bimport\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
-// Probe in Vite's default resolve.extensions order so that when more than one candidate exists
-// (for example Widget.js and Widget.tsx), we resolve to the same file the bundler would, not a
-// different one. A different pick would attribute a changed file to a screen it does not render.
-const PROBE_EXTENSIONS = [
-  '.mjs',
-  '.js',
-  '.mts',
-  '.ts',
-  '.jsx',
-  '.tsx',
-  '/index.mjs',
-  '/index.js',
-  '/index.mts',
-  '/index.ts',
-  '/index.jsx',
-  '/index.tsx',
-];
+// Candidate suffixes for an extensionless import, split into a file tier and a directory-index
+// tier. The bundler's exact pick depends on its resolve.extensions order, which we do not parse, so
+// when more than one candidate exists in a tier we disclose instead of guessing. Guessing could
+// attribute a changed file to a screen that actually renders the sibling file.
+const FILE_SUFFIXES = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx'];
+const INDEX_SUFFIXES = ['/index.mjs', '/index.js', '/index.mts', '/index.ts', '/index.jsx', '/index.tsx'];
 
 function extractSpecifiers(source: string): string[] {
   const found: string[] = [];
@@ -77,16 +66,31 @@ function resolveBaseFile(importer: string, specifier: string): string {
   return path.normalize(path.join(path.dirname(importer), specifier));
 }
 
-async function resolveFileAtPath(fs: FsGlob, filePath: string): Promise<string | null> {
-  const candidates = hasKnownExtension(filePath)
-    ? [filePath]
-    : PROBE_EXTENSIONS.map((suffix) => `${filePath}${suffix}`);
-  for (const candidate of candidates) {
-    if ((await fs.readFile(candidate)) !== null) {
-      return candidate;
+async function existingCandidates(fs: FsGlob, base: string, suffixes: string[]): Promise<string[]> {
+  const hits: string[] = [];
+  for (const suffix of suffixes) {
+    if ((await fs.readFile(`${base}${suffix}`)) !== null) {
+      hits.push(`${base}${suffix}`);
     }
   }
-  return null;
+  return hits;
+}
+
+async function resolveFileAtPath(fs: FsGlob, filePath: string): Promise<string | null> {
+  if (hasKnownExtension(filePath)) {
+    return (await fs.readFile(filePath)) !== null ? filePath : null;
+  }
+  // File tier before index tier (the bundler prefers a file over a directory index). Within a tier,
+  // exactly one hit resolves; more than one is ambiguous, so disclose rather than pick.
+  const fileHits = await existingCandidates(fs, filePath, FILE_SUFFIXES);
+  if (fileHits.length === 1) {
+    return fileHits[0] ?? null;
+  }
+  if (fileHits.length > 1) {
+    return null;
+  }
+  const indexHits = await existingCandidates(fs, filePath, INDEX_SUFFIXES);
+  return indexHits.length === 1 ? (indexHits[0] ?? null) : null;
 }
 
 async function resolveRelativeImport(fs: FsGlob, importer: string, specifier: string): Promise<string | null> {

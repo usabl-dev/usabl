@@ -249,11 +249,11 @@ export function resolveAliasSpecifier(specifier: string, mappings: AliasMapping[
 }
 
 export function isAliasLikeSpecifier(specifier: string): boolean {
-  return (
-    specifier.startsWith('@/') ||
-    specifier.startsWith('~/') ||
-    (specifier.startsWith('@') && !specifier.startsWith('@/'))
-  );
+  // Only the conventional alias prefixes. A scoped npm package such as @patternfly/react-core also
+  // starts with '@' but is a bare package, not an alias, so it must be ignored, not disclosed as an
+  // unresolved alias. Non-conventional configured aliases stay unresolved (disclosed), which is the
+  // safe direction.
+  return specifier.startsWith('@/') || specifier.startsWith('~/');
 }
 
 export async function loadAliasConfig(fs: FsGlob): Promise<AliasConfig> {

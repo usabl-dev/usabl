@@ -70,7 +70,7 @@ export function parseDataRouterRoutes(
   }
   const routes: Array<{ path: string; component: string | null }> = [];
   const seen = new Set<string>();
-  for (const pathMatch of region.matchAll(/path:\s*['"`](\/[^'"`]+)['"`]/g)) {
+  for (const pathMatch of region.matchAll(/path:\s*['"`](\/[^'"`]*)['"`]/g)) {
     const routePath = pathMatch[1];
     if (typeof routePath !== 'string' || seen.has(routePath)) {
       continue;

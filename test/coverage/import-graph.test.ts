@@ -55,10 +55,10 @@ describe('buildImportGraph', () => {
     });
   });
 
-  it('resolves to the bundler-preferred extension when several exist (.js over .tsx)', async () => {
-    // With both Widget.js and Widget.tsx present, Vite's default resolve.extensions loads .js.
-    // usabl must pick the same file, or a change to one would be attributed to a screen that
-    // renders the other.
+  it('discloses instead of guessing when several candidate files exist', async () => {
+    // With both Widget.js and Widget.tsx present, which one Vite loads depends on its
+    // resolve.extensions order, which usabl does not parse. Picking one could attribute a change to
+    // a screen that renders the other, so it creates no edge and discloses the ambiguity.
     const fs = fsOf({
       'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } }),
       'src/Page.tsx': `import { Widget } from '@/Widget';`,
@@ -67,8 +67,22 @@ describe('buildImportGraph', () => {
     });
     const aliasConfig = await loadAliasConfig(fs);
     const graph = await buildImportGraph(fs, ['src/Page.tsx'], aliasConfig);
-    expect(graph.get('src/Page.tsx')).toContain('src/Widget.js');
+    expect(graph.get('src/Page.tsx')).not.toContain('src/Widget.js');
     expect(graph.get('src/Page.tsx')).not.toContain('src/Widget.tsx');
+    expect(graph.unresolvable).toContainEqual({
+      importer: 'src/Page.tsx',
+      specifier: '@/Widget',
+      kind: 'file-not-found',
+    });
+  });
+
+  it('ignores scoped npm packages instead of disclosing them as unresolved aliases', async () => {
+    const fs = fsOf({
+      'src/Page.tsx': `import { Button } from '@patternfly/react-core';`,
+    });
+    const aliasConfig = await loadAliasConfig(fs);
+    const graph = await buildImportGraph(fs, ['src/Page.tsx'], aliasConfig);
+    expect(graph.unresolvable).toEqual([]);
   });
 
   it('records ~/ import as unresolvable when no config maps it', async () => {
