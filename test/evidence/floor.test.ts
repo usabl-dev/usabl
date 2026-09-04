@@ -37,8 +37,20 @@ describe('parseEvidenceFloor', () => {
     expect(() => parseEvidenceFloor({ version: 2, scope: 'full', entries: [entry] })).toThrow(/scope/);
   });
 
-  it('rejects a floor entry count that is not a finite non-negative integer', () => {
-    for (const count of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, 1.5, '4']) {
+  it('rejects a floor entry count that is not a finite non-negative safe integer', () => {
+    // 9007199254740993 is past 2^53, so JSON.parse already rounded it to ...992 before it reached
+    // here. isInteger would accept the rounded value; isSafeInteger rejects it so the gate never
+    // compares against a tally that does not match the file.
+    for (const count of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      -1,
+      1.5,
+      '4',
+      Number.MAX_SAFE_INTEGER + 1,
+      9007199254740993,
+    ]) {
       expect(() => parseEvidenceFloor({ version: 2, entries: [{ ...entry, count }] })).toThrow(/count/);
     }
   });

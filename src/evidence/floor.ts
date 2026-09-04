@@ -30,8 +30,11 @@ export function parseFloorEntry(value: unknown): FloorEntry {
   if (identityBasis !== 'name' && identityBasis !== 'structural' && identityBasis !== 'count') {
     throw new Error('evidence floor entry identityBasis must be name, structural, or count');
   }
-  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
-    throw new Error('evidence floor entry count must be a non-negative integer');
+  // isSafeInteger, not isInteger: a value past 2^53 has already lost precision in the JSON parse
+  // (9007199254740993 becomes ...992), so accepting it would compare the gate against a tally that
+  // does not match what the file says. Reject anything that cannot be represented faithfully.
+  if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+    throw new Error('evidence floor entry count must be a non-negative safe integer');
   }
 
   return { screenId, layer, rule, elementKey, identityBasis, count };
