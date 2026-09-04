@@ -353,6 +353,36 @@ describe('usablVitePlugin', () => {
     expect(runCount).toBe(2);
     expect(sentEvents).toContainEqual({ type: 'custom', event: 'usabl:refresh' });
   });
+
+  it('runs before the host JSX transform so it sees raw tags', () => {
+    // Without enforce 'pre' the host's JSX plugin (for example @vitejs/plugin-react) rewrites
+    // "<button>" into jsx() calls first, and the source injector finds no tags to annotate. This
+    // pins the ordering so jump-to-source keeps resolving to a line.
+    const plugin = usablVitePlugin({ run: async () => baseResult({ findings: [] }) });
+    expect(plugin.enforce).toBe('pre');
+  });
+
+  it('injects source only in serve, on host source, on raw JSX tags', () => {
+    const plugin = usablVitePlugin({
+      workspaceRoot: '/repo',
+      run: async () => baseResult({ findings: [] }),
+    });
+    const raw = 'export const A = () => <button type="submit">Go</button>;\n';
+
+    // Before configResolved, and in build, the injector stays off.
+    expect(plugin.transform?.(raw, '/repo/src/A.tsx')).toBeNull();
+    plugin.configResolved?.({ command: 'build' });
+    expect(plugin.transform?.(raw, '/repo/src/A.tsx')).toBeNull();
+
+    // In serve it injects file and line on a native element in host source.
+    plugin.configResolved?.({ command: 'serve' });
+    const injected = plugin.transform?.(raw, '/repo/src/A.tsx');
+    expect(injected?.code).toContain('data-source-file="src/A.tsx"');
+    expect(injected?.code).toContain('data-source-line="1"');
+
+    // Dependencies under node_modules are never annotated.
+    expect(plugin.transform?.(raw, '/repo/node_modules/pkg/A.tsx')).toBeNull();
+  });
 });
 
 describe('usablVitePluginFromConfig', () => {

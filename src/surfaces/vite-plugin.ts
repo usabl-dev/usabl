@@ -94,6 +94,7 @@ interface UsablServer {
 
 export interface UsablVitePlugin {
   name: string;
+  enforce?: 'pre' | 'post';
   configureServer?: (server: UsablServer) => void;
   configResolved?: (config: { command: string }) => void;
   transformIndexHtml?: (html: string) => string | Promise<string>;
@@ -231,6 +232,10 @@ export function usablVitePlugin(opts: { run: () => Promise<Result>; workspaceRoo
   return {
     // We keep a minimal plugin shape so host apps provide Vite, and this package stays engine-focused.
     name: 'usabl-overlay',
+    // Run before the host's JSX transform (for example @vitejs/plugin-react). That plugin rewrites
+    // "<button>" into jsx() calls, so our string-level source injector must see the raw JSX first,
+    // or it finds no tags to annotate and jump-to-source never gets a line.
+    enforce: 'pre',
     configResolved(config) {
       injectSourceAttributes = config.command === 'serve';
     },
