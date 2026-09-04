@@ -114,8 +114,12 @@ export function isOverlayWired(source: string): boolean {
   // The import binding lives in code, while its module specifier is itself a string literal.
   // Checking on the comment-stripped copy (strings intact) lets the specifier survive while
   // a commented-out import line does not. Both the binding and the specifier must be present.
+  //
+  // [^;]* (not [^;\n]*) so that multi-line imports are accepted. An import declaration
+  // cannot contain a semicolon before its closing from-clause, so stopping at ; is a sound
+  // statement boundary without also stopping at every newline.
   const hasImport =
-    /import\b[^;\n]*\busablVitePluginFromConfig\b[^;\n]*from\s*['"]usabl\/vite['"]/.test(withoutComments);
+    /import\b[^;]*\busablVitePluginFromConfig\b[^;]*from\s*['"]usabl\/vite['"]/.test(withoutComments);
 
   // The factory call must survive in active code, not inside a comment or a string, so it is
   // checked on the copy with both comments removed and string contents blanked.

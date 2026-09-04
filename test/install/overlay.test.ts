@@ -159,4 +159,78 @@ export default defineConfig({ plugins: [usablVitePluginFromConfig({ cwd: import.
 `;
     expect(isOverlayWired(wiredWithUrl)).toBe(true);
   });
+
+  it('recognises a multi-line import as wired', () => {
+    // A legitimately wired config whose import is broken across lines was reported as not wired
+    // because [^;\n]* stops at newlines. The fix allows newlines within a single import statement.
+    const multiLine = `import { defineConfig } from 'vite'
+import {
+  usablVitePluginFromConfig,
+} from 'usabl/vite'
+export default defineConfig({
+  plugins: [
+    usablVitePluginFromConfig({ cwd: import.meta.dirname }),
+  ],
+})
+`;
+    expect(isOverlayWired(multiLine)).toBe(true);
+  });
+
+  it('recognises a multi-line import with additional named exports as wired', () => {
+    // Multiple bindings on separate lines — a common formatter output.
+    const multiLineMultiBinding = `import { defineConfig } from 'vite'
+import {
+  someOtherExport,
+  usablVitePluginFromConfig,
+  anotherExport,
+} from 'usabl/vite'
+export default defineConfig({
+  plugins: [usablVitePluginFromConfig({ cwd: import.meta.dirname })],
+})
+`;
+    expect(isOverlayWired(multiLineMultiBinding)).toBe(true);
+  });
+
+  it('recognises a multi-line import where from is on its own line as wired', () => {
+    // Some formatters put the closing brace and from keyword on the same line,
+    // others put the binding list on separate lines with from at the end.
+    const fromOnOwnLine = `import { defineConfig } from 'vite'
+import {
+  usablVitePluginFromConfig
+}
+  from 'usabl/vite'
+export default defineConfig({
+  plugins: [usablVitePluginFromConfig({ cwd: import.meta.dirname })],
+})
+`;
+    expect(isOverlayWired(fromOnOwnLine)).toBe(true);
+  });
+
+  it('still refuses when the multi-line import is commented out', () => {
+    // Commenting out a multi-line import must still be rejected, not accepted.
+    const commentedMultiLine = `import { defineConfig } from 'vite'
+/*
+import {
+  usablVitePluginFromConfig,
+} from 'usabl/vite'
+*/
+export default defineConfig({ plugins: [usablVitePluginFromConfig({ cwd: import.meta.dirname })] })
+`;
+    expect(isOverlayWired(commentedMultiLine)).toBe(false);
+  });
+
+  it('planOverlay returns already-wired for a multi-line import config', async () => {
+    const multiLine = `import { defineConfig } from 'vite'
+import {
+  usablVitePluginFromConfig,
+} from 'usabl/vite'
+export default defineConfig({
+  plugins: [
+    usablVitePluginFromConfig({ cwd: import.meta.dirname }),
+  ],
+})
+`;
+    const plan = await planOverlay(memoryFs({ 'vite.config.ts': multiLine }));
+    expect(plan.action).toBe('already-wired');
+  });
 });
