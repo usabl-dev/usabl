@@ -10,8 +10,9 @@ an SSH tunnel.
 | SSH private key (`rht_classroom.rsa`) | [Drive folder](https://drive.google.com/drive/folders/1hz_F6ZX_LjJe0mkx7SVPv9x9wDw6V4Sm?usp=drive_link) (download only, do not commit this key to any repo) |
 | AAP login | `admin` / `redhat` |
 
-Everything else lives in the `usabl-dev/ansible-ui` fork (`usabl.config.json`, tunnel script, login
-script, public key fingerprint).
+The app scan config (`usabl.config.json`, `usabl.routes.json`) lives in the private
+`usabl-dev/ansible-ui-demo` repo. The tunnel script, login script, and the public key for the
+fingerprint check live in the usabl clone under `docs/demo`.
 
 ---
 
@@ -182,7 +183,7 @@ Merge the `.usabl-evidence.json` diff with your fix PR so the floor ratchets dow
 
 ### Rules for this test subject
 
-- Work only in the **`usabl-dev/ansible-ui` fork**. Never push to `ansible/ansible-ui`.
+- Work only in the private **`usabl-dev/ansible-ui-demo`** repo. Never push to `ansible/ansible-ui`.
 - Never commit `.usabl-session.json`, the SSH private key, or raw scan output that names product
   findings you should not publish.
 - Keep tunnel + dev server + `USABL_STORAGE_STATE` exported for every scan.
@@ -394,11 +395,10 @@ Both must print the same `SHA256:` fingerprint. See `docs/demo/keys/README.md` i
 
 ### 1. Get the code
 
-The ansible-ui fork (public, in usabl-dev). This repo ships `usabl.config.json` and the committed
-evidence floor. The demo helper scripts and the key live in the usabl clone (see below), so the fork
-stays a clean mirror:
+The private demo app repo (`usabl-dev/ansible-ui-demo`). It ships `usabl.config.json` and
+`usabl.routes.json`. The demo helper scripts and the key live in the usabl clone (see below):
 ```
-git clone https://github.com/usabl-dev/ansible-ui.git
+git clone https://github.com/usabl-dev/ansible-ui-demo.git ansible-ui
 cd ansible-ui && npm ci
 ```
 
