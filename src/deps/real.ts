@@ -32,9 +32,55 @@ const SETTLE_SAMPLES_REQUIRED = 4;
 // after that first idle.
 const NETWORK_QUIET_WINDOW_MS = 500;
 
+// Browser-side path helper used by both document-start injection and adoptPage install.
+// Keep this the only implementation: a uniqueness (or any path) fix that lands in one
+// copy and misses the other recreates the duplicate-id false green (#182).
+// Paths use nth-child ancestry so selectors stay valid and comparable across calls.
+// An id is only used as a selector when it is unique in the document; duplicate ids
+// fall back to the structural path so set ops keyed on element identity cannot collide.
+const PATH_FOR_IMPL = `
+  const escapeCss = (value) => {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+      return CSS.escape(value);
+    }
+    return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => '\\\\' + ch);
+  };
+  const isUniqueId = (id) => document.querySelectorAll('#' + escapeCss(id)).length === 1;
+  const pathFor = (element) => {
+    if (!(element instanceof Element)) {
+      return '';
+    }
+    if (element.id && isUniqueId(element.id)) {
+      return '#' + escapeCss(element.id);
+    }
+    const segments = [];
+    let current = element;
+    while (current instanceof Element) {
+      if (current.id && isUniqueId(current.id)) {
+        segments.unshift('#' + escapeCss(current.id));
+        break;
+      }
+      const parent = current.parentElement;
+      if (!parent) {
+        segments.unshift(current.tagName.toLowerCase());
+        break;
+      }
+      let index = 1;
+      let sibling = current.previousElementSibling;
+      while (sibling instanceof Element) {
+        index += 1;
+        sibling = sibling.previousElementSibling;
+      }
+      segments.unshift(current.tagName.toLowerCase() + ':nth-child(' + String(index) + ')');
+      current = parent;
+    }
+    return segments.join(' > ');
+  };
+`;
+
 // Inject before app scripts run so the first live update is observable and not lost.
 // Late injection would under-report announcements and create a false sense of coverage.
-const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
+export const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
   const LIVE = '[aria-live],[role="status"],[role="alert"],[role="log"]';
   const buffer = [];
   const toText = (value) => {
@@ -70,43 +116,17 @@ const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
     startObserver();
   }
 
-  const escapeCss = (value) => {
-    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
-      return CSS.escape(value);
-    }
-    return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => '\\\\' + ch);
-  };
-  // Paths use nth-child ancestry so selectors stay valid and comparable across calls.
-  const pathFor = (element) => {
-    if (!(element instanceof Element)) {
-      return '';
-    }
-    if (element.id) {
-      return '#' + escapeCss(element.id);
-    }
-    const segments = [];
-    let current = element;
-    while (current instanceof Element) {
-      if (current.id) {
-        segments.unshift('#' + escapeCss(current.id));
-        break;
-      }
-      const parent = current.parentElement;
-      if (!parent) {
-        segments.unshift(current.tagName.toLowerCase());
-        break;
-      }
-      let index = 1;
-      let sibling = current.previousElementSibling;
-      while (sibling instanceof Element) {
-        index += 1;
-        sibling = sibling.previousElementSibling;
-      }
-      segments.unshift(current.tagName.toLowerCase() + ':nth-child(' + String(index) + ')');
-      current = parent;
-    }
-    return segments.join(' > ');
-  };
+  ${PATH_FOR_IMPL}
+  window.__usablPathFor = pathFor;
+})();`;
+
+// Evaluated after adoptPage attaches to a caller-owned page that already navigated.
+// Same PATH_FOR_IMPL as the init script; guarded so re-adopting the same page is a no-op.
+export const INSTALL_PATH_HELPER_SCRIPT = `(() => {
+  if (typeof window.__usablPathFor === 'function') {
+    return;
+  }
+  ${PATH_FOR_IMPL}
   window.__usablPathFor = pathFor;
 })();`;
 
@@ -608,56 +628,6 @@ function wrapPage(
   return page;
 }
 
-// Installs the stable-path helper on a page that already navigated before usabl attached.
-// makeRealBrowserDriver injects LIVE_AND_PATH_INIT_SCRIPT at document start, but a page a caller
-// hands us has already loaded, so the path helper must be installed after the fact. It is guarded
-// so re-adopting the same page is a no-op. The announcement observer is intentionally left out:
-// a retroactive observer cannot capture live updates that already fired, and disclosing that
-// honestly beats arming a lane that would under-report.
-function installPathHelper(): void {
-  const scope = window as unknown as { __usablPathFor?: (element: Element | null) => string };
-  if (typeof scope.__usablPathFor === 'function') {
-    return;
-  }
-  const escapeCss = (value: string): string => {
-    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
-      return CSS.escape(value);
-    }
-    return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => '\\' + ch);
-  };
-  const pathFor = (element: Element | null): string => {
-    if (!(element instanceof Element)) {
-      return '';
-    }
-    if (element.id) {
-      return '#' + escapeCss(element.id);
-    }
-    const segments: string[] = [];
-    let current: Element | null = element;
-    while (current instanceof Element) {
-      if (current.id) {
-        segments.unshift('#' + escapeCss(current.id));
-        break;
-      }
-      const parent: Element | null = current.parentElement;
-      if (parent === null) {
-        segments.unshift(current.tagName.toLowerCase());
-        break;
-      }
-      let index = 1;
-      let sibling: Element | null = current.previousElementSibling;
-      while (sibling instanceof Element) {
-        index += 1;
-        sibling = sibling.previousElementSibling;
-      }
-      segments.unshift(current.tagName.toLowerCase() + ':nth-child(' + String(index) + ')');
-      current = parent;
-    }
-    return segments.join(' > ');
-  };
-  scope.__usablPathFor = pathFor;
-}
-
 /**
  * Adopts a Playwright page a caller already created and navigated, so usabl can run providers on it
  * (for example from a Playwright test suite). It attaches a CDP session for AX reads and installs the
@@ -674,7 +644,7 @@ export async function adoptPage(pw: PwPage): Promise<Page> {
   const context = pw.context();
   const cdp = await context.newCDPSession(pw);
   await cdp.send('Accessibility.enable');
-  await pw.evaluate(installPathHelper);
+  await pw.evaluate(INSTALL_PATH_HELPER_SCRIPT);
   // The caller already navigated, so this tracker starts counting from adoption forward. A caller
   // that then uses gotoReady gets readiness measured against requests fired after adoption.
   const network = makeNetworkActivityTracker(pw);
