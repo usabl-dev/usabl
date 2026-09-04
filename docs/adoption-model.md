@@ -4,7 +4,7 @@ How developers and teams discover, try, integrate, and expand usabl, and how
 contributors join the project. This is an open-source adoption funnel, not a sales
 pipeline.
 
-Every command named here is a real command in the current engine (v0.2.0). The
+Every command named here is a real command in the current engine (v0.2.1). The
 adoption arc a person actually types is:
 
 ```
