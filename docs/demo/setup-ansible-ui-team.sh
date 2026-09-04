@@ -104,7 +104,7 @@ check_ssh_key() {
 }
 
 verify_key_fingerprint() {
-  local pub_key="${ANSIBLE_UI_DIR}/keys/rht_classroom.rsa.pub"
+  local pub_key="${USABL_DIR}/docs/demo/keys/rht_classroom.rsa.pub"
   if [[ ! -f "${pub_key}" ]]; then
     info "skipping fingerprint check (${pub_key} not found yet)"
     return 0
@@ -163,7 +163,8 @@ open_tunnel() {
     return 0
   fi
   info "opening lab tunnel"
-  "${ANSIBLE_UI_DIR}/scripts/open-aap-tunnel.sh"
+  # Lives in the usabl clone, not the ansible-ui fork, so the fork stays a clean mirror.
+  "${USABL_DIR}/docs/demo/open-aap-tunnel.sh"
 }
 
 mint_session() {
@@ -181,17 +182,19 @@ mint_session() {
     echo "  Then mint the session:"
     echo "    cd ${ANSIBLE_UI_DIR}"
     echo "    AUI_BASE_URL=${AUI_BASE_URL} AAP_USER=${AAP_USER} AAP_PASSWORD=*** \\"
-    echo "      AUI_STORAGE_STATE=./.usabl-session.json node scripts/aap-login.mjs"
+    echo "      AUI_STORAGE_STATE=./.usabl-session.json node ${USABL_DIR}/docs/demo/aap-login.mjs"
     return 0
   fi
   info "minting Playwright session at ${ANSIBLE_UI_DIR}/.usabl-session.json"
   (
+    # Run from the ansible-ui clone so .usabl-session.json lands where usabl reads it, but the
+    # script itself lives in the usabl clone to keep the ansible-ui fork clean.
     cd "${ANSIBLE_UI_DIR}"
     AUI_BASE_URL="${AUI_BASE_URL}" \
       AAP_USER="${AAP_USER}" \
       AAP_PASSWORD="${AAP_PASSWORD}" \
       AUI_STORAGE_STATE=./.usabl-session.json \
-      node scripts/aap-login.mjs
+      node "${USABL_DIR}/docs/demo/aap-login.mjs"
   )
 }
 
