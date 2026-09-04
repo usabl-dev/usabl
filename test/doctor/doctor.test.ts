@@ -222,6 +222,39 @@ describe('collectPolicyScope (guardedPaths vs CODEOWNERS)', () => {
     expect(stateOf(reports, 'policy-scope')).toBe('wired');
   });
 
+  it('flags a glob CODEOWNERS pattern as unreconcilable rather than assuming coverage', async () => {
+    // "* @o" owns every file; guardedPaths cannot express that, so usabl must not read it as wired.
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({
+          'usabl.config.json': configWith(['src/gate/']),
+          '.github/CODEOWNERS': '* @o\n',
+        }),
+        gh: GH_VERIFIED,
+        configPath: 'usabl.config.json',
+      }),
+    );
+    const report = byId(reports, 'policy-scope');
+    expect(report.state).toBe('drifted');
+    expect(report.nextStep).toContain('cannot reconcile');
+  });
+
+  it('flags a slash-free CODEOWNERS literal, which matches at any depth', async () => {
+    // "README.md" (no separator) owns that name at every level, not just the root, so a guarded
+    // root "README.md" does not cover it. usabl flags it rather than reading it as wired.
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({
+          'usabl.config.json': configWith(['README.md']),
+          '.github/CODEOWNERS': 'README.md @o\n',
+        }),
+        gh: GH_VERIFIED,
+        configPath: 'usabl.config.json',
+      }),
+    );
+    expect(stateOf(reports, 'policy-scope')).toBe('drifted');
+  });
+
   it('reports missing when there is no CODEOWNERS to reconcile against', async () => {
     const reports = await collectDoctorReport(
       doctorDeps({

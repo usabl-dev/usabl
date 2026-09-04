@@ -493,23 +493,41 @@ function normalizePolicyPath(path: string): string {
   return path.replace(/^\/+/, '').replace(/\/+$/, '');
 }
 
-// The path pattern from each CODEOWNERS rule line: the first whitespace token, comments and blank
-// lines skipped. Glob patterns (which CODEOWNERS allows but usabl's gate refuses) are left out
-// because they cannot be reconciled against a plain guarded prefix; only literal paths are checked.
-function codeownersOwnedPaths(raw: string): string[] {
-  const paths: string[] = [];
+interface CodeownersPatterns {
+  // Root-anchored literal path prefixes, normalized, which reconcile against guarded prefixes.
+  reconcilable: string[];
+  // Patterns usabl cannot reconcile against a plain guarded prefix: globs (* ? [ ]) and any-depth
+  // names with no path separator (CODEOWNERS matches those at every level, gitignore-style). These
+  // are flagged for manual verification rather than assumed covered, so the check never reads a
+  // pattern it cannot evaluate as "wired".
+  unreconcilable: string[];
+}
+
+// Split each CODEOWNERS rule's path pattern (the first whitespace token) into the two buckets above.
+// Comments and blank lines are skipped.
+function codeownersOwnedPaths(raw: string): CodeownersPatterns {
+  const reconcilable: string[] = [];
+  const unreconcilable: string[] = [];
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (trimmed.length === 0 || trimmed.startsWith('#')) {
       continue;
     }
     const token = trimmed.split(/\s+/)[0];
-    if (token === undefined || /[*?[\]]/.test(token)) {
+    if (token === undefined) {
       continue;
     }
-    paths.push(normalizePolicyPath(token));
+    const hasGlob = /[*?[\]]/.test(token);
+    // A separator at the start or middle anchors the pattern to the repo root (gitignore rule). A
+    // token with no separator matches its name at any depth, which a plain prefix cannot express.
+    const rootAnchored = token.replace(/\/+$/, '').includes('/');
+    if (hasGlob || !rootAnchored) {
+      unreconcilable.push(token);
+      continue;
+    }
+    reconcilable.push(normalizePolicyPath(token));
   }
-  return paths;
+  return { reconcilable, unreconcilable };
 }
 
 // A CODEOWNERS path is covered when the guarded set contains it or an ancestor directory of it, so
@@ -550,15 +568,28 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
     }
   }
   const guardedSet = buildGuardedSet({ guardedPaths });
-  const uncovered = [...new Set(codeownersOwnedPaths(codeownersRaw))].filter(
+  const { reconcilable, unreconcilable } = codeownersOwnedPaths(codeownersRaw);
+  const uncovered = [...new Set(reconcilable)].filter(
     (path) => !isPolicyPathCovered(path, guardedSet),
   );
-  if (uncovered.length > 0) {
+  const unverifiable = [...new Set(unreconcilable)];
+  if (uncovered.length > 0 || unverifiable.length > 0) {
+    const parts: string[] = [];
+    if (uncovered.length > 0) {
+      parts.push(
+        `CODEOWNERS gates ${uncovered.join(', ')}, but guardedPaths does not, so a change there reads as "no policy change" while GitHub still requires an owner. Add ${uncovered.join(', ')} to guardedPaths in ${deps.configPath}.`,
+      );
+    }
+    if (unverifiable.length > 0) {
+      parts.push(
+        `CODEOWNERS uses pattern(s) usabl cannot reconcile against a guarded prefix (${unverifiable.join(', ')}); confirm guardedPaths covers what they own, since usabl cannot prove it.`,
+      );
+    }
     return {
       id: 'policy-scope',
       label: POLICY_SCOPE_LABEL,
       state: 'drifted',
-      nextStep: `CODEOWNERS gates ${uncovered.join(', ')}, but guardedPaths does not, so a change there reads as "no policy change" while GitHub still requires an owner. Add ${uncovered.join(', ')} to guardedPaths in ${deps.configPath}.`,
+      nextStep: parts.join(' '),
     };
   }
   return { id: 'policy-scope', label: POLICY_SCOPE_LABEL, state: 'wired', nextStep: '' };
