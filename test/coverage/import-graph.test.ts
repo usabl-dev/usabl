@@ -55,14 +55,37 @@ describe('buildImportGraph', () => {
     });
   });
 
-  it('resolves ~/ imports via default project-root mapping', async () => {
+  it('resolves to the bundler-preferred extension when several exist (.js over .tsx)', async () => {
+    // With both Widget.js and Widget.tsx present, Vite's default resolve.extensions loads .js.
+    // usabl must pick the same file, or a change to one would be attributed to a screen that
+    // renders the other.
+    const fs = fsOf({
+      'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } }),
+      'src/Page.tsx': `import { Widget } from '@/Widget';`,
+      'src/Widget.js': `export const Widget = 1;`,
+      'src/Widget.tsx': `export const Widget = 2;`,
+    });
+    const aliasConfig = await loadAliasConfig(fs);
+    const graph = await buildImportGraph(fs, ['src/Page.tsx'], aliasConfig);
+    expect(graph.get('src/Page.tsx')).toContain('src/Widget.js');
+    expect(graph.get('src/Page.tsx')).not.toContain('src/Widget.tsx');
+  });
+
+  it('records ~/ import as unresolvable when no config maps it', async () => {
     const fs = fsOf({
       'src/Page.tsx': `import { util } from '~/src/lib/util';`,
       'src/lib/util.ts': `export const util = 1;`,
     });
     const aliasConfig = await loadAliasConfig(fs);
     const graph = await buildImportGraph(fs, ['src/Page.tsx'], aliasConfig);
-    expect(graph.get('src/Page.tsx')).toContain('src/lib/util.ts');
+    // No invented ~/ -> ./ default, so this creates no coverage edge; it is disclosed instead of
+    // silently attributing the file. Inventing the edge would be a false-coverage guess.
+    expect(graph.get('src/Page.tsx')).not.toContain('src/lib/util.ts');
+    expect(graph.unresolvable).toContainEqual({
+      importer: 'src/Page.tsx',
+      specifier: '~/src/lib/util',
+      kind: 'alias-unconfigured',
+    });
   });
 
   it('records a relative import with no existing candidate file as file-not-found', async () => {

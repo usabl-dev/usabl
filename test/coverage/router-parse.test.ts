@@ -29,7 +29,9 @@ describe('router-parse', () => {
     expect(isRouterSource('export function App() { return null }')).toBe(false);
   });
 
-  it('parses data-router routes with inline components', () => {
+  it('discovers data-router route urls without attributing a component', () => {
+    // Component attribution is intentionally not done: slicing to the next brace binds a nested
+    // child element to its parent route. Routes are discovered as URLs only (component null).
     const routes = parseDataRouterRoutes(`
       createBrowserRouter([
         { path: '/home', element: <Home /> },
@@ -37,9 +39,32 @@ describe('router-parse', () => {
       ])
     `);
     expect(routes).toEqual([
-      { path: '/home', component: 'Home' },
-      { path: '/about', component: 'About' },
+      { path: '/home', component: null },
+      { path: '/about', component: null },
     ]);
+  });
+
+  it('does not attribute a nested child element to its parent route', () => {
+    // False-coverage guard. The old brace-slicer bound /parent to Child. Now no component is
+    // attributed, so init cannot invent a wrong entry file for the parent route.
+    const routes = parseDataRouterRoutes(`
+      createBrowserRouter([
+        { path: '/parent', children: [{ path: '/child', element: <Child /> }], element: <Parent /> },
+      ])
+    `);
+    expect(routes).toEqual([
+      { path: '/parent', component: null },
+      { path: '/child', component: null },
+    ]);
+  });
+
+  it('ignores path-like objects outside the create*Router call', () => {
+    // A decoy object elsewhere in the module must not be read as a route.
+    const routes = parseDataRouterRoutes(`
+      const telemetry = { path: '/not-a-route', element: <Decoy /> };
+      createBrowserRouter([{ path: '/home', element: <Home /> }]);
+    `);
+    expect(routes).toEqual([{ path: '/home', component: null }]);
   });
 
   it('merges jsx and data routes without duplicating paths', () => {

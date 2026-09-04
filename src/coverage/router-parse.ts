@@ -56,26 +56,51 @@ export function isRouterSource(raw: string): boolean {
   );
 }
 
+// Discovers data-router route URLs, scoped to the create*Router(...) argument so an unrelated
+// object elsewhere in the module cannot be read as a route. It never attributes a component:
+// slicing to the next brace binds a nested child's element to its parent route, so entry-file
+// attribution stays null and each route is a URL-only discovery. route-manifest's rule holds here
+// too: never invent entry-file attribution from router text.
 export function parseDataRouterRoutes(
   raw: string,
 ): Array<{ path: string; component: string | null }> {
+  const region = extractRouterCallArg(raw);
+  if (region === null) {
+    return [];
+  }
   const routes: Array<{ path: string; component: string | null }> = [];
-  const pathMatches = raw.matchAll(/path:\s*['"`](\/[^'"`]+)['"`]/g);
-  for (const pathMatch of pathMatches) {
+  const seen = new Set<string>();
+  for (const pathMatch of region.matchAll(/path:\s*['"`](\/[^'"`]+)['"`]/g)) {
     const routePath = pathMatch[1];
-    if (typeof routePath !== 'string') {
+    if (typeof routePath !== 'string' || seen.has(routePath)) {
       continue;
     }
-    const start = pathMatch.index ?? 0;
-    const blockEnd = raw.indexOf('}', start);
-    const block = blockEnd === -1 ? raw.slice(start) : raw.slice(start, blockEnd + 1);
-    const elementMatch = block.match(/element:\s*<\s*([A-Za-z_$][\w$]*)\s*\/?>/);
-    routes.push({
-      path: routePath,
-      component: elementMatch?.[1] ?? null,
-    });
+    seen.add(routePath);
+    routes.push({ path: routePath, component: null });
   }
   return routes;
+}
+
+// Returns the balanced-paren argument of the first create*Router(...) call, or null.
+function extractRouterCallArg(raw: string): string | null {
+  const marker = raw.match(/\bcreate(?:Browser|Hash|Memory)Router\s*\(/);
+  if (marker?.index === undefined) {
+    return null;
+  }
+  const start = marker.index + marker[0].length - 1;
+  let depth = 0;
+  for (let i = start; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch === '(') {
+      depth += 1;
+    } else if (ch === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return raw.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
 }
 
 export function mergeParsedRoutes(

@@ -121,8 +121,15 @@ function parseViteAliases(raw: string, configFile: string): AliasMapping[] {
   const mappings: AliasMapping[] = [];
   const seenPrefixes = new Set<string>();
 
+  // Only parse aliases inside the resolve block. A bare "alias:" match anywhere would let a
+  // plugin option or unrelated object masquerade as resolve.alias and attribute a decoy file.
+  const raw2 = extractResolveBlock(raw);
+  if (raw2 === null) {
+    return mappings;
+  }
+
   // Object form: alias: { '@': './src', ... } or path.resolve(__dirname, './src')
-  const objectBlock = raw.match(/alias\s*:\s*\{([^}]+)\}/);
+  const objectBlock = raw2.match(/alias\s*:\s*\{([^}]+)\}/);
   if (objectBlock?.[1] !== undefined) {
     const entries = objectBlock[1].matchAll(
       /['"`]([^'"`]+)['"`]\s*:\s*((?:path\.resolve\([^)]+\)|['"`][^'"`]*['"`]|[^,}\n]+))/g,
@@ -149,7 +156,7 @@ function parseViteAliases(raw: string, configFile: string): AliasMapping[] {
   }
 
   // Array form: alias: [{ find: '@', replacement: './src' }, ...]
-  const arrayEntries = raw.matchAll(
+  const arrayEntries = raw2.matchAll(
     /\{\s*find\s*:\s*['"`]([^'"`]+)['"`]\s*,\s*replacement\s*:\s*([^}]+)\}/g,
   );
   for (const match of arrayEntries) {
@@ -175,25 +182,57 @@ function parseViteAliases(raw: string, configFile: string): AliasMapping[] {
   return mappings;
 }
 
-function mergeMappings(tsconfig: AliasMapping[], vite: AliasMapping[]): AliasMapping[] {
-  const byPrefix = new Map<string, AliasMapping>();
-  for (const mapping of tsconfig) {
-    byPrefix.set(mapping.prefix, mapping);
+// Returns the balanced-brace body of the first `resolve: { ... }` block, or null. Scoping alias
+// parsing to this block is what keeps a decoy `alias:` elsewhere in the config from being read.
+function extractResolveBlock(raw: string): string | null {
+  const marker = raw.match(/\bresolve\s*:\s*\{/);
+  if (marker?.index === undefined) {
+    return null;
   }
-  // Vite wins on conflict for the same prefix.
-  for (const mapping of vite) {
-    byPrefix.set(mapping.prefix, mapping);
+  const start = marker.index + marker[0].length - 1;
+  let depth = 0;
+  for (let i = start; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return raw.slice(start, i + 1);
+      }
+    }
   }
-  return [...byPrefix.values()].sort((a, b) => b.prefix.length - a.prefix.length);
+  return null;
 }
 
-export function resolveAliasSpecifier(
-  specifier: string,
-  mappings: AliasMapping[],
-  _projectRoot: string,
-): string | null {
-  const ordered = [...mappings].sort((a, b) => b.prefix.length - a.prefix.length);
-  for (const mapping of ordered) {
+function mergeMappings(tsconfig: AliasMapping[], vite: AliasMapping[]): AliasMapping[] {
+  // Order is the resolution rule, so do not sort by prefix length. Vite is the bundler authority,
+  // and its aliases apply in declaration order (first match wins), so they come first as parsed.
+  // tsconfig paths fill in only prefixes Vite does not define, longest-prefix first to match how
+  // TypeScript picks the most specific mapping.
+  const ordered: AliasMapping[] = [];
+  const seen = new Set<string>();
+  for (const mapping of vite) {
+    if (!seen.has(mapping.prefix)) {
+      seen.add(mapping.prefix);
+      ordered.push(mapping);
+    }
+  }
+  const tsconfigByLength = [...tsconfig].sort((a, b) => b.prefix.length - a.prefix.length);
+  for (const mapping of tsconfigByLength) {
+    if (!seen.has(mapping.prefix)) {
+      seen.add(mapping.prefix);
+      ordered.push(mapping);
+    }
+  }
+  return ordered;
+}
+
+export function resolveAliasSpecifier(specifier: string, mappings: AliasMapping[]): string | null {
+  // First match wins, in the order the mappings were resolved (see mergeMappings). Re-sorting here
+  // would break Vite's declaration-order semantics and could resolve to a different file than the
+  // bundler, which is a false-coverage risk.
+  for (const mapping of mappings) {
     if (!specifier.startsWith(mapping.prefix) && specifier !== mapping.prefix.slice(0, -1)) {
       continue;
     }
@@ -235,14 +274,9 @@ export async function loadAliasConfig(fs: FsGlob): Promise<AliasConfig> {
     }
   }
 
+  // No invented "~/ -> ./" default. A tilde import only resolves when the project actually
+  // configures it; otherwise it stays disclosed as alias-unconfigured, not silently attributed.
   const merged = mergeMappings(tsconfigMappings, viteMappings);
-
-  // ~/ maps to project root when no explicit ~/ mapping exists.
-  if (!merged.some((m) => m.prefix === '~/')) {
-    merged.push({ prefix: '~/', target: './' });
-  }
-
-  merged.sort((a, b) => b.prefix.length - a.prefix.length);
 
   const hasAliasConfig = tsconfigMappings.length > 0 || viteMappings.length > 0;
 

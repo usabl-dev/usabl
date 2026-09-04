@@ -30,8 +30,23 @@ export interface ImportGraphView {
 // never invent import edges that were not proven by concrete source text and files.
 const FROM_IMPORT_RE = /\bimport\s+(?:type\s+)?[^"'`;\n]+?\sfrom\s*["'`]([^"'`]+)["'`]/g;
 const DYNAMIC_IMPORT_RE = /\bimport\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
-// Probe in a deterministic order. First existing file wins and nothing else is inferred.
-const PROBE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts'];
+// Probe in Vite's default resolve.extensions order so that when more than one candidate exists
+// (for example Widget.js and Widget.tsx), we resolve to the same file the bundler would, not a
+// different one. A different pick would attribute a changed file to a screen it does not render.
+const PROBE_EXTENSIONS = [
+  '.mjs',
+  '.js',
+  '.mts',
+  '.ts',
+  '.jsx',
+  '.tsx',
+  '/index.mjs',
+  '/index.js',
+  '/index.mts',
+  '/index.ts',
+  '/index.jsx',
+  '/index.tsx',
+];
 
 function extractSpecifiers(source: string): string[] {
   const found: string[] = [];
@@ -113,7 +128,7 @@ export async function buildImportGraph(
     const fileEdges = edges.get(file) ?? [];
     for (const specifier of extractSpecifiers(source)) {
       if (isAliasLikeSpecifier(specifier)) {
-        const aliasPath = resolveAliasSpecifier(specifier, mappings, '.');
+        const aliasPath = resolveAliasSpecifier(specifier, mappings);
         if (aliasPath === null) {
           pushUniqueUnresolvable(unresolvable, {
             importer: file,
@@ -187,7 +202,7 @@ export async function inspectDirectImports(
 
   for (const specifier of extractSpecifiers(source)) {
     if (isAliasLikeSpecifier(specifier)) {
-      const aliasPath = resolveAliasSpecifier(specifier, mappings, '.');
+      const aliasPath = resolveAliasSpecifier(specifier, mappings);
       if (aliasPath === null) {
         pushUniqueUnresolvable(unresolvable, {
           importer: file,
