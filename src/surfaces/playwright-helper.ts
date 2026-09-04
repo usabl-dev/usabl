@@ -16,10 +16,8 @@ import type {
 } from '../contracts/index.js';
 import { decideAccessibilityVerdict } from '../coverage/completeness.js';
 import { adoptPage } from '../deps/real.js';
-import { axeProvider } from '../providers/axe/index.js';
+import { makeCoreProviders } from '../providers/core-stack.js';
 import { runProviders } from '../providers/index.js';
-import { makeKeyboardWalkProvider } from '../providers/keyboard-walk/index.js';
-import { makeRulepackProvider } from '../providers/rulepack/index.js';
 import { scrubResult } from './scrub.js';
 
 // A single-page check outcome for a live Playwright page. It calls the same precedence function
@@ -88,17 +86,16 @@ function pageCheckCapabilities(providers: Provider[]): Capability[] {
  *
  * This is the seam a Playwright suite uses: navigate and interact with the page in your test, then
  * hand the page to checkPage. It adopts the page (attaching a CDP session and the path helper without
- * ever closing the page or its context), runs the axe, PatternFly rulepack, and keyboard-walk
- * providers, and summarizes the drafts with the same precedence as a full usabl run.
+ * ever closing the page or its context), runs the same core provider stack as `buildDeps` (axe,
+ * PatternFly rulepack, docs rulepack, keyboard walk), and summarizes the drafts with the same
+ * precedence as a full usabl run.
  */
 export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}): Promise<PageCheckResult> {
   const profile: ProfileName = options.profile ?? 'app';
-  const providers: Provider[] = [axeProvider, makeRulepackProvider()];
-  if (options.keyboardWalk !== false) {
-    providers.push(
-      makeKeyboardWalkProvider(options.tabCap === undefined ? {} : { tabCap: options.tabCap }),
-    );
-  }
+  const providers: Provider[] = makeCoreProviders({
+    ...(options.keyboardWalk === undefined ? {} : { keyboardWalk: options.keyboardWalk }),
+    ...(options.tabCap === undefined ? {} : { tabCap: options.tabCap }),
+  });
 
   const page = await adoptPage(pwPage);
   const { drafts, gaps } = await runProviders(

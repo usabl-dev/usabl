@@ -12,10 +12,7 @@ import type { Capability, Deps, UsablConfig } from "../contracts/index.js";
 import { canonicalHash, sha256 } from "../primitives/canonical.js";
 import { sortBy } from "../primitives/sortKey.js";
 import { makeCheckRunner } from "../providers/check-runner.js";
-import { axeProvider } from "../providers/axe/index.js";
-import { makeRulepackProvider } from "../providers/rulepack/index.js";
-import { makeDocsRulepackProvider } from "../providers/docs-rulepack/index.js";
-import { makeKeyboardWalkProvider } from "../providers/keyboard-walk/index.js";
+import { makeCoreProviders } from "../providers/core-stack.js";
 import { makeStepRunner } from "../providers/keyboard-walk/steps.js";
 import { loadRequirements } from "../intake/load.js";
 import { mapRequirementsToProviders } from "../intake/map-to-providers.js";
@@ -33,14 +30,6 @@ const RUNNER_PACKAGE_PATHS = [
   // Source imports during Vitest live in src/deps/.
   fileURLToPath(new URL("../../package.json", import.meta.url)),
 ];
-// Per-screen budget for the keyboard walk, anchored when each walk starts. It guards against a
-// focus order that never cycles back; it is not a throttle on normal screens, which end on their
-// own once focus returns to a stop already seen. Wall clock binds before the 200 tab-stop cap does.
-// Measured screens carry up to about 145 focusable elements, and every stop costs several browser
-// round trips, so a large screen on a busy main thread needs seconds, not milliseconds. This is
-// also the budget the real-browser smoke entry uses, so the shipped path and the path we actually
-// exercise against Chromium agree.
-const KEYBOARD_WALL_CLOCK_MS = 15_000;
 
 function readVersion(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -219,14 +208,7 @@ export async function buildDeps(
     options.trustedRef,
   );
   const loadedRequirements = await loadRequirements(intakeFs, intakeConfig);
-  const providers = [
-    axeProvider,
-    makeRulepackProvider(),
-    // Docs-only checks. This pack self-gates to the docs profile, so it returns [] on app scans.
-    makeDocsRulepackProvider(),
-    // Wall-clock cap limits infinite focus loops while still disclosing partial evidence.
-    makeKeyboardWalkProvider({ wallClockMs: KEYBOARD_WALL_CLOCK_MS }),
-  ];
+  const providers = makeCoreProviders();
   if (loadedRequirements.ok) {
     providers.push(...mapRequirementsToProviders(loadedRequirements.bundle));
   }
