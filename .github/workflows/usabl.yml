@@ -16,6 +16,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         # v5.1.0 declares node24 so GitHub stops forcing a Node 20 action onto Node 24.
@@ -67,3 +68,29 @@ jobs:
         # usabl holds its own shipped HTML docs to the WCAG 2.2 AA bar it enforces
         # on other products. Chromium is already installed above.
         run: npm run docs:a11y
+
+  # Real Chromium suites gated by USABL_INTEGRATION. Default `npm run check` skips them, so a
+  # merge could stay green while the live driver path drifted. This job runs only the in-repo
+  # fixture suites (fixtures/live and local HTTP pages). The hero-bug / fixture-clean suites need
+  # an external demo app path and stay local-only.
+  integration-chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Real Chromium integration
+        run: npm run test:integration
