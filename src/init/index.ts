@@ -7,6 +7,12 @@
 import { posix } from 'node:path';
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
 import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
+import {
+  isRouterSource,
+  mergeParsedRoutes,
+  parseDataRouterRoutes,
+  screenIdFromUrl,
+} from '../coverage/router-parse.js';
 
 // Init writes only these two drafts. Waivers stay human-authored judgment.
 const POLICY_FILES = ['usabl.config.json', 'usabl.routes.json'] as const;
@@ -48,14 +54,6 @@ export interface WriteInitResult {
   written: string[];
   refused: string[];
   message: string;
-}
-
-function screenIdFromUrl(url: string): string {
-  // Same identity rule as the route sidecar parser. Init must not invent a
-  // second screen-id scheme that later coverage planning cannot match.
-  const trimmed = url.startsWith('/') ? url.slice(1) : url;
-  if (trimmed.length === 0) return 'root';
-  return trimmed.replace(/\//g, '-');
 }
 
 function parseVitePort(raw: string): number | null {
@@ -199,7 +197,7 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
   let routerRaw: string | null = null;
   for (const candidate of ROUTER_CANDIDATES) {
     const raw = await fs.readFile(candidate);
-    if (raw !== null && (raw.includes('<Route') || raw.includes('path='))) {
+    if (raw !== null && isRouterSource(raw)) {
       routerFile = candidate;
       routerRaw = raw;
       notes.push(`Inferred router file ${candidate}.`);
@@ -213,7 +211,10 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
   const routes: RouteEntry[] = [];
   if (routerRaw !== null) {
     const imports = parseLocalImports(routerRaw);
-    const parsed = parseRouteTags(routerRaw);
+    const parsed = mergeParsedRoutes(parseRouteTags(routerRaw), parseDataRouterRoutes(routerRaw));
+    if (routerRaw.includes('createBrowserRouter')) {
+      notes.push('Review: data-router routes detected; verify entry file attribution.');
+    }
     let attributed = 0;
     for (const route of parsed) {
       if (!isProvenRoutePath(route.path)) {

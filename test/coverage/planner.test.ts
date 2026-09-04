@@ -207,4 +207,31 @@ describe('computeCoverage', () => {
     expect(cov.gaps[0]!.state).toBe('unresolved');
     expect(cov.gaps[0]!.reason).not.toBe('');
   });
+
+  it('maps a changed file reachable via an alias import chain to an affected screen', async () => {
+    const fs = fsOf({
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: { paths: { '@/*': ['src/*'] } },
+      }),
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }],
+      }),
+      'src/ClustersPage.tsx': `import { Table } from '@/components/Table';`,
+      'src/components/Table.tsx': `export function Table() {}`,
+    });
+    const cov = await computeCoverage(fs, baseConfig, ['src/components/Table.tsx']);
+    expect(cov.unresolvedFiles).toEqual([]);
+    expect(cov.affected.some((s) => s.screenId === 'clusters' && s.provenance === 'route-graph')).toBe(true);
+  });
+
+  it('includes alias diagnostics when an unresolved file imports through a broken alias', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({ routes: [] }),
+      'src/Orphan.tsx': `import { Foo } from '@/components/Foo';`,
+    });
+    const cov = await computeCoverage(fs, baseConfig, ['src/Orphan.tsx']);
+    expect(cov.gaps[0]!.reason).toContain('Discovery detail');
+    expect(cov.gaps[0]!.reason).toContain('alias mapping');
+    expect(cov.gaps[0]!.reason).toContain('src/Orphan.tsx');
+  });
 });

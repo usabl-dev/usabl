@@ -7,10 +7,22 @@
 // Use POSIX paths so coverage keys stay stable across operating systems.
 import { posix as path } from 'node:path';
 import type { FsGlob } from '../contracts/index.js';
+import {
+  type AliasConfig,
+  isAliasLikeSpecifier,
+  resolveAliasSpecifier,
+} from './alias-config.js';
 
-interface ImportGraphView {
+export interface UnresolvableImport {
+  importer: string;
+  specifier: string;
+  kind: 'alias-unconfigured' | 'alias-unmapped' | 'file-not-found';
+}
+
+export interface ImportGraphView {
   get(file: string): string[];
-  unresolvable: string[];
+  unresolvable: UnresolvableImport[];
+  visited: ReadonlySet<string>;
 }
 
 // This pattern stays single-line by design. A multiline static import can be missed,
@@ -42,11 +54,6 @@ function isRelativeSpecifier(specifier: string): boolean {
   return specifier.startsWith('.');
 }
 
-function isAliasSpecifier(specifier: string): boolean {
-  // This module has no alias config source. @/ and ~/ stay unresolved on purpose.
-  return specifier.startsWith('@/') || specifier.startsWith('~/');
-}
-
 function hasKnownExtension(specifier: string): boolean {
   return /\.[^/]+$/.test(specifier);
 }
@@ -55,9 +62,10 @@ function resolveBaseFile(importer: string, specifier: string): string {
   return path.normalize(path.join(path.dirname(importer), specifier));
 }
 
-async function resolveRelativeImport(fs: FsGlob, importer: string, specifier: string): Promise<string | null> {
-  const base = resolveBaseFile(importer, specifier);
-  const candidates = hasKnownExtension(specifier) ? [base] : PROBE_EXTENSIONS.map((suffix) => `${base}${suffix}`);
+async function resolveFileAtPath(fs: FsGlob, filePath: string): Promise<string | null> {
+  const candidates = hasKnownExtension(filePath)
+    ? [filePath]
+    : PROBE_EXTENSIONS.map((suffix) => `${filePath}${suffix}`);
   for (const candidate of candidates) {
     if ((await fs.readFile(candidate)) !== null) {
       return candidate;
@@ -66,17 +74,29 @@ async function resolveRelativeImport(fs: FsGlob, importer: string, specifier: st
   return null;
 }
 
-function pushUnique(list: string[], value: string): void {
-  if (!list.includes(value)) {
-    list.push(value);
+async function resolveRelativeImport(fs: FsGlob, importer: string, specifier: string): Promise<string | null> {
+  const base = resolveBaseFile(importer, specifier);
+  return resolveFileAtPath(fs, base);
+}
+
+function pushUniqueUnresolvable(list: UnresolvableImport[], entry: UnresolvableImport): void {
+  const key = `${entry.importer}:${entry.specifier}:${entry.kind}`;
+  if (!list.some((item) => `${item.importer}:${item.specifier}:${item.kind}` === key)) {
+    list.push(entry);
   }
 }
 
-export async function buildImportGraph(fs: FsGlob, entryFiles: string[]): Promise<ImportGraphView> {
+export async function buildImportGraph(
+  fs: FsGlob,
+  entryFiles: string[],
+  aliasConfig?: AliasConfig,
+): Promise<ImportGraphView> {
   const edges = new Map<string, string[]>();
   const visited = new Set<string>();
   const queue = [...entryFiles];
-  const unresolvable: string[] = [];
+  const unresolvable: UnresolvableImport[] = [];
+  const mappings = aliasConfig?.mappings ?? [];
+  const hasAliasConfig = aliasConfig?.hasAliasConfig ?? false;
 
   while (queue.length > 0) {
     const file = queue.shift();
@@ -92,8 +112,27 @@ export async function buildImportGraph(fs: FsGlob, entryFiles: string[]): Promis
 
     const fileEdges = edges.get(file) ?? [];
     for (const specifier of extractSpecifiers(source)) {
-      if (isAliasSpecifier(specifier)) {
-        pushUnique(unresolvable, `${file}:${specifier}`);
+      if (isAliasLikeSpecifier(specifier)) {
+        const aliasPath = resolveAliasSpecifier(specifier, mappings, '.');
+        if (aliasPath === null) {
+          pushUniqueUnresolvable(unresolvable, {
+            importer: file,
+            specifier,
+            kind: hasAliasConfig ? 'alias-unmapped' : 'alias-unconfigured',
+          });
+          continue;
+        }
+        const resolved = await resolveFileAtPath(fs, aliasPath);
+        if (resolved === null) {
+          pushUniqueUnresolvable(unresolvable, {
+            importer: file,
+            specifier,
+            kind: 'file-not-found',
+          });
+          continue;
+        }
+        pushUnique(fileEdges, resolved);
+        queue.push(resolved);
         continue;
       }
 
@@ -104,13 +143,14 @@ export async function buildImportGraph(fs: FsGlob, entryFiles: string[]): Promis
 
       const resolved = await resolveRelativeImport(fs, file, specifier);
       if (resolved === null) {
-        // Missing relative files stay explicit as file:specifier evidence.
-        // Guessing would create fake closure edges.
-        pushUnique(unresolvable, `${file}:${specifier}`);
+        pushUniqueUnresolvable(unresolvable, {
+          importer: file,
+          specifier,
+          kind: 'file-not-found',
+        });
         continue;
       }
 
-      // Record the edge first, then let visited checks stop cycle re-traversal.
       pushUnique(fileEdges, resolved);
       queue.push(resolved);
     }
@@ -122,5 +162,60 @@ export async function buildImportGraph(fs: FsGlob, entryFiles: string[]): Promis
       return edges.get(file) ?? [];
     },
     unresolvable,
+    visited,
   };
+}
+
+function pushUnique(list: string[], value: string): void {
+  if (!list.includes(value)) {
+    list.push(value);
+  }
+}
+
+export async function inspectDirectImports(
+  fs: FsGlob,
+  file: string,
+  aliasConfig?: AliasConfig,
+): Promise<UnresolvableImport[]> {
+  const source = await fs.readFile(file);
+  if (source === null) {
+    return [];
+  }
+  const mappings = aliasConfig?.mappings ?? [];
+  const hasAliasConfig = aliasConfig?.hasAliasConfig ?? false;
+  const unresolvable: UnresolvableImport[] = [];
+
+  for (const specifier of extractSpecifiers(source)) {
+    if (isAliasLikeSpecifier(specifier)) {
+      const aliasPath = resolveAliasSpecifier(specifier, mappings, '.');
+      if (aliasPath === null) {
+        pushUniqueUnresolvable(unresolvable, {
+          importer: file,
+          specifier,
+          kind: hasAliasConfig ? 'alias-unmapped' : 'alias-unconfigured',
+        });
+        continue;
+      }
+      const resolved = await resolveFileAtPath(fs, aliasPath);
+      if (resolved === null) {
+        pushUniqueUnresolvable(unresolvable, {
+          importer: file,
+          specifier,
+          kind: 'file-not-found',
+        });
+      }
+      continue;
+    }
+    if (isRelativeSpecifier(specifier)) {
+      const resolved = await resolveRelativeImport(fs, file, specifier);
+      if (resolved === null) {
+        pushUniqueUnresolvable(unresolvable, {
+          importer: file,
+          specifier,
+          kind: 'file-not-found',
+        });
+      }
+    }
+  }
+  return unresolvable;
 }

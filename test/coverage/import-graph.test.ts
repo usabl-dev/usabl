@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildImportGraph } from '../../src/coverage/import-graph.js';
+import { loadAliasConfig } from '../../src/coverage/alias-config.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 
 const fsOf = (files: Record<string, string>) => makeFakeDeps({ files }).fs;
@@ -14,22 +15,64 @@ describe('buildImportGraph', () => {
     expect(graph.get('src/ClustersPage.tsx')).toContain('src/ClusterTable.ts');
   });
 
-  it('records an alias import as unresolvable', async () => {
+  it('records alias-unconfigured when no alias config exists', async () => {
     const fs = fsOf({ 'src/Page.tsx': `import { Foo } from '@/components/Foo';` });
     const graph = await buildImportGraph(fs, ['src/Page.tsx']);
-    expect(graph.unresolvable).toContain('src/Page.tsx:@/components/Foo');
+    expect(graph.unresolvable).toContainEqual({
+      importer: 'src/Page.tsx',
+      specifier: '@/components/Foo',
+      kind: 'alias-unconfigured',
+    });
   });
 
-  it('records a tilde alias import as unresolvable', async () => {
-    const fs = fsOf({ 'src/Page.tsx': `import { Foo } from '~/components/Foo';` });
-    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
-    expect(graph.unresolvable).toContain('src/Page.tsx:~/components/Foo');
+  it('resolves @/ imports when tsconfig paths are present', async () => {
+    const fs = fsOf({
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } },
+      }),
+      'src/Page.tsx': `import { Foo } from '@/components/Foo';`,
+      'src/components/Foo.tsx': `export const Foo = 1;`,
+    });
+    const aliasConfig = await loadAliasConfig(fs);
+    const graph = await buildImportGraph(fs, ['src/Page.tsx'], aliasConfig);
+    expect(graph.get('src/Page.tsx')).toContain('src/components/Foo.tsx');
+    expect(graph.unresolvable).toEqual([]);
   });
 
-  it('records a relative import with no existing candidate file as unresolvable', async () => {
+  it('records file-not-found when alias resolves but no file exists', async () => {
+    const fs = fsOf({
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: { paths: { '@/*': ['src/*'] } },
+      }),
+      'src/Page.tsx': `import { Foo } from '@/components/Foo';`,
+    });
+    const aliasConfig = await loadAliasConfig(fs);
+    const graph = await buildImportGraph(fs, ['src/Page.tsx'], aliasConfig);
+    expect(graph.unresolvable).toContainEqual({
+      importer: 'src/Page.tsx',
+      specifier: '@/components/Foo',
+      kind: 'file-not-found',
+    });
+  });
+
+  it('resolves ~/ imports via default project-root mapping', async () => {
+    const fs = fsOf({
+      'src/Page.tsx': `import { util } from '~/src/lib/util';`,
+      'src/lib/util.ts': `export const util = 1;`,
+    });
+    const aliasConfig = await loadAliasConfig(fs);
+    const graph = await buildImportGraph(fs, ['src/Page.tsx'], aliasConfig);
+    expect(graph.get('src/Page.tsx')).toContain('src/lib/util.ts');
+  });
+
+  it('records a relative import with no existing candidate file as file-not-found', async () => {
     const fs = fsOf({ 'src/Page.tsx': `import { Gone } from './Gone';` });
     const graph = await buildImportGraph(fs, ['src/Page.tsx']);
-    expect(graph.unresolvable).toContain('src/Page.tsx:./Gone');
+    expect(graph.unresolvable).toContainEqual({
+      importer: 'src/Page.tsx',
+      specifier: './Gone',
+      kind: 'file-not-found',
+    });
   });
 
   it('resolves a dynamic import when the file exists', async () => {
@@ -74,5 +117,15 @@ describe('buildImportGraph', () => {
     const graph = await buildImportGraph(fs, ['src/A.tsx']);
     expect(graph.get('src/A.tsx')).toContain('src/B.tsx');
     expect(graph.get('src/B.tsx')).toContain('src/A.tsx');
+  });
+
+  it('exposes visited files from BFS', async () => {
+    const fs = fsOf({
+      'src/A.tsx': `import { B } from './B';`,
+      'src/B.tsx': `export const B = 1;`,
+    });
+    const graph = await buildImportGraph(fs, ['src/A.tsx']);
+    expect(graph.visited.has('src/A.tsx')).toBe(true);
+    expect(graph.visited.has('src/B.tsx')).toBe(true);
   });
 });
