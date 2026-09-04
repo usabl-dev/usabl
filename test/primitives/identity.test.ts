@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeIdentity } from '../../src/primitives/identity.js';
+import { computeIdentity, identityKey } from '../../src/primitives/identity.js';
 import type { Draft } from '../../src/contracts/index.js';
 
 function draft(over: Partial<Draft>): Draft {
@@ -10,6 +10,24 @@ function draft(over: Partial<Draft>): Draft {
     ...over,
   };
 }
+
+describe('identityKey', () => {
+  it('joins screen, rule, and elementKey so gate, baseline, and prune stay aligned', () => {
+    expect(
+      identityKey({
+        screenId: 'clusters',
+        rule: 'color-contrast',
+        elementKey: 'clusters|color-contrast|name:save',
+      }),
+    ).toBe('clusters|color-contrast|clusters|color-contrast|name:save');
+  });
+
+  it('uses the count sentinel when elementKey is null', () => {
+    expect(identityKey({ screenId: 'clusters', rule: 'button-name', elementKey: null })).toBe(
+      'clusters|button-name|count',
+    );
+  });
+});
 
 describe('computeIdentity', () => {
   it('uses the accessible name when present', () => {

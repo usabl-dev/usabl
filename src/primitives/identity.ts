@@ -44,6 +44,16 @@ function neutralizePath(path: string): string {
 }
 
 /**
+ * Cross-layer / floor map key. Layer is omitted so axe and PatternFly reports of the same
+ * defect collapse to one identity. Keep this helper in one place: gate, baseline, and floor
+ * prune must agree on the string or a paid-down barrier can reappear as carried debt, and a
+ * carried barrier can gate as new.
+ */
+export function identityKey(value: { screenId: string; rule: string; elementKey: string | null }): string {
+  return `${value.screenId}|${value.rule}|${value.elementKey ?? 'count'}`;
+}
+
+/**
  * Layer-independent identity for a Draft.
  * Returns `elementKey: null` for count-based rules; callers must not invent a name key.
  */
