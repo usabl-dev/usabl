@@ -140,4 +140,34 @@ describe('evaluateStopDecision', () => {
     expect(decision.message).toContain('UNTRUSTED PAGE TEXT');
     expect(decision.message).not.toContain('secretvalue');
   });
+
+  it('collapses findings over the noise budget with a show-all hint', () => {
+    const findings = Array.from({ length: 6 }, (_, index) => ({
+      rule: `rule-${index}`,
+      layer: 'axe',
+      severity: 'serious' as const,
+      evidenceClass: 'deterministic' as const,
+      screenId: 'clusters',
+      elementPath: `button-${index}`,
+      elementName: 'Save',
+      role: 'button',
+      whatUserExperiences: `problem ${index}`,
+      why: 'because',
+      fix: 'fix it',
+      evidence: {},
+      confidence: 'fail' as const,
+      elementKey: `k-${index}`,
+      identityBasis: 'name' as const,
+      status: 'new' as const,
+    }));
+    const decision = evaluateStopDecision(
+      baseResult({ verdict: 'regression', findings }),
+      { stopHookActive: false },
+    );
+
+    expect(decision.block).toBe(true);
+    expect(decision.message).toContain('Barriers:');
+    expect(decision.message).toContain('usabl check --json');
+    expect(decision.message).toContain('6 gating findings');
+  });
 });

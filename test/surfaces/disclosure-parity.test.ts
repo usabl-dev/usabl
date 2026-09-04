@@ -314,13 +314,16 @@ describe('the stop hook stays short enough to belong in a model context', () => 
     // so there is no number. Each entry costs a fixed 106 characters of frame markers on top of
     // whatever the page text runs to.
     const message = evaluateStopDecision(
-      withGaps([
-        gap(),
-        UNOPENED_GAP,
-        gap({ ref: 'p', state: 'skipped', reason: 'provider walk needs the page as loaded' }),
-        gap({ ref: 'q', state: 'capability-denied', reason: 'provider pf denied capability: network' }),
-        gap({ ref: 'r', state: 'not-covered', reason: 'another screen failed to open' }),
-      ]),
+      withGaps(
+        [
+          gap(),
+          UNOPENED_GAP,
+          gap({ ref: 'p', state: 'skipped', reason: 'provider walk needs the page as loaded' }),
+          gap({ ref: 'q', state: 'capability-denied', reason: 'provider pf denied capability: network' }),
+          gap({ ref: 'r', state: 'not-covered', reason: 'another screen failed to open' }),
+        ],
+        { findings: [] },
+      ),
       { stopHookActive: false },
     ).message;
 
@@ -332,15 +335,18 @@ describe('the stop hook stays short enough to belong in a model context', () => 
     // The sweep collapses every unrecognized state into a single trailing entry, so the
     // structural bound survives a caller inventing states.
     const message = evaluateStopDecision(
-      withGaps([
-        gap(),
-        UNOPENED_GAP,
-        gap({ ref: 'p', state: 'skipped', reason: 'provider walk needs the page as loaded' }),
-        gap({ ref: 'q', state: 'capability-denied', reason: DENIED_REASON }),
-        gap({ ref: 'w', state: 'one-unknown' as unknown as CoverageGap['state'], reason: 'a' }),
-        gap({ ref: 'x', state: 'two-unknown' as unknown as CoverageGap['state'], reason: 'b' }),
-        gap({ ref: 'y', state: 'three-unknown' as unknown as CoverageGap['state'], reason: 'c' }),
-      ]),
+      withGaps(
+        [
+          gap(),
+          UNOPENED_GAP,
+          gap({ ref: 'p', state: 'skipped', reason: 'provider walk needs the page as loaded' }),
+          gap({ ref: 'q', state: 'capability-denied', reason: DENIED_REASON }),
+          gap({ ref: 'w', state: 'one-unknown' as unknown as CoverageGap['state'], reason: 'a' }),
+          gap({ ref: 'x', state: 'two-unknown' as unknown as CoverageGap['state'], reason: 'b' }),
+          gap({ ref: 'y', state: 'three-unknown' as unknown as CoverageGap['state'], reason: 'c' }),
+        ],
+        { findings: [] },
+      ),
       { stopHookActive: false },
     ).message;
 

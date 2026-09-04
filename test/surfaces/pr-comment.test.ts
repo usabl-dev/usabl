@@ -213,4 +213,31 @@ describe('projectPrComment', () => {
     expect(markdown).not.toContain('floor debt');
     expect(markdown).not.toContain('prune');
   });
+
+  it('collapses findings over the noise budget with counts and a show-all hint', () => {
+    const findings = Array.from({ length: 6 }, (_, index) => ({
+      rule: `rule-${index}`,
+      layer: 'axe',
+      severity: 'serious' as const,
+      evidenceClass: 'deterministic' as const,
+      screenId: 'clusters',
+      elementPath: `button-${index}`,
+      elementName: 'Save',
+      role: 'button',
+      whatUserExperiences: `problem ${index}`,
+      why: 'because',
+      fix: 'fix it',
+      evidence: {},
+      confidence: 'fail' as const,
+      elementKey: `k-${index}`,
+      identityBasis: 'name' as const,
+      status: 'new' as const,
+    }));
+    const markdown = projectPrComment(baseResult({ verdict: 'regression', findings }));
+
+    expect(markdown).toContain('### Findings (collapsed by rule)');
+    expect(markdown).not.toContain('### New barriers');
+    expect(markdown).toContain('usabl check --json');
+    expect(markdown).toContain('6 gating findings');
+  });
 });

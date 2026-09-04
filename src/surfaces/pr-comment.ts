@@ -9,11 +9,18 @@ import type {
   Finding,
   Result,
   TranscriptStop,
+  UsablConfig,
   Verdict,
 } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence } from '../output/disclosure.js';
+import {
+  applyNoiseBudget,
+  formatCollapsedGroupHeadline,
+  resolveNoiseBudgetDefault,
+  type CollapsedFindingGroup,
+} from '../output/noise-budget.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 
@@ -132,6 +139,43 @@ function renderFindingGroup(title: string, findings: Finding[]): string[] {
   return [`### ${title}`, ...findings.flatMap((finding) => formatFinding(finding))];
 }
 
+function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
+  const finding = group.representative;
+  const headline = formatCollapsedGroupHeadline(group);
+  const rule = neutralize(finding.rule);
+  const layer = neutralize(finding.layer);
+  const screenId = neutralize(finding.screenId);
+  const severity = neutralize(finding.severity);
+  const source = finding.docsSource;
+  const fix = neutralize(fixOrAbsence(finding));
+  const why = neutralize(finding.why);
+  const framed = frameUntrusted(finding.whatUserExperiences).split('\n');
+  return [
+    `- ${headline}`,
+    `  - rule: \`${screenId}\` - \`${layer}/${rule}\` · ${severity}`,
+    ...framed.map((line) => `  ${line}`),
+    `  - why: ${why}`,
+    ...renderSource(source, finding.appSource),
+    `  - fix: ${fix}`,
+  ];
+}
+
+function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): string[] {
+  const view = applyNoiseBudget(findings, resolveNoiseBudgetDefault(config), 'gating findings');
+  // Render the collapsed view whenever the shown groups do not map one to one to findings, whether
+  // that is from grouping repeated rules or from the budget hiding groups. Checking only collapsed
+  // dropped the grouped-but-not-truncated case back to a raw, hint-less list.
+  if (!view.grouped && !view.collapsed) {
+    return [];
+  }
+  return [
+    '### Findings (collapsed by rule)',
+    ...view.groups.flatMap((group) => formatCollapsedFinding(group)),
+    '',
+    `_${view.showAllHint ?? ''}_`,
+  ];
+}
+
 function renderCoverageGaps(result: Result): string[] {
   if (result.coverage.gaps.length === 0) {
     return ['### Coverage gaps', '- none'];
@@ -183,7 +227,7 @@ function renderAnnouncements(result: Result): string[] {
   return lines;
 }
 
-export function projectPrComment(result: Result): string {
+export function projectPrComment(result: Result, config?: UsablConfig): string {
   // Scrub first because PR comments are public egress for page-derived text.
   const safe = scrubResult(result);
   const deterministicNew = safe.findings.filter(
@@ -195,6 +239,20 @@ export function projectPrComment(result: Result): string {
   const advisory = safe.findings.filter(
     (finding) => finding.evidenceClass === 'preview' || finding.evidenceClass === 'model-judgment',
   );
+  // Collapse only the gating (deterministic) lane. Advisory findings never gate, so they keep their
+  // own labeled section and are never mixed into the collapsed barrier list.
+  const gating = [...deterministicNew, ...deterministicCarried];
+  const collapsedGating = renderCollapsedFindings(gating, config);
+  const findingSections =
+    collapsedGating.length > 0
+      ? [...collapsedGating, '', ...renderFindingGroup('Advisory (non-gating)', advisory)]
+      : [
+          ...renderFindingGroup('New barriers', deterministicNew),
+          '',
+          ...renderFindingGroup('Known (carried)', deterministicCarried),
+          '',
+          ...renderFindingGroup('Advisory (non-gating)', advisory),
+        ];
 
   return [
     COMMENT_MARKER,
@@ -205,11 +263,7 @@ export function projectPrComment(result: Result): string {
     '',
     ...renderConformance(safe),
     '',
-    ...renderFindingGroup('New barriers', deterministicNew),
-    '',
-    ...renderFindingGroup('Known (carried)', deterministicCarried),
-    '',
-    ...renderFindingGroup('Advisory (non-gating)', advisory),
+    ...findingSections,
     '',
     ...renderCoverageGaps(safe),
     '',

@@ -435,7 +435,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // Comment mode is a pure projection from stdin so CI does not import package internals.
     const parsed: unknown = JSON.parse(await readStdin());
     const result = parseResultJson(parsed);
-    process.stdout.write(projectPrComment(result) + '\n');
+    // Load config best-effort so a repo's noiseBudget applies to the comment. Absent config falls
+    // back to the default budget rather than failing the projection.
+    let commentConfig: UsablConfig | undefined;
+    try {
+      commentConfig = await loadConfig(opts.configPath);
+    } catch {
+      commentConfig = undefined;
+    }
+    process.stdout.write(projectPrComment(result, commentConfig) + '\n');
     return result.exitCode;
   }
 
@@ -505,7 +513,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
     if (opts.selfCheck) {
       // Self-check is advisory and keeps exit 0 so stop-hook remains the only gate for continuation.
-      const advisory = projectSelfCheck(result);
+      const advisory = projectSelfCheck(result, config);
       process.stdout.write(advisory.message + '\n');
       return advisory.advisoryExitCode;
     }

@@ -397,6 +397,13 @@ export interface Deps {
 }
 
 // ---- config (operator file; engine does not hardcode origins) ----
+export interface NoiseBudgetConfig {
+  // Default maximum finding groups shown on bounded surfaces. Absent means 5.
+  default?: number;
+  // Per-screen overrides for calibration on large PatternFly surfaces.
+  perSurface?: Record<string, number>;
+}
+
 export interface SurfaceConfig {
   id: string;
   url: string;
@@ -421,6 +428,8 @@ export interface UsablConfig {
   // in operator config because how long an application takes to render is a property of that
   // application, not of the engine. Absent means the engine default.
   readyTimeoutMs?: number;
+  // Caps how many finding groups bounded surfaces show before collapsing by rule.
+  noiseBudget?: NoiseBudgetConfig;
 }
 
 export type Capability = 'live' | 'network' | 'secrets' | 'filesystem-write';

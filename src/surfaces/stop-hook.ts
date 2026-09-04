@@ -3,14 +3,18 @@
  * This unit maps an existing Result into block or allow messages only.
  * It must never mint verdicts or bypass gate ownership of verdict authority.
  */
-import type { Result, Verdict } from '../contracts/index.js';
+import type { Result, UsablConfig, Verdict } from '../contracts/index.js';
 import {
   discloseGaps,
   fixOrAbsence,
   gapDetail,
   gapHeadline,
-  pickBarrier,
 } from '../output/disclosure.js';
+import {
+  applyNoiseBudget,
+  formatCollapsedGroupHeadline,
+  resolveNoiseBudgetDefault,
+} from '../output/noise-budget.js';
 import { frameUntrustedBlock, scrubResult } from './scrub.js';
 
 export interface HookContext {
@@ -49,31 +53,39 @@ function notEvaluatedPieces(result: Result): string[] {
 /**
  * The whole block message, with at most one untrusted frame.
  *
- * The trusted engine scaffold stays outside the frame: the summary line, the Rule line, and the
- * Not evaluated header. Every page-derived piece, the finding experience, the fix, and each gap
- * detail, goes inside one frame, each with a short inline label so the model can map evidence to
- * cause. The pieces are already bounded, and the assembled block is never cut to length. Cutting
- * could remove the single closing marker and hand the model an unterminated block of untrusted
- * text.
+ * The trusted engine scaffold stays outside the frame: the summary line, the Rule or Barriers
+ * headline lines, the show-all hint, and the Not evaluated header. Every page-derived piece, each
+ * finding experience, each fix, and each gap detail, goes inside one frame, each with a short inline
+ * label so the model can map evidence to cause. The noise budget bounds how many groups appear, and
+ * the assembled block is never cut to length. Cutting could remove the single closing marker and hand
+ * the model an unterminated block of untrusted text.
  */
-function buildBlockMessage(result: Result): string {
+function buildBlockMessage(result: Result, config?: UsablConfig): string {
   const scaffold = [`NOT verified - ${result.summary}`];
   const pieces: string[] = [];
+  const budget = resolveNoiseBudgetDefault(config);
+  // Only gating (deterministic) findings are barriers this block is about. Advisory findings never
+  // gate, so listing one here would present it as a blocker it is not. They still surface elsewhere.
+  const gating = result.findings.filter((finding) => finding.evidenceClass === 'deterministic');
+  const view = applyNoiseBudget(gating, budget, 'gating findings');
 
-  const finding = pickBarrier(result.findings);
-  if (finding !== null) {
-    scaffold.push(`Rule: ${finding.rule}`);
-    pieces.push(`experience: ${finding.whatUserExperiences}`);
-    // The fix is page-derived like the experience above it. Only five axe rules carry a curated
-    // note, and for every other rule this text is axe's failureSummary, which comes from the page
-    // under test, so it is no more trustworthy than the experience already in the frame.
-    //
-    // When no fix was recorded this frames usabl's own sentence and so mislabels it as page text.
-    // That is deliberate. A Finding carries no provenance saying where its fix came from, so the
-    // alternative is a conditional framing path where the caller decides trust per string, and a
-    // path that can choose not to frame is a worse shape than an over-label that errs toward
-    // distrust.
-    pieces.push(`fix: ${fixOrAbsence(finding)}`);
+  if (view.groups.length === 1 && !view.collapsed) {
+    const group = view.groups[0]!;
+    const ruleLabel =
+      group.count > 1 ? `${group.rule} (×${group.count})` : group.rule;
+    scaffold.push(`Rule: ${ruleLabel}`);
+    pieces.push(`experience: ${group.representative.whatUserExperiences}`);
+    pieces.push(`fix: ${fixOrAbsence(group.representative)}`);
+  } else if (view.groups.length > 0) {
+    scaffold.push('Barriers:');
+    for (const group of view.groups) {
+      scaffold.push(`- ${formatCollapsedGroupHeadline(group)}`);
+      pieces.push(`experience (${group.rule}): ${group.representative.whatUserExperiences}`);
+      pieces.push(`fix (${group.rule}): ${fixOrAbsence(group.representative)}`);
+    }
+    if (view.showAllHint !== null) {
+      scaffold.push(view.showAllHint);
+    }
   }
 
   const gapPieces = notEvaluatedPieces(result);
@@ -89,7 +101,11 @@ function buildBlockMessage(result: Result): string {
   return [...scaffold, frameUntrustedBlock(pieces)].join('\n');
 }
 
-export function evaluateStopDecision(result: Result, ctx: HookContext): StopDecision {
+export function evaluateStopDecision(
+  result: Result,
+  ctx: HookContext,
+  config?: UsablConfig,
+): StopDecision {
   const safe = scrubResult(result);
 
   if (safe.verdict === 'verified') {
@@ -135,6 +151,6 @@ export function evaluateStopDecision(result: Result, ctx: HookContext): StopDeci
 
   return {
     block: true,
-    message: buildBlockMessage(safe),
+    message: buildBlockMessage(safe, config),
   };
 }

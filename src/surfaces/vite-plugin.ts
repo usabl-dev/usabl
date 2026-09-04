@@ -11,6 +11,9 @@ import { run } from '../run.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 import { overlayClientSource } from './overlay-client.js';
 import { injectJsxSourceAttributes, shouldInjectJsxSource } from './vite-jsx-source.js';
+import {
+  applyNoiseBudgetPerSurface,
+} from '../output/noise-budget.js';
 
 function overlayClientModuleSource(): string {
   return [
@@ -50,7 +53,11 @@ export interface OverlayProjection {
     why: string;
     fix: string;
     appSource: Result['findings'][number]['appSource'] | null;
+    groupCount: number | null;
   }>;
+  findingsTotalCount: number;
+  noiseBudgetCollapsed: boolean;
+  showAllHint: string | null;
   receipt: {
     sourceTree: string;
     baseRevision: string | null;
@@ -136,9 +143,14 @@ function makeUsablVitePluginFactoryPorts(
   };
 }
 
-export function projectOverlay(result: Result, workspaceRoot: string | null = null): OverlayProjection {
+export function projectOverlay(
+  result: Result,
+  workspaceRoot: string | null = null,
+  config?: UsablConfig,
+): OverlayProjection {
   // Overlay is advisory only, so displayExitCode stays 0 even when the gated Result blocked.
   const safe = scrubResult(result);
+  const budgetView = applyNoiseBudgetPerSurface(safe.findings, config);
   return {
     advisory: true,
     displayExitCode: 0,
@@ -152,24 +164,31 @@ export function projectOverlay(result: Result, workspaceRoot: string | null = nu
       unresolvedFiles: safe.coverage.unresolvedFiles,
       gaps: safe.coverage.gaps,
     },
-    findings: safe.findings.map((finding) => ({
-      rule: finding.rule,
-      screenId: finding.screenId,
-      layer: finding.layer,
-      severity: finding.severity,
-      evidenceClass: finding.evidenceClass,
-      status: finding.status,
-      confidence: finding.confidence,
-      elementPath: frameUntrusted(finding.elementPath),
-      elementName: finding.elementName === null ? null : frameUntrusted(finding.elementName),
-      role: finding.role === null ? null : frameUntrusted(finding.role),
-      elementKey: finding.elementKey === null ? null : frameUntrusted(finding.elementKey),
-      identityBasis: finding.identityBasis,
-      whatUserExperiences: frameUntrusted(finding.whatUserExperiences),
-      why: finding.why,
-      fix: finding.fix,
-      appSource: finding.appSource ?? null,
-    })),
+    findings: budgetView.groups.map((group) => {
+      const finding = group.representative;
+      return {
+        rule: finding.rule,
+        screenId: finding.screenId,
+        layer: finding.layer,
+        severity: finding.severity,
+        evidenceClass: finding.evidenceClass,
+        status: finding.status,
+        confidence: finding.confidence,
+        elementPath: frameUntrusted(finding.elementPath),
+        elementName: finding.elementName === null ? null : frameUntrusted(finding.elementName),
+        role: finding.role === null ? null : frameUntrusted(finding.role),
+        elementKey: finding.elementKey === null ? null : frameUntrusted(finding.elementKey),
+        identityBasis: finding.identityBasis,
+        whatUserExperiences: frameUntrusted(finding.whatUserExperiences),
+        why: finding.why,
+        fix: finding.fix,
+        appSource: finding.appSource ?? null,
+        groupCount: group.count > 1 ? group.count : null,
+      };
+    }),
+    findingsTotalCount: budgetView.totalCount,
+    noiseBudgetCollapsed: budgetView.collapsed,
+    showAllHint: budgetView.showAllHint,
     receipt:
       safe.receipt === null
         ? null
@@ -219,7 +238,11 @@ function injectLoader(html: string): string {
   return html.includes('</body>') ? html.replace('</body>', `${loader}\n</body>`) : `${html}\n${loader}`;
 }
 
-export function usablVitePlugin(opts: { run: () => Promise<Result>; workspaceRoot?: string }): UsablVitePlugin {
+export function usablVitePlugin(opts: {
+  run: () => Promise<Result>;
+  workspaceRoot?: string;
+  resolveOverlayConfig?: () => UsablConfig | undefined;
+}): UsablVitePlugin {
   let runOnce = singleFlight(opts.run);
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let injectSourceAttributes = false;
@@ -250,10 +273,12 @@ export function usablVitePlugin(opts: { run: () => Promise<Result>; workspaceRoo
           return;
         }
         if (method === 'GET' && pathname === '/__usabl/result') {
-          const result = projectOverlay(await runOnce(), opts.workspaceRoot ?? null);
+          const result = await runOnce();
+          const config = opts.resolveOverlayConfig?.();
+          const projected = projectOverlay(result, opts.workspaceRoot ?? null, config);
           res.statusCode = 200;
           res.setHeader('content-type', 'application/json; charset=utf-8');
-          res.end(JSON.stringify(result));
+          res.end(JSON.stringify(projected));
           return;
         }
         next();
@@ -299,13 +324,16 @@ export function usablVitePluginFromConfig(
   const cwd = opts.cwd ?? resolvedPorts.cwd();
   const configPath = opts.configPath ?? 'usabl.config.json';
   const resolvedConfigPath = resolvedPorts.resolvePath(cwd, configPath);
+  let overlayConfig: UsablConfig | undefined;
 
   // Hosts should not assemble Deps. This factory keeps wiring in-package and
   // still returns a projection-only overlay backed by the gate-owned Result.
   return usablVitePlugin({
     workspaceRoot: cwd,
+    resolveOverlayConfig: () => overlayConfig,
     run: async () => {
       const config = await resolvedPorts.loadConfig(resolvedConfigPath);
+      overlayConfig = config;
       const deps = await resolvedPorts.buildDeps(config, { cwd });
       try {
         return await resolvedPorts.runEngine(deps, config);

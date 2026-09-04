@@ -5,6 +5,7 @@
  */
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
 import { expandBraces } from '../primitives/match-glob.js';
+import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 
 function expectObject(value: unknown, label: string): object {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -119,6 +120,10 @@ export function parseUsablConfig(raw: string): UsablConfig {
       ? undefined
       : expectPositiveWholeNumber(readyTimeoutRaw, 'readyTimeoutMs');
 
+  const noiseBudgetRaw = Reflect.get(root, 'noiseBudget');
+  const noiseBudget =
+    noiseBudgetRaw === undefined ? undefined : parseNoiseBudgetConfig(noiseBudgetRaw);
+
   return {
     appBaseUrl: expectString(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
     uiFileGlobs: expectGlobArray(Reflect.get(root, 'uiFileGlobs'), 'uiFileGlobs'),
@@ -134,5 +139,6 @@ export function parseUsablConfig(raw: string): UsablConfig {
     ...(requirements === undefined ? {} : { requirements }),
     ...(promotedObligations === undefined ? {} : { promotedObligations }),
     ...(readyTimeoutMs === undefined ? {} : { readyTimeoutMs }),
+    ...(noiseBudget === undefined ? {} : { noiseBudget }),
   };
 }
