@@ -84,6 +84,12 @@ Typecheck and tests (this is also CI):
 npm run check
 ```
 
+Real Chromium driver suites (also CI, separate job; needs Playwright Chromium):
+
+```bash
+npm run test:integration
+```
+
 Scan git history for secrets (this is also CI):
 
 ```bash
@@ -108,8 +114,10 @@ semgrep scan --config p/typescript --config p/javascript --config p/github-actio
 ## CI
 
 Pull requests and pushes to `main` run the `usabl` workflow. Its required status check name
-is **`check`**. Pull requests also run the `usabl-gate` workflow, whose required status check
-name is **`usabl-required`**. Both must be required on `main`.
+is **`check`**. The same workflow also runs **`integration-chromium`** for the live Playwright
+driver suites (`npm run test:integration`). Pull requests also run the `usabl-gate` workflow,
+whose required status check name is **`usabl-required`**. `check` and `usabl-required` must be
+required on `main`.
 
 CI runs, in order:
 
@@ -117,6 +125,7 @@ CI runs, in order:
 2. the pre-commit suite (the staged-only gitleaks hook is skipped here; step 1 is the history scan)
 3. Semgrep (`p/typescript`, `p/javascript`, `p/github-actions`, `p/security-audit`)
 4. `npm run check`
+5. `npm run test:integration` (parallel `integration-chromium` job)
 
 ## Code owners
 

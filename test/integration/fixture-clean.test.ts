@@ -1,3 +1,4 @@
+import { accessSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -10,6 +11,15 @@ const FIXTURE_APP_CWD = '/home/eparenti/work/repos/innovation-days-2026/usabl-ap
 const FIXTURE_BASE_URL = 'http://127.0.0.1:5173';
 const FIXTURE_CHANGED_FILES = ['src/pages/Clusters.tsx', 'src/pages/Settings.tsx'];
 type FixtureServerProcess = ReturnType<typeof spawn>;
+
+function fixtureAppPresent(): boolean {
+  try {
+    accessSync(FIXTURE_APP_CWD);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const fixtureConfig: UsablConfig = {
   appBaseUrl: FIXTURE_BASE_URL,
@@ -98,7 +108,7 @@ async function stopFixtureServer(server: FixtureServerProcess): Promise<void> {
   }
 }
 
-describe.runIf(process.env['USABL_INTEGRATION'] === '1')('fixture clean oracle integration', () => {
+describe.runIf(process.env['USABL_INTEGRATION'] === '1' && fixtureAppPresent())('fixture clean oracle integration', () => {
   let fixtureServer: FixtureServerProcess | null = null;
   let fixtureOutput: string[] = [];
 

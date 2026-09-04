@@ -1,3 +1,4 @@
+import { accessSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -11,6 +12,15 @@ const FIXTURE_APP_CWD = '/home/eparenti/work/repos/innovation-days-2026/usabl-ap
 const FIXTURE_BASE_URL = 'http://127.0.0.1:5174';
 const FIXTURE_CHANGED_FILES = ['src/pages/Clusters.tsx'];
 type FixtureServerProcess = ReturnType<typeof spawn>;
+
+function fixtureAppPresent(): boolean {
+  try {
+    accessSync(FIXTURE_APP_CWD);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function configForVariant(variant: 'broken' | 'fixed'): UsablConfig {
   return {
@@ -96,7 +106,7 @@ async function stopFixtureServer(server: FixtureServerProcess): Promise<void> {
   }
 }
 
-describe.runIf(process.env['USABL_INTEGRATION'] === '1')('hero-bug flip integration', () => {
+describe.runIf(process.env['USABL_INTEGRATION'] === '1' && fixtureAppPresent())('hero-bug flip integration', () => {
   let fixtureServer: FixtureServerProcess | null = null;
   let fixtureOutput: string[] = [];
 
