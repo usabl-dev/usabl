@@ -223,13 +223,13 @@ jobs:
 
       - name: Download Result JSON from this run
         if: github.event_name == 'pull_request'
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: usabl-result
 
       - name: Download Result JSON from the scan run
         if: github.event_name == 'pull_request_review'
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: usabl-result
           run-id: ${{ env.SCAN_RUN_ID }}
