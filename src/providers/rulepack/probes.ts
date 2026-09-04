@@ -171,18 +171,27 @@ export async function probeMenus(ctx: ProviderContext): Promise<Draft[]> {
   for (const toggle of toggles) {
     try {
       const toggleNode = await ctx.page.axAt(toggle.selector);
+      // Record the menus already open before this toggle acts. The menu this toggle opens is one
+      // that appears now but was not present before the click. Scoping the focus check to those,
+      // rather than any [role=menu] on the page, fixes both directions: a stale menu sitting ahead
+      // in query order no longer causes a false fail, and focus resting in an unrelated already-open
+      // menu no longer counts as this toggle's success (a false pass).
+      const menusBefore = new Set((await ctx.page.queryAll(SEL.menu)).map((menu) => menu.selector));
       await ctx.page.click(toggle.selector);
 
-      const menus = await ctx.page.queryAll(SEL.menu);
-      if (menus.length === 0) {
+      const openedMenus = (await ctx.page.queryAll(SEL.menu)).filter(
+        (menu) => !menusBefore.has(menu.selector),
+      );
+      if (openedMenus.length === 0) {
+        // No new menu opened, so there is nothing to judge focus against. Do not fault the toggle.
         await ctx.page.press('Escape');
         continue;
       }
 
-      // Do not pin to menus[0]. A prior role=menu (nav, another kebab, listbox) can sit
-      // ahead of the menu this toggle just opened; focus landing in that later menu is a pass.
+      // Focus can arrive a frame after the menu mounts, so poll, but only against the menu that
+      // opened. A stale or unrelated menu is excluded, so its focus cannot pass for this toggle.
       const focusEnteredMenu = await waitFor(async () => {
-        for (const menu of await ctx.page.queryAll(SEL.menu)) {
+        for (const menu of openedMenus) {
           if (await ctx.page.activeElementWithin(menu.selector)) {
             return true;
           }

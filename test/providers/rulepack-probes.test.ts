@@ -83,6 +83,9 @@ async function makeMenuContext(options: {
   // When true, a second always-present menu sits ahead of the opened one in query order.
   // Checking only menus[0] would miss focus that moved into the opened menu.
   staleMenuAhead?: boolean;
+  // When true, keyboard focus sits inside the stale menu, not the one this toggle opens. Accepting
+  // that as success would be a false pass: focus never reached this toggle's own menu.
+  focusInStaleMenu?: boolean;
 }): Promise<ProviderContext> {
   const deps = makeFakeDeps();
   const page = await deps.browser.open(SCREEN.url);
@@ -125,7 +128,8 @@ async function makeMenuContext(options: {
       }
     },
     activeElementWithin: async (selector: string) =>
-      selector === menu.selector && isOpen && options.focusMovesIntoMenu,
+      (selector === menu.selector && isOpen && (options.focusMovesIntoMenu ?? false)) ||
+      (selector === staleMenu.selector && (options.focusInStaleMenu ?? false)),
   });
 
   return {
@@ -253,7 +257,7 @@ describe('rulepack interaction probes', () => {
 
   it('does not fail when focus lands in the opened menu that is not menus[0]', async () => {
     // A prior role=menu (nav, closed kebab, etc.) can sit ahead of the menu this toggle
-    // just opened. The probe must accept focus in any matched menu, not only the first.
+    // just opened. The probe must judge focus against the menu that opened, not the first match.
     const provider = makeRulepackProvider();
     const ctx = await makeMenuContext({
       menuAppearsOnClick: true,
@@ -264,6 +268,28 @@ describe('rulepack interaction probes', () => {
     const drafts = draftsOf(await provider.run(ctx));
 
     expect(drafts.filter((draft) => draft.rule === 'pf-kebab-expanded-state')).toEqual([]);
+  });
+
+  it('fails when focus is in a stale menu but never enters the menu this toggle opened', async () => {
+    // False-green guard. A stale menu was already open with focus before the click, and this
+    // toggle opens its own menu without moving focus into it. Accepting focus in the stale menu
+    // would report a real barrier as fine. The probe must judge only the menu that opened.
+    const provider = makeRulepackProvider();
+    const ctx = await makeMenuContext({
+      menuAppearsOnClick: true,
+      focusMovesIntoMenu: false,
+      staleMenuAhead: true,
+      focusInStaleMenu: true,
+    });
+
+    const drafts = draftsOf(await provider.run(ctx));
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      rule: 'pf-kebab-expanded-state',
+      confidence: 'fail',
+      elementPath: '#menu-toggle',
+    });
   });
 
   it('still fails when a stale menu is first and focus never enters any menu', async () => {
