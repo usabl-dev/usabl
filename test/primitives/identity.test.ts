@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeIdentity } from '../../src/primitives/identity.js';
+import { computeIdentity, identityKey } from '../../src/primitives/identity.js';
 import type { Draft } from '../../src/contracts/index.js';
 
 function draft(over: Partial<Draft>): Draft {
@@ -10,6 +10,33 @@ function draft(over: Partial<Draft>): Draft {
     ...over,
   };
 }
+
+describe('identityKey', () => {
+  it('encodes screen, rule, and elementKey so gate, baseline, and prune stay aligned', () => {
+    expect(
+      identityKey({
+        screenId: 'clusters',
+        rule: 'color-contrast',
+        elementKey: 'clusters|color-contrast|name:save',
+      }),
+    ).toBe('["clusters","color-contrast","clusters|color-contrast|name:save"]');
+  });
+
+  it('uses the count sentinel when elementKey is null', () => {
+    expect(identityKey({ screenId: 'clusters', rule: 'button-name', elementKey: null })).toBe(
+      '["clusters","button-name","count"]',
+    );
+  });
+
+  it('is injective when a field contains the delimiter', () => {
+    // A plain "a|b|c" join collides here: both triples flatten to a|intake:b|intake:c|name:save,
+    // which would let one finding be marked carried against the other finding's floor entry.
+    // The encoding must keep them distinct.
+    const a = identityKey({ screenId: 'a|intake:b', rule: 'intake:c', elementKey: 'name:save' });
+    const b = identityKey({ screenId: 'a', rule: 'intake:b|intake:c', elementKey: 'name:save' });
+    expect(a).not.toBe(b);
+  });
+});
 
 describe('computeIdentity', () => {
   it('uses the accessible name when present', () => {

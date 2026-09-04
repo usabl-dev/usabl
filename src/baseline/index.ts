@@ -7,7 +7,7 @@ import type { Deps, EvidenceFloor, FloorEntry, Finding, Result, UsablConfig } fr
 import { coverageIncomplete, notEvaluatedCounts } from '../coverage/completeness.js';
 import { parseDocsManifest } from '../coverage/docs-manifest.js';
 import { neutralize } from '../primitives/neutralize.js';
-import { computeIdentity } from '../primitives/identity.js';
+import { computeIdentity, identityKey } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { run } from '../run.js';
 import { checkGuard } from '../trust/guard.js';
@@ -26,10 +26,6 @@ export interface BaselineOutcome {
   wrote: boolean;
   message: string;
   entryCount: number;
-}
-
-function identityKey(value: { screenId: string; rule: string; elementKey: string | null }): string {
-  return `${value.screenId}|${value.rule}|${value.elementKey ?? 'count'}`;
 }
 
 function findingKey(entry: FloorEntry): string {

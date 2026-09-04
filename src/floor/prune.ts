@@ -7,7 +7,7 @@ import type { Deps, ScreenScan, UsablConfig } from '../contracts/index.js';
 import { EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
 import { coverageIncomplete } from '../coverage/completeness.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
-import { computeIdentity } from '../primitives/identity.js';
+import { computeIdentity, identityKey } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { run } from '../run.js';
 import { checkGuard } from '../trust/guard.js';
@@ -31,10 +31,6 @@ function formatDirtyGuardedPaths(paths: string[]): string {
     ...paths.map((path) => `  - ${neutralize(path)}`),
   ];
   return lines.join('\n');
-}
-
-function identityKey(value: { screenId: string; rule: string; elementKey: string | null }): string {
-  return `${value.screenId}|${value.rule}|${value.elementKey ?? 'count'}`;
 }
 
 function floorEntrySortKey(value: { screenId: string; layer: string; rule: string; elementKey: string | null }): string {

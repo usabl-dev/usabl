@@ -13,7 +13,7 @@
 import type { AccessibilityExitCode, AccessibilityVerdict, Coverage, Draft, EvidenceFacts, Finding, FloorEntry, GateInput, GateOutput, Waiver } from '../contracts/index.js';
 import { coverageIncomplete, decideAccessibilityVerdict, notEvaluatedCounts } from '../coverage/completeness.js';
 import { sortBy } from '../primitives/sortKey.js';
-import { computeIdentity } from '../primitives/identity.js';
+import { computeIdentity, identityKey } from '../primitives/identity.js';
 
 const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
 
@@ -84,11 +84,6 @@ function preferLayer(a: Finding, b: Finding): Finding {
   const winner = a.layer === 'pf' ? a : b.layer === 'pf' ? b : a;
   const loser = winner === a ? b : a;
   return { ...winner, evidence: mergeEvidence(winner.evidence, loser.evidence) };
-}
-
-/** Cross-layer / floor key. Layer is omitted so axe and pf can collapse. */
-function identityKey(f: { screenId: string; rule: string; elementKey: string | null }): string {
-  return `${f.screenId}|${f.rule}|${f.elementKey ?? 'count'}`;
 }
 
 /** Expired waivers are inert. Fixed findings are never rewritten to waived. */

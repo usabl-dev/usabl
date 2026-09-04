@@ -44,6 +44,22 @@ function neutralizePath(path: string): string {
 }
 
 /**
+ * Cross-layer / floor map key. Layer is omitted so axe and PatternFly reports of the same
+ * defect collapse to one identity. Keep this helper in one place: gate, baseline, and floor
+ * prune must agree on the string or a paid-down barrier can reappear as carried debt, and a
+ * carried barrier can gate as new.
+ *
+ * The encoding must be injective: two different field triples must never produce the same key.
+ * A plain "a|b|c" join is not, because a screenId or an intake-generated rule can itself contain
+ * "|", so (screenId="a|b", rule="c") and (screenId="a", rule="b|c") would collide and let one
+ * finding be marked carried against the other's floor entry. JSON.stringify of the fixed-length
+ * tuple escapes the delimiter and the field contents, so the key is one-to-one with the triple.
+ */
+export function identityKey(value: { screenId: string; rule: string; elementKey: string | null }): string {
+  return JSON.stringify([value.screenId, value.rule, value.elementKey ?? 'count']);
+}
+
+/**
  * Layer-independent identity for a Draft.
  * Returns `elementKey: null` for count-based rules; callers must not invent a name key.
  */
