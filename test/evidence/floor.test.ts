@@ -59,4 +59,22 @@ describe('parseEvidenceFloor', () => {
     const parsed = parseEvidenceFloor({ version: 2, entries: [{ ...entry, count: 0 }] });
     expect(parsed.entries[0]?.count).toBe(0);
   });
+
+  it('rejects duplicate screen|rule|elementKey identities that the gate would last-win', () => {
+    const duplicateLayer = { ...entry, layer: 'pf' };
+    expect(() => parseEvidenceFloor({ version: 2, entries: [entry, duplicateLayer] })).toThrow(
+      /duplicate identity/,
+    );
+  });
+
+  it('accepts distinct identities that share a screen', () => {
+    const other = {
+      ...entry,
+      rule: 'button-name',
+      elementKey: null,
+      identityBasis: 'count' as const,
+      count: 1,
+    };
+    expect(parseEvidenceFloor({ version: 2, entries: [entry, other] }).entries).toHaveLength(2);
+  });
 });
