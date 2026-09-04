@@ -489,6 +489,14 @@ export const overlayClientSource = `(() => {
         font-size: 0.6875rem;
       }
 
+      .show-all-hint {
+        margin-top: 10px;
+        color: var(--slate);
+        font-size: 0.75rem;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+
       .empty {
         color: var(--slate);
         font-size: 0.8125rem;
@@ -586,13 +594,20 @@ export const overlayClientSource = `(() => {
     return host;
   }
 
+  function findingsCount(payload) {
+    if (typeof payload.findingsTotalCount === 'number') {
+      return payload.findingsTotalCount;
+    }
+    return Array.isArray(payload.findings) ? payload.findings.length : 0;
+  }
+
   function syncExpansion(host) {
     const shadow = host.shadowRoot;
     const launcher = shadow.querySelector('.launcher');
     const panel = shadow.querySelector('.panel');
     const payload = state.payload;
     const status = statusFor(payload || { verdict: null }, state.error, state.scanning);
-    const count = payload && Array.isArray(payload.findings) ? payload.findings.length : 0;
+    const count = findingsCount(payload || {});
     const countLabel = count === 1 ? '1 finding' : count + ' findings';
 
     launcher.dataset.expanded = String(state.expanded);
@@ -716,7 +731,7 @@ export const overlayClientSource = `(() => {
   function renderLauncher(host, payload, error) {
     const launcher = host.shadowRoot.querySelector('.launcher');
     const status = statusFor(payload, error, state.scanning);
-    const count = Array.isArray(payload.findings) ? payload.findings.length : 0;
+    const count = findingsCount(payload);
     const countLabel = count === 1 ? '1 finding' : count + ' findings';
     const brand = make('span', 'brand', 'usabl');
     const statusText = make('span', 'launcher-status');
@@ -802,22 +817,46 @@ export const overlayClientSource = `(() => {
     symbol.setAttribute('aria-hidden', 'true');
     button.appendChild(symbol);
     button.appendChild(make('span', 'finding-label', finding.whatUserExperiences));
+    const supportText =
+      finding.rule +
+      ' · ' +
+      finding.layer +
+      ' · ' +
+      finding.severity +
+      ' · ' +
+      finding.status +
+      (finding.groupCount ? ' · ×' + finding.groupCount : '');
     button.appendChild(
       make(
         'span',
         'finding-support',
-        finding.rule + ' · ' + finding.layer + ' · ' + finding.severity + ' · ' + finding.status,
+        supportText,
       ),
     );
     button.addEventListener('click', () => onSelect(key));
     return button;
   }
 
+  function renderShowAllHint(payload) {
+    if (!payload.showAllHint) {
+      return null;
+    }
+    const section = make('section', 'section');
+    section.appendChild(make('p', 'show-all-hint', payload.showAllHint));
+    return section;
+  }
+
   function renderFindings(payload, host) {
     const section = make('section', 'section');
     const heading = make('div', 'section-heading');
     heading.appendChild(make('h3', '', 'Findings'));
-    heading.appendChild(make('span', 'section-count', String(payload.findings.length)));
+    const shownCount = Array.isArray(payload.findings) ? payload.findings.length : 0;
+    const totalCount = findingsCount(payload);
+    const countLabel =
+      payload.noiseBudgetCollapsed && totalCount > shownCount
+        ? shownCount + ' shown · ' + totalCount + ' total'
+        : String(shownCount);
+    heading.appendChild(make('span', 'section-count', countLabel));
     section.appendChild(heading);
 
     if (!payload.findings.length) {
@@ -850,6 +889,10 @@ export const overlayClientSource = `(() => {
       }
       group.appendChild(list);
       section.appendChild(group);
+    }
+    const showAll = renderShowAllHint(payload);
+    if (showAll) {
+      section.appendChild(showAll);
     }
     return section;
   }

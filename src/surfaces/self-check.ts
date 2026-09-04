@@ -3,14 +3,18 @@
  * This unit reports a human-readable snapshot only.
  * It must never gate, mint a verdict, or return a process-failing exit code.
  */
-import type { Result } from '../contracts/index.js';
+import type { Result, UsablConfig } from '../contracts/index.js';
 import {
   discloseGaps,
   fixOrAbsence,
   gapDetail,
   gapHeadline,
-  pickBarrier,
 } from '../output/disclosure.js';
+import {
+  applyNoiseBudget,
+  formatCollapsedGroupHeadline,
+  resolveNoiseBudgetDefault,
+} from '../output/noise-budget.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
 import { frameUntrustedBlock, scrubResult } from './scrub.js';
 
@@ -34,7 +38,20 @@ function notEvaluatedPieces(result: Result): string[] {
   );
 }
 
-export function projectSelfCheck(result: Result): {
+function appendSourceScaffold(scaffold: string[], finding: Result['findings'][number]): void {
+  if (finding.docsSource?.file) {
+    scaffold.push(`source: ${formatDocsSourceLocation(finding.docsSource)}`);
+  } else if (finding.appSource?.file) {
+    scaffold.push(`source: ${formatAppSourceLocation(finding.appSource)}`);
+  } else if (finding.appSource && finding.appSource.candidates.length > 0) {
+    scaffold.push(`candidates: ${finding.appSource.candidates.join(', ')}`);
+  }
+}
+
+export function projectSelfCheck(
+  result: Result,
+  config?: UsablConfig,
+): {
   advisoryExitCode: 0;
   verdict: Result['verdict'];
   message: string;
@@ -53,24 +70,28 @@ export function projectSelfCheck(result: Result): {
     safe.summary,
   ];
   const pieces: string[] = [];
+  const budget = resolveNoiseBudgetDefault(config);
+  const view = applyNoiseBudget(safe.findings, budget);
 
-  const finding = pickBarrier(safe.findings);
-  if (finding !== null) {
-    scaffold.push(`Rule: ${finding.rule}`);
-    pieces.push(`experience: ${finding.whatUserExperiences}`);
-    // The source location is derived from usabl's own source mapping, not from page text, so it
-    // stays in the scaffold outside the frame as it did before.
-    if (finding.docsSource?.file) {
-      scaffold.push(`source: ${formatDocsSourceLocation(finding.docsSource)}`);
-    } else if (finding.appSource?.file) {
-      scaffold.push(`source: ${formatAppSourceLocation(finding.appSource)}`);
-    } else if (finding.appSource && finding.appSource.candidates.length > 0) {
-      scaffold.push(`candidates: ${finding.appSource.candidates.join(', ')}`);
+  if (view.groups.length === 1 && !view.collapsed) {
+    const group = view.groups[0]!;
+    const ruleLabel =
+      group.count > 1 ? `${group.rule} (×${group.count})` : group.rule;
+    scaffold.push(`Rule: ${ruleLabel}`);
+    appendSourceScaffold(scaffold, group.representative);
+    pieces.push(`experience: ${group.representative.whatUserExperiences}`);
+    pieces.push(`fix: ${fixOrAbsence(group.representative)}`);
+  } else if (view.groups.length > 0) {
+    scaffold.push('Barriers:');
+    for (const group of view.groups) {
+      scaffold.push(`- ${formatCollapsedGroupHeadline(group)}`);
+      appendSourceScaffold(scaffold, group.representative);
+      pieces.push(`experience (${group.rule}): ${group.representative.whatUserExperiences}`);
+      pieces.push(`fix (${group.rule}): ${fixOrAbsence(group.representative)}`);
     }
-    // The fix is page-derived for most rules. When no fix was recorded this frames usabl's own
-    // sentence and mislabels it as page text, which is deliberate: it errs toward distrust
-    // rather than adding a per-string decide-trust path.
-    pieces.push(`fix: ${fixOrAbsence(finding)}`);
+    if (view.showAllHint !== null) {
+      scaffold.push(view.showAllHint);
+    }
   }
 
   const gapPieces = notEvaluatedPieces(safe);

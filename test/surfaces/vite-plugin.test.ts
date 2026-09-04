@@ -192,6 +192,37 @@ describe('projectOverlay', () => {
     expect(approvalOverlay.dirtyGuardedPaths).toEqual(['usabl.config.json']);
     expect(overlay.advisory).toBe(true);
     expect(overlay.displayExitCode).toBe(0);
+    expect(overlay.findingsTotalCount).toBe(1);
+    expect(overlay.noiseBudgetCollapsed).toBe(false);
+    expect(overlay.showAllHint).toBeNull();
+    expect(overlay.findings[0]?.groupCount).toBeNull();
+  });
+
+  it('collapses overlay findings per surface and surfaces a show-all hint', () => {
+    const findings = Array.from({ length: 6 }, (_, index) => ({
+      rule: `rule-${index}`,
+      layer: 'axe',
+      severity: 'serious' as const,
+      evidenceClass: 'deterministic' as const,
+      screenId: 'clusters',
+      elementPath: `button-${index}`,
+      elementName: 'Save',
+      role: 'button',
+      whatUserExperiences: `problem ${index}`,
+      why: 'because',
+      fix: 'fix it',
+      evidence: {},
+      confidence: 'fail' as const,
+      elementKey: `k-${index}`,
+      identityBasis: 'name' as const,
+      status: 'new' as const,
+    }));
+    const overlay = projectOverlay(baseResult({ findings }));
+
+    expect(overlay.findingsTotalCount).toBe(6);
+    expect(overlay.findings).toHaveLength(5);
+    expect(overlay.noiseBudgetCollapsed).toBe(true);
+    expect(overlay.showAllHint).toContain('usabl check --json');
   });
 
   it('frames page-derived finding text before browser egress', () => {
@@ -450,7 +481,7 @@ describe('usablVitePluginFromConfig', () => {
     expect(runEngineConfig).toBe(config);
     expect(closeCalls).toBe(1);
     expect(calls).toEqual(['loadConfig', 'buildDeps', 'runEngine', 'close']);
-    expect(JSON.parse(response.body)).toEqual(projectOverlay(engineResult, '/repo/app'));
+    expect(JSON.parse(response.body)).toEqual(projectOverlay(engineResult, '/repo/app', config));
   });
 
   it('closes browser when runEngine throws', async () => {

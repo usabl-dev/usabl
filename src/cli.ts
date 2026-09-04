@@ -505,7 +505,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
     if (opts.selfCheck) {
       // Self-check is advisory and keeps exit 0 so stop-hook remains the only gate for continuation.
-      const advisory = projectSelfCheck(result);
+      const advisory = projectSelfCheck(result, config);
       process.stdout.write(advisory.message + '\n');
       return advisory.advisoryExitCode;
     }

@@ -135,3 +135,27 @@ describe('parseUsablConfig glob syntax', () => {
     expect(config.uiFileGlobs).toEqual(['src/App.{tsx}']);
   });
 });
+
+describe('parseUsablConfig noiseBudget', () => {
+  it('reads default and per-surface calibration', () => {
+    const config = parseUsablConfig(
+      configJson({
+        noiseBudget: {
+          default: 5,
+          perSurface: { clusters: 8 },
+        },
+      }),
+    );
+    expect(config.noiseBudget).toEqual({ default: 5, perSurface: { clusters: 8 } });
+  });
+
+  it('leaves noiseBudget unset when omitted', () => {
+    expect(parseUsablConfig(configJson()).noiseBudget).toBeUndefined();
+  });
+
+  it('refuses invalid noiseBudget values', () => {
+    expect(() => parseUsablConfig(configJson({ noiseBudget: { default: 0 } }))).toThrow(
+      /noiseBudget\.default/,
+    );
+  });
+});

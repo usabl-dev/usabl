@@ -40,7 +40,7 @@ export interface StopHookRunnerPorts {
   loadConfig: () => Promise<UsablConfig>;
   buildDeps: (config: UsablConfig) => Promise<Deps>;
   runEngine: (deps: Deps, config: UsablConfig) => Promise<Result>;
-  evaluateDecision: (result: Result, ctx: HookContext) => { block: boolean; message: string };
+  evaluateDecision: (result: Result, ctx: HookContext, config?: UsablConfig) => { block: boolean; message: string };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -309,7 +309,7 @@ export async function runStopHook(
       await saveReceipt(ports.fs, result.receipt);
     }
 
-    const decision = ports.evaluateDecision(result, { stopHookActive: input.stopHookActive });
+    const decision = ports.evaluateDecision(result, { stopHookActive: input.stopHookActive }, config);
     if (decision.block) {
       await emitProtocolBlock(ports, decision.message, options);
       return 0;
