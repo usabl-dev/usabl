@@ -1581,12 +1581,26 @@ self-check.
 }
 ```
 
-Each `surfaces[].id` is the key coverage is tracked under, so it must be a non-empty string
-and it must be unique across the list. Ids are compared with surrounding whitespace removed,
-so `settings` and ` settings ` count as the same id. A blank or repeated id is refused when
-the config is read. Left in, it would collapse two screens into one entry: the second screen
-is dropped from the scan while its changed files still count as mapped, and the run would
-report both screens as covered when only one was ever opened.
+Each `surfaces[].id` is the key coverage is tracked under. It must be a non-empty string, it
+must be unique across the list, and it must not contain whitespace or any invisible or control
+character. Ids are compared exactly, which is the comparison the planner, the floor, and the
+receipt already make, so the grammar is what keeps two ids from looking alike: a space, a
+no-break space, a zero-width space, or a bidirectional mark inside an id is refused rather
+than folded away. Everything a font draws is still allowed, so a discovery-derived id such as
+`users-:id` stays valid. A refused id is reported by index, with the position and code point
+of the offending character, because printing an invisible character back would show nothing.
+
+A blank or repeated id is refused when the config is read. Left in, it would collapse two
+screens into one entry: the second screen is dropped from the scan while its changed files
+still count as mapped, and the run would report both screens as covered when only one was
+ever opened.
+
+Surface ids and the `screenId` values in `usabl.routes.json` are one namespace, because both
+are written into the same affected-screen map. A surface may reuse a route's screen id, which
+is how an operator overrides that screen's scan URL, but only to change the query or the
+fragment of the same screen. A surface that takes a route's screen id and points at a
+different path is refused when coverage is planned, for the same reason: one of the two
+screens would never be scanned and the run would still report both as covered.
 
 `guardedPaths` is additive. The four policy files (`usabl.config.json`,
 `usabl.routes.json`, `.usabl-evidence.json`, `.usabl-waivers.json`) are force-guarded by

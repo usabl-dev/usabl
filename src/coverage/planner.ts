@@ -8,8 +8,8 @@ import type { AffectedScreen, Coverage, CoverageGap, FsGlob, UsablConfig } from 
 import { loadAliasConfig } from './alias-config.js';
 import { buildUnresolvedReason } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
-import { parseRouteManifest } from './route-manifest.js';
-import { assertSurfaceIds } from '../intake/surface-ids.js';
+import { parseRouteManifest, type RouteEntry } from './route-manifest.js';
+import { assertSurfaceIds, forMessage } from '../intake/surface-ids.js';
 import { matchGlob } from '../primitives/match-glob.js';
 
 function isWideBlastFile(file: string, globs: string[]): boolean {
@@ -51,6 +51,67 @@ function manualUrlOverride(config: UsablConfig, file: string, screenId: string):
   return null;
 }
 
+// Reduces a scan target to the screen it opens: origin and path, with query, fragment, and a
+// trailing slash dropped. Returns null when the string is not a url this planner could resolve.
+function screenAddress(url: string, baseUrl: string): string | null {
+  try {
+    const joinBaseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+    const resolved = new URL(url, joinBaseUrl);
+    const path =
+      resolved.pathname.length > 1 && resolved.pathname.endsWith('/')
+        ? resolved.pathname.slice(0, -1)
+        : resolved.pathname;
+    return `${resolved.origin}${path}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refuses a manual surface that takes a discovered route's screen id for a different screen.
+ *
+ * Surface ids and route screen ids are one namespace, because both are written into the same
+ * affected-screen map, so uniqueness inside each set is not enough. A manual surface is allowed
+ * to reuse a route's screen id: that is how manualUrlOverride lets an operator keep control of
+ * the scan url for a screen discovery already owns, which is what makes query variants like
+ * ?variant=fixed possible. What that override means is "same screen, different url to reach it",
+ * so the two have to be the same screen. Same origin and same path is that test. Query and
+ * fragment may differ, since varying them is the whole point of the override.
+ *
+ * A different path is a different screen wearing an id that is already taken. The map keeps
+ * whichever arrives first and drops the other, while the dropped screen's changed files still
+ * count as mapped, so the run reports two changed screens as covered after scanning one. Refuse
+ * it here, where both sets of ids are known for the first time.
+ */
+function assertSurfacesDoNotTakeRouteScreens(config: UsablConfig, routes: RouteEntry[]): void {
+  const routeById = new Map<string, RouteEntry>();
+  for (const route of routes) {
+    if (!routeById.has(route.screenId)) {
+      routeById.set(route.screenId, route);
+    }
+  }
+
+  config.surfaces.forEach((surface, index) => {
+    const route = routeById.get(surface.id);
+    if (route === undefined) {
+      return;
+    }
+    const surfaceAddress = screenAddress(surface.url, config.appBaseUrl);
+    const routeAddress = screenAddress(route.url, config.appBaseUrl);
+    if (surfaceAddress !== null && routeAddress === surfaceAddress) {
+      return;
+    }
+    throw new Error(
+      `surfaces[${index}].id "${forMessage(surface.id)}" is already the screen id of the ` +
+        `discovered route "${forMessage(route.url)}", but surfaces[${index}].url ` +
+        `"${forMessage(surface.url)}" opens a different screen. usabl tracks coverage by screen ` +
+        `id, so the id would name one of the two screens and the other would never be scanned. ` +
+        `A surface may reuse a route's screen id only to change the query or fragment of that ` +
+        `same screen's url. Give this surface its own id, or point it at the route's path.`,
+    );
+  });
+}
+
 function importClosure(graph: { get(file: string): string[] }, entryFile: string): Set<string> {
   const seen = new Set<string>();
   const queue = [entryFile];
@@ -84,6 +145,11 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
   }
 
   const manifest = await parseRouteManifest(fs, config.discovery);
+  // parseRouteManifest has checked that route screen ids are unique among themselves, and
+  // assertSurfaceIds checked the same for surfaces. Neither sees the other set, and both write
+  // into the one map below, so the cross-set check can only happen here.
+  assertSurfacesDoNotTakeRouteScreens(config, manifest.routes);
+
   const affectedByScreen = new Map<string, AffectedScreen>();
   const unresolvedFiles: string[] = [];
   const gaps: CoverageGap[] = [];

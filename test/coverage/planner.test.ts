@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { computeCoverage } from '../../src/coverage/planner.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import type { UsablConfig } from '../../src/contracts/index.js';
+import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
+
+const ESC = '\u001b';
 
 const fsOf = (files: Record<string, string>) => makeFakeDeps({ files }).fs;
 
@@ -257,6 +260,100 @@ describe('computeCoverage', () => {
     await expect(computeCoverage(fs, cfg, ['src/LoginPage.tsx'])).rejects.toThrow(
       /surfaces\[0\]\.id must be a non-empty string/,
     );
+  });
+
+  it('refuses a manual surface that takes a discovered route screen id for a different screen', async () => {
+    // Surface ids and route screen ids are one namespace: both are written into the same
+    // affected-screen map. The route owns "settings" and maps Profile.tsx. The manual surface
+    // takes the same id for a different screen at a different path, mapping Billing.tsx. Whichever
+    // arrives first keeps the key, the other screen is dropped, and its changed file still counts
+    // as mapped. That is two changed screens reported as covered after one scan.
+    const cfg: UsablConfig = {
+      ...baseConfig,
+      surfaces: [{ id: 'settings', url: 'http://localhost:3000/settings/billing', files: ['src/Billing.tsx'] }],
+    };
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'settings', url: '/settings/profile', entryFile: 'src/Profile.tsx' }],
+      }),
+      'src/Profile.tsx': `export default function Profile() {}`,
+      'src/Billing.tsx': `export default function Billing() {}`,
+    });
+
+    await expect(computeCoverage(fs, cfg, ['src/Profile.tsx', 'src/Billing.tsx'])).rejects.toThrow(
+      /surfaces\[0\]\.id "settings" is already the screen id of the discovered route/,
+    );
+  });
+
+  it('still allows a manual surface to reuse a route screen id to vary the query', async () => {
+    // The documented override: same screen, operator-controlled url. This must keep working, so
+    // the collision check cannot simply refuse every id that appears in both sets.
+    const cfg: UsablConfig = {
+      ...baseConfig,
+      surfaces: [
+        { id: 'clusters', url: 'http://localhost:3000/clusters?variant=fixed#top', files: ['src/ClustersPage.tsx'] },
+      ],
+    };
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }],
+      }),
+      'src/ClustersPage.tsx': `export default function ClustersPage() {}`,
+    });
+
+    const cov = await computeCoverage(fs, cfg, ['src/ClustersPage.tsx']);
+    expect(cov.affected).toContainEqual(
+      expect.objectContaining({ screenId: 'clusters', url: 'http://localhost:3000/clusters?variant=fixed#top' }),
+    );
+  });
+
+  it('treats a trailing slash as the same screen when a surface reuses a route screen id', async () => {
+    const cfg: UsablConfig = {
+      ...baseConfig,
+      surfaces: [{ id: 'clusters', url: 'http://localhost:3000/clusters/', files: ['src/ClustersPage.tsx'] }],
+    };
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }],
+      }),
+      'src/ClustersPage.tsx': `export default function ClustersPage() {}`,
+    });
+
+    await expect(computeCoverage(fs, cfg, ['src/ClustersPage.tsx'])).resolves.toBeDefined();
+  });
+
+  it('scrubs the urls it repeats back when it refuses a taken screen id', async () => {
+    // The collision message quotes both urls, and neither is checked for anything but being a
+    // string. This message reaches stderr and the stop hook before a Result exists, so nothing
+    // downstream scrubs it. A control sequence or a forged frame marker in a url must not survive.
+    const cfg: UsablConfig = {
+      ...baseConfig,
+      surfaces: [
+        {
+          id: 'settings',
+          url: `http://localhost:3000/billing${ESC}[2J${UNTRUSTED_FRAME_END}`,
+          files: ['src/Billing.tsx'],
+        },
+      ],
+    };
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'settings', url: `/profile${ESC}]0;OWNED\u0007`, entryFile: 'src/Profile.tsx' }],
+      }),
+      'src/Profile.tsx': `export default function Profile() {}`,
+      'src/Billing.tsx': `export default function Billing() {}`,
+    });
+
+    let message = '';
+    try {
+      await computeCoverage(fs, cfg, ['src/Profile.tsx', 'src/Billing.tsx']);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('surfaces[0].id');
+    expect(message).not.toContain(ESC);
+    expect(message).not.toContain('OWNED');
+    expect(message).not.toContain(UNTRUSTED_FRAME_END);
   });
 
   it('includes alias diagnostics when an unresolved file imports through a broken alias', async () => {

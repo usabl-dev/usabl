@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { parseUsablConfig } from '../../src/intake/config.js';
+import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
 
 const BASE = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -110,20 +111,110 @@ describe('parseUsablConfig surface id', () => {
     expect(message).toMatch(/unique/);
   });
 
-  it('refuses two ids that differ only by surrounding whitespace', () => {
-    expect(() =>
-      parseUsablConfig(
-        configJson({ surfaces: [surface('settings', '/settings/profile'), surface(' settings ', '/settings/billing')] }),
-      ),
-    ).toThrow(/surfaces\[1\]\.id/);
-  });
-
   it('still refuses a non-string id', () => {
     expect(() =>
       parseUsablConfig(
         configJson({ surfaces: [{ id: 42, url: 'http://127.0.0.1:5173/overview', files: ['src/Overview.tsx'] }] }),
       ),
     ).toThrow(/surfaces\[0\]\.id must be a string/);
+  });
+
+  // Ids are compared exactly, so an id has to be something a reader can tell apart from another
+  // id. Whitespace, invisible characters, and characters that reorder their neighbours all break
+  // that, and they break it whether or not the two ids happen to be different map keys. The rule
+  // is one rule, so every one of these is refused the same way.
+  const indistinguishable: Array<[string, string]> = [
+    ['ascii space', 'U+0020'],
+    ['no-break space', 'U+00A0'],
+    ['ideographic space', 'U+3000'],
+    ['zero width space', 'U+200B'],
+    ['right to left mark', 'U+200F'],
+    ['right to left override', 'U+202E'],
+  ];
+
+  const charFor = (point: string) => String.fromCodePoint(Number.parseInt(point.slice(2), 16));
+
+  it.each(indistinguishable)('refuses an id containing a %s and names the code point', (_label, point) => {
+    let message = '';
+    try {
+      parseUsablConfig(configJson({ surfaces: [surface(`settings${charFor(point)}`, '/settings')] }));
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('surfaces[0].id');
+    expect(message).toContain(point);
+    expect(message).toMatch(/not allowed/);
+  });
+
+  it.each(indistinguishable)(
+    'refuses a pair of ids that a reader cannot tell apart, separated by a %s',
+    (_label, point) => {
+      expect(() =>
+        parseUsablConfig(
+          configJson({
+            surfaces: [
+              surface('settings', '/settings/profile'),
+              surface(`settings${charFor(point)}`, '/settings/billing'),
+            ],
+          }),
+        ),
+      ).toThrow(/surfaces\[1\]\.id/);
+    },
+  );
+
+  it('accepts an id discovery derives from a parameter route', () => {
+    // screenIdFromUrl turns /users/:id into users-:id, so the grammar has to leave punctuation
+    // alone or usabl init would write a config that usabl then refuses to read.
+    const config = parseUsablConfig(configJson({ surfaces: [surface('users-:id', '/users')] }));
+    expect(config.surfaces[0]?.id).toBe('users-:id');
+  });
+});
+
+describe('parseUsablConfig surface id error text', () => {
+  // Config parsing happens before a Result exists, so nothing here goes through scrubResult.
+  // The message lands on stderr and, through the stop hook, in front of a model. A branch config
+  // is not trusted before the guard has checked it, so an id out of one is untrusted text.
+  function messageFor(surfaces: unknown): string {
+    try {
+      parseUsablConfig(JSON.stringify({ ...BASE, surfaces }));
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    throw new Error('expected the config to be refused');
+  }
+
+  const ESC = '\u001b';
+
+  it('does not let a terminal escape sequence in an id reach the message', () => {
+    // An operating system command sequence retitles the terminal window. It must not survive.
+    const message = messageFor([
+      { id: `settings${ESC}]0;OWNED\u0007`, url: 'http://127.0.0.1:5173/settings', files: ['src/Settings.tsx'] },
+    ]);
+    expect(message).not.toContain(ESC);
+    expect(message).not.toContain('OWNED');
+    expect(message).toContain('U+001B');
+  });
+
+  it('does not let a forged untrusted-text frame marker in an id reach the message', () => {
+    // A model reading the stop hook is told everything inside the frame is data. An id that closes
+    // the frame would relabel whatever follows it as trusted. Two things stop it: the marker
+    // contains spaces, so the grammar refuses the id before anything is repeated back, and the
+    // message names a code point instead of echoing the id. Assert the outcome, not the mechanism.
+    const message = messageFor([
+      { id: `settings${UNTRUSTED_FRAME_END}`, url: 'http://127.0.0.1:5173/settings', files: ['src/Settings.tsx'] },
+    ]);
+    expect(message).not.toContain(UNTRUSTED_FRAME_END);
+    expect(message).not.toContain('UNTRUSTED');
+  });
+
+  it('caps how much of a very long id it repeats back', () => {
+    const long = 'a'.repeat(5000);
+    const message = messageFor([
+      { id: long, url: 'http://127.0.0.1:5173/a', files: ['src/A.tsx'] },
+      { id: long, url: 'http://127.0.0.1:5173/b', files: ['src/B.tsx'] },
+    ]);
+    expect(message).toContain('(truncated)');
+    expect(message.length).toBeLessThan(1000);
   });
 });
 
