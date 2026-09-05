@@ -60,8 +60,8 @@ VO: "This is the whole product on one screen. Three steps. It collects evidence 
 page, including barriers a static scanner never sees, like focus trapped in a dialog after you press
 a key. It decides once: one gate, one verdict, one exit code, and a receipt anyone can re-check. Then
 it shows that verdict everywhere the developer already works, the command line, the pull request, and
-the AI assistant. The assistant can write the code. It cannot pass its own work. None of this is
-complicated, and that is the point."
+the AI assistant. The assistant can write the code. It cannot certify its own work; the gate decides.
+None of this is complicated, and that is the point."
 
 TEST STATUS: graphic built and rendered (usabl-product-map.html / .png), 2026-09-04. Every claim on
 it maps to something the demo then shows working: the stateful catch (3.1, 3.2), the receipt (3.3),
@@ -70,7 +70,8 @@ table of contents for the proof that follows.
 
 ## Innovation, stated plainly (for the pitch and Innovation Days)
 
-Five things that are genuinely new here. Say them plainly; the demo proves each one, so none is hype.
+Five things that make usabl different. The combination is what is new, not each piece on its own. Say
+them plainly; the demo shows each one on the surfaces usabl is configured for.
 
 1. Accessibility as a verdict, not a report. Most tools hand you a list to triage. usabl returns one
    deterministic verdict with an exit code and a re-checkable receipt. It is a gate, like a test, not
@@ -82,18 +83,20 @@ Five things that are genuinely new here. Say them plainly; the demo proves each 
    is grading its own work. usabl structurally stops an assistant from declaring done on an
    inaccessible change. And it hands the barrier to the assistant to fix with the page's own text
    sealed as untrusted data, so that text cannot pose as instructions to the model fixing it. That
-   is the timely, novel part: an AI accessibility-fix loop where the page under repair cannot
-   smuggle instructions into the assistant.
-4. It is honest by construction. It never passes what it did not check; it discloses coverage gaps.
-   The rules guard themselves, so a change cannot rewrite the policy it is judged by. Trust is
-   engineered in, not asserted.
+   is the timely part: an AI accessibility-fix loop where the page under repair cannot pose as
+   instructions to the assistant.
+4. It is honest by construction. On the surfaces it is configured for, it does not call a change
+   verified when it did not check the affected screen; it discloses coverage gaps instead of treating
+   them as clean. The rules guard themselves, so a change cannot rewrite the policy it is judged by.
+   Trust is engineered in, not asserted.
 5. The simplicity is the innovation. A hard, trust-sensitive problem, continuous accessibility proof
    at the speed of development, reduced to three auditable steps with one authority and everything
    else display-only. The elegance of the architecture is the result, not an accident.
 
-One-line version for the top of the pitch: usabl turns accessibility from a scan you interpret into a
-verdict you can trust, enforced continuously and even on AI, that catches the barriers a scanner
-cannot see and never passes what it did not check.
+One-line version for the top of the pitch: on configured React and PatternFly surfaces, usabl turns
+machine-checkable accessibility evidence into an enforced result, enforced continuously and even on
+AI, that catches barriers a static scanner cannot see and reports known coverage gaps instead of
+calling them verified.
 
 ## Innovation inventory (everything we built, big and small)
 
