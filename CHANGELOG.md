@@ -28,6 +28,15 @@
   JSON, stops the run rather than producing another signed-out scan. Neither the
   path nor the file contents are ever printed, because the file holds live session
   tokens.
+- Page-derived text can no longer make usabl's own output read differently from
+  what usabl found. Unicode bidirectional controls tell a terminal, a pull
+  request comment, or the overlay to draw characters in a different order than
+  they are stored, so a crafted label could render as the opposite of the
+  finding behind it. The egress neutralizer now removes those controls, along
+  with the other invisible formatting characters that can pad a string or hide
+  characters inside it. Right-to-left text is unaffected: Hebrew and Arabic
+  letters carry their own direction and are left alone, and the joiners that
+  Persian, Arabic, Indic, and emoji sequences depend on are kept.
 
 ### Added
 

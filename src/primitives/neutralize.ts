@@ -1,8 +1,52 @@
 /**
  * Terminal egress neutralizer for untrusted finding text.
- * It strips control bytes and control sequences before CLI output.
+ * It strips control bytes, control sequences, and invisible formatting characters before CLI output.
  * It must never decide verdicts, sanitize HTML, or alter identity keys.
  */
+
+/**
+ * True for a formatting character that a reader never sees but that changes what the text looks
+ * like or hides content inside it.
+ *
+ * Two groups are covered. The bidirectional controls, the embeddings, overrides, isolates, and
+ * direction marks, tell a renderer to draw characters in a different order than they are stored.
+ * Page text can use them to make usabl print a verdict that reads as the opposite of the verdict
+ * usabl reached, which is the defect this guard exists to close. The rest have no glyph at all,
+ * so they can pad a string, hide characters inside it, or split a literal that a later stage
+ * matches on, with nothing visible to warn the reader.
+ *
+ * The joiners U+200C and U+200D are deliberately kept. They carry meaning in Persian, Arabic, and
+ * Indic text, and they bind emoji sequences into one glyph, so removing them would mangle
+ * legitimate content. Letters that have a direction of their own, Hebrew and Arabic script, are
+ * untouched: they render right to left without any control character, so right-to-left text
+ * survives this pass unchanged.
+ */
+function isInvisibleFormat(code: number): boolean {
+  return (
+    code === 0x00ad || // soft hyphen
+    code === 0x061c || // Arabic letter mark
+    code === 0x200b || // zero width space
+    code === 0x200e || // left-to-right mark
+    code === 0x200f || // right-to-left mark
+    (code >= 0x202a && code <= 0x202e) || // bidi embeddings, overrides, and pop
+    (code >= 0x2060 && code <= 0x2064) || // word joiner and invisible operators
+    (code >= 0x2066 && code <= 0x206f) || // bidi isolates and deprecated format characters
+    code === 0xfeff || // zero width no-break space, the byte order mark
+    (code >= 0xfff9 && code <= 0xfffb) // interlinear annotation
+  );
+}
+
+/**
+ * True for the two code units of a tag character, U+E0000 to U+E007F.
+ *
+ * These are an invisible copy of ASCII. A string spelled in them reaches anything that reads the
+ * bytes while a person sees nothing, so they are removed as a pair to keep the scan on a character
+ * boundary. Every other astral character passes through, since only this block is invisible.
+ */
+function isTagPair(high: number, low: number): boolean {
+  return high === 0xdb40 && low >= 0xdc00 && low <= 0xdc7f;
+}
+
 export function neutralize(text: string): string {
   if (text.length === 0) {
     return '';
@@ -78,6 +122,20 @@ export function neutralize(text: string): string {
       code === 0x2029
     ) {
       i += 1;
+      continue;
+    }
+
+    // Invisible formatting characters are dropped, not replaced with a notice. Everything this
+    // function removes is removed silently, and none of these characters has a glyph, so dropping
+    // one takes nothing away that the reader could have seen. Marking them would also let page
+    // text pad usabl's own output at will, one notice per planted character.
+    if (isInvisibleFormat(code)) {
+      i += 1;
+      continue;
+    }
+
+    if (isTagPair(code, text.charCodeAt(i + 1))) {
+      i += 2;
       continue;
     }
 

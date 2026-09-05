@@ -130,8 +130,9 @@ comments.
 - Default: all processing **local**; no telemetry ships in v0.2.0.
 - Document that transcripts may contain page data; caution for production URLs in CI.
 - Secret redaction and control-byte neutralization already run at egress: `scrubResult`
-  redacts credential-shaped keys and values and `neutralize` strips control sequences,
-  applied by the CLI, docs, and stop-hook projections before any output leaves the tool.
+  redacts credential-shaped keys and values and `neutralize` strips control sequences and
+  invisible formatting characters, applied by the CLI, docs, and stop-hook projections
+  before any output leaves the tool.
 
 **Status:** [x] Local-first; egress redaction and neutralization ship. [ ] Telemetry
 decision open.
