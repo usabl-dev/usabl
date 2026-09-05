@@ -18,10 +18,10 @@ export const overlayClientSource = `(() => {
   const state = {
     expanded: false,
     payload: null,
-    selectedKey: null,
     error: false,
     scanning: false,
     highlightCleanup: null,
+    navHooked: false,
   };
 
   function displayText(value) {
@@ -32,6 +32,92 @@ export const overlayClientSource = `(() => {
       return value.slice(UNTRUSTED_START.length, -UNTRUSTED_END.length).trim();
     }
     return value;
+  }
+
+  // Compare a scan-time url to the live pathname on PATHNAME only.
+  //
+  // The scan runs against one host (for example 127.0.0.1:5173) and the developer may open the app
+  // on a different host or port. Host and port would never match across those two, so matching there
+  // would always fail and the overlay would look empty on every screen. The path is the stable
+  // identity of a screen, so we normalize both to a pathname with any trailing slash removed and
+  // compare only that. A malformed scan-time url is treated as no match rather than throwing.
+  function pathnameOf(rawUrl) {
+    if (typeof rawUrl !== 'string' || rawUrl === '') {
+      return null;
+    }
+    let path;
+    try {
+      // A base lets us parse an absolute url or a bare path with the same call.
+      path = new URL(rawUrl, 'http://usabl.invalid').pathname;
+    } catch (_error) {
+      return null;
+    }
+    return normalizePath(path);
+  }
+
+  function normalizePath(path) {
+    if (typeof path !== 'string' || path === '') {
+      return '/';
+    }
+    // Treat "/clusters" and "/clusters/" as the same screen. Keep "/" as "/".
+    if (path.length > 1 && path.endsWith('/')) {
+      return path.slice(0, -1);
+    }
+    return path;
+  }
+
+  // Split findings into the screen the browser is on and every other scanned screen.
+  //
+  // The overlay is screen-aware: it guides the developer one screen at a time. It matches the live
+  // pathname to a scanned screen through coverage.affected, then partitions findings by screenId.
+  // "here" is a flat list of this screen's findings, each individually locatable. "elsewhere" is a
+  // per-screen count plus a path to navigate to, and never the other screens' individual findings.
+  function partitionByScreen(payload, currentPath) {
+    const affected = (payload && payload.coverage && Array.isArray(payload.coverage.affected))
+      ? payload.coverage.affected
+      : [];
+    const findings = Array.isArray(payload.findings) ? payload.findings : [];
+    const normalizedCurrent = normalizePath(currentPath);
+
+    // Map each affected screenId to its normalized pathname, and find which one is current.
+    let currentScreenId = null;
+    const screenPath = new Map();
+    for (const screen of affected) {
+      const path = pathnameOf(screen.url);
+      if (path === null) {
+        continue;
+      }
+      if (!screenPath.has(screen.screenId)) {
+        screenPath.set(screen.screenId, path);
+      }
+      if (currentScreenId === null && path === normalizedCurrent) {
+        currentScreenId = screen.screenId;
+      }
+    }
+
+    const here = [];
+    const elsewhereCounts = new Map();
+    for (const finding of findings) {
+      if (currentScreenId !== null && finding.screenId === currentScreenId) {
+        here.push(finding);
+      } else {
+        const entry = elsewhereCounts.get(finding.screenId) || { screenId: finding.screenId, count: 0 };
+        entry.count += 1;
+        elsewhereCounts.set(finding.screenId, entry);
+      }
+    }
+
+    const elsewhere = [];
+    for (const entry of elsewhereCounts.values()) {
+      // Prefer the scan-time pathname for this screen when we have one, so the navigating link is a
+      // real route. When a finding names a screen that is not in coverage.affected, we have no path
+      // and omit the link rather than guess a route that may not exist.
+      const path = screenPath.get(entry.screenId) || null;
+      elsewhere.push({ screenId: entry.screenId, count: entry.count, path });
+    }
+    elsewhere.sort((a, b) => a.screenId.localeCompare(b.screenId));
+
+    return { matched: currentScreenId !== null, currentScreenId, here, elsewhere };
   }
 
   function make(tag, className, text) {
@@ -53,10 +139,6 @@ export const overlayClientSource = `(() => {
     if (payload.verdict === 'not_covered') return { key: 'not-covered', label: 'Not covered', symbol: '?' };
     if (payload.verdict === 'approval_required') return { key: 'approval', label: 'Approval required', symbol: '!' };
     return { key: 'idle', label: 'Idle', symbol: '○' };
-  }
-
-  function findingKey(finding, index) {
-    return finding.elementKey || finding.screenId + '|' + finding.rule + '|' + index;
   }
 
   function ensureInspector() {
@@ -149,7 +231,8 @@ export const overlayClientSource = `(() => {
 
       .launcher:focus-visible,
       .finding-button:focus-visible,
-      .locate-button:focus-visible {
+      .elsewhere-link:focus-visible,
+      .editor-link:focus-visible {
         outline: 3px solid var(--cobalt);
         outline-offset: 3px;
       }
@@ -288,8 +371,7 @@ export const overlayClientSource = `(() => {
       }
 
       .coverage-list,
-      .receipt-grid,
-      .detail-meta {
+      .receipt-grid {
         display: grid;
         grid-template-columns: minmax(110px, 0.8fr) minmax(0, 1.2fr);
         gap: 8px 12px;
@@ -347,15 +429,6 @@ export const overlayClientSource = `(() => {
         overflow-wrap: anywhere;
       }
 
-      .screen-group + .screen-group {
-        margin-top: 14px;
-      }
-
-      .screen-heading {
-        margin-bottom: 6px;
-        color: var(--slate);
-      }
-
       .finding-list {
         display: grid;
         gap: 6px;
@@ -364,31 +437,38 @@ export const overlayClientSource = `(() => {
         list-style: none;
       }
 
+      .finding-item {
+        display: grid;
+        gap: 4px;
+      }
+
       .finding-button {
         display: grid;
         grid-template-columns: auto minmax(0, 1fr);
-        gap: 3px 9px;
+        gap: 3px 10px;
         width: 100%;
-        padding: 9px 10px;
+        padding: 10px 11px;
         border: 1px solid var(--rule);
         border-radius: 8px;
         background: var(--white);
         color: var(--ink);
         text-align: left;
         cursor: pointer;
+        transition: border-color 150ms ease-out, background-color 150ms ease-out;
       }
 
       .finding-button:hover {
         border-color: var(--cobalt);
+        background: #f6f8ff;
       }
 
-      .finding-button[aria-pressed="true"] {
-        border-color: var(--cobalt);
-        background: #f1f4ff;
+      .finding-button:active {
+        transform: translateY(1px);
       }
 
       .finding-symbol {
-        grid-row: 1 / span 2;
+        grid-row: 1 / span 1;
+        align-self: start;
         color: var(--red);
         font-weight: 800;
       }
@@ -398,11 +478,26 @@ export const overlayClientSource = `(() => {
         color: var(--green);
       }
 
+      .finding-body {
+        display: grid;
+        gap: 3px;
+        min-width: 0;
+      }
+
       .finding-label {
-        font-size: 0.8125rem;
-        font-weight: 650;
+        font-size: 0.875rem;
+        font-weight: 680;
         line-height: 1.4;
         overflow-wrap: anywhere;
+        text-wrap: pretty;
+      }
+
+      .finding-fix {
+        color: #344054;
+        font-size: 0.8125rem;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
+        text-wrap: pretty;
       }
 
       .finding-support {
@@ -412,89 +507,135 @@ export const overlayClientSource = `(() => {
         overflow-wrap: anywhere;
       }
 
-      .detail {
-        background: var(--white);
+      .finding-affordance {
+        margin-top: 3px;
+        color: #1745bd;
+        font-size: 0.75rem;
+        font-weight: 700;
       }
 
-      .detail-impact {
-        margin: 8px 0 14px;
-        font-size: 0.9375rem;
-        font-weight: 650;
-        line-height: 1.5;
+      .finding-affordance::before {
+        content: "→";
+        margin-right: 5px;
+      }
+
+      .editor-link {
+        display: inline-flex;
+        align-items: center;
+        margin-left: 34px;
+        color: #1745bd;
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .editor-link:hover {
+        text-decoration: underline;
+      }
+
+      .locate-status {
+        margin-left: 34px;
+        color: var(--slate);
+        font-size: 0.75rem;
+        line-height: 1.4;
         overflow-wrap: anywhere;
-        text-wrap: pretty;
       }
 
-      .detail-block + .detail-block {
-        margin-top: 13px;
+      .locate-status:empty {
+        display: none;
       }
 
-      .detail-block h4 {
-        margin-bottom: 4px;
+      .locate-selector {
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.6875rem;
+        color: var(--ink);
       }
 
-      .detail-block p {
+      .current-screen-name {
+        margin-bottom: 10px;
+        color: var(--slate);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.75rem;
+        overflow-wrap: anywhere;
+      }
+
+      .elsewhere-lead {
+        margin-bottom: 10px;
         color: #344054;
         font-size: 0.8125rem;
-        overflow-wrap: anywhere;
+        line-height: 1.4;
         text-wrap: pretty;
       }
 
-      .detail-actions {
+      .elsewhere-list {
+        display: grid;
+        gap: 6px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .elsewhere-item {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        gap: 8px 12px;
-        margin-top: 14px;
+        justify-content: space-between;
+        gap: 6px 12px;
+        padding: 9px 11px;
+        border: 1px solid var(--rule);
+        border-radius: 8px;
+        background: var(--white);
       }
 
-      .locate-button {
-        min-height: 40px;
-        padding: 7px 11px;
+      .elsewhere-info {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 8px;
+        min-width: 0;
+      }
+
+      .elsewhere-name {
+        font-size: 0.875rem;
+        font-weight: 680;
+        overflow-wrap: anywhere;
+      }
+
+      .elsewhere-count {
+        display: inline-flex;
+        padding: 1px 7px;
+        border-radius: 999px;
+        background: var(--red-light);
+        color: #9f252d;
+        font-size: 0.6875rem;
+        font-weight: 700;
+      }
+
+      .elsewhere-path {
+        width: 100%;
+        color: var(--slate);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.6875rem;
+        overflow-wrap: anywhere;
+      }
+
+      .elsewhere-link {
+        min-height: 36px;
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 11px;
         border: 1px solid var(--cobalt);
         border-radius: 8px;
         background: var(--white);
         color: #1745bd;
         font-size: 0.8125rem;
         font-weight: 700;
-        cursor: pointer;
-      }
-
-      .locate-button:hover {
-        background: var(--cobalt-light);
-      }
-
-      .editor-link {
-        display: inline-flex;
-        align-items: center;
         text-decoration: none;
+        white-space: nowrap;
       }
 
-      .locate-button:active {
-        transform: translateY(1px);
-      }
-
-      .locate-status {
-        flex: 1 1 180px;
-        color: var(--slate);
-        font-size: 0.75rem;
-        line-height: 1.4;
-      }
-
-      .detail-meta {
-        margin-top: 14px;
-        padding-top: 12px;
-        border-top: 1px solid var(--rule);
-        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-        font-size: 0.6875rem;
-      }
-
-      .show-all-hint {
-        margin-top: 10px;
-        color: var(--slate);
-        font-size: 0.75rem;
-        line-height: 1.45;
-        overflow-wrap: anywhere;
+      .elsewhere-link:hover {
+        background: var(--cobalt-light);
       }
 
       .empty {
@@ -541,8 +682,7 @@ export const overlayClientSource = `(() => {
         }
 
         .coverage-list,
-        .receipt-grid,
-        .detail-meta {
+        .receipt-grid {
           grid-template-columns: 1fr;
           gap: 3px;
         }
@@ -631,16 +771,13 @@ export const overlayClientSource = `(() => {
     }
     const stale = document.getElementById('__usabl-highlight');
     if (stale) stale.remove();
-  }
-
-  function formatAppSource(source) {
-    if (!source || !source.file) {
-      return '';
-    }
-    if (source.line !== null && source.line !== undefined) {
-      return source.file + ':' + source.line;
-    }
-    return source.file;
+    // Remove any tabindex we added only to focus a non-focusable flagged element, so the page's own
+    // tab order is left exactly as it was before we located anything.
+    const temped = document.querySelectorAll('[data-usabl-temp-tabindex="true"]');
+    temped.forEach((node) => {
+      node.removeAttribute('tabindex');
+      delete node.dataset.usablTempTabindex;
+    });
   }
 
   function editorDeepLink(workspaceRoot, source) {
@@ -667,7 +804,19 @@ export const overlayClientSource = `(() => {
 
     const inspector = document.getElementById(HOST_ID);
     if (!target || target === inspector || (inspector && inspector.contains(target))) {
-      statusHost.textContent = 'This element is not available on the current page.';
+      // Honest status: the finding was true at scan time; the DOM has changed since. We name the
+      // selector so a developer can see what was flagged and where it was.
+      statusHost.replaceChildren();
+      statusHost.appendChild(
+        document.createTextNode('This was flagged here at the last scan; it is not on the page right now.'),
+      );
+      if (selector) {
+        const code = document.createElement('code');
+        code.className = 'locate-selector';
+        code.textContent = selector;
+        statusHost.appendChild(document.createTextNode(' '));
+        statusHost.appendChild(code);
+      }
       return;
     }
 
@@ -725,6 +874,21 @@ export const overlayClientSource = `(() => {
       window.removeEventListener('resize', position);
       marker.remove();
     };
+
+    // Move keyboard focus to the flagged element so a keyboard user lands on it, not just a sighted
+    // one. Some flagged elements are not focusable by default; a temporary tabindex of -1 lets us
+    // focus them programmatically without adding them to the tab order. preventScroll keeps our own
+    // centered scrollIntoView from being overridden by the browser's focus scroll.
+    try {
+      if (!target.hasAttribute('tabindex')) {
+        target.setAttribute('tabindex', '-1');
+        target.dataset.usablTempTabindex = 'true';
+      }
+      target.focus({ preventScroll: true });
+    } catch (_error) {
+      // Focus can throw on detached or disabled nodes. The highlight still stands on its own.
+    }
+
     statusHost.textContent = 'Highlighted ' + targetName + ' on the page.';
   }
 
@@ -806,174 +970,146 @@ export const overlayClientSource = `(() => {
     return section;
   }
 
-  function renderFindingButton(finding, index, selectedKey, onSelect) {
-    const key = findingKey(finding, index);
+  // A finding row on the current screen. The whole row is a real button: activating it locates the
+  // element on the live page, highlights it, moves focus to it, and reports an honest status. There
+  // is no separate "Locate" control and no selection or detail pane, because the current-screen list
+  // is flat and every row acts on click.
+  function renderFindingRow(finding, workspaceRoot) {
+    const item = make('li', 'finding-item');
+
     const button = make('button', 'finding-button');
     button.type = 'button';
     button.dataset.status = finding.status;
-    button.setAttribute('aria-pressed', String(key === selectedKey));
-    button.setAttribute('aria-label', displayText(finding.whatUserExperiences));
+    // The accessible name carries the impact plus a plain "click to find it" affordance, so a
+    // screen-reader user hears what the button does, not just what the finding is.
+    button.setAttribute(
+      'aria-label',
+      displayText(finding.whatUserExperiences) + ' Activate to find this on the page.',
+    );
+
     const symbol = make('span', 'finding-symbol', finding.status === 'fixed' || finding.status === 'waived' ? '✓' : '×');
     symbol.setAttribute('aria-hidden', 'true');
     button.appendChild(symbol);
-    button.appendChild(make('span', 'finding-label', finding.whatUserExperiences));
+
+    const body = make('div', 'finding-body');
+    body.appendChild(make('span', 'finding-label', finding.whatUserExperiences));
+
+    // A hint of the fix under the impact, so a developer sees what to do without opening anything.
+    if (finding.fix) {
+      body.appendChild(make('span', 'finding-fix', displayText(finding.fix)));
+    }
+
     const supportText =
       finding.rule +
       ' · ' +
       finding.layer +
       ' · ' +
       finding.severity +
-      ' · ' +
-      finding.status +
       (finding.groupCount ? ' · ×' + finding.groupCount : '');
-    button.appendChild(
-      make(
-        'span',
-        'finding-support',
-        supportText,
-      ),
-    );
-    button.addEventListener('click', () => onSelect(key));
-    return button;
-  }
+    body.appendChild(make('span', 'finding-support', supportText));
 
-  function renderShowAllHint(payload) {
-    if (!payload.showAllHint) {
-      return null;
-    }
-    const section = make('section', 'section');
-    section.appendChild(make('p', 'show-all-hint', payload.showAllHint));
-    return section;
-  }
+    // The "click to find it" affordance, shown to sighted users and hidden from the accessible name
+    // above so it is not read twice.
+    const affordance = make('span', 'finding-affordance', 'Find on page');
+    affordance.setAttribute('aria-hidden', 'true');
+    body.appendChild(affordance);
 
-  function renderFindings(payload, host) {
-    const section = make('section', 'section');
-    const heading = make('div', 'section-heading');
-    heading.appendChild(make('h3', '', 'Findings'));
-    const shownCount = Array.isArray(payload.findings) ? payload.findings.length : 0;
-    const totalCount = findingsCount(payload);
-    // Show "shown · total" whenever fewer rows are shown than findings exist, whether that is from
-    // grouping repeated rules or from the budget hiding groups. Keying only on collapsed left the
-    // header showing the group count while the launcher showed the finding total.
-    const countLabel =
-      totalCount > shownCount
-        ? shownCount + ' shown · ' + totalCount + ' total'
-        : String(shownCount);
-    heading.appendChild(make('span', 'section-count', countLabel));
-    section.appendChild(heading);
+    button.appendChild(body);
 
-    if (!payload.findings.length) {
-      section.appendChild(make('p', 'empty', 'No active findings in this result.'));
-      return section;
-    }
-
-    const groups = new Map();
-    payload.findings.forEach((finding, index) => {
-      const entries = groups.get(finding.screenId) || [];
-      entries.push({ finding, index });
-      groups.set(finding.screenId, entries);
-    });
-
-    for (const [screenId, entries] of groups) {
-      const group = make('div', 'screen-group');
-      group.appendChild(make('h4', 'screen-heading', screenId));
-      const list = make('ul', 'finding-list');
-      for (const entry of entries) {
-        const item = make('li');
-        item.appendChild(
-          renderFindingButton(entry.finding, entry.index, state.selectedKey, (key) => {
-            state.selectedKey = key;
-            renderPayload(state.payload, state.error);
-            const selected = host.shadowRoot.querySelector('.finding-button[aria-pressed="true"]');
-            if (selected) selected.focus();
-          }),
-        );
-        list.appendChild(item);
-      }
-      group.appendChild(list);
-      section.appendChild(group);
-    }
-    const showAll = renderShowAllHint(payload);
-    if (showAll) {
-      section.appendChild(showAll);
-    }
-    return section;
-  }
-
-  function selectedFinding(payload) {
-    if (!payload.findings.length) {
-      return null;
-    }
-    const selected = payload.findings.find((finding, index) => findingKey(finding, index) === state.selectedKey);
-    return selected || payload.findings[0];
-  }
-
-  function renderDetail(payload) {
-    const finding = selectedFinding(payload);
-    if (!finding) {
-      return null;
-    }
-    const section = make('section', 'section detail');
-    section.appendChild(make('h3', '', 'Selected finding'));
-    section.appendChild(make('p', 'detail-impact', finding.whatUserExperiences));
-
-    const why = make('div', 'detail-block');
-    why.appendChild(make('h4', '', 'Why it matters'));
-    why.appendChild(make('p', '', finding.why));
-    section.appendChild(why);
-
-    const repair = make('div', 'detail-block');
-    repair.appendChild(make('h4', '', 'Suggested repair'));
-    repair.appendChild(make('p', '', finding.fix));
-    section.appendChild(repair);
-
-    if (finding.appSource && (finding.appSource.file || finding.appSource.candidates.length > 0)) {
-      const sourceBlock = make('div', 'detail-block');
-      sourceBlock.appendChild(make('h4', '', 'Source'));
-      if (finding.appSource.file) {
-        sourceBlock.appendChild(make('p', '', formatAppSource(finding.appSource)));
-      }
-      if (
-        finding.appSource.candidates.length > 0 &&
-        (finding.appSource.file === null || finding.appSource.candidates.length > 1)
-      ) {
-        sourceBlock.appendChild(
-          make('p', '', 'candidates: ' + finding.appSource.candidates.join(', ')),
-        );
-      }
-      section.appendChild(sourceBlock);
-    }
-
-    const actions = make('div', 'detail-actions');
-    const locate = make('button', 'locate-button', 'Locate on page');
-    locate.type = 'button';
-    const locateStatus = make('p', 'locate-status', 'Show the affected element on this page.');
+    // One status line per row, announced politely, that reports located or the honest not-found text.
+    const locateStatus = make('p', 'locate-status');
     locateStatus.setAttribute('aria-live', 'polite');
-    locate.addEventListener('click', () => locateFinding(finding, locateStatus));
-    actions.appendChild(locate);
-    actions.appendChild(locateStatus);
-    const editorHref = editorDeepLink(payload.workspaceRoot, finding.appSource);
+
+    button.addEventListener('click', () => locateFinding(finding, locateStatus));
+
+    item.appendChild(button);
+    item.appendChild(locateStatus);
+
+    // Editor deep link stays available per row when the source tier is a renderer file.
+    const editorHref = editorDeepLink(workspaceRoot, finding.appSource);
     if (editorHref) {
-      const openEditor = make('a', 'locate-button editor-link', 'Open in editor');
+      const openEditor = make('a', 'editor-link', 'Open in editor');
       openEditor.href = editorHref;
       openEditor.target = '_blank';
       openEditor.rel = 'noopener noreferrer';
-      actions.appendChild(openEditor);
+      item.appendChild(openEditor);
     }
-    section.appendChild(actions);
 
-    const meta = make('dl', 'detail-meta');
-    appendDefinition(meta, 'Screen', finding.screenId);
-    appendDefinition(meta, 'Element', finding.elementName || finding.elementPath);
-    if (finding.appSource && finding.appSource.file) {
-      appendDefinition(meta, 'Source', formatAppSource(finding.appSource));
+    return item;
+  }
+
+  // The current-screen section: a flat, individually clickable list of every finding on this screen,
+  // or an honest message when the live path matches no scanned screen.
+  function renderCurrentScreen(payload, split) {
+    const section = make('section', 'section current-screen');
+    const heading = make('div', 'section-heading');
+    heading.appendChild(make('h3', '', 'This screen'));
+
+    if (!split.matched) {
+      section.appendChild(heading);
+      section.appendChild(make('p', 'empty', 'This screen was not part of the last scan.'));
+      return section;
     }
-    appendDefinition(meta, 'Rule', finding.rule);
-    appendDefinition(meta, 'Provider', finding.layer);
-    appendDefinition(meta, 'Severity', finding.severity);
-    appendDefinition(meta, 'Status', finding.status);
-    appendDefinition(meta, 'Confidence', finding.confidence);
-    section.appendChild(meta);
+
+    heading.appendChild(
+      make('span', 'section-count', split.here.length === 1 ? '1 finding' : split.here.length + ' findings'),
+    );
+    section.appendChild(heading);
+
+    // Name the matched screen so the developer knows which route the list belongs to.
+    section.appendChild(make('p', 'current-screen-name', split.currentScreenId));
+
+    if (!split.here.length) {
+      section.appendChild(make('p', 'empty', 'No accessibility findings on this screen.'));
+      return section;
+    }
+
+    const list = make('ul', 'finding-list');
+    for (const finding of split.here) {
+      list.appendChild(renderFindingRow(finding, payload.workspaceRoot));
+    }
+    section.appendChild(list);
+    return section;
+  }
+
+  // The elsewhere guide: one entry per other scanned screen that has findings, with a count and a
+  // real navigating link. It never lists the individual findings of other screens. The intent is
+  // fix here, then go there.
+  function renderElsewhere(split) {
+    if (!split.elsewhere.length) {
+      return null;
+    }
+    const section = make('section', 'section elsewhere');
+    const heading = make('div', 'section-heading');
+    heading.appendChild(make('h3', '', 'On other screens'));
+    section.appendChild(heading);
+    section.appendChild(
+      make('p', 'elsewhere-lead', 'Fix this screen first, then move on. These screens also have findings.'),
+    );
+
+    const list = make('ul', 'elsewhere-list');
+    for (const entry of split.elsewhere) {
+      const item = make('li', 'elsewhere-item');
+      const info = make('div', 'elsewhere-info');
+      info.appendChild(make('span', 'elsewhere-name', entry.screenId));
+      const countText = entry.count === 1 ? '1 finding' : entry.count + ' findings';
+      info.appendChild(make('span', 'elsewhere-count', countText));
+      if (entry.path) {
+        info.appendChild(make('span', 'elsewhere-path', entry.path));
+      }
+      item.appendChild(info);
+
+      if (entry.path) {
+        // A real anchor with an href set to the screen's pathname. Clicking navigates the browser,
+        // which works for a full page load and, because it is a real in-page anchor, is also fine
+        // for a single-page app that intercepts same-origin link clicks.
+        const link = make('a', 'elsewhere-link', 'Go to this screen');
+        link.href = entry.path;
+        item.appendChild(link);
+      }
+      list.appendChild(item);
+    }
+    section.appendChild(list);
     return section;
   }
 
@@ -1032,12 +1168,15 @@ export const overlayClientSource = `(() => {
     header.appendChild(summary);
     header.appendChild(make('p', 'advisory', 'Advisory view. The stop hook and CI gate decide completion.'));
 
-    const children = [header, renderCoverage(payload), renderFindings(payload, host)];
-    const detail = renderDetail(payload);
+    const split = partitionByScreen(payload, window.location.pathname);
+    const children = [header, renderCurrentScreen(payload, split)];
+    const elsewhere = renderElsewhere(split);
+    const coverage = renderCoverage(payload);
     const receipt = renderReceipt(payload.receipt);
     const guarded = renderGuardedPaths(payload.dirtyGuardedPaths);
     const floorPaidDown = renderFloorPaidDown(payload.paidDownCount);
-    if (detail) children.push(detail);
+    if (elsewhere) children.push(elsewhere);
+    children.push(coverage);
     if (receipt) children.push(receipt);
     if (guarded) children.push(guarded);
     if (floorPaidDown) children.push(floorPaidDown);
@@ -1075,12 +1214,54 @@ export const overlayClientSource = `(() => {
     state.payload = payload;
     state.error = error;
     state.scanning = false;
-    if (!state.selectedKey && payload.findings.length) {
-      state.selectedKey = findingKey(payload.findings[0], 0);
-    }
     renderLauncher(host, payload, error);
     renderPanel(host, payload, error);
     syncExpansion(host);
+  }
+
+  // Re-partition the current-screen and elsewhere split after an in-app route change.
+  //
+  // A single-page app changes route without a full reload, so the overlay must re-render or it keeps
+  // showing the previous screen's findings. We only re-render when a real payload is present and the
+  // panel exists; loading and error states re-render on their own paths. Any active highlight is
+  // cleared because the located element belonged to the screen we just left.
+  function handleRouteChange() {
+    if (state.scanning || state.error || !state.payload) {
+      return;
+    }
+    const host = document.getElementById(HOST_ID);
+    if (!host || !host.shadowRoot) {
+      return;
+    }
+    clearHighlight();
+    renderPanel(host, state.payload, state.error);
+    syncExpansion(host);
+  }
+
+  // Wrap history.pushState and history.replaceState so client-side navigation emits an event we can
+  // listen for. The History API does not fire an event on these calls, unlike popstate for the back
+  // and forward buttons, so a router that only pushes state would otherwise leave the overlay stale.
+  // We wrap once, keep the original behavior, and dispatch a synthetic event the overlay listens to.
+  function hookNavigation() {
+    if (state.navHooked) {
+      return;
+    }
+    state.navHooked = true;
+    const emit = () => window.dispatchEvent(new Event('usabl:locationchange'));
+    for (const name of ['pushState', 'replaceState']) {
+      const original = history[name];
+      if (typeof original !== 'function') {
+        continue;
+      }
+      history[name] = function () {
+        const result = original.apply(this, arguments);
+        emit();
+        return result;
+      };
+    }
+    window.addEventListener('popstate', handleRouteChange);
+    window.addEventListener('hashchange', handleRouteChange);
+    window.addEventListener('usabl:locationchange', handleRouteChange);
   }
 
   async function refresh() {
@@ -1109,6 +1290,7 @@ export const overlayClientSource = `(() => {
     }
   }
 
+  hookNavigation();
   refresh();
   if (import.meta && import.meta.hot && typeof import.meta.hot.on === 'function') {
     import.meta.hot.on('usabl:refresh', () => {

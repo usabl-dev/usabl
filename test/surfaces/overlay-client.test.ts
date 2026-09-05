@@ -66,9 +66,17 @@ const result = (over: Partial<Result> = {}): Result => ({
 
 async function mount(
   payload: ReturnType<typeof projectOverlay> | null,
-  viewport = { width: 1280, height: 900 },
-  responseDelayMs = 0,
+  options: {
+    viewport?: { width: number; height: number };
+    responseDelayMs?: number;
+    path?: string;
+  } = {},
 ): Promise<Page> {
+  const viewport = options.viewport ?? { width: 1280, height: 900 };
+  const responseDelayMs = options.responseDelayMs ?? 0;
+  // The path the browser opens. The overlay partitions findings by the live pathname, so a screen's
+  // findings only appear as "this screen" when the browser is on that screen's path.
+  const path = options.path ?? '/';
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
   const pageErrors: string[] = [];
@@ -101,7 +109,7 @@ async function mount(
         </html>`,
     });
   });
-  await page.goto('http://usabl.test/');
+  await page.goto('http://usabl.test' + path);
   try {
     await page.locator('#__usabl-overlay').waitFor({ timeout: 2000 });
   } catch {
@@ -120,9 +128,10 @@ afterAll(async () => {
   }
 });
 
-describe('overlay browser client', { timeout: 15_000 }, () => {
-  it('renders an accessible regression inspector and returns focus on Escape', async () => {
-    const page = await mount(projectOverlay(result()));
+describe('overlay browser client', { timeout: 20_000 }, () => {
+  it('shows only the current screen findings, individually, and returns focus on Escape', async () => {
+    // Browser is on /clusters, which matches the scanned "clusters" screen by pathname.
+    const page = await mount(projectOverlay(result()), { path: '/clusters' });
     const host = page.locator('#__usabl-overlay');
     const toggle = host.getByRole('button', { name: /Open usabl inspector.*regression.*2 findings/i });
 
@@ -131,18 +140,21 @@ describe('overlay browser client', { timeout: 15_000 }, () => {
 
     const inspector = host.getByRole('region', { name: 'usabl accessibility inspector' });
     expect(await inspector.isVisible()).toBe(true);
-    expect(await inspector.getByText('Affected screens').isVisible()).toBe(true);
-    expect(await inspector.getByText('clusters', { exact: true }).first().isVisible()).toBe(true);
+    expect(await inspector.getByRole('heading', { name: 'This screen' }).isVisible()).toBe(true);
 
-    const findingButton = inspector.getByRole('button', {
-      name: 'Focus stays behind the dialog when it opens.',
+    // Both current-screen findings are listed individually as their own buttons.
+    const firstRow = inspector.getByRole('button', {
+      name: /Focus stays behind the dialog when it opens\..*find this on the page/i,
     });
-    await findingButton.click();
-    expect(
-      await inspector.getByText('The dialog focus lifecycle does not establish a keyboard position.').isVisible(),
-    ).toBe(true);
+    const secondRow = inspector.getByRole('button', {
+      name: /Focus does not return to the trigger.*find this on the page/i,
+    });
+    expect(await firstRow.count()).toBe(1);
+    expect(await secondRow.count()).toBe(1);
+
+    // The fix hint is shown inline on the row without opening any detail pane.
     expect(await inspector.getByText('Move focus into the dialog when it opens.').isVisible()).toBe(true);
-    expect(await inspector.getByText('pf-focus-into-dialog', { exact: true }).isVisible()).toBe(true);
+    expect(await inspector.getByText('pf-focus-into-dialog', { exact: false }).first().isVisible()).toBe(true);
 
     const axe = await new AxeBuilder({ page }).analyze();
     expect(axe.violations).toEqual([]);
@@ -159,12 +171,45 @@ describe('overlay browser client', { timeout: 15_000 }, () => {
     await page.context().close();
   });
 
-  it('locates the selected accessibility problem on the page', async () => {
-    const page = await mount(projectOverlay(result()));
+  it('shows a calm message when the live path matches no scanned screen', async () => {
+    // Browser is on /, which matches no scanned screen (the only scanned screen is /clusters).
+    const page = await mount(projectOverlay(result()), { path: '/' });
     const host = page.locator('#__usabl-overlay');
     await host.getByRole('button', { name: /Open usabl inspector/i }).click();
 
-    await host.getByRole('button', { name: 'Locate on page' }).click();
+    const inspector = host.getByRole('region', { name: 'usabl accessibility inspector' });
+    expect(await inspector.getByText('This screen was not part of the last scan.').isVisible()).toBe(true);
+    // No current-screen finding buttons are rendered.
+    expect(await inspector.getByRole('button', { name: /find this on the page/i }).count()).toBe(0);
+
+    await page.context().close();
+  });
+
+  it('normalizes trailing slash and ignores host and port when matching the current screen', async () => {
+    // Scan-time url is http://127.0.0.1:5173/clusters. The browser is on a different host and port
+    // and a trailing slash, and it must still match by pathname alone.
+    const page = await mount(projectOverlay(result()), { path: '/clusters/' });
+    const host = page.locator('#__usabl-overlay');
+    await host.getByRole('button', { name: /Open usabl inspector/i }).click();
+
+    const inspector = host.getByRole('region', { name: 'usabl accessibility inspector' });
+    expect(await inspector.getByText('This screen was not part of the last scan.').count()).toBe(0);
+    expect(
+      await inspector.getByRole('button', { name: /find this on the page/i }).count(),
+    ).toBe(2);
+
+    await page.context().close();
+  });
+
+  it('locates a finding by clicking its row, moving focus to the element', async () => {
+    const page = await mount(projectOverlay(result()), { path: '/clusters' });
+    const host = page.locator('#__usabl-overlay');
+    await host.getByRole('button', { name: /Open usabl inspector/i }).click();
+
+    const row = host.getByRole('button', {
+      name: /Focus stays behind the dialog when it opens\..*find this on the page/i,
+    });
+    await row.click();
 
     const marker = page.locator('#__usabl-highlight');
     expect(await marker.isVisible()).toBe(true);
@@ -172,32 +217,185 @@ describe('overlay browser client', { timeout: 15_000 }, () => {
     expect(await marker.textContent()).toContain('Accessibility problem');
     expect(await host.getByText('Highlighted View cluster details on the page.').isVisible()).toBe(true);
 
+    // Keyboard focus moved to the flagged element on the page, not just a visual highlight.
+    const focusedId = await page.evaluate(() => document.activeElement && document.activeElement.id);
+    expect(focusedId).toBe('cluster-details');
+
     const axe = await new AxeBuilder({ page }).analyze();
     expect(axe.violations).toEqual([]);
 
-    await page.keyboard.press('Escape');
-    expect(await marker.count()).toBe(0);
+    // A route change clears the highlight, because the located element belonged to the screen we
+    // just left. Focus is now on the page element, so this exercises the navigation cleanup path.
+    await page.evaluate(() => history.pushState({}, '', '/somewhere-else'));
+    await expect.poll(async () => marker.count()).toBe(0);
 
     await page.context().close();
   });
 
-  it('reports a stale or invalid finding selector without changing the page', async () => {
+  it('reports a stale finding without changing the page and shows the selector', async () => {
     const page = await mount(
-      projectOverlay(result({ findings: [finding({ elementPath: 'not[valid' })] })),
+      projectOverlay(result({ findings: [finding({ elementPath: '#gone-since-scan' })] })),
+      { path: '/clusters' },
     );
     const host = page.locator('#__usabl-overlay');
     await host.getByRole('button', { name: /Open usabl inspector/i }).click();
 
-    await host.getByRole('button', { name: 'Locate on page' }).click();
+    await host.getByRole('button', { name: /find this on the page/i }).click();
 
     expect(await page.locator('#__usabl-highlight').count()).toBe(0);
-    expect(await host.getByText('This element is not available on the current page.').isVisible()).toBe(true);
+    expect(
+      await host
+        .getByText('This was flagged here at the last scan; it is not on the page right now.')
+        .isVisible(),
+    ).toBe(true);
+    // The selector that was flagged is shown so the developer can see what to look for.
+    expect(await host.getByText('#gone-since-scan', { exact: false }).isVisible()).toBe(true);
+
+    await page.context().close();
+  });
+
+  it('guides to other screens with counts and navigating links, without listing their findings', async () => {
+    const withOtherScreens = result({
+      summary: 'regression: 3 gating findings',
+      coverage: {
+        changedFiles: ['src/app.tsx'],
+        affected: [
+          { screenId: 'clusters', url: 'http://127.0.0.1:5173/clusters', provenance: 'route-graph' },
+          { screenId: 'deployments', url: 'http://127.0.0.1:5173/deployments', provenance: 'route-graph' },
+          { screenId: 'jobs', url: 'http://127.0.0.1:5173/jobs', provenance: 'route-graph' },
+        ],
+        unresolvedFiles: [],
+        gaps: [],
+        nothingToCheck: false,
+      },
+      findings: [
+        finding({ screenId: 'clusters', whatUserExperiences: 'Clusters barrier.' }),
+        finding({
+          screenId: 'deployments',
+          rule: 'pf-name-me',
+          whatUserExperiences: 'Deployments barrier one.',
+          elementKey: 'deployments|pf-name-me|name:a',
+        }),
+        finding({
+          screenId: 'deployments',
+          rule: 'pf-name-me-2',
+          whatUserExperiences: 'Deployments barrier two.',
+          elementKey: 'deployments|pf-name-me-2|name:b',
+        }),
+        finding({
+          screenId: 'jobs',
+          rule: 'pf-name-me-3',
+          whatUserExperiences: 'Jobs barrier.',
+          elementKey: 'jobs|pf-name-me-3|name:c',
+        }),
+      ],
+    });
+    const page = await mount(projectOverlay(withOtherScreens), { path: '/clusters' });
+    const host = page.locator('#__usabl-overlay');
+    await host.getByRole('button', { name: /Open usabl inspector/i }).click();
+
+    const inspector = host.getByRole('region', { name: 'usabl accessibility inspector' });
+
+    // Current screen shows only the clusters finding.
+    expect(await inspector.getByText('Clusters barrier.').isVisible()).toBe(true);
+    // Other screens' individual findings are not listed anywhere.
+    expect(await inspector.getByText('Deployments barrier one.').count()).toBe(0);
+    expect(await inspector.getByText('Jobs barrier.').count()).toBe(0);
+
+    // The elsewhere guide names each other screen with a count. Scope to the elsewhere section
+    // because the coverage section also lists these screen ids as tokens.
+    const elsewhere = inspector.locator('.elsewhere');
+    expect(await inspector.getByRole('heading', { name: 'On other screens' }).isVisible()).toBe(true);
+    expect(await elsewhere.getByText('deployments', { exact: true }).isVisible()).toBe(true);
+    expect(await elsewhere.getByText('2 findings', { exact: true }).isVisible()).toBe(true);
+    expect(await elsewhere.getByText('jobs', { exact: true }).isVisible()).toBe(true);
+
+    // Each other screen has a real navigating link whose href is that screen's pathname.
+    const deploymentsLink = inspector.getByRole('link', { name: 'Go to this screen' }).first();
+    const hrefs = await inspector
+      .getByRole('link', { name: 'Go to this screen' })
+      .evaluateAll((links) => links.map((link) => (link as HTMLAnchorElement).getAttribute('href')));
+    expect(hrefs).toContain('/deployments');
+    expect(hrefs).toContain('/jobs');
+    expect(await deploymentsLink.isVisible()).toBe(true);
+
+    await page.context().close();
+  });
+
+  it('re-partitions on client-side navigation via pushState and popstate', async () => {
+    const twoScreens = result({
+      coverage: {
+        changedFiles: ['src/app.tsx'],
+        affected: [
+          { screenId: 'clusters', url: 'http://127.0.0.1:5173/clusters', provenance: 'route-graph' },
+          { screenId: 'deployments', url: 'http://127.0.0.1:5173/deployments', provenance: 'route-graph' },
+        ],
+        unresolvedFiles: [],
+        gaps: [],
+        nothingToCheck: false,
+      },
+      findings: [
+        finding({ screenId: 'clusters', whatUserExperiences: 'Clusters barrier.' }),
+        finding({
+          screenId: 'deployments',
+          rule: 'pf-deploy',
+          whatUserExperiences: 'Deployments barrier.',
+          elementKey: 'deployments|pf-deploy|name:d',
+        }),
+      ],
+    });
+    const page = await mount(projectOverlay(twoScreens), { path: '/clusters' });
+    const host = page.locator('#__usabl-overlay');
+    await host.getByRole('button', { name: /Open usabl inspector/i }).click();
+    const inspector = host.getByRole('region', { name: 'usabl accessibility inspector' });
+
+    expect(await inspector.getByText('Clusters barrier.').isVisible()).toBe(true);
+    expect(await inspector.getByText('Deployments barrier.').count()).toBe(0);
+
+    // Simulate a single-page-app route change with pushState. The overlay wraps pushState and must
+    // re-render the split without a reload.
+    await page.evaluate(() => history.pushState({}, '', '/deployments'));
+    await expect
+      .poll(async () => inspector.getByText('Deployments barrier.').count())
+      .toBe(1);
+    expect(await inspector.getByText('Clusters barrier.').count()).toBe(0);
+
+    // The browser back button fires popstate, which the overlay also handles.
+    await page.evaluate(() => history.pushState({}, '', '/clusters'));
+    await page.goBack();
+    await expect
+      .poll(async () => inspector.getByText('Deployments barrier.').count())
+      .toBe(1);
+
+    await page.context().close();
+  });
+
+  it('does not use innerHTML with page text and unwraps the untrusted frame', async () => {
+    // A finding whose page-derived text carries markup and an untrusted-frame marker. The overlay
+    // must render it as text, never as HTML, and must not show the raw frame markers.
+    const hostile = finding({
+      whatUserExperiences: '<img src=x onerror="window.__usablXss=1">markup impact',
+      elementName: '<b>evil</b>',
+    });
+    const page = await mount(projectOverlay(result({ findings: [hostile] })), { path: '/clusters' });
+    const host = page.locator('#__usabl-overlay');
+    await host.getByRole('button', { name: /Open usabl inspector/i }).click();
+
+    // The onerror never fired, so no injected element and no global side effect.
+    const xssRan = await page.evaluate(() => (window as unknown as { __usablXss?: number }).__usablXss);
+    expect(xssRan).toBeUndefined();
+
+    // The literal text is present as text content, and no raw frame markers leak to the user.
+    const shadowText = await host.evaluate((el) => el.shadowRoot?.textContent ?? '');
+    expect(shadowText).toContain('markup impact');
+    expect(shadowText).not.toContain('BEGIN UNTRUSTED PAGE TEXT');
+    expect(shadowText).not.toContain('END UNTRUSTED PAGE TEXT');
 
     await page.context().close();
   });
 
   it('discloses scanning, idle, not covered, approval, and error states', async () => {
-    const scanningPage = await mount(projectOverlay(result()), { width: 1280, height: 900 }, 1000);
+    const scanningPage = await mount(projectOverlay(result()), { responseDelayMs: 1000 });
     expect(
       await scanningPage
         .locator('#__usabl-overlay')
@@ -313,7 +511,10 @@ describe('overlay browser client', { timeout: 15_000 }, () => {
         elementKey: `clusters|rule-${index + 1}|name:control`,
       }),
     );
-    const page = await mount(projectOverlay(result({ findings })), { width: 360, height: 640 });
+    const page = await mount(projectOverlay(result({ findings })), {
+      viewport: { width: 360, height: 640 },
+      path: '/clusters',
+    });
     const host = page.locator('#__usabl-overlay');
 
     await host.getByRole('button', { name: /Open usabl inspector/i }).click();
