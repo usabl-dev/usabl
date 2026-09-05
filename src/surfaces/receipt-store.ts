@@ -23,6 +23,19 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
 }
 
+function isApplicabilitySummary(value: unknown): value is Receipt['applicability'] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry['screenId'] === 'string' &&
+        typeof entry['applied'] === 'number' &&
+        typeof entry['abstained'] === 'number',
+    )
+  );
+}
+
 function isReceipt(value: unknown): value is Receipt {
   if (!isRecord(value)) {
     return false;
@@ -45,6 +58,7 @@ function isReceipt(value: unknown): value is Receipt {
     isRecord(coverage) &&
     isStringArray(coverage['checked']) &&
     isStringArray(coverage['notCovered']) &&
+    isApplicabilitySummary(value['applicability']) &&
     value['verdict'] === 'verified' &&
     isRecord(findingsSummary) &&
     typeof findingsSummary['new'] === 'number' &&

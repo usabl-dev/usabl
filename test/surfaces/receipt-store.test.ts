@@ -67,6 +67,25 @@ describe('receipt-store', () => {
     await expect(loadReceipt(fs)).resolves.toBeNull();
   });
 
+  it('rejects a stored receipt missing the required applicability field', async () => {
+    // applicability is a required Receipt field, so the runtime validator must enforce it too.
+    // An older receipt written before the field existed is stale (its sourceTree will not match
+    // current code anyway), so rejecting it is fail-safe: the hook discloses and re-checks.
+    const fs = new MemoryReceiptFs();
+    const { applicability: _dropped, ...withoutApplicability } = receiptFixture;
+    fs.writeRaw(RECEIPT_PATH, JSON.stringify(withoutApplicability));
+    await expect(loadReceipt(fs)).resolves.toBeNull();
+  });
+
+  it('rejects a stored receipt whose applicability rows are malformed', async () => {
+    const fs = new MemoryReceiptFs();
+    fs.writeRaw(
+      RECEIPT_PATH,
+      JSON.stringify({ ...receiptFixture, applicability: [{ screenId: 'clusters', applied: 'lots' }] }),
+    );
+    await expect(loadReceipt(fs)).resolves.toBeNull();
+  });
+
   it('keeps .usabl state ignored by git', async () => {
     const gitignorePath = new URL('../../.gitignore', import.meta.url);
     const gitignore = await readFile(gitignorePath, 'utf8');
