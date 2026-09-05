@@ -10,9 +10,12 @@ import { matchGlob } from '../../src/primitives/match-glob.js';
 import type { InstallFs } from '../../src/install/index.js';
 import {
   ENGINE_REF_PLACEHOLDER,
+  EXPECTED_ENGINE_REF_LINES,
   USABL_GATE_WORKFLOW,
   USABL_GATE_WORKFLOW_PATH,
+  USABL_DOCS_GATE_WORKFLOW,
   classifyGateWorkflow,
+  countDraftEngineRefLines,
   planCi,
   writeCi,
 } from '../../src/install/ci.js';
@@ -60,6 +63,29 @@ describe('USABL_GATE_WORKFLOW security properties', () => {
     expect(occurrences).toBe(2);
     // A 40-char hex commit-shaped ref would be a fabricated pin. There must be none on a ref line.
     expect(/^\s*ref: [0-9a-f]{40}\s*$/m.test(USABL_GATE_WORKFLOW)).toBe(false);
+  });
+});
+
+describe('engine-ref sentinel coupling (guards classifyWorkflow recognition)', () => {
+  // classifyWorkflow learns which on-disk lines are variable pins by finding the draft lines
+  // whose value is the sentinel. If a draft were ever shipped pre-pinned, or the sentinel
+  // renamed, that predicate would match nothing, and every real workflow (even a correctly
+  // pinned one) would classify as drifted, degrading doctor to always-drifted with no false
+  // wired. These tests pin the invariant, using the same predicate the classifier uses, so a
+  // draft edit that breaks recognition fails here instead of silently rotting the signal.
+  it('the app gate draft carries exactly the expected number of sentinel ref lines', () => {
+    expect(countDraftEngineRefLines(USABL_GATE_WORKFLOW)).toBe(EXPECTED_ENGINE_REF_LINES);
+  });
+
+  it('the docs gate draft carries exactly the expected number of sentinel ref lines', () => {
+    expect(countDraftEngineRefLines(USABL_DOCS_GATE_WORKFLOW)).toBe(EXPECTED_ENGINE_REF_LINES);
+  });
+
+  it('a pre-pinned draft would count zero sentinel ref lines, which is the trap this guards', () => {
+    // Demonstrates the failure mode the guard catches: replace the sentinel with a real SHA
+    // and the recognizer sees no variable pin line at all.
+    const prePinned = USABL_GATE_WORKFLOW.replaceAll(ENGINE_REF_PLACEHOLDER, TRUSTED_SHA);
+    expect(countDraftEngineRefLines(prePinned)).toBe(0);
   });
 });
 

@@ -1011,6 +1011,23 @@ function draftEngineRefIndent(draftLine: string): string | null {
   return match[1] ?? '';
 }
 
+// The number of engine-ref lines a draft is built to carry. classifyWorkflow learns which
+// on-disk lines are variable pins by finding the draft lines whose value is the sentinel, so
+// this count is a load-bearing coupling: if a draft were ever shipped pre-pinned, or the
+// sentinel renamed, draftEngineRefIndent would match nothing, refValues would be empty, and
+// every real workflow (even a correctly pinned one) would classify as drifted, degrading
+// doctor to always-drifted with no false wired. A guard-test asserts each draft still carries
+// exactly this many sentinel ref lines, so a draft edit that breaks the recognizer fails a
+// test rather than silently rotting the signal.
+export const EXPECTED_ENGINE_REF_LINES = 2;
+
+// Count the sentinel engine-ref lines in a draft, using the same predicate classifyWorkflow
+// uses to find them, so the guard-test and the classifier can never disagree about what a
+// pin line is.
+export function countDraftEngineRefLines(draft: string): number {
+  return draft.split('\n').filter((line) => draftEngineRefIndent(line) !== null).length;
+}
+
 // The recognizer is draft-relative: it compares the on-disk file against a specific draft,
 // so the app gate and the docs gate share one implementation and each passes its own draft.
 function classifyWorkflow(raw: string | null, draft: string): GateWorkflowState {
