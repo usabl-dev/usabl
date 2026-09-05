@@ -765,6 +765,11 @@ export const overlayClientSource = `(() => {
         padding-top: 1px;
       }
 
+      .finding-title-wrap {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
       /* Collapsed rows clamp the title to one line. The full string stays in the DOM, so the
          accessible name is never the truncated version, and expanding simply drops the clamp. */
       .finding-title {
@@ -1446,7 +1451,11 @@ export const overlayClientSource = `(() => {
     button.appendChild(dot);
     // The severity WORD sits next to the dot, so severity is never carried by colour alone.
     button.appendChild(make('span', 'severity-word', severityWord(finding.severity)));
-    button.appendChild(make('span', 'finding-title', finding.whatUserExperiences));
+    // The clamped title sits inside a wrapper rather than being a flex child itself, because a flex
+    // item is blockified and the line clamp would never take effect.
+    const titleWrap = make('span', 'finding-title-wrap');
+    titleWrap.appendChild(make('span', 'finding-title', finding.whatUserExperiences));
+    button.appendChild(titleWrap);
 
     const detail = make('div', 'finding-detail');
     detail.id = detailId;
