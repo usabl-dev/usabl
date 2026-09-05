@@ -12,8 +12,15 @@
  */
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser, type Page as PwPage } from 'playwright';
+import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
+
+// Every test and hook here drives a real Chromium instance, so the whole file uses the shared
+// real-process budget, generous enough that machine load cannot decide the outcome. Launching
+// the browser cold under a full suite is exactly the case a per-test idle-machine number would
+// flake on. See test/support/timing.ts.
+vi.setConfig({ testTimeout: REAL_PROCESS_BUDGET_MS, hookTimeout: REAL_PROCESS_BUDGET_MS });
 import type { AxNode, Page, ProviderContext } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
 import { checkPfKebabExpandedState } from '../../src/providers/rulepack/pf-kebab-expanded-state.js';
@@ -226,5 +233,6 @@ describe('PatternFly 6 selectors against rendered PatternFly markup', () => {
     } finally {
       await page.close();
     }
-  }, 30_000);
+    // Budget comes from the file-level vi.setConfig above (shared real-process budget).
+  });
 });

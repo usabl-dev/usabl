@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
+import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -22,7 +23,8 @@ describe('identity stability measurement command', () => {
       code: 1,
       stderr: expect.stringContaining('Set IDENTITY_STABILITY_BASE_URL'),
     });
-  }, 15_000);
+    // Real npm subprocess: shared real-process budget. See test/support/timing.ts.
+  }, REAL_PROCESS_BUDGET_MS);
 
   it('rejects a settle period that is not a whole number of milliseconds, before it opens a browser', async () => {
     const env = { ...process.env };
@@ -42,5 +44,6 @@ describe('identity stability measurement command', () => {
       code: 1,
       stderr: expect.stringContaining('IDENTITY_STABILITY_SETTLE_MS must be a whole number'),
     });
-  }, 15_000);
+    // Real npm subprocess: shared real-process budget. See test/support/timing.ts.
+  }, REAL_PROCESS_BUDGET_MS);
 });
