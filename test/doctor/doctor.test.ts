@@ -13,7 +13,12 @@ import type { InstallFs } from '../../src/install/index.js';
 import type { GhReader, GhResult } from '../../src/install/branch-rule.js';
 import { REQUIRED_CHECK } from '../../src/install/branch-rule.js';
 import { ENGINE_REF_PLACEHOLDER, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
-import { CLAUDE_SKILL_CONTENTS, CLAUDE_SKILL_PATH } from '../../src/install/claude-skill.js';
+import {
+  CLAUDE_SKILL_CONTENTS,
+  CLAUDE_SKILL_PATH,
+  CLAUDE_FIX_SKILL_CONTENTS,
+  CLAUDE_FIX_SKILL_PATH,
+} from '../../src/install/claude-skill.js';
 import {
   buildCursorHooksJson,
   buildCursorRuleContents,
@@ -178,6 +183,7 @@ const FULLY_WIRED_FILES: Record<string, string> = {
   'vite.config.ts': WIRED_OVERLAY,
   '.claude/settings.json': WIRED_CLAUDE,
   [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS,
+  [CLAUDE_FIX_SKILL_PATH]: CLAUDE_FIX_SKILL_CONTENTS,
   [CURSOR_HOOKS_JSON_PATH]: buildCursorHooksJson(null),
   [CURSOR_STOP_SCRIPT_PATH]: CURSOR_STOP_SCRIPT,
   [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
@@ -495,7 +501,25 @@ export default defineConfig({
     expect(overlay).toBe('drifted');
   });
 
-  it('reports the canonical usabl-check skill file as wired', async () => {
+  it('reports both canonical skill files as wired', async () => {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+      fs: readOnlyFs({
+        [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS,
+        [CLAUDE_FIX_SKILL_PATH]: CLAUDE_FIX_SKILL_CONTENTS,
+      }),
+      gh: GH_UNAVAILABLE,
+      configPath: 'usabl.config.json',
+      }),
+    );
+    expect(stateOf(reports, 'claude-skill:usabl-check')).toBe('wired');
+    expect(stateOf(reports, 'claude-skill:usabl-fix')).toBe('wired');
+  });
+
+  it('reports a missing usabl-fix skill even when usabl-check is wired', async () => {
+    // The gap this closes: doctor used to report only usabl-check, so a repo whose usabl-fix
+    // skill was absent passed with no signal. usabl-fix is the one that edits source, so its
+    // silent absence is the one that matters.
     const reports = await collectDoctorReport(
       doctorDeps({
       fs: readOnlyFs({ [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS }),
@@ -503,7 +527,9 @@ export default defineConfig({
       configPath: 'usabl.config.json',
       }),
     );
-    expect(stateOf(reports, 'claude-skill')).toBe('wired');
+    expect(stateOf(reports, 'claude-skill:usabl-check')).toBe('wired');
+    expect(stateOf(reports, 'claude-skill:usabl-fix')).toBe('missing');
+    expect(byId(reports, 'claude-skill:usabl-fix').nextStep).toContain('--claude-skill');
   });
 
   it('reports a missing usabl-check skill file as missing and names the install step', async () => {
@@ -514,22 +540,25 @@ export default defineConfig({
       configPath: 'usabl.config.json',
       }),
     );
-    expect(stateOf(reports, 'claude-skill')).toBe('missing');
-    expect(byId(reports, 'claude-skill').nextStep).toContain('--claude-skill');
+    expect(stateOf(reports, 'claude-skill:usabl-check')).toBe('missing');
+    expect(byId(reports, 'claude-skill:usabl-check').nextStep).toContain('--claude-skill');
   });
 
-  it('reports a differing usabl-check skill file as drifted, never wired', async () => {
+  it('reports a differing usabl-fix skill file as drifted, never wired', async () => {
     // The path is usabl-owned, but a file that differs from the canonical skill (an operator
     // edit or an older engine version) cannot be confirmed as the current skill. It is drift,
     // not a confident absence and never a false wired.
     const reports = await collectDoctorReport(
       doctorDeps({
-      fs: readOnlyFs({ [CLAUDE_SKILL_PATH]: '---\nname: usabl-check\n---\n\nOld version.\n' }),
+      fs: readOnlyFs({
+        [CLAUDE_SKILL_PATH]: CLAUDE_SKILL_CONTENTS,
+        [CLAUDE_FIX_SKILL_PATH]: '---\nname: usabl-fix\n---\n\nOld version.\n',
+      }),
       gh: GH_UNAVAILABLE,
       configPath: 'usabl.config.json',
       }),
     );
-    expect(stateOf(reports, 'claude-skill')).toBe('drifted');
+    expect(stateOf(reports, 'claude-skill:usabl-fix')).toBe('drifted');
   });
 
   it('reports the canonical Cursor files as wired', async () => {
@@ -731,6 +760,11 @@ export default defineConfig({
     const step = byId(reports, 'ci').nextStep;
     expect(step).toContain('40-character');
     expect(step).toContain(ENGINE_REF_PLACEHOLDER);
+    // The next step must not imply "usabl install --ci" reprints the pin instructions. On an
+    // existing unpinned draft that command hits its already-wired path and prints "No change".
+    // So the step names the file edit, not a command that would not do what it implies.
+    expect(step).not.toContain('install --ci');
+    expect(step).toContain('.github/workflows/usabl-gate.yml');
   });
 
   it('reports a pinned workflow with a structural edit outside the engine ref as drifted', async () => {
