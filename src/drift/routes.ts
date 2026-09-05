@@ -64,6 +64,9 @@ export function formatDriftReport(drift: RoutesDrift): string {
     for (const url of drift.added) {
       lines.push(`  ${neutralize(url)}`);
     }
+    lines.push(
+      `\nNote: object properties named "path" that are not routes (for example an HTTP client or build config sharing the key) can appear as false additions. Verify before acting.`,
+    );
   }
 
   if (drift.removed.length > 0) {
