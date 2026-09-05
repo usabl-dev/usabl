@@ -22,7 +22,7 @@ import {
   type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
-import { frameUntrusted, scrubResult } from './scrub.js';
+import { frameUntrustedBlock, scrubResult } from './scrub.js';
 
 const COMMENT_MARKER = '<!-- usabl-report -->';
 const STOP_CAP = 20;
@@ -84,30 +84,47 @@ function renderConformance(result: Result): string[] {
   return lines;
 }
 
-// The source location for a docs finding: file plus the author's construct when known, file plus
-// the exact line when the renderer supplied one, else the file alone. Neutralized by the caller.
-function renderSource(source: DocsSourceMapping | undefined, appSource: AppSourceMapping | undefined): string[] {
+// The source location and candidates as plain pieces for the untrusted frame. An app finding's
+// source file can be read from a renderer-injected DOM attribute, so it is page-influenced and
+// belongs inside the frame with the rest of the dynamic finding text. frameUntrustedBlock scrubs
+// each piece, so these are passed raw rather than pre-neutralized.
+function sourcePieces(
+  source: DocsSourceMapping | undefined,
+  appSource: AppSourceMapping | undefined,
+): string[] {
   if (source !== undefined && source.file !== null) {
-    const lines = [`  - source: \`${neutralize(formatDocsSourceLocation(source))}\``];
+    const pieces = [`source: ${formatDocsSourceLocation(source)}`];
     if (source.candidates.length > 1) {
-      const listed = source.candidates.map((candidate) => `\`${neutralize(candidate)}\``).join(', ');
-      lines.push(`  - candidates: ${listed}`);
+      pieces.push(`candidates: ${source.candidates.join(', ')}`);
     }
-    return lines;
+    return pieces;
   }
   if (appSource !== undefined && appSource.file !== null) {
-    const lines = [`  - source: \`${neutralize(formatAppSourceLocation(appSource))}\``];
+    const pieces = [`source: ${formatAppSourceLocation(appSource)}`];
     if (appSource.candidates.length > 1) {
-      const listed = appSource.candidates.map((candidate) => `\`${neutralize(candidate)}\``).join(', ');
-      lines.push(`  - candidates: ${listed}`);
+      pieces.push(`candidates: ${appSource.candidates.join(', ')}`);
     }
-    return lines;
+    return pieces;
   }
   if (appSource !== undefined && appSource.candidates.length > 0) {
-    const listed = appSource.candidates.map((candidate) => `\`${neutralize(candidate)}\``).join(', ');
-    return [`  - candidates: ${listed}`];
+    return [`candidates: ${appSource.candidates.join(', ')}`];
   }
   return [];
+}
+
+// One frame around every dynamic finding field. whatUserExperiences, why, the fix, and the source
+// location can each carry page-derived or scanner-derived text: an axe rule with no curated note
+// falls back to node.failureSummary for both why and fix, and an app source can be read from a
+// renderer-injected DOM attribute. This comment is read by a model, so all of it is sealed as
+// untrusted in one frame, and only the engine-authored header (severity, screen id, layer, rule)
+// stays outside. That matches how the stop hook already frames its block.
+function findingPieces(finding: Finding): string[] {
+  return [
+    finding.whatUserExperiences,
+    `why: ${finding.why}`,
+    ...sourcePieces(finding.docsSource, finding.appSource),
+    `fix: ${fixOrAbsence(finding)}`,
+  ];
 }
 
 function formatFinding(finding: Finding): string[] {
@@ -115,20 +132,10 @@ function formatFinding(finding: Finding): string[] {
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
-  // Docs findings speak the author's markup: a source line and a syntax-aware fix. App findings
-  // have no docsSource and fall back to finding.fix.
-  const source = finding.docsSource;
-  // Most axe rules carry no curated note, so an absent fix is a real and common state. It is
-  // stated rather than left blank, because a blank reads as a rendering fault.
-  const fix = neutralize(fixOrAbsence(finding));
-  const why = neutralize(finding.why);
-  const framed = frameUntrusted(finding.whatUserExperiences).split('\n');
+  const framed = frameUntrustedBlock(findingPieces(finding)).split('\n');
   return [
     `- [${severity}] \`${screenId}\` - \`${layer}/${rule}\``,
     ...framed.map((line) => `  ${line}`),
-    `  - why: ${why}`,
-    ...renderSource(source, finding.appSource),
-    `  - fix: ${fix}`,
   ];
 }
 
@@ -146,17 +153,11 @@ function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
-  const source = finding.docsSource;
-  const fix = neutralize(fixOrAbsence(finding));
-  const why = neutralize(finding.why);
-  const framed = frameUntrusted(finding.whatUserExperiences).split('\n');
+  const framed = frameUntrustedBlock(findingPieces(finding)).split('\n');
   return [
     `- ${headline}`,
     `  - rule: \`${screenId}\` - \`${layer}/${rule}\` · ${severity}`,
     ...framed.map((line) => `  ${line}`),
-    `  - why: ${why}`,
-    ...renderSource(source, finding.appSource),
-    `  - fix: ${fix}`,
   ];
 }
 
@@ -182,22 +183,28 @@ function renderCoverageGaps(result: Result): string[] {
   }
   return [
     '### Coverage gaps',
-    ...result.coverage.gaps.map(
-      (gap) =>
-        `- \`${neutralize(gap.ref)}\` (${neutralize(gap.state)}): ${neutralize(gap.reason)}`,
-    ),
+    ...result.coverage.gaps.flatMap((gap) => {
+      // A gap ref can be a page URL, and a reason can carry a browser or provider exception, both
+      // page- or tool-derived, so they are sealed as untrusted for the model reading this comment.
+      // The state is an engine enum and stays as the plain label.
+      const framed = frameUntrustedBlock([`ref: ${gap.ref}`, `reason: ${gap.reason}`]).split('\n');
+      return [`- (${neutralize(gap.state)})`, ...framed.map((line) => `  ${line}`)];
+    }),
   ];
 }
 
-function formatStop(stop: TranscriptStop): string {
+// The announcement text for one stop, page-derived: tokens come from the accessibility tree and
+// live regions, and the element-path fallback is a DOM selector. Returned raw; the caller frames
+// it, and frameUntrustedBlock scrubs it, so it is not pre-neutralized here.
+function stopAnnouncementText(stop: TranscriptStop): string {
   const nonLiveTokens = stop.announcement
     .filter((token) => token.kind !== 'live' && token.text !== null)
-    .map((token) => neutralize(token.text ?? ''));
+    .map((token) => token.text ?? '');
   const liveTokens = stop.announcement
     .filter((token) => token.kind === 'live' && token.text !== null)
-    .map((token) => `[announced] ${neutralize(token.text ?? '')}`);
+    .map((token) => `[announced] ${token.text ?? ''}`);
   const pieces = [...nonLiveTokens, ...liveTokens].filter((token) => token.length > 0);
-  return pieces.length > 0 ? pieces.join(', ') : neutralize(stop.elementPath);
+  return pieces.length > 0 ? pieces.join(', ') : stop.elementPath;
 }
 
 function renderAnnouncements(result: Result): string[] {
@@ -213,7 +220,8 @@ function renderAnnouncements(result: Result): string[] {
     lines.push(`#### \`${neutralize(screen.screenId)}\``);
     const capped = screen.stops.slice(0, STOP_CAP);
     for (const stop of capped) {
-      lines.push(`${stop.index + 1}. ${formatStop(stop)}`);
+      const framed = frameUntrustedBlock([stopAnnouncementText(stop)]).split('\n');
+      lines.push(`${stop.index + 1}.`, ...framed.map((line) => `  ${line}`));
     }
     if (screen.stops.length > STOP_CAP) {
       lines.push(`- showing first ${STOP_CAP} of ${screen.stops.length} stops`);
