@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
+import { REAL_PROCESS_BUDGET_MS } from '../support/timing.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -20,5 +21,7 @@ describe('Fleet Insights measurement command', () => {
       code: 1,
       stderr: expect.stringContaining('Set FLEET_INSIGHTS_STORAGE_STATE'),
     });
-  }, 15_000);
+    // Spawns a real npm subprocess, so it uses the shared real-process budget: generous
+    // enough that a busy machine cannot decide the outcome. See test/support/timing.ts.
+  }, REAL_PROCESS_BUDGET_MS);
 });
