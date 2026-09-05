@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>usabl: the whole product</title>
+<style>
+  html,body{margin:0;background:#efece3;font-family:"Red Hat Text",Overpass,Inter,"Segoe UI",Arial,sans-serif}
+  .wrap{max-width:1300px;margin:0 auto;padding:24px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<svg viewBox="0 0 1300 720" width="100%" role="img"
+  aria-label="usabl product map. Left: evidence providers (axe, PatternFly rulepack, keyboard walk, voicing) plus targeting and coverage. Center: the gate produces one of four verdicts, weighed against the evidence floor and waivers, and mints a receipt on verified runs. Right: display-only surfaces. Bottom: the rules guard themselves.">
+  <defs>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#101827" flood-opacity="0.14"/>
+    </filter>
+    <marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8793a5"/>
+    </marker>
+    <style>
+      .col{font-weight:800;letter-spacing:1.6px;font-size:15px;fill:#48546a}
+      .colsub{font-size:12px;fill:#8a94a6}
+      .ct{font-weight:800;font-size:15px;fill:#1a2233}
+      .cs{font-size:12.5px;fill:#6b7280}
+      .lab{font-size:12.5px;font-style:italic;fill:#6b7280}
+      .flow{stroke:#8793a5;stroke-width:2;fill:none}
+      .chip{font-weight:800;font-size:12.5px;fill:#fff}
+      .surf{font-size:14.5px;fill:#26303e}
+      .surfnote{font-size:12.5px;fill:#7c8698}
+    </style>
+  </defs>
+
+  <!-- frame -->
+  <rect x="14" y="14" width="1272" height="692" rx="20" fill="#ffffff" stroke="#e4dfd2" stroke-width="1.5"/>
+
+  <!-- column headers -->
+  <text class="col" x="185" y="58" text-anchor="middle">COLLECT EVIDENCE</text>
+  <text class="colsub" x="185" y="78" text-anchor="middle">providers, on the real rendered page</text>
+  <text class="col" x="645" y="58" text-anchor="middle">DECIDE ONCE</text>
+  <text class="colsub" x="645" y="78" text-anchor="middle">the gate is the only authority</text>
+  <text class="col" x="1085" y="58" text-anchor="middle">SHOW THE VERDICT</text>
+  <text class="colsub" x="1085" y="78" text-anchor="middle">display only, never decide</text>
+
+  <!-- provider cards -->
+  <g filter="url(#sh)">
+    <rect x="48" y="98"  width="260" height="56" rx="9" fill="#fff" stroke="#dcd6c9"/>
+    <rect x="48" y="164" width="260" height="56" rx="9" fill="#fff" stroke="#dcd6c9"/>
+    <rect x="48" y="230" width="260" height="56" rx="9" fill="#fff" stroke="#dcd6c9"/>
+    <rect x="48" y="296" width="260" height="56" rx="9" fill="#fff" stroke="#dcd6c9"/>
+  </g>
+  <text class="ct" x="66" y="124">axe scanner</text>
+  <text class="cs" x="66" y="142">general WCAG checks</text>
+  <text class="ct" x="66" y="190">PatternFly rulepack</text>
+  <text class="cs" x="66" y="208">design system, dialog and menu probes</text>
+  <text class="ct" x="66" y="256">keyboard walk</text>
+  <text class="cs" x="66" y="274">real tab order and accessible names</text>
+  <text class="ct" x="66" y="322">voicing <tspan fill="#7452b8" font-size="11.5">advisory</tspan></text>
+  <text class="cs" x="66" y="340">what a screen reader announces</text>
+
+  <!-- targeting / coverage band -->
+  <rect x="48" y="372" width="260" height="84" rx="9" fill="#eef1f6" stroke="#d9dfe8"/>
+  <text x="66" y="396" font-weight="800" font-size="12.5" fill="#3d4a5e">TARGETING &amp; COVERAGE</text>
+  <text class="cs" x="66" y="416">changed files, import graph, only the</text>
+  <text class="cs" x="66" y="432">screens they touch. Waits for the real</text>
+  <text class="cs" x="66" y="448">render. Discloses screens it could not see.</text>
+
+  <!-- flows providers -> gate -->
+  <path class="flow" marker-end="url(#arw)" d="M308,126 C400,150 420,190 494,204"/>
+  <path class="flow" marker-end="url(#arw)" d="M308,192 C400,198 430,200 494,208"/>
+  <path class="flow" marker-end="url(#arw)" d="M308,258 C400,240 430,220 494,214"/>
+  <path class="flow" marker-end="url(#arw)" d="M308,324 C410,290 440,230 494,220"/>
+  <text class="lab" x="360" y="168">drafts + coverage gaps</text>
+
+  <!-- the gate -->
+  <g filter="url(#sh)">
+    <rect x="496" y="150" width="298" height="96" rx="13" fill="#2457e6"/>
+  </g>
+  <text x="645" y="192" text-anchor="middle" font-weight="800" font-size="24" fill="#fff">The gate</text>
+  <text x="645" y="220" text-anchor="middle" font-size="13.5" fill="#dbe4ff">one verdict &#183; one exit code</text>
+
+  <!-- gate reasoning caption -->
+  <text class="lab" x="645" y="270" text-anchor="middle">weighs new barriers against the accepted floor;</text>
+  <text class="lab" x="645" y="287" text-anchor="middle">a change cannot rewrite the policy it is judged by</text>
+
+  <!-- verdict chips -->
+  <g>
+    <rect x="470" y="304" width="120" height="30" rx="15" fill="#177a4a"/>
+    <text class="chip" x="530" y="324" text-anchor="middle">verified</text>
+    <rect x="598" y="304" width="120" height="30" rx="15" fill="#c9363e"/>
+    <text class="chip" x="658" y="324" text-anchor="middle">regression</text>
+    <rect x="470" y="342" width="120" height="30" rx="15" fill="#a95f00"/>
+    <text class="chip" x="530" y="362" text-anchor="middle">not covered</text>
+    <rect x="598" y="342" width="120" height="30" rx="15" fill="#7452b8"/>
+    <text class="chip" x="658" y="362" text-anchor="middle" font-size="11.5">approval required</text>
+  </g>
+
+  <!-- floor + waivers note (right of chips) -->
+  <rect x="730" y="304" width="150" height="68" rx="9" fill="#f3f1ea" stroke="#e0dccf"/>
+  <text x="742" y="323" font-weight="800" font-size="11.5" fill="#3d4a5e">ADOPT SAFELY</text>
+  <text class="cs" x="742" y="340" font-size="11.5">evidence floor (baseline),</text>
+  <text class="cs" x="742" y="355" font-size="11.5">only new barriers block,</text>
+  <text class="cs" x="742" y="370" font-size="11.5">waivers with owner + expiry</text>
+
+  <!-- receipt -->
+  <path class="flow" marker-end="url(#arw)" d="M645,374 L645,398"/>
+  <g filter="url(#sh)">
+    <rect x="520" y="400" width="250" height="60" rx="11" fill="#177a4a"/>
+  </g>
+  <text x="645" y="426" text-anchor="middle" font-weight="800" font-size="15" fill="#fff">receipt</text>
+  <text x="645" y="446" text-anchor="middle" font-size="12" fill="#dcefe4">verified runs only, re-checkable</text>
+  <text class="cs" x="645" y="480" text-anchor="middle">records the exact code, policy, engine, scanner and browser</text>
+
+  <!-- flow gate -> surfaces -->
+  <path class="flow" marker-end="url(#arw)" d="M794,198 L868,198"/>
+  <text class="lab" x="831" y="188" text-anchor="middle">verdict</text>
+
+  <!-- surfaces panel -->
+  <rect x="870" y="98" width="368" height="358" rx="13" fill="#f2f4f8" stroke="#dfe4ec"/>
+  <text x="892" y="130" font-weight="800" font-size="16" fill="#1a2233">Surfaces</text>
+  <text x="972" y="130" font-size="12.5" fill="#8a94a6">display only</text>
+  <g>
+    <circle cx="898" cy="166" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="171">command line <tspan class="surfnote">— usabl check</tspan></text>
+    <circle cx="898" cy="204" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="209">AI stop hook <tspan class="surfnote">— blocks "done"</tspan></text>
+    <circle cx="898" cy="242" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="247">browser overlay <tspan class="surfnote">— on the live app</tspan></text>
+    <circle cx="898" cy="280" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="285">pull request comment <tspan class="surfnote">— sticky</tspan></text>
+    <circle cx="898" cy="318" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="323">CI required check <tspan class="surfnote">— blocks merge</tspan></text>
+    <circle cx="898" cy="356" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="361">documentation page <tspan class="surfnote">— same engine</tspan></text>
+    <circle cx="898" cy="394" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="399">Playwright suite <tspan class="surfnote">— your existing tests</tspan></text>
+  </g>
+  <text x="892" y="436" font-size="12.5" fill="#7c8698">Every surface shows the same gate-owned verdict.</text>
+
+  <!-- trust band -->
+  <rect x="48" y="502" width="1190" height="96" rx="12" fill="#101827"/>
+  <rect x="48" y="502" width="6" height="96" rx="3" fill="#2457e6"/>
+  <text x="78" y="534" font-weight="800" font-size="13" letter-spacing="1.4" fill="#8fb0ff">THE RULES GUARD THEMSELVES</text>
+  <text x="78" y="560" font-size="13.5" fill="#d7dde8">Policy is read from the protected branch, so a change cannot grade itself. Guarded paths need a CODEOWNERS sign-off before they change.</text>
+  <text x="78" y="582" font-size="13.5" fill="#d7dde8">One required check sees both the accessibility verdict and the policy verdict. Anything usabl cannot check is reported, never passed in silence.</text>
+
+  <!-- wordmark -->
+  <text x="1214" y="636" text-anchor="end" font-weight="800" font-size="15" fill="#101827" letter-spacing="-0.5">usabl</text>
+  <text x="1214" y="654" text-anchor="end" font-size="11.5" fill="#8a94a6">accessibility proof engine</text>
+</svg>
+</div>
+</body>
+</html>
