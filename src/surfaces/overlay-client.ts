@@ -9,20 +9,70 @@ export const overlayClientSource = `(() => {
   const RESULT_ENDPOINT = '/__usabl/result';
   const HOST_ID = '__usabl-overlay';
   const PANEL_ID = '__usabl-inspector-panel';
+  const TITLE_ID = '__usabl-inspector-title';
+  const HIGHLIGHT_ID = '__usabl-highlight';
+  const OPEN_STORAGE_KEY = 'usabl.overlay.open';
+  const WIDE_STORAGE_KEY = 'usabl.overlay.wide';
+  const COMPACT_WIDTH = 'min(420px, calc(100vw - 24px))';
+  const WIDE_WIDTH = 'min(640px, calc(100vw - 24px))';
   // Interpolated from the one definition in scrub.ts. This client unwraps a framed value by
   // matching these exact strings, so a second copy here would stop unwrapping the moment the
   // marker wording changed, and would show a user raw markers instead of the page text.
   const UNTRUSTED_START = ${JSON.stringify(UNTRUSTED_FRAME_START)};
   const UNTRUSTED_END = ${JSON.stringify(UNTRUSTED_FRAME_END)};
 
+  // Severity decides the order of the list and the word on every row. The word is what carries the
+  // meaning; the coloured dot beside it is decoration and is hidden from assistive technology.
+  const SEVERITY_RANK = { critical: 0, serious: 1, moderate: 2, minor: 3 };
+  const SEVERITY_WORD = { critical: 'Critical', serious: 'Serious', moderate: 'Moderate', minor: 'Minor' };
+  const UNRATED_RANK = 4;
+
+  const MISSING_ELEMENT_TEXT =
+    'This was flagged here at the last scan; it is not on the page right now.';
+
   const state = {
-    expanded: false,
+    open: false,
+    wide: false,
     payload: null,
     error: false,
     scanning: false,
+    split: null,
+    // Exactly one row may be expanded, and the highlight on the page belongs to that row. Both are
+    // held here so the two can never drift apart.
+    expandedKey: null,
+    highlightKey: null,
     highlightCleanup: null,
+    rows: [],
+    liveStatus: null,
     navHooked: false,
   };
+
+  // Persisted preferences are a convenience. A browser with storage disabled, a private window that
+  // throws on write, or a sandboxed frame with no localStorage at all must still get a working
+  // overlay, so every read falls back to the default and every write is allowed to fail.
+  function storedValue(key) {
+    try {
+      const store = window.localStorage;
+      if (!store) {
+        return null;
+      }
+      return store.getItem(key);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function storeValue(key, value) {
+    try {
+      const store = window.localStorage;
+      if (!store) {
+        return;
+      }
+      store.setItem(key, value);
+    } catch (_error) {
+      // Ignored on purpose. Losing a preference is acceptable; losing the overlay is not.
+    }
+  }
 
   function displayText(value) {
     if (typeof value !== 'string') {
@@ -32,6 +82,24 @@ export const overlayClientSource = `(() => {
       return value.slice(UNTRUSTED_START.length, -UNTRUSTED_END.length).trim();
     }
     return value;
+  }
+
+  // Object.hasOwn, not a bare index, so an unexpected severity string can never read an inherited
+  // prototype member and turn into a function where a number or a word is expected.
+  function severityRank(value) {
+    return Object.hasOwn(SEVERITY_RANK, value) ? SEVERITY_RANK[value] : UNRATED_RANK;
+  }
+
+  function severityWord(value) {
+    return Object.hasOwn(SEVERITY_WORD, value) ? SEVERITY_WORD[value] : 'Unrated';
+  }
+
+  function severityKey(value) {
+    return Object.hasOwn(SEVERITY_RANK, value) ? value : 'unrated';
+  }
+
+  function countLabel(count, noun) {
+    return count + ' ' + (count === 1 ? noun : noun + 's');
   }
 
   // Compare a scan-time url to the live pathname on PATHNAME only.
@@ -70,13 +138,14 @@ export const overlayClientSource = `(() => {
   //
   // The overlay is screen-aware: it guides the developer one screen at a time. It matches the live
   // pathname to a scanned screen through coverage.affected, then partitions findings by screenId.
-  // "here" is a flat list of this screen's findings, each individually locatable. "elsewhere" is a
-  // per-screen count plus a path to navigate to, and never the other screens' individual findings.
+  // "here" is a flat list of this screen's findings sorted worst first, each individually locatable.
+  // "elsewhere" is a per-screen count plus a path to navigate to, and never the other screens'
+  // individual findings.
   function partitionByScreen(payload, currentPath) {
     const affected = (payload && payload.coverage && Array.isArray(payload.coverage.affected))
       ? payload.coverage.affected
       : [];
-    const findings = Array.isArray(payload.findings) ? payload.findings : [];
+    const findings = (payload && Array.isArray(payload.findings)) ? payload.findings : [];
     const normalizedCurrent = normalizePath(currentPath);
 
     // Map each affected screenId to its normalized pathname, and find which one is current.
@@ -100,24 +169,86 @@ export const overlayClientSource = `(() => {
     for (const finding of findings) {
       if (currentScreenId !== null && finding.screenId === currentScreenId) {
         here.push(finding);
-      } else {
-        const entry = elsewhereCounts.get(finding.screenId) || { screenId: finding.screenId, count: 0 };
-        entry.count += 1;
-        elsewhereCounts.set(finding.screenId, entry);
+        continue;
       }
+      const entry = elsewhereCounts.get(finding.screenId)
+        || { screenId: finding.screenId, count: 0, worstRank: UNRATED_RANK, worstSeverity: 'unrated' };
+      entry.count += 1;
+      const rank = severityRank(finding.severity);
+      if (rank < entry.worstRank) {
+        entry.worstRank = rank;
+        entry.worstSeverity = severityKey(finding.severity);
+      }
+      elsewhereCounts.set(finding.screenId, entry);
     }
 
+    // Worst first, so the row a developer should read first is the row they see first. Array sort is
+    // stable, so findings of equal severity keep the order the engine gave them.
+    here.sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
+
     const elsewhere = [];
+    let elsewhereTotal = 0;
     for (const entry of elsewhereCounts.values()) {
       // Prefer the scan-time pathname for this screen when we have one, so the navigating link is a
       // real route. When a finding names a screen that is not in coverage.affected, we have no path
       // and omit the link rather than guess a route that may not exist.
       const path = screenPath.get(entry.screenId) || null;
-      elsewhere.push({ screenId: entry.screenId, count: entry.count, path });
+      elsewhereTotal += entry.count;
+      elsewhere.push({
+        screenId: entry.screenId,
+        count: entry.count,
+        worstRank: entry.worstRank,
+        worstSeverity: entry.worstSeverity,
+        path,
+      });
     }
-    elsewhere.sort((a, b) => a.screenId.localeCompare(b.screenId));
+    elsewhere.sort(
+      (a, b) => a.worstRank - b.worstRank || b.count - a.count || a.screenId.localeCompare(b.screenId),
+    );
 
-    return { matched: currentScreenId !== null, currentScreenId, here, elsewhere };
+    return {
+      matched: currentScreenId !== null,
+      currentScreenId,
+      currentPath: normalizedCurrent,
+      here,
+      elsewhere,
+      elsewhereTotal,
+    };
+  }
+
+  function emptySplit(currentPath) {
+    return {
+      matched: false,
+      currentScreenId: null,
+      currentPath: normalizePath(currentPath),
+      here: [],
+      elsewhere: [],
+      elsewhereTotal: 0,
+    };
+  }
+
+  // A stable identity for a row across re-renders. Two findings that share every part of this key
+  // are told apart by an occurrence suffix, so no two rows ever collide and a surviving row keeps
+  // its key when a different finding is fixed and disappears.
+  function rowKeyFor(finding) {
+    return JSON.stringify([
+      displayText(finding.elementKey) || '',
+      String(finding.rule || ''),
+      displayText(finding.elementPath) || '',
+      String(finding.severity || ''),
+    ]);
+  }
+
+  function keyedFindings(findings) {
+    const seen = new Map();
+    const rows = [];
+    for (const finding of findings) {
+      const base = rowKeyFor(finding);
+      const seenCount = seen.get(base) || 0;
+      seen.set(base, seenCount + 1);
+      rows.push({ finding, key: seenCount === 0 ? base : base + '#' + seenCount });
+    }
+    return rows;
   }
 
   function make(tag, className, text) {
@@ -131,37 +262,94 @@ export const overlayClientSource = `(() => {
     return element;
   }
 
-  function statusFor(payload, error, scanning) {
-    if (scanning) return { key: 'scanning', label: 'Scanning', symbol: '…' };
-    if (error) return { key: 'error', label: 'NOT verified', symbol: '!' };
-    if (payload.verdict === 'verified') return { key: 'verified', label: 'Verified', symbol: '✓' };
-    if (payload.verdict === 'regression') return { key: 'regression', label: 'Regression', symbol: '×' };
-    if (payload.verdict === 'not_covered') return { key: 'not-covered', label: 'Not covered', symbol: '?' };
-    if (payload.verdict === 'approval_required') return { key: 'approval', label: 'Approval required', symbol: '!' };
-    return { key: 'idle', label: 'Idle', symbol: '○' };
+  // The verdict word is the meaning. The symbol repeats it for scanning speed and the colour is
+  // third, so nothing here depends on a reader telling red from green.
+  function verdictFor(payload, error, scanning) {
+    if (scanning) return { key: 'scanning', word: 'Scanning', symbol: '…' };
+    if (error) return { key: 'error', word: 'Not verified', symbol: '!' };
+    const verdict = payload ? payload.verdict : null;
+    if (verdict === 'verified') return { key: 'verified', word: 'Verified', symbol: '✓' };
+    if (verdict === 'regression') return { key: 'regression', word: 'Regression', symbol: '✕' };
+    if (verdict === 'not_covered') return { key: 'not-covered', word: 'Not covered', symbol: '?' };
+    if (verdict === 'approval_required') return { key: 'approval', word: 'Approval required', symbol: '!' };
+    return { key: 'idle', word: 'Nothing to check', symbol: '○' };
   }
 
-  function ensureInspector() {
-    let host = document.getElementById(HOST_ID);
-    if (host) {
-      return host;
+  // One plain line under the verdict that says what this state means for the screen in front of the
+  // developer. Every branch either states a fact or states plainly that usabl does not know.
+  function explanationFor(payload, error, scanning, split) {
+    if (scanning) {
+      return 'usabl is scanning the screens your change affects.';
     }
+    if (error) {
+      return 'usabl could not load a result, so it can say nothing about this screen. Check the dev server log.';
+    }
+    if (!payload || !payload.loaded) {
+      return 'usabl has not loaded a result yet.';
+    }
+    const verdict = payload.verdict;
+    if (verdict === 'not_covered') {
+      return 'usabl could not check the affected screens, so nothing here is proven.';
+    }
+    if (verdict === 'approval_required') {
+      return 'A guarded file changed. A person has to approve that change before the gate can pass.';
+    }
+    if (!split.matched) {
+      return 'This screen was not part of the last scan, so usabl has nothing to report on it.';
+    }
+    if (verdict === 'verified') {
+      return payload && payload.receipt
+        ? 'No findings on any screen usabl checked. The receipt below records what that covered.'
+        : 'No findings on any screen usabl checked.';
+    }
+    if (split.here.length === 0) {
+      return split.elsewhereTotal > 0
+        ? 'No findings on this screen. Other screens still have findings.'
+        : 'No findings on this screen.';
+    }
+    return 'usabl found ' + countLabel(split.here.length, 'accessibility barrier') + ' on this screen.';
+  }
 
-    host = document.createElement('aside');
-    host.id = HOST_ID;
-    host.setAttribute('aria-label', 'usabl development tools');
-    host.style.setProperty('all', 'initial', 'important');
-    host.style.setProperty('position', 'fixed', 'important');
-    host.style.setProperty('right', '12px', 'important');
-    host.style.setProperty('bottom', '12px', 'important');
-    host.style.setProperty('width', 'min(430px, calc(100vw - 24px))', 'important');
-    host.style.setProperty('max-height', 'calc(100vh - 24px)', 'important');
-    host.style.setProperty('display', 'block', 'important');
-    host.style.setProperty('z-index', '2147483647', 'important');
+  // What the collapsed badge says. The count is this screen's count, because that is the number the
+  // developer can act on from where they are standing.
+  function badgeView(payload, error, scanning, split) {
+    const verdict = verdictFor(payload, error, scanning);
+    if (scanning) {
+      return { key: 'scanning', symbol: '…', count: null, label: 'usabl: scanning. Open inspector.' };
+    }
+    if (error) {
+      return { key: 'error', symbol: '!', count: null, label: 'usabl: could not load a result. Open inspector.' };
+    }
+    if (!payload || !payload.loaded) {
+      return { key: 'idle', symbol: '○', count: null, label: 'usabl: no result yet. Open inspector.' };
+    }
+    if (!split.matched) {
+      return {
+        key: 'unscanned',
+        symbol: '?',
+        count: null,
+        label: 'usabl: this screen was not scanned. Open inspector.',
+      };
+    }
+    if (split.here.length === 0) {
+      return {
+        key: 'clear',
+        symbol: '✓',
+        count: null,
+        label: 'usabl: no issues on this screen. Open inspector.',
+      };
+    }
+    return {
+      key: verdict.key,
+      symbol: '✕',
+      count: split.here.length,
+      label:
+        'usabl: ' + verdict.word.toLowerCase() + ', ' + countLabel(split.here.length, 'issue')
+        + ' on this screen. Open inspector.',
+    };
+  }
 
-    const shadow = host.attachShadow({ mode: 'open' });
-    const style = document.createElement('style');
-    style.textContent = \`
+  const OVERLAY_STYLE = \`
       :host {
         color-scheme: light;
         --ink: #101827;
@@ -170,16 +358,24 @@ export const overlayClientSource = `(() => {
         --white: #ffffff;
         --cobalt: #2457e6;
         --cobalt-light: #dfe7ff;
+        --cobalt-ink: #173d9f;
         --green: #177a4a;
         --green-light: #e6f4ed;
+        --green-ink: #0f5a36;
         --red: #c9363e;
         --red-light: #fbeaec;
+        --red-ink: #9f252d;
         --amber: #a95f00;
         --amber-light: #fff1d7;
-        --violet: #7452b8;
+        --amber-ink: #754200;
         --violet-light: #f0eafa;
+        --violet-ink: #54388c;
         --slate: #596579;
+        --graphite: #344054;
         --rule: #cbd2de;
+        --mute: #e8ebf0;
+        --mute-ink: #3d485a;
+        --on-dark: #dce3ef;
         font-family: system-ui, "Segoe UI", Arial, sans-serif;
         font-size: 16px;
         line-height: 1.5;
@@ -194,162 +390,268 @@ export const overlayClientSource = `(() => {
         font: inherit;
       }
 
+      h2, h3, h4, p, dl, dd, ul {
+        margin: 0;
+      }
+
+      /* The host is click-through so the collapsed badge never blocks the app underneath it. Only
+         the badge itself and the open panel take pointer events. */
       .shell {
         display: flex;
         flex-direction: column;
-        align-items: stretch;
+        align-items: flex-end;
         gap: 8px;
-        width: 100%;
         max-height: calc(100vh - 24px);
         color: var(--ink);
+        pointer-events: none;
       }
 
-      .launcher {
-        align-self: flex-end;
-        display: flex;
+      .badge,
+      .panel {
+        pointer-events: auto;
+      }
+
+      .badge {
+        display: inline-flex;
         align-items: center;
-        gap: 9px;
+        justify-content: center;
+        gap: 8px;
+        min-width: 44px;
         min-height: 44px;
-        max-width: 100%;
-        padding: 9px 12px;
+        padding: 0 14px;
         border: 1px solid var(--ink);
-        border-radius: 10px;
+        border-radius: 999px;
         background: var(--ink);
         color: var(--white);
+        font-size: 0.9375rem;
+        font-weight: 700;
         cursor: pointer;
-        box-shadow: 0 4px 8px rgba(16, 24, 39, 0.24);
-        transition: background-color 180ms ease-out, transform 180ms ease-out;
+        box-shadow: 0 4px 10px rgba(16, 24, 39, 0.28);
+        transition: background-color 160ms ease-out, transform 160ms ease-out;
       }
 
-      .launcher:hover {
+      .badge:hover {
         background: var(--ink-surface);
       }
 
-      .launcher:active {
+      .badge:active {
         transform: translateY(1px);
       }
 
-      .launcher:focus-visible,
-      .finding-button:focus-visible,
-      .elsewhere-link:focus-visible,
-      .editor-link:focus-visible {
-        outline: 3px solid var(--cobalt);
-        outline-offset: 3px;
+      .badge[hidden] {
+        display: none;
       }
 
-      .launcher[data-expanded="true"] {
-        width: 100%;
-        justify-content: flex-start;
-        border-color: var(--ink-surface);
-        border-radius: 10px 10px 4px 4px;
+      .badge-symbol {
+        font-size: 1.0625rem;
+        line-height: 1;
       }
 
-      .brand {
-        font-weight: 760;
-        letter-spacing: -0.02em;
+      .badge[data-state="clear"] .badge-symbol {
+        color: #7ee2b0;
       }
 
-      .launcher-status {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        font-size: 0.875rem;
+      .badge[data-state="regression"] .badge-symbol,
+      .badge[data-state="error"] .badge-symbol {
+        color: #ff9ba2;
       }
 
-      .launcher-count {
-        margin-left: auto;
-        color: #dce3ef;
-        font-size: 0.8125rem;
-        white-space: nowrap;
+      .badge[data-state="not-covered"] .badge-symbol,
+      .badge[data-state="unscanned"] .badge-symbol,
+      .badge[data-state="approval"] .badge-symbol {
+        color: #ffd18a;
       }
 
       .panel {
+        display: flex;
+        flex-direction: column;
         width: 100%;
-        max-height: calc(100vh - 84px);
-        overflow: auto;
-        overscroll-behavior: contain;
+        max-height: calc(100vh - 24px);
+        overflow: hidden;
         border: 1px solid var(--ink-surface);
-        border-radius: 4px 4px 12px 12px;
+        border-radius: 12px;
         background: var(--paper);
         color: var(--ink);
-        box-shadow: 0 4px 8px rgba(16, 24, 39, 0.2);
+        box-shadow: 0 6px 18px rgba(16, 24, 39, 0.24);
       }
 
       .panel[hidden] {
         display: none;
       }
 
+      .panel:focus-visible,
+      .badge:focus-visible,
+      .icon-button:focus-visible,
+      .finding-button:focus-visible,
+      .detail-action:focus-visible,
+      .elsewhere-link:focus-visible,
+      .editor-link:focus-visible {
+        outline: 3px solid var(--cobalt);
+        outline-offset: 2px;
+      }
+
+      .badge:focus-visible {
+        outline-color: var(--ink);
+        outline-offset: 3px;
+      }
+
       .panel-header {
-        padding: 16px 18px 14px;
+        flex: 0 0 auto;
+        padding: 14px 16px 15px;
         background: var(--ink);
         color: var(--white);
       }
 
-      .panel-title-row {
+      .panel-bar {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 12px;
-      }
-
-      h2, h3, h4, p, dl, dd {
-        margin: 0;
+        gap: 10px;
       }
 
       h2 {
-        font-size: 1.125rem;
-        line-height: 1.25;
-        letter-spacing: -0.02em;
-        text-wrap: balance;
-      }
-
-      h3 {
         font-size: 0.9375rem;
-        line-height: 1.35;
+        font-weight: 760;
+        letter-spacing: -0.01em;
+        line-height: 1.3;
       }
 
-      h4 {
-        font-size: 0.875rem;
-        line-height: 1.4;
-      }
-
-      .status {
-        display: inline-flex;
+      .panel-controls {
+        display: flex;
         align-items: center;
         gap: 6px;
-        min-height: 26px;
-        padding: 2px 8px;
-        border-radius: 999px;
-        font-size: 0.75rem;
+      }
+
+      /* 44px on every control. WCAG 2.2 AA asks for 24px; this is deliberately larger so the panel
+         is comfortable on a touch screen and on a trackpad. */
+      .icon-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0 10px;
+        border: 1px solid #3d4a61;
+        border-radius: 8px;
+        background: var(--ink-surface);
+        color: var(--white);
+        font-size: 0.8125rem;
         font-weight: 700;
+        cursor: pointer;
+      }
+
+      .icon-button:hover {
+        background: #22304a;
+      }
+
+      .icon-button[aria-pressed="true"] {
+        border-color: var(--white);
+        background: var(--white);
+        color: var(--ink);
+      }
+
+      .banner {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .banner-verdict {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 28px;
+        padding: 3px 11px;
+        border-radius: 999px;
+        font-size: 0.875rem;
+        font-weight: 760;
+        letter-spacing: -0.01em;
         white-space: nowrap;
       }
 
-      .status[data-status="verified"] { background: var(--green-light); color: #0f5a36; }
-      .status[data-status="regression"],
-      .status[data-status="error"] { background: var(--red-light); color: #9f252d; }
-      .status[data-status="not-covered"] { background: var(--amber-light); color: #754200; }
-      .status[data-status="approval"] { background: var(--violet-light); color: #54388c; }
-      .status[data-status="scanning"] { background: var(--cobalt-light); color: #173d9f; }
-      .status[data-status="idle"] { background: #e8ebf0; color: #3d485a; }
+      .banner[data-state="verified"] .banner-verdict { background: var(--green-light); color: var(--green-ink); }
+      .banner[data-state="regression"] .banner-verdict,
+      .banner[data-state="error"] .banner-verdict { background: var(--red-light); color: var(--red-ink); }
+      .banner[data-state="not-covered"] .banner-verdict { background: var(--amber-light); color: var(--amber-ink); }
+      .banner[data-state="approval"] .banner-verdict { background: var(--violet-light); color: var(--violet-ink); }
+      .banner[data-state="scanning"] .banner-verdict { background: var(--cobalt-light); color: var(--cobalt-ink); }
+      .banner[data-state="idle"] .banner-verdict { background: var(--mute); color: var(--mute-ink); }
 
-      .summary {
-        margin-top: 8px;
-        max-width: 68ch;
-        color: #dce3ef;
-        font-size: 0.875rem;
+      .banner-exit {
+        color: var(--on-dark);
+        font-size: 0.75rem;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      .banner-note {
+        margin-top: 9px;
+        max-width: 66ch;
+        color: var(--on-dark);
+        font-size: 0.8125rem;
         overflow-wrap: anywhere;
         text-wrap: pretty;
       }
 
-      .advisory {
-        margin-top: 8px;
-        color: #b9c3d3;
+      .screen-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 10px;
+        margin-top: 11px;
+        padding-top: 10px;
+        border-top: 1px solid #2b3549;
+      }
+
+      .screen-label {
+        color: var(--white);
+        font-size: 0.8125rem;
+        font-weight: 700;
+      }
+
+      .screen-path {
+        color: var(--on-dark);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.75rem;
+        overflow-wrap: anywhere;
+      }
+
+      .screen-counts {
+        margin-left: auto;
+        color: var(--on-dark);
+        font-size: 0.75rem;
+        white-space: nowrap;
+      }
+
+      .panel-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+
+      .locate-status {
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--rule);
+        background: var(--cobalt-light);
+        color: var(--ink);
+        font-size: 0.8125rem;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
+      }
+
+      .locate-status:empty {
+        display: none;
+      }
+
+      .locate-selector {
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
         font-size: 0.75rem;
       }
 
       .section {
-        padding: 15px 18px;
+        padding: 14px 16px;
         border-top: 1px solid var(--rule);
       }
 
@@ -365,88 +667,50 @@ export const overlayClientSource = `(() => {
         margin-bottom: 10px;
       }
 
+      h3 {
+        font-size: 0.9375rem;
+        line-height: 1.35;
+      }
+
+      h4 {
+        color: var(--slate);
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+      }
+
       .section-count {
         color: var(--slate);
         font-size: 0.75rem;
+        white-space: nowrap;
       }
 
-      .coverage-list,
-      .receipt-grid {
-        display: grid;
-        grid-template-columns: minmax(110px, 0.8fr) minmax(0, 1.2fr);
-        gap: 8px 12px;
-        font-size: 0.8125rem;
-      }
-
-      dt {
-        color: var(--slate);
-        font-weight: 650;
-      }
-
-      dd {
-        min-width: 0;
-        overflow-wrap: anywhere;
-      }
-
-      .screen-list,
-      .path-list,
-      .gap-list {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 5px;
-        margin: 0;
-        padding: 0;
-        list-style: none;
-      }
-
-      .screen-token,
-      .path-token {
-        display: inline-flex;
-        padding: 2px 7px;
-        border-radius: 999px;
-        background: var(--cobalt-light);
-        color: #173d9f;
-        font-size: 0.75rem;
-        font-weight: 650;
-      }
-
-      .path-token {
-        background: #e8ebf0;
-        color: #3d485a;
-      }
-
-      .gap-list {
-        display: grid;
-        gap: 6px;
-      }
-
-      .gap-item {
-        padding: 7px 9px;
-        border: 1px solid #e0b46b;
-        border-radius: 8px;
-        background: var(--amber-light);
-        color: #603700;
-        overflow-wrap: anywhere;
+      /* The list scrolls inside its own bounded box, so a screen with forty findings never pushes
+         the coverage footer off the bottom of the window. No hard cap on how many rows exist. */
+      .finding-scroll {
+        max-height: 46vh;
+        overflow-y: auto;
+        overscroll-behavior: contain;
       }
 
       .finding-list {
         display: grid;
         gap: 6px;
-        margin: 0;
         padding: 0;
         list-style: none;
       }
 
       .finding-item {
         display: grid;
-        gap: 4px;
       }
 
       .finding-button {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
-        gap: 3px 10px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
         width: 100%;
+        min-height: 44px;
         padding: 10px 11px;
         border: 1px solid var(--rule);
         border-radius: 8px;
@@ -454,7 +718,7 @@ export const overlayClientSource = `(() => {
         color: var(--ink);
         text-align: left;
         cursor: pointer;
-        transition: border-color 150ms ease-out, background-color 150ms ease-out;
+        transition: border-color 140ms ease-out, background-color 140ms ease-out;
       }
 
       .finding-button:hover {
@@ -462,115 +726,151 @@ export const overlayClientSource = `(() => {
         background: #f6f8ff;
       }
 
-      .finding-button:active {
-        transform: translateY(1px);
+      .finding-button[aria-expanded="true"] {
+        align-items: flex-start;
+        border-color: var(--cobalt);
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+        background: #f6f8ff;
       }
 
-      .finding-symbol {
-        grid-row: 1 / span 1;
-        align-self: start;
-        color: var(--red);
-        font-weight: 800;
+      .severity-dot {
+        flex: 0 0 auto;
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--slate);
       }
 
-      .finding-button[data-status="fixed"] .finding-symbol,
-      .finding-button[data-status="waived"] .finding-symbol {
-        color: var(--green);
+      .finding-button[aria-expanded="true"] .severity-dot {
+        margin-top: 6px;
       }
 
-      .finding-body {
-        display: grid;
-        gap: 3px;
+      .finding-button[data-severity="critical"] .severity-dot { background: #8f2027; }
+      .finding-button[data-severity="serious"] .severity-dot { background: var(--red); }
+      .finding-button[data-severity="moderate"] .severity-dot { background: var(--amber); }
+      .finding-button[data-severity="minor"] .severity-dot { background: var(--slate); }
+
+      .severity-word {
+        flex: 0 0 auto;
+        min-width: 4.5em;
+        color: var(--graphite);
+        font-size: 0.75rem;
+        font-weight: 760;
+        letter-spacing: 0.01em;
+        text-transform: uppercase;
+      }
+
+      .finding-button[aria-expanded="true"] .severity-word {
+        padding-top: 1px;
+      }
+
+      /* Collapsed rows clamp the title to one line. The full string stays in the DOM, so the
+         accessible name is never the truncated version, and expanding simply drops the clamp. */
+      .finding-title {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 1;
+        overflow: hidden;
         min-width: 0;
-      }
-
-      .finding-label {
         font-size: 0.875rem;
-        font-weight: 680;
+        font-weight: 650;
         line-height: 1.4;
         overflow-wrap: anywhere;
+      }
+
+      .finding-button[aria-expanded="true"] .finding-title {
+        display: block;
+        overflow: visible;
         text-wrap: pretty;
       }
 
-      .finding-fix {
-        color: #344054;
+      .finding-detail {
+        display: grid;
+        gap: 10px;
+        padding: 12px 12px 13px;
+        border: 1px solid var(--cobalt);
+        border-top: 0;
+        border-bottom-left-radius: 8px;
+        border-bottom-right-radius: 8px;
+        background: var(--white);
+      }
+
+      .finding-detail[hidden] {
+        display: none;
+      }
+
+      .detail-block p {
+        margin-top: 3px;
+        color: var(--graphite);
         font-size: 0.8125rem;
-        line-height: 1.4;
+        line-height: 1.45;
         overflow-wrap: anywhere;
         text-wrap: pretty;
       }
 
-      .finding-support {
+      .detail-selector {
+        display: block;
+        margin-top: 3px;
+        color: var(--ink);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.75rem;
+        overflow-wrap: anywhere;
+      }
+
+      .detail-meta {
         color: var(--slate);
         font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
         font-size: 0.6875rem;
         overflow-wrap: anywhere;
       }
 
-      .finding-affordance {
-        margin-top: 3px;
-        color: #1745bd;
-        font-size: 0.75rem;
-        font-weight: 700;
+      .detail-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
       }
 
-      .finding-affordance::before {
-        content: "→";
-        margin-right: 5px;
+      .detail-action {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        padding: 0 13px;
+        border: 1px solid var(--cobalt);
+        border-radius: 8px;
+        background: var(--white);
+        color: #1745bd;
+        font-size: 0.8125rem;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .detail-action:hover {
+        background: var(--cobalt-light);
       }
 
       .editor-link {
         display: inline-flex;
         align-items: center;
-        margin-left: 34px;
+        min-height: 44px;
         color: #1745bd;
-        font-size: 0.75rem;
+        font-size: 0.8125rem;
         font-weight: 700;
-        text-decoration: none;
-      }
-
-      .editor-link:hover {
         text-decoration: underline;
-      }
-
-      .locate-status {
-        margin-left: 34px;
-        color: var(--slate);
-        font-size: 0.75rem;
-        line-height: 1.4;
-        overflow-wrap: anywhere;
-      }
-
-      .locate-status:empty {
-        display: none;
-      }
-
-      .locate-selector {
-        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-        font-size: 0.6875rem;
-        color: var(--ink);
-      }
-
-      .current-screen-name {
-        margin-bottom: 10px;
-        color: var(--slate);
-        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-        font-size: 0.75rem;
-        overflow-wrap: anywhere;
       }
 
       .elsewhere-lead {
         margin-bottom: 10px;
-        color: #344054;
+        color: var(--graphite);
         font-size: 0.8125rem;
-        line-height: 1.4;
+        line-height: 1.45;
         text-wrap: pretty;
       }
 
       .elsewhere-list {
         display: grid;
         gap: 6px;
-        margin: 0;
         padding: 0;
         list-style: none;
       }
@@ -606,9 +906,16 @@ export const overlayClientSource = `(() => {
         padding: 1px 7px;
         border-radius: 999px;
         background: var(--red-light);
-        color: #9f252d;
+        color: var(--red-ink);
         font-size: 0.6875rem;
         font-weight: 700;
+      }
+
+      .elsewhere-worst {
+        color: var(--slate);
+        font-size: 0.6875rem;
+        font-weight: 650;
+        text-transform: uppercase;
       }
 
       .elsewhere-path {
@@ -620,10 +927,10 @@ export const overlayClientSource = `(() => {
       }
 
       .elsewhere-link {
-        min-height: 36px;
         display: inline-flex;
         align-items: center;
-        padding: 6px 11px;
+        min-height: 44px;
+        padding: 0 13px;
         border: 1px solid var(--cobalt);
         border-radius: 8px;
         background: var(--white);
@@ -636,6 +943,69 @@ export const overlayClientSource = `(() => {
 
       .elsewhere-link:hover {
         background: var(--cobalt-light);
+        text-decoration: underline;
+      }
+
+      .coverage-footer {
+        background: #f1efe8;
+      }
+
+      .coverage-list,
+      .receipt-grid {
+        display: grid;
+        grid-template-columns: minmax(110px, 0.8fr) minmax(0, 1.2fr);
+        gap: 8px 12px;
+        font-size: 0.8125rem;
+      }
+
+      dt {
+        color: var(--slate);
+        font-weight: 650;
+      }
+
+      dd {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .screen-list,
+      .path-list,
+      .gap-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        padding: 0;
+        list-style: none;
+      }
+
+      .screen-token,
+      .path-token {
+        display: inline-flex;
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: var(--cobalt-light);
+        color: var(--cobalt-ink);
+        font-size: 0.75rem;
+        font-weight: 650;
+      }
+
+      .path-token {
+        background: var(--mute);
+        color: var(--mute-ink);
+      }
+
+      .gap-list {
+        display: grid;
+        gap: 6px;
+      }
+
+      .gap-item {
+        padding: 7px 9px;
+        border: 1px solid #e0b46b;
+        border-radius: 8px;
+        background: var(--amber-light);
+        color: #603700;
+        overflow-wrap: anywhere;
       }
 
       .empty {
@@ -648,11 +1018,18 @@ export const overlayClientSource = `(() => {
       }
 
       .receipt h3 {
-        color: #0f5a36;
+        color: var(--green-ink);
       }
 
       .receipt-grid {
         margin-top: 10px;
+      }
+
+      .notice {
+        color: var(--graphite);
+        font-size: 0.8125rem;
+        line-height: 1.45;
+        text-wrap: pretty;
       }
 
       .loading-line {
@@ -662,7 +1039,7 @@ export const overlayClientSource = `(() => {
         background: #dce1e9;
       }
 
-      .loading-line:nth-child(2) {
+      .loading-line:nth-child(3) {
         width: 72%;
       }
 
@@ -671,14 +1048,15 @@ export const overlayClientSource = `(() => {
           font-size: 15px;
         }
 
-        .panel {
-          max-height: calc(100vh - 76px);
+        .panel-header,
+        .section,
+        .locate-status {
+          padding-left: 13px;
+          padding-right: 13px;
         }
 
-        .panel-header,
-        .section {
-          padding-left: 14px;
-          padding-right: 14px;
+        .finding-scroll {
+          max-height: 38vh;
         }
 
         .coverage-list,
@@ -700,68 +1078,131 @@ export const overlayClientSource = `(() => {
       }
     \`;
 
+  function ensureInspector() {
+    let host = document.getElementById(HOST_ID);
+    if (host) {
+      return host;
+    }
+
+    host = document.createElement('aside');
+    host.id = HOST_ID;
+    host.setAttribute('aria-label', 'usabl development tools');
+    host.style.setProperty('all', 'initial', 'important');
+    host.style.setProperty('position', 'fixed', 'important');
+    host.style.setProperty('right', '12px', 'important');
+    host.style.setProperty('bottom', '12px', 'important');
+    host.style.setProperty('width', 'auto', 'important');
+    host.style.setProperty('max-height', 'calc(100vh - 24px)', 'important');
+    host.style.setProperty('display', 'block', 'important');
+    host.style.setProperty('z-index', '2147483647', 'important');
+    // Click-through by default so the collapsed badge cannot swallow a click meant for the app.
+    // The badge and the open panel opt back in through the shadow stylesheet.
+    host.style.setProperty('pointer-events', 'none', 'important');
+
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = OVERLAY_STYLE;
+
     const shell = make('div', 'shell');
-    const launcher = make('button', 'launcher');
-    launcher.type = 'button';
-    launcher.setAttribute('aria-controls', PANEL_ID);
-    launcher.setAttribute('aria-expanded', 'false');
+
+    const badge = make('button', 'badge');
+    badge.type = 'button';
+    badge.setAttribute('aria-controls', PANEL_ID);
+    badge.setAttribute('aria-expanded', 'false');
+    badge.setAttribute('aria-label', 'usabl: no result yet. Open inspector.');
+    badge.addEventListener('click', () => setOpen(host, true, true));
+
     const panel = make('section', 'panel');
     panel.id = PANEL_ID;
-    panel.setAttribute('role', 'region');
-    panel.setAttribute('aria-label', 'usabl accessibility inspector');
+    panel.setAttribute('aria-labelledby', TITLE_ID);
+    panel.tabIndex = -1;
     panel.hidden = true;
 
-    launcher.addEventListener('click', () => {
-      state.expanded = !state.expanded;
-      syncExpansion(host);
-    });
+    // The header and the body are refilled on every render. The status region is created once and
+    // never replaced: a live region that is removed and recreated is not reliably announced, and
+    // this one is how a screen reader user learns whether a locate succeeded.
+    const header = make('header', 'panel-header');
+    const liveStatus = make('p', 'locate-status');
+    liveStatus.setAttribute('role', 'status');
+    liveStatus.setAttribute('aria-live', 'polite');
+    const body = make('div', 'panel-body');
+    panel.appendChild(header);
+    panel.appendChild(liveStatus);
+    panel.appendChild(body);
+    state.liveStatus = liveStatus;
 
     shadow.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && state.expanded) {
+      if (event.key === 'Escape' && state.open) {
         event.preventDefault();
-        state.expanded = false;
-        syncExpansion(host);
-        launcher.focus();
+        setOpen(host, false, true);
       }
     });
 
-    shell.appendChild(launcher);
+    shell.appendChild(badge);
     shell.appendChild(panel);
     shadow.appendChild(style);
     shadow.appendChild(shell);
     document.body.appendChild(host);
-    renderLoading(host);
+
+    state.open = storedValue(OPEN_STORAGE_KEY) === '1';
+    state.wide = storedValue(WIDE_STORAGE_KEY) === '1';
     return host;
   }
 
-  function findingsCount(payload) {
-    if (typeof payload.findingsTotalCount === 'number') {
-      return payload.findingsTotalCount;
+  // Opening and closing only flips visibility, so the panel content the user was reading is still
+  // there when they come back. Closing collapses the open row and drops the highlight, which keeps
+  // the rule that a highlighted element always has an expanded row explaining it.
+  function setOpen(host, open, viaUser) {
+    state.open = open;
+    storeValue(OPEN_STORAGE_KEY, open ? '1' : '0');
+    if (!open) {
+      state.expandedKey = null;
+      applyRowState();
+      clearLocateStatus();
     }
-    return Array.isArray(payload.findings) ? payload.findings.length : 0;
+    syncOpen(host, viaUser);
   }
 
-  function syncExpansion(host) {
-    const shadow = host.shadowRoot;
-    const launcher = shadow.querySelector('.launcher');
-    const panel = shadow.querySelector('.panel');
-    const payload = state.payload;
-    const status = statusFor(payload || { verdict: null }, state.error, state.scanning);
-    const count = findingsCount(payload || {});
-    const countLabel = count === 1 ? '1 finding' : count + ' findings';
+  function setWide(host, wide) {
+    state.wide = wide;
+    storeValue(WIDE_STORAGE_KEY, wide ? '1' : '0');
+    const toggle = host.shadowRoot.querySelector('.width-toggle');
+    if (toggle) {
+      toggle.setAttribute('aria-pressed', String(wide));
+    }
+    syncOpen(host, false);
+  }
 
-    launcher.dataset.expanded = String(state.expanded);
-    launcher.setAttribute('aria-expanded', String(state.expanded));
-    launcher.setAttribute(
-      'aria-label',
-      state.expanded
-        ? 'Close usabl inspector'
-        : 'Open usabl inspector. ' + status.label + '. ' + countLabel + '.',
+  function syncOpen(host, moveFocus) {
+    const shadow = host.shadowRoot;
+    const badge = shadow.querySelector('.badge');
+    const panel = shadow.querySelector('.panel');
+    badge.hidden = state.open;
+    badge.setAttribute('aria-expanded', String(state.open));
+    panel.hidden = !state.open;
+    host.style.setProperty(
+      'width',
+      state.open ? (state.wide ? WIDE_WIDTH : COMPACT_WIDTH) : 'auto',
+      'important',
     );
-    panel.hidden = !state.expanded;
-    if (!state.expanded) {
+    if (!state.open) {
       clearHighlight();
     }
+    if (!moveFocus) {
+      return;
+    }
+    // The control the user just pressed is now hidden, so focus has to be placed deliberately or it
+    // falls to the document and a keyboard user loses their position.
+    if (state.open) {
+      panel.focus();
+    } else {
+      badge.focus();
+    }
+  }
+
+  function prefersReducedMotion() {
+    return typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
   function clearHighlight() {
@@ -769,10 +1210,11 @@ export const overlayClientSource = `(() => {
       state.highlightCleanup();
       state.highlightCleanup = null;
     }
-    const stale = document.getElementById('__usabl-highlight');
+    state.highlightKey = null;
+    const stale = document.getElementById(HIGHLIGHT_ID);
     if (stale) stale.remove();
     // Remove any tabindex we added only to focus a non-focusable flagged element, so the page's own
-    // tab order is left exactly as it was before we located anything.
+    // tab order is left exactly as it was before we touched anything.
     const temped = document.querySelectorAll('[data-usabl-temp-tabindex="true"]');
     temped.forEach((node) => {
       node.removeAttribute('tabindex');
@@ -780,20 +1222,30 @@ export const overlayClientSource = `(() => {
     });
   }
 
-  function editorDeepLink(workspaceRoot, source) {
-    if (!source || !source.file || source.tier !== 'renderer') {
-      return null;
+  function setLocateStatus(text, selector) {
+    const region = state.liveStatus;
+    if (!region) {
+      return;
     }
-    const line = source.line || 1;
-    const relative = String(source.file).replace(/^\\//, '');
-    const absolute = workspaceRoot
-      ? String(workspaceRoot).replace(/\\/$/, '') + '/' + relative
-      : relative;
-    return 'vscode://file/' + absolute + ':' + line + ':1';
+    region.replaceChildren(document.createTextNode(text));
+    if (selector) {
+      const code = document.createElement('code');
+      code.className = 'locate-selector';
+      code.textContent = selector;
+      region.appendChild(document.createTextNode(' '));
+      region.appendChild(code);
+    }
   }
 
-  function locateFinding(finding, statusHost) {
-    clearHighlight();
+  function clearLocateStatus() {
+    if (state.liveStatus) {
+      state.liveStatus.replaceChildren();
+    }
+  }
+
+  // Look up the flagged element on the live page. A selector the browser rejects, an element that
+  // has since been removed, and an element inside our own overlay all count as not found.
+  function resolveTarget(finding) {
     const selector = displayText(finding.elementPath).trim();
     let target = null;
     try {
@@ -801,32 +1253,43 @@ export const overlayClientSource = `(() => {
     } catch (_error) {
       target = null;
     }
-
     const inspector = document.getElementById(HOST_ID);
     if (!target || target === inspector || (inspector && inspector.contains(target))) {
-      // Honest status: the finding was true at scan time; the DOM has changed since. We name the
-      // selector so a developer can see what was flagged and where it was.
-      statusHost.replaceChildren();
-      statusHost.appendChild(
-        document.createTextNode('This was flagged here at the last scan; it is not on the page right now.'),
-      );
-      if (selector) {
-        const code = document.createElement('code');
-        code.className = 'locate-selector';
-        code.textContent = selector;
-        statusHost.appendChild(document.createTextNode(' '));
-        statusHost.appendChild(code);
-      }
-      return;
+      return { selector, target: null };
+    }
+    return { selector, target };
+  }
+
+  // Honest status: the finding was true at scan time and the DOM has changed since. We name the
+  // selector so a developer can see exactly what was flagged, and we never claim a locate worked.
+  function reportMissingElement(selector) {
+    setLocateStatus(MISSING_ELEMENT_TEXT, selector);
+  }
+
+  function elementLabel(finding, selector) {
+    return displayText(finding.elementName) || selector || 'the flagged element';
+  }
+
+  // Scroll to the flagged element and outline it. This never moves focus. A developer who activates
+  // a row with the keyboard stays in the list; "Focus element" is the explicit way to leave it.
+  function highlightFinding(finding, key) {
+    clearHighlight();
+    const found = resolveTarget(finding);
+    if (found.target === null) {
+      reportMissingElement(found.selector);
+      return false;
     }
 
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center', inline: 'nearest' });
+    const target = found.target;
+    target.scrollIntoView({
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+      block: 'center',
+      inline: 'nearest',
+    });
 
     const marker = document.createElement('div');
-    marker.id = '__usabl-highlight';
+    marker.id = HIGHLIGHT_ID;
     marker.setAttribute('aria-hidden', 'true');
-    const targetName = displayText(finding.elementName) || selector || 'selected element';
     marker.style.cssText = [
       'position:fixed',
       'z-index:2147483646',
@@ -867,67 +1330,257 @@ export const overlayClientSource = `(() => {
 
     window.addEventListener('scroll', position, true);
     window.addEventListener('resize', position);
-    const timeout = window.setTimeout(clearHighlight, 5000);
+    // No timeout. The highlight stays until the row is closed, another row is opened, the panel is
+    // closed, or the route changes. A mark that vanishes on its own is a mark you have to chase.
     state.highlightCleanup = () => {
-      window.clearTimeout(timeout);
       window.removeEventListener('scroll', position, true);
       window.removeEventListener('resize', position);
       marker.remove();
     };
+    state.highlightKey = key;
+    setLocateStatus('Highlighted ' + elementLabel(finding, found.selector) + ' on the page.', '');
+    return true;
+  }
 
-    // Move keyboard focus to the flagged element so a keyboard user lands on it, not just a sighted
-    // one. Some flagged elements are not focusable by default; a temporary tabindex of -1 lets us
-    // focus them programmatically without adding them to the tab order. preventScroll keeps our own
-    // centered scrollIntoView from being overridden by the browser's focus scroll.
+  // The explicit opt in. This moves real keyboard and assistive-technology focus onto the flagged
+  // element so a screen reader user hears what the finding is about.
+  function focusFinding(finding) {
+    const found = resolveTarget(finding);
+    if (found.target === null) {
+      reportMissingElement(found.selector);
+      return;
+    }
+    const target = found.target;
     try {
+      // Some flagged elements are not focusable. A temporary tabindex of -1 lets us focus them
+      // without adding them to the page's tab order, and it is removed again on the next clear.
       if (!target.hasAttribute('tabindex')) {
         target.setAttribute('tabindex', '-1');
         target.dataset.usablTempTabindex = 'true';
       }
       target.focus({ preventScroll: true });
     } catch (_error) {
-      // Focus can throw on detached or disabled nodes. The highlight still stands on its own.
+      setLocateStatus('Could not move focus to this element.', found.selector);
+      return;
+    }
+    setLocateStatus('Keyboard focus moved to ' + elementLabel(finding, found.selector) + '.', '');
+  }
+
+  function applyRowState() {
+    for (const row of state.rows) {
+      const open = row.key === state.expandedKey;
+      row.button.setAttribute('aria-expanded', String(open));
+      row.detail.hidden = !open;
+    }
+  }
+
+  function rowByKey(key) {
+    for (const row of state.rows) {
+      if (row.key === key) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  // One activation does three things at once: it locates the element on the page, it opens this
+  // row's detail, and it closes whichever row was open before. Activating the open row again closes
+  // it and takes the highlight away with it, so an outlined element always has an open row.
+  function activateRow(key) {
+    if (state.expandedKey === key) {
+      state.expandedKey = null;
+      clearHighlight();
+      clearLocateStatus();
+      applyRowState();
+      return;
+    }
+    state.expandedKey = key;
+    applyRowState();
+    const row = rowByKey(key);
+    if (row) {
+      highlightFinding(row.finding, key);
+    }
+  }
+
+  function editorDeepLink(workspaceRoot, source) {
+    if (!source || !source.file || source.tier !== 'renderer') {
+      return null;
+    }
+    const line = source.line || 1;
+    const relative = String(source.file).replace(/^\\//, '');
+    const absolute = workspaceRoot
+      ? String(workspaceRoot).replace(/\\/$/, '') + '/' + relative
+      : relative;
+    return 'vscode://file/' + absolute + ':' + line + ':1';
+  }
+
+  function appendDetailBlock(parent, heading, text) {
+    const value = displayText(text).trim();
+    if (!value) {
+      return;
+    }
+    const block = make('div', 'detail-block');
+    block.appendChild(make('h4', '', heading));
+    block.appendChild(make('p', '', value));
+    parent.appendChild(block);
+  }
+
+  function renderFindingRow(entry, index, workspaceRoot) {
+    const finding = entry.finding;
+    const rowId = PANEL_ID + '-row-' + index;
+    const detailId = PANEL_ID + '-detail-' + index;
+
+    const item = make('li', 'finding-item');
+
+    // A real button, so Enter and Space work with no key handling of our own, and the browser
+    // reports the expanded state through aria-expanded to the detail it controls.
+    const button = make('button', 'finding-button');
+    button.type = 'button';
+    button.id = rowId;
+    button.dataset.severity = severityKey(finding.severity);
+    button.setAttribute('aria-expanded', 'false');
+    button.setAttribute('aria-controls', detailId);
+
+    const dot = make('span', 'severity-dot');
+    dot.setAttribute('aria-hidden', 'true');
+    button.appendChild(dot);
+    // The severity WORD sits next to the dot, so severity is never carried by colour alone.
+    button.appendChild(make('span', 'severity-word', severityWord(finding.severity)));
+    button.appendChild(make('span', 'finding-title', finding.whatUserExperiences));
+
+    const detail = make('div', 'finding-detail');
+    detail.id = detailId;
+    detail.hidden = true;
+
+    appendDetailBlock(detail, 'Why this matters', finding.why);
+    appendDetailBlock(detail, 'How to fix it', finding.fix);
+
+    const elementBlock = make('div', 'detail-block');
+    elementBlock.appendChild(make('h4', '', 'Element'));
+    const elementName = displayText(finding.elementName).trim();
+    elementBlock.appendChild(make('p', '', elementName || 'No accessible name at scan time.'));
+    const selector = make('code', 'detail-selector', finding.elementPath);
+    elementBlock.appendChild(selector);
+    detail.appendChild(elementBlock);
+
+    detail.appendChild(
+      make('p', 'detail-meta', finding.rule + ' · ' + finding.layer + ' · ' + finding.severity),
+    );
+
+    const actions = make('div', 'detail-actions');
+    const showAgain = make('button', 'detail-action', 'Show on page again');
+    showAgain.type = 'button';
+    showAgain.addEventListener('click', () => highlightFinding(finding, entry.key));
+    actions.appendChild(showAgain);
+
+    const focusButton = make('button', 'detail-action', 'Focus element');
+    focusButton.type = 'button';
+    focusButton.addEventListener('click', () => focusFinding(finding));
+    actions.appendChild(focusButton);
+
+    const editorHref = editorDeepLink(workspaceRoot, finding.appSource);
+    if (editorHref) {
+      const openEditor = make('a', 'editor-link', 'Open in editor');
+      openEditor.href = editorHref;
+      openEditor.target = '_blank';
+      openEditor.rel = 'noopener noreferrer';
+      actions.appendChild(openEditor);
+    }
+    detail.appendChild(actions);
+
+    button.addEventListener('click', () => activateRow(entry.key));
+
+    item.appendChild(button);
+    item.appendChild(detail);
+    return { item, button, detail, key: entry.key, finding };
+  }
+
+  // The current-screen section: every finding on this screen, worst first, one row each. This is
+  // where the developer works, so nothing is grouped away and nothing is hidden behind a budget.
+  function renderCurrentScreen(payload, split) {
+    const section = make('section', 'section current-screen');
+    const heading = make('div', 'section-heading');
+    heading.appendChild(make('h3', '', 'Issues on this screen'));
+
+    if (!split.matched) {
+      section.appendChild(heading);
+      section.appendChild(
+        make('p', 'empty', 'This screen was not part of the last scan, so there is nothing to list.'),
+      );
+      return section;
     }
 
-    statusHost.textContent = 'Highlighted ' + targetName + ' on the page.';
+    heading.appendChild(make('span', 'section-count', countLabel(split.here.length, 'issue') + ' total'));
+    section.appendChild(heading);
+
+    if (!split.here.length) {
+      section.appendChild(make('p', 'empty', 'No accessibility findings on this screen.'));
+      return section;
+    }
+
+    const scroll = make('div', 'finding-scroll');
+    const list = make('ul', 'finding-list');
+    const entries = keyedFindings(split.here);
+    entries.forEach((entry, index) => {
+      const row = renderFindingRow(entry, index, payload.workspaceRoot);
+      state.rows.push(row);
+      list.appendChild(row.item);
+    });
+    scroll.appendChild(list);
+    section.appendChild(scroll);
+    return section;
   }
 
-  function renderLauncher(host, payload, error) {
-    const launcher = host.shadowRoot.querySelector('.launcher');
-    const status = statusFor(payload, error, state.scanning);
-    const count = findingsCount(payload);
-    const countLabel = count === 1 ? '1 finding' : count + ' findings';
-    const brand = make('span', 'brand', 'usabl');
-    const statusText = make('span', 'launcher-status');
-    const symbol = make('span', '', status.symbol);
-    symbol.setAttribute('aria-hidden', 'true');
-    statusText.appendChild(symbol);
-    statusText.appendChild(document.createTextNode(status.label));
-    const countText = make('span', 'launcher-count', countLabel);
+  // The elsewhere guide: one entry per other scanned screen that has findings, worst screen first,
+  // with a count and a real navigating link. It never lists the findings of other screens. The
+  // intent is fix this screen, then go there.
+  function renderElsewhere(split) {
+    if (!split.elsewhere.length) {
+      return null;
+    }
+    const section = make('section', 'section elsewhere');
+    const heading = make('div', 'section-heading');
+    heading.appendChild(make('h3', '', 'On other screens'));
+    heading.appendChild(make('span', 'section-count', countLabel(split.elsewhereTotal, 'issue')));
+    section.appendChild(heading);
+    section.appendChild(
+      make('p', 'elsewhere-lead', 'Fix this screen first, then move on. These screens also have findings.'),
+    );
 
-    launcher.replaceChildren(brand, statusText, countText);
-    syncExpansion(host);
-  }
+    const list = make('ul', 'elsewhere-list');
+    for (const entry of split.elsewhere) {
+      const item = make('li', 'elsewhere-item');
+      const info = make('div', 'elsewhere-info');
+      info.appendChild(make('span', 'elsewhere-name', entry.screenId));
+      info.appendChild(make('span', 'elsewhere-count', countLabel(entry.count, 'finding')));
+      // Naming the worst severity explains the order of this list rather than leaving it a mystery.
+      info.appendChild(make('span', 'elsewhere-worst', 'worst: ' + entry.worstSeverity));
+      if (entry.path) {
+        info.appendChild(make('span', 'elsewhere-path', entry.path));
+      }
+      item.appendChild(info);
 
-  function appendStatus(parent, status) {
-    const badge = make('span', 'status');
-    badge.dataset.status = status.key;
-    const symbol = make('span', '', status.symbol);
-    symbol.setAttribute('aria-hidden', 'true');
-    badge.appendChild(symbol);
-    badge.appendChild(document.createTextNode(status.label));
-    parent.appendChild(badge);
+      if (entry.path) {
+        // A real anchor with an href set to the screen's pathname. Clicking navigates the browser,
+        // which works for a full page load and, because it is a real in-page anchor, is also fine
+        // for a single-page app that intercepts same-origin link clicks.
+        const link = make('a', 'elsewhere-link', 'Go to this screen');
+        link.href = entry.path;
+        item.appendChild(link);
+      }
+      list.appendChild(item);
+    }
+    section.appendChild(list);
+    return section;
   }
 
   function appendTokenList(parent, values, className) {
     const list = make('ul', className === 'screen-token' ? 'screen-list' : 'path-list');
     if (!values.length) {
-      const item = make('li', className, 'None');
-      list.appendChild(item);
+      list.appendChild(make('li', className, 'None'));
     } else {
       for (const value of values) {
-        const item = make('li', className, value);
-        list.appendChild(item);
+        list.appendChild(make('li', className, value));
       }
     }
     parent.appendChild(list);
@@ -937,7 +1590,11 @@ export const overlayClientSource = `(() => {
     list.appendChild(make('dt', '', term));
     const definition = make('dd');
     if (Array.isArray(value)) {
-      appendTokenList(definition, value, term === 'Affected screens' || term === 'Checked screens' ? 'screen-token' : 'path-token');
+      appendTokenList(
+        definition,
+        value,
+        term === 'Affected screens' || term === 'Checked screens' ? 'screen-token' : 'path-token',
+      );
     } else {
       definition.textContent = displayText(value);
     }
@@ -945,10 +1602,12 @@ export const overlayClientSource = `(() => {
   }
 
   function renderCoverage(payload) {
-    const section = make('section', 'section');
+    const section = make('footer', 'section coverage-footer');
     const heading = make('div', 'section-heading');
     heading.appendChild(make('h3', '', 'Coverage'));
-    heading.appendChild(make('span', 'section-count', String(payload.coverage.affected.length) + ' affected'));
+    heading.appendChild(
+      make('span', 'section-count', countLabel(payload.coverage.affected.length, 'screen') + ' affected'),
+    );
     section.appendChild(heading);
 
     const list = make('dl', 'coverage-list');
@@ -966,149 +1625,6 @@ export const overlayClientSource = `(() => {
     }
     gaps.appendChild(gapList);
     list.appendChild(gaps);
-    section.appendChild(list);
-    return section;
-  }
-
-  // A finding row on the current screen. The whole row is a real button: activating it locates the
-  // element on the live page, highlights it, moves focus to it, and reports an honest status. There
-  // is no separate "Locate" control and no selection or detail pane, because the current-screen list
-  // is flat and every row acts on click.
-  function renderFindingRow(finding, workspaceRoot) {
-    const item = make('li', 'finding-item');
-
-    const button = make('button', 'finding-button');
-    button.type = 'button';
-    button.dataset.status = finding.status;
-    // The accessible name carries the impact plus a plain "click to find it" affordance, so a
-    // screen-reader user hears what the button does, not just what the finding is.
-    button.setAttribute(
-      'aria-label',
-      displayText(finding.whatUserExperiences) + ' Activate to find this on the page.',
-    );
-
-    const symbol = make('span', 'finding-symbol', finding.status === 'fixed' || finding.status === 'waived' ? '✓' : '×');
-    symbol.setAttribute('aria-hidden', 'true');
-    button.appendChild(symbol);
-
-    const body = make('div', 'finding-body');
-    body.appendChild(make('span', 'finding-label', finding.whatUserExperiences));
-
-    // A hint of the fix under the impact, so a developer sees what to do without opening anything.
-    if (finding.fix) {
-      body.appendChild(make('span', 'finding-fix', displayText(finding.fix)));
-    }
-
-    const supportText =
-      finding.rule +
-      ' · ' +
-      finding.layer +
-      ' · ' +
-      finding.severity +
-      (finding.groupCount ? ' · ×' + finding.groupCount : '');
-    body.appendChild(make('span', 'finding-support', supportText));
-
-    // The "click to find it" affordance, shown to sighted users and hidden from the accessible name
-    // above so it is not read twice.
-    const affordance = make('span', 'finding-affordance', 'Find on page');
-    affordance.setAttribute('aria-hidden', 'true');
-    body.appendChild(affordance);
-
-    button.appendChild(body);
-
-    // One status line per row, announced politely, that reports located or the honest not-found text.
-    const locateStatus = make('p', 'locate-status');
-    locateStatus.setAttribute('aria-live', 'polite');
-
-    button.addEventListener('click', () => locateFinding(finding, locateStatus));
-
-    item.appendChild(button);
-    item.appendChild(locateStatus);
-
-    // Editor deep link stays available per row when the source tier is a renderer file.
-    const editorHref = editorDeepLink(workspaceRoot, finding.appSource);
-    if (editorHref) {
-      const openEditor = make('a', 'editor-link', 'Open in editor');
-      openEditor.href = editorHref;
-      openEditor.target = '_blank';
-      openEditor.rel = 'noopener noreferrer';
-      item.appendChild(openEditor);
-    }
-
-    return item;
-  }
-
-  // The current-screen section: a flat, individually clickable list of every finding on this screen,
-  // or an honest message when the live path matches no scanned screen.
-  function renderCurrentScreen(payload, split) {
-    const section = make('section', 'section current-screen');
-    const heading = make('div', 'section-heading');
-    heading.appendChild(make('h3', '', 'This screen'));
-
-    if (!split.matched) {
-      section.appendChild(heading);
-      section.appendChild(make('p', 'empty', 'This screen was not part of the last scan.'));
-      return section;
-    }
-
-    heading.appendChild(
-      make('span', 'section-count', split.here.length === 1 ? '1 finding' : split.here.length + ' findings'),
-    );
-    section.appendChild(heading);
-
-    // Name the matched screen so the developer knows which route the list belongs to.
-    section.appendChild(make('p', 'current-screen-name', split.currentScreenId));
-
-    if (!split.here.length) {
-      section.appendChild(make('p', 'empty', 'No accessibility findings on this screen.'));
-      return section;
-    }
-
-    const list = make('ul', 'finding-list');
-    for (const finding of split.here) {
-      list.appendChild(renderFindingRow(finding, payload.workspaceRoot));
-    }
-    section.appendChild(list);
-    return section;
-  }
-
-  // The elsewhere guide: one entry per other scanned screen that has findings, with a count and a
-  // real navigating link. It never lists the individual findings of other screens. The intent is
-  // fix here, then go there.
-  function renderElsewhere(split) {
-    if (!split.elsewhere.length) {
-      return null;
-    }
-    const section = make('section', 'section elsewhere');
-    const heading = make('div', 'section-heading');
-    heading.appendChild(make('h3', '', 'On other screens'));
-    section.appendChild(heading);
-    section.appendChild(
-      make('p', 'elsewhere-lead', 'Fix this screen first, then move on. These screens also have findings.'),
-    );
-
-    const list = make('ul', 'elsewhere-list');
-    for (const entry of split.elsewhere) {
-      const item = make('li', 'elsewhere-item');
-      const info = make('div', 'elsewhere-info');
-      info.appendChild(make('span', 'elsewhere-name', entry.screenId));
-      const countText = entry.count === 1 ? '1 finding' : entry.count + ' findings';
-      info.appendChild(make('span', 'elsewhere-count', countText));
-      if (entry.path) {
-        info.appendChild(make('span', 'elsewhere-path', entry.path));
-      }
-      item.appendChild(info);
-
-      if (entry.path) {
-        // A real anchor with an href set to the screen's pathname. Clicking navigates the browser,
-        // which works for a full page load and, because it is a real in-page anchor, is also fine
-        // for a single-page app that intercepts same-origin link clicks.
-        const link = make('a', 'elsewhere-link', 'Go to this screen');
-        link.href = entry.path;
-        item.appendChild(link);
-      }
-      list.appendChild(item);
-    }
     section.appendChild(list);
     return section;
   }
@@ -1131,7 +1647,7 @@ export const overlayClientSource = `(() => {
   }
 
   function renderGuardedPaths(paths) {
-    if (!paths.length) {
+    if (!paths || !paths.length) {
       return null;
     }
     const section = make('section', 'section');
@@ -1147,84 +1663,209 @@ export const overlayClientSource = `(() => {
       return null;
     }
     const section = make('section', 'section');
-    const plural = count === 1 ? 'finding' : 'findings';
     section.appendChild(make('h3', '', 'Floor debt resolved'));
-    const notice = make('p', '');
-    notice.textContent = count + ' previously accepted ' + plural + ' no longer present on cleanly scanned screens. Run usabl floor prune to remove them and re-arm the gate.';
-    section.appendChild(notice);
+    section.appendChild(
+      make(
+        'p',
+        'notice',
+        count + ' previously accepted ' + (count === 1 ? 'finding' : 'findings')
+          + ' no longer present on cleanly scanned screens. Run usabl floor prune to remove them and re-arm the gate.',
+      ),
+    );
     return section;
   }
 
-  function renderPanel(host, payload, error) {
-    const panel = host.shadowRoot.querySelector('.panel');
-    const status = statusFor(payload, error, state.scanning);
-    const header = make('header', 'panel-header');
-    const titleRow = make('div', 'panel-title-row');
-    titleRow.appendChild(make('h2', '', 'Accessibility inspector'));
-    appendStatus(titleRow, status);
-    header.appendChild(titleRow);
-    const summary = make('p', 'summary', error ? 'NOT verified: ' + payload.summary : payload.summary);
-    summary.setAttribute('aria-live', 'polite');
-    header.appendChild(summary);
-    header.appendChild(make('p', 'advisory', 'Advisory view. The stop hook and CI gate decide completion.'));
+  function renderHeader(host, payload, split) {
+    const header = host.shadowRoot.querySelector('.panel-header');
+    const verdict = verdictFor(payload, state.error, state.scanning);
 
-    const split = partitionByScreen(payload, window.location.pathname);
-    const children = [header, renderCurrentScreen(payload, split)];
-    const elsewhere = renderElsewhere(split);
-    const coverage = renderCoverage(payload);
-    const receipt = renderReceipt(payload.receipt);
-    const guarded = renderGuardedPaths(payload.dirtyGuardedPaths);
-    const floorPaidDown = renderFloorPaidDown(payload.paidDownCount);
-    if (elsewhere) children.push(elsewhere);
-    children.push(coverage);
-    if (receipt) children.push(receipt);
-    if (guarded) children.push(guarded);
-    if (floorPaidDown) children.push(floorPaidDown);
-    panel.replaceChildren(...children);
+    const bar = make('div', 'panel-bar');
+    const title = make('h2', '', 'usabl accessibility inspector');
+    title.id = TITLE_ID;
+    bar.appendChild(title);
+
+    const controls = make('div', 'panel-controls');
+    const widthToggle = make('button', 'icon-button width-toggle', 'Wide');
+    widthToggle.type = 'button';
+    widthToggle.setAttribute('aria-pressed', String(state.wide));
+    widthToggle.setAttribute('aria-label', 'Wide panel');
+    widthToggle.addEventListener('click', () => setWide(host, !state.wide));
+    controls.appendChild(widthToggle);
+
+    const collapse = make('button', 'icon-button collapse-button');
+    collapse.type = 'button';
+    collapse.setAttribute('aria-label', 'Collapse the usabl inspector');
+    const collapseGlyph = make('span', '', '▲');
+    collapseGlyph.setAttribute('aria-hidden', 'true');
+    collapse.appendChild(collapseGlyph);
+    collapse.addEventListener('click', () => setOpen(host, false, true));
+    controls.appendChild(collapse);
+    bar.appendChild(controls);
+
+    // Verdict banner: symbol, then the verdict WORD, then the exit code the gate would use. The
+    // word is the meaning; the colour behind it only repeats what the word already said.
+    const banner = make('div', 'banner');
+    banner.dataset.state = verdict.key;
+    const chip = make('span', 'banner-verdict');
+    const symbol = make('span', '', verdict.symbol);
+    symbol.setAttribute('aria-hidden', 'true');
+    chip.appendChild(symbol);
+    chip.appendChild(document.createTextNode(verdict.word));
+    banner.appendChild(chip);
+    if (!state.scanning && !state.error && payload && typeof payload.exitCode === 'number') {
+      banner.appendChild(make('span', 'banner-exit', 'exit code ' + payload.exitCode));
+    }
+
+    const note = make('p', 'banner-note', explanationFor(payload, state.error, state.scanning, split));
+
+    const screenLine = make('div', 'screen-line');
+    screenLine.appendChild(make('span', 'screen-label', 'This screen'));
+    screenLine.appendChild(make('span', 'screen-path', split.currentPath));
+    // Counts are only shown once a result is loaded. Printing "0 here" while the first scan is still
+    // running would state a fact usabl does not have yet.
+    if (payload && payload.loaded && !state.error) {
+      screenLine.appendChild(
+        make(
+          'span',
+          'screen-counts',
+          split.here.length + ' here · ' + split.elsewhereTotal + ' on other screens',
+        ),
+      );
+    }
+
+    header.replaceChildren(bar, banner, note, screenLine);
   }
 
-  function renderLoading(host) {
-    clearHighlight();
-    const loading = {
+  function renderBadge(host, payload, split) {
+    const badge = host.shadowRoot.querySelector('.badge');
+    const view = badgeView(payload, state.error, state.scanning, split);
+    badge.dataset.state = view.key;
+    const symbol = make('span', 'badge-symbol', view.symbol);
+    symbol.setAttribute('aria-hidden', 'true');
+    badge.replaceChildren(symbol);
+    if (view.count !== null) {
+      badge.appendChild(make('span', 'badge-count', String(view.count)));
+    }
+    // The accessible name carries the whole state, because the glyph and the number alone do not
+    // say what they are counting.
+    badge.setAttribute('aria-label', view.label);
+  }
+
+  function renderBody(host, payload, split) {
+    const body = host.shadowRoot.querySelector('.panel-body');
+
+    if (state.error) {
+      const section = make('section', 'section');
+      section.appendChild(make('h3', '', 'No result to show'));
+      section.appendChild(make('p', 'notice', payload.summary));
+      body.replaceChildren(section);
+      return;
+    }
+
+    if (!payload.loaded) {
+      const section = make('section', 'section');
+      section.appendChild(make('h3', '', 'Loading result'));
+      section.appendChild(make('div', 'loading-line'));
+      section.appendChild(make('div', 'loading-line'));
+      body.replaceChildren(section);
+      return;
+    }
+
+    const children = [renderCurrentScreen(payload, split)];
+    const elsewhere = renderElsewhere(split);
+    if (elsewhere) children.push(elsewhere);
+    const receipt = renderReceipt(payload.receipt);
+    if (receipt) children.push(receipt);
+    const guarded = renderGuardedPaths(payload.dirtyGuardedPaths);
+    if (guarded) children.push(guarded);
+    const floorPaidDown = renderFloorPaidDown(payload.paidDownCount);
+    if (floorPaidDown) children.push(floorPaidDown);
+    children.push(renderCoverage(payload));
+    body.replaceChildren(...children);
+  }
+
+  // What the overlay shows before the first result arrives. loaded stays false so every surface can
+  // tell "no result yet" apart from "a result that found nothing".
+  const EMPTY_PAYLOAD = {
+    loaded: false,
+    verdict: null,
+    summary: '',
+    coverage: { affected: [], unresolvedFiles: [], gaps: [] },
+    findings: [],
+    receipt: null,
+    dirtyGuardedPaths: [],
+    paidDownCount: 0,
+  };
+
+  // One render pass. The badge and the panel are drawn from the same split, so the number on the
+  // badge and the number in the header can never disagree.
+  function render(host) {
+    const payload = state.payload || EMPTY_PAYLOAD;
+    const split = (state.error || !state.payload)
+      ? emptySplit(window.location.pathname)
+      : partitionByScreen(payload, window.location.pathname);
+    state.split = split;
+    state.rows = [];
+
+    renderBadge(host, payload, split);
+    renderHeader(host, payload, split);
+    renderBody(host, payload, split);
+
+    // A row that no longer exists cannot stay expanded, and its highlight cannot stay on the page.
+    if (state.expandedKey !== null && rowByKey(state.expandedKey) === null) {
+      state.expandedKey = null;
+      clearHighlight();
+      clearLocateStatus();
+    }
+    applyRowState();
+    syncOpen(host, false);
+  }
+
+  function errorPayload() {
+    return {
+      loaded: true,
       verdict: null,
-      summary: 'Scanning affected accessibility surfaces.',
+      summary: 'The inspector could not load the current result. Check the dev server logs.',
       coverage: { affected: [], unresolvedFiles: [], gaps: [] },
       findings: [],
       receipt: null,
       dirtyGuardedPaths: [],
       paidDownCount: 0,
     };
-    state.payload = loading;
-    state.error = false;
-    state.scanning = true;
-    renderLauncher(host, loading, false);
-    const panel = host.shadowRoot.querySelector('.panel');
-    const header = make('header', 'panel-header');
-    header.appendChild(make('h2', '', 'Accessibility inspector'));
-    header.appendChild(make('p', 'summary', 'Scanning affected accessibility surfaces.'));
-    const section = make('section', 'section');
-    section.appendChild(make('h3', '', 'Loading result'));
-    section.appendChild(make('div', 'loading-line'));
-    section.appendChild(make('div', 'loading-line'));
-    panel.replaceChildren(header, section);
   }
 
-  function renderPayload(payload, error = false) {
+  // A re-scan keeps the last result on screen and marks the panel as scanning. Wiping the panel back
+  // to a skeleton on every save would make the fix loop flicker, and there is nothing dishonest
+  // about showing the previous result while plainly saying a new scan is running.
+  function renderScanning(host) {
+    state.error = false;
+    state.scanning = true;
+    clearHighlight();
+    render(host);
+  }
+
+  function renderPayload(payload, error) {
     const host = ensureInspector();
-    state.payload = payload;
-    state.error = error;
+    // The page may have been re-rendered under us, so the old outline can point at a node that is
+    // no longer there. Drop it and re-anchor below if the row it belonged to survived.
+    clearHighlight();
+    state.payload = Object.assign({ loaded: true }, payload);
+    state.error = error === true;
     state.scanning = false;
-    renderLauncher(host, payload, error);
-    renderPanel(host, payload, error);
-    syncExpansion(host);
+    render(host);
+    if (state.open && state.expandedKey !== null) {
+      const row = rowByKey(state.expandedKey);
+      if (row) {
+        highlightFinding(row.finding, row.key);
+      }
+    }
   }
 
   // Re-partition the current-screen and elsewhere split after an in-app route change.
   //
   // A single-page app changes route without a full reload, so the overlay must re-render or it keeps
-  // showing the previous screen's findings. We only re-render when a real payload is present and the
-  // panel exists; loading and error states re-render on their own paths. Any active highlight is
-  // cleared because the located element belonged to the screen we just left.
+  // showing the previous screen's findings. Any expanded row and any highlight belonged to the
+  // screen we just left, so both are dropped.
   function handleRouteChange() {
     if (state.scanning || state.error || !state.payload) {
       return;
@@ -1234,8 +1875,9 @@ export const overlayClientSource = `(() => {
       return;
     }
     clearHighlight();
-    renderPanel(host, state.payload, state.error);
-    syncExpansion(host);
+    clearLocateStatus();
+    state.expandedKey = null;
+    render(host);
   }
 
   // Wrap history.pushState and history.replaceState so client-side navigation emits an event we can
@@ -1266,7 +1908,7 @@ export const overlayClientSource = `(() => {
 
   async function refresh() {
     const host = ensureInspector();
-    renderLoading(host);
+    renderScanning(host);
     try {
       const response = await fetch(RESULT_ENDPOINT, { cache: 'no-store' });
       if (!response.ok) {
@@ -1275,22 +1917,17 @@ export const overlayClientSource = `(() => {
       const payload = await response.json();
       renderPayload(payload, false);
     } catch (_err) {
-      renderPayload(
-        {
-          verdict: null,
-          summary: 'Inspector could not load the current result. Check the dev server logs.',
-          coverage: { affected: [], unresolvedFiles: [], gaps: [] },
-          findings: [],
-          receipt: null,
-          dirtyGuardedPaths: [],
-          paidDownCount: 0,
-        },
-        true,
-      );
+      renderPayload(errorPayload(), true);
     }
   }
 
   hookNavigation();
+  // A Vite dev server pushes a refresh over its hot channel. Any other host, and any test harness,
+  // can ask for the same re-read by dispatching this event. Both paths only re-read the published
+  // result; neither can change it.
+  window.addEventListener('usabl:refresh', () => {
+    refresh();
+  });
   refresh();
   if (import.meta && import.meta.hot && typeof import.meta.hot.on === 'function') {
     import.meta.hot.on('usabl:refresh', () => {
