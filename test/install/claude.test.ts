@@ -219,4 +219,45 @@ describe('isUsablStopCommand', () => {
     expect(isUsablStopCommand('node ./wrap.js && node node_modules/usabl/dist/stop-hook-runner.js')).toBe(false);
     expect(isUsablStopCommand('run-my-own-formatter')).toBe(false);
   });
+
+  it('does not treat a directory that merely ends in "usabl" as usabl-owned', () => {
+    // The retired-dist match forces a path-segment boundary before "usabl", so a foreign
+    // directory whose name ends in "usabl" (an operator's own "notusabl" or "myusabl") is not
+    // rewritten as if it were the retired usabl runner. "usabl" must be the whole final
+    // directory before /dist, not a suffix of one.
+    expect(isUsablStopCommand('node /path/notusabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node myusabl/dist/stop-hook-runner.js')).toBe(false);
+    // The legitimate forms still match: "usabl" at a segment boundary or as the first token.
+    expect(isUsablStopCommand('node /opt/node_modules/usabl/dist/stop-hook-runner.js')).toBe(true);
+    expect(isUsablStopCommand('node usabl/dist/stop-hook-runner.js')).toBe(true);
+  });
+
+  it('rejects a path prefix carrying shell expansion, comment, or separator syntax', () => {
+    // A match authorizes a silent rewrite, so the path prefix is an allowlist of literal POSIX
+    // path characters. Anything that could be shell syntax fails closed: a match here would let
+    // a foreign command with an expansion, a command substitution, or a comment be rewritten.
+    expect(isUsablStopCommand('node $PATH/usabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node `cmd`/usabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node #/usabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node ~/usabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node a*/usabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node a\\b/usabl/dist/stop-hook-runner.js')).toBe(false);
+    // A command-separating newline must not join "node" to a following retired-path token.
+    expect(isUsablStopCommand('node\nusabl/dist/stop-hook-runner.js')).toBe(false);
+    // A leading-dash first token is a node option, not a script path, so it is not the retired
+    // runner and must not be rewritten as if it were.
+    expect(isUsablStopCommand('node -x/usabl/dist/stop-hook-runner.js')).toBe(false);
+  });
+
+  it('accepts real install-path characters that are not shell-expandable', () => {
+    // pnpm encodes its virtual store with "+", and ordinary directories carry it too, so a
+    // legitimate usabl hook under such a path must migrate, not be refused as foreign. "+" is
+    // not shell-expandable, so allowing it does not reopen the injection surface.
+    expect(
+      isUsablStopCommand('node /work/c++-ui/node_modules/usabl/dist/stop-hook-runner.js'),
+    ).toBe(true);
+    expect(
+      isUsablStopCommand('node node_modules/.pnpm/usabl@0.2.1/node_modules/usabl/dist/stop-hook-runner.js'),
+    ).toBe(true);
+  });
 });
