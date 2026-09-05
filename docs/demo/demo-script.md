@@ -81,9 +81,9 @@ Five things that are genuinely new here. Say them plainly; the demo proves each 
 3. It is enforced on AI, and the AI handoff is safe. As assistants write more of our UI, the writer
    is grading its own work. usabl structurally stops an assistant from declaring done on an
    inaccessible change. And it hands the barrier to the assistant to fix with the page's own text
-   sealed as untrusted data, so the model fixing a barrier cannot be prompt-injected by the very
-   page it is fixing. That is the timely, novel part: AI-driven accessibility fixes that a hostile
-   page cannot hijack.
+   sealed as untrusted data, so that text cannot pose as instructions to the model fixing it. That
+   is the timely, novel part: an AI accessibility-fix loop where the page under repair cannot
+   smuggle instructions into the assistant.
 4. It is honest by construction. It never passes what it did not check; it discloses coverage gaps.
    The rules guard themselves, so a change cannot rewrite the policy it is judged by. Trust is
    engineered in, not asserted.
@@ -131,8 +131,8 @@ Honesty engineered in (the "silence is not evidence" family)
 
 Safe by construction
 - Page text handed to a model is sealed as untrusted data, and the seal is unforgeable: the page
-  cannot close its own frame. So the assistant fixing a barrier cannot be prompt-injected by the
-  page it is fixing. AI-driven accessibility fixes that a hostile page cannot hijack.
+  cannot close its own frame. So the page's text cannot pose as instructions to the assistant fixing
+  it. An AI accessibility-fix loop where the page under repair cannot smuggle in instructions.
 - The gate is the only authority; every provider only emits drafts. That single rule is what would
   let customers author their own rulepacks safely, because a pack can propose but can never pass.
 - The rules guard themselves. On a pull request the policy is read from the protected branch, so a
@@ -151,7 +151,8 @@ Built to adopt on real, brownfield products
 
 Small touches that show the care
 - The overlay deliberately skips under automation, so it never pollutes a team's e2e tests.
-- The stop hook shows the top barrier only, not a wall, respecting the model reader's context budget,
+- The stop hook shows the top few gating barriers grouped by rule (a noise budget, default 5), not a
+  wall and not one-at-a-time, with a pointer to the full list, respecting the model reader's context budget,
   and the whole message uses one untrusted frame instead of one per item to save tokens.
 - Finding identity is stable across markup churn (accessible name, then structure, then count), and
   framework-generated ids (React useId, PatternFly random ids) are neutralized, so a barrier keeps
@@ -211,15 +212,22 @@ message the agent gets is:
     fix: Move focus to the PatternFly <Modal> initial focus target on render.
     [END UNTRUSTED PAGE TEXT]
 
-The agent cannot declare done. It gets one barrier in plain words and the exact fix. The block
-shows the top barrier only, not all nine, so it is focused, not a wall. Undeniable and plain.
+The agent cannot declare done. It gets the gating barriers grouped by rule, each in plain words with
+its fix, and a pointer to `usabl check --json` for the rest. It is a short, ranked list, not a wall.
+
+RE-CAPTURE NEEDED (engine changed 2026-09-04): the capture above is from the pre-noise-budget engine,
+which showed one barrier. The final engine collapses to up to five gating rule groups (default budget
+5), gating only, with a `[status severity] screen/layer/rule (×N)` headline and a show-all hint
+disclosing the total. Re-fire the stop hook against the broken app and paste the real block here
+before recording. Narrate "it gets the top few barriers, grouped, with a pointer to the full list,"
+NOT "the top barrier only."
 
 NARRATION BEAT, worth a line (Edgar's call, keep it): the page's own text is sealed inside an
 "UNTRUSTED PAGE TEXT" frame, so the assistant treats it as data, never as instructions. usabl
 cannot be talked out of the block, or talked into anything while it fixes, by the page it is
-checking. Proposed line: "And usabl hands the page's own text to the assistant as data, never as
-instructions. So the model fixing a barrier can't be prompt-injected by the very page it is
-fixing." This is a genuine security property and a novel intersection of AI, accessibility, and
+checking. Proposed line: "And usabl hands the page's own text to the assistant sealed as data, never
+as instructions, so the page being fixed cannot smuggle commands into the model." This is a genuine
+security property and a novel intersection of AI, accessibility, and
 security, which is squarely on theme for Innovation Days. It reads as strength, not cringe, when
 narrated plainly.
 
@@ -240,15 +248,20 @@ TEST STATUS: VERIFIED on usabl-app, final engine, 2026-09-04, full arc:
   and mints a receipt: `sourceTree 41c3072... @ 2026-09-04T00:29:18Z`. The break and repair are a
   one-command reproducible loop, good for the camera.
 
-SOURCE GRANULARITY, molded from footage (important, do not overclaim): jump-to-source resolves to
-the FILE, not the exact line, in this setup. Every finding pointed at `src/demo/scenarios.ts` (the
-file the change lived in) with candidates like `src/pages/Clusters.tsx`. The exact-line editor link
-only fires for renderer-tier findings (the dev transform's data-source-file/line on a component),
-which these were not. So narrate "usabl names the barrier, the fix, and the file to look at," NOT
-"the exact line." The stronger visual for locating is the overlay's "Locate on page," which
-highlights the broken control in the live app. If we want the exact-line editor link on camera, that
-is a separate task: craft a break whose finding lands on a renderer-tier element so data-source-file
-is present. Flag for a decision; the file-level pointer plus locate-on-page is honest and enough.
+SOURCE GRANULARITY, molded from footage (VERIFIED exact-line, 2026-09-04): jump-to-source now
+resolves to the exact LINE, not just the file. Every finding on the fixture points at the source line
+of the broken control:
+- `pf/pf-focus-into-dialog` and `pf/pf-modal-focus-return` -> `src/pages/Clusters.tsx:26`
+- `axe/button-name`, `pf/pf-icon-button-name`, and the toolbar and row-action findings ->
+  `src/pages/Deployments.tsx:72`, `:79`, `:90`, `:92`
+Each line is the exact element carrying the barrier, and on that line you can see the injected break
+itself (the `isRepaired ? realName : undefined` conditional name). So narrate "usabl names the
+barrier, the fix, and the exact line to open." Two things had to be true for this, and both now are:
+the dev transform annotates native HTML elements (button, input, and the rest), not only components
+(#206), and it runs before the host JSX transform so it sees raw tags (#207). The overlay's "Locate
+on page" is still the companion visual: the line takes you to the code, locate-on-page highlights the
+same control live. Recording note: exact-line resolution needs the dev server, since the transform is
+serve-only; that is the same server the whole developer-day arc runs against, so no extra setup.
 
 RECEIPT beat (real): the receipt records the source tree hash and a timestamp, so anyone can
 re-check the exact run later. That is the "re-checkable proof" line, and it is true.
@@ -329,13 +342,15 @@ TEST STATUS: TRUE and already done, needs accurate telling only. This sprint we 
 at itself and at a real Red Hat product, found real false-greens and coverage holes (readiness
 settling early, findings reported fixed on unscanned screens, a rulepack check that could drop a
 whole provider), fixed each, and wrote the root cause on the issue. The real-product run is
-captured in the proof anchor; refresh it against ansible-ui when the lab tunnel is up.
+captured in the proof anchor; refresh it against ansible-ui-demo when the lab tunnel is up.
 
-PROVENANCE (for the honesty claim on screen or in notes): the real-product target is
-ansible-ui, upstream `ansible/ansible-ui` at commit `83747a4b` dated 2026-08-11, scanned
-against a live Ansible Automation Platform backend. State the commit and date so the catch is
-"real barriers on ansible-ui as of that commit," not a vague claim. Do a freshness check against
-current upstream close to the final recording, and swap any barrier that was fixed since.
+PROVENANCE (for the honesty claim on screen or in notes): the original catch was on ansible-ui,
+upstream `ansible/ansible-ui` at commit `83747a4b` dated 2026-08-11, scanned against a live Ansible
+Automation Platform backend. That is still true as a historical fact. The demo now runs against the
+private `usabl-dev/ansible-ui-demo` repo (its `devel`), so when you refresh the footage the on-screen
+provenance is that repo at whatever commit `devel` is on that day. State the exact commit and date
+either way, so the catch is "real barriers on ansible-ui as of that commit," not a vague claim. Do a
+freshness check close to the final recording and swap any barrier that was fixed since.
 
 The real-product beat (scene 5.1) is the one thing that needs the lab. Everything in scene 3
 runs on usabl-app without it.
@@ -344,10 +359,9 @@ runs on usabl-app without it.
 
 ## Open items
 
-- Lab tunnel for the real-ansible-ui refresh: run from a non-sandboxed shell:
-  `ssh -f -N -L 8443:aap.lab.example.com:443 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/agents/.ssh/rht_classroom.rsa -p 22022 instructor@72.32.49.202`
-  then map `aap.lab.example.com` to `127.0.0.1` in `/etc/hosts`, and start the ansible-ui dev
-  server. The current environment's tunnel and dev server are down; the hero loop does not need
-  them.
+- Lab tunnel for the real-product refresh: set `AAP_LAB_HOST` to the current lab jump host, then run
+  `docs/demo/open-aap-tunnel.sh`. It opens the tunnel and reminds you to map the lab host to
+  `127.0.0.1` in `/etc/hosts`. Then start the ansible-ui-demo dev server. The full flow is in
+  `docs/demo/ansible-ui-team-setup.md`. The hero loop (scene 3) does not need the lab.
 - Format: this is the demo script of record. `video-storyboard.md` stays as the shot-level A/V
   handoff; this file is the story spine and the test log that molds it.

@@ -24,7 +24,12 @@ import { EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
 import { parseWaiverLedger } from '../run.js';
 import { readStorageStateEnv, STORAGE_STATE_ENV_VAR, type EnvReader } from '../deps/session.js';
 import { neutralize } from '../primitives/neutralize.js';
+import { buildGuardedSet } from '../trust/guard.js';
 import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
+
+// The code-owners file the policy gate reads. Doctor reconciles it against guardedPaths so the
+// two lists cannot drift silently (issue #151).
+const CODEOWNERS_PATH = '.github/CODEOWNERS';
 
 // The waiver ledger path the gate reads. There is no shared constant for it today (run.ts,
 // guard.ts, and init all use the literal), so doctor names it locally rather than invent a
@@ -49,6 +54,7 @@ const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
 // rather than spelling it out, so doctor can never tell someone to require a stale job name.
 const BRANCH_RULE_LABEL = `branch protection (main requires ${REQUIRED_CHECK})`;
 const PLAYWRIGHT_CHROMIUM_LABEL = 'playwright chromium (headless browser)';
+const POLICY_SCOPE_LABEL = 'policy scope (guardedPaths covers CODEOWNERS)';
 
 // Four states, and unknown is first class. wired is a positive confirmation. missing is a
 // confident absence. drifted is present-but-not-what-usabl-expects. unknown is "cannot
@@ -481,6 +487,114 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
   };
 }
 
+// A guarded prefix, leading and trailing slashes stripped, so a directory entry and a file entry
+// compare the same way.
+function normalizePolicyPath(path: string): string {
+  return path.replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
+interface CodeownersPatterns {
+  // Root-anchored literal path prefixes, normalized, which reconcile against guarded prefixes.
+  reconcilable: string[];
+  // Patterns usabl cannot reconcile against a plain guarded prefix: globs (* ? [ ]) and any-depth
+  // names with no path separator (CODEOWNERS matches those at every level, gitignore-style). These
+  // are flagged for manual verification rather than assumed covered, so the check never reads a
+  // pattern it cannot evaluate as "wired".
+  unreconcilable: string[];
+}
+
+// Split each CODEOWNERS rule's path pattern (the first whitespace token) into the two buckets above.
+// Comments and blank lines are skipped.
+function codeownersOwnedPaths(raw: string): CodeownersPatterns {
+  const reconcilable: string[] = [];
+  const unreconcilable: string[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith('#')) {
+      continue;
+    }
+    const token = trimmed.split(/\s+/)[0];
+    if (token === undefined) {
+      continue;
+    }
+    const hasGlob = /[*?[\]]/.test(token);
+    // A separator at the start or middle anchors the pattern to the repo root (gitignore rule). A
+    // token with no separator matches its name at any depth, which a plain prefix cannot express.
+    const rootAnchored = token.replace(/\/+$/, '').includes('/');
+    if (hasGlob || !rootAnchored) {
+      unreconcilable.push(token);
+      continue;
+    }
+    reconcilable.push(normalizePolicyPath(token));
+  }
+  return { reconcilable, unreconcilable };
+}
+
+// A CODEOWNERS path is covered when the guarded set contains it or an ancestor directory of it, so
+// any change under the owned path is one usabl also treats as a policy change.
+function isPolicyPathCovered(codeownersPath: string, guardedSet: string[]): boolean {
+  return guardedSet.some((guarded) => {
+    const g = normalizePolicyPath(guarded);
+    return codeownersPath === g || codeownersPath.startsWith(`${g}/`);
+  });
+}
+
+// Reconcile guardedPaths against CODEOWNERS. If CODEOWNERS gates a path that guardedPaths (plus the
+// always-guarded ledgers) does not, a change to that path reads as "no policy change" while GitHub
+// still requires an owner: the #140 pattern, where silence reads as green. Report it as drift so the
+// disagreement is loud, not something the next reviewer finds by luck.
+async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
+  const codeownersRaw = await deps.fs.readFile(CODEOWNERS_PATH);
+  if (codeownersRaw === null) {
+    return {
+      id: 'policy-scope',
+      label: POLICY_SCOPE_LABEL,
+      state: 'missing',
+      nextStep: `No ${CODEOWNERS_PATH}, so usabl cannot confirm which changes GitHub gates. Add code owners for the trust-critical paths, then list them in guardedPaths.`,
+    };
+  }
+  let guardedPaths: string[] = [];
+  const configRaw = await deps.fs.readFile(deps.configPath);
+  if (configRaw !== null) {
+    try {
+      const parsed: unknown = JSON.parse(configRaw);
+      const raw = (parsed as { guardedPaths?: unknown }).guardedPaths;
+      if (Array.isArray(raw)) {
+        guardedPaths = raw.filter((entry): entry is string => typeof entry === 'string');
+      }
+    } catch {
+      // A config that does not parse is already reported by collectConfig; treat guardedPaths as
+      // empty here so the always-guarded ledgers still reconcile.
+    }
+  }
+  const guardedSet = buildGuardedSet({ guardedPaths });
+  const { reconcilable, unreconcilable } = codeownersOwnedPaths(codeownersRaw);
+  const uncovered = [...new Set(reconcilable)].filter(
+    (path) => !isPolicyPathCovered(path, guardedSet),
+  );
+  const unverifiable = [...new Set(unreconcilable)];
+  if (uncovered.length > 0 || unverifiable.length > 0) {
+    const parts: string[] = [];
+    if (uncovered.length > 0) {
+      parts.push(
+        `CODEOWNERS gates ${uncovered.join(', ')}, but guardedPaths does not, so a change there reads as "no policy change" while GitHub still requires an owner. Add ${uncovered.join(', ')} to guardedPaths in ${deps.configPath}.`,
+      );
+    }
+    if (unverifiable.length > 0) {
+      parts.push(
+        `CODEOWNERS uses pattern(s) usabl cannot reconcile against a guarded prefix (${unverifiable.join(', ')}); confirm guardedPaths covers what they own, since usabl cannot prove it.`,
+      );
+    }
+    return {
+      id: 'policy-scope',
+      label: POLICY_SCOPE_LABEL,
+      state: 'drifted',
+      nextStep: parts.join(' '),
+    };
+  }
+  return { id: 'policy-scope', label: POLICY_SCOPE_LABEL, state: 'wired', nextStep: '' };
+}
+
 export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceReport[]> {
   // Order mirrors the slice: config, authenticated session, playwright chromium, routes,
   // evidence floor, waivers, overlay, stop hook, usabl-check skill, cursor assistant, ci
@@ -503,6 +617,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     await guardRead('cursor', CURSOR_LABEL, () => collectCursor(deps)),
     await guardRead('ci', CI_LABEL, () => collectCi(deps)),
     await guardRead('branch-rule', BRANCH_RULE_LABEL, () => collectBranchRule(deps)),
+    await guardRead('policy-scope', POLICY_SCOPE_LABEL, () => collectPolicyScope(deps)),
   ];
 }
 

@@ -156,6 +156,9 @@ const FULLY_WIRED_FILES: Record<string, string> = {
   [CURSOR_COMMAND_PATH]: CURSOR_COMMAND_CONTENTS,
   [CURSOR_RULE_PATH]: buildCursorRuleContents(['fixtures/app/src/**']),
   '.github/workflows/usabl-gate.yml': PINNED_WORKFLOW,
+  // CODEOWNERS gates only always-guarded ledgers here, so guardedPaths covers it and policy-scope
+  // reads wired.
+  '.github/CODEOWNERS': '/usabl.config.json @owner\n/.usabl-evidence.json @owner\n',
   // The storage state lives outside the repository on purpose: it holds live session tokens
   // and must never be committed. Doctor reads it through the same fs port, by absolute path.
   [SESSION_PATH]: VALID_SESSION_FILE,
@@ -182,6 +185,87 @@ function doctorDeps(
 function stateOf(reports: SurfaceReport[], id: string): SurfaceState {
   return byId(reports, id).state;
 }
+
+describe('collectPolicyScope (guardedPaths vs CODEOWNERS)', () => {
+  const configWith = (guardedPaths: string[]): string =>
+    JSON.stringify({ ...(JSON.parse(VALID_CONFIG) as object), guardedPaths });
+
+  it('reports drift when CODEOWNERS gates a path guardedPaths does not', async () => {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({
+          'usabl.config.json': configWith(['src/gate/index.ts']),
+          '.github/CODEOWNERS': '/src/gate/ @o\n/.github/workflows/ @o\n',
+        }),
+        gh: GH_VERIFIED,
+        configPath: 'usabl.config.json',
+      }),
+    );
+    const report = byId(reports, 'policy-scope');
+    expect(report.state).toBe('drifted');
+    // .github/workflows is not guarded at all; src/gate/ (dir) is not covered by the file entry.
+    expect(report.nextStep).toContain('.github/workflows');
+    expect(report.nextStep).toContain('src/gate');
+  });
+
+  it('reports wired when guardedPaths covers every literal CODEOWNERS path', async () => {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({
+          'usabl.config.json': configWith(['src/gate/', '.github/workflows/']),
+          '.github/CODEOWNERS': '/src/gate/ @o\n/.github/workflows/ @o\n/usabl.config.json @o\n',
+        }),
+        gh: GH_VERIFIED,
+        configPath: 'usabl.config.json',
+      }),
+    );
+    expect(stateOf(reports, 'policy-scope')).toBe('wired');
+  });
+
+  it('flags a glob CODEOWNERS pattern as unreconcilable rather than assuming coverage', async () => {
+    // "* @o" owns every file; guardedPaths cannot express that, so usabl must not read it as wired.
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({
+          'usabl.config.json': configWith(['src/gate/']),
+          '.github/CODEOWNERS': '* @o\n',
+        }),
+        gh: GH_VERIFIED,
+        configPath: 'usabl.config.json',
+      }),
+    );
+    const report = byId(reports, 'policy-scope');
+    expect(report.state).toBe('drifted');
+    expect(report.nextStep).toContain('cannot reconcile');
+  });
+
+  it('flags a slash-free CODEOWNERS literal, which matches at any depth', async () => {
+    // "README.md" (no separator) owns that name at every level, not just the root, so a guarded
+    // root "README.md" does not cover it. usabl flags it rather than reading it as wired.
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({
+          'usabl.config.json': configWith(['README.md']),
+          '.github/CODEOWNERS': 'README.md @o\n',
+        }),
+        gh: GH_VERIFIED,
+        configPath: 'usabl.config.json',
+      }),
+    );
+    expect(stateOf(reports, 'policy-scope')).toBe('drifted');
+  });
+
+  it('reports missing when there is no CODEOWNERS to reconcile against', async () => {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({ 'usabl.config.json': VALID_CONFIG }),
+        gh: GH_VERIFIED,
+        configPath: 'usabl.config.json',
+      }),
+    );
+    expect(stateOf(reports, 'policy-scope')).toBe('missing');
+  });
+});
 
 describe('collectDoctorReport', () => {
   it('reports every surface wired for a fully wired repo', async () => {

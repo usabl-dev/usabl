@@ -341,8 +341,13 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
     const trusted: Record<string, string> = {
       'usabl.config.json': config,
       '.github/CODEOWNERS': codeowners,
-      [over.dirty]: 'trusted bytes',
     };
+    // Ensure the dirty path exists at the trusted ref, but do not clobber the real config or
+    // CODEOWNERS when one of them is the dirty file: enforcePolicy resolves owners from the trusted
+    // ref, so the trusted CODEOWNERS must stay valid even when CODEOWNERS itself is the change.
+    if (!(over.dirty in trusted)) {
+      trusted[over.dirty] = 'trusted bytes';
+    }
     const headTable: Record<string, string> = { ...trusted, [over.dirty]: 'head bytes' };
     const table = (ref: string): Record<string, string> => (ref === 'origin/main' ? trusted : headTable);
     return {
@@ -414,7 +419,10 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
     const reviews = logins.map((login) => ({ userLogin: login, state: 'APPROVED', commitId: head }));
 
     const unclearable: { path: string; message: string }[] = [];
-    for (const path of guarded) {
+    for (const entry of guarded) {
+      // A directory entry is expanded to files before enforcePolicy sees a dirty path, so probe a
+      // representative file under it. CODEOWNERS must own that file, or the directory has a gap.
+      const path = entry.endsWith('/') ? `${entry}probe-file` : entry;
       const out = await enforcePolicy(
         policyResult,
         await repoDeps({ dirty: path, author: 'outside-contributor', reviews }),
