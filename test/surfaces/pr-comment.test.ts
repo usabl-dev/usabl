@@ -125,10 +125,14 @@ describe('projectPrComment', () => {
     expect(markdown).not.toContain('Create cluster 21');
   });
 
-  it('prints coverage gaps with state and reason', () => {
+  it('prints coverage gaps with state as the label and ref and reason sealed as untrusted', () => {
+    // The ref can be a page URL and the reason can carry a browser exception, so both sit inside
+    // the finding-style frame; only the engine state stays as the plain label.
     const markdown = projectPrComment(baseResult({}));
 
-    expect(markdown).toContain('- `provider:axe-core` (capability-denied): static mode denied live');
+    expect(markdown).toContain('- (capability-denied)');
+    expect(markdown).toContain('ref: provider:axe-core');
+    expect(markdown).toContain('reason: static mode denied live');
   });
 
   it('scrubs untrusted findings before markdown egress', () => {

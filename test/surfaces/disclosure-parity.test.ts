@@ -345,6 +345,40 @@ describe('the pull request comment seals page-derived finding text (a model may 
     // The forged close is scrubbed to a marker, so the fix after it is still inside the frame.
     expect(insideFrame(text, POISON)).toBe(true);
   });
+
+  it('frames a coverage gap reason, which can carry a browser or provider exception', () => {
+    const text = projectPrComment(
+      withGaps([gap({ ref: 'http://127.0.0.1:5173/jobs', state: 'not-covered', reason: POISON })]),
+    );
+    expect(text).toContain(POISON);
+    expect(insideFrame(text, POISON)).toBe(true);
+  });
+
+  it('frames an announcement token, which comes straight from the accessibility tree', () => {
+    const text = projectPrComment(
+      blockedResult({
+        screens: [
+          {
+            screenId: 'clusters',
+            url: 'http://127.0.0.1:5173/clusters',
+            stops: [
+              {
+                index: 0,
+                elementPath: 'button.pf-m-plain',
+                announcement: [{ kind: 'live', text: POISON, fromTree: true, source: 'ax-tree' }],
+              },
+            ],
+            drafts: [],
+            gaps: [],
+            applicability: [],
+            reachedSelectorPresent: null,
+          },
+        ],
+      }),
+    );
+    expect(text).toContain(POISON);
+    expect(insideFrame(text, POISON)).toBe(true);
+  });
 });
 
 describe('the stop hook stays short enough to belong in a model context', () => {

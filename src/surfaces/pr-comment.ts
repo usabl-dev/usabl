@@ -183,22 +183,28 @@ function renderCoverageGaps(result: Result): string[] {
   }
   return [
     '### Coverage gaps',
-    ...result.coverage.gaps.map(
-      (gap) =>
-        `- \`${neutralize(gap.ref)}\` (${neutralize(gap.state)}): ${neutralize(gap.reason)}`,
-    ),
+    ...result.coverage.gaps.flatMap((gap) => {
+      // A gap ref can be a page URL, and a reason can carry a browser or provider exception, both
+      // page- or tool-derived, so they are sealed as untrusted for the model reading this comment.
+      // The state is an engine enum and stays as the plain label.
+      const framed = frameUntrustedBlock([`ref: ${gap.ref}`, `reason: ${gap.reason}`]).split('\n');
+      return [`- (${neutralize(gap.state)})`, ...framed.map((line) => `  ${line}`)];
+    }),
   ];
 }
 
-function formatStop(stop: TranscriptStop): string {
+// The announcement text for one stop, page-derived: tokens come from the accessibility tree and
+// live regions, and the element-path fallback is a DOM selector. Returned raw; the caller frames
+// it, and frameUntrustedBlock scrubs it, so it is not pre-neutralized here.
+function stopAnnouncementText(stop: TranscriptStop): string {
   const nonLiveTokens = stop.announcement
     .filter((token) => token.kind !== 'live' && token.text !== null)
-    .map((token) => neutralize(token.text ?? ''));
+    .map((token) => token.text ?? '');
   const liveTokens = stop.announcement
     .filter((token) => token.kind === 'live' && token.text !== null)
-    .map((token) => `[announced] ${neutralize(token.text ?? '')}`);
+    .map((token) => `[announced] ${token.text ?? ''}`);
   const pieces = [...nonLiveTokens, ...liveTokens].filter((token) => token.length > 0);
-  return pieces.length > 0 ? pieces.join(', ') : neutralize(stop.elementPath);
+  return pieces.length > 0 ? pieces.join(', ') : stop.elementPath;
 }
 
 function renderAnnouncements(result: Result): string[] {
@@ -214,7 +220,8 @@ function renderAnnouncements(result: Result): string[] {
     lines.push(`#### \`${neutralize(screen.screenId)}\``);
     const capped = screen.stops.slice(0, STOP_CAP);
     for (const stop of capped) {
-      lines.push(`${stop.index + 1}. ${formatStop(stop)}`);
+      const framed = frameUntrustedBlock([stopAnnouncementText(stop)]).split('\n');
+      lines.push(`${stop.index + 1}.`, ...framed.map((line) => `  ${line}`));
     }
     if (screen.stops.length > STOP_CAP) {
       lines.push(`- showing first ${STOP_CAP} of ${screen.stops.length} stops`);
