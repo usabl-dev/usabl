@@ -96,11 +96,38 @@ const GH_VERIFIED = ghReplying(() => ({
   stderr: '',
 }));
 
-const GH_NOT_PROTECTED = ghReplying(() => ({
-  code: 1,
-  stdout: '',
-  stderr: 'gh: Branch not protected (HTTP 404)',
-}));
+const GH_NOT_PROTECTED = ghReplying((endpoint) =>
+  endpoint.includes('/rulesets')
+    ? { code: 0, stdout: '[]', stderr: '' }
+    : { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' },
+);
+
+// No classic protection, but an active ruleset requires the check. Doctor must read wired.
+const GH_RULESET_PROTECTED = ghReplying((endpoint) => {
+  if (endpoint.endsWith('/rulesets/7')) {
+    return {
+      code: 0,
+      stdout: JSON.stringify({
+        name: 'Protect main',
+        target: 'branch',
+        enforcement: 'active',
+        conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
+        rules: [
+          { type: 'required_status_checks', parameters: { required_status_checks: [{ context: REQUIRED_CHECK }] } },
+        ],
+      }),
+      stderr: '',
+    };
+  }
+  if (endpoint.includes('/rulesets')) {
+    return {
+      code: 0,
+      stdout: JSON.stringify([{ id: 7, name: 'Protect main', target: 'branch', enforcement: 'active' }]),
+      stderr: '',
+    };
+  }
+  return { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' };
+});
 
 const GH_UNAVAILABLE = ghReplying(() => null);
 
@@ -282,6 +309,18 @@ describe('collectDoctorReport', () => {
     for (const report of reports) {
       expect(report.state).toBe('wired');
     }
+  });
+
+  it('reports branch-rule wired when a ruleset requires the check with no classic protection', async () => {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs(FULLY_WIRED_FILES),
+        gh: GH_RULESET_PROTECTED,
+        configPath: 'usabl.config.json',
+        env: WIRED_SESSION,
+      }),
+    );
+    expect(stateOf(reports, 'branch-rule')).toBe('wired');
   });
 
   it('reports every surface missing for a bare repo and names a next step', async () => {
