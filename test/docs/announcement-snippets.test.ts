@@ -15,6 +15,7 @@ const receiptFixture: Receipt = {
   },
   surfaces: ['clusters', 'settings'],
   coverage: { checked: ['clusters', 'settings'], notCovered: [] },
+  applicability: [],
   verdict: 'verified',
   findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 },
   activeWaivers: 0,

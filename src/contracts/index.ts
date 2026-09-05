@@ -184,6 +184,13 @@ export interface Receipt {
   scannerVersions: { axeCore: string; playwright: string; chromium: string };
   surfaces: string[];
   coverage: { checked: string[]; notCovered: string[] };
+  // What the run actually examined, per scanned screen: rules that examined at least one element
+  // (applied) versus rules that matched nothing (abstained). This exists so a verified receipt
+  // states what was checked, not only what was found. It is recorded, never re-verified:
+  // verifyReceipt does not compare it, because applicability legitimately varies with app state
+  // (a dialog present one run, absent the next), and it never gates. Screens with no applicability
+  // data (unseen screens, stripped upstream) are omitted.
+  applicability: { screenId: string; applied: number; abstained: number }[];
   verdict: 'verified';
   findingsSummary: { new: number; carried: number; fixed: number; unverified: number };
   activeWaivers: number;

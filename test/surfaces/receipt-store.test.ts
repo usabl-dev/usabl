@@ -37,6 +37,7 @@ const receiptFixture: Receipt = {
   scannerVersions: { axeCore: '4.13.0', playwright: '1.62.1', chromium: 'revision-123' },
   surfaces: ['cli'],
   coverage: { checked: ['clusters'], notCovered: [] },
+  applicability: [],
   verdict: 'verified',
   findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 },
   activeWaivers: 0,
@@ -63,6 +64,25 @@ describe('receipt-store', () => {
   it('returns null when receipt json is corrupt', async () => {
     const fs = new MemoryReceiptFs();
     fs.writeRaw(RECEIPT_PATH, '{"schemaVersion":1,');
+    await expect(loadReceipt(fs)).resolves.toBeNull();
+  });
+
+  it('rejects a stored receipt missing the required applicability field', async () => {
+    // applicability is a required Receipt field, so the runtime validator must enforce it too.
+    // An older receipt written before the field existed is stale (its sourceTree will not match
+    // current code anyway), so rejecting it is fail-safe: the hook discloses and re-checks.
+    const fs = new MemoryReceiptFs();
+    const { applicability: _dropped, ...withoutApplicability } = receiptFixture;
+    fs.writeRaw(RECEIPT_PATH, JSON.stringify(withoutApplicability));
+    await expect(loadReceipt(fs)).resolves.toBeNull();
+  });
+
+  it('rejects a stored receipt whose applicability rows are malformed', async () => {
+    const fs = new MemoryReceiptFs();
+    fs.writeRaw(
+      RECEIPT_PATH,
+      JSON.stringify({ ...receiptFixture, applicability: [{ screenId: 'clusters', applied: 'lots' }] }),
+    );
     await expect(loadReceipt(fs)).resolves.toBeNull();
   });
 

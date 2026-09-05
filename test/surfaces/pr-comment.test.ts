@@ -58,6 +58,7 @@ const baseResult = (over: Partial<Result>): Result => ({
     scannerVersions: { axeCore: '4.13.0', playwright: '1.62.1', chromium: 'revision-123' },
     surfaces: ['clusters'],
     coverage: { checked: ['clusters'], notCovered: ['provider:axe-core'] },
+    applicability: [],
     verdict: 'verified',
     findingsSummary: { new: 1, carried: 1, fixed: 0, unverified: 2 },
     activeWaivers: 0,

@@ -31,7 +31,7 @@ import { markUnseenScreens } from './coverage/unseen.js';
 import { mapFindingToSource, type DocsPageClosure } from './docs/source-map.js';
 import { enrichAppFindings } from './app/source-map.js';
 import { gate } from './gate/index.js';
-import { mintReceipt } from './evidence/receipt.js';
+import { mintReceipt, summarizeApplicability } from './evidence/receipt.js';
 import { parseEvidenceFloor } from './evidence/floor.js';
 import { parseUsablConfig } from './intake/config.js';
 import { loadRequirements } from './intake/load.js';
@@ -224,6 +224,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
             surfaces: ['cli'],
             checked: coverage.affected.map((a) => a.screenId),
             notCovered: coverage.unresolvedFiles,
+            applicability: summarizeApplicability(screens),
             findingsSummary: summarize(gated.findings),
             activeWaivers: gated.findings.filter((f) => f.status === 'waived').length,
           })

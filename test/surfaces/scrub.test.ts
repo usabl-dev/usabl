@@ -214,6 +214,7 @@ describe('scrubResult', () => {
         },
         surfaces: ['cli'],
         coverage: { checked: ['clusters'], notCovered: [] },
+        applicability: [],
         verdict: 'verified',
         findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 },
         activeWaivers: 0,
