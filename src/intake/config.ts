@@ -4,6 +4,7 @@
  * It must never mint a verdict or choose scan targets on its own.
  */
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
+import { assertSurfaceIds } from './surface-ids.js';
 import { expandBraces } from '../primitives/match-glob.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 
@@ -106,6 +107,11 @@ export function parseUsablConfig(raw: string): UsablConfig {
     throw new Error('surfaces must be an array');
   }
 
+  const surfaces = surfacesRaw.map((surface, index) => parseSurface(surface, index));
+  // Shape is checked per entry above. Identity is a property of the whole list, so it is
+  // checked once the list exists.
+  assertSurfaceIds(surfaces);
+
   const requirementsRaw = Reflect.get(root, 'requirements');
   const requirements =
     requirementsRaw === undefined ? undefined : expectString(requirementsRaw, 'requirements');
@@ -134,7 +140,7 @@ export function parseUsablConfig(raw: string): UsablConfig {
       routerFile: expectString(Reflect.get(discovery, 'routerFile'), 'discovery.routerFile'),
       wideBlastGlobs: expectGlobArray(Reflect.get(discovery, 'wideBlastGlobs'), 'discovery.wideBlastGlobs'),
     },
-    surfaces: surfacesRaw.map((surface, index) => parseSurface(surface, index)),
+    surfaces,
     guardedPaths: expectGlobArray(Reflect.get(root, 'guardedPaths'), 'guardedPaths'),
     ...(requirements === undefined ? {} : { requirements }),
     ...(promotedObligations === undefined ? {} : { promotedObligations }),

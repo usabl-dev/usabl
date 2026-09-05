@@ -1581,6 +1581,13 @@ self-check.
 }
 ```
 
+Each `surfaces[].id` is the key coverage is tracked under, so it must be a non-empty string
+and it must be unique across the list. Ids are compared with surrounding whitespace removed,
+so `settings` and ` settings ` count as the same id. A blank or repeated id is refused when
+the config is read. Left in, it would collapse two screens into one entry: the second screen
+is dropped from the scan while its changed files still count as mapped, and the run would
+report both screens as covered when only one was ever opened.
+
 `guardedPaths` is additive. The four policy files (`usabl.config.json`,
 `usabl.routes.json`, `.usabl-evidence.json`, `.usabl-waivers.json`) are force-guarded by
 `ALWAYS_GUARDED` whether or not they are listed here, and the requirements directory is

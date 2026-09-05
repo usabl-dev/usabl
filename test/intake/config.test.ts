@@ -73,6 +73,60 @@ describe('parseUsablConfig surface reachedWhen', () => {
   });
 });
 
+describe('parseUsablConfig surface id', () => {
+  const surface = (id: string, path: string) => ({
+    id,
+    url: `http://127.0.0.1:5173${path}`,
+    files: [`src${path}.tsx`],
+  });
+
+  it('loads a config whose surface ids are all distinct', () => {
+    const config = parseUsablConfig(
+      configJson({ surfaces: [surface('profile', '/profile'), surface('billing', '/billing')] }),
+    );
+    expect(config.surfaces.map((entry) => entry.id)).toEqual(['profile', 'billing']);
+  });
+
+  it('refuses an empty or whitespace-only id', () => {
+    for (const bad of ['', '   ', '\t']) {
+      expect(() => parseUsablConfig(configJson({ surfaces: [surface(bad, '/overview')] })), bad).toThrow(
+        /surfaces\[0\]\.id must be a non-empty string/,
+      );
+    }
+  });
+
+  it('refuses two surfaces that share one id and names both entries', () => {
+    let message = '';
+    try {
+      parseUsablConfig(
+        configJson({ surfaces: [surface('settings', '/settings/profile'), surface('settings', '/settings/billing')] }),
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('surfaces[1].id');
+    expect(message).toContain('surfaces[0].id');
+    expect(message).toContain('settings');
+    expect(message).toMatch(/unique/);
+  });
+
+  it('refuses two ids that differ only by surrounding whitespace', () => {
+    expect(() =>
+      parseUsablConfig(
+        configJson({ surfaces: [surface('settings', '/settings/profile'), surface(' settings ', '/settings/billing')] }),
+      ),
+    ).toThrow(/surfaces\[1\]\.id/);
+  });
+
+  it('still refuses a non-string id', () => {
+    expect(() =>
+      parseUsablConfig(
+        configJson({ surfaces: [{ id: 42, url: 'http://127.0.0.1:5173/overview', files: ['src/Overview.tsx'] }] }),
+      ),
+    ).toThrow(/surfaces\[0\]\.id must be a string/);
+  });
+});
+
 describe('parseUsablConfig glob syntax', () => {
   it('loads a config using only stars and brace groups', () => {
     const config = parseUsablConfig(

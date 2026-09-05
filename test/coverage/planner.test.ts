@@ -224,6 +224,41 @@ describe('computeCoverage', () => {
     expect(cov.affected.some((s) => s.screenId === 'clusters' && s.provenance === 'route-graph')).toBe(true);
   });
 
+  it('refuses a config whose surfaces share one id instead of scanning one screen and reporting two', async () => {
+    // The affected-screen map is keyed by surface id. Two screens under one id means the second
+    // is dropped from the scan while its changed file still counts as mapped, so the run reports
+    // both changed screens as covered when only one was ever opened. Config parsing rejects this,
+    // but computeCoverage takes a UsablConfig value from any caller, so it refuses here too.
+    const cfg: UsablConfig = {
+      ...baseConfig,
+      surfaces: [
+        { id: 'settings', url: '/settings/profile', files: ['src/Profile.tsx'] },
+        { id: 'settings', url: '/settings/billing', files: ['src/Billing.tsx'] },
+      ],
+    };
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({ routes: [] }),
+      'src/Profile.tsx': `export default function Profile() {}`,
+      'src/Billing.tsx': `export default function Billing() {}`,
+    });
+
+    await expect(computeCoverage(fs, cfg, ['src/Profile.tsx', 'src/Billing.tsx'])).rejects.toThrow(
+      /surfaces\[1\]\.id/,
+    );
+  });
+
+  it('refuses a config with an empty surface id', async () => {
+    const cfg: UsablConfig = { ...baseConfig, surfaces: [{ id: '  ', url: '/login', files: ['src/LoginPage.tsx'] }] };
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({ routes: [] }),
+      'src/LoginPage.tsx': `export default function LoginPage() {}`,
+    });
+
+    await expect(computeCoverage(fs, cfg, ['src/LoginPage.tsx'])).rejects.toThrow(
+      /surfaces\[0\]\.id must be a non-empty string/,
+    );
+  });
+
   it('includes alias diagnostics when an unresolved file imports through a broken alias', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({ routes: [] }),
