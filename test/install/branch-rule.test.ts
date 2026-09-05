@@ -175,6 +175,63 @@ describe('verifyBranchRule', () => {
     expect(result.action).toBe('not-applied');
   });
 
+  it('reads later ruleset pages so a protecting ruleset past page one still verifies', async () => {
+    const fullFirstPage = Array.from({ length: 100 }, (_, i) => ({
+      id: 1000 + i,
+      name: `filler-${i}`,
+      target: 'tag',
+      enforcement: 'active',
+    }));
+    const gh = recordingGh((endpoint) => {
+      if (endpoint.endsWith('/rulesets/7')) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            name: 'Protect main',
+            target: 'branch',
+            enforcement: 'active',
+            conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
+            rules: [requiredCheckRule],
+          }),
+          stderr: '',
+        };
+      }
+      if (endpoint.endsWith('&page=2')) {
+        return {
+          code: 0,
+          stdout: JSON.stringify([{ id: 7, name: 'Protect main', target: 'branch', enforcement: 'active' }]),
+          stderr: '',
+        };
+      }
+      if (endpoint.endsWith('&page=1')) {
+        return { code: 0, stdout: JSON.stringify(fullFirstPage), stderr: '' };
+      }
+      return { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' };
+    });
+    const result = await verifyBranchRule(gh.reader);
+    expect(result.action).toBe('verified');
+    expect(gh.calls.some((c) => c.endsWith('&page=2'))).toBe(true);
+  });
+
+  it('refuses when a ruleset summary is valid but its detail body is malformed', async () => {
+    const gh = recordingGh((endpoint) => {
+      if (endpoint.endsWith('/rulesets/7')) {
+        return { code: 0, stdout: '{}', stderr: '' };
+      }
+      if (endpoint.includes('/rulesets')) {
+        return {
+          code: 0,
+          stdout: JSON.stringify([{ id: 7, name: 'x', target: 'branch', enforcement: 'active' }]),
+          stderr: '',
+        };
+      }
+      return { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' };
+    });
+    const result = await verifyBranchRule(gh.reader);
+    expect(result.action).toBe('cannot-verify');
+    expect(result.message.toLowerCase()).not.toContain('verified:');
+  });
+
   it('refuses rather than claims not-applied when classic is absent but rulesets are unreadable', async () => {
     // A ruleset could require the check; if the rulesets read fails, usabl must not call it missing.
     const gh = recordingGh((endpoint) =>

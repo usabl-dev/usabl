@@ -98,11 +98,22 @@ export function branchRuleSetting(): string {
 // The repository's branch rulesets. A ruleset can require the same check a classic rule does, so
 // doctor must read both or it calls a ruleset-protected repo unprotected. {owner}/{repo} are
 // resolved by gh from the current repo context, so no slug is interpolated from external input.
-// per_page=100 in one call, because a repository holds at most 75 rulesets, so a single page reads
-// them all and the default 30-per-page window cannot hide the protecting ruleset behind a later page.
-const RULESETS_ENDPOINT = 'repos/{owner}/{repo}/rulesets?per_page=100';
+// The rulesets list is paged (repo rulesets plus inherited org rulesets can exceed one page), so it
+// is read at the max page size across pages until a short page. The cap is far above any real total;
+// hitting it means the list could not be read in full, which is treated as unreadable, not empty.
+function rulesetsPageEndpoint(page: number): string {
+  return `repos/{owner}/{repo}/rulesets?per_page=100&page=${page}`;
+}
+const RULESETS_PAGE_SIZE = 100;
+const RULESETS_PAGE_CAP = 10;
 function rulesetEndpoint(id: number): string {
   return `repos/{owner}/{repo}/rulesets/${id}`;
+}
+
+// A ruleset detail body has at least these fields. A response missing them is malformed, so it is
+// read as unreadable rather than as a valid ruleset that happens not to protect the branch.
+function isRulesetShape(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && typeof value['enforcement'] === 'string' && Array.isArray(value['rules']);
 }
 
 // Whether a single ref target names the protected branch. "covers" only for literals this code can
@@ -124,7 +135,7 @@ function verifyByHand(): string {
   return [
     'Verify by hand (read-only):',
     `  gh api ${PROTECTION_ENDPOINT} --jq '.required_status_checks'`,
-    `  gh api ${RULESETS_ENDPOINT}   # a ruleset can require the check instead of classic protection`,
+    '  gh api repos/{owner}/{repo}/rulesets   # a ruleset can require the check instead of classic protection',
     '  or open Settings > Branches (and Settings > Rules) in the GitHub web UI.',
   ].join('\n');
 }
@@ -240,25 +251,41 @@ export function rulesetCheckCoverage(fullRuleset: unknown): Coverage {
 // The result of reading rulesets: a named ruleset that confidently requires the check, 'ambiguous'
 // when one might but usabl cannot confirm the branch targeting, null when none does, or 'unreadable'
 // when a response could not be read (so it is never taken as a confident absence).
+// Every ruleset summary across all pages, or 'unreadable' when any page could not be read or the
+// list did not terminate in a short page within the cap (so a later page cannot be silently missed).
+async function listAllRulesets(gh: GhReader): Promise<unknown[] | 'unreadable'> {
+  const all: unknown[] = [];
+  for (let page = 1; page <= RULESETS_PAGE_CAP; page += 1) {
+    let res: GhResult | null;
+    try {
+      res = await gh.getJson(rulesetsPageEndpoint(page));
+    } catch {
+      return 'unreadable';
+    }
+    if (res === null || res.code !== 0) {
+      return 'unreadable';
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(res.stdout);
+    } catch {
+      return 'unreadable';
+    }
+    if (!Array.isArray(parsed)) {
+      return 'unreadable';
+    }
+    all.push(...parsed);
+    if (parsed.length < RULESETS_PAGE_SIZE) {
+      return all;
+    }
+  }
+  return 'unreadable';
+}
+
 type RulesetOutcome = { name: string } | 'ambiguous' | null | 'unreadable';
 async function findRulesetRequiringCheck(gh: GhReader): Promise<RulesetOutcome> {
-  let listRes: GhResult | null;
-  try {
-    listRes = await gh.getJson(RULESETS_ENDPOINT);
-  } catch {
-    return 'unreadable';
-  }
-  if (listRes === null || listRes.code !== 0) {
-    return 'unreadable';
-  }
-  let list: unknown;
-  try {
-    list = JSON.parse(listRes.stdout);
-  } catch {
-    return 'unreadable';
-  }
-  if (!Array.isArray(list)) {
-    // Valid JSON of the wrong shape is a response usabl cannot read, not a confident empty list.
+  const list = await listAllRulesets(gh);
+  if (list === 'unreadable') {
     return 'unreadable';
   }
   let sawAmbiguous = false;
@@ -285,9 +312,13 @@ async function findRulesetRequiringCheck(gh: GhReader): Promise<RulesetOutcome> 
     } catch {
       return 'unreadable';
     }
+    // A malformed detail body must not read as a valid ruleset that happens not to protect main.
+    if (!isRulesetShape(full)) {
+      return 'unreadable';
+    }
     const coverage = rulesetCheckCoverage(full);
     if (coverage === 'covers') {
-      const name = isRecord(full) && typeof full['name'] === 'string' ? full['name'] : 'a ruleset';
+      const name = typeof full['name'] === 'string' ? full['name'] : 'a ruleset';
       return { name };
     }
     if (coverage === 'ambiguous') {
