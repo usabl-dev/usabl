@@ -369,6 +369,28 @@ describe('runRoutesDrift', () => {
     expect(outcome.stdout).toMatch(/computed|variable|parse/i);
   });
 
+  it('includes a symmetric caveat about false additions in the added routes section', async () => {
+    // The added side over-reports the same way the removed side does: a stray object
+    // property named "path" can look like a route. The report must say so, mirroring
+    // the removed-routes caveat, so an operator verifies before acting.
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+      }),
+      'src/router.tsx': `
+        <Route path="/home" element={<Home />} />
+        <Route path="/added" element={<Added />} />
+      `,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stdout).toContain('Added routes');
+    expect(outcome.stdout).toMatch(/false addition/i);
+    expect(outcome.stdout).toMatch(/verify before acting/i);
+  });
+
   it('handles duplicate literal paths without crashing', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({
