@@ -105,8 +105,10 @@ describe('formatSummary source mapping', () => {
 
 describe('projectPrComment source mapping', () => {
   it('renders a source line and the syntax-aware fix for a docs finding', () => {
+    // Source now sits inside the finding's untrusted frame (an app source can be read from a
+    // renderer-injected DOM attribute), so it renders as a plain piece, not a markdown list line.
     const out = projectPrComment(resultWith([finding({ docsSource: contentMapping() })]));
-    expect(out).toContain('- source: `modules/proc_create.adoc -> image::create-cluster.png`');
+    expect(out).toContain('source: modules/proc_create.adoc -> image::create-cluster.png');
     expect(out).toContain('Add alt text between the brackets in AsciiDoc');
   });
 
@@ -121,7 +123,7 @@ describe('projectPrComment source mapping', () => {
         }),
       ]),
     );
-    expect(out).toContain('- candidates: `modules/a.adoc`, `modules/b.adoc`');
+    expect(out).toContain('candidates: modules/a.adoc, modules/b.adoc');
   });
 
   it('renders no source line for an app finding', () => {
