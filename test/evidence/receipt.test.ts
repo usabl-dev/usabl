@@ -53,6 +53,22 @@ describe('mintReceipt', () => {
     });
     expect(receipt.applicability).toEqual([{ screenId: 'clusters', applied: 40, abstained: 3 }]);
   });
+
+  it('sorts the applicability it records so the receipt is byte-stable regardless of caller order', async () => {
+    // mintReceipt sorts surfaces and coverage; applicability must be no different, so a caller
+    // that builds ReceiptArgs directly cannot produce a differently ordered receipt for the
+    // same run.
+    const deps = makeFakeDeps({ now: '2026-08-19T12:00:00.000Z', writeTree: 'tree-abc', runnerVersion: '0.0.0-test' });
+    const receipt = await mintReceipt(deps, config, {
+      surfaces: ['cli'], checked: ['zeta', 'alpha'], notCovered: [],
+      applicability: [
+        { screenId: 'zeta', applied: 1, abstained: 0 },
+        { screenId: 'alpha', applied: 2, abstained: 1 },
+      ],
+      findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 }, activeWaivers: 0,
+    });
+    expect(receipt.applicability.map((entry) => entry.screenId)).toEqual(['alpha', 'zeta']);
+  });
 });
 
 describe('summarizeApplicability', () => {
@@ -88,5 +104,15 @@ describe('summarizeApplicability', () => {
       screen('alpha', [applic('r', 'passed', 1)]),
     ]);
     expect(summary.map((s) => s.screenId)).toEqual(['alpha', 'zeta']);
+  });
+
+  it('aggregates a screen scanned more than once into one row rather than double-counting', () => {
+    // A duplicate-render run can scan the same logical screen twice. Its counts sum into a
+    // single row so the receipt does not report the same screen twice or double-count it.
+    const summary = summarizeApplicability([
+      screen('clusters', [applic('a', 'passed', 1), applic('b', 'inapplicable', 0)]),
+      screen('clusters', [applic('c', 'failed', 2)]),
+    ]);
+    expect(summary).toEqual([{ screenId: 'clusters', applied: 2, abstained: 1 }]);
   });
 });

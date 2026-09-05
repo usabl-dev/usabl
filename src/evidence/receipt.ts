@@ -33,14 +33,27 @@ export interface ReceiptArgs {
 export function summarizeApplicability(
   screens: readonly ScreenScan[],
 ): Receipt["applicability"] {
+  // Aggregate by screenId, not per ScreenScan. If a screen is scanned more than once in a run
+  // (a duplicate-render case), it is one logical screen, so its counts sum into a single row
+  // rather than appearing twice and double-counting. One row per screen also keeps the receipt
+  // bytes stable when the same screen arrives in a different position.
+  const byScreen = new Map<string, { applied: number; abstained: number }>();
+  for (const screen of screens) {
+    if (screen.applicability.length === 0) {
+      continue;
+    }
+    const applied = screen.applicability.filter((entry) => entry.outcome !== "inapplicable").length;
+    const abstained = screen.applicability.filter((entry) => entry.outcome === "inapplicable").length;
+    const existing = byScreen.get(screen.screenId);
+    if (existing === undefined) {
+      byScreen.set(screen.screenId, { applied, abstained });
+    } else {
+      existing.applied += applied;
+      existing.abstained += abstained;
+    }
+  }
   return sortBy(
-    screens
-      .filter((screen) => screen.applicability.length > 0)
-      .map((screen) => ({
-        screenId: screen.screenId,
-        applied: screen.applicability.filter((entry) => entry.outcome !== "inapplicable").length,
-        abstained: screen.applicability.filter((entry) => entry.outcome === "inapplicable").length,
-      })),
+    [...byScreen.entries()].map(([screenId, counts]) => ({ screenId, ...counts })),
     (summary) => summary.screenId,
   );
 }
@@ -88,7 +101,10 @@ export async function mintReceipt(
       checked: sortBy([...args.checked], (s) => s),
       notCovered: sortBy([...args.notCovered], (s) => s),
     },
-    applicability: args.applicability,
+    // Sort here too, the way surfaces and coverage are sorted, so the receipt is byte-stable for
+    // the same inputs no matter what order a caller supplied. summarizeApplicability already
+    // sorts, but this protects any other caller that builds ReceiptArgs directly.
+    applicability: sortBy([...args.applicability], (entry) => entry.screenId),
     verdict: "verified",
     findingsSummary: args.findingsSummary,
     activeWaivers: args.activeWaivers,
