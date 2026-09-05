@@ -13,7 +13,7 @@
 import type { InstallFs } from '../install/index.js';
 import { planOverlay } from '../install/overlay.js';
 import { planClaude } from '../install/claude.js';
-import { planClaudeSkill } from '../install/claude-skill.js';
+import { planClaudeSkill, CLAUDE_SKILLS, type ClaudeSkillDescriptor } from '../install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs } from '../install/cursor.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { verifyBranchRule, REQUIRED_CHECK, type GhReader } from '../install/branch-rule.js';
@@ -47,7 +47,15 @@ const EVIDENCE_FLOOR_LABEL = `evidence floor (${EVIDENCE_FLOOR_PATH})`;
 const WAIVERS_LABEL = `waiver ledger (${WAIVERS_PATH})`;
 const OVERLAY_LABEL = 'vite overlay plugin';
 const STOP_HOOK_LABEL = 'claude stop hook (.claude/settings.json)';
-const CLAUDE_SKILL_LABEL = 'claude usabl-check skill (.claude/skills/usabl-check/SKILL.md)';
+// One report per installed skill, so a missing or drifted usabl-fix skill is not hidden behind
+// the usabl-check skill's state. The id and label are derived from the descriptor so a new skill
+// added to CLAUDE_SKILLS is reported without a further doctor edit.
+function claudeSkillId(skill: ClaudeSkillDescriptor): string {
+  return `claude-skill:${skill.humanName}`;
+}
+function claudeSkillLabel(skill: ClaudeSkillDescriptor): string {
+  return `claude ${skill.humanName} skill (${skill.path})`;
+}
 const CURSOR_LABEL = 'cursor stop hook + assistant (.cursor/hooks + commands + rules)';
 const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
 // The label names the check the operator must require. It reads that name from branch-rule
@@ -352,29 +360,35 @@ async function collectStopHook(deps: DoctorDeps): Promise<SurfaceReport> {
   };
 }
 
-async function collectClaudeSkill(deps: DoctorDeps): Promise<SurfaceReport> {
-  // The /usabl-check skill is a whole-file surface, so it drives off planClaudeSkill's plan the
-  // way overlay does, not planClaude's finer discriminator. already-wired is the only wired
-  // mapping. write means the file is absent, a confident absence. refuse means a file is present
-  // but differs from the canonical skill (an operator edit or an older engine version), which is
-  // drift, never a false wired.
-  const plan = await planClaudeSkill(deps.fs);
+async function collectClaudeSkill(
+  deps: DoctorDeps,
+  skill: ClaudeSkillDescriptor,
+): Promise<SurfaceReport> {
+  // Each skill is a whole-file surface, so it drives off planClaudeSkill's plan the way overlay
+  // does, not planClaude's finer discriminator. already-wired is the only wired mapping. write
+  // means the file is absent, a confident absence. refuse means a file is present but differs
+  // from the canonical skill (an operator edit or an older engine version), which is drift,
+  // never a false wired. install --claude-skill writes every skill, so it is the step in each
+  // message even for a single missing or drifted skill.
+  const id = claudeSkillId(skill);
+  const label = claudeSkillLabel(skill);
+  const plan = await planClaudeSkill(deps.fs, skill);
   if (plan.action === 'already-wired') {
-    return { id: 'claude-skill', label: CLAUDE_SKILL_LABEL, state: 'wired', nextStep: '' };
+    return { id, label, state: 'wired', nextStep: '' };
   }
   if (plan.action === 'refuse') {
     return {
-      id: 'claude-skill',
-      label: CLAUDE_SKILL_LABEL,
+      id,
+      label,
       state: 'drifted',
-      nextStep: `${plan.path} is present but is not the canonical usabl-check skill. Reconcile it by hand, or delete it and run "usabl install --claude-skill".`,
+      nextStep: `${plan.path} is present but is not the canonical ${skill.humanName} skill. Reconcile it by hand, or delete it and run "usabl install --claude-skill".`,
     };
   }
   return {
-    id: 'claude-skill',
-    label: CLAUDE_SKILL_LABEL,
+    id,
+    label,
     state: 'missing',
-    nextStep: 'No usabl-check skill. Run "usabl install --claude-skill" to write the on-demand /usabl-check command.',
+    nextStep: `No ${skill.humanName} skill. Run "usabl install --claude-skill" to write it.`,
   };
 }
 
@@ -428,8 +442,11 @@ async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'ci',
       label: CI_LABEL,
       state: 'drifted',
-      nextStep:
-        'The gate workflow is present but the engine ref is still the placeholder. Run "usabl install --ci" and replace PIN_TO_A_TRUSTED_USABL_COMMIT (it appears twice) with a full 40-character commit SHA you trust.',
+      // Do not tell the operator to run "usabl install --ci" here. On an existing unpinned
+      // draft that command hits its already-wired path and prints "No change" without
+      // reprinting the pin step, so it would not do what this instruction implies. The edit is
+      // self-contained: replace the placeholder in place.
+      nextStep: `The gate workflow is present but the engine ref is still the placeholder. Edit ${USABL_GATE_WORKFLOW_PATH} and replace PIN_TO_A_TRUSTED_USABL_COMMIT (it appears twice) with a full 40-character commit SHA you trust.`,
     };
   }
   return {
@@ -604,6 +621,14 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
   // so tests can target the states directly. guardRead absorbs an unexpected fs read error as
   // an honest unknown; every recognized state (including drifted and unknown) is returned, and
   // only a real programmer error propagates.
+  // One report per installed skill, iterated from CLAUDE_SKILLS so usabl-fix is covered and a
+  // future skill is reported without another doctor edit. Order within the group follows the
+  // list; the group sits where the single claude-skill report used to, after the stop hook.
+  const skillReports = await Promise.all(
+    CLAUDE_SKILLS.map((skill) =>
+      guardRead(claudeSkillId(skill), claudeSkillLabel(skill), () => collectClaudeSkill(deps, skill)),
+    ),
+  );
   return [
     await guardRead('config', CONFIG_LABEL, () => collectConfig(deps)),
     await guardRead('session', SESSION_LABEL, () => collectSession(deps)),
@@ -613,7 +638,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     await guardRead('waivers', WAIVERS_LABEL, () => collectWaivers(deps)),
     await guardRead('overlay', OVERLAY_LABEL, () => collectOverlay(deps)),
     await guardRead('stop-hook', STOP_HOOK_LABEL, () => collectStopHook(deps)),
-    await guardRead('claude-skill', CLAUDE_SKILL_LABEL, () => collectClaudeSkill(deps)),
+    ...skillReports,
     await guardRead('cursor', CURSOR_LABEL, () => collectCursor(deps)),
     await guardRead('ci', CI_LABEL, () => collectCi(deps)),
     await guardRead('branch-rule', BRANCH_RULE_LABEL, () => collectBranchRule(deps)),
