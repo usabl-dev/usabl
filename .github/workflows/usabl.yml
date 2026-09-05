@@ -74,6 +74,15 @@ jobs:
         # on other products. Chromium is already installed above.
         run: npm run docs:a11y
 
+      - name: Docs link check
+        # A broken docs link once shipped and was found by a person reading the docs, never by
+        # CI, because this check existed as an npm script but no workflow ran it. Wire it so its
+        # silence means it passed, not that it never ran.
+        run: npm run docs:linkcheck
+
+      - name: Docs badge check
+        run: npm run docs:badges
+
   # Real Chromium suites gated by USABL_INTEGRATION. Default `npm run check` skips them, so a
   # merge could stay green while the live driver path drifted. This job runs only the in-repo
   # fixture suites (fixtures/live and local HTTP pages). The hero-bug / fixture-clean suites need
