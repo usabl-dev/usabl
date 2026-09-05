@@ -388,7 +388,7 @@ describe('runRoutesDrift', () => {
     expect(outcome.exitCode).toBe(1);
     expect(outcome.stdout).toContain('Added routes');
     expect(outcome.stdout).toMatch(/false addition/i);
-    expect(outcome.stdout.toLowerCase()).toContain('verify before acting');
+    expect(outcome.stdout).toMatch(/verify before acting/i);
   });
 
   it('handles duplicate literal paths without crashing', async () => {
