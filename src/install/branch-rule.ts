@@ -175,18 +175,33 @@ async function readClassicProtection(gh: GhReader): Promise<ClassicState> {
 // "ambiguous" means usabl cannot tell (a glob or ~DEFAULT_BRANCH in the include, or any target in the
 // exclude it cannot evaluate), so it must not be read as either protecting or not protecting main.
 type Coverage = 'covers' | 'no' | 'ambiguous';
+// A string array, or absent. A present value that is not a clean string array is malformed, and
+// silently dropping a non-string entry (an exclusion, say) could turn a real exclude of main into a
+// false verified. So malformed conditions are reported ambiguous, never confidently covered or not.
+function stringListOrNull(value: unknown): string[] | null {
+  if (value === undefined) {
+    return [];
+  }
+  if (Array.isArray(value) && value.every((entry) => typeof entry === 'string')) {
+    return value as string[];
+  }
+  return null;
+}
 function conditionCoverage(conditions: unknown): Coverage {
   if (!isRecord(conditions)) {
-    return 'no';
+    return 'ambiguous';
   }
   const refName = conditions['ref_name'];
   if (!isRecord(refName)) {
-    return 'no';
+    return 'ambiguous';
   }
-  const asStrings = (value: unknown): string[] =>
-    Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
-  const include = asStrings(refName['include']).map(refTargetMatchesProtected);
-  const exclude = asStrings(refName['exclude']).map(refTargetMatchesProtected);
+  const includeList = stringListOrNull(refName['include']);
+  const excludeList = stringListOrNull(refName['exclude']);
+  if (includeList === null || excludeList === null) {
+    return 'ambiguous';
+  }
+  const include = includeList.map(refTargetMatchesProtected);
+  const exclude = excludeList.map(refTargetMatchesProtected);
 
   // Exclusions first. A confident exclusion of main means this ruleset does not protect it. An
   // exclusion usabl cannot evaluate might exclude main, so the whole ruleset is ambiguous.

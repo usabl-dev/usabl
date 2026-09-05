@@ -232,6 +232,32 @@ describe('verifyBranchRule', () => {
     expect(result.message.toLowerCase()).not.toContain('verified:');
   });
 
+  it('does not verify when an exclusion list has a non-string entry', async () => {
+    // False-verify guard: a null in exclude must not be dropped, leaving include ~ALL reading as
+    // full coverage. The malformed condition is ambiguous.
+    const gh = ghWithRuleset({
+      name: 'Malformed exclude',
+      target: 'branch',
+      enforcement: 'active',
+      conditions: { ref_name: { include: ['~ALL'], exclude: [null] } },
+      rules: [requiredCheckRule],
+    });
+    const result = await verifyBranchRule(gh.reader);
+    expect(result.action).toBe('cannot-verify');
+    expect(result.message.toLowerCase()).not.toContain('verified:');
+  });
+
+  it('does not conclude not-applied when a ruleset that requires the check has no conditions', async () => {
+    const gh = ghWithRuleset({
+      name: 'No conditions',
+      target: 'branch',
+      enforcement: 'active',
+      rules: [requiredCheckRule],
+    });
+    const result = await verifyBranchRule(gh.reader);
+    expect(result.action).toBe('cannot-verify');
+  });
+
   it('refuses rather than claims not-applied when classic is absent but rulesets are unreadable', async () => {
     // A ruleset could require the check; if the rulesets read fails, usabl must not call it missing.
     const gh = recordingGh((endpoint) =>
