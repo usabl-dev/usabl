@@ -199,7 +199,9 @@ describe('projectOverlay', () => {
     expect(overlay.findings[0]?.groupCount).toBeNull();
   });
 
-  it('collapses overlay findings per surface and surfaces a show-all hint', () => {
+  it('lists every overlay finding while still reporting the budget total and hint', () => {
+    // The overlay list is flat so that each finding can be located on the page by itself. The
+    // budget fields keep reporting the collapse for the bounded text surfaces that read them.
     const findings = Array.from({ length: 6 }, (_, index) => ({
       rule: `rule-${index}`,
       layer: 'axe',
@@ -220,8 +222,9 @@ describe('projectOverlay', () => {
     }));
     const overlay = projectOverlay(baseResult({ findings }));
 
+    expect(overlay.findings).toHaveLength(6);
+    expect(overlay.findings.every((entry) => entry.groupCount === null)).toBe(true);
     expect(overlay.findingsTotalCount).toBe(6);
-    expect(overlay.findings).toHaveLength(5);
     expect(overlay.noiseBudgetCollapsed).toBe(true);
     expect(overlay.showAllHint).toContain('usabl check --json');
   });

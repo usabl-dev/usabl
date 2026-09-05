@@ -150,6 +150,11 @@ export function projectOverlay(
 ): OverlayProjection {
   // Overlay is advisory only, so displayExitCode stays 0 even when the gated Result blocked.
   const safe = scrubResult(result);
+  // The noise budget still produces the total count and the show-all hint that the bounded text
+  // surfaces rely on, so we keep computing it. The overlay's own list is flat: it shows one row per
+  // finding so every finding can be located on the page by itself. A collapsed representative row
+  // cannot be located, because it stands for elements it does not name. So the projection carries
+  // the full findings list and the budget only contributes counts.
   const budgetView = applyNoiseBudgetPerSurface(safe.findings, config);
   return {
     advisory: true,
@@ -164,8 +169,7 @@ export function projectOverlay(
       unresolvedFiles: safe.coverage.unresolvedFiles,
       gaps: safe.coverage.gaps,
     },
-    findings: budgetView.groups.map((group) => {
-      const finding = group.representative;
+    findings: safe.findings.map((finding) => {
       return {
         rule: finding.rule,
         screenId: finding.screenId,
@@ -183,7 +187,8 @@ export function projectOverlay(
         why: finding.why,
         fix: finding.fix,
         appSource: finding.appSource ?? null,
-        groupCount: group.count > 1 ? group.count : null,
+        // Every row is one finding, so no row stands for a group of them.
+        groupCount: null,
       };
     }),
     findingsTotalCount: budgetView.totalCount,
