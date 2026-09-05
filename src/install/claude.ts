@@ -44,8 +44,12 @@ export function isUsablStopCommand(command: string): boolean {
     return true;
   }
   // A plain node invocation of the retired dist runner and nothing else: no wrappers, env
-  // prefixes, redirects, pipes, subshells, or trailing arguments.
-  return /^node\s+[^\s'";|&<>()]*usabl\/dist\/stop-hook-runner\.js$/.test(trimmed);
+  // prefixes, redirects, pipes, subshells, or trailing arguments. The path prefix, if present,
+  // must end at a segment boundary, so "usabl" is the whole final directory before /dist, not a
+  // suffix of one. Without the trailing slash on the prefix group, "notusabl/dist/..." would
+  // also match, and a foreign directory named "*usabl" would be treated as usabl-owned. The
+  // safe-character class still excludes shell metacharacters so nothing injectable is accepted.
+  return /^node\s+([^\s'";|&<>()]*\/)?usabl\/dist\/stop-hook-runner\.js$/.test(trimmed);
 }
 
 function canonicalStopEntry(): { hooks: Array<{ type: string; command: string }> } {

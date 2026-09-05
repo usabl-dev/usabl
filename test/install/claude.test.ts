@@ -219,4 +219,16 @@ describe('isUsablStopCommand', () => {
     expect(isUsablStopCommand('node ./wrap.js && node node_modules/usabl/dist/stop-hook-runner.js')).toBe(false);
     expect(isUsablStopCommand('run-my-own-formatter')).toBe(false);
   });
+
+  it('does not treat a directory that merely ends in "usabl" as usabl-owned', () => {
+    // The retired-dist match forces a path-segment boundary before "usabl", so a foreign
+    // directory whose name ends in "usabl" (an operator's own "notusabl" or "myusabl") is not
+    // rewritten as if it were the retired usabl runner. "usabl" must be the whole final
+    // directory before /dist, not a suffix of one.
+    expect(isUsablStopCommand('node /path/notusabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node myusabl/dist/stop-hook-runner.js')).toBe(false);
+    // The legitimate forms still match: "usabl" at a segment boundary or as the first token.
+    expect(isUsablStopCommand('node /opt/node_modules/usabl/dist/stop-hook-runner.js')).toBe(true);
+    expect(isUsablStopCommand('node usabl/dist/stop-hook-runner.js')).toBe(true);
+  });
 });
