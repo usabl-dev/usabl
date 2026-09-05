@@ -69,6 +69,25 @@ describe('mintReceipt', () => {
     });
     expect(receipt.applicability.map((entry) => entry.screenId)).toEqual(['alpha', 'zeta']);
   });
+
+  it('folds duplicate screen rows into one so receipt bytes do not depend on caller order', async () => {
+    // A direct caller that supplies two rows for the same screen, in either order, must yield the
+    // same receipt. Duplicate screen rows sum into one, then sort, so the bytes are stable.
+    const deps = makeFakeDeps({ now: '2026-08-19T12:00:00.000Z', writeTree: 'tree-abc', runnerVersion: '0.0.0-test' });
+    const receipt = await mintReceipt(deps, config, {
+      surfaces: ['cli'], checked: ['alpha', 'zeta'], notCovered: [],
+      applicability: [
+        { screenId: 'zeta', applied: 1, abstained: 0 },
+        { screenId: 'alpha', applied: 2, abstained: 1 },
+        { screenId: 'alpha', applied: 1, abstained: 0 },
+      ],
+      findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 }, activeWaivers: 0,
+    });
+    expect(receipt.applicability).toEqual([
+      { screenId: 'alpha', applied: 3, abstained: 1 },
+      { screenId: 'zeta', applied: 1, abstained: 0 },
+    ]);
+  });
 });
 
 describe('summarizeApplicability', () => {
@@ -106,13 +125,33 @@ describe('summarizeApplicability', () => {
     expect(summary.map((s) => s.screenId)).toEqual(['alpha', 'zeta']);
   });
 
-  it('aggregates a screen scanned more than once into one row rather than double-counting', () => {
-    // A duplicate-render run can scan the same logical screen twice. Its counts sum into a
-    // single row so the receipt does not report the same screen twice or double-count it.
+  it('aggregates a screen scanned more than once into one row, counting distinct rules', () => {
+    // A duplicate-render run can scan the same logical screen twice. Distinct rules across the
+    // two scans fold into one row so the receipt does not report the same screen twice.
     const summary = summarizeApplicability([
       screen('clusters', [applic('a', 'passed', 1), applic('b', 'inapplicable', 0)]),
       screen('clusters', [applic('c', 'failed', 2)]),
     ]);
     expect(summary).toEqual([{ screenId: 'clusters', applied: 2, abstained: 1 }]);
+  });
+
+  it('counts a rule observed more than once on a screen only once', () => {
+    // The double-count trap: the same rule seen in two scans of one screen is one logical rule.
+    // Counting observations would turn one applied rule into two.
+    const summary = summarizeApplicability([
+      screen('clusters', [applic('color-contrast', 'passed', 1)]),
+      screen('clusters', [applic('color-contrast', 'passed', 1)]),
+    ]);
+    expect(summary).toEqual([{ screenId: 'clusters', applied: 1, abstained: 0 }]);
+  });
+
+  it('classifies a rule seen as both applied and inapplicable as applied, never both', () => {
+    // A rule that examined an element in one scan and matched nothing in another applied at
+    // least once, so it is one applied rule, not one applied plus one abstained.
+    const summary = summarizeApplicability([
+      screen('clusters', [applic('r', 'passed', 1)]),
+      screen('clusters', [applic('r', 'inapplicable', 0)]),
+    ]);
+    expect(summary).toEqual([{ screenId: 'clusters', applied: 1, abstained: 0 }]);
   });
 });

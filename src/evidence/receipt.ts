@@ -33,28 +33,58 @@ export interface ReceiptArgs {
 export function summarizeApplicability(
   screens: readonly ScreenScan[],
 ): Receipt["applicability"] {
-  // Aggregate by screenId, not per ScreenScan. If a screen is scanned more than once in a run
-  // (a duplicate-render case), it is one logical screen, so its counts sum into a single row
-  // rather than appearing twice and double-counting. One row per screen also keeps the receipt
-  // bytes stable when the same screen arrives in a different position.
-  const byScreen = new Map<string, { applied: number; abstained: number }>();
+  // Count unique rules, not observations. A screen scanned more than once, or a rule observed
+  // more than once on a screen (a duplicate-render case), is still one logical rule and counts
+  // once. Deduplicate to one record per (screenId, layer, rule) first, so a repeated scan cannot
+  // turn "1 applied" into "2 applied". A rule is applied if any observation examined an element
+  // (outcome other than inapplicable), and abstained only if every observation matched nothing,
+  // so a rule seen once as passed and once as inapplicable is one applied rule, never both.
+  const appliedByRule = new Map<string, boolean>();
+  const screenOfRule = new Map<string, string>();
   for (const screen of screens) {
-    if (screen.applicability.length === 0) {
-      continue;
+    for (const entry of screen.applicability) {
+      const key = JSON.stringify([screen.screenId, entry.layer, entry.rule]);
+      const appliedNow = entry.outcome !== "inapplicable";
+      appliedByRule.set(key, (appliedByRule.get(key) ?? false) || appliedNow);
+      screenOfRule.set(key, screen.screenId);
     }
-    const applied = screen.applicability.filter((entry) => entry.outcome !== "inapplicable").length;
-    const abstained = screen.applicability.filter((entry) => entry.outcome === "inapplicable").length;
-    const existing = byScreen.get(screen.screenId);
-    if (existing === undefined) {
-      byScreen.set(screen.screenId, { applied, abstained });
+  }
+  const byScreen = new Map<string, { applied: number; abstained: number }>();
+  for (const [key, applied] of appliedByRule) {
+    const screenId = screenOfRule.get(key) ?? "";
+    const counts = byScreen.get(screenId) ?? { applied: 0, abstained: 0 };
+    if (applied) {
+      counts.applied += 1;
     } else {
-      existing.applied += applied;
-      existing.abstained += abstained;
+      counts.abstained += 1;
     }
+    byScreen.set(screenId, counts);
   }
   return sortBy(
     [...byScreen.entries()].map(([screenId, counts]) => ({ screenId, ...counts })),
     (summary) => summary.screenId,
+  );
+}
+
+/**
+ * Normalize a per-screen applicability list to one row per screenId, then sort. summarizeApplicability
+ * already produces this shape, so for the engine's own call this only sorts. It exists so a caller
+ * that builds ReceiptArgs directly, and might pass duplicate or unordered screen rows, still yields
+ * byte-stable receipt bytes: duplicate screen rows are summed into one, and the result is ordered.
+ */
+function normalizeReceiptApplicability(
+  rows: Receipt["applicability"],
+): Receipt["applicability"] {
+  const byScreen = new Map<string, { applied: number; abstained: number }>();
+  for (const row of rows) {
+    const counts = byScreen.get(row.screenId) ?? { applied: 0, abstained: 0 };
+    counts.applied += row.applied;
+    counts.abstained += row.abstained;
+    byScreen.set(row.screenId, counts);
+  }
+  return sortBy(
+    [...byScreen.entries()].map(([screenId, counts]) => ({ screenId, ...counts })),
+    (row) => row.screenId,
   );
 }
 
@@ -101,10 +131,11 @@ export async function mintReceipt(
       checked: sortBy([...args.checked], (s) => s),
       notCovered: sortBy([...args.notCovered], (s) => s),
     },
-    // Sort here too, the way surfaces and coverage are sorted, so the receipt is byte-stable for
-    // the same inputs no matter what order a caller supplied. summarizeApplicability already
-    // sorts, but this protects any other caller that builds ReceiptArgs directly.
-    applicability: sortBy([...args.applicability], (entry) => entry.screenId),
+    // Normalize here too, the way surfaces and coverage are sorted, so the receipt is byte-stable
+    // for the same run no matter what order or duplicates a caller supplied. summarizeApplicability
+    // already returns one sorted row per screen, so this only sorts for the engine's own call; it
+    // protects any other caller that builds ReceiptArgs directly.
+    applicability: normalizeReceiptApplicability(args.applicability),
     verdict: "verified",
     findingsSummary: args.findingsSummary,
     activeWaivers: args.activeWaivers,
