@@ -231,4 +231,18 @@ describe('isUsablStopCommand', () => {
     expect(isUsablStopCommand('node /opt/node_modules/usabl/dist/stop-hook-runner.js')).toBe(true);
     expect(isUsablStopCommand('node usabl/dist/stop-hook-runner.js')).toBe(true);
   });
+
+  it('rejects a path prefix carrying shell expansion, comment, or separator syntax', () => {
+    // A match authorizes a silent rewrite, so the path prefix is an allowlist of literal POSIX
+    // path characters. Anything that could be shell syntax fails closed: a match here would let
+    // a foreign command with an expansion, a command substitution, or a comment be rewritten.
+    expect(isUsablStopCommand('node $PATH/usabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node `cmd`/usabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node #/usabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node ~/usabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node a*/usabl/dist/stop-hook-runner.js')).toBe(false);
+    expect(isUsablStopCommand('node a\\b/usabl/dist/stop-hook-runner.js')).toBe(false);
+    // A command-separating newline must not join "node" to a following retired-path token.
+    expect(isUsablStopCommand('node\nusabl/dist/stop-hook-runner.js')).toBe(false);
+  });
 });
