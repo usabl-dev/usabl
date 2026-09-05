@@ -68,7 +68,11 @@ describe('verifyBranchRule', () => {
   });
 
   it('reports not applied when the check is absent, and prints the exact setting', async () => {
-    const gh = recordingGh(() => ({ code: 0, stdout: protectionJson(['other-check']), stderr: '' }));
+    const gh = recordingGh((endpoint) =>
+      endpoint.includes('/rulesets')
+        ? { code: 0, stdout: '[]', stderr: '' }
+        : { code: 0, stdout: protectionJson(['other-check']), stderr: '' },
+    );
     const result = await verifyBranchRule(gh.reader);
 
     // Load-bearing: with the rule absent it must NOT claim verified. If the verified
@@ -92,39 +96,83 @@ describe('verifyBranchRule', () => {
     expect(result.exitCode).toBe(2);
   });
 
-  it('reports verified when a ruleset requires the check even with no classic protection', async () => {
-    const gh = recordingGh((endpoint) => {
-      if (endpoint === 'repos/{owner}/{repo}/rulesets') {
+  // Builds a gh mock: no classic protection, one active branch ruleset (id 7) whose full body is
+  // rulesetBody. Any other endpoint (the repo, extra pages) 404s.
+  function ghWithRuleset(rulesetBody: unknown): ReturnType<typeof recordingGh> {
+    return recordingGh((endpoint) => {
+      if (endpoint.endsWith('/rulesets/7')) {
+        return { code: 0, stdout: JSON.stringify(rulesetBody), stderr: '' };
+      }
+      if (endpoint.includes('/rulesets')) {
         return {
           code: 0,
           stdout: JSON.stringify([{ id: 7, name: 'Protect main', target: 'branch', enforcement: 'active' }]),
           stderr: '',
         };
       }
-      if (endpoint.endsWith('/rulesets/7')) {
-        return {
-          code: 0,
-          stdout: JSON.stringify({
-            name: 'Protect main',
-            target: 'branch',
-            enforcement: 'active',
-            conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
-            rules: [
-              { type: 'pull_request', parameters: {} },
-              { type: 'required_status_checks', parameters: { required_status_checks: [{ context: REQUIRED_CHECK }] } },
-            ],
-          }),
-          stderr: '',
-        };
-      }
-      // classic protection: none
       return { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' };
+    });
+  }
+
+  const requiredCheckRule = {
+    type: 'required_status_checks',
+    parameters: { required_status_checks: [{ context: REQUIRED_CHECK }] },
+  };
+
+  it('reports verified when a ruleset requires the check even with no classic protection', async () => {
+    const gh = ghWithRuleset({
+      name: 'Protect main',
+      target: 'branch',
+      enforcement: 'active',
+      conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
+      rules: [{ type: 'pull_request', parameters: {} }, requiredCheckRule],
     });
     const result = await verifyBranchRule(gh.reader);
     expect(result.exitCode).toBe(0);
     expect(result.action).toBe('verified');
     expect(result.message).toContain('ruleset');
     expect(result.message).toContain('Protect main');
+  });
+
+  it('does not verify from a ruleset whose branch targeting it cannot evaluate', async () => {
+    // include ~DEFAULT_BRANCH: main may not be the default, so usabl cannot confirm coverage.
+    const gh = ghWithRuleset({
+      name: 'Protect default',
+      target: 'branch',
+      enforcement: 'active',
+      conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
+      rules: [requiredCheckRule],
+    });
+    const result = await verifyBranchRule(gh.reader);
+    expect(result.action).toBe('cannot-verify');
+    expect(result.message.toLowerCase()).not.toContain('verified:');
+  });
+
+  it('does not verify when a ruleset covers all branches but excludes one it cannot evaluate', async () => {
+    // False-verify guard: include ~ALL with an exclude usabl cannot evaluate might exclude main.
+    const gh = ghWithRuleset({
+      name: 'All but some',
+      target: 'branch',
+      enforcement: 'active',
+      conditions: { ref_name: { include: ['~ALL'], exclude: ['refs/heads/ma*'] } },
+      rules: [requiredCheckRule],
+    });
+    const result = await verifyBranchRule(gh.reader);
+    expect(result.action).toBe('cannot-verify');
+    expect(result.message.toLowerCase()).not.toContain('verified:');
+  });
+
+  it('ignores a disabled ruleset and one scoped to another branch', async () => {
+    const gh = ghWithRuleset({
+      name: 'Disabled',
+      target: 'branch',
+      enforcement: 'disabled',
+      conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
+      rules: [requiredCheckRule],
+    });
+    const result = await verifyBranchRule(gh.reader);
+    // Disabled ruleset does not require it, classic is absent, no other ruleset: confident not-applied.
+    expect(result.action).toBe('not-applied');
   });
 
   it('refuses rather than claims not-applied when classic is absent but rulesets are unreadable', async () => {

@@ -98,9 +98,26 @@ export function branchRuleSetting(): string {
 // The repository's branch rulesets. A ruleset can require the same check a classic rule does, so
 // doctor must read both or it calls a ruleset-protected repo unprotected. {owner}/{repo} are
 // resolved by gh from the current repo context, so no slug is interpolated from external input.
-const RULESETS_ENDPOINT = 'repos/{owner}/{repo}/rulesets';
+// per_page=100 in one call, because a repository holds at most 75 rulesets, so a single page reads
+// them all and the default 30-per-page window cannot hide the protecting ruleset behind a later page.
+const RULESETS_ENDPOINT = 'repos/{owner}/{repo}/rulesets?per_page=100';
 function rulesetEndpoint(id: number): string {
   return `repos/{owner}/{repo}/rulesets/${id}`;
+}
+
+// Whether a single ref target names the protected branch. "covers" only for literals this code can
+// evaluate exactly (~ALL, or refs/heads/main). "unknown" for anything usabl cannot evaluate without
+// replicating GitHub's fnmatch and default-branch resolution: a glob, or ~DEFAULT_BRANCH (main may
+// not be the default). "no" for another literal branch. Unknowns never become a confident answer.
+type TargetMatch = 'covers' | 'no' | 'unknown';
+function refTargetMatchesProtected(token: string): TargetMatch {
+  if (token === '~ALL' || token === `refs/heads/${PROTECTED_BRANCH}`) {
+    return 'covers';
+  }
+  if (token === '~DEFAULT_BRANCH' || /[*?[\]]/.test(token)) {
+    return 'unknown';
+  }
+  return 'no';
 }
 
 function verifyByHand(): string {
@@ -143,37 +160,42 @@ async function readClassicProtection(gh: GhReader): Promise<ClassicState> {
   }
 }
 
-// True when the conditions of a branch ruleset cover the protected branch: its include list names
-// the default branch, all branches, or the branch by ref, and the branch is not excluded.
-function conditionsCoverProtectedBranch(conditions: unknown): boolean {
+// How a ruleset's branch conditions relate to the protected branch. "covers" and "no" are confident;
+// "ambiguous" means usabl cannot tell (a glob or ~DEFAULT_BRANCH in the include, or any target in the
+// exclude it cannot evaluate), so it must not be read as either protecting or not protecting main.
+type Coverage = 'covers' | 'no' | 'ambiguous';
+function conditionCoverage(conditions: unknown): Coverage {
   if (!isRecord(conditions)) {
-    return false;
+    return 'no';
   }
   const refName = conditions['ref_name'];
   if (!isRecord(refName)) {
-    return false;
+    return 'no';
   }
   const asStrings = (value: unknown): string[] =>
     Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
-  const target = `refs/heads/${PROTECTED_BRANCH}`;
-  const include = asStrings(refName['include']);
-  const exclude = asStrings(refName['exclude']);
-  const included = include.some((p) => p === '~ALL' || p === '~DEFAULT_BRANCH' || p === target);
-  const excluded = exclude.some((p) => p === '~ALL' || p === target);
-  return included && !excluded;
+  const include = asStrings(refName['include']).map(refTargetMatchesProtected);
+  const exclude = asStrings(refName['exclude']).map(refTargetMatchesProtected);
+
+  // Exclusions first. A confident exclusion of main means this ruleset does not protect it. An
+  // exclusion usabl cannot evaluate might exclude main, so the whole ruleset is ambiguous.
+  if (exclude.includes('covers')) {
+    return 'no';
+  }
+  if (exclude.includes('unknown')) {
+    return 'ambiguous';
+  }
+  // No exclusion touches main. Now the include list decides.
+  if (include.includes('covers')) {
+    return 'covers';
+  }
+  if (include.includes('unknown')) {
+    return 'ambiguous';
+  }
+  return 'no';
 }
 
-// True when an active branch ruleset requires REQUIRED_CHECK on the protected branch.
-export function rulesetRequiresCheck(fullRuleset: unknown): boolean {
-  if (!isRecord(fullRuleset)) {
-    return false;
-  }
-  if (fullRuleset['enforcement'] !== 'active' || fullRuleset['target'] !== 'branch') {
-    return false;
-  }
-  if (!conditionsCoverProtectedBranch(fullRuleset['conditions'])) {
-    return false;
-  }
+function rulesetNamesRequiredCheck(fullRuleset: Record<string, unknown>): boolean {
   const rules = fullRuleset['rules'];
   if (!Array.isArray(rules)) {
     return false;
@@ -199,9 +221,27 @@ export function rulesetRequiresCheck(fullRuleset: unknown): boolean {
   return false;
 }
 
-// The name of an active ruleset that requires the check, null when none does, or 'unreadable' when
-// the rulesets could not be read at all (so the caller does not read that as a confident absence).
-async function findRulesetRequiringCheck(gh: GhReader): Promise<{ name: string } | null | 'unreadable'> {
+// Coverage of the protected branch by an active branch ruleset that requires the check: 'covers',
+// 'ambiguous', or 'no'. A ruleset that is not active, not branch-scoped, or does not name the check
+// is 'no'.
+export function rulesetCheckCoverage(fullRuleset: unknown): Coverage {
+  if (!isRecord(fullRuleset)) {
+    return 'no';
+  }
+  if (fullRuleset['enforcement'] !== 'active' || fullRuleset['target'] !== 'branch') {
+    return 'no';
+  }
+  if (!rulesetNamesRequiredCheck(fullRuleset)) {
+    return 'no';
+  }
+  return conditionCoverage(fullRuleset['conditions']);
+}
+
+// The result of reading rulesets: a named ruleset that confidently requires the check, 'ambiguous'
+// when one might but usabl cannot confirm the branch targeting, null when none does, or 'unreadable'
+// when a response could not be read (so it is never taken as a confident absence).
+type RulesetOutcome = { name: string } | 'ambiguous' | null | 'unreadable';
+async function findRulesetRequiringCheck(gh: GhReader): Promise<RulesetOutcome> {
   let listRes: GhResult | null;
   try {
     listRes = await gh.getJson(RULESETS_ENDPOINT);
@@ -218,9 +258,10 @@ async function findRulesetRequiringCheck(gh: GhReader): Promise<{ name: string }
     return 'unreadable';
   }
   if (!Array.isArray(list)) {
-    // A readable but non-list response is a confident "no rulesets to read here", not an error.
-    return null;
+    // Valid JSON of the wrong shape is a response usabl cannot read, not a confident empty list.
+    return 'unreadable';
   }
+  let sawAmbiguous = false;
   for (const summary of list) {
     if (!isRecord(summary) || summary['enforcement'] !== 'active' || summary['target'] !== 'branch') {
       continue;
@@ -244,12 +285,16 @@ async function findRulesetRequiringCheck(gh: GhReader): Promise<{ name: string }
     } catch {
       return 'unreadable';
     }
-    if (rulesetRequiresCheck(full)) {
+    const coverage = rulesetCheckCoverage(full);
+    if (coverage === 'covers') {
       const name = isRecord(full) && typeof full['name'] === 'string' ? full['name'] : 'a ruleset';
       return { name };
     }
+    if (coverage === 'ambiguous') {
+      sawAmbiguous = true;
+    }
   }
-  return null;
+  return sawAmbiguous ? 'ambiguous' : null;
 }
 
 export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> {
@@ -267,7 +312,7 @@ export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> 
 
   // Classic did not confirm it, so check rulesets: a ruleset can require the same check.
   const ruleset = await findRulesetRequiringCheck(gh);
-  if (ruleset !== null && ruleset !== 'unreadable') {
+  if (ruleset !== null && ruleset !== 'unreadable' && ruleset !== 'ambiguous') {
     return {
       exitCode: 0,
       action: 'verified',
@@ -277,12 +322,17 @@ export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> 
 
   // Neither mechanism confirmed the check. Only call it not-applied when both are confident: a
   // classic absence and a rulesets list that named no rule requiring it. If either could not be
-  // read, refuse rather than claim the protection is missing.
-  if (classic === 'unreadable' || ruleset === 'unreadable') {
+  // read, or a ruleset might require it on branch targeting usabl cannot evaluate, refuse rather
+  // than claim the protection is missing.
+  if (classic === 'unreadable' || ruleset === 'unreadable' || ruleset === 'ambiguous') {
+    const reason =
+      ruleset === 'ambiguous'
+        ? `a ruleset requires ${REQUIRED_CHECK} but usabl cannot confirm it targets ${PROTECTED_BRANCH}`
+        : `could not read classic protection and rulesets for ${PROTECTED_BRANCH}`;
     return {
       exitCode: 2,
       action: 'cannot-verify',
-      message: `cannot verify: could not read classic protection and rulesets for ${PROTECTED_BRANCH}.\n${setting}\n${verifyByHand()}`,
+      message: `cannot verify: ${reason}.\n${setting}\n${verifyByHand()}`,
     };
   }
   return {

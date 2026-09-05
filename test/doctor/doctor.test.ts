@@ -104,13 +104,6 @@ const GH_NOT_PROTECTED = ghReplying((endpoint) =>
 
 // No classic protection, but an active ruleset requires the check. Doctor must read wired.
 const GH_RULESET_PROTECTED = ghReplying((endpoint) => {
-  if (endpoint === 'repos/{owner}/{repo}/rulesets') {
-    return {
-      code: 0,
-      stdout: JSON.stringify([{ id: 7, name: 'Protect main', target: 'branch', enforcement: 'active' }]),
-      stderr: '',
-    };
-  }
   if (endpoint.endsWith('/rulesets/7')) {
     return {
       code: 0,
@@ -118,11 +111,18 @@ const GH_RULESET_PROTECTED = ghReplying((endpoint) => {
         name: 'Protect main',
         target: 'branch',
         enforcement: 'active',
-        conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
+        conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
         rules: [
           { type: 'required_status_checks', parameters: { required_status_checks: [{ context: REQUIRED_CHECK }] } },
         ],
       }),
+      stderr: '',
+    };
+  }
+  if (endpoint.includes('/rulesets')) {
+    return {
+      code: 0,
+      stdout: JSON.stringify([{ id: 7, name: 'Protect main', target: 'branch', enforcement: 'active' }]),
       stderr: '',
     };
   }
