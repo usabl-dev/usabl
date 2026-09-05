@@ -54,10 +54,16 @@ export function isUsablStopCommand(command: string): boolean {
   //     shell metacharacters. A blocklist cannot enumerate every expansion or comment form:
   //     "$PATH", backticks, "#", backslashes, and globs would all slip through and let a
   //     foreign command with shell syntax read as usabl-owned. Only path characters are
-  //     accepted, so anything that could be shell syntax fails closed.
+  //     accepted, so anything that could be shell syntax fails closed. "+" is on the allowlist
+  //     because pnpm's virtual store encodes path separators as "+" and real directories carry
+  //     it (a "c++-ui" folder), and it is not shell-expandable, so excluding it would refuse a
+  //     legitimate usabl hook rather than migrate it.
+  // The first path character cannot be "-": node reads a leading-dash argument as an option, not
+  // a script path, so "node -x/usabl/dist/..." is not actually running the retired runner and
+  // must not be rewritten as if it were.
   // The separator is [ \t]+, not \s+, so a command-separating newline cannot join "node" to a
   // following retired-path token.
-  return /^node[ \t]+([A-Za-z0-9._@/-]*\/)?usabl\/dist\/stop-hook-runner\.js$/.test(trimmed);
+  return /^node[ \t]+(?!-)([A-Za-z0-9._@+/-]*\/)?usabl\/dist\/stop-hook-runner\.js$/.test(trimmed);
 }
 
 function canonicalStopEntry(): { hooks: Array<{ type: string; command: string }> } {
