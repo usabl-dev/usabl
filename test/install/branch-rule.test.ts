@@ -79,12 +79,63 @@ describe('verifyBranchRule', () => {
     expect(result.message.toLowerCase()).not.toContain('verified:');
   });
 
-  it('treats a genuine "Branch not protected" response as not applied', async () => {
-    // This is the exact signal GitHub returns for GET .../protection when the branch exists
-    // but has no protection, so it is a confident not-applied.
-    const gh = recordingGh(() => ({ code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' }));
+  it('treats no classic protection and no ruleset as not applied', async () => {
+    // "Branch not protected" is a confident no-classic-rule; an empty rulesets list is a confident
+    // no-ruleset. Together they are a confident not-applied.
+    const gh = recordingGh((endpoint) =>
+      endpoint.includes('/rulesets')
+        ? { code: 0, stdout: '[]', stderr: '' }
+        : { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' },
+    );
     const result = await verifyBranchRule(gh.reader);
     expect(result.action).toBe('not-applied');
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('reports verified when a ruleset requires the check even with no classic protection', async () => {
+    const gh = recordingGh((endpoint) => {
+      if (endpoint === 'repos/{owner}/{repo}/rulesets') {
+        return {
+          code: 0,
+          stdout: JSON.stringify([{ id: 7, name: 'Protect main', target: 'branch', enforcement: 'active' }]),
+          stderr: '',
+        };
+      }
+      if (endpoint.endsWith('/rulesets/7')) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            name: 'Protect main',
+            target: 'branch',
+            enforcement: 'active',
+            conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
+            rules: [
+              { type: 'pull_request', parameters: {} },
+              { type: 'required_status_checks', parameters: { required_status_checks: [{ context: REQUIRED_CHECK }] } },
+            ],
+          }),
+          stderr: '',
+        };
+      }
+      // classic protection: none
+      return { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' };
+    });
+    const result = await verifyBranchRule(gh.reader);
+    expect(result.exitCode).toBe(0);
+    expect(result.action).toBe('verified');
+    expect(result.message).toContain('ruleset');
+    expect(result.message).toContain('Protect main');
+  });
+
+  it('refuses rather than claims not-applied when classic is absent but rulesets are unreadable', async () => {
+    // A ruleset could require the check; if the rulesets read fails, usabl must not call it missing.
+    const gh = recordingGh((endpoint) =>
+      endpoint.includes('/rulesets')
+        ? { code: 1, stdout: '', stderr: 'gh: Bad credentials (HTTP 401)' }
+        : { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' },
+    );
+    const result = await verifyBranchRule(gh.reader);
+    expect(result.action).toBe('cannot-verify');
     expect(result.exitCode).toBe(2);
   });
 

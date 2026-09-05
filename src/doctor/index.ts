@@ -28,7 +28,7 @@ import { buildGuardedSet } from '../trust/guard.js';
 import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
 
 // The code-owners file the policy gate reads. Doctor reconciles it against guardedPaths so the
-// two lists cannot drift silently (issue #151).
+// two lists cannot drift silently.
 const CODEOWNERS_PATH = '.github/CODEOWNERS';
 
 // The waiver ledger path the gate reads. There is no shared constant for it today (run.ts,
@@ -541,8 +541,8 @@ function isPolicyPathCovered(codeownersPath: string, guardedSet: string[]): bool
 
 // Reconcile guardedPaths against CODEOWNERS. If CODEOWNERS gates a path that guardedPaths (plus the
 // always-guarded ledgers) does not, a change to that path reads as "no policy change" while GitHub
-// still requires an owner: the #140 pattern, where silence reads as green. Report it as drift so the
-// disagreement is loud, not something the next reviewer finds by luck.
+// still requires an owner, so silence reads as green. Report it as drift so the disagreement is
+// loud, not something the next reviewer finds by luck.
 async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
   const codeownersRaw = await deps.fs.readFile(CODEOWNERS_PATH);
   if (codeownersRaw === null) {

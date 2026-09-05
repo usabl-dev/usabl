@@ -95,77 +95,199 @@ export function branchRuleSetting(): string {
   ].join('\n');
 }
 
+// The repository's branch rulesets. A ruleset can require the same check a classic rule does, so
+// doctor must read both or it calls a ruleset-protected repo unprotected. {owner}/{repo} are
+// resolved by gh from the current repo context, so no slug is interpolated from external input.
+const RULESETS_ENDPOINT = 'repos/{owner}/{repo}/rulesets';
+function rulesetEndpoint(id: number): string {
+  return `repos/{owner}/{repo}/rulesets/${id}`;
+}
+
 function verifyByHand(): string {
   return [
     'Verify by hand (read-only):',
     `  gh api ${PROTECTION_ENDPOINT} --jq '.required_status_checks'`,
-    '  or open Settings > Branches in the GitHub web UI.',
+    `  gh api ${RULESETS_ENDPOINT}   # a ruleset can require the check instead of classic protection`,
+    '  or open Settings > Branches (and Settings > Rules) in the GitHub web UI.',
   ].join('\n');
 }
 
 function isBranchNotProtected(stderr: string): boolean {
   // GitHub returns exactly "Branch not protected" for GET .../protection when the branch
-  // exists but has no protection. That is the only confident "not applied" signal. A
-  // generic 404 can mean a missing branch, the wrong repo, or no permission, none of which
-  // prove the absence of a rule, so those fall through to cannot-verify.
+  // exists but has no classic protection. It does not rule out a ruleset, so it is only a
+  // confident "no classic rule", checked against rulesets before concluding not-applied.
   return /branch not protected/i.test(stderr);
+}
+
+// The classic branch-protection answer for the required check: confirmed present, confidently
+// absent, or unreadable (gh missing, a non-"branch not protected" error, or unparseable JSON).
+type ClassicState = 'present' | 'absent' | 'unreadable';
+
+async function readClassicProtection(gh: GhReader): Promise<ClassicState> {
+  let outcome: GhResult | null;
+  try {
+    outcome = await gh.getJson(PROTECTION_ENDPOINT);
+  } catch {
+    return 'unreadable';
+  }
+  if (outcome === null) {
+    return 'unreadable';
+  }
+  if (outcome.code !== 0) {
+    return isBranchNotProtected(outcome.stderr) ? 'absent' : 'unreadable';
+  }
+  try {
+    return isRequiredCheckPresent(JSON.parse(outcome.stdout)) ? 'present' : 'absent';
+  } catch {
+    return 'unreadable';
+  }
+}
+
+// True when the conditions of a branch ruleset cover the protected branch: its include list names
+// the default branch, all branches, or the branch by ref, and the branch is not excluded.
+function conditionsCoverProtectedBranch(conditions: unknown): boolean {
+  if (!isRecord(conditions)) {
+    return false;
+  }
+  const refName = conditions['ref_name'];
+  if (!isRecord(refName)) {
+    return false;
+  }
+  const asStrings = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+  const target = `refs/heads/${PROTECTED_BRANCH}`;
+  const include = asStrings(refName['include']);
+  const exclude = asStrings(refName['exclude']);
+  const included = include.some((p) => p === '~ALL' || p === '~DEFAULT_BRANCH' || p === target);
+  const excluded = exclude.some((p) => p === '~ALL' || p === target);
+  return included && !excluded;
+}
+
+// True when an active branch ruleset requires REQUIRED_CHECK on the protected branch.
+export function rulesetRequiresCheck(fullRuleset: unknown): boolean {
+  if (!isRecord(fullRuleset)) {
+    return false;
+  }
+  if (fullRuleset['enforcement'] !== 'active' || fullRuleset['target'] !== 'branch') {
+    return false;
+  }
+  if (!conditionsCoverProtectedBranch(fullRuleset['conditions'])) {
+    return false;
+  }
+  const rules = fullRuleset['rules'];
+  if (!Array.isArray(rules)) {
+    return false;
+  }
+  for (const rule of rules) {
+    if (!isRecord(rule) || rule['type'] !== 'required_status_checks') {
+      continue;
+    }
+    const params = rule['parameters'];
+    if (!isRecord(params)) {
+      continue;
+    }
+    const checks = params['required_status_checks'];
+    if (!Array.isArray(checks)) {
+      continue;
+    }
+    for (const entry of checks) {
+      if (isRecord(entry) && entry['context'] === REQUIRED_CHECK) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The name of an active ruleset that requires the check, null when none does, or 'unreadable' when
+// the rulesets could not be read at all (so the caller does not read that as a confident absence).
+async function findRulesetRequiringCheck(gh: GhReader): Promise<{ name: string } | null | 'unreadable'> {
+  let listRes: GhResult | null;
+  try {
+    listRes = await gh.getJson(RULESETS_ENDPOINT);
+  } catch {
+    return 'unreadable';
+  }
+  if (listRes === null || listRes.code !== 0) {
+    return 'unreadable';
+  }
+  let list: unknown;
+  try {
+    list = JSON.parse(listRes.stdout);
+  } catch {
+    return 'unreadable';
+  }
+  if (!Array.isArray(list)) {
+    // A readable but non-list response is a confident "no rulesets to read here", not an error.
+    return null;
+  }
+  for (const summary of list) {
+    if (!isRecord(summary) || summary['enforcement'] !== 'active' || summary['target'] !== 'branch') {
+      continue;
+    }
+    const id = summary['id'];
+    if (typeof id !== 'number') {
+      continue;
+    }
+    let fullRes: GhResult | null;
+    try {
+      fullRes = await gh.getJson(rulesetEndpoint(id));
+    } catch {
+      return 'unreadable';
+    }
+    if (fullRes === null || fullRes.code !== 0) {
+      return 'unreadable';
+    }
+    let full: unknown;
+    try {
+      full = JSON.parse(fullRes.stdout);
+    } catch {
+      return 'unreadable';
+    }
+    if (rulesetRequiresCheck(full)) {
+      const name = isRecord(full) && typeof full['name'] === 'string' ? full['name'] : 'a ruleset';
+      return { name };
+    }
+  }
+  return null;
 }
 
 export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> {
   const setting = branchRuleSetting();
 
-  let outcome: GhResult | null;
-  try {
-    // The port only issues a GET, so this read cannot mutate the repository.
-    outcome = await gh.getJson(PROTECTION_ENDPOINT);
-  } catch {
-    outcome = null;
-  }
-
-  if (outcome === null) {
-    return {
-      exitCode: 2,
-      action: 'cannot-verify',
-      message: `cannot verify: gh is not available.\n${setting}\n${verifyByHand()}`,
-    };
-  }
-
-  if (outcome.code !== 0) {
-    if (isBranchNotProtected(outcome.stderr)) {
-      return {
-        exitCode: 2,
-        action: 'not-applied',
-        message: `not applied: the ${PROTECTED_BRANCH} branch has no protection requiring ${REQUIRED_CHECK}.\n${setting}`,
-      };
-    }
-    return {
-      exitCode: 2,
-      action: 'cannot-verify',
-      message: `cannot verify: gh could not read branch protection (exit ${outcome.code}).\n${setting}\n${verifyByHand()}`,
-    };
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(outcome.stdout);
-  } catch {
-    return {
-      exitCode: 2,
-      action: 'cannot-verify',
-      message: `cannot verify: branch protection response was not readable JSON.\n${setting}\n${verifyByHand()}`,
-    };
-  }
-
-  if (isRequiredCheckPresent(parsed)) {
+  // Classic protection first, so a classic-protected repo still verifies in one read-only GET.
+  const classic = await readClassicProtection(gh);
+  if (classic === 'present') {
     return {
       exitCode: 0,
       action: 'verified',
-      message: `verified: ${REQUIRED_CHECK} is a required status check on ${PROTECTED_BRANCH}.`,
+      message: `verified: ${REQUIRED_CHECK} is a required status check on ${PROTECTED_BRANCH} (classic branch protection).`,
+    };
+  }
+
+  // Classic did not confirm it, so check rulesets: a ruleset can require the same check.
+  const ruleset = await findRulesetRequiringCheck(gh);
+  if (ruleset !== null && ruleset !== 'unreadable') {
+    return {
+      exitCode: 0,
+      action: 'verified',
+      message: `verified: ${REQUIRED_CHECK} is a required status check on ${PROTECTED_BRANCH} (ruleset "${ruleset.name}").`,
+    };
+  }
+
+  // Neither mechanism confirmed the check. Only call it not-applied when both are confident: a
+  // classic absence and a rulesets list that named no rule requiring it. If either could not be
+  // read, refuse rather than claim the protection is missing.
+  if (classic === 'unreadable' || ruleset === 'unreadable') {
+    return {
+      exitCode: 2,
+      action: 'cannot-verify',
+      message: `cannot verify: could not read classic protection and rulesets for ${PROTECTED_BRANCH}.\n${setting}\n${verifyByHand()}`,
     };
   }
   return {
     exitCode: 2,
     action: 'not-applied',
-    message: `not applied: ${REQUIRED_CHECK} is not a required status check on ${PROTECTED_BRANCH}.\n${setting}`,
+    message: `not applied: ${REQUIRED_CHECK} is required by neither classic branch protection nor an active ruleset on ${PROTECTED_BRANCH}.\n${setting}`,
   };
 }
