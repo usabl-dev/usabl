@@ -981,3 +981,103 @@ describe('the overlay is itself accessible and read only', { timeout: 30_000 }, 
     await page.context().close();
   });
 });
+
+describe('overlay accessibility guarantees', { timeout: 30_000 }, () => {
+  it('collapses from the caret control as well as from Escape', async () => {
+    const page = await mount(projectOverlay(result()), { path: '/clusters' });
+    const host = page.locator('#__usabl-overlay');
+    const panel = await openPanel(page);
+
+    await panel.getByRole('button', { name: 'Collapse the usabl inspector' }).click();
+
+    expect(await panel.isHidden()).toBe(true);
+    const badge = host.getByRole('button', { name: /Open inspector/i });
+    expect(await badge.isVisible()).toBe(true);
+    // Focus lands on the badge, so a keyboard user is not dropped on the document.
+    expect(
+      await badge.evaluate((element) => {
+        const root = element.getRootNode();
+        return root instanceof ShadowRoot && root.activeElement === element;
+      }),
+    ).toBe(true);
+
+    await page.context().close();
+  });
+
+  it('scrolls without animation when the reader asked for reduced motion', async () => {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      reducedMotion: 'reduce',
+    });
+    // Record the scroll behaviour the overlay asks for, before any overlay code runs.
+    await context.addInitScript(`
+      window.__usablScrollBehaviours = [];
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function (options) {
+        window.__usablScrollBehaviours.push(options && options.behavior);
+        return original.apply(this, arguments);
+      };
+    `);
+    const page = await context.newPage();
+    await page.route('http://usabl.test/**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/__usabl/result') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(projectOverlay(result())),
+        });
+        return;
+      }
+      await route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<!doctype html>
+          <html lang="en">
+            <head><title>Clean host</title></head>
+            <body>
+              <header><h1>Fleet operations</h1></header>
+              <main><button id="cluster-details" type="button">Host action</button></main>
+              <script type="module">${overlayClientSource}</script>
+            </body>
+          </html>`,
+      });
+    });
+    await page.goto('http://usabl.test/clusters');
+    await page.locator('#__usabl-overlay').waitFor();
+
+    const panel = await openPanel(page);
+    await panel.locator('.finding-button').first().click();
+
+    const behaviours = await page.evaluate(
+      () => (window as unknown as { __usablScrollBehaviours: string[] }).__usablScrollBehaviours,
+    );
+    expect(behaviours).toContain('auto');
+    expect(behaviours).not.toContain('smooth');
+
+    await context.close();
+  });
+
+  it('draws a visible focus indicator on every control reached by keyboard', async () => {
+    const page = await mount(projectOverlay(result()), { path: '/clusters' });
+    const host = page.locator('#__usabl-overlay');
+    await openPanel(page);
+
+    const outlines: string[] = [];
+    for (let step = 0; step < 4; step += 1) {
+      await page.keyboard.press('Tab');
+      const outline = await host.evaluate((element) => {
+        const active = (element as HTMLElement).shadowRoot?.activeElement;
+        if (!active) return 'no shadow focus';
+        const style = getComputedStyle(active);
+        return `${style.outlineStyle}:${style.outlineWidth}`;
+      });
+      outlines.push(outline);
+    }
+
+    // Every stop reports a real outline, so focus is never invisible inside the panel.
+    for (const outline of outlines) {
+      expect(outline).toMatch(/^solid:[1-9]/);
+    }
+
+    await page.context().close();
+  });
+});
