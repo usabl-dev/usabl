@@ -186,6 +186,32 @@ per-surface budget is not yet exposed.
 
 ---
 
+## Threat 9: Output that renders differently from what usabl found
+
+**Attack:** Page text carries Unicode formatting characters that no reader sees. Two
+effects, both reproduced against `frameUntrusted`. Bidirectional controls reorder how the
+characters around them are drawn, so a finding can render as the opposite of what usabl
+found while the stored bytes stay innocent. Invisible characters planted between the
+characters of the untrusted-text frame marker let page text close usabl's own frame, after
+which everything the page supplied reads as trusted instruction rather than as data.
+
+**Controls:**
+
+- `neutralize` removes bidirectional controls and the other invisible formatting characters
+  at every egress, so what a surface prints and what usabl found are the same text.
+- The joiners U+200C and U+200D are kept. Persian, Arabic, and Indic words and emoji
+  sequences are built from them, so removing them would corrupt real content in an
+  accessibility tool.
+- Because those two survive, `removeFrameMarkers` matches the frame markers through
+  invisible characters, so a split marker is still recognised and replaced. Both places work
+  from one list of characters, so what one removes and what the other tolerates cannot drift.
+
+**Status:** [x] Both controls ship. Six splitters and the reordering payload are covered by
+tests. [ ] usabl does not report that a page attempted either forgery; it removes them
+silently.
+
+---
+
 ## Decision: Stop hook fail-open on exit 4
 
 After the guard runs before any coverage, floor, or waiver parse, a diverged

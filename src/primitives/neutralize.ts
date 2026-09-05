@@ -5,8 +5,8 @@
  */
 
 /**
- * True for a formatting character that a reader never sees but that changes what the text looks
- * like or hides content inside it.
+ * The formatting characters a reader never sees but that change what the text looks like or hide
+ * content inside it. Ranges are inclusive code points.
  *
  * Two groups are covered. The bidirectional controls, the embeddings, overrides, isolates, and
  * direction marks, tell a renderer to draw characters in a different order than they are stored.
@@ -15,25 +15,42 @@
  * so they can pad a string, hide characters inside it, or split a literal that a later stage
  * matches on, with nothing visible to warn the reader.
  *
- * The joiners U+200C and U+200D are deliberately kept. They carry meaning in Persian, Arabic, and
- * Indic text, and they bind emoji sequences into one glyph, so removing them would mangle
+ * The joiners U+200C and U+200D are deliberately absent. They carry meaning in Persian, Arabic,
+ * and Indic text, and they bind emoji sequences into one glyph, so removing them would mangle
  * legitimate content. Letters that have a direction of their own, Hebrew and Arabic script, are
  * untouched: they render right to left without any control character, so right-to-left text
  * survives this pass unchanged.
+ *
+ * This list is exported because the untrusted-text frame in the surface scrubber has to recognise
+ * a marker that page text split with one of these characters. Both places work from this one list,
+ * so what one removes and what the other tolerates cannot drift apart.
+ */
+export const INVISIBLE_FORMAT_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x00ad, 0x00ad], // soft hyphen
+  [0x061c, 0x061c], // Arabic letter mark
+  [0x200b, 0x200b], // zero width space
+  [0x200e, 0x200f], // left-to-right and right-to-left marks
+  [0x202a, 0x202e], // bidi embeddings, overrides, and pop
+  [0x2060, 0x2064], // word joiner and invisible operators
+  [0x2066, 0x206f], // bidi isolates and deprecated format characters
+  [0xfeff, 0xfeff], // zero width no-break space, the byte order mark
+  [0xfff9, 0xfffb], // interlinear annotation
+  [0xe0000, 0xe007f], // tag characters, an invisible copy of ASCII
+];
+
+/**
+ * True for a code point in the list above.
+ *
+ * The scan below reads one UTF-16 code unit at a time, and a single code unit can never reach the
+ * tag range, so that last entry is inert here. The surrogate pair check does that work instead.
  */
 function isInvisibleFormat(code: number): boolean {
-  return (
-    code === 0x00ad || // soft hyphen
-    code === 0x061c || // Arabic letter mark
-    code === 0x200b || // zero width space
-    code === 0x200e || // left-to-right mark
-    code === 0x200f || // right-to-left mark
-    (code >= 0x202a && code <= 0x202e) || // bidi embeddings, overrides, and pop
-    (code >= 0x2060 && code <= 0x2064) || // word joiner and invisible operators
-    (code >= 0x2066 && code <= 0x206f) || // bidi isolates and deprecated format characters
-    code === 0xfeff || // zero width no-break space, the byte order mark
-    (code >= 0xfff9 && code <= 0xfffb) // interlinear annotation
-  );
+  for (const [first, last] of INVISIBLE_FORMAT_RANGES) {
+    if (code >= first && code <= last) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

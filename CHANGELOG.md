@@ -37,6 +37,14 @@
   characters inside it. Right-to-left text is unaffected: Hebrew and Arabic
   letters carry their own direction and are left alone, and the joiners that
   Persian, Arabic, Indic, and emoji sequences depend on are kept.
+- Page text can no longer close usabl's own untrusted-text frame. That frame tells
+  an agent-facing reader that everything inside it is data and never instructions.
+  A marker with an invisible character planted between two of its characters still
+  reads as a marker, because the planted character draws nothing, but it did not
+  match the literal, so it survived into the framed body and everything after it
+  read as trusted. The marker search now looks through invisible characters, so a
+  split marker is recognised and replaced like any other. Words that need a joiner
+  are unaffected, because the tolerance applies only while matching a marker.
 
 ### Added
 
