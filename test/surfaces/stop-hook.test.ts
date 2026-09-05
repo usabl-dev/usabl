@@ -38,6 +38,7 @@ describe('evaluateStopDecision', () => {
           scannerVersions: { axeCore: '4.13.0', playwright: '1.62.1', chromium: 'revision-123' },
           surfaces: ['cli'],
           coverage: { checked: ['clusters'], notCovered: [] },
+          applicability: [],
           verdict: 'verified',
           findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 },
           activeWaivers: 0,

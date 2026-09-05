@@ -116,10 +116,50 @@ describe('run', () => {
       const without = await run(depsFor(drafts), config);
       const withEntries = await run(depsFor(drafts, applicability), config);
 
-      expect({ ...withEntries, screens: [] }).toEqual({ ...without, screens: [] });
+      // Applicability moves no verdict. Every field except the screens and the receipt is
+      // byte-identical whether or not the scan reported which rules applied. The receipt is
+      // excluded here because it records applicability by design (proved in the next test); it
+      // is compared separately so this assertion stays about the verdict, not the record.
+      expect({ ...withEntries, screens: [], receipt: null }).toEqual({
+        ...without,
+        screens: [],
+        receipt: null,
+      });
       expect(withEntries.screens[0]?.applicability).toEqual(applicability);
       expect(without.screens[0]?.applicability).toEqual([]);
     }
+  });
+
+  it('records the applicability summary in a verified receipt, and nothing else in it moves', async () => {
+    // Decision-of-record for applicability: the receipt states what was examined, so a verified
+    // receipt records not only what was found but what was checked. It is informational, so it
+    // changes no verdict and is never re-verified.
+    const applicability: RuleApplicability[] = [
+      { screenId: 'clusters', layer: 'axe', rule: 'video-caption', outcome: 'inapplicable', elementCount: 0 },
+      { screenId: 'clusters', layer: 'axe', rule: 'html-has-lang', outcome: 'passed', elementCount: 1 },
+      { screenId: 'clusters', layer: 'axe', rule: 'color-contrast', outcome: 'passed', elementCount: 3 },
+    ];
+    const depsFor = (entries?: RuleApplicability[]) =>
+      makeFakeDeps({
+        ...guardOk,
+        writeTree: 'tree-1',
+        changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
+        scans: {
+          clusters: entries === undefined ? scanWith([]) : { ...scanWith([]), applicability: entries },
+        },
+      });
+
+    const withEntries = await run(depsFor(applicability), config);
+    const without = await run(depsFor(), config);
+
+    // A clean run mints a receipt; it records what was examined: two rules applied, one abstained.
+    expect(withEntries.verdict).toBe('verified');
+    expect(withEntries.receipt?.applicability).toEqual([{ screenId: 'clusters', applied: 2, abstained: 1 }]);
+    // With no applicability reported, the screen carries no examined/abstained claim, so the
+    // receipt omits it rather than record 0/0.
+    expect(without.receipt?.applicability).toEqual([]);
+    // Only the applicability record differs; the rest of the receipt is identical.
+    expect({ ...withEntries.receipt, applicability: null }).toEqual({ ...without.receipt, applicability: null });
   });
 
   it('is approval_required (exit 2) when a guarded path diverged', async () => {

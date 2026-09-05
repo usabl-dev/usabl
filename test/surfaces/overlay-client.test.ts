@@ -285,6 +285,7 @@ describe('overlay browser client', { timeout: 15_000 }, () => {
             scannerVersions: { axeCore: '4.13.0', playwright: '1.62.1', chromium: '140' },
             surfaces: ['vite'],
             coverage: { checked: ['clusters'], notCovered: [] },
+            applicability: [],
             verdict: 'verified',
             findingsSummary: { new: 0, carried: 0, fixed: 1, unverified: 0 },
             activeWaivers: 0,

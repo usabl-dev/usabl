@@ -249,6 +249,7 @@ describe('stop-hook-runner protocol', () => {
       surfaces: ['cli'],
       checked: ['clusters'],
       notCovered: [],
+      applicability: [],
       findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 },
       activeWaivers: 0,
     });

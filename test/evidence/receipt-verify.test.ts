@@ -24,6 +24,7 @@ const mintArgs = {
   surfaces: ["cli"],
   checked: ["clusters"],
   notCovered: [],
+  applicability: [],
   findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 },
   activeWaivers: 0,
 };
@@ -83,6 +84,34 @@ describe("verifyReceipt", () => {
       valid: true,
       failedFields: [],
     });
+  });
+
+  it("does not compare applicability, because it is recorded, not certified", async () => {
+    // Applicability is informational: it states what the run examined, and it legitimately
+    // varies with app state (a dialog present one run, absent the next). If verify compared it,
+    // an honest receipt would fail re-check whenever the page changed. So a receipt whose
+    // applicability differs from a fresh run must still re-verify valid when the certified
+    // fields (source tree, policy, runner, scanners) match.
+    const deps = makeFakeDeps({
+      files: guardFiles,
+      headContents: guardFiles,
+      headBlobs: guardBlobs,
+      writeTree: "tree-a",
+      runnerVersion: "0.1.0",
+    });
+
+    const receipt = await mintReceipt(deps, config, {
+      ...mintArgs,
+      applicability: [{ screenId: "clusters", applied: 40, abstained: 3 }],
+    });
+    const withDifferentApplicability = {
+      ...receipt,
+      applicability: [{ screenId: "clusters", applied: 12, abstained: 31 }],
+    };
+
+    await expect(
+      verifyReceipt(deps, config, withDifferentApplicability, "tree-a"),
+    ).resolves.toEqual({ valid: true, failedFields: [] });
   });
 
   it("fails only sourceTree when current source tree differs", async () => {

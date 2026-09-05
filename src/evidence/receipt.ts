@@ -7,7 +7,7 @@
  * blobs at HEAD), runnerVersion, and scannerVersions (axe-core, Playwright, Chromium).
  * Lists are sorted so the same inputs hash the same way.
  */
-import type { Deps, Receipt, UsablConfig } from "../contracts/index.js";
+import type { Deps, Receipt, ScreenScan, UsablConfig } from "../contracts/index.js";
 import { sortBy } from "../primitives/sortKey.js";
 import { canonicalHash } from "../primitives/canonical.js";
 import { buildGuardedSet, expandGuardedSet } from "../trust/guard.js";
@@ -16,9 +16,33 @@ export interface ReceiptArgs {
   surfaces: string[];
   checked: string[];
   notCovered: string[];
+  applicability: Receipt["applicability"];
   findingsSummary: Receipt["findingsSummary"];
   activeWaivers: number;
   baseRevision?: string | null;
+}
+
+/**
+ * Summarize, per scanned screen, how many rules examined at least one element (applied) versus
+ * how many matched nothing (abstained). This is the receipt's record of what was actually
+ * checked, not only what was found. It is informational: the receipt records it, verifyReceipt
+ * never compares it, and it never gates. A screen with no applicability data (an unseen screen,
+ * stripped upstream) is omitted rather than recorded as 0/0 noise. Sorted by screenId so the
+ * same inputs produce the same receipt bytes.
+ */
+export function summarizeApplicability(
+  screens: readonly ScreenScan[],
+): Receipt["applicability"] {
+  return sortBy(
+    screens
+      .filter((screen) => screen.applicability.length > 0)
+      .map((screen) => ({
+        screenId: screen.screenId,
+        applied: screen.applicability.filter((entry) => entry.outcome !== "inapplicable").length,
+        abstained: screen.applicability.filter((entry) => entry.outcome === "inapplicable").length,
+      })),
+    (summary) => summary.screenId,
+  );
 }
 
 /**
@@ -64,6 +88,7 @@ export async function mintReceipt(
       checked: sortBy([...args.checked], (s) => s),
       notCovered: sortBy([...args.notCovered], (s) => s),
     },
+    applicability: args.applicability,
     verdict: "verified",
     findingsSummary: args.findingsSummary,
     activeWaivers: args.activeWaivers,
