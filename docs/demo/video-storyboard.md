@@ -80,7 +80,7 @@ weeks later. End on the person. The narrator does not speak until scene 2.
 **Working title:** Nobody was required to disagree
 **Runs:** about 40 seconds
 **Purpose:** Name the time gap and the pipeline. Introduce the twist that the writer
-is also the grader (they need usabl to solve this problem and prevent this from happening). Introduce usabl, the four possible verdicts, and the product promise. The narrator
+is also the grader (they need usabl to solve this problem and prevent this from happening). Introduce usabl, the four verdicts and the no-verdict case, and the product promise. The narrator
 enters here.
 
 **Shot 2.1**, duration ~12s, running 0:28 to 0:40
@@ -120,7 +120,8 @@ enters here.
   required. The verified chip is highlighted. The tagline lands at the end.
 - **Audio:** narrator.
 - **VO:** "usabl is built to be the thing that ensures a11y is a top priority. On the surfaces a change touches,
-  it returns one of four answers. Only verified lets an assistant call the work done. The
+  it returns one of four answers, or none when nothing was checked. Only verified counts as
+  proof, and on a blocking verdict the assistant's first stop is blocked. The
   assistant can propose the fix. The rules decide whether it passes."
 - **Text and graphics:** four chips, then "Don't ship until it's usabl."
 - **Transition:** cut into the demo.
@@ -333,8 +334,9 @@ Every step was a chance to catch it. Every step let it through. None of those st
 ever required to disagree. Accessibility was the one thing no gate was holding. And now
 the assistant that writes the code is the one that says it is done. It grades its own work,
 from inside its own confidence. usabl is built to be the thing that disagrees. On the
-surfaces a change touches, it returns one of four answers. Only verified lets an assistant
-call the work done. The assistant can propose the fix. The rules decide whether it passes."
+surfaces a change touches, it returns one of four answers, or none when nothing was checked.
+Only verified counts as proof, and on a blocking verdict the assistant's first stop is
+blocked. The assistant can propose the fix. The rules decide whether it passes."
 
 Scene 3:
 "Here is the same kind of dialog inside a real dev loop. A change breaks it. On save, usabl
