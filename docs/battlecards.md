@@ -17,7 +17,7 @@ findings; Deque adds remediate guidance and training content.
 
 **What we add:** The full proof loop - fix re-verification, keyboard walk,
 deterministic screen-reader announcement checks, differential ratchet, and a stop gate
-that blocks "done" until proof passes on the change.
+that blocks an assistant's first stop on a blocking verdict unless a one-use bypass was issued.
 
 **Complementary?** Yes - Deque's remediate guidance and usabl's proof gate can coexist.
 axe-core is one of our check layers.
