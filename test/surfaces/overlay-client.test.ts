@@ -1654,3 +1654,221 @@ describe('the elsewhere guide never links off site', { timeout: 40_000 }, () => 
     await page.context().close();
   });
 });
+
+describe('the overlay announces state changes and stays visible on any host', { timeout: 40_000 }, () => {
+  it('announces scan and verdict changes without repeating itself', async () => {
+    const page = await mount(null, {
+      path: '/clusters',
+      responseDelayMs: 500,
+      payloads: [
+        projectOverlay(result()),
+        projectOverlay(result({ verdict: 'verified', findings: [], exitCode: 0 })),
+      ],
+    });
+    const host = page.locator(OVERLAY);
+    const verdictStatus = host.locator('.visually-hidden[role="status"]');
+
+    expect(await verdictStatus.getAttribute('aria-live')).toBe('polite');
+    await expect.poll(async () => verdictStatus.textContent(), { timeout: 10_000 }).toBe(
+      'usabl: Regression. 2 findings on this screen.',
+    );
+
+    const panel = await openPanel(page);
+    // Opening and closing the panel is not a state change, so nothing is re-announced.
+    await panel.getByRole('button', { name: 'Collapse the usabl inspector' }).click();
+    await host.getByRole('button', { name: /Open inspector/i }).click();
+    expect(await verdictStatus.textContent()).toBe('usabl: Regression. 2 findings on this screen.');
+
+    await panel.getByRole('button', { name: 'Check again' }).click();
+    await expect.poll(async () => verdictStatus.textContent()).toBe('usabl: Scanning.');
+    await expect
+      .poll(async () => verdictStatus.textContent(), { timeout: 10_000 })
+      .toBe('usabl: Verified. No findings on this screen.');
+
+    // It is a live region, not a visible duplicate of the banner.
+    const box = await verdictStatus.boundingBox();
+    expect(box?.width ?? 99).toBeLessThanOrEqual(2);
+
+    await page.context().close();
+  });
+
+  it('keeps the badge focus ring visible against a dark host page', async () => {
+    // The ring used to be a single dark colour, so on a host page painted the same dark colour it
+    // sat at 1:1 contrast and vanished. The earlier focus test only ever used a white page.
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    await page.route('http://usabl.test/**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/__usabl/result') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(projectOverlay(result())),
+        });
+        return;
+      }
+      await route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<!doctype html>
+          <html lang="en">
+            <head><title>Dark host</title>
+              <style>body { background: #101827; color: #ffffff; margin: 0; min-height: 100vh; }</style>
+            </head>
+            <body>
+              <header><h1>Fleet operations</h1></header>
+              <main><button id="cluster-details" type="button">Host action</button></main>
+              <script type="module">${overlayClientSource}</script>
+            </body>
+          </html>`,
+      });
+    });
+    await page.goto('http://usabl.test/clusters');
+    await page.locator(OVERLAY).waitFor();
+
+    // Tab through the host page's own controls until focus reaches the badge.
+    const readFocus = async () =>
+      page.locator(OVERLAY).evaluate(
+        (element) => (element as HTMLElement).shadowRoot?.activeElement?.className ?? '',
+      );
+    for (let step = 0; step < 6 && !(await readFocus()).includes('badge'); step += 1) {
+      await page.keyboard.press('Tab');
+    }
+
+    const ring = await page.locator(OVERLAY).evaluate((element) => {
+      const active = (element as HTMLElement).shadowRoot?.activeElement;
+      if (!active) return null;
+      const style = getComputedStyle(active);
+      return {
+        focused: active.className,
+        outlineColor: style.outlineColor,
+        outlineWidth: style.outlineWidth,
+        boxShadow: style.boxShadow,
+      };
+    });
+
+    expect(ring?.focused).toContain('badge');
+    // A white inner ring against the dark host, plus a dark outer ring so the edge is visible on
+    // light content too. One of the two always contrasts.
+    expect(ring?.outlineColor).toBe('rgb(255, 255, 255)');
+    expect(parseFloat(ring?.outlineWidth ?? '0')).toBeGreaterThanOrEqual(2);
+    expect(ring?.boxShadow).toContain('rgb(16, 24, 39)');
+    expect(ring?.boxShadow).toContain('rgb(255, 255, 255)');
+
+    await context.close();
+  });
+});
+
+describe('the overlay bounds its own work', { timeout: 60_000 }, () => {
+  const manyFindings = (count: number, titleLength = 40) =>
+    Array.from({ length: count }, (_, index) =>
+      finding({
+        rule: `rule-${index}`,
+        elementPath: `#target-${index}`,
+        whatUserExperiences: `Finding ${index}: ${'x'.repeat(titleLength)}`,
+      }),
+    );
+
+  it('builds a bounded page of rows while still reporting the true total', async () => {
+    const page = await mount(projectOverlay(result({ findings: manyFindings(500) })), {
+      path: '/clusters',
+    });
+    const panel = await openPanel(page);
+
+    // Bounded in the DOM.
+    expect(await panel.locator('.finding-button').count()).toBe(40);
+    // Truthful in what it reports. Bounding what is BUILT never changes what is COUNTED.
+    expect(await panel.getByText('500 issues total').isVisible()).toBe(true);
+    expect(await panel.getByText('Showing 40 of 500 findings on this screen.').isVisible()).toBe(true);
+    expect(await panel.locator('.screen-counts').textContent()).toBe('500 here · 0 on other screens');
+
+    // Each row says where it sits in the whole list, not in the part that happens to be built.
+    const positions = await panel
+      .locator('.finding-item')
+      .evaluateAll((items) =>
+        items.slice(0, 2).map((item) => ({
+          size: item.getAttribute('aria-setsize'),
+          position: item.getAttribute('aria-posinset'),
+        })),
+      );
+    expect(positions).toEqual([
+      { size: '500', position: '1' },
+      { size: '500', position: '2' },
+    ]);
+
+    await panel.getByRole('button', { name: 'Show 40 more' }).click();
+    expect(await panel.locator('.finding-button').count()).toBe(80);
+    expect(await panel.getByText('Showing 80 of 500 findings on this screen.').isVisible()).toBe(true);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  it('keeps a large result under control in nodes and in time', async () => {
+    const started = Date.now();
+    const page = await mount(projectOverlay(result({ findings: manyFindings(3000, 1000) })), {
+      path: '/clusters',
+    });
+    const panel = await openPanel(page);
+    const elapsed = Date.now() - started;
+
+    const nodes = await page.evaluate(() => document.querySelectorAll('*').length);
+    const shadowNodes = await page
+      .locator(OVERLAY)
+      .evaluate((host) => (host as HTMLElement).shadowRoot?.querySelectorAll('*').length ?? 0);
+
+    expect(await panel.getByText('3000 issues total').isVisible()).toBe(true);
+    // Forty rows with no detail bodies built, so a few hundred nodes, not sixty thousand.
+    expect(shadowNodes).toBeLessThan(1500);
+    expect(nodes).toBeLessThan(2000);
+    expect(elapsed).toBeLessThan(10_000);
+
+    await page.context().close();
+  });
+
+  it('builds a detail body only for the row that is open', async () => {
+    const page = await mount(projectOverlay(result({ findings: manyFindings(40) })), {
+      path: '/clusters',
+    });
+    const panel = await openPanel(page);
+
+    // Forty rows exist, and not one detail body has been built.
+    expect(await panel.locator('.finding-button').count()).toBe(40);
+    expect(await panel.locator('.detail-action').count()).toBe(0);
+
+    await panel.locator('.finding-button').first().click();
+    expect(await panel.locator('.finding-detail:not([hidden]) .detail-action').count()).toBe(2);
+    // Only the open row has one.
+    expect(await panel.locator('.detail-action').count()).toBe(2);
+
+    await panel.locator('.finding-button').nth(1).click();
+    // The first row's body stays built but hidden, and the second one is built on demand.
+    expect(await panel.locator('.finding-detail:not([hidden])').count()).toBe(1);
+
+    await page.context().close();
+  });
+
+  it('shortens an enormous field and says that it did', async () => {
+    const huge = 'y'.repeat(200_000);
+    const page = await mount(
+      projectOverlay(
+        result({
+          findings: [finding({ whatUserExperiences: huge, why: huge, elementPath: `#a${huge}` })],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    const title = await panel.locator('.finding-title').textContent();
+    expect(title?.length ?? 0).toBeLessThan(2100);
+    expect(title).toContain('[shortened for display]');
+
+    await panel.locator('.finding-button').click();
+    const why = await panel.locator('.detail-block p').first().textContent();
+    expect(why?.length ?? 0).toBeLessThan(2100);
+    expect(why).toContain('[shortened for display]');
+
+    await page.context().close();
+  });
+});

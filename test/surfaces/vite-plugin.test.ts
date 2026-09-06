@@ -168,6 +168,9 @@ describe('projectOverlay', () => {
       ],
       unresolvedFiles: ['src/pages/Unknown.tsx'],
       gaps: [{ ref: 'clusters', state: 'not-covered', reason: 'browser unavailable' }],
+      // Carried so the overlay can tell a run that had nothing to check apart from a run that
+      // ended without a verdict. Those look identical without it, and one of them is a pass.
+      nothingToCheck: false,
     });
     expect(overlay.findings[0]).toEqual(
       expect.objectContaining({
