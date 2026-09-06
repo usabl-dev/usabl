@@ -106,6 +106,40 @@ describe('check-staged-links command', () => {
     expect(result.stdout).toContain('6 external or same-page link(s) skipped');
   });
 
+  it('fails a root-absolute link because the site is served under a repository path', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-staged-links-root-'));
+    const source = join(root, 'docs');
+    // team-orientation.html is staged, so a naive join would pass this link. In
+    // the browser it resolves against the domain root, above the site path, and 404s.
+    await writePublicPages(source, {
+      'how-usabl-works.html': '<h1 id="intro">How</h1>\n<a href="/team-orientation.html">Home</a>\n',
+    });
+
+    const result = await runChecker(source);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain('how-usabl-works.html:2');
+    expect(result.stdout).toContain('link "/team-orientation.html" is root-absolute');
+    expect(result.stdout).toContain('served under /usabl/');
+    expect(result.stdout).toContain('1 broken');
+  });
+
+  it('passes directory references that the site serves as index.html', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-staged-links-index-'));
+    const source = join(root, 'docs');
+    await writePublicPages(source, {
+      'how-usabl-works.html':
+        '<h1 id="intro">How</h1>\n<a href=".">Dot</a>\n<a href="./">Dot slash</a>\n',
+      'demo/product-deck.html': '<h1>Deck</h1>\n<a href="..">Up</a>\n<a href="../">Up slash</a>\n',
+    });
+
+    const result = await runChecker(source);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('4 internal link(s) checked');
+    expect(result.stdout).toContain('0 broken');
+  });
+
   it('reports a link that escapes the staged tree as missing', async () => {
     root = await mkdtemp(join(tmpdir(), 'usabl-staged-links-escape-'));
     const source = join(root, 'docs');

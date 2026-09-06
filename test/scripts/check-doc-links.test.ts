@@ -85,6 +85,84 @@ describe('check-doc-links command', () => {
     expect(result.code).toBe(0);
   });
 
+  it('accepts a query string on a relative link', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-query-'));
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(
+      join(root, 'docs', 'a.html'),
+      '<h1 id="top">A</h1>\n<a href="b.html?v=2">b</a>\n<a href="b.html?v=2#intro">b intro</a>\n',
+      'utf8',
+    );
+    await writeFile(join(root, 'docs', 'b.html'), '<h1 id="intro">B</h1>\n', 'utf8');
+
+    const result = await runChecker(root);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('2 relative link(s) checked');
+  });
+
+  // The extractor covers srcset candidates, the video poster, the object data
+  // attribute, url() inside a style block, and url() inside an inline style.
+  const richPage = (prefix: string): string =>
+    [
+      '<style>',
+      `  .hero { background: url(${prefix}hero.png); }`,
+      `  .logo { background-image: url("${prefix}logo.svg"); }`,
+      '</style>',
+      '<h1 id="top">A</h1>',
+      `<img src="${prefix}small.png" srcset="${prefix}small.png 1x, ${prefix}large.png 2x" alt="">`,
+      `<video poster="${prefix}poster.jpg" src="${prefix}clip.mp4"></video>`,
+      `<object data="${prefix}doc.pdf" type="application/pdf"></object>`,
+      `<div style="background: url('${prefix}inline.png')"></div>`,
+      '<svg><path marker-end="url(#arrow)"></path><marker id="arrow"></marker></svg>',
+      '<p data-title="not-a-link.html">text</p>',
+      '',
+    ].join('\n');
+  const richAssets = [
+    'hero.png',
+    'logo.svg',
+    'small.png',
+    'large.png',
+    'poster.jpg',
+    'clip.mp4',
+    'doc.pdf',
+    'inline.png',
+  ];
+
+  it('passes srcset, poster, object data, and CSS url() links that resolve', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-rich-good-'));
+    await mkdir(join(root, 'docs', 'assets'), { recursive: true });
+    await writeFile(join(root, 'docs', 'a.html'), richPage('assets/'), 'utf8');
+    for (const asset of richAssets) {
+      await writeFile(join(root, 'docs', 'assets', asset), 'x', 'utf8');
+    }
+
+    const result = await runChecker(root);
+
+    expect(result.code).toBe(0);
+    // Nine references: eight assets, with small.png counted once from src and
+    // once from srcset. The data-title attribute is not a link, and the SVG
+    // marker-end attribute is not a style context, so neither is counted.
+    expect(result.stdout).toContain('9 relative link(s) checked');
+    expect(result.stdout).toContain('0 broken');
+  });
+
+  it('reports each srcset, poster, object data, and CSS url() link that is missing', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-rich-bad-'));
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(join(root, 'docs', 'a.html'), richPage('gone/'), 'utf8');
+
+    const result = await runChecker(root);
+
+    expect(result.code).not.toBe(0);
+    for (const asset of richAssets) {
+      expect(result.stdout).toContain(`file not found: gone/${asset}`);
+    }
+    expect(result.stdout).not.toContain('not-a-link.html');
+    // Each occurrence is reported, so small.png counts from both src and srcset.
+    expect(result.stdout).toContain('9 broken');
+  });
+
   it('does not check external http(s) links over the network', async () => {
     root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-ext-'));
     await mkdir(join(root, 'docs'), { recursive: true });

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { extractLinks, EXTERNAL_PREFIX } from './check-doc-links.mjs';
+import { extractLinks, EXTERNAL_PREFIX, splitLinkTarget } from './check-doc-links.mjs';
 import { stagePublicPages } from './stage-public-pages.mjs';
 
 // Link check over the published Pages artifact, not the source tree.
@@ -12,34 +12,45 @@ import { stagePublicPages } from './stage-public-pages.mjs';
 // repository. The Pages deploy stages only an allowlist of files, so a page can
 // link a file that exists in source and still 404 on the published site. This
 // check stages the exact deploy artifact into a temporary directory, then
-// requires every internal href and src in every staged HTML file to resolve to
-// a file that is itself in the staged set. External URLs, data URIs, and pure
-// fragments are skipped; they are not affected by staging.
+// requires every internal link in every staged HTML file to name a file that is
+// itself in the staged set. Link extraction and target normalization are shared
+// with the source-tree check so the two passes agree on what a link names.
+//
+// Resolution follows the browser. A relative link resolves against the linking
+// page's directory. A directory reference (`.`, `./`, `demo/`, `demo`) is served
+// as that directory's index.html. A root-absolute link (`/page.html`) resolves
+// against the domain root, and this project site is served under a repository
+// path, so such a link never reaches the site and is reported as broken. A link
+// that climbs above the staged root is reported as missing. External URLs,
+// data URIs, and same-page fragments are skipped; staging does not affect them.
 
-// Resolve a link target written in one staged page to a staged-set path.
-// Returns the POSIX path relative to the staged root, or null when the link is
-// not a file reference (external, data, or a pure fragment on the same page).
+// Published URL prefix for this project Pages site. Named only for the failure
+// message; the staged tree has no mount point, so nothing is resolved against it.
+const SITE_BASE_PATH = '/usabl/';
+
+// Classify a link target written in one staged page.
+//   { kind: 'skip' }                   not a file reference (external, data, fragment)
+//   { kind: 'root-absolute' }          starts with `/`, never resolves under the site path
+//   { kind: 'file', file, index }      candidate staged paths: the file itself (empty for a
+//                                      directory reference) and that directory's index.html
 function resolveStagedTarget(page, rawTarget) {
   const raw = rawTarget.trim();
-  if (raw === '' || EXTERNAL_PREFIX.test(raw)) return null;
+  if (raw === '' || EXTERNAL_PREFIX.test(raw)) return { kind: 'skip' };
 
-  // Drop the fragment and query; neither changes which file is served.
-  const withoutFragment = raw.split('#')[0];
-  const pathPart = withoutFragment.split('?')[0];
-  if (pathPart === '') return null;
+  const { path } = splitLinkTarget(raw);
+  if (path === '') return { kind: 'skip' };
+  if (path.startsWith('/')) return { kind: 'root-absolute' };
 
-  let decoded = pathPart;
-  try {
-    decoded = decodeURIComponent(pathPart);
-  } catch {
-    // Keep the raw form; a malformed escape still names a path to look up.
-  }
+  // Normalize to a path relative to the staged root. posix.normalize keeps a
+  // trailing slash and returns `.` or `./` for the root itself.
+  let resolved = posix.normalize(posix.join(posix.dirname(page), path));
+  if (resolved === '.') resolved = '';
+  else if (resolved.startsWith('./')) resolved = resolved.slice(2);
 
-  // Resolve relative to the page's own directory inside the staged tree. A
-  // root-absolute or parent-escaping path normalizes to something outside the
-  // staged set and is reported as missing, which is what it would be on the site.
-  const resolved = posix.normalize(posix.join(posix.dirname(page), decoded));
-  return resolved;
+  const isDirectory = resolved === '' || resolved.endsWith('/');
+  const file = isDirectory ? '' : resolved;
+  const index = isDirectory ? `${resolved}index.html` : `${resolved}/index.html`;
+  return { kind: 'file', file, index };
 }
 
 // Check every staged HTML file. `stagedFiles` is the list of POSIX-relative
@@ -56,15 +67,25 @@ async function checkStagedLinks(stagedDir, stagedFiles) {
     const content = await readFile(resolve(stagedDir, page), 'utf8');
     for (const { target, lineNumber } of extractLinks(page, content)) {
       const resolved = resolveStagedTarget(page, target);
-      if (resolved === null) {
+      if (resolved.kind === 'skip') {
         skippedCount += 1;
         continue;
       }
       checkedCount += 1;
-      // A directory-style link is served as that directory's index.html.
-      const asIndex = resolved.endsWith('/') ? `${resolved}index.html` : `${resolved}/index.html`;
-      if (staged.has(resolved) || staged.has(asIndex)) continue;
-      broken.push({ page, lineNumber, target: target.trim(), missing: resolved });
+      if (resolved.kind === 'root-absolute') {
+        broken.push({ page, lineNumber, target: target.trim(), reason: 'root-absolute' });
+        continue;
+      }
+      if ((resolved.file !== '' && staged.has(resolved.file)) || staged.has(resolved.index)) {
+        continue;
+      }
+      broken.push({
+        page,
+        lineNumber,
+        target: target.trim(),
+        reason: 'missing',
+        missing: resolved.file === '' ? resolved.index : resolved.file,
+      });
     }
   }
 
@@ -83,14 +104,25 @@ async function checkStagedSite(sourceDir = 'docs') {
   }
 }
 
+function describeBroken(entry) {
+  if (entry.reason === 'root-absolute') {
+    return (
+      `${entry.page}:${entry.lineNumber}: link "${entry.target}" is root-absolute; the browser ` +
+      `resolves it against the domain root, and this project Pages site is served under ` +
+      `${SITE_BASE_PATH}, so it returns 404 on the published site\n`
+    );
+  }
+  return (
+    `${entry.page}:${entry.lineNumber}: link "${entry.target}" points to "${entry.missing}", ` +
+    'which is not in the staged Pages set and would return 404 on the published site\n'
+  );
+}
+
 async function main() {
   const { pages, broken, checkedCount, skippedCount } = await checkStagedSite(process.argv[2]);
 
   for (const entry of broken) {
-    process.stdout.write(
-      `${entry.page}:${entry.lineNumber}: link "${entry.target}" points to "${entry.missing}", ` +
-        'which is not in the staged Pages set and would return 404 on the published site\n',
-    );
+    process.stdout.write(describeBroken(entry));
   }
 
   process.stdout.write(

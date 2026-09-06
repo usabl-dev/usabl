@@ -101,14 +101,55 @@ function collectAnchors(filePath, content) {
   return anchors;
 }
 
+// Attributes whose whole value is one URL. `data` is the <object> source and
+// `poster` the <video> preview image. The leading boundary keeps data-* and
+// names such as metadata from matching. Values must be quoted and on one line;
+// unquoted and line-broken attribute values are not extracted. Every page in
+// this corpus quotes its attributes, so that gap is accepted rather than
+// handled with a partial parser.
+const URL_ATTRIBUTE = /(?<![\w-])(?:href|src|poster|data)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+// srcset holds comma-separated candidates, each a URL followed by an optional
+// width or density descriptor.
+const SRCSET_ATTRIBUTE = /(?<![\w-])srcset\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+// Inline style attributes and <style> blocks can reference files through
+// url(...). SVG presentation attributes such as marker-end="url(#id)" are not
+// style contexts and are left alone.
+const STYLE_ATTRIBUTE = /(?<![\w-])style\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+const CSS_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^"')\s]+))\s*\)/gi;
+const STYLE_OPEN = /<style[\s>]/i;
+const STYLE_CLOSE = /<\/style\s*>/i;
+
+function quotedValue(match) {
+  return match[1] ?? match[2] ?? '';
+}
+
+function cssUrls(text) {
+  const urls = [];
+  for (const match of text.matchAll(CSS_URL)) {
+    urls.push(match[1] ?? match[2] ?? match[3] ?? '');
+  }
+  return urls;
+}
+
+function srcsetUrls(value) {
+  const urls = [];
+  for (const candidate of value.split(',')) {
+    const url = candidate.trim().split(/\s+/)[0];
+    if (url !== undefined && url !== '') urls.push(url);
+  }
+  return urls;
+}
+
 function extractLinks(filePath, content) {
   const ext = extname(filePath).toLowerCase();
   const links = [];
   const lines = content.split(/\r?\n/);
   let inFence = false;
+  let inStyle = false;
 
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
+    const push = (target) => links.push({ target, lineNumber });
 
     if (ext === '.md') {
       if (stripFence(line)) {
@@ -119,17 +160,34 @@ function extractLinks(filePath, content) {
         // Markdown inline links and images: [text](target) / ![alt](target),
         // allowing an optional "title" after the target.
         for (const match of line.matchAll(/!?\[[^\]]*\]\(\s*([^)\s]+?)(?:\s+["'][^"']*["'])?\s*\)/g)) {
-          links.push({ target: match[1], lineNumber });
+          push(match[1]);
         }
       }
     }
 
-    // href/src attributes appear in HTML files and in raw HTML inside markdown.
-    for (const match of line.matchAll(/(?:href|src)\s*=\s*"([^"]*)"/gi)) {
-      links.push({ target: match[1], lineNumber });
+    // HTML attributes appear in HTML files and in raw HTML inside markdown.
+    for (const match of line.matchAll(URL_ATTRIBUTE)) {
+      push(quotedValue(match));
     }
-    for (const match of line.matchAll(/(?:href|src)\s*=\s*'([^']*)'/gi)) {
-      links.push({ target: match[1], lineNumber });
+    for (const match of line.matchAll(SRCSET_ATTRIBUTE)) {
+      srcsetUrls(quotedValue(match)).forEach(push);
+    }
+
+    // CSS url(...) inside a <style> block (tracked across lines) or an inline
+    // style attribute. A block that opens and closes on one line is scanned once.
+    const opensStyle = STYLE_OPEN.test(line);
+    const closesStyle = STYLE_CLOSE.test(line);
+    if (inStyle || opensStyle) {
+      cssUrls(line).forEach(push);
+    } else {
+      for (const match of line.matchAll(STYLE_ATTRIBUTE)) {
+        cssUrls(quotedValue(match)).forEach(push);
+      }
+    }
+    if (closesStyle) {
+      inStyle = false;
+    } else if (opensStyle) {
+      inStyle = true;
     }
   });
 
@@ -142,6 +200,20 @@ function safeDecode(value) {
   } catch {
     return value;
   }
+}
+
+// Split a link target into the path the server resolves and the fragment the
+// browser resolves. The query string is dropped: it never changes which static
+// file is served, so `page.html?v=2` names page.html. Both parts are
+// percent-decoded so `a%20b.md` matches `a b.md` on disk. Both passes use this
+// so they agree on what file a link names.
+function splitLinkTarget(raw) {
+  const hashIndex = raw.indexOf('#');
+  const beforeFragment = hashIndex === -1 ? raw : raw.slice(0, hashIndex);
+  const fragment = hashIndex === -1 ? '' : raw.slice(hashIndex + 1);
+  const queryIndex = beforeFragment.indexOf('?');
+  const path = queryIndex === -1 ? beforeFragment : beforeFragment.slice(0, queryIndex);
+  return { path: safeDecode(path), fragment: safeDecode(fragment) };
 }
 
 function anchorResolves(anchors, fragment) {
@@ -193,21 +265,19 @@ async function checkDocLinks(root) {
         continue;
       }
 
-      const hashIndex = raw.indexOf('#');
-      const pathPart = hashIndex === -1 ? raw : raw.slice(0, hashIndex);
-      const fragment = hashIndex === -1 ? '' : raw.slice(hashIndex + 1);
+      const { path: pathPart, fragment } = splitLinkTarget(raw);
 
       // Pure fragment: resolve against the current file's own anchors.
       if (pathPart === '') {
         checkedCount += 1;
-        if (fragment !== '' && !anchorResolves(anchors, safeDecode(fragment))) {
+        if (fragment !== '' && !anchorResolves(anchors, fragment)) {
           broken.push({ relFile, lineNumber, target: raw, reason: 'missing anchor' });
         }
         continue;
       }
 
       checkedCount += 1;
-      const targetPath = resolve(dirname(file), safeDecode(pathPart));
+      const targetPath = resolve(dirname(file), pathPart);
       if (!(await pathExists(targetPath))) {
         broken.push({ relFile, lineNumber, target: raw, reason: 'file not found' });
         continue;
@@ -225,7 +295,7 @@ async function checkDocLinks(root) {
       // Cross-file fragment: resolve against the target file when we can parse it.
       if (fragment !== '' && ANCHOR_EXTENSIONS.has(extname(targetPath).toLowerCase())) {
         const targetAnchors = await anchorsFor(targetPath);
-        if (!anchorResolves(targetAnchors, safeDecode(fragment))) {
+        if (!anchorResolves(targetAnchors, fragment)) {
           broken.push({ relFile, lineNumber, target: raw, reason: 'missing anchor' });
         }
       }
@@ -266,6 +336,7 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
   });
 }
 
-// extractLinks and EXTERNAL_PREFIX are shared with the staged link check so both
-// passes agree on what counts as a link and what counts as external.
-export { checkDocLinks, collectAnchors, extractLinks, EXTERNAL_PREFIX, slugify };
+// extractLinks, splitLinkTarget, and EXTERNAL_PREFIX are shared with the staged
+// link check so both passes agree on what counts as a link, what file a link
+// names, and what counts as external.
+export { checkDocLinks, collectAnchors, extractLinks, EXTERNAL_PREFIX, slugify, splitLinkTarget };
