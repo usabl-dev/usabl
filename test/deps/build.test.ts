@@ -113,6 +113,9 @@ describe("buildDeps", () => {
         contextOptions.push(options);
         throw new Error("context options recorded");
       },
+      // A live process. The driver checks this before reusing a browser and after a failed open,
+      // so the fake has to answer it like a real one.
+      isConnected: () => true,
       close: async () => {},
     } as unknown as Browser);
     vi.stubEnv("USABL_STORAGE_STATE", storageStatePath);

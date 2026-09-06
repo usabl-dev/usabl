@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { resolve } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import type { Deps, Result, UsablConfig } from '../../src/contracts/index.js';
+import type { RealBrowserOptions, SharedBrowser } from '../../src/deps/real.js';
 import { overlayClientSource } from '../../src/surfaces/overlay-client.js';
-import { makeResultCache, projectOverlay, usablVitePlugin, usablVitePluginFromConfig } from '../../src/surfaces/vite-plugin.js';
+import {
+  isRequestFromDevOrigin,
+  makeResultCache,
+  projectOverlay,
+  usablVitePlugin,
+  usablVitePluginFromConfig,
+} from '../../src/surfaces/vite-plugin.js';
+import { testConfig } from '../helpers.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
   schemaVersion: 'usabl.result.v1',
@@ -781,6 +791,106 @@ describe('usablVitePlugin', () => {
     expect(sameOrigin.statusCode).toBe(200);
   });
 
+  it('requires an exact origin match and one Host header on this server port', async () => {
+    const plugin = usablVitePlugin({ run: async () => baseResult({ verdict: 'regression', exitCode: 1 }) });
+    const middleware = getMiddleware(plugin);
+    const status = async (headers: Record<string, string>, rawHeaders?: string[]): Promise<number> => {
+      const response = makeResponse();
+      await middleware(
+        { method: 'GET', url: '/__usabl/result', headers, ...(rawHeaders ? { rawHeaders } : {}) },
+        response,
+        () => {},
+      );
+      return response.statusCode;
+    };
+
+    // Served on http://localhost:5173, the Vite default when nothing else names a port.
+    // "null" is not an origin the page can be trusted from.
+    expect(await status({ host: 'localhost:5173', origin: 'null' })).toBe(403);
+    // Host on another port than the one this server listens on.
+    expect(await status({ host: 'localhost:9999' })).toBe(403);
+    expect(await status({ host: 'localhost' })).toBe(403);
+    // A local Origin that is not the origin this request's Host names.
+    expect(await status({ host: 'localhost:5173', origin: 'http://127.0.0.1:5173' })).toBe(403);
+    // Right host, wrong scheme.
+    expect(await status({ host: 'localhost:5173', origin: 'https://localhost:5173' })).toBe(403);
+    // Right host, wrong effective port (80).
+    expect(await status({ host: 'localhost:5173', origin: 'http://localhost' })).toBe(403);
+    // Two Host headers are refused in either order. The folded value is whichever one the runtime
+    // kept, so it cannot be trusted.
+    expect(
+      await status({ host: 'localhost:5173' }, ['Host', 'localhost:5173', 'Host', 'attacker.example.com']),
+    ).toBe(403);
+    expect(
+      await status({ host: 'localhost:5173' }, ['Host', 'attacker.example.com', 'Host', 'localhost:5173']),
+    ).toBe(403);
+    expect(await status({ host: 'localhost:5173' }, ['host', 'localhost:5173', 'HOST', 'localhost:5173'])).toBe(
+      403,
+    );
+
+    // The exact origin, and a single Host in rawHeaders, are still allowed.
+    expect(await status({ host: 'localhost:5173', origin: 'http://localhost:5173' })).toBe(200);
+    expect(await status({ host: '127.0.0.1:5173', origin: 'http://127.0.0.1:5173' })).toBe(200);
+    expect(await status({ host: '[::1]:5173', origin: 'http://[::1]:5173' })).toBe(200);
+    expect(await status({ host: 'localhost:5173' }, ['Host', 'localhost:5173', 'Accept', '*/*'])).toBe(200);
+  });
+
+  it('checks the origin against the port the server really listens on and its scheme', () => {
+    // The live listener can sit on a different port than the config asked for. The origin is judged
+    // against the real one. Under https the effective port of a bare origin is 443, not 80.
+    const server = { scheme: 'http' as const, port: 5174, configuredHost: null };
+    expect(isRequestFromDevOrigin({ headers: { host: 'localhost:5174' } }, server)).toBe(true);
+    expect(isRequestFromDevOrigin({ headers: { host: 'localhost:5173' } }, server)).toBe(false);
+    expect(
+      isRequestFromDevOrigin({ headers: { host: 'localhost:5174', origin: 'http://localhost:5174' } }, server),
+    ).toBe(true);
+
+    const secure = { scheme: 'https' as const, port: 443, configuredHost: 'dev.internal' };
+    expect(
+      isRequestFromDevOrigin({ headers: { host: 'dev.internal', origin: 'https://dev.internal' } }, secure),
+    ).toBe(true);
+    expect(
+      isRequestFromDevOrigin({ headers: { host: 'dev.internal', origin: 'http://dev.internal' } }, secure),
+    ).toBe(false);
+    // The configured dev origin is accepted as the Origin of a request whose Host is another local
+    // name on the same server.
+    expect(
+      isRequestFromDevOrigin({ headers: { host: 'localhost', origin: 'https://dev.internal' } }, secure),
+    ).toBe(true);
+    expect(isRequestFromDevOrigin({ headers: { host: 'other.internal' } }, secure)).toBe(false);
+  });
+
+  it('reads the listening port from the http server when it differs from the config', async () => {
+    const plugin = usablVitePlugin({ run: async () => baseResult({}) });
+    plugin.configResolved?.({ command: 'serve', server: { port: 5173 } });
+    const middlewares: Array<
+      (
+        req: { method?: string; url?: string; headers?: Record<string, string | string[] | undefined> },
+        res: FakeResponse,
+        next: () => void,
+      ) => void | Promise<void>
+    > = [];
+    plugin.configureServer?.({
+      middlewares: {
+        use(handler) {
+          middlewares.push(handler);
+        },
+      },
+      ws: { send() {} },
+      // The configured port was taken, so the server listens on the next one.
+      httpServer: { on() {}, address: () => ({ address: '127.0.0.1', family: 'IPv4', port: 5174 }) },
+    });
+    const middleware = middlewares[0];
+    if (middleware === undefined) {
+      throw new Error('expected middleware registration');
+    }
+    const live = await callMiddleware(middleware, '/__usabl/result', { host: 'localhost:5174' });
+    expect(live.statusCode).toBe(200);
+    const stale = makeResponse();
+    await middleware({ method: 'GET', url: '/__usabl/result', headers: { host: 'localhost:5173' } }, stale, () => {});
+    expect(stale.statusCode).toBe(403);
+  });
+
   it('allows the dev server configured host', async () => {
     const plugin = usablVitePlugin({ run: async () => baseResult({ verdict: 'verified', exitCode: 0 }) });
     // The dev server was told to bind to a specific host and port.
@@ -850,19 +960,12 @@ describe('usablVitePluginFromConfig', () => {
     let loadConfigPath = '';
     let buildDepsConfig: UsablConfig | null = null;
     let buildDepsCwd = '';
-    let buildDepsBrowser: Deps['browser'] | undefined;
+    let buildDepsBrowserFor: ((options: RealBrowserOptions) => Deps['browser']) | undefined;
     let runEngineDeps: Deps | null = null;
     let runEngineConfig: UsablConfig | null = null;
-    let closeCalls = 0;
-    // The warm browser the factory keeps across refreshes. It is created once and passed into every
-    // buildDeps call. A run must not close it.
-    const warm: Deps['browser'] = {
-      open: deps.browser.open,
-      close: async () => {
-        closeCalls += 1;
-        calls.push('close');
-      },
-    };
+    // The browser process the factory keeps across refreshes. It is made once, and every buildDeps
+    // call gets a factory that draws a per-run driver from it. A run must not close it.
+    const warm = fakeSharedBrowser({ onClose: () => calls.push('close') });
     let makeBrowserCalls = 0;
 
     const plugin = usablVitePluginFromConfig(
@@ -875,12 +978,12 @@ describe('usablVitePluginFromConfig', () => {
         },
         makeBrowser: () => {
           makeBrowserCalls += 1;
-          return warm;
+          return warm.shared;
         },
         buildDeps: async (resolvedConfig, options) => {
           buildDepsConfig = resolvedConfig;
           buildDepsCwd = options.cwd;
-          buildDepsBrowser = options.browser;
+          buildDepsBrowserFor = options.browserFor;
           calls.push('buildDeps');
           return deps;
         },
@@ -899,45 +1002,92 @@ describe('usablVitePluginFromConfig', () => {
     expect(loadConfigPath).toBe(resolve('/repo/app', 'usabl.config.json'));
     expect(buildDepsConfig).toBe(config);
     expect(buildDepsCwd).toBe('/repo/app');
-    // The warm browser was created once and handed to buildDeps.
+    // The browser process was made once and buildDeps got a factory that draws from it, passing the
+    // run's own options through.
     expect(makeBrowserCalls).toBe(1);
-    expect(buildDepsBrowser).toBe(warm);
+    expect(buildDepsBrowserFor).toBeDefined();
+    buildDepsBrowserFor?.({ readyTimeoutMs: 1234, storageStatePath: '/tmp/session.json' });
+    expect(warm.driverOptions).toEqual([{ readyTimeoutMs: 1234, storageStatePath: '/tmp/session.json' }]);
     expect(runEngineDeps).toBe(deps);
     expect(runEngineConfig).toBe(config);
-    // No close during a run. The warm browser stays alive for the next refresh.
-    expect(closeCalls).toBe(0);
+    // No close during a run. The process stays alive for the next refresh.
+    expect(warm.closeCalls()).toBe(0);
     expect(calls).toEqual(['loadConfig', 'buildDeps', 'runEngine']);
     expect(JSON.parse(response.body)).toEqual(projectOverlay(engineResult, '/repo/app'));
 
-    // A second refresh reuses the same warm browser and still never launches a new one.
+    // A second refresh reuses the same process and still never makes a new one.
     await callMiddleware(middleware, '/__usabl/result');
     expect(makeBrowserCalls).toBe(1);
-    expect(closeCalls).toBe(0);
+    expect(warm.closeCalls()).toBe(0);
 
-    // Shutdown closes the warm browser exactly once.
+    // Shutdown closes the process exactly once.
     await plugin.closeBundle?.();
-    expect(closeCalls).toBe(1);
+    expect(warm.closeCalls()).toBe(1);
     // A second shutdown is a no-op.
     await plugin.closeBundle?.();
-    expect(closeCalls).toBe(1);
+    expect(warm.closeCalls()).toBe(1);
+  });
+
+  it('hands each run its own storage state and ready timeout through the shared browser', async () => {
+    // The real buildDeps resolves the authenticated session from the environment and the readiness
+    // budget from the config. Both must reach the driver the shared process hands out for THAT run.
+    // A process that took them once at launch would scan signed out after the operator exported a
+    // session, and would keep the first run's budget after the config changed.
+    const sessionDir = await mkdtemp(join(tmpdir(), 'usabl-session-'));
+    const sessionPath = join(sessionDir, 'state.json');
+    await writeFile(sessionPath, JSON.stringify({ cookies: [], origins: [] }), 'utf8');
+    const previousEnv = process.env.USABL_STORAGE_STATE;
+    process.env.USABL_STORAGE_STATE = sessionPath;
+    try {
+      const warm = fakeSharedBrowser({});
+      let readyTimeoutMs = 1234;
+      const plugin = usablVitePluginFromConfig(
+        { cwd: process.cwd() },
+        {
+          loadConfig: async () => testConfig({ readyTimeoutMs }),
+          makeBrowser: () => warm.shared,
+          runEngine: async () => baseResult({}),
+        },
+      );
+      const middleware = getMiddleware(plugin);
+
+      await callMiddleware(middleware, '/__usabl/result');
+      expect(warm.driverOptions).toEqual([{ storageStatePath: sessionPath, readyTimeoutMs: 1234 }]);
+
+      // The config changed between saves. The next run must read the new budget, and the session
+      // must still reach it.
+      readyTimeoutMs = 5678;
+      await callMiddleware(middleware, '/__usabl/result?fresh=1');
+      expect(warm.driverOptions).toEqual([
+        { storageStatePath: sessionPath, readyTimeoutMs: 1234 },
+        { storageStatePath: sessionPath, readyTimeoutMs: 5678 },
+      ]);
+      // And the session reaches the context the process opens, not only the driver.
+      const view = warm.shared.driver(warm.driverOptions[1]);
+      await expect(view.open('http://127.0.0.1:1/never')).rejects.toThrow('fake open');
+      expect(warm.contextOptions).toEqual([{ storageState: sessionPath }]);
+
+      await plugin.closeBundle?.();
+      expect(warm.closeCalls()).toBe(1);
+    } finally {
+      if (previousEnv === undefined) {
+        delete process.env.USABL_STORAGE_STATE;
+      } else {
+        process.env.USABL_STORAGE_STATE = previousEnv;
+      }
+      await rm(sessionDir, { recursive: true, force: true });
+    }
   });
 
   it('keeps the warm browser alive when runEngine throws', async () => {
     // A run that throws must not tear down the shared browser, or the next save would pay a cold
     // launch again. The browser is closed only at shutdown.
-    let closeCalls = 0;
-    const warm: Deps['browser'] = {
-      open: async () => {
-        throw new Error('open not used in this test');
-      },
-      close: async () => {
-        closeCalls += 1;
-      },
-    };
+    const warm = fakeSharedBrowser({});
+    const closeCalls = () => warm.closeCalls();
     const plugin = usablVitePluginFromConfig(
       { cwd: '/repo/app' },
       makeFactoryPorts({
-        makeBrowser: () => warm,
+        makeBrowser: () => warm.shared,
         buildDeps: async () => makeDeps(),
         runEngine: async () => {
           throw new Error('engine failed');
@@ -957,26 +1107,19 @@ describe('usablVitePluginFromConfig', () => {
       ),
     ).rejects.toThrow('engine failed');
     // The throw did not close the warm browser.
-    expect(closeCalls).toBe(0);
+    expect(closeCalls()).toBe(0);
 
     // Shutdown still closes it once.
     await plugin.closeBundle?.();
-    expect(closeCalls).toBe(1);
+    expect(closeCalls()).toBe(1);
   });
 
   it('closes the warm browser on dev server close', async () => {
-    let closeCalls = 0;
-    const warm: Deps['browser'] = {
-      open: async () => {
-        throw new Error('open not used in this test');
-      },
-      close: async () => {
-        closeCalls += 1;
-      },
-    };
+    const warm = fakeSharedBrowser({});
+    const closeCalls = () => warm.closeCalls();
     const plugin = usablVitePluginFromConfig(
       { cwd: '/repo/app' },
-      makeFactoryPorts({ makeBrowser: () => warm }),
+      makeFactoryPorts({ makeBrowser: () => warm.shared }),
     );
 
     // Wire a fake http server so the plugin can hook its close event, and drive one request so the
@@ -1014,7 +1157,7 @@ describe('usablVitePluginFromConfig', () => {
     }
     // The close handler runs the teardown asynchronously, so wait a tick.
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(closeCalls).toBe(1);
+    expect(closeCalls()).toBe(1);
   });
 
   it('uses process.cwd() and usabl.config.json defaults when opts are omitted', async () => {
@@ -1190,31 +1333,62 @@ function makeDeps(): Deps {
   };
 }
 
+type BuildDepsPort = (
+  config: UsablConfig,
+  options: { cwd: string; browserFor?: (options: RealBrowserOptions) => Deps['browser'] },
+) => Promise<Deps>;
+
+/**
+ * A stand-in for the one browser process the overlay keeps. It records the options each run asked a
+ * driver for, the options each opened context was given, and how many times it was closed. open
+ * always fails, because no test here needs a page, but it fails only after recording the context
+ * options so the session's arrival at the context can be asserted.
+ */
+function fakeSharedBrowser(hooks: { onClose?: () => void }): {
+  shared: SharedBrowser;
+  driverOptions: RealBrowserOptions[];
+  contextOptions: Array<{ storageState?: string }>;
+  closeCalls: () => number;
+} {
+  const driverOptions: RealBrowserOptions[] = [];
+  const contextOptions: Array<{ storageState?: string }> = [];
+  let closed = 0;
+  const shared: SharedBrowser = {
+    driver(options = {}) {
+      driverOptions.push(options);
+      return {
+        open: async () => {
+          contextOptions.push(
+            options.storageStatePath === undefined ? {} : { storageState: options.storageStatePath },
+          );
+          throw new Error('fake open');
+        },
+        close: async () => {},
+      };
+    },
+    close: async () => {
+      closed += 1;
+      hooks.onClose?.();
+    },
+  };
+  return { shared, driverOptions, contextOptions, closeCalls: () => closed };
+}
+
 function makeFactoryPorts(overrides: {
   loadConfig?: (path: string) => Promise<UsablConfig>;
-  buildDeps?: (
-    config: UsablConfig,
-    options: { cwd: string; browser?: Deps['browser'] },
-  ) => Promise<Deps>;
+  buildDeps?: BuildDepsPort;
   runEngine?: (deps: Deps, config: UsablConfig) => Promise<Result>;
-  makeBrowser?: (config: UsablConfig) => Deps['browser'];
+  makeBrowser?: () => SharedBrowser;
 }): {
   loadConfig: (path: string) => Promise<UsablConfig>;
-  buildDeps: (config: UsablConfig, options: { cwd: string; browser?: Deps['browser'] }) => Promise<Deps>;
+  buildDeps: BuildDepsPort;
   runEngine: (deps: Deps, config: UsablConfig) => Promise<Result>;
-  makeBrowser: (config: UsablConfig) => Deps['browser'];
+  makeBrowser: () => SharedBrowser;
 } {
   return {
     loadConfig: overrides.loadConfig ?? (async () => makeConfig()),
     buildDeps: overrides.buildDeps ?? (async () => makeDeps()),
     runEngine: overrides.runEngine ?? (async () => baseResult({})),
-    makeBrowser:
-      overrides.makeBrowser ??
-      (() => ({
-        open: async () => {
-          throw new Error('open not used in this test');
-        },
-        close: async () => {},
-      })),
+    makeBrowser: overrides.makeBrowser ?? (() => fakeSharedBrowser({}).shared),
   };
 }

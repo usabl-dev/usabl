@@ -7,7 +7,7 @@ import { resolve, relative } from 'node:path';
 import { loadConfig } from '../cli.js';
 import type { BrowserDriver, Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
-import { makeRealBrowserDriver } from '../deps/real.js';
+import { makeSharedBrowser, type RealBrowserOptions, type SharedBrowser } from '../deps/real.js';
 import { run } from '../run.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 import { overlayClientSource } from './overlay-client.js';
@@ -78,8 +78,18 @@ export interface OverlayProjection {
 
 type IncomingHeaders = Record<string, string | string[] | undefined>;
 
+// rawHeaders is the flat name, value, name, value list Node keeps before it folds duplicates. It is
+// the only place a second Host header is still visible: the folded headers object keeps one of them
+// and which one depends on the runtime, so a check made on it can be steered by header order.
+interface IncomingRequest {
+  method?: string;
+  url?: string;
+  headers?: IncomingHeaders;
+  rawHeaders?: string[];
+}
+
 type Middleware = (
-  req: { method?: string; url?: string; headers?: IncomingHeaders },
+  req: IncomingRequest,
   res: {
     statusCode: number;
     setHeader(name: string, value: string): void;
@@ -98,6 +108,9 @@ interface UsablWs {
 
 interface UsablHttpServer {
   on(event: 'close', handler: () => void): void;
+  // Node's net.Server.address(): the port the server actually listens on, which can differ from the
+  // configured one when that port was taken. Read at request time, because it is null until listen.
+  address?(): unknown;
 }
 
 interface UsablServer {
@@ -105,12 +118,17 @@ interface UsablServer {
   ws: UsablWs;
   watcher?: UsablWatcher;
   httpServer?: UsablHttpServer | null;
+  config?: { server?: ResolvedServerAddress };
 }
 
 interface ResolvedServerAddress {
   host?: string | boolean;
   port?: number;
+  https?: unknown;
 }
+
+// Vite's default dev port, used only when neither the live listener nor the config names one.
+const DEFAULT_DEV_PORT = 5173;
 
 export interface UsablVitePlugin {
   name: string;
@@ -124,87 +142,141 @@ export interface UsablVitePlugin {
   closeBundle?: () => void | Promise<void>;
 }
 
-function firstHeader(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value;
+// The origin this dev server answers as: its scheme, its listening port, and the host it was told to
+// bind to when that host is a name. It is what a request's Host and Origin are compared against.
+interface DevServerOrigin {
+  scheme: 'http' | 'https';
+  port: number;
+  configuredHost: string | null;
 }
 
-// The hostname part of a Host header value, lowercased and without a port. IPv6 hosts arrive in
-// brackets, for example "[::1]:5173", and we keep the brackets so the compared value matches the
-// bracketed form callers write.
-function hostnameOf(hostHeader: string): string {
+// A parsed authority: a lowercased hostname, bracketed for IPv6, and the port when one was written.
+interface Authority {
+  hostname: string;
+  port: number | null;
+}
+
+// Parses a Host header value. IPv6 hosts arrive in brackets, for example "[::1]:5173", and the
+// brackets are kept so the value compares equal to the bracketed form URL.hostname produces.
+function parseHostHeader(hostHeader: string): Authority | null {
   const trimmed = hostHeader.trim().toLowerCase();
+  if (trimmed === '') {
+    return null;
+  }
+  let hostname: string;
+  let rest: string;
   if (trimmed.startsWith('[')) {
     const close = trimmed.indexOf(']');
-    if (close !== -1) {
-      return trimmed.slice(0, close + 1);
+    if (close === -1) {
+      return null;
     }
-    return trimmed;
+    hostname = trimmed.slice(0, close + 1);
+    rest = trimmed.slice(close + 1);
+  } else {
+    const colon = trimmed.indexOf(':');
+    hostname = colon === -1 ? trimmed : trimmed.slice(0, colon);
+    rest = colon === -1 ? '' : trimmed.slice(colon);
   }
-  const colon = trimmed.lastIndexOf(':');
-  return colon === -1 ? trimmed : trimmed.slice(0, colon);
+  if (rest === '') {
+    return { hostname, port: null };
+  }
+  if (!/^:\d{1,5}$/.test(rest)) {
+    return null;
+  }
+  return { hostname, port: Number(rest.slice(1)) };
+}
+
+function isLocalHostname(hostname: string, configuredHost: string | null): boolean {
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]') {
+    return true;
+  }
+  return configuredHost !== null && hostname === configuredHost;
+}
+
+// The port a URL or authority means when none was written.
+function effectivePort(port: number | null, scheme: 'http' | 'https'): number {
+  if (port !== null) {
+    return port;
+  }
+  return scheme === 'https' ? 443 : 80;
+}
+
+function countHeader(rawHeaders: string[] | undefined, name: string): number {
+  if (rawHeaders === undefined) {
+    return 0;
+  }
+  let count = 0;
+  for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
+    if (rawHeaders[index]?.toLowerCase() === name) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 // The result projection exposes the absolute workspace root, source paths, import chains, guarded
 // paths, and findings. These handlers run before Vite validates the Host header and they end the
 // response, so without this check they answer a request aimed at the dev server from another origin
-// through DNS rebinding. Only a local host is allowed, plus whatever host the dev server was told to
-// bind to, and a cross-origin Origin header is rejected outright.
-function isLocalHostname(name: string, configuredHost: string | null): boolean {
-  const local = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
-  if (local.has(name)) {
-    return true;
+// through DNS rebinding or a cross-origin fetch.
+//
+// The Host must name a local host or the configured bind host, on this server's port. When an Origin
+// is present it must match exactly, scheme and hostname and effective port, either the origin this
+// request's own Host names under the server's scheme, or the configured dev origin. "null" is not an
+// origin the page can be trusted from, so it is refused. A request carrying two Host headers is
+// refused outright: the folded header keeps one of them and which one depends on the runtime, so a
+// check on the folded value could be steered by header order.
+export function isRequestFromDevOrigin(req: IncomingRequest, server: DevServerOrigin): boolean {
+  if (countHeader(req.rawHeaders, 'host') > 1 || Array.isArray(req.headers?.host)) {
+    return false;
   }
-  if (configuredHost !== null && name === configuredHost.toLowerCase()) {
-    return true;
-  }
-  return false;
-}
-
-function isRequestFromLocalHost(
-  headers: IncomingHeaders | undefined,
-  configuredHost: string | null,
-  configuredPort: number | null,
-): boolean {
-  const hostHeader = firstHeader(headers?.host);
-  if (hostHeader === undefined || hostHeader === '') {
+  const hostHeader = req.headers?.host;
+  if (typeof hostHeader !== 'string') {
     // A missing Host header on HTTP/1.1 is malformed. Refuse rather than guess.
     return false;
   }
-  if (!isLocalHostname(hostnameOf(hostHeader), configuredHost)) {
+  const host = parseHostHeader(hostHeader);
+  if (host === null || !isLocalHostname(host.hostname, server.configuredHost)) {
     return false;
   }
-  const originHeader = firstHeader(headers?.origin);
-  if (originHeader !== undefined && originHeader !== '' && originHeader !== 'null') {
-    let originHost: string;
-    let originPort: number | null;
-    try {
-      const originUrl = new URL(originHeader);
-      originHost = originUrl.hostname.toLowerCase();
-      originPort = originUrl.port === '' ? null : Number(originUrl.port);
-    } catch {
-      return false;
-    }
-    // The Origin hostname arrives without brackets even for IPv6, so compare against the bracketed
-    // and unbracketed local forms both.
-    const originCandidates = new Set([originHost, '[' + originHost + ']']);
-    let originIsLocal = false;
-    for (const candidate of originCandidates) {
-      if (isLocalHostname(candidate, configuredHost)) {
-        originIsLocal = true;
-        break;
-      }
-    }
-    if (!originIsLocal) {
-      return false;
-    }
-    if (configuredPort !== null && originPort !== null && originPort !== configuredPort) {
-      return false;
-    }
+  if (effectivePort(host.port, server.scheme) !== server.port) {
+    return false;
   }
-  return true;
+
+  const originHeader = req.headers?.origin;
+  if (originHeader === undefined) {
+    return true;
+  }
+  if (Array.isArray(originHeader) || originHeader.trim() === '' || originHeader.trim() === 'null') {
+    return false;
+  }
+  let origin: URL;
+  try {
+    origin = new URL(originHeader.trim());
+  } catch {
+    return false;
+  }
+  const originScheme = origin.protocol === 'https:' ? 'https' : origin.protocol === 'http:' ? 'http' : null;
+  if (originScheme !== server.scheme) {
+    return false;
+  }
+  const originHostname = origin.hostname.toLowerCase();
+  const allowedHostnames = new Set([host.hostname]);
+  if (server.configuredHost !== null) {
+    allowedHostnames.add(server.configuredHost);
+  }
+  if (!allowedHostnames.has(originHostname)) {
+    return false;
+  }
+  const originPort = origin.port === '' ? null : Number(origin.port);
+  return effectivePort(originPort, originScheme) === server.port;
+}
+
+function portOfAddress(address: unknown): number | null {
+  if (typeof address !== 'object' || address === null) {
+    return null;
+  }
+  const port = Reflect.get(address, 'port');
+  return typeof port === 'number' && Number.isInteger(port) && port > 0 ? port : null;
 }
 
 function toRepoRelativeSourcePath(workspaceRoot: string, id: string): string {
@@ -225,12 +297,15 @@ interface UsablVitePluginFactoryPorts {
   cwd: () => string;
   resolvePath: (cwd: string, configPath: string) => string;
   loadConfig: (path: string) => Promise<UsablConfig>;
-  buildDeps: (config: UsablConfig, options: { cwd: string; browser?: BrowserDriver }) => Promise<Deps>;
+  buildDeps: (
+    config: UsablConfig,
+    options: { cwd: string; browserFor?: (options: RealBrowserOptions) => BrowserDriver },
+  ) => Promise<Deps>;
   runEngine: (deps: Deps, config: UsablConfig) => Promise<Result>;
-  // Builds the one warm browser driver the overlay reuses across refresh waves. It is a port so a
-  // test can inject a fake driver and prove the driver is built once and closed once, without a real
-  // Chromium.
-  makeBrowser: (config: UsablConfig) => BrowserDriver;
+  // Makes the one browser process the overlay keeps across refresh waves. It is a port so a test can
+  // inject a fake and prove the process is made once, receives each run's options, and is closed
+  // once, without a real Chromium.
+  makeBrowser: () => SharedBrowser;
 }
 
 function makeUsablVitePluginFactoryPorts(
@@ -242,15 +317,12 @@ function makeUsablVitePluginFactoryPorts(
     loadConfig: overrides.loadConfig ?? (async (path: string) => loadConfig(path)),
     buildDeps:
       overrides.buildDeps ??
-      (async (config: UsablConfig, options: { cwd: string; browser?: BrowserDriver }) =>
-        buildDeps(config, options)),
+      (async (
+        config: UsablConfig,
+        options: { cwd: string; browserFor?: (options: RealBrowserOptions) => BrowserDriver },
+      ) => buildDeps(config, options)),
     runEngine: overrides.runEngine ?? (async (deps: Deps, config: UsablConfig) => run(deps, config)),
-    makeBrowser:
-      overrides.makeBrowser ??
-      ((config: UsablConfig) =>
-        makeRealBrowserDriver(
-          config.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: config.readyTimeoutMs },
-        )),
+    makeBrowser: overrides.makeBrowser ?? (() => makeSharedBrowser()),
   };
 }
 
@@ -413,6 +485,8 @@ export function usablVitePlugin(opts: {
   let injectSourceAttributes = false;
   let configuredHost: string | null = null;
   let configuredPort: number | null = null;
+  let scheme: 'http' | 'https' = 'http';
+  let httpServer: UsablHttpServer | null = null;
   let closed = false;
   const workspaceRoot = opts.workspaceRoot ?? '';
 
@@ -432,11 +506,28 @@ export function usablVitePlugin(opts: {
     }
   };
 
+  // The port this server answers on: the live listener first, then the configured port, then the
+  // Vite default. The listener is consulted per request because it is null until the server listens.
+  const devOrigin = (): DevServerOrigin => ({
+    scheme,
+    port: portOfAddress(httpServer?.address?.()) ?? configuredPort ?? DEFAULT_DEV_PORT,
+    configuredHost,
+  });
+
+  const applyServerConfig = (config: ResolvedServerAddress | undefined): void => {
+    const host = config?.host;
+    // A string host is a specific bind address. true means all interfaces and false means
+    // localhost, neither of which names an extra allowed host, so only a string is captured.
+    configuredHost = typeof host === 'string' ? host.toLowerCase() : null;
+    configuredPort = typeof config?.port === 'number' ? config.port : null;
+    scheme = config?.https ? 'https' : 'http';
+  };
+
   const rejectNonLocal = (
-    req: { headers?: IncomingHeaders },
+    req: IncomingRequest,
     res: { statusCode: number; setHeader(name: string, value: string): void; end(chunk?: string): void },
   ): boolean => {
-    if (isRequestFromLocalHost(req.headers, configuredHost, configuredPort)) {
+    if (isRequestFromDevOrigin(req, devOrigin())) {
       return false;
     }
     res.statusCode = 403;
@@ -454,13 +545,13 @@ export function usablVitePlugin(opts: {
     enforce: 'pre',
     configResolved(config) {
       injectSourceAttributes = config.command === 'serve';
-      const host = config.server?.host;
-      // A string host is a specific bind address. true means all interfaces and false means
-      // localhost, neither of which names an extra allowed host, so only a string is captured.
-      configuredHost = typeof host === 'string' ? host.toLowerCase() : null;
-      configuredPort = typeof config.server?.port === 'number' ? config.server.port : null;
+      applyServerConfig(config.server);
     },
     configureServer(server) {
+      httpServer = server.httpServer ?? null;
+      if (server.config?.server !== undefined) {
+        applyServerConfig(server.config.server);
+      }
       server.middlewares.use(async (req, res, next) => {
         const method = req.method ?? 'GET';
         const requestUrl = new URL(req.url ?? '/', 'http://localhost');
@@ -554,7 +645,7 @@ export function usablVitePluginFromConfig(
   // every later run, so a save no longer pays a cold Chromium launch and teardown. Each run still
   // builds fresh Deps for correct git and intake state, and each open still makes a fresh context, so
   // run isolation is unchanged. The driver is closed once when the dev server shuts down.
-  let warmBrowser: BrowserDriver | null = null;
+  let warmBrowser: SharedBrowser | null = null;
 
   // Hosts should not assemble Deps. This factory keeps wiring in-package and
   // still returns a projection-only overlay backed by the gate-owned Result.
@@ -562,9 +653,17 @@ export function usablVitePluginFromConfig(
     workspaceRoot: cwd,
     run: async () => {
       const config = await resolvedPorts.loadConfig(resolvedConfigPath);
-      warmBrowser ??= resolvedPorts.makeBrowser(config);
-      const deps = await resolvedPorts.buildDeps(config, { cwd, browser: warmBrowser });
-      // No browser teardown here on purpose. The warm browser is shared across refresh waves and is
+      warmBrowser ??= resolvedPorts.makeBrowser();
+      const shared = warmBrowser;
+      // buildDeps resolves this run's storage state and readiness budget and hands them back here,
+      // so every context the shared process opens for this run carries this run's session and
+      // budget. A process that took them once at launch would scan signed out after the operator
+      // exported a session, and would keep the first run's budget after the config changed.
+      const deps = await resolvedPorts.buildDeps(config, {
+        cwd,
+        browserFor: (options) => shared.driver(options),
+      });
+      // No browser teardown here on purpose. The process is shared across refresh waves and is
       // closed once at shutdown. Each open opens and closes its own context, so a run still leaves no
       // page or context state behind.
       return resolvedPorts.runEngine(deps, config);

@@ -653,16 +653,70 @@ export async function adoptPage(pw: PwPage): Promise<Page> {
   return { ...page, close: async (): Promise<void> => {} };
 }
 
-export function makeRealBrowserDriver(
-  options: { storageStatePath?: string; readyTimeoutMs?: number } = {},
-): BrowserDriver {
-  let browser: Browser | null = null;
-  const readyTimeoutMs = readyTimeoutMsFor(options);
+/**
+ * What one run needs from the browser: the session to open contexts with and the readiness budget.
+ * Both belong to a run, not to the browser process, so a browser that lives across runs takes them
+ * per run rather than once at launch.
+ */
+export interface RealBrowserOptions {
+  storageStatePath?: string;
+  readyTimeoutMs?: number;
+}
 
-  return {
-    async open(url: string): Promise<Page> {
-      browser ??= await chromium.launch({ headless: true });
-      const context = await browser.newContext(
+/**
+ * The part of a launched Playwright browser this module uses. Narrow so a test can stand in a fake
+ * and drive the launch, disconnect, and relaunch logic without a real Chromium.
+ */
+export type LaunchedBrowser = Pick<Browser, 'newContext' | 'isConnected' | 'close'>;
+
+/**
+ * One browser process shared across runs.
+ *
+ * driver(options) returns a BrowserDriver view for one run. Every open on that view makes a fresh
+ * context from the run's own options, so an authenticated storage state and a readiness budget that
+ * change between runs are honored on each open, not frozen at the first launch. The view's close is
+ * a no-op: the process belongs to whoever made the shared browser, and only its close ends it.
+ *
+ * A browser process can die between runs, from an out-of-memory kill, a crash, or an operator
+ * closing it. A dead process kept as the reference would fail every later open. So open checks that
+ * the process is still connected and relaunches when it is not, and an open that fails with the
+ * process gone clears the reference so the next open launches again.
+ */
+export interface SharedBrowser {
+  driver(options?: RealBrowserOptions): BrowserDriver;
+  close(): Promise<void>;
+}
+
+export function makeSharedBrowser(
+  ports: { launch?: () => Promise<LaunchedBrowser> } = {},
+): SharedBrowser {
+  const launch = ports.launch ?? (async (): Promise<LaunchedBrowser> => chromium.launch({ headless: true }));
+  let browser: LaunchedBrowser | null = null;
+
+  const discard = async (): Promise<void> => {
+    const dead = browser;
+    browser = null;
+    if (dead !== null) {
+      // The process is already gone. close() only releases what is left on this side.
+      await dead.close().catch(() => undefined);
+    }
+  };
+
+  const acquire = async (): Promise<LaunchedBrowser> => {
+    if (browser !== null && !browser.isConnected()) {
+      await discard();
+    }
+    if (browser === null) {
+      browser = await launch();
+    }
+    return browser;
+  };
+
+  const openPage = async (url: string, options: RealBrowserOptions): Promise<Page> => {
+    const launched = await acquire();
+    const readyTimeoutMs = readyTimeoutMsFor(options);
+    try {
+      const context = await launched.newContext(
         options.storageStatePath === undefined ? {} : { storageState: options.storageStatePath },
       );
       const page = await context.newPage();
@@ -676,12 +730,48 @@ export function makeRealBrowserDriver(
       // budget, so one config number covers the whole cost of reaching a screen.
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });
       return wrapPage(page, context, cdp, readyTimeoutMs, network);
+    } catch (error) {
+      // A failure with the process gone means the process died under us. Forget it so the next
+      // open relaunches instead of failing against a dead reference. A failure with the process
+      // still connected is the page's own problem and the process stays.
+      if (browser === launched && !launched.isConnected()) {
+        await discard();
+      }
+      throw error;
+    }
+  };
+
+  return {
+    driver(options = {}) {
+      return {
+        open: (url: string) => openPage(url, options),
+        // The process belongs to the shared browser, not to one run.
+        close: async () => {},
+      };
     },
     async close(): Promise<void> {
-      if (browser !== null) {
-        await browser.close();
-      }
+      const open = browser;
       browser = null;
+      if (open !== null) {
+        await open.close();
+      }
     },
+  };
+}
+
+/**
+ * One browser for one caller, launched lazily and closed by the same caller. This is the CLI's
+ * one-shot shape. It is the shared browser with a single run's options and a close that ends the
+ * process, so the two paths cannot drift in how they open a page.
+ */
+export function makeRealBrowserDriver(
+  options: RealBrowserOptions = {},
+  ports: { launch?: () => Promise<LaunchedBrowser> } = {},
+): BrowserDriver {
+  const shared = makeSharedBrowser(ports);
+  const view = shared.driver(options);
+  return {
+    open: (url: string) => view.open(url),
+    close: () => shared.close(),
   };
 }

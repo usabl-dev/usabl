@@ -18,7 +18,7 @@ import { loadRequirements } from "../intake/load.js";
 import { mapRequirementsToProviders } from "../intake/map-to-providers.js";
 import { overlayRequirementsFs } from "../intake/overlay-fs.js";
 import { resolveIntakeConfig } from "../intake/trusted-config.js";
-import { makeRealBrowserDriver } from "./real.js";
+import { makeRealBrowserDriver, type RealBrowserOptions } from "./real.js";
 import { makeGitReader } from "./git.js";
 import { makeFsGlob } from "./fs.js";
 import { resolveStorageStatePath, type EnvReader } from "./session.js";
@@ -175,12 +175,14 @@ export async function buildDeps(
     storageStatePath?: string;
     trustedRef?: string;
     env?: EnvReader;
-    // A caller can inject a browser driver so one warm Chromium serves many runs. The dev overlay
-    // does this: it builds fresh Deps on every save for correct git and intake state, but reuses one
-    // driver so each scan does not pay a cold browser launch and teardown. Each open still makes a
+    // A caller can supply the browser driver so one warm Chromium serves many runs. The dev overlay
+    // does this: it builds fresh Deps on every save for correct git and intake state, but keeps one
+    // browser process. The factory receives the options this function resolved for the run, the
+    // authenticated storage state and the readiness budget, so a driver that outlives one run still
+    // opens every context with this run's session and this run's budget. Each open still makes a
     // fresh context, so run isolation is unchanged. When omitted, a driver is created per call and
     // the caller closes it, which is the CLI's one-shot behavior.
-    browser?: BrowserDriver;
+    browserFor?: (options: RealBrowserOptions) => BrowserDriver;
   } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
@@ -192,16 +194,18 @@ export async function buildDeps(
     explicit: options.storageStatePath,
     env: options.env ?? process.env,
   });
+  const browserOptions: RealBrowserOptions = {
+    ...(storageStatePath === null ? {} : { storageStatePath }),
+    // The operator's app is what decides how long a screen takes to render, so the budget rides
+    // the config the run was started with.
+    ...(config.readyTimeoutMs === undefined
+      ? {}
+      : { readyTimeoutMs: config.readyTimeoutMs }),
+  };
   const browser =
-    options.browser ??
-    makeRealBrowserDriver({
-      ...(storageStatePath === null ? {} : { storageStatePath }),
-      // The operator's app is what decides how long a screen takes to render, so the budget rides
-      // the config the run was started with.
-      ...(config.readyTimeoutMs === undefined
-        ? {}
-        : { readyTimeoutMs: config.readyTimeoutMs }),
-    });
+    options.browserFor === undefined
+      ? makeRealBrowserDriver(browserOptions)
+      : options.browserFor(browserOptions);
   const fs = makeFsGlob({ cwd });
   const git = makeGitReader({ cwd });
   const intakeConfig = await resolveIntakeConfig(
