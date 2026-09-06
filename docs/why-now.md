@@ -87,9 +87,8 @@ claim compliance.
 
 ## 3. Category literature agrees on the gap
 
-From market research and vendor comparisons (August 2026):
-
-> "Most tools find issues. Almost none verify the fix actually worked."
+usabl's design goal, stated as a goal and not as a fact about other tools: verify that the
+fix worked, not only find the issue.
 
 usabl's timing: the advisory MCP layer commoditized in under a year; the **proof loop**
 is the next layer teams will ask for.
