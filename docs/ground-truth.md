@@ -27,7 +27,9 @@ things because it is hard to know everything.
 
 **What usabl is.** A proof engine for accessibility in product development workflows.
 It checks whether touched surfaces have any machine-checkable accessibility barrier
-that is new against a reviewed evidence floor, before work can be called done. It gives one of four clear answers:
+that is new against a reviewed evidence floor, before work can be called done. When it
+checked something, it gives one of four answers (a run that checked nothing, or that
+crashed, gives no verdict; see below):
 
 | Verdict | Meaning |
 |---|---|
@@ -62,7 +64,7 @@ Every surface is a thin wrapper over one CLI entry point that returns `Result`.
 | **CLI** | Run the full engine on demand: baseline a brownfield app, debug locally, CI invokes this, and the agent mid-task self-check (`usabl check` via Bash). Scanner-shaped entry, proof-engine semantics. |
 | **Stop hook** | Block the AI from calling work done without proof. The headline. |
 | **Overlay** | Show findings while hand-coding in the browser. Advises only. |
-| **CI / PR comment** | Team-visible gate on merge. Tamper-proof policy read. |
+| **CI / PR comment** | Team-visible gate on merge. Policy read from the trusted base ref. |
 | **Mid-task self-check** | Let the agent check itself while context is warm, before Stop. **CLI is sufficient** (Bash); MCP is an optional transport for discoverability (section 11.5). Stop still decides. |
 | **Reports** | Publish approved accessibility artifacts (alt-text manifests, snippets, keyboard paths) bound to verified evidence. Command: `usabl docs`. |
 | **Playwright helper** | Same check inside tests teams already run. |
@@ -95,8 +97,9 @@ The specific things that are new, each against what exists today:
    absence; it does not witness the fix.
 2. It reports what it did not check. It reports "we could not check this" as a real
    answer instead of quietly passing. Reporting unknown as unknown is rare.
-3. Its answers can be re-checked. Every result is tied to the exact code and can be
-   recomputed by anyone.
+3. A verified answer can be re-checked. A verified receipt is bound to the exact source
+   tree, policy, runner version, and scanner versions, and re-verification compares those
+   bindings against the current tree without a re-scan.
 4. It shows what a screen reader would actually say, on the change. Simulating
    screen-reader output is a gap the field names itself, and surfacing that
    announcement as re-checkable evidence on a code change is new. The preview is
@@ -1160,7 +1163,7 @@ tamper-proof: an agent with shell access can edit and commit anything. The guard
 catches the change and refuses to issue a trusted verdict, but it cannot prevent the
 edit.
 
-### CI (tamper-proof)
+### CI (trusted-ref policy read)
 
 CI requires `--trusted-ref` (a forge-supplied base revision). Config, evidence,
 waivers, and rules are read via `git show <ref>:<path>` from the trusted base, never
@@ -1313,10 +1316,12 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
 On save, the overlay client requests a scan from the same engine as the stop hook
 (single-flight per repo so hook and overlay do not storm browsers). It renders
-`Result`. It never constructs a Verdict and never blocks the page. Oracle-preserving:
+`Result`. It never constructs a Verdict and never blocks the page. It is advisory: the
+client runs inside the tested page's own JavaScript realm, so the page can interfere with
+what the overlay shows, and the CLI and CI remain the verdict authority. Oracle-preserving:
 mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
 
-### 11.4 CI/PR comment (tamper-proof)
+### 11.4 CI/PR comment (trusted-ref policy read)
 
 Reads policy from the protected branch (or the trusted ref), never the working tree.
 Refuses to run without a base ref. The comment leads with the receipt, groups findings
@@ -1814,7 +1819,9 @@ self-check.
   screen reader. It is labeled as a preview everywhere.
 - CDP does not serialize aria-sort; that one fact is read from the DOM attribute. The
   exception is documented at the read site and disclosed in the demo.
-- Local enforcement is tamper-evident, not tamper-proof. CI is the tamper-proof tier.
+- Local enforcement is tamper-evident, not tamper-proof. CI reads policy from the trusted
+  base ref, so a pull request cannot change the policy it is judged against; the head code
+  it scans is still the pull request's own.
 - Discovery misses bundler aliases, computed imports, and unparseable routes. Those
   are honest `not_covered`, never silent passes.
 - Identity-weak rules (missing accessible name) use count-based identity because you
