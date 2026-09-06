@@ -476,7 +476,7 @@
           </article>
         </div>
         <figure class="diagram">
-          <svg viewBox="0 0 960 150" role="img" aria-label="Flow diagram: a git diff maps to affected screens, checks run in a real browser, results are compared to the baseline, and one verdict is produced.">
+          <svg viewBox="0 0 960 150" role="img" aria-label="Flow diagram: a git diff maps to affected screens, checks run in a real browser, results are compared to the baseline, and one of four verdicts, or no verdict, is produced.">
             <path class="flow-line" d="M160,80 H200" marker-end="url(#arrow)"></path>
             <path class="flow-line" d="M340,80 H380" marker-end="url(#arrow)"></path>
             <path class="flow-line" d="M520,80 H560" marker-end="url(#arrow)"></path>
@@ -500,7 +500,7 @@
 
             <rect class="node-box accent" x="740" y="50" width="200" height="60" rx="6"></rect>
             <text class="node-title on-accent" x="840" y="76" text-anchor="middle">Verdict</text>
-            <text class="node-sub on-accent" x="840" y="94" text-anchor="middle">One result, every time</text>
+            <text class="node-sub on-accent" x="840" y="94" text-anchor="middle">One of four, or none</text>
           </svg>
           <figcaption class="quiet">This sequence runs on every check, whether triggered from the CLI, an assistant hook, or CI.</figcaption>
         </figure>
@@ -580,7 +580,7 @@
           </article>
           <article class="tile">
             <strong>The Gate</strong>
-            The central authority. It evaluates all drafts against the baseline and waivers, then issues a single final verdict for the run.
+            The central authority. It evaluates all drafts against the baseline and waivers, then issues one of four verdicts for the run, or no verdict when nothing was checked or the run could not decide.
           </article>
         </div>
         <figure class="diagram">
@@ -629,7 +629,7 @@
         <div class="verdicts">
           <article class="verdict">
             <div><span class="stamp stamp-verified">verified</span><span class="cite">exit 0</span></div>
-            <p>No new accessibility barriers were found on the touched surfaces, and coverage was complete.</p>
+            <p>No new gating barrier (deterministic and machine-checkable) was found on the touched surfaces, and coverage was complete. Preview and model-judgment findings are shown but do not affect the verdict.</p>
           </article>
           <article class="verdict">
             <div><span class="stamp stamp-regression">regression</span><span class="cite">exit 1</span></div>
@@ -834,7 +834,7 @@
         </figure>
         <div class="surfaces">
           <article class="surface"><strong>CLI</strong><code>usabl check</code> runs the gate locally.</article>
-          <article class="surface"><strong>Assistant Hook</strong>Blocks an AI agent from marking a task complete when the gate is not verified.</article>
+          <article class="surface"><strong>Assistant Hook</strong>Blocks an AI agent's first attempt to stop on a blocking verdict, unless a one-use bypass was issued. Idle, no verdict, and hook errors are disclosed and allowed.</article>
           <article class="surface"><strong>Dev Server</strong>Vite plugin shows the gate's findings on the local application. Advisory only.</article>
           <article class="surface"><strong>CI / GitHub</strong>Required status check and one pull request comment detailing findings.</article>
           <article class="surface"><strong>Playwright</strong>A page-level check inside existing E2E test suites. No floor, no waivers.</article>
@@ -1094,8 +1094,8 @@ test('cluster list stays accessible', async ({ page }) => {
     <section class="slide" id="stop-hook" data-title="Assistant Hook" aria-label="Slide 20 of 31: Assistant Hook" tabindex="-1">
       <div class="card">
         <p class="kicker">Integrations</p>
-        <h1 tabindex="-1">Stops an AI Agent From Declaring Done</h1>
-        <p class="lede">When an AI coding agent finishes a task, a stop hook runs the same gate on the screens it touched. If the gate is not verified, the agent cannot mark the task complete. It gets the verdict, the reason, and the fix, and has to address them first. If the hook itself fails, it exits 0 and reports NOT verified instead of blocking by accident.</p>
+        <h1 tabindex="-1">Blocks an AI Agent's Stop on a Blocking Verdict</h1>
+        <p class="lede">When an AI coding agent tries to stop, a stop hook runs the same gate on the screens it touched. On a blocking verdict (regression, not covered, or approval required) it blocks that first stop attempt unless the user has issued a one-use bypass, and hands the agent the verdict, the reason, and the fix. Idle runs, runs with no verdict, and hook errors are disclosed and allowed, and an active continuation is allowed once so the agent does not loop.</p>
         <div class="surfaces">
           <article class="surface"><strong>Same engine</strong>The hook runs the same axe-core, keyboard-walk, and PatternFly engine as CI, against the local evidence floor and waivers. CI reads those files from the trusted base branch, so the two can differ when the local files differ from the base.</article>
           <article class="surface"><strong>Closes the agent loop</strong>Without it, an agent can ship an inaccessible change between human reviews. The hook puts the check at the moment of completion, where it is cheapest to fix.</article>
@@ -1131,7 +1131,7 @@ test('cluster list stays accessible', async ({ page }) => {
       <div class="card title-card">
         <p class="kicker">Extending the Engine</p>
         <h1 tabindex="-1">usabl for Documentation</h1>
-        <p class="lede">usabl checks the application for new machine-checkable accessibility barriers. The same engine checks product documentation pages listed in a manifest, so the user guides and install guides that ship with the product are held to the same rules, automatically, each time they change.</p>
+        <p class="lede">usabl checks the application for new machine-checkable accessibility barriers. The same engine and the same gate check product documentation pages listed in a manifest, automatically, each time their sources change. The rule profile differs: PatternFly rules do not run on docs, a docs rulepack runs only on docs, and axe uses the WCAG 2.2 A and AA tag set on docs.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#overlay">Previous</a>
           <span class="pos">22 / 31</span>
@@ -1277,12 +1277,12 @@ test('cluster list stays accessible', async ({ page }) => {
             <text class="node-sub on-accent" x="450" y="115" text-anchor="middle">Same Providers, same Gate</text>
 
             <rect class="node-box" x="680" y="30" width="240" height="60" rx="6"></rect>
-            <text class="node-title" x="800" y="56" text-anchor="middle">Verdict: App</text>
-            <text class="node-sub" x="800" y="74" text-anchor="middle">One of four outcomes</text>
+            <text class="node-title" x="800" y="56" text-anchor="middle">Verdict</text>
+            <text class="node-sub" x="800" y="74" text-anchor="middle">one of four, or none, for both</text>
 
             <rect class="node-box" x="680" y="110" width="240" height="60" rx="6"></rect>
-            <text class="node-title" x="800" y="136" text-anchor="middle">Verdict: Docs</text>
-            <text class="node-sub" x="800" y="154" text-anchor="middle">One of four outcomes</text>
+            <text class="node-title" x="800" y="136" text-anchor="middle">Coverage gaps</text>
+            <text class="node-sub" x="800" y="154" text-anchor="middle">reported for either surface</text>
           </svg>
           <figcaption class="quiet">Same Providers, same Gate, same four verdicts, now applied to a second surface. A repository that has both gets one run and one verdict covering both.</figcaption>
         </figure>
@@ -1330,7 +1330,7 @@ test('cluster list stays accessible', async ({ page }) => {
         <p class="lede">"We checked it" is not evidence. A compliance team, an auditor, or a future developer needs to confirm for themselves that a specific change was tested before it shipped.</p>
         <p class="lede">When a run is verified, usabl writes a small receipt that records what the result depended on: a hash of the source tree, a hash of the committed policy, the engine version, and the exact scanner versions. Re-verification recomputes those values and compares them. It does not re-scan. If any value changed, the receipt no longer holds.</p>
         <figure class="diagram">
-          <svg viewBox="0 0 960 170" role="img" aria-label="A verified run mints a receipt that binds three values: the source-tree hash, the policy hash, and the scanner versions. The receipt can be re-verified at any time by recomputing and comparing those values, with no re-scan.">
+          <svg viewBox="0 0 960 170" role="img" aria-label="A verified run mints a receipt that binds four values: the source-tree hash, the policy hash, the engine version, and the scanner versions. The receipt can be re-verified at any time by recomputing and comparing those values, with no re-scan.">
             <path class="flow-line" d="M200,85 H250" marker-end="url(#arrow)"></path>
             <path class="flow-line" d="M630,85 H690" marker-end="url(#arrow)"></path>
 
@@ -1340,7 +1340,7 @@ test('cluster list stays accessible', async ({ page }) => {
 
             <rect class="node-box accent" x="250" y="45" width="380" height="80" rx="6"></rect>
             <text class="node-title on-accent" x="440" y="80" text-anchor="middle">Receipt</text>
-            <text class="node-sub on-accent" x="440" y="100" text-anchor="middle">source-tree hash · policy hash · scanner versions</text>
+            <text class="node-sub on-accent" x="440" y="100" text-anchor="middle">source tree · policy · engine · scanner versions</text>
 
             <rect class="node-box" x="690" y="55" width="250" height="60" rx="6"></rect>
             <text class="node-title" x="815" y="82" text-anchor="middle">Re-verify anytime</text>
@@ -1365,7 +1365,7 @@ test('cluster list stays accessible', async ({ page }) => {
         <div class="surfaces">
           <article class="surface">
             <strong>AI assistant</strong>
-            <span class="tag tag-block">Blocks</span> The Stop hook will not let Claude Code finish a turn while the gate is red. Run <code>/usabl-check</code> at any point to scan work in progress.
+            <span class="tag tag-block">Blocks</span> The Stop hook blocks the first attempt to finish a turn on a blocking verdict, unless a one-use bypass was issued. Idle, no verdict, and hook errors are disclosed and allowed. Run <code>/usabl-check</code> at any point to scan work in progress.
           </article>
           <article class="surface">
             <strong>CI / pull request</strong>
