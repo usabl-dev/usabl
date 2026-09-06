@@ -2385,6 +2385,45 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     await context0(page);
   });
 
+  it('waits for a smooth scroll to finish before judging the corners', async () => {
+    // Standard motion. The target sits far below the fold and is large, so after the smooth scroll
+    // centres it, it covers the band every corner would occupy. Judging the corners two frames into
+    // the scroll read the target's starting position, found the panel clear, and never warned. The
+    // dodge must run once the scroll has settled, and the blocked sentence must be announced exactly
+    // once, for the row activation and again exactly once for Focus element.
+    const page = await mountWithTarget({
+      targetCss: 'position: absolute; left: 421px; top: 2400px; width: 480px; height: 700px;',
+      dockSeed: 'top-left',
+    });
+    const host = page.locator(OVERLAY);
+    const panel = host.getByRole('region', { name: 'usabl accessibility inspector' });
+    const status = host.locator('.locate-status');
+    const blockedCount = (text: string | null): number => (text ?? '').split('no corner is clear').length - 1;
+
+    await panel.locator('.finding-button').click();
+    await expect.poll(async () => blockedCount(await status.textContent()), { timeout: 5000 }).toBe(1);
+    // It settled: the sentence is not repeated on later frames, and the panel is still docked.
+    await page.waitForTimeout(400);
+    const highlightStatus = await status.textContent();
+    expect(blockedCount(highlightStatus)).toBe(1);
+    expect(highlightStatus).toContain('Highlighted Corner control on the page.');
+    // The panel could not move, so the final geometry is either clear or blocked and announced.
+    const overlap = await panelOverlapsTarget(page);
+    expect(overlap === false || blockedCount(highlightStatus) === 1).toBe(true);
+
+    await panel.getByRole('button', { name: 'Focus element' }).click();
+    await expect
+      .poll(async () => {
+        const text = await status.textContent();
+        return (text ?? '').includes('Keyboard focus moved to Corner control.') && blockedCount(text) === 1;
+      }, { timeout: 5000 })
+      .toBe(true);
+    await page.waitForTimeout(400);
+    expect(blockedCount(await status.textContent())).toBe(1);
+
+    await context0(page);
+  });
+
   it('keeps the host click-through with only the panel taking pointer events after a dock move', async () => {
     const page = await mountWithTarget({ targetCss: 'left: 20px; top: 80px;', reducedMotion: true });
     const host = page.locator(OVERLAY);

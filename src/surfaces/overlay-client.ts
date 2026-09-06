@@ -1638,6 +1638,63 @@ export const overlayClientSource = `(() => {
     return 'moved';
   }
 
+  // Run a callback once a smooth scroll toward the target has finished, so the geometry it reads is
+  // the geometry the user ends up looking at. A fixed number of animation frames is not enough: a
+  // long smooth scroll is still moving after two frames, the panel is judged clear against a
+  // position the target has not reached, and the target ends up under it with no warning.
+  //
+  // scrollend is used where the browser fires it. Because a target already in view scrolls nothing
+  // and fires no scrollend, and because not every browser fires it, the wait also ends when no
+  // scroll event has arrived within a few frames, or when the target's rectangle has held still for
+  // a few frames after scrolling, and in any case after about one second.
+  function afterScrollSettles(target, callback) {
+    let done = false;
+    let sawScroll = false;
+    let frames = 0;
+    let stableFrames = 0;
+    let lastRect = '';
+    const startedAt = Date.now();
+    const onScroll = () => {
+      sawScroll = true;
+    };
+    const finish = () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('scrollend', finish, true);
+      callback();
+    };
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('scrollend', finish, true);
+    const tick = () => {
+      if (done) {
+        return;
+      }
+      frames += 1;
+      const rect = target.getBoundingClientRect();
+      const key = rect.left + ',' + rect.top + ',' + rect.width + ',' + rect.height;
+      stableFrames = key === lastRect ? stableFrames + 1 : 0;
+      lastRect = key;
+      if (!sawScroll && frames >= 4) {
+        // Nothing scrolled, so the geometry was final from the start.
+        finish();
+        return;
+      }
+      if (sawScroll && stableFrames >= 3) {
+        finish();
+        return;
+      }
+      if (Date.now() - startedAt >= 1000) {
+        finish();
+        return;
+      }
+      window.requestAnimationFrame(tick);
+    };
+    window.requestAnimationFrame(tick);
+  }
+
   const DODGE_BLOCKED_TEXT =
     'The panel covers part of it and no corner is clear. Collapse the panel or use Move to see it.';
 
@@ -1759,16 +1816,14 @@ export const overlayClientSource = `(() => {
       if (reducedMotion || typeof window.requestAnimationFrame !== 'function') {
         dodgeOutcome = dodgePanelAwayFrom(state.host, target);
       } else {
-        window.requestAnimationFrame(() => {
-          window.requestAnimationFrame(() => {
-            if (state.host && state.highlightKey === key) {
-              if (dodgePanelAwayFrom(state.host, target) === 'blocked') {
-                // The status was already written below. Rewrite it with the extra sentence, so a
-                // screen reader user hears why the element is still partly covered.
-                setLocateStatus(highlightedText + ' ' + DODGE_BLOCKED_TEXT, '');
-              }
+        afterScrollSettles(target, () => {
+          if (state.host && state.highlightKey === key) {
+            if (dodgePanelAwayFrom(state.host, target) === 'blocked') {
+              // The status was already written below. Rewrite it once with the extra sentence, so
+              // a screen reader user hears why the element is still partly covered.
+              setLocateStatus(highlightedText + ' ' + DODGE_BLOCKED_TEXT, '');
             }
-          });
+          }
         });
       }
     }
@@ -1844,12 +1899,25 @@ export const overlayClientSource = `(() => {
     // Bring the element into view first, then get the panel out of its way, so a sighted keyboard
     // user can see the element the focus landed on and it is not left behind the panel. Focus itself
     // uses preventScroll because the scrollIntoView above already placed the element.
+    const focusReducedMotion = prefersReducedMotion();
     target.scrollIntoView({
-      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+      behavior: focusReducedMotion ? 'auto' : 'smooth',
       block: 'center',
       inline: 'nearest',
     });
-    const dodgeOutcome = state.host ? dodgePanelAwayFrom(state.host, target) : 'clear';
+    // With reduced motion the scroll is instant and the geometry is final now. With a smooth scroll
+    // it is not, so the dodge waits for the scroll to settle and rewrites the status once if the
+    // panel still cannot get out of the way.
+    const dodgeNow = focusReducedMotion || typeof window.requestAnimationFrame !== 'function';
+    const dodgeOutcome = state.host && dodgeNow ? dodgePanelAwayFrom(state.host, target) : 'clear';
+    const movedText = 'Keyboard focus moved to ' + elementLabel(finding, found.selector) + '.';
+    if (state.host && !dodgeNow) {
+      afterScrollSettles(target, () => {
+        if (state.host && dodgePanelAwayFrom(state.host, target) === 'blocked') {
+          setLocateStatus(movedText + ' ' + DODGE_BLOCKED_TEXT, '');
+        }
+      });
+    }
     try {
       // Some flagged elements are not focusable. A temporary tabindex of -1 lets us focus them
       // without adding them to the page's tab order. We record the exact node and the exact value it
@@ -1864,7 +1932,6 @@ export const overlayClientSource = `(() => {
       setLocateStatus('Could not move focus to this element.', found.selector);
       return;
     }
-    const movedText = 'Keyboard focus moved to ' + elementLabel(finding, found.selector) + '.';
     setLocateStatus(dodgeOutcome === 'blocked' ? movedText + ' ' + DODGE_BLOCKED_TEXT : movedText, '');
   }
 
