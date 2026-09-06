@@ -16,18 +16,26 @@
  * The suites never touch the real checkout. They clone it at HEAD into a
  * temporary directory, give the clone a `node_modules` whose entries link to the
  * real app's packages except `usabl`, which links to this engine repository, and
- * do every break and repair edit in the clone. Removing the clone is a plain
- * directory removal, so a killed run leaves at most a stray temp dir. The real
- * app must have a clean `git status` before and after, and the suites assert it.
+ * do every break and repair edit in the clone. The real app must have a clean
+ * `git status` before and after, and the suites assert it.
  *
- * The clone's dev server loads `usabl/vite` from `node_modules/usabl`, so the
- * engine's built `dist/` must exist. `npm run test:demo-integration` builds first.
+ * The dev server runs detached in its own process group and is stopped by
+ * signalling that group. If the test runner itself is killed, `afterAll` never
+ * runs: the clone stays in the temp dir and its Vite process keeps running until
+ * the next run finds the clone's owner process dead and removes both. A clone
+ * whose owner is still alive is never touched.
+ *
+ * Every wait is bounded. Server start and source propagation use the app's
+ * `readyTimeoutMs`, the same budget the engine gives to reaching one screen. Git
+ * and the demo's switch script have their own timeouts. The clone's dev server
+ * loads `usabl/vite` from `node_modules/usabl`, so the engine's built `dist/`
+ * must exist. `npm run test:demo-integration` builds first under a lock.
  */
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { accessSync, readFileSync, statSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -46,9 +54,32 @@ const ENGINE_PACKAGE_NAME = 'usabl';
 // Vite writes its dependency cache into these entries. The clone gets its own so the
 // real app's node_modules is never written to.
 const NODE_MODULES_NOT_LINKED = new Set([ENGINE_PACKAGE_NAME, '.vite', '.vite-temp', '.tmp']);
+const CLONE_PREFIX = 'usabl-demo-app-';
+const OWNER_FILE = 'owner.json';
 const MARKER_FILE = 'usabl-fixture-marker.txt';
 const OVERLAY_LOADER = "import('/__usabl/client.js')";
+const DEFAULT_READY_TIMEOUT_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 2_000;
+const GIT_TIMEOUT_MS = 60_000;
+const SOURCE_SWITCH_TIMEOUT_MS = 30_000;
+const GRACEFUL_STOP_MS = 5_000;
+const FORCED_STOP_MS = 5_000;
+
+/**
+ * Time budgets for one suite. `readyTimeoutMs` is the engine's budget for reaching
+ * one screen. Starting the dev server and re-serving an edited module are the same
+ * class of wait, so they share it. Test timeouts add these up per operation.
+ */
+export interface Budgets {
+  readyTimeoutMs: number;
+  serverStartMs: number;
+  sourceSwitchMs: number;
+  gitMs: number;
+}
+
+export function budgetsFor(readyTimeoutMs: number): Budgets {
+  return { readyTimeoutMs, serverStartMs: readyTimeoutMs, sourceSwitchMs: readyTimeoutMs, gitMs: GIT_TIMEOUT_MS };
+}
 
 export type FixtureAppRequest =
   | { kind: 'skip'; note: string }
@@ -57,6 +88,8 @@ export type FixtureAppRequest =
 export interface DisposableApp {
   /** The clone the suite runs against. Every edit happens here. */
   cwd: string;
+  /** Temp root holding the clone and its owner file. */
+  root: string;
   /** The real checkout the clone came from. Never written to. */
   sourceCwd: string;
   /** Commit both the real checkout and the clone sit on. */
@@ -65,6 +98,7 @@ export interface DisposableApp {
   enginePath: string;
   /** Random token served from the clone's public directory; proves a server is ours. */
   token: string;
+  budgets: Budgets;
   dispose(): Promise<void>;
 }
 
@@ -73,6 +107,13 @@ export interface FixtureServer {
   baseUrl: string;
   port: number;
   output: string[];
+}
+
+interface OwnerRecord {
+  pid: number;
+  startedAt: number;
+  cwd: string;
+  serverPid?: number;
 }
 
 function readPackageName(cwd: string): string | null {
@@ -132,9 +173,28 @@ export function requestFixtureApp(): FixtureAppRequest {
   return { kind: 'run', cwd };
 }
 
+/** Runs a child process with a hard deadline and names the command in the failure. */
+export async function runBounded(
+  label: string,
+  command: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(command, args, { cwd, encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGKILL' });
+    return stdout;
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & { killed?: boolean; stderr?: string };
+    if (failure.killed === true) {
+      throw new Error(`${label} did not finish within ${timeoutMs}ms`);
+    }
+    throw new Error(`${label} failed: ${failure.stderr?.trim() || failure.message}`);
+  }
+}
+
 async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd, encoding: 'utf8' });
-  return stdout;
+  return runBounded(`git ${args[0]}`, 'git', args, cwd, GIT_TIMEOUT_MS);
 }
 
 /** Fails when the real demo app has any uncommitted change. The suites must not be the cause. */
@@ -148,6 +208,100 @@ export async function assertRealAppClean(cwd: string, moment: string): Promise<v
 /** The engine repository this test file belongs to. */
 export function engineRoot(): string {
   return fileURLToPath(new URL('../../', import.meta.url));
+}
+
+/** Timeout budget the engine applies to reaching one screen, read from the app's config. */
+export function fixtureReadyTimeoutMs(cwd: string): number {
+  return parseUsablConfig(readFileSync(join(cwd, 'usabl.config.json'), 'utf8')).readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to someone else. Treat it as alive.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+async function readOwner(root: string): Promise<OwnerRecord | null> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(root, OWNER_FILE), 'utf8'));
+    if (typeof parsed !== 'object' || parsed === null) {
+      return null;
+    }
+    const pid = Reflect.get(parsed, 'pid');
+    const startedAt = Reflect.get(parsed, 'startedAt');
+    const cwd = Reflect.get(parsed, 'cwd');
+    const serverPid = Reflect.get(parsed, 'serverPid');
+    if (typeof pid !== 'number' || typeof startedAt !== 'number' || typeof cwd !== 'string') {
+      return null;
+    }
+    return { pid, startedAt, cwd, ...(typeof serverPid === 'number' ? { serverPid } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Kills the dev server group a dead run left behind, but only when the group
+ * leader's command line still names that run's clone. A reused pid never matches.
+ */
+async function killOrphanedServer(owner: OwnerRecord): Promise<void> {
+  if (owner.serverPid === undefined || !processAlive(owner.serverPid)) {
+    return;
+  }
+  let cmdline: string;
+  try {
+    cmdline = await readFile(`/proc/${owner.serverPid}/cmdline`, 'utf8');
+  } catch {
+    return;
+  }
+  if (!cmdline.includes(owner.cwd)) {
+    return;
+  }
+  killGroup(owner.serverPid, 'SIGKILL');
+}
+
+/**
+ * Removes clones from earlier runs whose owner process is gone. A clone is only
+ * removed when it is older than this process and no live process owns it, so a
+ * concurrent run's clone is never touched.
+ */
+export async function removeStaleClones(): Promise<string[]> {
+  const processStartedAt = Date.now() - process.uptime() * 1000;
+  const removed: string[] = [];
+  let entries: string[];
+  try {
+    entries = await readdir(tmpdir());
+  } catch {
+    return removed;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(CLONE_PREFIX)) {
+      continue;
+    }
+    const root = join(tmpdir(), entry);
+    try {
+      const info = await stat(root);
+      if (!info.isDirectory() || info.mtimeMs >= processStartedAt) {
+        continue;
+      }
+      const owner = await readOwner(root);
+      if (owner !== null && processAlive(owner.pid)) {
+        continue;
+      }
+      if (owner !== null) {
+        await killOrphanedServer(owner);
+      }
+      await rm(root, { recursive: true, force: true });
+      removed.push(root);
+    } catch {
+      // Another run may have removed it first. Nothing to do.
+    }
+  }
+  return removed;
 }
 
 async function linkNodeModules(sourceCwd: string, cloneCwd: string): Promise<string> {
@@ -183,6 +337,10 @@ async function linkNodeModules(sourceCwd: string, cloneCwd: string): Promise<str
   return resolvedEngine;
 }
 
+async function writeOwner(root: string, record: OwnerRecord): Promise<void> {
+  await writeFile(join(root, OWNER_FILE), JSON.stringify(record), 'utf8');
+}
+
 /**
  * Clones the real demo app at HEAD into a temporary directory and wires its
  * `node_modules` to the real packages plus this engine. Every suite edit happens in
@@ -190,10 +348,15 @@ async function linkNodeModules(sourceCwd: string, cloneCwd: string): Promise<str
  */
 export async function createDisposableApp(sourceCwd: string): Promise<DisposableApp> {
   await assertRealAppClean(sourceCwd, 'before the suite started');
+  for (const stale of await removeStaleClones()) {
+    console.info(`[fixture app] removed stale clone ${stale} left by an earlier run`);
+  }
+  const budgets = budgetsFor(fixtureReadyTimeoutMs(sourceCwd));
   const head = (await git(sourceCwd, ['rev-parse', 'HEAD'])).trim();
-  const root = await mkdtemp(join(tmpdir(), 'usabl-demo-app-'));
+  const root = await mkdtemp(join(tmpdir(), CLONE_PREFIX));
   const cwd = join(root, 'app');
   try {
+    await writeOwner(root, { pid: process.pid, startedAt: Date.now(), cwd });
     await git(root, ['clone', '--quiet', '--no-hardlinks', sourceCwd, cwd]);
     await git(cwd, ['checkout', '--quiet', '--detach', head]);
     const cloneHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
@@ -206,10 +369,12 @@ export async function createDisposableApp(sourceCwd: string): Promise<Disposable
     await writeFile(join(cwd, 'public', MARKER_FILE), token, 'utf8');
     return {
       cwd,
+      root,
       sourceCwd,
       head,
       enginePath,
       token,
+      budgets,
       dispose: () => rm(root, { recursive: true, force: true }),
     };
   } catch (error) {
@@ -218,9 +383,9 @@ export async function createDisposableApp(sourceCwd: string): Promise<Disposable
   }
 }
 
-/** Timeout budget the engine applies to reaching one screen. */
-export function fixtureReadyTimeoutMs(cwd: string): number {
-  return parseUsablConfig(readFileSync(join(cwd, 'usabl.config.json'), 'utf8')).readyTimeoutMs ?? 60_000;
+/** Runs the demo app's own source switch script inside the clone. */
+export async function switchDemoSource(app: DisposableApp, script: string, mode: string): Promise<void> {
+  await runBounded(`${script} ${mode}`, 'node', [script, mode], app.cwd, SOURCE_SWITCH_TIMEOUT_MS);
 }
 
 /**
@@ -285,10 +450,10 @@ function attachOutputBuffer(server: ReturnType<typeof spawn>): string[] {
 }
 
 /**
- * Starts the clone's dev server on a free port and waits until it proves it is
- * ours: it serves the clone's random marker token, and its HTML carries the usabl
- * overlay loader that only this engine's Vite plugin injects. A child that exits
- * before that point fails the wait at once.
+ * Starts the clone's dev server on a free port, in its own process group, and
+ * waits until it proves it is ours: it serves the clone's random marker token, and
+ * its HTML carries the usabl overlay loader that only this engine's Vite plugin
+ * injects. A child that exits before that point fails the wait at once.
  */
 export async function startFixtureServer(app: DisposableApp, probePath: string): Promise<FixtureServer> {
   const port = await freePort();
@@ -297,9 +462,14 @@ export async function startFixtureServer(app: DisposableApp, probePath: string):
     cwd: app.cwd,
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
+    // Own process group, so stopping the server also stops the Vite grandchild npm starts.
+    detached: true,
   });
   const output = attachOutputBuffer(child);
   const server: FixtureServer = { process: child, baseUrl, port, output };
+  if (child.pid !== undefined) {
+    await writeOwner(app.root, { pid: process.pid, startedAt: Date.now(), cwd: app.cwd, serverPid: child.pid });
+  }
   try {
     await waitForServerReady(server, app, probePath);
   } catch (error) {
@@ -342,7 +512,7 @@ async function waitForServerReady(server: FixtureServer, app: DisposableApp, pro
   const exited = new Promise<'exited'>((resolve) => {
     server.process.once('exit', () => resolve('exited'));
   });
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + app.budgets.serverStartMs;
   let lastReason = 'request never succeeded';
   while (Date.now() < deadline) {
     const outcome = await Promise.race([probeServer(server, app, probePath), exited]);
@@ -360,18 +530,46 @@ async function waitForServerReady(server: FixtureServer, app: DisposableApp, pro
     lastReason = outcome.reason;
     await Promise.race([delay(200), exited]);
   }
-  throw new Error(`fixture dev server did not become ready: ${lastReason}; output: ${summarizeOutput(server.output)}`);
+  throw new Error(
+    `fixture dev server did not become ready within ${app.budgets.serverStartMs}ms: ${lastReason}; output: ${summarizeOutput(server.output)}`,
+  );
 }
 
+/** Signals a whole process group. A group that is already gone is not an error. */
+function killGroup(leaderPid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-leaderPid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+      throw error;
+    }
+  }
+}
+
+async function exitedWithin(child: ReturnType<typeof spawn>, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return true;
+  }
+  const outcome = await Promise.race([once(child, 'exit').then(() => 'exited' as const), delay(timeoutMs)]);
+  return outcome === 'exited';
+}
+
+/**
+ * Stops the dev server and everything npm started under it by signalling the
+ * process group: SIGTERM first, SIGKILL after a grace period. Both waits are
+ * bounded; a group that survives SIGKILL is reported, not waited on forever.
+ */
 export async function stopFixtureServer(server: FixtureServer): Promise<void> {
   const child = server.process;
-  if (child.exitCode !== null) {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
     return;
   }
-  child.kill('SIGTERM');
-  const graceful = await Promise.race([once(child, 'exit'), delay(5_000).then(() => null)]);
-  if (graceful === null && child.exitCode === null) {
-    child.kill('SIGKILL');
-    await once(child, 'exit');
+  killGroup(child.pid, 'SIGTERM');
+  if (await exitedWithin(child, GRACEFUL_STOP_MS)) {
+    return;
+  }
+  killGroup(child.pid, 'SIGKILL');
+  if (!(await exitedWithin(child, FORCED_STOP_MS))) {
+    throw new Error(`fixture dev server group ${child.pid} did not exit within ${FORCED_STOP_MS}ms of SIGKILL`);
   }
 }

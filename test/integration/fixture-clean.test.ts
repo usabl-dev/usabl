@@ -22,6 +22,7 @@ import { buildDeps } from '../../src/deps/build.js';
 import { run } from '../../src/run.js';
 import {
   assertRealAppClean,
+  budgetsFor,
   createDisposableApp,
   fixtureReadyTimeoutMs,
   normalizeFindings,
@@ -35,10 +36,14 @@ import {
 const FIXTURE_CHANGED_FILES = ['src/pages/Clusters.tsx', 'src/pages/Settings.tsx'];
 const EXPECTED_SCREENS = ['clusters', 'settings'];
 const TIMEOUT_MARGIN_MS = 60_000;
+// Git calls in beforeAll: status, rev-parse, clone, checkout, rev-parse.
+const SETUP_GIT_CALLS = 5;
 
 const fixture = requestFixtureApp();
-const testTimeoutMs =
-  fixture.kind === 'run' ? EXPECTED_SCREENS.length * fixtureReadyTimeoutMs(fixture.cwd) + TIMEOUT_MARGIN_MS : 0;
+const budgets = fixture.kind === 'run' ? budgetsFor(fixtureReadyTimeoutMs(fixture.cwd)) : null;
+const testTimeoutMs = budgets === null ? 0 : EXPECTED_SCREENS.length * budgets.readyTimeoutMs + TIMEOUT_MARGIN_MS;
+const setupTimeoutMs = budgets === null ? 0 : SETUP_GIT_CALLS * budgets.gitMs + budgets.serverStartMs + TIMEOUT_MARGIN_MS;
+const teardownTimeoutMs = budgets === null ? 0 : budgets.gitMs + TIMEOUT_MARGIN_MS;
 
 function fixtureConfig(baseUrl: string): UsablConfig {
   return {
@@ -80,7 +85,7 @@ describe('fixture clean oracle integration', () => {
     app = await createDisposableApp(realAppCwd);
     console.info(`[fixture clean] clone ${app.cwd} at ${app.head}; node_modules/usabl -> ${app.enginePath}`);
     server = await startFixtureServer(app, '/settings');
-  }, 90_000);
+  }, setupTimeoutMs);
 
   afterAll(async () => {
     try {
@@ -93,7 +98,7 @@ describe('fixture clean oracle integration', () => {
       }
       await assertRealAppClean(realAppCwd, 'after the suite finished');
     }
-  }, 30_000);
+  }, teardownTimeoutMs);
 
   it(
     'treats the fixed fixture variant as a verified zero-finding oracle',

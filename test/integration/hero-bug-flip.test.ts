@@ -12,7 +12,8 @@
  * screen sets, no coverage gaps, and that the scanned pages carried no overlay.
  *
  * The real checkout is never written to. It must have a clean `git status`
- * before and after, and the clone is removed in `afterAll`.
+ * before and after, and the clone is removed in `afterAll`. If the runner is
+ * killed, the clone and its Vite process stay until the next run removes them.
  *
  * Run it with:
  *   USABL_FIXTURE_APP_CWD=/path/to/usabl-app npm run test:demo-integration
@@ -21,11 +22,9 @@
  * (`dist/`; the npm script builds first). Without USABL_FIXTURE_APP_CWD the suite
  * skips. With a path that is not the demo app it fails.
  */
-import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Deps, Result } from '../../src/contracts/index.js';
 import { buildDeps } from '../../src/deps/build.js';
@@ -33,6 +32,7 @@ import { verifyReceipt } from '../../src/evidence/receipt.js';
 import { run } from '../../src/run.js';
 import {
   assertRealAppClean,
+  budgetsFor,
   createDisposableApp,
   fetchText,
   fixtureReadyTimeoutMs,
@@ -41,11 +41,11 @@ import {
   requestFixtureApp,
   startFixtureServer,
   stopFixtureServer,
+  switchDemoSource,
   type DisposableApp,
   type FixtureServer,
 } from './fixture-app.js';
 
-const execFileAsync = promisify(execFile);
 const SOURCE_STATE_FILE = 'src/demo/scenarios.ts';
 const SOURCE_SWITCH_SCRIPT = 'scripts/set-demo-source.mjs';
 // The demo pull request changes only the tracked source state. That single file is
@@ -75,16 +75,22 @@ const REPAIRED_ORACLE: string[] = [];
 // Page opens per run: one scan per expected screen, then one overlay check per screen.
 const PAGE_OPENS_PER_PHASE = EXPECTED_SCREENS.length * 2;
 const PHASES = 2;
-// Flips, git work, receipt verification, and provider time on top of readiness budgets.
+// Git work, receipt verification, and provider time on top of the per-operation budgets.
 const TIMEOUT_MARGIN_MS = 90_000;
+// Git calls in beforeAll: status, rev-parse, clone, checkout, rev-parse.
+const SETUP_GIT_CALLS = 5;
 
 type SourceMode = 'broken' | 'repaired';
 
 const fixture = requestFixtureApp();
+const budgets = fixture.kind === 'run' ? budgetsFor(fixtureReadyTimeoutMs(fixture.cwd)) : null;
+// Every wait in the test has a budget; the test timeout is their sum plus a margin.
 const testTimeoutMs =
-  fixture.kind === 'run'
-    ? PAGE_OPENS_PER_PHASE * PHASES * fixtureReadyTimeoutMs(fixture.cwd) + TIMEOUT_MARGIN_MS
-    : 0;
+  budgets === null
+    ? 0
+    : PAGE_OPENS_PER_PHASE * PHASES * budgets.readyTimeoutMs + PHASES * budgets.sourceSwitchMs + TIMEOUT_MARGIN_MS;
+const setupTimeoutMs = budgets === null ? 0 : SETUP_GIT_CALLS * budgets.gitMs + budgets.serverStartMs + TIMEOUT_MARGIN_MS;
+const teardownTimeoutMs = budgets === null ? 0 : budgets.gitMs + TIMEOUT_MARGIN_MS;
 
 function screenIds(result: Result): { affected: string[]; scanned: string[] } {
   return {
@@ -166,19 +172,20 @@ describe('hero-bug flip integration', () => {
 
   async function setSourceMode(mode: SourceMode): Promise<void> {
     const { app: current } = requireApp();
-    await execFileAsync('node', [SOURCE_SWITCH_SCRIPT, mode], { cwd: current.cwd });
+    await switchDemoSource(current, SOURCE_SWITCH_SCRIPT, mode);
     await waitForServedSourceMode(mode);
   }
 
   /** The dev server transforms the module on demand; wait until it serves the new state. */
   async function waitForServedSourceMode(mode: SourceMode): Promise<void> {
-    const { server: current } = requireApp();
+    const { app: current, server: currentServer } = requireApp();
     const pattern = new RegExp(`CURRENT_SOURCE_MODE\\s*=\\s*["']${mode}["']`);
-    const deadline = Date.now() + 10_000;
+    const budgetMs = current.budgets.sourceSwitchMs;
+    const deadline = Date.now() + budgetMs;
     let lastReason = 'request never succeeded';
     while (Date.now() < deadline) {
       try {
-        const response = await fetchText(`${current.baseUrl}/${SOURCE_STATE_FILE}`);
+        const response = await fetchText(`${currentServer.baseUrl}/${SOURCE_STATE_FILE}`);
         if (response.ok && pattern.test(response.body)) {
           return;
         }
@@ -188,7 +195,7 @@ describe('hero-bug flip integration', () => {
       }
       await delay(200);
     }
-    throw new Error(`dev server never served ${SOURCE_STATE_FILE} in ${mode} mode: ${lastReason}`);
+    throw new Error(`dev server did not serve ${SOURCE_STATE_FILE} in ${mode} mode within ${budgetMs}ms: ${lastReason}`);
   }
 
   beforeAll(async () => {
@@ -198,7 +205,7 @@ describe('hero-bug flip integration', () => {
     });
     console.info(`[hero-bug flip] clone ${app.cwd} at ${app.head}; node_modules/usabl -> ${app.enginePath}`);
     server = await startFixtureServer(app, '/clusters');
-  }, 90_000);
+  }, setupTimeoutMs);
 
   afterAll(async () => {
     try {
@@ -211,7 +218,7 @@ describe('hero-bug flip integration', () => {
       }
       await assertRealAppClean(realAppCwd, 'after the suite finished');
     }
-  }, 30_000);
+  }, teardownTimeoutMs);
 
   it(
     'goes from regression on the broken source to verified on the repaired source',
