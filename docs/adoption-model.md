@@ -84,8 +84,8 @@ each stage matters; this section is what a team actually types, in order.
     browser inspector appears during development. It refuses to clobber an existing
     config and prints the exact lines to add.
 12. (automatic, `usabl install --claude`) Merges a Stop hook running
-    `npx usabl stop-hook` into `.claude/settings.json`, so an assistant cannot call
-    interface work done without proof. Its companion `usabl install --claude-skill`
+    `npx usabl stop-hook` into `.claude/settings.json`, so an assistant's first stop on a
+    blocking verdict is blocked unless a one-use bypass was issued. Its companion `usabl install --claude-skill`
     writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`,
     so the assistant can run the advisory self-check during work. The engine ships the
     skill body, so the installed command cannot drift from the CLI it calls.
