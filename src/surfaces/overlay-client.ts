@@ -597,6 +597,13 @@ export const overlayClientSource = `(() => {
         display: none;
       }
 
+      .badge-word {
+        font-size: 0.9375rem;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        line-height: 1;
+      }
+
       .badge-symbol {
         font-size: 1.0625rem;
         line-height: 1;
@@ -616,6 +623,44 @@ export const overlayClientSource = `(() => {
       .badge[data-state="unscanned"] .badge-symbol,
       .badge[data-state="approval"] .badge-symbol {
         color: #ffd18a;
+      }
+
+      /* The badge gets louder when the run has something a developer must act on: a solid fill
+         instead of the calm dark pill. Colour only reinforces the wordmark and glyph, which still
+         carry the meaning on their own, so this adds no colour-only signal. Clean, idle, pending,
+         scanning, and unscanned stay calm. */
+      .badge[data-state="regression"],
+      .badge[data-state="no-verdict"],
+      .badge[data-state="error"] {
+        background: var(--red);
+        border-color: var(--red);
+      }
+
+      .badge[data-state="regression"]:hover,
+      .badge[data-state="no-verdict"]:hover,
+      .badge[data-state="error"]:hover {
+        background: #ad2c33;
+      }
+
+      .badge[data-state="approval"],
+      .badge[data-state="not-covered"] {
+        background: var(--amber);
+        border-color: var(--amber);
+      }
+
+      .badge[data-state="approval"]:hover,
+      .badge[data-state="not-covered"]:hover {
+        background: #8c4f00;
+      }
+
+      /* On a filled badge the glyph joins the white wordmark; the tinted glyph colours above are for
+         the dark pill only. */
+      .badge[data-state="regression"] .badge-symbol,
+      .badge[data-state="no-verdict"] .badge-symbol,
+      .badge[data-state="error"] .badge-symbol,
+      .badge[data-state="approval"] .badge-symbol,
+      .badge[data-state="not-covered"] .badge-symbol {
+        color: var(--white);
       }
 
       .panel {
@@ -2054,7 +2099,7 @@ export const overlayClientSource = `(() => {
     const collapse = make('button', 'icon-button collapse-button');
     collapse.type = 'button';
     collapse.setAttribute('aria-label', 'Collapse the usabl inspector');
-    const collapseGlyph = make('span', '', '▲');
+    const collapseGlyph = make('span', '', '▼');
     collapseGlyph.setAttribute('aria-hidden', 'true');
     collapse.appendChild(collapseGlyph);
     collapse.addEventListener('click', () => setOpen(host, false, true));
@@ -2092,7 +2137,10 @@ export const overlayClientSource = `(() => {
       );
     }
 
-    header.replaceChildren(bar, banner, note, screenLine);
+    // On an idle run the screen split is all zeros, so it only repeats "nothing". The banner and the
+    // note already say there was nothing to check, so the line is dropped in that state.
+    const headerChildren = verdict.key === 'idle' ? [bar, banner, note] : [bar, banner, note, screenLine];
+    header.replaceChildren(...headerChildren);
     announceVerdict(verdict, split, payload);
   }
 
@@ -2126,12 +2174,18 @@ export const overlayClientSource = `(() => {
     const badge = host.shadowRoot.querySelector('.badge');
     const view = badgeView(payload, state.error, state.scanning, split);
     badge.dataset.state = view.key;
+    // The wordmark stays in the collapsed badge so it is always clear this control is usabl and not
+    // a generic help button. The glyph beside it carries the state, and the accessible name already
+    // says the whole thing, so the wordmark and glyph are decoration for a sighted reader.
+    const word = make('span', 'badge-word', 'usabl');
+    word.setAttribute('aria-hidden', 'true');
     const symbol = make('span', 'badge-symbol', view.symbol);
     symbol.setAttribute('aria-hidden', 'true');
-    badge.replaceChildren(symbol);
+    const children = [word, symbol];
     if (view.count !== null) {
-      badge.appendChild(make('span', 'badge-count', String(view.count)));
+      children.push(make('span', 'badge-count', String(view.count)));
     }
+    badge.replaceChildren(...children);
     // The accessible name carries the whole state, because the glyph and the number alone do not
     // say what they are counting.
     badge.setAttribute('aria-label', view.label);
@@ -2175,6 +2229,16 @@ export const overlayClientSource = `(() => {
       section.appendChild(make('div', 'loading-line'));
       section.appendChild(make('div', 'loading-line'));
       body.replaceChildren(...(tamper ? [tamper, section] : [section]));
+      return;
+    }
+
+    // Nothing to check and nothing left uncovered. The header already states this in full, so the
+    // body stays empty rather than repeating "none" as an empty issues section and a coverage table
+    // of zeros. A run that was idle but still has coverage gaps falls through to the full body.
+    const verdict = verdictFor(payload, state.error, state.scanning);
+    const gaps = payload.coverage && Array.isArray(payload.coverage.gaps) ? payload.coverage.gaps : [];
+    if (verdict.key === 'idle' && gaps.length === 0) {
+      body.replaceChildren(...(tamper ? [tamper] : []));
       return;
     }
 

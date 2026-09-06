@@ -188,8 +188,9 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
       name: 'usabl: regression, 2 issues on this screen. Open inspector.',
     });
     expect(await badge.count()).toBe(1);
-    // The verdict symbol and the count are the only visible text, so the badge stays out of the way.
-    expect((await badge.textContent())?.trim()).toBe('✕2');
+    // The wordmark keeps the badge identifiable as usabl, and the glyph and count carry the state.
+    // Nothing else shows, so it stays out of the way.
+    expect((await badge.textContent())?.trim()).toBe('usabl✕2');
 
     const box = await host.boundingBox();
     expect(box?.width ?? 999).toBeLessThan(130);
