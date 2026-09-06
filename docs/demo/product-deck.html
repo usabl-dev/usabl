@@ -776,7 +776,7 @@
 
             <rect class="node-box" x="760" y="30" width="180" height="64" rx="6"></rect>
             <text class="node-title" x="850" y="58" text-anchor="middle">Verdict + receipt</text>
-            <text class="node-sub" x="850" y="78" text-anchor="middle">one of four outcomes</text>
+            <text class="node-sub" x="850" y="78" text-anchor="middle">one of four, or none</text>
 
             <rect class="node-box" x="20" y="150" width="200" height="50" rx="6"></rect>
             <text class="node-title" x="120" y="173" text-anchor="middle">usabl docs</text>
@@ -1095,7 +1095,7 @@ test('cluster list stays accessible', async ({ page }) => {
       <div class="card">
         <p class="kicker">Integrations</p>
         <h1 tabindex="-1">Blocks an AI Agent's Stop on a Blocking Verdict</h1>
-        <p class="lede">When an AI coding agent tries to stop, a stop hook runs the same gate on the screens it touched. On a blocking verdict (regression, not covered, or approval required) it blocks that first stop attempt unless the user has issued a one-use bypass, and hands the agent the verdict, the reason, and the fix. Idle runs, runs with no verdict, and hook errors are disclosed and allowed, and an active continuation is allowed once so the agent does not loop.</p>
+        <p class="lede">When an AI coding agent tries to stop, a stop hook runs the same gate on the screens it touched. On a blocking verdict (regression, not covered, or approval required) it blocks that first stop attempt unless the user has issued a one-use bypass, and hands the agent the verdict, the reason, and the fix. Idle runs, runs with no verdict, and hook errors are disclosed and allowed. If the host reports that hook-triggered continuation is already active, usabl allows that stop attempt to prevent a recursive loop.</p>
         <div class="surfaces">
           <article class="surface"><strong>Same engine</strong>The hook runs the same axe-core, keyboard-walk, and PatternFly engine as CI, against the local evidence floor and waivers. CI reads those files from the trusted base branch, so the two can differ when the local files differ from the base.</article>
           <article class="surface"><strong>Closes the agent loop</strong>Without it, an agent can ship an inaccessible change between human reviews. The hook puts the check at the moment of completion, where it is cheapest to fix.</article>
@@ -1284,7 +1284,7 @@ test('cluster list stays accessible', async ({ page }) => {
             <text class="node-title" x="800" y="136" text-anchor="middle">Coverage gaps</text>
             <text class="node-sub" x="800" y="154" text-anchor="middle">reported for either surface</text>
           </svg>
-          <figcaption class="quiet">Same Providers, same Gate, same four verdicts, now applied to a second surface. A repository that has both gets one run and one verdict covering both.</figcaption>
+          <figcaption class="quiet">Same Providers, same Gate, same four verdicts, now applied to a second surface. A repository that has both gets one run, ending in one of four verdicts or none, covering both.</figcaption>
         </figure>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#docs-adoption">Previous</a>
@@ -1336,7 +1336,7 @@ test('cluster list stays accessible', async ({ page }) => {
 
             <rect class="node-box" x="20" y="55" width="180" height="60" rx="6"></rect>
             <text class="node-title" x="110" y="82" text-anchor="middle">Verified run</text>
-            <text class="node-sub" x="110" y="100" text-anchor="middle">no new barriers</text>
+            <text class="node-sub" x="110" y="100" text-anchor="middle">no new gating barriers</text>
 
             <rect class="node-box accent" x="250" y="45" width="380" height="80" rx="6"></rect>
             <text class="node-title on-accent" x="440" y="80" text-anchor="middle">Receipt</text>
