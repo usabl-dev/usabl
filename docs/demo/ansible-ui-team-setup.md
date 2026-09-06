@@ -81,8 +81,8 @@ usabl install --claude
 usabl install --claude-skill
 ```
 
-- `--claude` wires the **Stop hook** (`.claude/settings.json`) so Claude cannot finish while the gate
-  is red.
+- `--claude` wires the **Stop hook** (`.claude/settings.json`) so the assistant's first attempt to
+  finish on a blocking verdict is blocked unless a one-use `usabl bypass` was issued.
 - `--claude-skill` writes the **`/usabl-check` skill** for advisory mid-task scans.
 
 Mid-task: type `/usabl-check` or ask Claude to run `npx usabl check --self-check`.
