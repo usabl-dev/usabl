@@ -584,7 +584,7 @@
           </article>
         </div>
         <figure class="diagram">
-          <svg viewBox="0 0 900 220" role="img" aria-label="Three provider modules, axe-core, Keyboard Walk, and PatternFly Rules, each send findings to a central Gate. The Gate applies the baseline and waivers and produces one verdict.">
+          <svg viewBox="0 0 900 220" role="img" aria-label="Three provider modules, axe-core, Keyboard Walk, and PatternFly Rules, each send findings to a central Gate. The Gate applies the baseline and waivers and produces one of four verdicts when something was checked, or no verdict.">
             <path class="flow-line" d="M250,35 H320 V105 H370" marker-end="url(#arrow)"></path>
             <path class="flow-line" d="M250,105 H370" marker-end="url(#arrow)"></path>
             <path class="flow-line" d="M250,175 H320 V105 H370" marker-end="url(#arrow)"></path>
@@ -756,7 +756,7 @@
           </article>
         </div>
         <figure class="diagram">
-          <svg viewBox="0 0 960 210" role="img" aria-label="Flow diagram: an approved requirement bundle becomes requirement providers that report findings the same way axe-core does. Those findings pass through the same Gate, which applies the baseline and waivers and produces one verdict with a receipt. The same bundle is also projected read-only by the usabl docs command.">
+          <svg viewBox="0 0 960 210" role="img" aria-label="Flow diagram: an approved requirement bundle becomes requirement providers that report findings the same way axe-core does. Those findings pass through the same Gate, which applies the baseline and waivers and produces one of four verdicts when something was checked, or no verdict, and mints a receipt only when the verdict is verified. The same bundle is also projected read-only by the usabl docs command.">
             <path class="flow-line" d="M220,62 H270" marker-end="url(#arrow)"></path>
             <path class="flow-line" d="M490,62 H540" marker-end="url(#arrow)"></path>
             <path class="flow-line" d="M710,62 H760" marker-end="url(#arrow)"></path>
@@ -1258,7 +1258,7 @@ test('cluster list stays accessible', async ({ page }) => {
         <h1 tabindex="-1">One Engine, Two Surfaces</h1>
         <p class="lede">The obligation already exists. Design systems cover the page frame, the navigation and theme. The authored content, the words and images a writer produces, goes unchecked unless something checks it. This closes that specific, named gap by reusing the engine already used for the application, rather than building or buying a separate product.</p>
         <figure class="diagram">
-          <svg viewBox="0 0 960 190" role="img" aria-label="Diagram: the same usabl engine, with the same Providers and Gate, checks two surfaces, the application UI and the documentation pages, and produces a verdict for each.">
+          <svg viewBox="0 0 960 190" role="img" aria-label="Diagram: the same usabl engine, with the same Providers and Gate, checks two surfaces, the application UI and the documentation pages. A repository that has both gets one run and one verdict covering both; a run produces one of four verdicts when something was checked, or no verdict.">
             <path class="flow-line" d="M240,50 H300 V100 H340" marker-end="url(#arrow)"></path>
             <path class="flow-line" d="M240,140 H300 V100 H340" marker-end="url(#arrow)"></path>
             <path class="flow-line" d="M560,85 H620 V60 H680" marker-end="url(#arrow)"></path>
