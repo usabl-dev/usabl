@@ -62,7 +62,7 @@ once when "DECIDE ONCE" lights. The dark "rules guard themselves" band underline
 
 VO: "This is the whole product on one screen. Three steps. It collects evidence on the real running
 page, including barriers a static scanner never sees, like focus trapped in a dialog after you press
-a key. It decides once: one gate, one verdict, one exit code, and a receipt anyone can re-check. Then
+a key. It decides once: one gate, one of four verdicts or none, one exit code, and on a verified run a receipt anyone can re-check. Then
 it shows that verdict everywhere the developer already works, the command line, the pull request, and
 the AI assistant. The assistant can write the code. It cannot certify its own work; the gate decides.
 None of this is complicated, and that is the point."
@@ -74,18 +74,19 @@ table of contents for the proof that follows.
 
 ## Innovation, stated plainly (for the pitch and Innovation Days)
 
-Five things that make usabl different. The combination is what is new, not each piece on its own. Say
+Five things usabl is built to do, stated as design goals rather than as claims about other tools. Say
 them plainly; the demo shows each one on the surfaces usabl is configured for.
 
-1. Accessibility as a verdict, not a report. Most tools hand you a list to triage. usabl returns one
-   deterministic verdict with an exit code and a re-checkable receipt. It is a gate, like a test, not
-   a document someone has to interpret.
+1. Accessibility as a verdict rather than a report. usabl returns one of four deterministic
+   verdicts with an exit code when something was checked, and a re-checkable receipt on a verified
+   run. It is a gate, like a test, rather than a document someone has to interpret.
 2. It sees what scanners cannot. A dialog that traps focus, an Escape that does not return focus, a
    menu that does not announce its state: these only exist after a key is pressed. usabl drives the
    interaction and checks the real focus and announcements. A static scanner reports zero.
 3. It is enforced on AI, and the AI handoff marks page text as data. As assistants write more of
-   our UI, the writer is grading its own work. usabl stops an assistant from declaring done on a
-   change the gate did not verify. And it hands the barrier to the assistant to fix with the page's
+   our UI, the writer is grading its own work. usabl's Stop hook blocks an assistant's first attempt
+   to stop on a blocking verdict unless the user has issued a one-use bypass; idle, no verdict, and
+   hook errors are disclosed and allowed. And it hands the barrier to the assistant to fix with the page's
    own text inside a labeled frame that names it as data rather than instructions. The frame
    delimiters are removed from page text, so the page cannot close its own frame. That is the timely
    part: an AI accessibility-fix loop where the page under repair is handed over as data.
@@ -127,8 +128,9 @@ Sees what a static scanner cannot
   page users actually see. A real AAP screen can take many seconds to settle; usabl waits for it.
 
 Honesty engineered in (the "silence is not evidence" family)
-- Records what each rule did per screen, so "checked and found nothing" is never confused with
-  "never applied here." A quiet scanner is ambiguous; usabl makes silence legible.
+- Records, for providers that report it (axe today), which rules examined an element on each
+  screen, so "checked and found nothing" is separated from "never applied here" for those rules.
+  The PatternFly and docs rulepacks do not report applicability yet.
 - Marks a barrier fixed only if the screen was actually cleanly scanned this run. Absence of a
   finding is not proof it was fixed.
 - The baseline refuses to accept debt from a run that admits it did not see everything, and can be
@@ -170,9 +172,10 @@ Small touches that show the care
 - The stop hook shows the top few gating barriers grouped by rule (a noise budget, default 5), not a
   wall and not one-at-a-time, with a pointer to the full list, respecting the model reader's context budget,
   and the whole message uses one untrusted frame instead of one per item to save tokens.
-- Finding identity is stable across markup churn (accessible name, then structure, then count), and
-  framework-generated ids (React useId, PatternFly random ids) are neutralized, so a barrier keeps
-  the same identity as the DOM reshuffles.
+- Finding identity is keyed by accessible name where one exists, otherwise by role plus a
+  structural path with positional selectors removed, or by count for rules with no usable element
+  identity. Framework-generated ids (React useId, PatternFly random ids) are neutralized. A change to
+  the name, role, or structural path changes the identity.
 - usabl checks its own published documentation. During this work the architecture diagram failed
   usabl's own contrast check in CI, and we fixed the diagram. The tool caught its own artifact.
 
@@ -222,7 +225,8 @@ VO: "They hand it to their assistant. It writes the code and says done. usabl bl
 moment it tries to say done, because it introduced a barrier and cannot certify its own work.
 It can propose the fix. The rules decide whether it passes."
 
-TEST STATUS: VERIFIED on usabl-app, final engine (main e909621), 2026-09-04. Fired a real Claude
+TEST STATUS: VERIFIED on usabl-app, engine at main e909621, 2026-09-04 (a later commit changed the
+noise budget; see the re-capture note below). Fired a real Claude
 Stop event at the stop-hook runner against the broken app. It returned decision: block, and the
 message the agent gets is:
 
@@ -233,11 +237,11 @@ message the agent gets is:
     fix: Move focus to the PatternFly <Modal> initial focus target on render.
     [END UNTRUSTED TEXT]
 
-The agent cannot declare done. It gets the gating barriers grouped by rule, each in plain words with
+The agent's first stop is blocked. It gets the gating barriers grouped by rule, each in plain words with
 its fix, and a pointer to `usabl check --json` for the rest. It is a short, ranked list, not a wall.
 
 RE-CAPTURE NEEDED (engine changed 2026-09-04): the capture above is from the pre-noise-budget engine,
-which showed one barrier. The final engine collapses to up to five gating rule groups (default budget
+which showed one barrier. The current engine collapses to up to five gating rule groups (default budget
 5), gating only, with a `[status severity] screen/layer/rule (×N)` headline and a show-all hint
 disclosing the total. Re-fire the stop hook against the broken app and paste the real block here
 before recording. Narrate "it gets the top few barriers, grouped, with a pointer to the full list,"
@@ -269,7 +273,7 @@ file and the line. They apply the real fix, and the verdict flips to verified. u
 receipt that records the exact code, policy, engine, and the scanner and browser that made the
 call, so anyone can re-check it."
 
-TEST STATUS: VERIFIED on usabl-app, final engine, 2026-09-04, full arc:
+TEST STATUS: VERIFIED on usabl-app, engine at main e909621, 2026-09-04, full arc:
 - Broken: `usabl check` returns REGRESSION, 9 findings, each with the barrier in plain words, the
   fix, and a source pointer.
 - Repair (real source change via demo:repair): re-run returns VERIFIED, nothing blocking, exit 0,
@@ -280,6 +284,7 @@ SOURCE GRANULARITY, molded from footage (VERIFIED exact-line, 2026-09-04): jump-
 resolves to the exact LINE, not just the file. Every finding on the fixture points at the source line
 of the broken control:
 - `pf/pf-focus-into-dialog` and `pf/pf-modal-focus-return` -> `src/pages/Clusters.tsx:26`
+- `pf/pf-toolbar-labeled-when-repeated` -> `src/pages/Deployments.tsx:77`
 - `axe/button-name`, `pf/pf-icon-button-name`, and the toolbar and row-action findings ->
   `src/pages/Deployments.tsx:72`, `:79`, `:90`, `:92`
 Each line is the exact element carrying the barrier, and on that line you can see the injected break
