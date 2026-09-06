@@ -104,7 +104,7 @@ This writes four files:
 - `.cursor/rules/usabl-accessibility.mdc` - a rule reminding the agent to self-check after UI edits
 
 The stop hook uses Cursor's `followup_message` protocol: on a blocking verdict it sends the agent one
-follow-up with the findings, and when Cursor reports that the loop is already active (`loop_count`
+follow-up with the disclosed result and reason, and when Cursor reports that the loop is already active (`loop_count`
 above 0) it allows the stop to prevent a recursive loop. Set `USABL_STORAGE_STATE=./.usabl-session.json` in your shell profile or prefix it
 when you open Cursor.
 
@@ -257,8 +257,10 @@ or `REGRESSION`, `NOT COVERED`, `APPROVAL REQUIRED`, or `IDLE`.
 The comment includes:
 - **Conformance summary** - deterministic new/carried/waived/fixed counts, judged counts, unresolved
   files, gaps, and whether the change is blocked.
-- **Receipt** (verified only) - `sourceTree`, `policyHash`, `runnerVersion`, `mintedAt`. This receipt
-  is bound to the exact code, policy, and engine. Change any of them and it stops verifying.
+- **Receipt** (verified only) - the comment displays `sourceTree`, `policyHash`, `runnerVersion`, and
+  `mintedAt`. The receipt itself binds four values: the exact source tree, the policy hash, the engine
+  version, and the scanner versions (axe-core, Playwright, Chromium); the comment does not display the
+  scanner versions. Change any of the four and the receipt stops verifying.
 - **Findings** - each new or carried finding with rule, impact, surface, and page-derived help text
   (neutralized for terminal safety).
 - **Model suggestions** - grouped under "Model suggestions (not blocking)" when present. These are
