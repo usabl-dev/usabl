@@ -5,6 +5,7 @@
  */
 import type { FsGlob, RequirementBundle, UsablConfig } from '../contracts/index.js';
 import { normalize } from './normalize.js';
+import { findDuplicateRequirementId, type RequirementIdSite } from './requirement-ids.js';
 import type { ParseBundleResult } from './schema.js';
 
 export type LoadRequirementsResult = ParseBundleResult & { path?: string };
@@ -62,6 +63,9 @@ export async function loadRequirements(fs: FsGlob, config: UsablConfig): Promise
   }
 
   const requirements: RequirementBundle['requirements'] = [];
+  // Which file each id came from. The flat bundle loses that, and the operator needs both files
+  // to fix a repeat, because the two requirements are usually not in the same one.
+  const idSites: RequirementIdSite[] = [];
 
   for (const path of paths) {
     if (!isWithinRoot(path, root)) {
@@ -86,6 +90,25 @@ export async function loadRequirements(fs: FsGlob, config: UsablConfig): Promise
     }
 
     requirements.push(...normalized.bundle.requirements);
+    for (const requirement of normalized.bundle.requirements) {
+      idSites.push({ id: requirement.id, path });
+    }
+  }
+
+  // Uniqueness is checked here, over every file at once, and not in the per-file schema.
+  // A requirement id becomes the rule `intake:<id>`, and a waiver matches on that rule plus the
+  // surface. Two requirements that share an id therefore share a rule, so one waiver silently
+  // covers a requirement its author never saw and a real unwaived barrier reports as verified.
+  // Each file on its own is valid in that case, so only the assembled bundle can see it.
+  //
+  // This returns a failure rather than throwing one. The dependency builder calls this loader
+  // outside any try and keeps building so the run can fail closed through the gate, and the run
+  // itself reads only `ok` and `path` from this result. The reason is therefore recorded here
+  // but is not yet shown to the operator; surfacing it is the run's job and is not done in this
+  // unit.
+  const duplicate = findDuplicateRequirementId(idSites);
+  if (duplicate !== null) {
+    return pathFailure(duplicate.path, duplicate.reason);
   }
 
   return {

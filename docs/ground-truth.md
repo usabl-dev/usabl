@@ -1274,6 +1274,17 @@ hard and repeatable). `mapRequirementsToProviders` emits deterministic drafts wi
 id `intake:<id>` for content and flow requirements; there is no code path in v0.2.0 that
 marks an intake draft as model-judgment.
 
+### Requirement ids are waiver identities
+
+A requirement id becomes the rule `intake:<id>`, and a waiver matches on that rule plus the
+surface. Two requirements that share an id therefore share a rule, and one waiver would cover
+a requirement its author never saw. The loader refuses a repeated id across every requirement
+file at once, since each file can be valid on its own, and names both files. A requirement id
+also follows the same character grammar as a surface id (section 22): no whitespace, no
+invisible or control character, no assigned character that renders as blank, and NFC form.
+A refused character is reported by position and code point, never printed back. Either
+failure is `approval_required`, returned from the loader rather than thrown.
+
 ---
 
 ## 14. Reports (accessible docs output)
@@ -1595,7 +1606,9 @@ The grammar does not claim more than it delivers. It does not stop confusables a
 so a Latin `a` and a Cyrillic `a` are both accepted and stay distinct ids. That is deliberate:
 both screens are scanned, both appear in receipt coverage, and waiver matching is exact, so no
 screen is lost by it. Unassigned code points are accepted too, because rejecting them would
-make an id's validity depend on which Unicode version the running Node build carries.
+make an id's validity depend on which Unicode version the running Node build carries. The
+same grammar governs requirement ids (section 13), so one product has one rule for what an id
+may contain.
 
 A blank or repeated id is refused when the config is read. Left in, it would collapse two
 screens into one entry: the second screen is dropped from the scan while its changed files

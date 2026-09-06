@@ -14,6 +14,7 @@ import type {
   Requirement,
   RequirementBundle,
 } from '../contracts/index.js';
+import { describeRequirementIdProblem } from './requirement-ids.js';
 
 export type ParseBundleResult =
   | { ok: true; bundle: RequirementBundle }
@@ -70,6 +71,21 @@ const requirementSchema = z
   })
   .strict()
   .superRefine((requirement, ctx) => {
+    // The id becomes the rule a waiver matches on, so it has to be readable as an identity before
+    // anything else looks at it. This runs per requirement because it is a shape rule for one
+    // field. Uniqueness needs the whole directory and is checked by the loader. An empty id is
+    // already reported by the field rule above, so it is not reported a second time here.
+    if (requirement.id.length > 0) {
+      const idProblem = describeRequirementIdProblem(requirement.id);
+      if (idProblem !== null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['id'],
+          message: idProblem,
+        });
+      }
+    }
+
     if (requirement.kind !== requirement.assertion.type) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

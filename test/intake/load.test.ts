@@ -251,4 +251,140 @@ requirements:
     const guardedSet = buildGuardedSet(testConfig({ requirements: 'requirements/' }));
     expect(guardedSet).toContain('requirements/');
   });
+
+  function requirementFile(id: string, selector: string): string {
+    return `
+version: 1
+requirements:
+  - id: ${id}
+    kind: content
+    surface: clusters
+    description: account text
+    assertion:
+      type: content
+      selector: ${selector}
+      expectedText: Account name
+    approved: true
+`;
+  }
+
+  it('fails closed when two files in the bundle declare the same requirement id', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/name.yaml', 'requirements/email.yaml'], {
+        'requirements/email.yaml': requirementFile('account-name', 'p.email'),
+        'requirements/name.yaml': requirementFile('account-name', 'h1'),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      verdict: 'approval_required',
+      path: 'requirements/name.yaml',
+    });
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('account-name');
+    expect(result.reason).toContain('requirements/name.yaml');
+    expect(result.reason).toContain('requirements/email.yaml');
+  });
+
+  it('fails closed when one file declares the same requirement id twice', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/both.yaml'], {
+        'requirements/both.yaml': `
+version: 1
+requirements:
+  - id: account-name
+    kind: content
+    surface: clusters
+    description: account name heading
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Account name
+    approved: true
+  - id: account-name
+    kind: content
+    surface: clusters
+    description: account email label
+    assertion:
+      type: content
+      selector: p.email
+      expectedText: Account name
+    approved: true
+`,
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      verdict: 'approval_required',
+      path: 'requirements/both.yaml',
+    });
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('account-name');
+  });
+
+  it('accepts distinct requirement ids across files', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/name.yaml', 'requirements/email.yaml'], {
+        'requirements/email.yaml': requirementFile('account-email', 'p.email'),
+        'requirements/name.yaml': requirementFile('account-name', 'h1'),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses a requirement id that hides a character, by position and code point', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/a.yaml'], {
+        'requirements/a.yaml': requirementFile('"account\\u2800name"', 'h1'),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result).toMatchObject({ ok: false, verdict: 'approval_required', path: 'requirements/a.yaml' });
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('requirements[0].id');
+    expect(result.reason).toContain('at position 8');
+    expect(result.reason).toContain('U+2800');
+    expect(result.reason).not.toContain('\u2800');
+  });
+
+  it('does not echo a terminal escape sequence carried by a rejected id', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/a.yaml'], {
+        'requirements/a.yaml': `
+version: 1
+requirements:
+  - id: "boom\\u001b[2Jclear"
+    kind: content
+    surface: clusters
+    description: first
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Account name
+    approved: true
+`,
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).not.toContain('\u001b');
+    expect(result.reason).toContain('U+001B');
+  });
 });
