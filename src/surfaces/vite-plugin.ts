@@ -186,6 +186,18 @@ function parseHostHeader(hostHeader: string): Authority | null {
   return { hostname, port: Number(rest.slice(1)) };
 }
 
+// One spelling for a hostname wherever it comes from. Vite's config carries an IPv6 bind address
+// without brackets, "fd00::1", while an HTTP Host header and URL.hostname carry it bracketed,
+// "[fd00::1]". Comparing the two spellings never matched, so a configured IPv6 host was never
+// allowed. Everything is compared in the bracketed, lowercased form.
+function normalizeHostname(hostname: string): string {
+  const lower = hostname.trim().toLowerCase();
+  if (lower.includes(':') && !lower.startsWith('[')) {
+    return '[' + lower + ']';
+  }
+  return lower;
+}
+
 function isLocalHostname(hostname: string, configuredHost: string | null): boolean {
   if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]') {
     return true;
@@ -220,11 +232,12 @@ function countHeader(rawHeaders: string[] | undefined, name: string): number {
 // through DNS rebinding or a cross-origin fetch.
 //
 // The Host must name a local host or the configured bind host, on this server's port. When an Origin
-// is present it must match exactly, scheme and hostname and effective port, either the origin this
-// request's own Host names under the server's scheme, or the configured dev origin. "null" is not an
-// origin the page can be trusted from, so it is refused. A request carrying two Host headers is
-// refused outright: the folded header keeps one of them and which one depends on the runtime, so a
-// check on the folded value could be steered by header order.
+// is present it must be a browser's exact serialization, scheme://host[:port] and nothing more, and
+// it must match scheme, hostname, and effective port against either the origin this request's own
+// Host names under the server's scheme, or the configured dev origin. "null" is not an origin the
+// page can be trusted from, so it is refused. A request carrying two Host headers is refused
+// outright: the folded header keeps one of them and which one depends on the runtime, so a check on
+// the folded value could be steered by header order.
 export function isRequestFromDevOrigin(req: IncomingRequest, server: DevServerOrigin): boolean {
   if (countHeader(req.rawHeaders, 'host') > 1 || Array.isArray(req.headers?.host)) {
     return false;
@@ -253,6 +266,12 @@ export function isRequestFromDevOrigin(req: IncomingRequest, server: DevServerOr
   try {
     origin = new URL(originHeader.trim());
   } catch {
+    return false;
+  }
+  // A browser serializes Origin as exactly scheme://host[:port], lowercase, with no path, query,
+  // fragment, or default port. Anything else was not written by a browser's Origin logic, so it is
+  // refused rather than parsed leniently.
+  if (origin.origin !== originHeader.trim()) {
     return false;
   }
   const originScheme = origin.protocol === 'https:' ? 'https' : origin.protocol === 'http:' ? 'http' : null;
@@ -518,7 +537,7 @@ export function usablVitePlugin(opts: {
     const host = config?.host;
     // A string host is a specific bind address. true means all interfaces and false means
     // localhost, neither of which names an extra allowed host, so only a string is captured.
-    configuredHost = typeof host === 'string' ? host.toLowerCase() : null;
+    configuredHost = typeof host === 'string' ? normalizeHostname(host) : null;
     configuredPort = typeof config?.port === 'number' ? config.port : null;
     scheme = config?.https ? 'https' : 'http';
   };

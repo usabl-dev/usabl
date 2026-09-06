@@ -721,6 +721,108 @@ describe('usablVitePlugin', () => {
     }
   });
 
+  it('runs the engine once for a burst of interleaved watcher events and reads', async () => {
+    // change, add, and unlink land a few milliseconds apart with reads, one of them fresh, between
+    // them. That is one save as the file system reports it. It must cost one engine run, every
+    // reader in the burst must receive that run, and one notification goes out when it settles.
+    let runCount = 0;
+    const plugin = usablVitePlugin({
+      run: async () => {
+        runCount += 1;
+        return baseResult({ summary: `run ${runCount}` });
+      },
+    });
+    const watcherHandlers = new Map<string, Array<() => void>>();
+    const sentEvents: Array<{ type: string; event: string }> = [];
+    const middlewares: Array<
+      (
+        req: { method?: string; url?: string; headers?: Record<string, string | string[] | undefined> },
+        res: FakeResponse,
+        next: () => void,
+      ) => void | Promise<void>
+    > = [];
+    plugin.configureServer?.({
+      middlewares: {
+        use(handler) {
+          middlewares.push(handler);
+        },
+      },
+      ws: {
+        send(payload) {
+          sentEvents.push(payload);
+        },
+      },
+      watcher: {
+        on(event, handler) {
+          const list = watcherHandlers.get(event) ?? [];
+          list.push(handler);
+          watcherHandlers.set(event, list);
+        },
+      },
+    });
+    const middleware = middlewares[0];
+    if (middleware === undefined) {
+      throw new Error('expected middleware registration');
+    }
+    const fire = (event: string): void => {
+      for (const handler of watcherHandlers.get(event) ?? []) {
+        handler();
+      }
+    };
+    const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+    await callMiddleware(middleware, '/__usabl/result');
+    expect(runCount).toBe(1);
+
+    fire('change');
+    const afterChange = callMiddleware(middleware, '/__usabl/result');
+    await pause(20);
+    fire('add');
+    const afterAdd = callMiddleware(middleware, '/__usabl/result?fresh=1');
+    await pause(20);
+    fire('unlink');
+    const afterUnlink = callMiddleware(middleware, '/__usabl/result');
+    await pause(20);
+    // The wave is still open: nothing has run and nothing has been announced.
+    expect(runCount).toBe(1);
+    expect(sentEvents.length).toBe(0);
+
+    const responses = await Promise.all([afterChange, afterAdd, afterUnlink]);
+    expect(runCount).toBe(2);
+    expect(responses.map((response) => JSON.parse(response.body).summary)).toEqual(['run 2', 'run 2', 'run 2']);
+    expect(sentEvents).toEqual([{ type: 'custom', event: 'usabl:refresh' }]);
+
+    // The browser's read after the notification is that same run.
+    const afterNotification = await callMiddleware(middleware, '/__usabl/result');
+    expect(JSON.parse(afterNotification.body).summary).toBe('run 2');
+    expect(runCount).toBe(2);
+  });
+
+  it('accepts a configured IPv6 host and refuses an Origin that is not a bare origin', async () => {
+    const plugin = usablVitePlugin({ run: async () => baseResult({}) });
+    // Vite carries an IPv6 bind address without brackets. The Host header carries it bracketed.
+    plugin.configResolved?.({ command: 'serve', server: { host: 'fd00::1', port: 4000 } });
+    const middleware = getMiddleware(plugin);
+    const status = async (headers: Record<string, string>): Promise<number> => {
+      const response = makeResponse();
+      await middleware({ method: 'GET', url: '/__usabl/result', headers }, response, () => {});
+      return response.statusCode;
+    };
+
+    expect(await status({ host: '[fd00::1]:4000' })).toBe(200);
+    expect(await status({ host: '[fd00::1]:4000', origin: 'http://[fd00::1]:4000' })).toBe(200);
+    expect(await status({ host: 'localhost:4000', origin: 'http://[fd00::1]:4000' })).toBe(200);
+
+    // A browser writes Origin as scheme://host[:port] and nothing else. Anything more was not
+    // written by a browser's Origin logic.
+    expect(await status({ host: 'localhost:4000', origin: 'http://localhost:4000/' })).toBe(403);
+    expect(await status({ host: 'localhost:4000', origin: 'http://localhost:4000/path' })).toBe(403);
+    expect(await status({ host: 'localhost:4000', origin: 'http://localhost:4000?q=1' })).toBe(403);
+    expect(await status({ host: 'localhost:4000', origin: 'http://localhost:4000#frag' })).toBe(403);
+    expect(await status({ host: 'localhost:4000', origin: 'HTTP://LOCALHOST:4000' })).toBe(403);
+    expect(await status({ host: 'localhost:4000', origin: 'http://localhost:4000' })).toBe(200);
+  });
+
   it('rejects the result and client endpoints when the Host header is not local', async () => {
     // These handlers run before Vite validates the Host header and they end the response, so a DNS
     // rebinding request that reaches them would otherwise read back the workspace root, source paths,
