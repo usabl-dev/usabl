@@ -596,3 +596,111 @@ describe('secret redaction around control stripping', () => {
     expect(out).toBe(`${joiner}before token=[REDACTED] after${joiner}`);
   });
 });
+
+describe('secret redaction through invisible characters inside a value', () => {
+  // A key name split by an invisible character is one case. A value split by one is the other,
+  // and it used to leak: the plain reading matched the value up to the invisible character and
+  // replaced that prefix, and the readable reading then found "[REDACTED]" where the value had
+  // been and could not recover the rest. Every case here asserts that the whole value is gone.
+
+  const ZWSP = String.fromCodePoint(0x200b);
+  const JOINER = String.fromCodePoint(0x200d);
+  const TAG_A = String.fromCodePoint(0xe0061);
+  const VALUE = '1234567834567890';
+  const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signaturepart';
+
+  const split = (text: string, index: number, splitter: string): string =>
+    text.slice(0, index) + splitter + text.slice(index);
+
+  const scrubbedSummary = (summary: string): string =>
+    scrubResult(baseResult({ summary })).summary;
+
+  it('redacts a token value split at every position', () => {
+    for (let index = 1; index < VALUE.length; index += 1) {
+      expect(redactSecrets(`token=${split(VALUE, index, ZWSP)}`)).toBe('token=[REDACTED]');
+    }
+  });
+
+  it('redacts a bare JWT split at every position', () => {
+    for (let index = 1; index < JWT.length; index += 1) {
+      expect(redactSecrets(split(JWT, index, ZWSP))).toBe('[REDACTED]');
+    }
+  });
+
+  it('redacts a value split late, after the plain reading already has a match', () => {
+    // Eight value characters are enough for the plain token pattern, so the split lands where a
+    // prefix-only redaction would have left the tail behind.
+    expect(redactSecrets(`token=${split(VALUE, 8, ZWSP)}`)).toBe('token=[REDACTED]');
+    expect(redactSecrets(`token=${split(VALUE, VALUE.length - 1, TAG_A)}`)).toBe(
+      'token=[REDACTED]',
+    );
+    expect(redactSecrets(split(JWT, 49, ZWSP))).toBe('[REDACTED]');
+    expect(redactSecrets(`secret=${split('hunter2xyz', 9, TAG_A)}`)).toBe('secret=[REDACTED]');
+  });
+
+  it('redacts a value split by two different invisible characters', () => {
+    const value = split(split(VALUE, 12, JOINER), 4, ZWSP);
+
+    expect(redactSecrets(`token=${value}`)).toBe('token=[REDACTED]');
+    expect(redactSecrets(split(split(JWT, 40, TAG_A), 5, ZWSP))).toBe('[REDACTED]');
+  });
+
+  it('redacts a value split by the same character at every position of the whole line', () => {
+    const framed = `note: to${ZWSP}ken=${split(VALUE, 10, ZWSP)} and ${split(JWT, 30, ZWSP)}`;
+    const out = scrubbedSummary(framed);
+
+    expect(out).toBe('note: token=[REDACTED] and [REDACTED]');
+  });
+
+  // One or two characters from every block the neutralizer preserves. The full set is more than
+  // four thousand code points and is swept outside the suite; this holds a sample of each range
+  // so a change to any one block is caught here.
+  const PRESERVED_SAMPLE: readonly number[] = [
+    0x00ad, 0x034f, 0x115f, 0x1160, 0x17b4, 0x17b5, 0x180b, 0x180f, 0x200b, 0x200c, 0x200d,
+    0x2060, 0x2065, 0x206a, 0x206f, 0x3164, 0xfe00, 0xfe0f, 0xfeff, 0xffa0, 0xfff0, 0xfff8,
+    0x1bca0, 0x1bca3, 0x1d173, 0x1d17a, 0xe0000, 0xe0001, 0xe007f, 0xe0100, 0xe0fff,
+  ];
+
+  it('redacts a value split by a character from every preserved range', () => {
+    for (const code of PRESERVED_SAMPLE) {
+      const splitter = String.fromCodePoint(code);
+
+      expect(neutralize(`a${splitter}b`)).toBe(`a${splitter}b`);
+      for (const index of [1, 8, VALUE.length - 1]) {
+        expect(redactSecrets(`token=${split(VALUE, index, splitter)}`)).toBe('token=[REDACTED]');
+      }
+      for (const index of [3, 21, 49]) {
+        expect(redactSecrets(split(JWT, index, splitter))).toBe('[REDACTED]');
+      }
+      expect(redactSecrets(`password=${split('hunter2xyz', 4, splitter)}`)).toBe(
+        'password=[REDACTED]',
+      );
+    }
+  });
+
+  it('still redacts harmless text that only reads as a credential once looked through', () => {
+    // A key name that spells "token=" or "secret=" only with the invisible characters taken out
+    // is redacted anyway. That is a false positive on purpose: the text reads as a credential to
+    // anyone looking at it, and hiding a harmless value costs less than printing a real one.
+    expect(redactSecrets(`to${ZWSP}ken=harmlessvalue`)).toBe('token=[REDACTED]');
+    expect(redactSecrets(`sec${JOINER}ret=nothing-here`)).toBe('secret=[REDACTED]');
+  });
+
+  it('leaves international text and mathematics that need invisible characters intact', () => {
+    // A Persian phrase with a zero width non-joiner and an equals sign after it, and a function
+    // application written with the invisible times operator. Neither spells a credential anchor,
+    // so neither is touched, joiners and operators included.
+    const persian = `نمی${String.fromCodePoint(0x200c)}خواهم=آزمون`;
+    const math = `f${String.fromCodePoint(0x2062)}(x)=y`;
+
+    expect(redactSecrets(persian)).toBe(persian);
+    expect(redactSecrets(math)).toBe(math);
+    expect(scrubbedSummary(`${persian} ${math}`)).toBe(`${persian} ${math}`);
+  });
+
+  it('redacts a bearer credential once, not twice', () => {
+    // Two patterns cover an authorization header. They are one credential seen two ways, so the
+    // widest match is what gets written, rather than one redaction inside another.
+    expect(redactSecrets('Authorization: Bearer secret123')).toBe('Authorization: Bearer [REDACTED]');
+  });
+});

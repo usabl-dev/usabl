@@ -185,13 +185,6 @@ const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
 // match and does not need a second look.
 const ANCHOR_HINT = /authorization|token|password|secret|storagestate|eyJ/i;
 
-function applyValuePatterns(text: string): string {
-  return VALUE_PATTERNS.reduce(
-    (current, entry) => current.replace(entry.pattern, entry.replacement),
-    text,
-  );
-}
-
 function expandReplacement(template: string, match: RegExpExecArray): string {
   return template.replace(/\$(\d)/g, (_whole, digit: string) => match[Number(digit)] ?? '');
 }
@@ -237,94 +230,124 @@ function readableSourceIndex(text: string): Int32Array {
   return sourceIndex;
 }
 
+/** A stretch of the original text to replace, in code units of the original, and what replaces it. */
+interface RedactionSpan {
+  start: number;
+  end: number;
+  text: string;
+  order: number;
+}
+
 /**
- * Redacts credentials whose key name was split by invisible characters.
+ * Every credential match in one reading of the text, as spans of the original.
  *
- * The patterns match literal text, and the neutralizer deliberately keeps every invisible
- * character that carries meaning, so "to", zero width space, "ken=" reaches this point intact and
- * matches nothing while still reading as a token to anyone looking at it. The anchors are matched
- * against the text with those characters taken out, and the span that gets replaced is the real
- * span in the original, the same way the frame marker search cuts a split marker.
- *
- * Every pattern gets this, not just the key names. An invisible character inside a value that is
- * already shaped like a credential, a JWT for instance, has no legitimate reading either, and the
- * value still reads as a credential to a person looking at it.
- *
- * Inside a span being redacted the anchor is written in its readable form, because a redaction
- * already replaces that whole span. Text outside a redacted span keeps every character it had.
+ * The reading is either the original itself or the readable projection of it. A match found in a
+ * projection is mapped back to the original through sourceIndex, so the span that gets replaced
+ * is the real span in the original, the same way the frame marker search cuts a split marker.
+ * The end of a mapped span sits right after the last visible character of the match, so invisible
+ * characters just past a value stay where they were.
  */
-function redactThroughInvisible(text: string): string {
-  // Three gates, cheapest first, so ordinary text pays almost nothing. Only text carrying an
-  // invisible character can be hiding an anchor, and only text that reads as having an anchor is
-  // worth mapping back to. The hint has to be asked of the readable text, because the whole point
-  // is that the raw text does not spell the anchor.
-  if (!LOOK_THROUGH_PATTERN.test(text)) {
-    return text;
-  }
-
-  const readable = readableText(text);
-  if (!ANCHOR_HINT.test(readable)) {
-    return text;
-  }
-
-  const sourceIndex = readableSourceIndex(text);
-
-  // Patterns are collected against one projection rather than applied one after another, so the
-  // cost of building it is paid once. Where two patterns cover the same text the earlier one in
-  // the list wins, which is the order they would have run in anyway.
-  const spans: Array<{ start: number; end: number; text: string }> = [];
-  for (const entry of VALUE_PATTERNS) {
+function collectRedactionSpans(
+  reading: string,
+  sourceIndex: Int32Array | null,
+  spans: RedactionSpan[],
+): void {
+  VALUE_PATTERNS.forEach((entry, order) => {
     entry.pattern.lastIndex = 0;
-    let match = entry.pattern.exec(readable);
+    let match = entry.pattern.exec(reading);
     while (match !== null) {
       if (match[0].length === 0) {
         entry.pattern.lastIndex += 1;
       } else {
-        spans.push({
-          start: match.index,
-          end: match.index + match[0].length,
-          text: expandReplacement(entry.replacement, match),
-        });
+        const first = match.index;
+        const last = match.index + match[0].length - 1;
+        const start = sourceIndex === null ? first : (sourceIndex[first] ?? first);
+        const end = (sourceIndex === null ? last : (sourceIndex[last] ?? last)) + 1;
+        spans.push({ start, end, text: expandReplacement(entry.replacement, match), order });
       }
-      match = entry.pattern.exec(readable);
+      match = entry.pattern.exec(reading);
     }
     entry.pattern.lastIndex = 0;
-  }
-
-  if (spans.length === 0) {
-    return text;
-  }
-
-  spans.sort((left, right) => left.start - right.start);
-
-  let out = '';
-  let copied = 0;
-  let lastEnd = -1;
-  for (const span of spans) {
-    if (span.start < lastEnd) {
-      continue;
-    }
-    const start = sourceIndex[span.start] ?? 0;
-    const end = (sourceIndex[span.end - 1] ?? start) + 1;
-    out += text.slice(copied, start) + span.text;
-    copied = end;
-    lastEnd = span.end;
-  }
-
-  return out + text.slice(copied);
+  });
 }
 
 /**
  * Redacts credential-shaped values while preserving nearby context.
  * This is value hygiene only and does not strip control sequences.
  *
- * Two passes, because each catches what the other cannot. The plain pass reads the text as it
- * stands, which is what the bare-JWT pattern needs: it depends on a word boundary that an
- * invisible character can provide. The second reads the text as a person sees it, which is what a
- * key name split by an invisible character needs.
+ * The text is read twice and cut once. The plain reading takes the text as it stands, which is
+ * what the bare-JWT pattern needs: it depends on a word boundary that an invisible character can
+ * provide. The readable reading takes the text as a person sees it, with the invisible characters
+ * out, which is what a key name split by an invisible character needs. The patterns match literal
+ * text, and the neutralizer deliberately keeps every invisible character that carries meaning, so
+ * "to", zero width space, "ken=" reaches this point intact and matches nothing in the plain
+ * reading while still reading as a token to anyone looking at it.
+ *
+ * Both readings are matched against the same unchanged original, and the spans they find are
+ * merged before anything is replaced. That order is what keeps a value whole. An invisible
+ * character late in a value lets the plain reading match a prefix of it, and if that prefix were
+ * replaced first the readable reading would find "[REDACTED]" where the value used to be and the
+ * rest of the value would survive. Cutting the union of every overlapping span instead means the
+ * widest match always wins, whichever reading found it.
+ *
+ * Every pattern gets the readable reading, not just the key names. An invisible character inside
+ * a value that is already shaped like a credential, a JWT for instance, has no legitimate reading
+ * either, and the value still reads as a credential to a person looking at it.
+ *
+ * Inside a span being redacted the anchor is written in its readable form, because a redaction
+ * already replaces that whole span. Text outside a redacted span keeps every character it had.
  */
 export function redactSecrets(text: string): string {
-  return redactThroughInvisible(applyValuePatterns(text));
+  const spans: RedactionSpan[] = [];
+
+  // Every pattern needs an anchor, so text that spells none in this reading cannot match and does
+  // not need the patterns run over it.
+  if (ANCHOR_HINT.test(text)) {
+    collectRedactionSpans(text, null, spans);
+  }
+
+  // The readable reading costs a projection of the whole text, so it is gated twice: only text
+  // carrying an invisible character can be hiding an anchor, and only a projection that spells
+  // one is worth mapping back to. The hint has to be asked of the readable text, because the
+  // whole point is that the raw text does not spell the anchor.
+  if (LOOK_THROUGH_PATTERN.test(text)) {
+    const readable = readableText(text);
+    if (ANCHOR_HINT.test(readable)) {
+      collectRedactionSpans(readable, readableSourceIndex(text), spans);
+    }
+  }
+
+  if (spans.length === 0) {
+    return text;
+  }
+
+  // Earliest start first. For one start, the widest span first, so its replacement is the one
+  // written; for one width, the earlier pattern in the list, which is the order they used to run.
+  spans.sort(
+    (left, right) => left.start - right.start || right.end - left.end || left.order - right.order,
+  );
+
+  let out = '';
+  let copied = 0;
+  let current: RedactionSpan | null = null;
+  for (const span of spans) {
+    if (current !== null && span.start < current.end) {
+      // Overlapping spans are one credential seen two ways. The cut grows to cover both.
+      current.end = Math.max(current.end, span.end);
+      continue;
+    }
+    if (current !== null) {
+      out += text.slice(copied, current.start) + current.text;
+      copied = current.end;
+    }
+    current = { ...span };
+  }
+  if (current !== null) {
+    out += text.slice(copied, current.start) + current.text;
+    copied = current.end;
+  }
+
+  return out + text.slice(copied);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
