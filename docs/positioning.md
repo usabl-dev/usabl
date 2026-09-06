@@ -49,10 +49,10 @@ CLI, AI assistant, browser overlay, CI, and docs.
 
 ## Competitive landscape
 
-Strong tools exist on every axis. No one ships the full integrated loop as a single
-product today.
+Strong tools exist on every axis. usabl's design goal is the full integrated loop as a
+single product; this section does not claim what other tools do or do not ship.
 
-| Category | Examples | What they do well | Where usabl goes further |
+| Category | Examples | What they do well | What usabl is built to add |
 |---|---|---|---|
 | **Accessibility scanners** | axe, Lighthouse, Pa11y, WAVE | Fast issue lists on a page | Verify the fix, gate completion, cover the full change set |
 | **CI regression tools** | Chromatic, Pa11y CI, MFA11y | Block new violations vs baseline | Same ratchet idea, plus AI gate, keyboard walk, SR evidence, PF rules |
@@ -118,10 +118,10 @@ result ties to the exact code state and can be re-checked by anyone.
 **Why it matters:** No tool sprawl, no conflicting scores, and standards stay
 enforceable as the codebase evolves.
 
-### Also unique (supporting, not headline)
+### Also part of the design (supporting, not headline)
 
-- **PatternFly rulepack** - purpose-built composition rules; empty slot for PF (FluentUI
-  has one, PF does not).
+- **PatternFly rulepack** - purpose-built composition rules for the design system our
+  products use.
 - **Coverage per change** - maps touched surfaces, runs the full stack on that set,
   and returns one of four verdicts, or none, for the whole change, with any surface it cannot reach flagged
   as not_covered.
