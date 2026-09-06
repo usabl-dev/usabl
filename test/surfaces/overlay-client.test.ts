@@ -1321,3 +1321,336 @@ describe('the overlay never shows green for a run that is not green', { timeout:
     await declaredButFailed.context().close();
   });
 });
+
+describe('the overlay never shows a stale result', { timeout: 40_000 }, () => {
+  it('ignores an older response that lands after a newer one', async () => {
+    // Two refreshes overlap. The newer request asks second but answers first, and the older request
+    // answers last carrying a verified result. Without a generation check the older, greener answer
+    // wins and the panel says verified while the engine says regression. This is not theoretical:
+    // the dev server replaces its single-flight wrapper on save while an older run is still going.
+    const regression = projectOverlay(result());
+    const staleVerified = projectOverlay(
+      result({ verdict: 'verified', summary: 'verified: stale', findings: [], exitCode: 0 }),
+    );
+
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    let served = 0;
+    await page.route('http://usabl.test/**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/__usabl/result') {
+        served += 1;
+        if (served === 1) {
+          // First load. Answer immediately so the panel settles before the race starts.
+          await route.fulfill({ contentType: 'application/json', body: JSON.stringify(regression) });
+          return;
+        }
+        if (served === 2) {
+          // The older of the two racing requests. Verified, and deliberately slow.
+          await new Promise((resolve) => setTimeout(resolve, 900));
+          await route.fulfill({ contentType: 'application/json', body: JSON.stringify(staleVerified) });
+          return;
+        }
+        // The newer request. Regression, and fast, so it lands first.
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify(regression) });
+        return;
+      }
+      await route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<!doctype html>
+          <html lang="en">
+            <head><title>Clean host</title></head>
+            <body>
+              <header><h1>Fleet operations</h1></header>
+              <main><button id="cluster-details" type="button">Host action</button></main>
+              <script type="module">${overlayClientSource}</script>
+            </body>
+          </html>`,
+      });
+    });
+    await page.goto('http://usabl.test/clusters');
+    await page.locator(OVERLAY).waitFor();
+    const panel = await openPanel(page);
+    await expect.poll(async () => bannerWord(page)).toBe('✕Regression');
+
+    const recheck = panel.getByRole('button', { name: 'Check again' });
+    await recheck.click();
+    // The slow verified request is now in flight. Start the newer one on top of it.
+    await recheck.click();
+
+    await expect.poll(async () => bannerWord(page), { timeout: 10_000 }).toBe('✕Regression');
+    // Wait past the slow response so a late overwrite would have had time to land.
+    await expect
+      .poll(async () => bannerWord(page), { timeout: 4000, interval: 250 })
+      .toBe('✕Regression');
+    expect(await panel.locator('.banner-exit').textContent()).toBe('exit code 1');
+
+    await context.close();
+  });
+
+  it('collapses a burst of refresh requests into one active and one queued', async () => {
+    const page = await mount(null, {
+      path: '/clusters',
+      responseDelayMs: 250,
+      payloads: [projectOverlay(result())],
+    });
+    const panel = await openPanel(page);
+    await expect.poll(async () => panel.locator('.finding-button').count()).toBe(2);
+
+    const before = await page.evaluate(
+      () => performance.getEntriesByType('resource').filter((e) => e.name.includes('/__usabl/result')).length,
+    );
+    const recheck = panel.getByRole('button', { name: 'Check again' });
+    for (let press = 0; press < 12; press += 1) {
+      await recheck.dispatchEvent('click');
+    }
+    await expect.poll(async () => bannerWord(page), { timeout: 10_000 }).toBe('✕Regression');
+
+    const after = await page.evaluate(
+      () => performance.getEntriesByType('resource').filter((e) => e.name.includes('/__usabl/result')).length,
+    );
+    // Twelve presses, at most one in flight plus one queued, so far fewer than twelve reads.
+    expect(after - before).toBeLessThanOrEqual(2);
+    expect(after - before).toBeGreaterThanOrEqual(1);
+
+    await page.context().close();
+  });
+});
+
+describe('the overlay does not hand the page easy levers', { timeout: 40_000 }, () => {
+  it('captures fetch at load so a later swap cannot feed it a forged result', async () => {
+    const page = await mount(projectOverlay(result()), { path: '/clusters' });
+    // Replace fetch AFTER the overlay has loaded, then make it re-read.
+    await page.evaluate(() => {
+      (window as unknown as { __usablForged: number }).__usablForged = 0;
+      window.fetch = async () => {
+        (window as unknown as { __usablForged: number }).__usablForged += 1;
+        return new Response('{"verdict":"verified","exitCode":0}', { status: 200 });
+      };
+    });
+    const panel = await openPanel(page);
+    await panel.getByRole('button', { name: 'Check again' }).click();
+    await page.waitForTimeout(400);
+
+    // The overlay used its own reference, so the forged fetch never ran and the verdict is unchanged.
+    expect(await bannerWord(page)).toBe('✕Regression');
+    expect(await page.evaluate(() => (window as unknown as { __usablForged: number }).__usablForged))
+      .toBe(0);
+    expect(await panel.getByText('This view may not be the real result').count()).toBe(0);
+
+    await page.context().close();
+  });
+
+  it('says outright that it cannot vouch for a result when the page swapped fetch first', async () => {
+    // A script that runs BEFORE the overlay wins the race, and no amount of capturing changes that
+    // inside the page's own realm. What the overlay owes the developer in that case is to say it
+    // cannot tell, rather than to present a result it has no way to stand behind.
+    const page = await mount(projectOverlay(result()), {
+      path: '/clusters',
+      initScript: `
+        window.fetch = async () => new Response(JSON.stringify({
+          verdict: 'verified', exitCode: 0, findings: [], summary: 'forged',
+          coverage: { affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true },
+          receipt: null, dirtyGuardedPaths: [], paidDownCount: 0,
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      `,
+    });
+    const panel = await openPanel(page);
+
+    expect(
+      await panel.getByRole('heading', { name: 'This view may not be the real result' }).isVisible(),
+    ).toBe(true);
+    expect(
+      await panel
+        .getByText('usabl cannot tell whether what you see below came from the engine.', { exact: false })
+        .isVisible(),
+    ).toBe(true);
+    // The warning is the first thing in the panel body, above the verdict it qualifies.
+    expect(
+      await panel.locator('.panel-body > *').first().getAttribute('class'),
+    ).toContain('tamper-notice');
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  it('has no window event that lets the page force a re-read', async () => {
+    const page = await mount(null, {
+      path: '/clusters',
+      payloads: [
+        projectOverlay(result()),
+        projectOverlay(result({ verdict: 'verified', findings: [], exitCode: 0 })),
+      ],
+    });
+    const panel = await openPanel(page);
+    await expect.poll(async () => bannerWord(page)).toBe('✕Regression');
+
+    // The old testability hook. Dispatching it must do nothing at all.
+    await page.evaluate(() => {
+      for (const name of ['usabl:refresh', 'usabl:reload', 'usabl:check']) {
+        window.dispatchEvent(new Event(name));
+      }
+    });
+    await page.waitForTimeout(300);
+    expect(await bannerWord(page)).toBe('✕Regression');
+
+    // The control in the panel is the path that does work, and it is user driven.
+    await panel.getByRole('button', { name: 'Check again' }).click();
+    await expect.poll(async () => bannerWord(page)).toBe('✓Verified');
+
+    await page.context().close();
+  });
+
+  it('cannot be suppressed by a page that pre-creates the overlay host id', async () => {
+    const page = await mount(projectOverlay(result()), {
+      path: '/clusters',
+      // The old fixed id. A page that squats on it used to make the overlay render into a node with
+      // no shadow root, which threw and left the developer with no inspector and no warning.
+      initScript: `
+        document.addEventListener('DOMContentLoaded', () => {
+          const squatter = document.createElement('div');
+          squatter.id = '__usabl-overlay';
+          document.body.appendChild(squatter);
+        });
+      `,
+    });
+
+    // The real inspector is present and correct beside the squatter.
+    expect(await page.locator(OVERLAY).count()).toBe(1);
+    expect(await badgeLabel(page)).toBe(
+      'usabl: regression, 2 issues on this screen. Open inspector.',
+    );
+    const panel = await openPanel(page);
+    expect(await panel.locator('.finding-button').count()).toBe(2);
+
+    await page.context().close();
+  });
+});
+
+describe('the overlay only touches what it owns', { timeout: 40_000 }, () => {
+  it('refuses to locate an element that contains the inspector', async () => {
+    // "body:has(...)" matches body itself. Locating used to scroll the whole document and put a
+    // borrowed tabindex on body, which is a page-owned element the overlay has no business changing.
+    const page = await mount(
+      projectOverlay(
+        result({ findings: [finding({ elementPath: 'body', elementName: 'the whole document' })] }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+    await panel.locator('.finding-button').click();
+
+    expect(await page.locator(HIGHLIGHT).count()).toBe(0);
+    expect(
+      await page.locator(OVERLAY).locator('.locate-status').textContent(),
+    ).toContain('it is not on the page right now');
+
+    await panel.getByRole('button', { name: 'Focus element' }).click();
+    expect(await page.locator('body').getAttribute('tabindex')).toBeNull();
+
+    await page.context().close();
+  });
+
+  it('leaves a page-owned tabindex exactly as it found it', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({ findings: [finding({ elementPath: '#plain-target', elementName: 'Plain paragraph' })] }),
+      ),
+      { path: '/clusters' },
+    );
+    // A second element the page owns, carrying the marker the old cleanup swept the document for.
+    await page.evaluate(() => {
+      const decoy = document.createElement('div');
+      decoy.id = 'page-owned';
+      decoy.setAttribute('tabindex', '-1');
+      decoy.setAttribute('data-usabl-temp-tabindex', 'true');
+      document.body.appendChild(decoy);
+    });
+
+    const panel = await openPanel(page);
+    const row = panel.locator('.finding-button');
+    await row.click();
+    await panel.getByRole('button', { name: 'Focus element' }).click();
+    await row.click();
+
+    // The element we borrowed is restored, and the page's own element is untouched.
+    expect(await page.locator('#plain-target').getAttribute('tabindex')).toBeNull();
+    expect(await page.locator('#page-owned').getAttribute('tabindex')).toBe('-1');
+
+    await page.context().close();
+  });
+});
+
+describe('the elsewhere guide never links off site', { timeout: 40_000 }, () => {
+  for (const hostile of ['//evil.example/x', '/\\evil.example/x', '//evil.example', '///evil.example/x']) {
+    it(`refuses to build a link for ${hostile}`, async () => {
+      // A pathname can begin with two slashes, which is a network-path reference: assigning it to an
+      // href sends the developer off site. The path is still shown as text so they can judge it.
+      const offsite = result({
+        coverage: {
+          changedFiles: ['src/app.tsx'],
+          affected: [
+            { screenId: 'clusters', url: 'http://127.0.0.1:5173/clusters', provenance: 'route-graph' },
+            { screenId: 'jobs', url: `http://127.0.0.1:5173${hostile}`, provenance: 'route-graph' },
+          ],
+          unresolvedFiles: [],
+          gaps: [],
+          nothingToCheck: false,
+        },
+        findings: [
+          finding({ screenId: 'clusters', whatUserExperiences: 'Clusters barrier.' }),
+          finding({ screenId: 'jobs', rule: 'r-jobs', whatUserExperiences: 'Jobs barrier.' }),
+        ],
+      });
+      const page = await mount(projectOverlay(offsite), { path: '/clusters' });
+      const panel = await openPanel(page);
+      const elsewhere = panel.locator('.elsewhere');
+
+      const hrefs = await elsewhere
+        .getByRole('link', { name: 'Go to this screen' })
+        .evaluateAll((links) => links.map((link) => (link as HTMLAnchorElement).href));
+      for (const href of hrefs) {
+        expect(new URL(href).origin).toBe('http://usabl.test');
+      }
+      expect(hrefs).toHaveLength(0);
+      expect(
+        await elsewhere.getByText('No link: that path does not resolve to this site.').isVisible(),
+      ).toBe(true);
+
+      await page.context().close();
+    });
+  }
+
+  it('still links a plain same-origin path', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          coverage: {
+            changedFiles: ['src/app.tsx'],
+            affected: [
+              { screenId: 'clusters', url: 'http://127.0.0.1:5173/clusters', provenance: 'route-graph' },
+              { screenId: 'jobs', url: 'http://127.0.0.1:5173/jobs', provenance: 'route-graph' },
+            ],
+            unresolvedFiles: [],
+            gaps: [],
+            nothingToCheck: false,
+          },
+          findings: [
+            finding({ screenId: 'clusters', whatUserExperiences: 'Clusters barrier.' }),
+            finding({ screenId: 'jobs', rule: 'r-jobs', whatUserExperiences: 'Jobs barrier.' }),
+          ],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+    const href = await panel
+      .getByRole('link', { name: 'Go to this screen' })
+      .evaluate((link) => (link as HTMLAnchorElement).href);
+    expect(href).toBe('http://usabl.test/jobs');
+
+    await page.context().close();
+  });
+});

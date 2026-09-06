@@ -24,9 +24,26 @@ export const overlayClientSource = `(() => {
   // page swapping window.fetch and feeding the inspector a result the engine never produced. Taking
   // our own references removes that lever. This is hardening, not a security boundary: the gate,
   // not the overlay, decides anything that matters.
+  const nativeToString = Function.prototype.toString;
   const nativeFetch = window.fetch.bind(window);
   const nativeResponseJson = Response.prototype.json;
   const nativeConsoleError = console.error.bind(console);
+
+  // Capturing only wins the race against a script that runs AFTER us. A script that runs BEFORE us
+  // has already replaced the global, and there is no honest way to recover the real one from inside
+  // the page's own realm. So we also check whether what we captured is the browser's own
+  // implementation. When it is not, the overlay says so on its own surface rather than presenting a
+  // result it cannot vouch for. Telling the developer we might be lying is worth more than a
+  // guarantee we cannot keep.
+  function looksNative(fn) {
+    try {
+      return nativeToString.call(fn).indexOf('[native code]') >= 0;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  const globalsReplaced = !looksNative(window.fetch) || !looksNative(Response.prototype.json);
 
   // A page cannot suppress the overlay by pre-creating an element with a known id, because the
   // overlay never looks its own host up by id. It keeps the reference it created. The random suffix
@@ -649,6 +666,16 @@ export const overlayClientSource = `(() => {
         white-space: nowrap;
         clip: rect(0 0 0 0);
         clip-path: inset(50%);
+      }
+
+      .tamper-notice {
+        border-top: 0;
+        border-bottom: 3px solid var(--amber);
+        background: var(--amber-light);
+      }
+
+      .tamper-notice h3 {
+        color: var(--amber-ink);
       }
 
       .more-note {
@@ -2110,14 +2137,35 @@ export const overlayClientSource = `(() => {
     badge.setAttribute('aria-label', view.label);
   }
 
+  // Shown whenever the page had already replaced a global the overlay reads results through. It is
+  // not a claim that anything was tampered with. It is a plain statement that usabl cannot tell.
+  function renderTamperNotice() {
+    if (!globalsReplaced) {
+      return null;
+    }
+    const section = make('section', 'section tamper-notice');
+    section.appendChild(make('h3', '', 'This view may not be the real result'));
+    section.appendChild(
+      make(
+        'p',
+        'notice',
+        'Something on this page replaced the browser functions usabl reads its result through, '
+          + 'before usabl loaded. usabl cannot tell whether what you see below came from the engine. '
+          + 'Run usabl check in a terminal to see the result the gate uses.',
+      ),
+    );
+    return section;
+  }
+
   function renderBody(host, payload, split) {
     const body = host.shadowRoot.querySelector('.panel-body');
+    const tamper = renderTamperNotice();
 
     if (state.error) {
       const section = make('section', 'section');
       section.appendChild(make('h3', '', 'No result to show'));
       section.appendChild(make('p', 'notice', payload.summary));
-      body.replaceChildren(section);
+      body.replaceChildren(...(tamper ? [tamper, section] : [section]));
       return;
     }
 
@@ -2126,11 +2174,14 @@ export const overlayClientSource = `(() => {
       section.appendChild(make('h3', '', 'Loading result'));
       section.appendChild(make('div', 'loading-line'));
       section.appendChild(make('div', 'loading-line'));
-      body.replaceChildren(section);
+      body.replaceChildren(...(tamper ? [tamper, section] : [section]));
       return;
     }
 
-    const children = [renderCurrentScreen(payload, split)];
+    // The notice goes first, above the verdict, because it changes how everything below it should
+    // be read.
+    const children = tamper ? [tamper] : [];
+    children.push(renderCurrentScreen(payload, split));
     const elsewhere = renderElsewhere(split);
     if (elsewhere) children.push(elsewhere);
     const receipt = renderReceipt(payload.receipt);
