@@ -31,6 +31,11 @@ const SPAWN_TIMEOUT_MS = 60_000;
 
 const TRUSTED_REF = 'origin/main';
 const CONFIG_PATH = 'usabl.config.json';
+// The one sentence the gap may say about docs. It has to be true whether the docs page was
+// scanned or not, so it points at the Result instead of asserting what happened.
+const DOCS_SENTENCE =
+  "Docs coverage is planned separately under usabl.docs.json; see this run's docs screens and gaps " +
+  'for what was actually checked.';
 const UNPARSEABLE_CONFIG = '{not-json';
 // Valid JSON with the wrong shape. The guard can read it (it only needs guardedPaths), but the
 // configuration parser rejects it, so the run has to disclose it the same way as broken JSON.
@@ -335,14 +340,63 @@ describe('an unreadable app configuration next to a changed docs page', () => {
       expect(requiredAggregate(enforced.exitCode).code).toBe(1);
 
       // The gap is attributed to the configuration and its text is true for this run: it is
-      // scoped to app screens and it says docs screens were still checked.
+      // scoped to app screens and it points at the docs screens rather than claiming them.
       const gap = result.coverage.gaps.find((entry) => entry.ref === CONFIG_PATH);
       expect(gap).toBeDefined();
       expect(gap?.state).toBe('not-covered');
       expect(gap?.reason).toContain(TRUSTED_REF);
       expect(gap?.reason).toContain('app configuration');
       expect(gap?.reason).toContain('no app screen was planned or checked');
-      expect(gap?.reason).toContain('Docs screens, if any changed, were still checked under usabl.docs.json');
+      expect(gap?.reason).toContain(DOCS_SENTENCE);
+      expect(gap?.reason).not.toContain('checked none of them');
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
+  it(
+    'does not claim the docs page was checked when invalid requirements stop every scan',
+    async () => {
+      // Every scan waits on valid policy input. With the requirements directory configured but
+      // empty, the docs page is planned and never scanned. The gap text must survive that: it may
+      // point at the docs screens, it may not assert they were checked.
+      const configWithRequirements: UsablConfig = { ...config, requirements: 'requirements/' };
+      const deps = makeFakeDeps({
+        files: {
+          [CONFIG_PATH]: JSON.stringify({ ...configWithRequirements, appBaseUrl: 'http://127.0.0.1:4000' }),
+          'usabl.docs.json': docsManifestBytes,
+        },
+        headContents: { [CONFIG_PATH]: UNPARSEABLE_CONFIG, 'usabl.docs.json': docsManifestBytes },
+        refContents: {
+          [TRUSTED_REF]: { [CONFIG_PATH]: UNPARSEABLE_CONFIG, 'usabl.docs.json': docsManifestBytes },
+        },
+        changed: [
+          { code: 'M', path: CONFIG_PATH },
+          { code: 'M', path: 'modules/getting-started.adoc' },
+        ],
+      });
+      const scanSpy = vi.spyOn(deps.checkRunner, 'scan');
+
+      const result = await run(deps, configWithRequirements, { trustedRef: TRUSTED_REF });
+      const enforced = enforceAccessibility(result);
+
+      // Planned, but not scanned. The Result must not carry evidence that does not exist.
+      expect(result.coverage.affected.map((screen) => screen.screenId)).toEqual(['getting-started']);
+      expect(scanSpy).not.toHaveBeenCalled();
+      expect(result.screens).toEqual([]);
+      expect(result.dirtyGuardedPaths).toContain('requirements');
+
+      expect(result.verdict).toBe('approval_required');
+      expect(result.coverage.nothingToCheck).toBe(false);
+      expect(result.accessibilityVerdict).toBe('not_covered');
+      expect(result.accessibilityExitCode).toBe(3);
+      expect(result.receipt).toBeNull();
+      expect(enforced.exitCode).toBe(3);
+      expect(requiredAggregate(enforced.exitCode).code).toBe(1);
+
+      const gap = result.coverage.gaps.find((entry) => entry.ref === CONFIG_PATH);
+      expect(gap).toBeDefined();
+      expect(gap?.reason).toContain(DOCS_SENTENCE);
+      expect(gap?.reason).not.toMatch(/docs screens[^.]*were (still )?checked/i);
       expect(gap?.reason).not.toContain('checked none of them');
     },
     SPAWN_TIMEOUT_MS,

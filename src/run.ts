@@ -356,9 +356,9 @@ interface ScanConfigResolution {
 }
 
 // The configuration only plans app screens. Docs screens are planned from usabl.docs.json, which
-// this run still reads, so a changed docs page is still scanned and its findings are real evidence.
-// The wording has to say so: a reader who sees a docs finding next to this gap must not conclude
-// the gap is lying, and a reader who sees no findings must not conclude the app was checked.
+// this run still reads, so a changed docs page can still be scanned. Whether it was scanned is
+// decided later, by the same policy checks every scan waits on, so the wording must not claim it.
+// It points the reader at the docs screens and gaps on this Result, which record what happened.
 function unreadableScanConfigGap(trustedRef: string, detail: string): CoverageGap {
   return {
     ref: CONFIG_PATH,
@@ -367,20 +367,22 @@ function unreadableScanConfigGap(trustedRef: string, detail: string): CoverageGa
       `${CONFIG_PATH} changed on this branch, so the app configuration was read from ${trustedRef} ` +
       `instead of the working tree, and that document could not be read: ${detail}. usabl therefore ` +
       'does not know which app screens the changed files belong to, so no app screen was planned ' +
-      'or checked. Docs screens, if any changed, were still checked under usabl.docs.json. This run ' +
-      `cannot verify accessibility. Repair the configuration at ${trustedRef}, then run usabl again.`,
+      'or checked. Docs coverage is planned separately under usabl.docs.json; see this run\'s docs ' +
+      'screens and gaps for what was actually checked. This run cannot verify accessibility. ' +
+      `Repair the configuration at ${trustedRef}, then run usabl again.`,
   };
 }
 
 /**
  * What this guarantees: a trusted configuration usabl cannot read never reads as idle or verified
- * and never mints a receipt. It does not guarantee that every unreadable configuration reaches the
- * gate as a coverage gap. A missing, unparseable, or schema-invalid document does. A raw read
+ * and never mints a receipt. This resolver returns a missing, unparseable, or schema-invalid
+ * document as a coverage gap. Whether that gap reaches the gate depends on the rest of the run,
+ * which can still crash on an independent failure, such as an invalid docs manifest. A raw read
  * failure, where the git call itself throws (for example permission denied or an I/O error), fails
  * closed as a crash instead: the guard reads the same document at the same ref before this runs,
  * so the failure surfaces there, outside any handler here, as exit 4 with no verdict and no
  * receipt. The read below sits inside the handler so that if the guard's read succeeded and this
- * one fails, that later failure is also disclosed as the gap rather than a crash.
+ * one fails, that later failure is also returned as the gap rather than a crash.
  */
 async function scanConfigForCoverage(
   deps: Deps,
