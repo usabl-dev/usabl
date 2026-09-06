@@ -7,22 +7,22 @@
 
 **usable by default.**
 
-usabl is an accessibility proof engine for product development. It checks that a change adds no new machine-checkable accessibility barriers on the surfaces it touched, and it will not let the work be called done until that is true. Every run returns one of four clear answers: verified, regression, not covered, or approval required. The scope is accessibility aligned with WCAG 2.2 AA. Screen-reader announcement is the differentiating layer, not the whole claim.
+usabl is an accessibility proof engine for product development. It checks that a change adds no new machine-checkable accessibility barriers on the surfaces it touched, and it will not let the work be called done until that is true. A run that checked something returns one of four verdicts: verified, regression, not covered, or approval required. A run can also return no verdict: the change touched no covered surface (idle), or the run could not produce a verdict (a crash, or configuration it could not read). No verdict is not a pass. The scope is accessibility aligned with WCAG 2.2 AA. Screen-reader announcement is the differentiating layer, not the whole claim.
 
 > **The AI can suggest fixes. It does not get to grade its own work.**
 
 ## Why usabl
 
-Most accessibility tools find issues. Very few prove the fix actually worked, and almost none stop an AI assistant from marking inaccessible work complete. usabl closes that loop:
+Most accessibility tools report issues. usabl decides whether a change may be called done:
 
-- **Proof, not a report.** A change is done only when the gate verifies it. The result is a receipt you can re-check later, not a slide of green numbers.
-- **The same check everywhere.** One deterministic engine runs in the assistant, the browser, and the pull request, so the answer never depends on where you look.
+- **A verdict with a receipt.** A change is done only when the gate verifies it. A verified run mints a receipt you can re-check later against the same source tree, policy, and scanner versions.
+- **One engine behind every surface.** The same engine runs behind the CLI, the Stop hook, the dev-server overlay, and CI. The overlay is advisory. CI reads policy from the trusted base branch, so a local run and a CI run can differ when local policy files differ from the base.
 - **Honest by construction.** The engine keeps verified, not covered, and merely observed apart in words, never by color. It never claims compliance, and it says so on its own output.
-- **Debt that only shrinks.** Known issues sit in a reviewed floor with owners and expiry dates. New barriers block. The floor ratchets down and never grows silently.
+- **Debt that only shrinks.** Known barriers sit in a reviewed evidence floor, recorded by screen, rule, and element identity. Exceptions live in a separate waiver ledger, where each waiver carries an owner, an approver, a reason, and an expiry date. New barriers block. `usabl floor prune` removes floor entries that a full scan no longer observes, so a reintroduced barrier gates as new.
 
 ## The four verdicts
 
-Every `usabl check` ends in exactly one verdict, each with a matching exit code:
+A `usabl check` that checked something ends in one of four verdicts, each with a matching exit code:
 
 | Verdict               | Meaning                                                                                                  |
 | --------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -31,15 +31,24 @@ Every `usabl check` ends in exactly one verdict, each with a matching exit code:
 | **Not covered**       | usabl could not check a touched surface, so it refuses to guess. This is honest uncertainty, not a pass. |
 | **Approval required** | The change edits policy itself, which needs a human code-owner decision before it can land.              |
 
+Two outcomes carry no verdict. The `verdict` field is `null` and no receipt is minted:
+
+| Outcome     | Meaning                                                                                                                                                                                      |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Idle**    | No changed file maps to a covered screen or documentation page, so there was nothing to check. Exit 0. This is not a pass; nothing was measured.                                              |
+| **No verdict** | The run could not produce a verdict: an unhandled error, a configuration file it could not read, or every affected screen failed to render. Exit 4, and the reason is printed. Not a pass. |
+
 Only the gate mints a verdict. Every other command drafts, inspects, wires, or reports.
 
 ## How it works
 
-- **Deterministic checks.** Three layers run on every scan: general accessibility rules through axe-core, PatternFly composition rules, and a keyboard and announcement walk. No layer asks a model to judge pass or fail.
-- **One gate, four surfaces.** The same check runs as a Claude Stop hook, a dev-server overlay, a CI gate, and a Playwright helper. The library ships those integrations as subpath exports (`usabl/vite`, `usabl/playwright`, `usabl/docs`).
+- **Deterministic checks.** Three layers run on every application scan: general accessibility rules through axe-core, PatternFly composition rules, and a keyboard and announcement walk. No layer asks a model to judge pass or fail.
+- **One gate, several surfaces.** The gate runs behind a Claude Stop hook, a CI gate, and an advisory dev-server overlay. The library ships those integrations as subpath exports (`usabl/vite`, `usabl/playwright`, `usabl/docs`). The overlay projects the gate's result and never mints one. It runs inside the tested page's own JavaScript, so the page can interfere with what it shows; the terminal command and CI are the verdict authority.
+- **Playwright page check.** `checkPage(page)` from `usabl/playwright` runs the same providers on one live page and returns a page-level result. It has no evidence floor and no waivers, so a barrier the gate has already accepted still reads as a regression there. Its verdict can differ from `usabl check`.
 - **App and docs.** When a `usabl.docs.json` manifest is present, the same engine also scans the product's published documentation pages and folds them into the one verdict.
+- **Coverage identity.** usabl records which changed files map to which screen, and it proves it scanned the address it was configured or discovered to scan. It cannot prove that an address showed the screen a reader expects: a redirect, a signed-out state, or a feature flag can change what an address renders. An optional `reachedWhen` selector adds partial evidence that the expected element was present. A manual surface entry is an operator assertion, not evidence.
 - **Receipts bound to the code.** A verified result mints a receipt tied to the exact source tree, the committed policy, the runner version, and the scanner versions. Change any of them and it no longer verifies.
-- **AI proposes, the gate decides.** The assistant can suggest and apply fixes, then it must re-run the same gate. It cannot approve its own work.
+- **AI proposes, the gate decides.** The assistant can suggest and apply fixes, then it must re-run the same gate. It cannot approve its own work. Page text handed to the assistant sits inside a labeled frame that marks it as data rather than instructions. The frame delimiters are removed from page text, so a page cannot close its own frame. Control sequences are stripped and credential-shaped values are redacted before page text leaves the engine.
 
 ## Quick start
 
@@ -67,7 +76,7 @@ usabl doctor   # confirms a session is configured
 usabl check
 ```
 
-usabl reads the variable once, where it builds its dependencies, so every surface picks up the same session: the CLI, the Vite overlay, and the Claude Stop hook. It is an environment variable rather than a flag because the overlay and the Stop hook have no command line, and rather than a config field because the file holds live cookies and tokens. A path to a storage state never enters committed config, and the file itself never enters the repository.
+usabl reads the variable once, where it builds its dependencies, so every surface picks up the same session: the CLI, the Vite overlay, and the Claude Stop hook. It is an environment variable rather than a flag because the overlay and the Stop hook have no command line, and rather than a config field because the file holds live cookies and tokens. usabl does not write the path or the file into its config, its evidence files, or its output.
 
 If the variable names a file usabl cannot read, a file that is not JSON, or a session with nothing left in it that could authenticate, the run stops with an error instead of quietly scanning signed out. It stops before it opens a browser and returns no verdict. usabl prints neither the path nor the contents, in errors or in reports. That last check is deliberately strict: it refuses only when every cookie is dated, every date is past, there is no local storage or IndexedDB, and there are no stored credentials, because a false refusal would stop a working run.
 
