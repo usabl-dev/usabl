@@ -99,11 +99,72 @@ describe('check-staged-links command', () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('0 broken');
-    // Three file links on the orientation page count twice because it is also
-    // staged as index.html, plus the one link on the deck. The same-page
-    // fragment, the external URL, and the data URI are skipped, not checked.
+    // Three file links and one same-page fragment on the orientation page count
+    // twice because it is also staged as index.html, plus the one link on the
+    // deck. The external URL and the data URI are skipped, not checked.
+    expect(result.stdout).toContain('9 internal link(s) checked');
+    expect(result.stdout).toContain('4 external link(s) skipped');
+  });
+
+  it('validates fragments against the staged file, including the root index', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-staged-links-fragment-'));
+    const source = join(root, 'docs');
+    // /usabl/ is served as the staged index.html, a copy of team-orientation.html,
+    // which has id="top" and nothing named "missing". The source pass sees /usabl/
+    // as the docs directory and cannot check that fragment; this pass must.
+    await writePublicPages(source, {
+      'how-usabl-works.html':
+        '<h1 id="intro">How</h1>\n' +
+        '<a href="/usabl/#missing">Root missing</a>\n' +
+        '<a href="/usabl/#top">Root present</a>\n' +
+        '<a href=".#top">Dot present</a>\n' +
+        '<a href="#intro">Same page present</a>\n' +
+        '<a href="#nope">Same page missing</a>\n' +
+        '<a href="#">Page top</a>\n' +
+        '<a href="team-orientation.html#gone">Cross page missing</a>\n' +
+        '<a href="team-orientation.html#top">Cross page present</a>\n',
+    });
+
+    const result = await runChecker(source);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain(
+      'how-usabl-works.html:2: link "/usabl/#missing" names anchor "#missing", and the staged "index.html" has no element with that id or name',
+    );
+    expect(result.stdout).toContain(
+      'how-usabl-works.html:6: link "#nope" names anchor "#nope", and the staged "how-usabl-works.html" has no element',
+    );
+    expect(result.stdout).toContain(
+      'how-usabl-works.html:8: link "team-orientation.html#gone" names anchor "#gone", and the staged "team-orientation.html" has no element',
+    );
+    expect(result.stdout).not.toContain('#top');
+    expect(result.stdout).not.toContain('#intro');
+    // Seven links checked (the bare # is skipped), three of them broken.
     expect(result.stdout).toContain('7 internal link(s) checked');
-    expect(result.stdout).toContain('6 external or same-page link(s) skipped');
+    expect(result.stdout).toContain('3 broken');
+  });
+
+  it('reads attribute values that span lines and reports the line each URL is on', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-staged-links-multiline-'));
+    const source = join(root, 'docs');
+    // A line-based scan never sees the closing quote of a wrapped value and
+    // silently drops every URL in it.
+    await writePublicPages(source, {
+      'how-usabl-works.html':
+        '<h1 id="intro">How</h1>\n' +
+        '<img srcset="gone-one.png 1x,\n' +
+        '  gone-two.png 2x" alt="">\n' +
+        '<a\n' +
+        '  href="gone-three.html">Wrapped</a>\n',
+    });
+
+    const result = await runChecker(source);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain('how-usabl-works.html:2: link "gone-one.png"');
+    expect(result.stdout).toContain('how-usabl-works.html:3: link "gone-two.png"');
+    expect(result.stdout).toContain('how-usabl-works.html:5: link "gone-three.html"');
+    expect(result.stdout).toContain('3 broken');
   });
 
   it('fails a root-absolute link because the site is served under a repository path', async () => {

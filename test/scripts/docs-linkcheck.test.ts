@@ -9,12 +9,15 @@ const execFileAsync = promisify(execFile);
 const packageJsonPath = resolve('package.json');
 
 // The docs:linkcheck npm script runs the source-tree pass and then the staged
-// pass. A link can pass one and fail the other, so a test that invokes only one
-// script cannot show what the real CI command accepts or rejects. These tests
-// do not spawn npm, because the command has no way to point both passes at a
-// fixture. Instead they read the command from package.json, require it to be
-// exactly `node <script>` parts joined by `&&`, and run those scripts in that
-// order with the fixture paths, stopping at the first failure as `&&` does.
+// pass, and both must pass. The passes check different properties (the whole
+// corpus against the repository; the published pages against the deployed
+// set), so neither is a superset of the other and the composite command is
+// the contract. A test that invokes only one script cannot show what that
+// command accepts or rejects. These tests do not spawn npm, because the
+// command has no way to point both passes at a fixture. Instead they read the
+// command from package.json, require it to be exactly `node <script>` parts
+// joined by `&&`, and run those scripts in that order with the fixture paths,
+// stopping at the first failure as `&&` does.
 interface PassResult {
   code: number;
   stdout: string;
@@ -148,6 +151,24 @@ describe('docs:linkcheck composite command', () => {
     expect(result.code).toBe(0);
     expect(result.passesRun).toBe(2);
     expect(result.stdout).toContain('0 broken');
+  });
+
+  it('rejects a missing fragment on the site root, which only the staged pass can see', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-composite-rootfrag-'));
+    // The source pass resolves /usabl/ to the docs directory and has no file to
+    // read anchors from, so it passes. The staged pass serves index.html for the
+    // root and finds no such anchor. Both must pass, so the command fails.
+    await writePublicPages(join(root, 'docs'), {
+      'how-usabl-works.html':
+        '<h1 id="intro">How</h1>\n<a href="/usabl/#missing">Gone</a>\n<a href="/usabl/#top">Top</a>\n',
+    });
+
+    const result = await runComposite(root);
+
+    expect(result.code).toBe(1);
+    expect(result.passesRun).toBe(2);
+    expect(result.stdout).toContain('link "/usabl/#missing" names anchor "#missing"');
+    expect(result.stdout).not.toContain('"/usabl/#top"');
   });
 
   it('rejects a root-absolute link in the source pass before staging runs', async () => {

@@ -151,6 +151,31 @@ describe('check-doc-links command', () => {
     expect(result.stdout).toContain('1 broken');
   });
 
+  it('reads attribute values that span lines and reports the line each URL is on', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-multiline-'));
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(
+      join(root, 'docs', 'a.html'),
+      '<h1>A</h1>\n' +
+        '<img srcset="gone-one.png 1x,\n' +
+        '  gone-two.png 2x" alt="">\n' +
+        '<a\n' +
+        '  href="gone-three.html">Wrapped</a>\n' +
+        '<a href="here.html">Same line</a>\n',
+      'utf8',
+    );
+    await writeFile(join(root, 'docs', 'here.html'), '<h1>Here</h1>\n', 'utf8');
+
+    const result = await runChecker(root);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toContain('docs/a.html:2: file not found: gone-one.png');
+    expect(result.stdout).toContain('docs/a.html:3: file not found: gone-two.png');
+    expect(result.stdout).toContain('docs/a.html:5: file not found: gone-three.html');
+    expect(result.stdout).toContain('4 relative link(s) checked');
+    expect(result.stdout).toContain('3 broken');
+  });
+
   it('extracts the string form of a CSS @import inside a style block', async () => {
     root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-import-'));
     await mkdir(join(root, 'docs'), { recursive: true });
