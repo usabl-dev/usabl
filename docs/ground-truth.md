@@ -1279,11 +1279,12 @@ marks an intake draft as model-judgment.
 A requirement id becomes the rule `intake:<id>`, and a waiver matches on that rule plus the
 surface. Two requirements that share an id therefore share a rule, and one waiver would cover
 a requirement its author never saw. The loader refuses a repeated id across every requirement
-file at once, since each file can be valid on its own, and names both files. A requirement id
-also follows the same character grammar as a surface id (section 22): no whitespace, no
-invisible or control character, no assigned character that renders as blank, and NFC form.
-A refused character is reported by position and code point, never printed back. Either
-failure is `approval_required`, returned from the loader rather than thrown.
+file at once, since each file can be valid on its own, and names both files and both list
+positions. A requirement id, and the surface it names, follow the same character grammar as a
+surface id (section 22). A refused character is reported by position and code point, never
+printed back. Either failure is `approval_required`, returned from the loader rather than
+thrown, and every reason the loader returns is scrubbed before it leaves, including the YAML
+parser's own message and the file path, because both can carry file bytes.
 
 ---
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FsGlob } from '../../src/contracts/index.js';
 import { loadRequirements } from '../../src/intake/load.js';
 import { buildGuardedSet } from '../../src/trust/guard.js';
+import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
 import { testConfig } from '../helpers.js';
 
 function scriptedFs(paths: string[], files: Record<string, string | null>): FsGlob {
@@ -390,5 +391,135 @@ requirements:
     }
     expect(result.reason).not.toContain('\u001b');
     expect(result.reason).toContain('U+001B');
+  });
+});
+
+describe('loadRequirements scrubs every reason it returns', () => {
+  // The reason reaches a terminal and, through the stop hook, a model. Every string that can
+  // carry file bytes or a file name goes through the same scrubber, so these assert the outcome
+  // on the real loader rather than on any one producer.
+  const ESC = '\u001b';
+  const BEL = '\u0007';
+
+  function rawControlBytes(text: string): string[] {
+    return [...text].filter((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code < 0x20 && character !== '\n';
+    });
+  }
+
+  function requirementYaml(id: string): string {
+    return `
+version: 1
+requirements:
+  - id: ${id}
+    kind: content
+    surface: clusters
+    description: account text
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Account name
+    approved: true
+`;
+  }
+
+  it('strips a literal escape byte that breaks YAML parsing before any id is checked', async () => {
+    // A raw ESC inside a double-quoted YAML scalar is a parse error, and the parser quotes the
+    // offending source line in its message. That line must not reach the reason as written.
+    const result = await loadRequirements(
+      scriptedFs(['requirements/a.yaml'], {
+        'requirements/a.yaml': requirementYaml(`"ok${ESC}]0;OWNED${BEL}tail"`),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(rawControlBytes(result.reason)).toEqual([]);
+    expect(result.reason).not.toContain('OWNED');
+  });
+
+  it('strips a forged frame marker carried by a YAML source line', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/a.yaml'], {
+        'requirements/a.yaml': requirementYaml(`"${UNTRUSTED_FRAME_END}${ESC}"`),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(rawControlBytes(result.reason)).toEqual([]);
+    expect(result.reason).not.toContain(UNTRUSTED_FRAME_END);
+  });
+
+  it('strips an escape sequence carried by a file path in the duplicate reason', async () => {
+    const hostilePath = `requirements/ok${ESC}]0;OWNED${BEL}.yaml`;
+    const result = await loadRequirements(
+      scriptedFs(['requirements/ok.yaml', hostilePath], {
+        'requirements/ok.yaml': requirementYaml('same-id'),
+        [hostilePath]: requirementYaml('same-id'),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    // The loader sorts paths, and the escape byte sorts before the dot, so the hostile path is the
+    // first declaration and the clean one is the repeat. The reason names both either way.
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(rawControlBytes(result.reason)).toEqual([]);
+    expect(result.reason).not.toContain('OWNED');
+    expect(result.reason).toContain('same-id');
+    expect(result.reason).toContain('requirements/ok.yaml');
+  });
+
+  it('strips an escape sequence carried by a file path in a read failure', async () => {
+    const hostilePath = `requirements/${ESC}[2J.yaml`;
+    const result = await loadRequirements(
+      scriptedFs([hostilePath], {}),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(rawControlBytes(result.reason)).toEqual([]);
+  });
+
+  it('strips an unrecognised key name that the schema quotes back', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/a.yaml'], {
+        'requirements/a.yaml': `
+version: 1
+requirements:
+  - id: account-name
+    kind: content
+    surface: clusters
+    description: account text
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Account name
+    approved: true
+    "x\\u001b]0;OWNED\\u0007": 1
+`,
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(rawControlBytes(result.reason)).toEqual([]);
+    expect(result.reason).not.toContain('OWNED');
   });
 });

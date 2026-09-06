@@ -4,6 +4,7 @@
  * It must fail closed on any malformed file because policy cannot be half-applied.
  */
 import type { FsGlob, RequirementBundle, UsablConfig } from '../contracts/index.js';
+import { scrubString } from '../surfaces/scrub.js';
 import { normalize } from './normalize.js';
 import { findDuplicateRequirementId, type RequirementIdSite } from './requirement-ids.js';
 import type { ParseBundleResult } from './schema.js';
@@ -15,12 +16,18 @@ function stripTrailingSlashes(path: string): string {
   return stripped.length === 0 ? path : stripped;
 }
 
+/**
+ * The one egress for a loader failure. The path is an operator-authored file name and the reason
+ * can quote file bytes, for example an unrecognised key name from the schema or a source line from
+ * the YAML parser, and both reach a terminal, so the whole sentence is scrubbed here. Scrubbing
+ * text that a producer already scrubbed changes nothing, so a reason may arrive clean or not.
+ */
 function pathFailure(path: string, reason: string): LoadRequirementsResult {
   return {
     ok: false,
     verdict: 'approval_required',
     path,
-    reason: `requirements path ${path}: ${reason}`,
+    reason: scrubString(`requirements path ${path}: ${reason}`),
   };
 }
 
