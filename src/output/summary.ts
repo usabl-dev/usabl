@@ -7,17 +7,7 @@ import type { Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { discloseGaps, fixOrAbsence, gapDetail, gapHeadline } from './disclosure.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from './source-location.js';
-
-/**
- * CLI summary output for a Result.
- * It must never re-derive findings, mint verdicts, or mutate raw Result data.
- */
-const HEADLINE: Record<string, string> = {
-  verified: 'VERIFIED',
-  regression: 'REGRESSION',
-  not_covered: 'NOT COVERED',
-  approval_required: 'APPROVAL REQUIRED',
-};
+import { describeVerdict, formatVerdictLine } from './verdict-line.js';
 
 /**
  * Page and scanner strings are untrusted at terminal egress.
@@ -60,25 +50,34 @@ function renderNotEvaluated(result: Result): string[] {
 
 /**
  * Human CLI projection of a Result. Never re-derives findings or a verdict.
- * `verdict === null` prints IDLE (nothing to check), not NOT COVERED.
+ *
+ * The first line is the verdict: a symbol, the verdict word, and the exit code. The second is
+ * one sentence saying what that means for the change. Everything else is labelled and indented
+ * under it. `verdict === null` prints NO VERDICT: IDLE (nothing to check) or NO VERDICT: RUN
+ * FAILED (exit 4), never NOT COVERED and never anything that reads as a pass.
+ *
+ * Data lines (findings, gaps, paths) are printed whole rather than wrapped to 80 columns, so an
+ * operator can grep the output for a rule, a URL, or a file and copy a line in one piece. The
+ * lines usabl authors itself stay within 80 columns.
  */
 export function formatSummary(result: Result): string {
   const lines: string[] = [];
-  // Idle and a failed run both leave verdict null, and they are opposite facts: idle means there
-  // was nothing to prove, exit 4 means there was something and the run could not prove it. The
-  // headline reads the exit code so a crash, or a run that never saw the application, cannot be
-  // mistaken for a quiet pass.
-  const head =
-    result.exitCode === 4
-      ? 'FAILED'
-      : result.verdict === null
-        ? 'IDLE'
-        : HEADLINE[result.verdict] ?? result.verdict;
-  lines.push(`usabl: ${head} - ${result.summary}`);
+  const verdict = describeVerdict(result);
+  lines.push(`usabl: ${formatVerdictLine(verdict)}`);
+  lines.push(`  ${verdict.meaning}`);
+  if (verdict.exitCode === 4) {
+    lines.push('  next: run usabl check again, or check the change by hand.');
+  }
+  // The gate's own summary, with its counts, printed whole and labelled so it reads as the
+  // gate's sentence rather than as a second verdict.
+  lines.push(`  gate summary: ${neutralizePrintedText(result.summary)}`);
 
   const gating = result.findings.filter(
     (f) => f.evidenceClass === 'deterministic' && (f.status === 'new' || f.status === 'carried'),
   );
+  if (gating.length > 0) {
+    lines.push('  barriers:');
+  }
   for (const f of gating) {
     const rule = neutralizePrintedText(f.rule);
     const whatUserExperiences = neutralizePrintedText(f.whatUserExperiences);
@@ -88,27 +87,27 @@ export function formatSummary(result: Result): string {
     const appSource = f.appSource;
     const fix = neutralizePrintedText(fixOrAbsence(f));
     lines.push(
-      `  [${f.status}] ${f.screenId} · ${f.layer}/${rule} (${f.severity}) - ${whatUserExperiences}`,
+      `    [${f.status}] ${f.screenId} · ${f.layer}/${rule} (${f.severity}): ${whatUserExperiences}`,
     );
     if (source && source.file) {
-      lines.push(`      source: ${neutralizePrintedText(formatDocsSourceLocation(source))}`);
+      lines.push(`        source: ${neutralizePrintedText(formatDocsSourceLocation(source))}`);
       if (source.candidates.length > 1) {
-        lines.push(`      candidates: ${source.candidates.map(neutralizePrintedText).join(', ')}`);
+        lines.push(`        candidates: ${source.candidates.map(neutralizePrintedText).join(', ')}`);
       }
     } else if (appSource) {
       if (appSource.file) {
-        lines.push(`      source: ${neutralizePrintedText(formatAppSourceLocation(appSource))}`);
+        lines.push(`        source: ${neutralizePrintedText(formatAppSourceLocation(appSource))}`);
       }
       if (
         appSource.candidates.length > 0 &&
         (appSource.file === null || appSource.candidates.length > 1)
       ) {
-        lines.push(`      candidates: ${appSource.candidates.map(neutralizePrintedText).join(', ')}`);
+        lines.push(`        candidates: ${appSource.candidates.map(neutralizePrintedText).join(', ')}`);
       }
     }
     // Always printed. Most axe rules carry no curated note, so an absent fix is a common and
     // real state, and a missing line reads as a rendering bug rather than as an absence.
-    lines.push(`      fix: ${fix}`);
+    lines.push(`        fix: ${fix}`);
   }
   lines.push(...renderNotEvaluated(result));
   if (result.dirtyGuardedPaths.length > 0) {

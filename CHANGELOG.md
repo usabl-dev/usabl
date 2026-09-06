@@ -103,6 +103,15 @@
   absent or unparseable reads as drifted, never wired. Doctor says whether a
   session is configured, never what it is.
 
+### Changed
+
+- `usabl check` opens with a verdict line: a symbol, the verdict word, and the exit
+  code, followed by one sentence saying what the verdict means for the change. The
+  gate's own summary, the barriers, the gaps, and the receipt follow under labels.
+  Idle and a failed run both print `NO VERDICT`, then `IDLE` or `RUN FAILED`, so
+  neither can be read as a pass. Every meaning is carried in text; no state
+  depends on colour.
+
 ## 0.2.1 - 2026-09-01
 
 Version files name 0.2.1. This freeze does not create a git tag or publish to
