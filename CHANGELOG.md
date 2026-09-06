@@ -75,9 +75,18 @@
   a word disappears and leaves the word, and a backslash disappears before
   punctuation. Any of those puts characters on screen that are not in the string,
   which was enough to draw usabl's own untrusted-text frame marker out of page
-  text that is not the marker. Every character a renderer could read as markup is
-  now written as a character reference, which renders as exactly the character it
-  names, so the reader sees the page text as it really is.
+  text that is not the marker. Every character a renderer could read as inline
+  markup is now written as a character reference, which renders as the character
+  it names. The first character of a block marker at the start of a page text
+  line, the colon of `://`, and the dot of `www.` are written the same way, so
+  page text cannot render as a heading, list item, thematic break, setext
+  underline, HTML block, code block, or scheme or `www.` link. GitHub still
+  applies its own post-render autolinks to email addresses, `mailto:` and
+  `xmpp:` forms, `@user` mentions, `#123` issue references, and commit SHAs,
+  because those run on decoded text after character references resolve, so page
+  text can still produce a clickable mailto, a notification to a user with
+  repository access, or a link to a repository object. None of these can forge a
+  verdict, close the untrusted-text frame, or leak engine data.
 - Long page text costs far less memory. Both the neutralizer and the frame marker
   search copy text in runs and return the original string when they have nothing
   to change, instead of rebuilding it one character at a time. On a four million

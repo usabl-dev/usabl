@@ -84,9 +84,15 @@ const BLOCK_MARKER_AT_LINE_START = /^(\s*)([#\-+*=]|\d(?=\d*[.)]))/;
 // same character, so the reader still sees the address as text. Only a colon followed by "//" is
 // touched, so a label like "why:" stays readable in the raw comment.
 //
-// One form is out of reach of a reference: an email address, "user@example.test", is found after
-// references are decoded and adjacent text is joined, so escaping cannot stop it. It is left as it
-// is and is named here so the limit is not mistaken for an oversight.
+// Some forms are out of reach of a reference, and they are named here so the limit is not mistaken
+// for an oversight. An email address, "user@example.test", and the "mailto:" and "xmpp:" forms are
+// found by the Markdown renderer after references are decoded and adjacent text is joined. GitHub
+// then runs its own filters on the rendered text: "@user" becomes a mention that notifies that
+// user if they have access to the repository, "#123" becomes a link to that issue or pull request,
+// and a commit SHA becomes a link to that commit. All of these read decoded text, so escaping
+// cannot stop any of them. None can forge a verdict, close the untrusted-text frame, or leak
+// engine data. The filters skip code spans, so wrapping page text in one is the mitigation, and
+// that belongs to the sealed-text visual work rather than to this escape.
 const SCHEME_COLON = /:(?=\/\/)/g;
 const WWW_DOT = /(www)\./gi;
 

@@ -236,10 +236,15 @@ screen.
   disappears when rendered, a character reference becomes another character, an emphasis pair
   around a piece of the marker disappears and leaves the piece, and a backslash disappears
   before punctuation the marker already contains. `pr-comment` writes every character a
-  Markdown or HTML renderer could read as markup as a numeric character reference, which
-  renders as exactly the character it names. The other surfaces were checked: the overlay
-  writes through `textContent` and never parses markup, `docs-html` escapes the five
-  HTML-significant characters already, and the CLI and stop hook emit plain text.
+  Markdown or HTML renderer could read as inline markup as a numeric character reference,
+  which renders as the character it names. It also writes the first character of a block
+  marker at the start of a page text line, the colon of `://`, and the dot of `www.` as
+  references, so page text cannot render as a heading, list item, thematic break, setext
+  underline, HTML block, code block, or scheme or `www.` link. A heading is the case that
+  matters most: page text beginning `# usabl report: VERIFIED` rendered louder than the
+  report's own headline. The other surfaces were checked: the overlay writes through
+  `textContent` and never parses markup, `docs-html` escapes the five HTML-significant
+  characters already, and the CLI and stop hook emit plain text.
 - The two policies are deliberately separate and are tested separately. Removal stays narrow
   so content is not rewritten. Looking through stays wide so nothing invisible can hide
   inside a marker. A test holds the second as a superset of the first.
@@ -251,11 +256,28 @@ compatibility-normalizes usabl's output, and the fix then belongs in that consum
 it scrubs. Folding page text here would make usabl match text that no reader sees as a
 marker, and compatibility folding is lossy for legitimate content.
 
+**Not handled:** GitHub applies its own autolinks after the Markdown is rendered. Email
+addresses, the `mailto:` and `xmpp:` forms, `@user` mentions, `#123` issue references, and
+commit SHAs are matched on decoded text, after character references have resolved, so a
+reference cannot stop them. Page text in a pull request comment can therefore still produce
+a clickable `mailto:` link, a notification to a user who has access to the repository, or a
+link to a repository object. None of these can forge a verdict, close the untrusted-text
+frame, or leak engine data. The mitigation is to wrap page-derived text in code spans, which
+GitHub's post-render filters skip, and that is scheduled for the sealed-text visual work.
+
+**Not handled:** credential-dense hostile input costs more than it did. About three million
+characters of back-to-back credentials take roughly 0.7 s to redact, and roughly 1.5 s with
+a 100 MiB peak when a look-through character is present, against about 0.1 s before the
+value-split fix. Ordinary large text got faster. This is a denial-of-service hardening item
+for later, not a correctness defect: every span is still redacted, and the surface-level
+field caps limit what reaches an agent.
+
 **Status:** [x] All three controls ship. The bidirectional controls are the full Unicode
-`Bidi_Control` set. Eleven splitters, every split position, the reordering payload, and eight
-renderer forgeries are covered by tests. [ ] usabl does not report that a page attempted a
-forgery; it removes them silently. [ ] Compatibility-normalized markers are out of scope, as
-above.
+`Bidi_Control` set. Eleven splitters, every split position, the reordering payload, eight
+renderer forgeries, and nineteen block-markup and autolink forms are covered by tests. [ ]
+usabl does not report that a page attempted a forgery; it removes them silently. [ ]
+Compatibility-normalized markers are out of scope, as above. [ ] Post-render autolinks and
+credential-dense input cost are open, as above.
 
 ---
 
