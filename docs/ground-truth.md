@@ -91,12 +91,11 @@ blocking. That is display, not a second decision-maker.
 
 The specific things that are new, each against what exists today:
 
-1. It re-checks the fix, not just finds the problem. The field's own reviews say most
-   tools find issues and almost none re-check that the finding is gone. usabl compares
-   the next run against the floor and reports what it no longer observes. It observes
-   absence; it does not witness the fix.
+1. It re-checks the fix as well as finding the problem. usabl compares the next run
+   against the floor and reports what it no longer observes. It observes absence; it
+   does not witness the fix.
 2. It reports what it did not check. It reports "we could not check this" as a real
-   answer instead of quietly passing. Reporting unknown as unknown is rare.
+   answer instead of quietly passing.
 3. A verified answer can be re-checked. A verified receipt is bound to the exact source
    tree, policy, runner version, and scanner versions, and re-verification compares those
    bindings against the current tree without a re-scan.
