@@ -3,8 +3,13 @@ import { tmpdir } from 'node:os';
 import { join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { extractLinks, EXTERNAL_PREFIX, splitLinkTarget } from './check-doc-links.mjs';
-import { stagePublicPages } from './stage-public-pages.mjs';
+import {
+  extractLinks,
+  EXTERNAL_PREFIX,
+  siteRootedPath,
+  splitLinkTarget,
+} from './check-doc-links.mjs';
+import { SITE_BASE_PATH, stagePublicPages } from './stage-public-pages.mjs';
 
 // Link check over the published Pages artifact, not the source tree.
 //
@@ -18,32 +23,41 @@ import { stagePublicPages } from './stage-public-pages.mjs';
 //
 // Resolution follows the browser. A relative link resolves against the linking
 // page's directory. A directory reference (`.`, `./`, `demo/`, `demo`) is served
-// as that directory's index.html. A root-absolute link (`/page.html`) resolves
-// against the domain root, and this project site is served under a repository
-// path, so such a link never reaches the site and is reported as broken. A link
-// that climbs above the staged root is reported as missing. External URLs,
-// data URIs, and same-page fragments are skipped; staging does not affect them.
-
-// Published URL prefix for this project Pages site. Named only for the failure
-// message; the staged tree has no mount point, so nothing is resolved against it.
-const SITE_BASE_PATH = '/usabl/';
+// as that directory's index.html. A root-absolute link resolves against the
+// domain root: under the site base path (`/usabl/page.html`) it names a staged
+// file, and outside it (`/page.html`) it never reaches the site and is reported
+// as broken. Syntax is judged on the path as written, before percent-decoding,
+// so `%2Fpage.html` is a relative link, as it is in the browser. A link that
+// climbs above the staged root is reported as missing. External URLs, data
+// URIs, and same-page fragments are skipped; staging does not affect them.
 
 // Classify a link target written in one staged page.
 //   { kind: 'skip' }                   not a file reference (external, data, fragment)
-//   { kind: 'root-absolute' }          starts with `/`, never resolves under the site path
+//   { kind: 'root-absolute' }          starts with `/` but not with the site base path
 //   { kind: 'file', file, index }      candidate staged paths: the file itself (empty for a
 //                                      directory reference) and that directory's index.html
 function resolveStagedTarget(page, rawTarget) {
   const raw = rawTarget.trim();
   if (raw === '' || EXTERNAL_PREFIX.test(raw)) return { kind: 'skip' };
 
-  const { path } = splitLinkTarget(raw);
-  if (path === '') return { kind: 'skip' };
-  if (path.startsWith('/')) return { kind: 'root-absolute' };
+  const { rawPath, path } = splitLinkTarget(raw);
+  if (rawPath === '') return { kind: 'skip' };
 
-  // Normalize to a path relative to the staged root. posix.normalize keeps a
-  // trailing slash and returns `.` or `./` for the root itself.
-  let resolved = posix.normalize(posix.join(posix.dirname(page), path));
+  // Root-absolute links resolve from the staged root; relative links from the
+  // page's directory. The decoded path is used for the lookup in both cases.
+  let base = posix.dirname(page);
+  let lookup = path;
+  if (rawPath.startsWith('/')) {
+    const siteRooted = siteRootedPath(rawPath);
+    if (siteRooted === null) return { kind: 'root-absolute' };
+    base = '.';
+    lookup = decodeURIComponentSafe(siteRooted);
+  }
+
+  // Normalize to a path relative to the staged root. posix.join concatenates,
+  // so a decoded leading slash still lands under the base. posix.normalize
+  // keeps a trailing slash and returns `.` or `./` for the root itself.
+  let resolved = posix.normalize(posix.join(base, lookup));
   if (resolved === '.') resolved = '';
   else if (resolved.startsWith('./')) resolved = resolved.slice(2);
 
@@ -51,6 +65,14 @@ function resolveStagedTarget(page, rawTarget) {
   const file = isDirectory ? '' : resolved;
   const index = isDirectory ? `${resolved}index.html` : `${resolved}/index.html`;
   return { kind: 'file', file, index };
+}
+
+function decodeURIComponentSafe(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 // Check every staged HTML file. `stagedFiles` is the list of POSIX-relative
@@ -107,9 +129,9 @@ async function checkStagedSite(sourceDir = 'docs') {
 function describeBroken(entry) {
   if (entry.reason === 'root-absolute') {
     return (
-      `${entry.page}:${entry.lineNumber}: link "${entry.target}" is root-absolute; the browser ` +
-      `resolves it against the domain root, and this project Pages site is served under ` +
-      `${SITE_BASE_PATH}, so it returns 404 on the published site\n`
+      `${entry.page}:${entry.lineNumber}: link "${entry.target}" is root-absolute and outside ` +
+      `the site base path; the browser resolves it against the domain root, and this project ` +
+      `Pages site is served under ${SITE_BASE_PATH}, so it returns 404 on the published site\n`
     );
   }
   return (

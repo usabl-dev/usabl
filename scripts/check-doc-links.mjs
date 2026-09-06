@@ -2,13 +2,21 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { SITE_BASE_PATH } from './stage-public-pages.mjs';
+
 // Offline documentation link checker. It validates relative links and local
 // file references inside the docs corpus, plus intra-page and cross-page
 // `#anchor` fragments where the target file can be parsed. External http(s)
 // URLs (and other schemes such as mailto and tel) are reported as skipped, not
 // fetched, so the check stays deterministic and does not touch the network.
+//
+// Root-absolute links follow the published site. The docs directory is the
+// site root and is served under SITE_BASE_PATH, so `/usabl/page.html` names
+// docs/page.html, and a root-absolute link outside that prefix is broken.
 
 const ROOT_DOCS = ['README.md', 'CONTRIBUTING.md', 'CHANGELOG.md'];
+// The directory that becomes the site root once staged.
+const SITE_SOURCE_DIR = 'docs';
 const CORPUS_EXTENSIONS = new Set(['.md', '.html']);
 const ANCHOR_EXTENSIONS = new Set(['.md', '.html']);
 
@@ -112,10 +120,14 @@ const URL_ATTRIBUTE = /(?<![\w-])(?:href|src|poster|data)\s*=\s*(?:"([^"]*)"|'([
 // width or density descriptor.
 const SRCSET_ATTRIBUTE = /(?<![\w-])srcset\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
 // Inline style attributes and <style> blocks can reference files through
-// url(...). SVG presentation attributes such as marker-end="url(#id)" are not
-// style contexts and are left alone.
+// url(...), and a <style> block can also pull in a sheet with the string form
+// `@import "sheet.css"`. SVG presentation attributes such as
+// marker-end="url(#id)" are not style contexts and are not scanned; the corpus
+// only uses same-document forms there, and a future presentation attribute
+// naming a file, such as url(markers.svg#id), would not be checked.
 const STYLE_ATTRIBUTE = /(?<![\w-])style\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
 const CSS_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^"')\s]+))\s*\)/gi;
+const CSS_IMPORT_STRING = /@import\s+(?:"([^"]*)"|'([^']*)')/gi;
 const STYLE_OPEN = /<style[\s>]/i;
 const STYLE_CLOSE = /<\/style\s*>/i;
 
@@ -131,11 +143,47 @@ function cssUrls(text) {
   return urls;
 }
 
+function cssImportStrings(text) {
+  const urls = [];
+  for (const match of text.matchAll(CSS_IMPORT_STRING)) {
+    urls.push(quotedValue(match));
+  }
+  return urls;
+}
+
+// Parse srcset the way the HTML srcset algorithm does. A candidate URL is a run
+// of non-whitespace characters, so a comma inside a data URL stays part of the
+// URL; only a comma that ends that run, or a comma after the descriptors,
+// separates candidates. Splitting on every comma would cut a data URL apart and
+// report its payload as a missing file.
 function srcsetUrls(value) {
   const urls = [];
-  for (const candidate of value.split(',')) {
-    const url = candidate.trim().split(/\s+/)[0];
-    if (url !== undefined && url !== '') urls.push(url);
+  const length = value.length;
+  let index = 0;
+  while (index < length) {
+    while (index < length && /[\s,]/.test(value[index])) index += 1;
+    if (index >= length) break;
+
+    const start = index;
+    while (index < length && !/\s/.test(value[index])) index += 1;
+    let url = value.slice(start, index);
+
+    const trailingCommas = /,+$/.exec(url);
+    if (trailingCommas) {
+      // The comma ended the URL run, so this candidate has no descriptors.
+      url = url.slice(0, url.length - trailingCommas[0].length);
+    } else {
+      // Skip the descriptors up to the next comma outside parentheses.
+      let depth = 0;
+      while (index < length) {
+        const char = value[index];
+        if (char === '(') depth += 1;
+        else if (char === ')') depth -= 1;
+        else if (char === ',' && depth === 0) break;
+        index += 1;
+      }
+    }
+    if (url !== '') urls.push(url);
   }
   return urls;
 }
@@ -174,11 +222,13 @@ function extractLinks(filePath, content) {
     }
 
     // CSS url(...) inside a <style> block (tracked across lines) or an inline
-    // style attribute. A block that opens and closes on one line is scanned once.
+    // style attribute, plus string-form @import inside a block. A block that
+    // opens and closes on one line is scanned once.
     const opensStyle = STYLE_OPEN.test(line);
     const closesStyle = STYLE_CLOSE.test(line);
     if (inStyle || opensStyle) {
       cssUrls(line).forEach(push);
+      cssImportStrings(line).forEach(push);
     } else {
       for (const match of line.matchAll(STYLE_ATTRIBUTE)) {
         cssUrls(quotedValue(match)).forEach(push);
@@ -204,16 +254,31 @@ function safeDecode(value) {
 
 // Split a link target into the path the server resolves and the fragment the
 // browser resolves. The query string is dropped: it never changes which static
-// file is served, so `page.html?v=2` names page.html. Both parts are
-// percent-decoded so `a%20b.md` matches `a b.md` on disk. Both passes use this
-// so they agree on what file a link names.
+// file is served, so `page.html?v=2` names page.html.
+//
+// `rawPath` is the path as written and is what syntax decisions are made on: a
+// leading `/` or the site base path means something only before decoding, so
+// `%2Fpage.html` is a relative link, not a root-absolute one. `path` is the
+// percent-decoded form for the filesystem lookup, so `a%20b.md` matches
+// `a b.md` on disk and `%2F` matches the slash the server decodes it to. Both
+// passes use this so they agree on what file a link names.
 function splitLinkTarget(raw) {
   const hashIndex = raw.indexOf('#');
   const beforeFragment = hashIndex === -1 ? raw : raw.slice(0, hashIndex);
   const fragment = hashIndex === -1 ? '' : raw.slice(hashIndex + 1);
   const queryIndex = beforeFragment.indexOf('?');
-  const path = queryIndex === -1 ? beforeFragment : beforeFragment.slice(0, queryIndex);
-  return { path: safeDecode(path), fragment: safeDecode(fragment) };
+  const rawPath = queryIndex === -1 ? beforeFragment : beforeFragment.slice(0, queryIndex);
+  return { rawPath, path: safeDecode(rawPath), fragment: safeDecode(fragment) };
+}
+
+// For a root-absolute raw path, return the part under the site base path, or
+// null when the path does not start with the base path and so never reaches the
+// site. `/usabl/` and `/usabl` both name the site root and return ''.
+function siteRootedPath(rawPath) {
+  const base = SITE_BASE_PATH.replace(/\/$/, '');
+  if (rawPath === base) return '';
+  if (rawPath.startsWith(SITE_BASE_PATH)) return rawPath.slice(SITE_BASE_PATH.length);
+  return null;
 }
 
 function anchorResolves(anchors, fragment) {
@@ -265,10 +330,10 @@ async function checkDocLinks(root) {
         continue;
       }
 
-      const { path: pathPart, fragment } = splitLinkTarget(raw);
+      const { rawPath, path: pathPart, fragment } = splitLinkTarget(raw);
 
       // Pure fragment: resolve against the current file's own anchors.
-      if (pathPart === '') {
+      if (rawPath === '') {
         checkedCount += 1;
         if (fragment !== '' && !anchorResolves(anchors, fragment)) {
           broken.push({ relFile, lineNumber, target: raw, reason: 'missing anchor' });
@@ -277,7 +342,26 @@ async function checkDocLinks(root) {
       }
 
       checkedCount += 1;
-      const targetPath = resolve(dirname(file), pathPart);
+      let targetPath;
+      if (rawPath.startsWith('/')) {
+        // Root-absolute: valid only under the site base path, where it names a
+        // file in the site source directory. Anything else leaves the site.
+        const siteRooted = siteRootedPath(rawPath);
+        if (siteRooted === null) {
+          broken.push({
+            relFile,
+            lineNumber,
+            target: raw,
+            reason: `root-absolute path outside the site base path ${SITE_BASE_PATH}`,
+          });
+          continue;
+        }
+        targetPath = join(root, SITE_SOURCE_DIR, safeDecode(siteRooted));
+      } else {
+        // join, not resolve: a decoded path may begin with a slash (from %2F)
+        // and must still be read relative to the linking file, as the server does.
+        targetPath = join(dirname(file), pathPart);
+      }
       if (!(await pathExists(targetPath))) {
         broken.push({ relFile, lineNumber, target: raw, reason: 'file not found' });
         continue;
@@ -336,7 +420,15 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
   });
 }
 
-// extractLinks, splitLinkTarget, and EXTERNAL_PREFIX are shared with the staged
-// link check so both passes agree on what counts as a link, what file a link
-// names, and what counts as external.
-export { checkDocLinks, collectAnchors, extractLinks, EXTERNAL_PREFIX, slugify, splitLinkTarget };
+// extractLinks, splitLinkTarget, siteRootedPath, and EXTERNAL_PREFIX are shared
+// with the staged link check so both passes agree on what counts as a link,
+// what file a link names, and what counts as external.
+export {
+  checkDocLinks,
+  collectAnchors,
+  extractLinks,
+  EXTERNAL_PREFIX,
+  siteRootedPath,
+  slugify,
+  splitLinkTarget,
+};

@@ -2,6 +2,11 @@ import { copyFile, lstat, mkdir, readdir, rm } from 'node:fs/promises';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// The published site is a project Pages site, so every staged file is served under
+// this path prefix on the Pages host. The link checks use it to resolve
+// root-absolute links the way the browser does.
+const SITE_BASE_PATH = '/usabl/';
+
 // The allowlist is the security boundary: only these files ever reach GitHub Pages.
 // Paths are relative to the docs source and may be nested; the deck ships under demo/
 // so its published URL is /usabl/demo/product-deck.html.
@@ -68,6 +73,6 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
   });
 }
 
-// Exported so the staged link check can build the exact deploy artifact without
-// carrying its own copy of the allowlist.
-export { stagePublicPages };
+// Exported so the link checks can build the exact deploy artifact without carrying
+// their own copy of the allowlist, and resolve site-rooted links against one base path.
+export { SITE_BASE_PATH, stagePublicPages };

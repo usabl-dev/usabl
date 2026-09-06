@@ -124,6 +124,72 @@ describe('check-staged-links command', () => {
     expect(result.stdout).toContain('1 broken');
   });
 
+  it('resolves a root-absolute link under the site base path against the staged root', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-staged-links-base-'));
+    const source = join(root, 'docs');
+    // /usabl/team-orientation.html is the published URL of a staged page and
+    // returns 200; /usabl/ and /usabl name the site root, served as index.html.
+    // /usabl/missing.html is under the base path but names nothing staged.
+    await writePublicPages(source, {
+      'demo/product-deck.html':
+        '<h1>Deck</h1>\n' +
+        '<a href="/usabl/team-orientation.html">Home</a>\n' +
+        '<a href="/usabl/">Root</a>\n' +
+        '<a href="/usabl">Root no slash</a>\n' +
+        '<a href="/usabl/missing.html">Gone</a>\n',
+    });
+
+    const result = await runChecker(source);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain('4 internal link(s) checked');
+    expect(result.stdout).toContain('1 broken');
+    expect(result.stdout).toContain('demo/product-deck.html:5');
+    expect(result.stdout).toContain('link "/usabl/missing.html" points to "missing.html"');
+    expect(result.stdout).not.toContain('team-orientation.html"');
+    expect(result.stdout).not.toContain('root-absolute');
+  });
+
+  it('treats a percent-encoded leading slash as a relative link, as the browser does', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-staged-links-encoded-'));
+    const source = join(root, 'docs');
+    // %2Fteam-orientation.html is relative syntax; the server decodes it and
+    // serves the same bytes as team-orientation.html. Decoding before classifying
+    // once turned it into a root-absolute link and rejected it.
+    await writePublicPages(source, {
+      'how-usabl-works.html':
+        '<h1 id="intro">How</h1>\n' +
+        '<a href="%2Fteam-orientation.html">Encoded slash</a>\n' +
+        '<a href="demo%2Fproduct-deck.html">Encoded nested slash</a>\n',
+    });
+
+    const result = await runChecker(source);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('2 internal link(s) checked');
+    expect(result.stdout).toContain('0 broken');
+  });
+
+  it('reports directory references with no staged index.html as missing', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-staged-links-noindex-'));
+    const source = join(root, 'docs');
+    // demo/ holds the deck but no index.html, so both directory forms 404.
+    // ../.. climbs above the staged root.
+    await writePublicPages(source, {
+      'how-usabl-works.html':
+        '<h1 id="intro">How</h1>\n<a href="demo">Bare</a>\n<a href="demo/">Slash</a>\n',
+      'demo/product-deck.html': '<h1>Deck</h1>\n<a href="../..">Above root</a>\n',
+    });
+
+    const result = await runChecker(source);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain('how-usabl-works.html:2: link "demo" points to "demo"');
+    expect(result.stdout).toContain('how-usabl-works.html:3: link "demo/" points to "demo/index.html"');
+    expect(result.stdout).toContain('demo/product-deck.html:2: link "../.." points to ".."');
+    expect(result.stdout).toContain('3 broken');
+  });
+
   it('passes directory references that the site serves as index.html', async () => {
     root = await mkdtemp(join(tmpdir(), 'usabl-staged-links-index-'));
     const source = join(root, 'docs');

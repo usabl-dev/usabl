@@ -101,6 +101,74 @@ describe('check-doc-links command', () => {
     expect(result.stdout).toContain('2 relative link(s) checked');
   });
 
+  it('resolves root-absolute links under the site base path against docs and rejects the rest', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-base-'));
+    await mkdir(join(root, 'docs', 'demo'), { recursive: true });
+    await writeFile(
+      join(root, 'docs', 'demo', 'a.html'),
+      '<h1 id="top">A</h1>\n' +
+        '<a href="/usabl/b.html#intro">Under base</a>\n' +
+        '<a href="/usabl/">Site root</a>\n' +
+        '<a href="/b.html">Outside base</a>\n' +
+        '<a href="%2Fb.html">Encoded slash, relative</a>\n',
+      'utf8',
+    );
+    await writeFile(join(root, 'docs', 'b.html'), '<h1 id="intro">B</h1>\n', 'utf8');
+    await writeFile(join(root, 'docs', 'demo', 'b.html'), '<h1>Demo B</h1>\n', 'utf8');
+
+    const result = await runChecker(root);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toContain('4 relative link(s) checked');
+    expect(result.stdout).toContain('1 broken');
+    expect(result.stdout).toContain(
+      'docs/demo/a.html:4: root-absolute path outside the site base path /usabl/: /b.html',
+    );
+    // The encoded slash is relative syntax and names demo/b.html, not /b.html.
+    expect(result.stdout).not.toContain('%2Fb.html');
+  });
+
+  it('keeps a data URL srcset candidate whole and still checks the next candidate', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-srcset-'));
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(
+      join(root, 'docs', 'a.html'),
+      '<img srcset="data:image/png;base64,PAYLOADPART,MOREPAYLOAD 1x, here.png 2x" alt="">\n' +
+        '<img srcset="here.png, gone.png 2x" alt="">\n',
+      'utf8',
+    );
+    await writeFile(join(root, 'docs', 'here.png'), 'x', 'utf8');
+
+    const result = await runChecker(root);
+
+    expect(result.code).not.toBe(0);
+    // The data URL is one external candidate, never split at its commas, so no
+    // part of its payload reaches the output.
+    expect(result.stdout).not.toContain('PAYLOAD');
+    expect(result.stdout).toContain('1 external URL(s) skipped');
+    expect(result.stdout).toContain('3 relative link(s) checked');
+    expect(result.stdout).toContain('docs/a.html:2: file not found: gone.png');
+    expect(result.stdout).toContain('1 broken');
+  });
+
+  it('extracts the string form of a CSS @import inside a style block', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-import-'));
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(
+      join(root, 'docs', 'a.html'),
+      '<style>\n@import "gone-theme.css";\n@import url("here.css");\n</style>\n',
+      'utf8',
+    );
+    await writeFile(join(root, 'docs', 'here.css'), 'x', 'utf8');
+
+    const result = await runChecker(root);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toContain('docs/a.html:2: file not found: gone-theme.css');
+    expect(result.stdout).toContain('2 relative link(s) checked');
+    expect(result.stdout).toContain('1 broken');
+  });
+
   // The extractor covers srcset candidates, the video poster, the object data
   // attribute, url() inside a style block, and url() inside an inline style.
   const richPage = (prefix: string): string =>

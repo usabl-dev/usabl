@@ -10,9 +10,11 @@ const packageJsonPath = resolve('package.json');
 
 // The docs:linkcheck npm script runs the source-tree pass and then the staged
 // pass. A link can pass one and fail the other, so a test that invokes only one
-// script cannot prove the real CI command accepts or rejects a link. These
-// tests read the command from package.json, assert its shape, and run the same
-// scripts in the same order against a fixture.
+// script cannot show what the real CI command accepts or rejects. These tests
+// do not spawn npm, because the command has no way to point both passes at a
+// fixture. Instead they read the command from package.json, require it to be
+// exactly `node <script>` parts joined by `&&`, and run those scripts in that
+// order with the fixture paths, stopping at the first failure as `&&` does.
 interface PassResult {
   code: number;
   stdout: string;
@@ -38,6 +40,9 @@ async function linkcheckScripts(): Promise<string[]> {
   const command = pkg.scripts['docs:linkcheck'] ?? '';
   return command.split('&&').map((part) => {
     const words = part.trim().split(/\s+/);
+    // Exactly `node <script>`: an extra argument or flag would change what the
+    // real command does in a way these tests would not reproduce.
+    expect(words, `docs:linkcheck part is not "node <script>": ${part.trim()}`).toHaveLength(2);
     expect(words[0]).toBe('node');
     return words[1] ?? '';
   });
@@ -126,6 +131,23 @@ describe('docs:linkcheck composite command', () => {
     expect(result.passesRun).toBe(2);
     expect(result.stdout).toContain('demo/product-deck.html:2');
     expect(result.stdout).toContain('not in the staged Pages set');
+  });
+
+  it('accepts a root-absolute link under the site base path in both passes', async () => {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-composite-base-'));
+    // /usabl/team-orientation.html returns 200 on the published site. The source
+    // pass once reported it as a missing file, so the composite command failed
+    // before the staged pass could resolve it.
+    await writePublicPages(join(root, 'docs'), {
+      'how-usabl-works.html':
+        '<h1 id="intro">How</h1>\n<a href="/usabl/team-orientation.html">Home</a>\n',
+    });
+
+    const result = await runComposite(root);
+
+    expect(result.code).toBe(0);
+    expect(result.passesRun).toBe(2);
+    expect(result.stdout).toContain('0 broken');
   });
 
   it('rejects a root-absolute link in the source pass before staging runs', async () => {
