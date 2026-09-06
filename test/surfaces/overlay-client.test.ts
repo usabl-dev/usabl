@@ -2197,7 +2197,7 @@ describe('the overlay moves out of the way of the element it points at', { timeo
         body: `<!doctype html>
           <html lang="en">
             <head><title>Corner host</title>
-              <style>#corner-target { position: fixed; ${options.targetCss} width: 160px; height: 60px; }</style>
+              <style>#corner-target { position: fixed; width: 160px; height: 60px; ${options.targetCss} }</style>
             </head>
             <body>
               <header><h1>Fleet operations</h1></header>
@@ -2308,6 +2308,76 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     await page.reload();
     await host.waitFor();
     expect(await dockCorner(page)).toBe(afterOne);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await context0(page);
+  });
+
+  // Shared by the two geometry tests: does the open panel overlap the corner target right now.
+  async function panelOverlapsTarget(page: Page): Promise<boolean> {
+    return page.locator(OVERLAY).evaluate((h) => {
+      const panelEl = (h as HTMLElement).shadowRoot?.querySelector('.panel');
+      const target = document.querySelector('#corner-target');
+      if (!panelEl || !target) return true;
+      const a = panelEl.getBoundingClientRect();
+      const b = target.getBoundingClientRect();
+      return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    });
+  }
+
+  it('judges corners with the real 12px inset, not flush to the edge', async () => {
+    // The panel is 420px wide and sits 12px in, so docked left it spans 12..432. A target that starts
+    // at 421 overlaps that band. A candidate drawn flush to the edge, 0..420, reads clear and the
+    // panel lands on top of the target anyway. The right corners, 848..1268, are truly clear.
+    const page = await mountWithTarget({
+      targetCss: 'left: 421px; top: 0; width: 279px; height: 100vh;',
+      reducedMotion: true,
+      dockSeed: 'top-left',
+    });
+    const panel = page.locator(OVERLAY).getByRole('region', { name: 'usabl accessibility inspector' });
+    expect(await dockCorner(page)).toBe('top-left');
+    expect(await panelOverlapsTarget(page)).toBe(true);
+
+    await panel.locator('.finding-button').click();
+    await panel.getByRole('button', { name: 'Show on page again' }).click();
+
+    await expect.poll(async () => dockCorner(page)).toMatch(/-right$/);
+    expect(await panelOverlapsTarget(page)).toBe(false);
+    expect(await page.locator(OVERLAY).locator('.locate-status').textContent()).toBe(
+      'Highlighted Corner control on the page.',
+    );
+
+    await context0(page);
+  });
+
+  it('stays put and says so when every corner would still cover the target', async () => {
+    // 421..901 across the full height: the left corners end at 432 and the right corners start at
+    // 848, so no corner is clear. Moving would be no better, so the panel stays and the status says
+    // why the element is still partly covered.
+    const page = await mountWithTarget({
+      targetCss: 'left: 421px; top: 0; width: 480px; height: 100vh;',
+      reducedMotion: true,
+      dockSeed: 'top-left',
+    });
+    const host = page.locator(OVERLAY);
+    const panel = host.getByRole('region', { name: 'usabl accessibility inspector' });
+
+    await panel.locator('.finding-button').click();
+    await panel.getByRole('button', { name: 'Show on page again' }).click();
+    await page.waitForTimeout(150);
+
+    expect(await dockCorner(page)).toBe('top-left');
+    const status = await host.locator('.locate-status').textContent();
+    expect(status).toContain('Highlighted Corner control on the page.');
+    expect(status).toContain('no corner is clear');
+
+    // Focus element says the same, because it dodges the same way.
+    await panel.getByRole('button', { name: 'Focus element' }).click();
+    const focusStatus = await host.locator('.locate-status').textContent();
+    expect(focusStatus).toContain('Keyboard focus moved to Corner control.');
+    expect(focusStatus).toContain('no corner is clear');
 
     const axe = await new AxeBuilder({ page }).analyze();
     expect(axe.violations).toEqual([]);

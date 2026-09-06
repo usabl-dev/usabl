@@ -18,7 +18,8 @@ export const overlayClientSource = `(() => {
   // corner sits behind it. Docking lets the user move it, and auto-dodge moves it for them when they
   // ask to see an element the panel is covering. The offset from each edge matches the original
   // bottom-right placement so the panel keeps the same inset wherever it docks.
-  const DOCK_INSET = '12px';
+  const DOCK_INSET_PX = 12;
+  const DOCK_INSET = DOCK_INSET_PX + 'px';
   const DOCK_CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
   const DEFAULT_DOCK = 'bottom-right';
   const DOCK_LABELS = {
@@ -1574,30 +1575,34 @@ export const overlayClientSource = `(() => {
     return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
   }
 
-  // Where each corner would place the panel, as the point the panel's inner corner sits at. Used to
-  // pick the corner farthest from the target so the dodge moves the panel as far out of the way as
-  // it can.
-  function cornerAnchor(corner, width, height) {
+  // The rectangle the panel would occupy docked at a corner, using the panel's real size and the
+  // real inset from the viewport edges. The inset is part of the geometry: a candidate drawn flush
+  // to the edge is 12px off from where the panel really lands, and for a target that crosses that
+  // 12px band the flush rectangle reads clear while the real one still overlaps.
+  function dockedRect(corner, width, height) {
+    const inset = DOCK_INSET_PX;
     const top = corner === 'top-left' || corner === 'top-right';
     const left = corner === 'top-left' || corner === 'bottom-left';
-    return {
-      x: left ? width : window.innerWidth - width,
-      y: top ? height : window.innerHeight - height,
-    };
+    const x = left ? inset : window.innerWidth - inset - width;
+    const y = top ? inset : window.innerHeight - inset - height;
+    return { left: x, right: x + width, top: y, bottom: y + height };
   }
 
   // If the panel is covering the target, move it to the corner farthest from the target that does
   // not overlap it. Called after the target has been scrolled into view, so the rectangles are the
-  // ones the user is actually looking at. When every corner would still overlap, for example a target
-  // that fills the viewport, the dock is left where it is rather than moved somewhere no better.
+  // ones the user is actually looking at.
+  //
+  // Returns 'clear' when the panel was not in the way, 'moved' when it moved, and 'blocked' when
+  // every corner would still overlap, for example a target that spans the viewport. In that case
+  // the dock is left where it is rather than moved somewhere no better, and the caller says so.
   function dodgePanelAwayFrom(host, target) {
     const panel = panelRect(host);
     if (panel === null) {
-      return;
+      return 'clear';
     }
     const targetRect = target.getBoundingClientRect();
     if (!rectsOverlap(panel, targetRect)) {
-      return;
+      return 'clear';
     }
     const width = panel.width;
     const height = panel.height;
@@ -1608,31 +1613,33 @@ export const overlayClientSource = `(() => {
     let best = null;
     let bestDistance = -1;
     for (const corner of DOCK_CORNERS) {
-      const anchor = cornerAnchor(corner, width, height);
-      // The rectangle the panel would occupy at this corner.
-      const left = corner === 'top-left' || corner === 'bottom-left';
-      const top = corner === 'top-left' || corner === 'top-right';
-      const candidate = {
-        left: left ? 0 : window.innerWidth - width,
-        right: left ? width : window.innerWidth,
-        top: top ? 0 : window.innerHeight - height,
-        bottom: top ? height : window.innerHeight,
-      };
+      const candidate = dockedRect(corner, width, height);
       if (rectsOverlap(candidate, targetRect)) {
         continue;
       }
-      const dx = anchor.x - targetCenter.x;
-      const dy = anchor.y - targetCenter.y;
+      // Distance from the target's centre to the panel's inner corner, the point of the panel that
+      // sits closest to the middle of the screen.
+      const left = corner === 'top-left' || corner === 'bottom-left';
+      const top = corner === 'top-left' || corner === 'top-right';
+      const dx = (left ? candidate.right : candidate.left) - targetCenter.x;
+      const dy = (top ? candidate.bottom : candidate.top) - targetCenter.y;
       const distance = dx * dx + dy * dy;
       if (distance > bestDistance) {
         bestDistance = distance;
         best = corner;
       }
     }
-    if (best !== null && best !== state.dock) {
+    if (best === null) {
+      return 'blocked';
+    }
+    if (best !== state.dock) {
       setDock(host, best);
     }
+    return 'moved';
   }
+
+  const DODGE_BLOCKED_TEXT =
+    'The panel covers part of it and no corner is clear. Collapse the panel or use Move to see it.';
 
   // Put back exactly the element we borrowed a tabindex from, with exactly the value it had.
   //
@@ -1746,14 +1753,20 @@ export const overlayClientSource = `(() => {
     // Once the target is in view, get the panel out of its way if it is covering it. With reduced
     // motion the scroll is instant, so the rect is final now and the dodge runs at once. With a smooth
     // scroll the rect settles a frame or two later, so the dodge waits for the next frame.
+    const highlightedText = 'Highlighted ' + elementLabel(finding, found.selector) + ' on the page.';
+    let dodgeOutcome = 'clear';
     if (state.host) {
       if (reducedMotion || typeof window.requestAnimationFrame !== 'function') {
-        dodgePanelAwayFrom(state.host, target);
+        dodgeOutcome = dodgePanelAwayFrom(state.host, target);
       } else {
         window.requestAnimationFrame(() => {
           window.requestAnimationFrame(() => {
             if (state.host && state.highlightKey === key) {
-              dodgePanelAwayFrom(state.host, target);
+              if (dodgePanelAwayFrom(state.host, target) === 'blocked') {
+                // The status was already written below. Rewrite it with the extra sentence, so a
+                // screen reader user hears why the element is still partly covered.
+                setLocateStatus(highlightedText + ' ' + DODGE_BLOCKED_TEXT, '');
+              }
             }
           });
         });
@@ -1812,7 +1825,10 @@ export const overlayClientSource = `(() => {
       window.removeEventListener('resize', position);
     };
     state.highlightKey = key;
-    setLocateStatus('Highlighted ' + elementLabel(finding, found.selector) + ' on the page.', '');
+    setLocateStatus(
+      dodgeOutcome === 'blocked' ? highlightedText + ' ' + DODGE_BLOCKED_TEXT : highlightedText,
+      '',
+    );
     return true;
   }
 
@@ -1833,9 +1849,7 @@ export const overlayClientSource = `(() => {
       block: 'center',
       inline: 'nearest',
     });
-    if (state.host) {
-      dodgePanelAwayFrom(state.host, target);
-    }
+    const dodgeOutcome = state.host ? dodgePanelAwayFrom(state.host, target) : 'clear';
     try {
       // Some flagged elements are not focusable. A temporary tabindex of -1 lets us focus them
       // without adding them to the page's tab order. We record the exact node and the exact value it
@@ -1850,7 +1864,8 @@ export const overlayClientSource = `(() => {
       setLocateStatus('Could not move focus to this element.', found.selector);
       return;
     }
-    setLocateStatus('Keyboard focus moved to ' + elementLabel(finding, found.selector) + '.', '');
+    const movedText = 'Keyboard focus moved to ' + elementLabel(finding, found.selector) + '.';
+    setLocateStatus(dodgeOutcome === 'blocked' ? movedText + ' ' + DODGE_BLOCKED_TEXT : movedText, '');
   }
 
   function applyRowState() {
