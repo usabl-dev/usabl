@@ -245,11 +245,16 @@ requirements:
     // One waiver was written for one requirement. A second requirement that reuses the id
     // produces the same rule string, so the waiver would cover a failure its author never saw
     // and a real barrier would report as verified.
-    const result = await run(depsForSecondId('account-name'), config);
+    const deps = depsForSecondId('account-name');
+    const scanSpy = vi.spyOn(deps.checkRunner, 'scan');
+    const result = await run(deps, config);
 
     expect(result.verdict).toBe('approval_required');
     expect(result.exitCode).toBe(2);
-    expect(result.findings.every((finding) => finding.status !== 'waived')).toBe(true);
+    // Nothing was scanned and nothing was found, so nothing could have been waived. Asserting
+    // the empty set directly, rather than a property over it, is what makes that claim real.
+    expect(scanSpy).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([]);
     expect(result.dirtyGuardedPaths).toContain('requirements/account-name.yaml');
   });
 
