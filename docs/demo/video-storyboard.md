@@ -218,7 +218,7 @@ See the claim guardrails at the end before changing it.
   checked inside your own change and hide what you touched."
 - **Text and graphics:** "policy read from the protected branch."
 - **Transition:** cut to scene 5.
-- **Intent:** Show the tamper-proof read without depicting an approval clearing the gate.
+- **Intent:** Show the trusted-ref policy read without depicting an approval clearing the gate.
 
 ---
 
