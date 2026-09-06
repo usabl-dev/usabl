@@ -82,8 +82,8 @@ Four pillars, ranked. Each is an integrated capability no single competitor ship
 
 ### 1. End-to-end proof loop
 
-Most tools find problems. usabl closes the loop: scan -> fix -> re-verify -> gate -> ship.
-The AI cannot declare victory until proof passes on what changed. One pass combines
+usabl is built to close the loop: scan -> fix -> re-verify -> gate -> ship.
+The Stop hook blocks the AI's first stop on a blocking verdict unless a one-use bypass was issued. One pass combines
 axe-core, PatternFly composition rules, a live keyboard walk, and deterministic
 screen-reader announcement checks on what changed.
 
@@ -122,7 +122,7 @@ enforceable as the codebase evolves.
 - **PatternFly rulepack** - purpose-built composition rules; empty slot for PF (FluentUI
   has one, PF does not).
 - **Coverage per change** - maps touched surfaces, runs the full stack on that set,
-  and returns one verdict for the whole change, with any surface it cannot reach flagged
+  and returns one of four verdicts, or none, for the whole change, with any surface it cannot reach flagged
   as not_covered.
 - **Receipt-backed verified results** - each verified change carries a re-checkable
   receipt: audit-ready proof for compliance conversations and release confidence.
