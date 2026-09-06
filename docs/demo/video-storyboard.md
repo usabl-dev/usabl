@@ -120,7 +120,7 @@ enters here.
   required. The verified chip is highlighted. The tagline lands at the end.
 - **Audio:** narrator.
 - **VO:** "usabl is built to be the thing that ensures a11y is a top priority. On the surfaces a change touches,
-  it returns one of four answers, or none when nothing was checked. Only verified counts as
+  it returns one of four answers, or none when nothing was checked or the run could not decide. Only verified counts as
   proof, and on a blocking verdict the assistant's first stop is blocked. The
   assistant can propose the fix. The rules decide whether it passes."
 - **Text and graphics:** four chips, then "Don't ship until it's usabl."
@@ -334,8 +334,8 @@ Every step was a chance to catch it. Every step let it through. None of those st
 ever required to disagree. Accessibility was the one thing no gate was holding. And now
 the assistant that writes the code is the one that says it is done. It grades its own work,
 from inside its own confidence. usabl is built to be the thing that disagrees. On the
-surfaces a change touches, it returns one of four answers, or none when nothing was checked.
-Only verified counts as proof, and on a blocking verdict the assistant's first stop is
+surfaces a change touches, it returns one of four answers, or none when nothing was checked
+or the run could not decide. Only verified counts as proof, and on a blocking verdict the assistant's first stop is
 blocked. The assistant can propose the fix. The rules decide whether it passes."
 
 Scene 3:
