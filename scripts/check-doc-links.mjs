@@ -266,4 +266,6 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
   });
 }
 
-export { checkDocLinks, collectAnchors, slugify };
+// extractLinks and EXTERNAL_PREFIX are shared with the staged link check so both
+// passes agree on what counts as a link and what counts as external.
+export { checkDocLinks, collectAnchors, extractLinks, EXTERNAL_PREFIX, slugify };

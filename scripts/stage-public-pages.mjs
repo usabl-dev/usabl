@@ -67,3 +67,7 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
     process.stdout.write(`Staged public Pages files: ${files.join(', ')}\n`);
   });
 }
+
+// Exported so the staged link check can build the exact deploy artifact without
+// carrying its own copy of the allowlist.
+export { stagePublicPages };
