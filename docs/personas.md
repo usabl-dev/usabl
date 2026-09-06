@@ -25,7 +25,8 @@ use what she built.
 she has no way to hear what changed.
 
 **usabl value:** Real-time proof in the assistant loop, overlay while hand-coding, and
-clear findings with fix guidance. Stop hook blocks "done" until verified.
+clear findings with fix guidance. The Stop hook blocks the first stop on a blocking verdict
+unless a one-use bypass was issued.
 
 **Success looks like:** First finding in minutes; fix verified in the same session; PR
 evidence bundle ready for review.
