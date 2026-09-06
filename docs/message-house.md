@@ -29,7 +29,7 @@ promise; differentiator #1 message explains how we keep it.
 | **Judge (technical)** | Deterministic Playwright + axe + keyboard walk + PatternFly rules; AI proposes fixes, the gate decides pass/fail. |
 | **Judge (business)** | Catches accessibility regressions before VPAT evidence and customer escalations - without claiming compliance. |
 | **Judge (accessibility expert)** | Mechanical layers handle the repeatable checks; your expertise stays on judgment calls, with repro scripts attached. |
-| **Priya (engineer)** | Real-time findings with fix guidance, and the assistant cannot say done until the harness verifies the change. |
+| **Priya (engineer)** | Real-time findings with fix guidance, and the Stop hook blocks the assistant's first stop on a blocking verdict unless a one-use bypass was issued. |
 | **James (AT user)** | Broken announcements and unnamed controls are caught before merge, and fixes are verified in the same workflow that introduced them. |
 | **Morgan (eng lead)** | Install it, gate from day one - ratchet blocks only new debt, with a waiver ledger for the rest. |
 | **Alex (a11y SME)** | Fewer repeated audits; escalations arrive with evidence, not "please test the whole page." |
@@ -66,7 +66,7 @@ Teaching artifact supports #3; not a fourth pillar.
 
 ## Prior-art sentence (required slide)
 
-> What is new is not another scanner: it is an assistant-time accessibility loop where
+> The design goal is an assistant-time accessibility loop, rather than another scanner, where
 > AI proposes fixes, PatternFly composition rules and rendered checks verify them, and
 > the same evidence ratchets in PRs without claiming compliance.
 
