@@ -15,7 +15,7 @@ usabl is an accessibility proof engine for product development. It checks that a
 
 usabl is built to decide whether a change may be called done, rather than to produce a report:
 
-- **A verdict with a receipt.** A change is done only when the gate verifies it. A verified run mints a receipt you can re-check later against the same source tree, policy hash, engine version, and scanner versions.
+- **A verdict with a receipt.** Only a verified run counts as proof. A verified run mints a receipt you can re-check later against the same source tree, policy hash, engine version, and scanner versions.
 - **One engine behind every surface.** The same engine runs behind the CLI, the Stop hook, the dev-server overlay, and CI. The overlay is advisory. CI reads policy from the trusted base branch, so a local run and a CI run can differ when local policy files differ from the base.
 - **Honest by construction.** The engine keeps verified, not covered, and merely observed apart in words, never by color. It never claims compliance, and it says so on its own output.
 - **Debt that only shrinks.** Known barriers sit in a reviewed evidence floor, recorded by screen, rule, and element identity. Exceptions live in a separate waiver ledger, where each waiver carries an owner, an approver, a reason, and an expiry date. New barriers block. `usabl floor prune` removes floor entries that a full scan no longer observes, so a reintroduced barrier gates as new.
@@ -36,7 +36,7 @@ Two outcomes carry no verdict. The `verdict` field is `null` and no receipt is m
 | Outcome     | Meaning                                                                                                                                                                                      |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Idle**    | No changed file maps to a covered screen or documentation page, so there was nothing to check. Exit 0. This is not a pass; nothing was measured.                                              |
-| **No verdict** | The run could not produce a verdict: an unhandled error, or every affected screen failed to render. Exit 4, and the reason is printed. Not a pass. If `usabl.config.json` itself cannot be read, the command stops before the engine runs: it prints the error and exits 4 with no result at all. |
+| **No verdict** | The run could not produce a verdict: an unhandled error, or every affected screen failed to render. Exit 4, and the reason is printed. Not a pass. Two configuration cases differ: if the working-tree `usabl.config.json` cannot be read when the command starts, the command stops before the engine runs, prints the error, and exits 4 with no result at all; if the copy at the trusted ref cannot be read during a `--trusted-ref` run, the engine records a coverage gap and returns `not_covered` (exit 3) with a result. |
 
 Only the gate mints a verdict. Every other command drafts, inspects, wires, or reports.
 
