@@ -2269,7 +2269,10 @@ export const overlayClientSource = `(() => {
       // cannot hold focus, and leaving focus where it was drops it to the document. Move focus
       // deliberately to the panel, a stable region that is always present, so a keyboard user keeps
       // their place and the next Tab starts from a known point.
-      requestRefresh();
+      //
+      // fresh: the server re-runs the engine even though it holds a cached result. This is a real
+      // check of the live application, so "Scanning" is true while it runs.
+      requestRefresh({ fresh: true, scanning: true });
       const panel = host.shadowRoot.querySelector('.panel');
       if (panel && !panel.hidden) {
         panel.focus();
@@ -2586,16 +2589,33 @@ export const overlayClientSource = `(() => {
     window.addEventListener('usabl:locationchange', handleRouteChange);
   }
 
-  // Two refreshes can be in flight at once around a save, because the dev server replaces its
-  // single-flight wrapper while an older run is still finishing. Responses can then land out of
+  // Two refreshes can be in flight at once around a save, because the dev server drops its cached
+  // result on a file change while an older run is still finishing. Responses can then land out of
   // order and an older verified result can overwrite a newer regression, leaving the panel green
   // while the engine says blocked. Every request takes a generation number and any response that is
   // not from the newest request is dropped on the floor.
   let refreshGeneration = 0;
   let refreshRunning = false;
   let refreshQueued = false;
+  // What the waiting refresh, if any, has been asked for. A burst merges into one read, and that
+  // read is fresh if any request in the burst was, and shows scanning if any request in it does.
+  let queuedFresh = false;
+  let queuedScanning = false;
 
-  async function performRefresh() {
+  // The three reasons the client reads the result, and what each one honestly knows.
+  //
+  // The dev server caches the last completed result and only re-runs the engine after a file change
+  // or when asked outright. So a read does not always mean a scan, and the badge must not say
+  // "Scanning" when nothing is running.
+  //
+  // - On page load the client cannot know whether the server has a cached result or is about to
+  //   scan, so it keeps the "No result yet" state, which is true either way.
+  // - A refresh pushed by the dev server follows an invalidation, so the read it triggers does run
+  //   the engine, and "Scanning" is true.
+  // - "Check again" sends fresh=1, which makes the server run the engine even with a cached result.
+  //   That is the one user-driven re-run. It is a real check, not a cache read, because the scan
+  //   measures the live application, which can change without a source edit. "Scanning" is true.
+  async function performRefresh(options) {
     const host = ensureInspector();
     if (!host) {
       // ensureInspector already said, once and loudly, why there is no inspector. Reading the result
@@ -2607,9 +2627,16 @@ export const overlayClientSource = `(() => {
     // rendering to it, so a later refresh landing while this run is mid-fetch supersedes this one too.
     const generation = refreshGeneration;
     const isCurrent = () => generation === refreshGeneration;
-    renderScanning(host);
+    if (options.scanning) {
+      renderScanning(host);
+    } else if (!state.payload) {
+      // First read, nothing to claim yet. Draw the "No result yet" state so the panel is not empty
+      // while the response is on its way.
+      render(host);
+    }
+    const url = options.fresh ? RESULT_ENDPOINT + '?fresh=1' : RESULT_ENDPOINT;
     try {
-      const response = await nativeFetch(RESULT_ENDPOINT, { cache: 'no-store' });
+      const response = await nativeFetch(url, { cache: 'no-store' });
       if (!isCurrent()) {
         return;
       }
@@ -2637,37 +2664,47 @@ export const overlayClientSource = `(() => {
   // response could still pass isCurrent() and render an older result over a newer one. By bumping the
   // counter now, any response from the run already in flight fails isCurrent() and is dropped, so an
   // old verified result can never overwrite a newer regression.
-  function requestRefresh() {
+  function requestRefresh(options) {
+    const fresh = options && options.fresh === true;
+    const scanning = options && options.scanning === true;
     refreshGeneration += 1;
     if (refreshRunning) {
       refreshQueued = true;
+      queuedFresh = queuedFresh || fresh;
+      queuedScanning = queuedScanning || scanning;
       return;
     }
-    runQueuedRefresh();
+    runQueuedRefresh({ fresh, scanning });
   }
 
-  async function runQueuedRefresh() {
+  async function runQueuedRefresh(options) {
     refreshRunning = true;
     try {
-      await performRefresh();
+      await performRefresh(options);
     } finally {
       refreshRunning = false;
       if (refreshQueued) {
         refreshQueued = false;
-        runQueuedRefresh();
+        const next = { fresh: queuedFresh, scanning: queuedScanning };
+        queuedFresh = false;
+        queuedScanning = false;
+        runQueuedRefresh(next);
       }
     }
   }
 
   hookNavigation();
-  requestRefresh();
-  // The dev server pushes a refresh over its own hot channel when it has re-run the engine. There is
-  // deliberately no window-level event for this: any script on the page can dispatch a window event,
-  // and a refresh the page can trigger is a lever the page can use to time what the developer sees.
-  // The "Check again" control in the panel is the user-driven path.
+  // Page load: the server may answer from its cache in milliseconds or scan for many seconds, and
+  // the client cannot tell which, so it shows "No result yet" rather than claiming a scan.
+  requestRefresh({ fresh: false, scanning: false });
+  // The dev server pushes a refresh over its own hot channel after a file change has invalidated
+  // its cached result, so the read this triggers runs the engine. There is deliberately no
+  // window-level event for this: any script on the page can dispatch a window event, and a refresh
+  // the page can trigger is a lever the page can use to time what the developer sees. The "Check
+  // again" control in the panel is the user-driven path.
   if (import.meta && import.meta.hot && typeof import.meta.hot.on === 'function') {
     import.meta.hot.on('usabl:refresh', () => {
-      requestRefresh();
+      requestRefresh({ fresh: false, scanning: true });
     });
   }
 })();`;

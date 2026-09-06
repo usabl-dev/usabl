@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import type { Deps, Result, UsablConfig } from '../../src/contracts/index.js';
 import { overlayClientSource } from '../../src/surfaces/overlay-client.js';
-import { projectOverlay, singleFlight, usablVitePlugin, usablVitePluginFromConfig } from '../../src/surfaces/vite-plugin.js';
+import { makeResultCache, projectOverlay, usablVitePlugin, usablVitePluginFromConfig } from '../../src/surfaces/vite-plugin.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
   schemaVersion: 'usabl.result.v1',
@@ -266,35 +266,132 @@ describe('projectOverlay', () => {
   });
 });
 
-describe('singleFlight', () => {
-  it('coalesces concurrent calls to one in-flight execution', async () => {
+describe('makeResultCache', () => {
+  it('coalesces concurrent reads into one execution', async () => {
     let calls = 0;
-    const run = singleFlight(async () => {
+    const cache = makeResultCache(async () => {
       calls += 1;
       await new Promise((resolve) => setTimeout(resolve, 10));
       return 'result-value';
     });
 
-    const [a, b, c] = await Promise.all([run(), run(), run()]);
+    const [a, b, c] = await Promise.all([cache.read(), cache.read(), cache.read()]);
 
     expect(calls).toBe(1);
-    expect(a).toBe('result-value');
-    expect(b).toBe('result-value');
-    expect(c).toBe('result-value');
+    expect([a, b, c]).toEqual(['result-value', 'result-value', 'result-value']);
   });
 
-  it('runs again after the previous call settles', async () => {
+  it('serves the completed result on later reads without running again', async () => {
     let calls = 0;
-    const run = singleFlight(async () => {
+    const cache = makeResultCache(async () => {
       calls += 1;
       return calls;
     });
 
-    await run();
-    const second = await run();
+    await cache.read();
+    const second = await cache.read();
+    const third = await cache.read();
+
+    expect(calls).toBe(1);
+    expect(second).toBe(1);
+    expect(third).toBe(1);
+  });
+
+  it('runs again after invalidate', async () => {
+    let calls = 0;
+    const cache = makeResultCache(async () => {
+      calls += 1;
+      return calls;
+    });
+
+    await cache.read();
+    cache.invalidate();
+    const second = await cache.read();
 
     expect(calls).toBe(2);
     expect(second).toBe(2);
+  });
+
+  it('does not cache a rejection, so the next read retries', async () => {
+    let calls = 0;
+    const cache = makeResultCache(async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error('engine failed');
+      }
+      return calls;
+    });
+
+    await expect(cache.read()).rejects.toThrow('engine failed');
+    const second = await cache.read();
+
+    expect(calls).toBe(2);
+    expect(second).toBe(2);
+  });
+
+  it('runs again on a fresh read but joins a run already in flight', async () => {
+    let calls = 0;
+    let release: () => void = () => {};
+    const cache = makeResultCache(async () => {
+      calls += 1;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return calls;
+    });
+
+    // The run starts one tick after read() is called, so wait for it before releasing it.
+    const started = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    const first = cache.read();
+    await started();
+    release();
+    expect(await first).toBe(1);
+
+    // fresh skips the cache and starts a new run.
+    const fresh = cache.read({ fresh: true });
+    // A second fresh read while that run is in flight joins it instead of starting a third.
+    const joined = cache.read({ fresh: true });
+    await started();
+    release();
+    expect(await fresh).toBe(2);
+    expect(await joined).toBe(2);
+    expect(calls).toBe(2);
+
+    // The fresh result replaced the cache.
+    expect(await cache.read()).toBe(2);
+    expect(calls).toBe(2);
+  });
+
+  it('does not cache or join a run that was in flight when invalidated', async () => {
+    // The run measured the tree before the change that invalidated it. A reader after the change
+    // must get a run that saw the change, and the stale run's result must not become the cache.
+    let calls = 0;
+    const releases: Array<() => void> = [];
+    const cache = makeResultCache(async () => {
+      calls += 1;
+      const mine = calls;
+      await new Promise<void>((resolve) => {
+        releases.push(resolve);
+      });
+      return mine;
+    });
+
+    const stale = cache.read();
+    cache.invalidate();
+    const afterChange = cache.read();
+    // Both runs start one tick after their read() call.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toBe(2);
+
+    for (const release of releases) {
+      release();
+    }
+    expect(await stale).toBe(1);
+    expect(await afterChange).toBe(2);
+    // The cache holds the run that saw the change.
+    expect(await cache.read()).toBe(2);
+    expect(calls).toBe(2);
   });
 });
 
@@ -392,6 +489,150 @@ describe('usablVitePlugin', () => {
     expect(JSON.parse(secondResult.body).summary).toContain('run 2');
     expect(runCount).toBe(2);
     expect(sentEvents).toContainEqual({ type: 'custom', event: 'usabl:refresh' });
+  });
+
+  it('serves the cached result on repeated fetches without re-running the engine', async () => {
+    let runCount = 0;
+    const plugin = usablVitePlugin({
+      run: async () => {
+        runCount += 1;
+        return baseResult({ verdict: 'regression', exitCode: 1, summary: `run ${runCount}` });
+      },
+    });
+    const middleware = getMiddleware(plugin);
+
+    const first = await callMiddleware(middleware, '/__usabl/result');
+    expect(JSON.parse(first.body).summary).toBe('run 1');
+    // Every later read, for example a panel open or a re-render, is served from the cache.
+    for (let read = 0; read < 5; read += 1) {
+      const again = await callMiddleware(middleware, '/__usabl/result');
+      expect(JSON.parse(again.body).summary).toBe('run 1');
+    }
+    expect(runCount).toBe(1);
+  });
+
+  it('re-runs the engine after the watcher invalidates the cache', async () => {
+    let runCount = 0;
+    const plugin = usablVitePlugin({
+      run: async () => {
+        runCount += 1;
+        return baseResult({ summary: `run ${runCount}` });
+      },
+    });
+    const watcherHandlers = new Map<string, Array<() => void>>();
+    const middlewares: Array<
+      (
+        req: { method?: string; url?: string; headers?: Record<string, string | string[] | undefined> },
+        res: FakeResponse,
+        next: () => void,
+      ) => void | Promise<void>
+    > = [];
+    plugin.configureServer?.({
+      middlewares: {
+        use(handler) {
+          middlewares.push(handler);
+        },
+      },
+      ws: { send() {} },
+      watcher: {
+        on(event, handler) {
+          const list = watcherHandlers.get(event) ?? [];
+          list.push(handler);
+          watcherHandlers.set(event, list);
+        },
+      },
+    });
+    const middleware = middlewares[0];
+    if (middleware === undefined) {
+      throw new Error('expected middleware registration');
+    }
+
+    await callMiddleware(middleware, '/__usabl/result');
+    await callMiddleware(middleware, '/__usabl/result');
+    expect(runCount).toBe(1);
+
+    for (const event of ['change', 'add', 'unlink']) {
+      for (const handler of watcherHandlers.get(event) ?? []) {
+        handler();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      const after = await callMiddleware(middleware, '/__usabl/result');
+      expect(JSON.parse(after.body).summary).toBe(`run ${runCount}`);
+    }
+    // One re-run per invalidation, three invalidations.
+    expect(runCount).toBe(4);
+  });
+
+  it('does not cache a failed run, so the next fetch retries', async () => {
+    let runCount = 0;
+    const plugin = usablVitePlugin({
+      run: async () => {
+        runCount += 1;
+        if (runCount === 1) {
+          throw new Error('engine failed');
+        }
+        return baseResult({ summary: `run ${runCount}` });
+      },
+    });
+    const middleware = getMiddleware(plugin);
+
+    await expect(
+      middleware(
+        { method: 'GET', url: '/__usabl/result', headers: { host: 'localhost:5173' } },
+        makeResponse(),
+        () => {},
+      ),
+    ).rejects.toThrow('engine failed');
+
+    const retried = await callMiddleware(middleware, '/__usabl/result');
+    expect(JSON.parse(retried.body).summary).toBe('run 2');
+    expect(runCount).toBe(2);
+
+    // And the retry's success is cached.
+    await callMiddleware(middleware, '/__usabl/result');
+    expect(runCount).toBe(2);
+  });
+
+  it('shares one execution between concurrent fetches during a run', async () => {
+    let runCount = 0;
+    const plugin = usablVitePlugin({
+      run: async () => {
+        runCount += 1;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return baseResult({ summary: `run ${runCount}` });
+      },
+    });
+    const middleware = getMiddleware(plugin);
+
+    const responses = await Promise.all([
+      callMiddleware(middleware, '/__usabl/result'),
+      callMiddleware(middleware, '/__usabl/result'),
+      callMiddleware(middleware, '/__usabl/result'),
+    ]);
+    expect(runCount).toBe(1);
+    for (const response of responses) {
+      expect(JSON.parse(response.body).summary).toBe('run 1');
+    }
+  });
+
+  it('re-runs the engine for a fresh fetch and serves that result afterwards', async () => {
+    // fresh=1 is the panel's "Check again". It must produce a real run even with a cached result,
+    // and the new result becomes the one later plain reads see.
+    let runCount = 0;
+    const plugin = usablVitePlugin({
+      run: async () => {
+        runCount += 1;
+        return baseResult({ summary: `run ${runCount}` });
+      },
+    });
+    const middleware = getMiddleware(plugin);
+
+    await callMiddleware(middleware, '/__usabl/result');
+    const fresh = await callMiddleware(middleware, '/__usabl/result?fresh=1');
+    expect(JSON.parse(fresh.body).summary).toBe('run 2');
+    const plain = await callMiddleware(middleware, '/__usabl/result');
+    expect(JSON.parse(plain.body).summary).toBe('run 2');
+    expect(runCount).toBe(2);
   });
 
   it('rejects the result and client endpoints when the Host header is not local', async () => {

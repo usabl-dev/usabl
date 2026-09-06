@@ -320,19 +320,72 @@ export function projectOverlay(
   };
 }
 
-export function singleFlight<T>(fn: () => Promise<T>): () => Promise<T> {
-  let inFlight: Promise<T> | null = null;
-  return async () => {
-    if (inFlight !== null) {
-      return inFlight;
-    }
-    // One save can trigger multiple refresh paths; single-flight keeps one truthy run per wave.
-    inFlight = Promise.resolve().then(() => fn());
-    try {
-      return await inFlight;
-    } finally {
-      inFlight = null;
-    }
+export interface ResultCache<T> {
+  // The current result. Joins a run already in flight, serves the cached result when one exists,
+  // and starts a run otherwise. fresh: true skips the cache but still joins an in-flight run.
+  read(options?: { fresh?: boolean }): Promise<T>;
+  // Drops the cached result. A run already in flight keeps going but its result is not cached,
+  // because it measured the tree as it was before the change that invalidated it.
+  invalidate(): void;
+}
+
+/**
+ * One completed result, served until the next invalidation.
+ *
+ * The earlier wrapper only shared one execution between CONCURRENT callers and forgot the result
+ * the moment it settled, so the very next read after a run re-ran the whole engine. A scan is
+ * dominated by the keyboard focus transcript, which is real evidence and cannot be cut, so every
+ * panel open and every re-read paid the full scan again. The file watcher is the only thing that
+ * makes a completed result stale, so its invalidation is the only thing that drops the cache.
+ *
+ * A rejected run is never cached: the next read retries. A run that was in flight when the cache
+ * was invalidated is neither joined nor cached, so a reader after a save always gets a run that saw
+ * the save.
+ */
+export function makeResultCache<T>(fn: () => Promise<T>): ResultCache<T> {
+  let generation = 0;
+  let cached: Promise<T> | null = null;
+  let running: { generation: number; promise: Promise<T> } | null = null;
+
+  return {
+    read(options = {}) {
+      if (running !== null && running.generation === generation) {
+        return running.promise;
+      }
+      if (options.fresh !== true && cached !== null) {
+        return cached;
+      }
+      const runGeneration = generation;
+      const promise = Promise.resolve().then(() => fn());
+      const entry = { generation: runGeneration, promise };
+      running = entry;
+      // Bookkeeping runs in the first reaction on the promise, registered here before any caller
+      // can await it, so by the time a caller continues the run is no longer marked as in flight.
+      // Clearing it in a later chained step left a window where a fresh read issued right after
+      // completion joined the finished run instead of starting a new one.
+      const settle = (): void => {
+        if (running === entry) {
+          running = null;
+        }
+      };
+      promise.then(
+        () => {
+          if (runGeneration === generation) {
+            cached = promise;
+          }
+          settle();
+        },
+        () => {
+          // Not cached. The caller sees the rejection and the next read starts a new run.
+          settle();
+        },
+      );
+      return promise;
+    },
+    invalidate() {
+      generation += 1;
+      cached = null;
+    },
   };
 }
 
@@ -355,7 +408,7 @@ export function usablVitePlugin(opts: {
   // the one warm browser it kept alive across refresh waves. It is guarded so it runs at most once.
   onClose?: () => void | Promise<void>;
 }): UsablVitePlugin {
-  let runOnce = singleFlight(opts.run);
+  const results = makeResultCache(opts.run);
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let injectSourceAttributes = false;
   let configuredHost: string | null = null;
@@ -363,8 +416,10 @@ export function usablVitePlugin(opts: {
   let closed = false;
   const workspaceRoot = opts.workspaceRoot ?? '';
 
+  // The one invalidation point. The file watcher calls this on change, add, and unlink, which are
+  // the only events that make a completed result stale.
   const resetRun = (): void => {
-    runOnce = singleFlight(opts.run);
+    results.invalidate();
   };
 
   const closeOnce = async (): Promise<void> => {
@@ -408,7 +463,8 @@ export function usablVitePlugin(opts: {
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const method = req.method ?? 'GET';
-        const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+        const requestUrl = new URL(req.url ?? '/', 'http://localhost');
+        const pathname = requestUrl.pathname;
         if (method === 'GET' && pathname === '/__usabl/client.js') {
           if (rejectNonLocal(req, res)) {
             return;
@@ -422,7 +478,13 @@ export function usablVitePlugin(opts: {
           if (rejectNonLocal(req, res)) {
             return;
           }
-          const result = await runOnce();
+          // fresh=1 is the panel's "Check again". It is the one user-driven way to re-run the engine
+          // without a file change: the scan measures the live application, which can change without
+          // a source edit, so a person who asks to check again gets a real check. Every other read
+          // serves the cached result, and a fresh read still joins a run already in flight rather
+          // than starting a second one beside it.
+          const fresh = requestUrl.searchParams.get('fresh') === '1';
+          const result = await results.read({ fresh });
           const projected = projectOverlay(result, opts.workspaceRoot ?? null);
           res.statusCode = 200;
           res.setHeader('content-type', 'application/json; charset=utf-8');

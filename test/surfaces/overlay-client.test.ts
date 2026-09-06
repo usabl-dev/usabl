@@ -513,6 +513,37 @@ describe('the fix loop', { timeout: 30_000 }, () => {
 
     await page.context().close();
   });
+
+  it('shows no result yet on load and asks for a fresh run only from Check again', async () => {
+    // The dev server caches the last completed result. On page load the client cannot tell whether
+    // the server will answer from that cache or scan, so it must not claim "Scanning". Check again
+    // is the one user-driven re-run, and it says so to the server with fresh=1.
+    const page = await mount(null, {
+      path: '/clusters',
+      responseDelayMs: 600,
+      payloads: [projectOverlay(result())],
+    });
+    const requests: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/__usabl/result')) {
+        requests.push(request.url());
+      }
+    });
+
+    // Still waiting on the first response: pending, not scanning.
+    expect(await badgeLabel(page)).toBe('usabl: no result yet. Open inspector.');
+    const panel = await openPanel(page);
+    expect(await bannerWord(page)).toBe('○No result yet');
+    await expect.poll(async () => bannerWord(page), { timeout: 10_000 }).toBe('✕Regression');
+
+    await panel.getByRole('button', { name: 'Check again' }).click();
+    await expect.poll(async () => bannerWord(page)).toBe('…Scanning');
+    await expect.poll(async () => requests.length).toBe(1);
+    expect(requests[0]).toContain('/__usabl/result?fresh=1');
+    await expect.poll(async () => bannerWord(page), { timeout: 10_000 }).toBe('✕Regression');
+
+    await page.context().close();
+  });
 });
 
 describe('overlay preferences', { timeout: 30_000 }, () => {
@@ -709,9 +740,13 @@ describe('overlay screen awareness', { timeout: 30_000 }, () => {
 });
 
 describe('overlay states', { timeout: 30_000 }, () => {
-  it('names the scanning state on the badge before the first result arrives', async () => {
+  it('says no result yet, not scanning, before the first result arrives', async () => {
+    // On page load the dev server may answer from its cached result at once or run a scan that
+    // takes many seconds, and the client cannot tell which. "No result yet" is true in both cases.
+    // "Scanning" is reserved for reads that really run the engine: a server-pushed refresh after a
+    // file change, and the user's Check again.
     const page = await mount(projectOverlay(result()), { responseDelayMs: 1000 });
-    expect(await badgeLabel(page)).toBe('usabl: scanning. Open inspector.');
+    expect(await badgeLabel(page)).toBe('usabl: no result yet. Open inspector.');
     await page.context().close();
   });
 
@@ -1520,9 +1555,12 @@ describe('the overlay never shows a stale result', { timeout: 40_000 }, () => {
   });
 
   it('collapses a burst of refresh requests into one active and one queued', async () => {
+    // The response is held long enough that all twelve presses below land while the first read is
+    // still in flight. Each press is a driver round trip, so a short delay lets the tail of the burst
+    // slip into the second read and queue a third, which would test timing rather than coalescing.
     const page = await mount(null, {
       path: '/clusters',
-      responseDelayMs: 250,
+      responseDelayMs: 900,
       payloads: [projectOverlay(result())],
     });
     const panel = await openPanel(page);
