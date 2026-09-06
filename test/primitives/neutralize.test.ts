@@ -22,6 +22,10 @@ describe('neutralize', () => {
     expect(neutralize('a\nb')).toBe('ab');
   });
 
+  it('strips the DELETE control byte', () => {
+    expect(neutralize('a\u007fb')).toBe('ab');
+  });
+
   it('strips Unicode line separator bytes', () => {
     expect(neutralize('a\u2028b')).toBe('ab');
   });
@@ -49,10 +53,6 @@ describe('neutralize', () => {
     expect(neutralize('a\u200eb\u200fc\u061cd')).toBe('abcd');
   });
 
-  it('strips deprecated formatting controls', () => {
-    expect(neutralize('a\u206ab\u206fc')).toBe('abc');
-  });
-
   it('strips a reordering payload so the reader sees the real character order', () => {
     // A right-to-left override makes a terminal draw this label as "status: not verified"
     // while the characters the page actually holds say something else. Removing the control
@@ -60,20 +60,42 @@ describe('neutralize', () => {
     expect(neutralize('status: \u202edeifirev ton\u202c')).toBe('status: deifirev ton');
   });
 
-  it('strips zero-width and invisible spacing characters', () => {
-    expect(neutralize('a\u200bb\u2060c\ufeffd\u00ade')).toBe('abcde');
+  // Everything below is invisible and stays. usabl reports the text that is on the page, so
+  // removing a character because a reader cannot see it would misrepresent the evidence. Each
+  // of these carries meaning that removal would destroy.
+
+  it('preserves the tag characters that spell the region in a flag emoji', () => {
+    // The flag of England: a waving black flag followed by six tag characters. Dropping the tags
+    // turns a valid emoji sequence into a plain black flag, a different accessible name.
+    const flag = '\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}';
+
+    expect(neutralize(flag)).toBe(flag);
+    expect([...neutralize(flag)]).toHaveLength(7);
   });
 
-  it('strips invisible math operators', () => {
-    expect(neutralize('a\u2061b\u2062c\u2063d\u2064e')).toBe('abcde');
+  it('preserves variation selectors that choose how a glyph is drawn', () => {
+    expect(neutralize('\u{1f44d}\ufe0f')).toBe('\u{1f44d}\ufe0f');
+    expect(neutralize('\u{845b}\u{e0100}')).toBe('\u{845b}\u{e0100}');
   });
 
-  it('strips interlinear annotation characters', () => {
-    expect(neutralize('a\ufff9b\ufffac\ufffbd')).toBe('abcd');
+  it('preserves invisible mathematical operators', () => {
+    expect(neutralize('f(x)\u2061 and a\u2062b')).toBe('f(x)\u2061 and a\u2062b');
   });
 
-  it('strips tag characters that hide ASCII from a human reader', () => {
-    expect(neutralize('ok\u{e0041}\u{e0042}\u{e007f}')).toBe('ok');
+  it('preserves soft hyphens, which are a line-break hint in real prose', () => {
+    expect(neutralize('accessibility\u00ad label')).toBe('accessibility\u00ad label');
+  });
+
+  it('preserves zero-width spaces, word joiners, and the byte order mark', () => {
+    expect(neutralize('a\u200bb\u2060c\ufeffd')).toBe('a\u200bb\u2060c\ufeffd');
+  });
+
+  it('preserves deprecated formatting characters', () => {
+    expect(neutralize('a\u206ab\u206fc')).toBe('a\u206ab\u206fc');
+  });
+
+  it('preserves interlinear annotation characters', () => {
+    expect(neutralize('a\ufff9b\ufffac\ufffbd')).toBe('a\ufff9b\ufffac\ufffbd');
   });
 
   it('preserves non-control Unicode text', () => {
@@ -98,18 +120,25 @@ describe('neutralize', () => {
     expect(neutralize('\u{1f469}\u200d\u{1f4bb}')).toBe('\u{1f469}\u200d\u{1f4bb}');
   });
 
-  it('preserves astral characters outside the tag block', () => {
+  it('preserves astral characters', () => {
     expect(neutralize('score \u{1f4af}')).toBe('score \u{1f4af}');
   });
 
-  it('removes formatting characters without leaving a marker', () => {
+  it('returns text with nothing to remove unchanged', () => {
+    const clean = 'button "Save" has no accessible name on /clusters';
+
+    expect(neutralize(clean)).toBe(clean);
+  });
+
+  it('removes what it removes without leaving a marker', () => {
     expect(neutralize('ver\u202eified')).toBe('verified');
   });
 
   it('is idempotent', () => {
     const text = 'status: \u202edeifirev ton\u202c \u001b[31m\u200bok\u2069';
     const once = neutralize(text);
-    expect(once).toBe('status: deifirev ton ok');
+
+    expect(once).toBe('status: deifirev ton \u200bok');
     expect(neutralize(once)).toBe(once);
   });
 

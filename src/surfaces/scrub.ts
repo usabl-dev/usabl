@@ -4,7 +4,7 @@
  * It must never mint a verdict and must never mutate the raw Result used for receipts.
  */
 import type { Result } from '../contracts/index.js';
-import { INVISIBLE_FORMAT_RANGES, neutralize } from '../primitives/neutralize.js';
+import { neutralize } from '../primitives/neutralize.js';
 
 // The untrusted-text frame markers.
 //
@@ -34,35 +34,47 @@ const FRAME_MARKERS = [UNTRUSTED_FRAME_START, UNTRUSTED_FRAME_END] as const;
 
 // The characters the marker search looks straight through.
 //
-// Every character the neutralizer removes, plus the two joiners it deliberately keeps, U+200C and
-// U+200D. Those two are the ones that can still reach this function inside page text, because
-// Persian, Arabic, and Indic words and emoji sequences are built from them and removing them would
-// corrupt real content. Taking the rest from the neutralizer's own list means what one removes and
-// what the other tolerates cannot drift apart, and it leaves this defense standing on its own
-// rather than on the order the callers happen to run in today.
-const MARKER_SPLITTER_RANGES: ReadonlyArray<readonly [number, number]> = [
-  ...INVISIBLE_FORMAT_RANGES,
-  [0x200c, 0x200d],
-];
+// Taken from Unicode properties rather than a written-out list, because a written-out list is how
+// this gap stayed open the first time: Unicode carries more than four thousand default-ignorable
+// code points and grows with each release, so any list maintained by hand is already behind.
+// Default_Ignorable_Code_Point covers the characters that render as nothing, including the joiners,
+// the variation selectors, the tag block, and the combining grapheme joiner. Bidi_Control adds the
+// direction controls, and Cc adds the C0 and C1 control characters, which the neutralizer removes
+// before this runs but which this search must not depend on it having removed.
+//
+// This set is deliberately defined here rather than shared with the neutralizer, and it is a
+// superset of what the neutralizer removes. The two answer different questions. The neutralizer
+// asks what is unsafe to display, and the answer has to stay narrow, because usabl reports the
+// text that is really on the page and must not rewrite it. This asks what a reader cannot see, and
+// the answer has to stay wide, because anything invisible can be planted inside a marker. Wiring
+// them together would mean narrowing one to protect content silently weakens the other. A test
+// holds the superset relation.
+//
+// One limit is worth naming: this looks through single characters. A marker split by a multi
+// character escape sequence is still the neutralizer's job, and scrubString runs it first.
+const LOOK_THROUGH_PATTERN = /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\p{Cc}\u2028\u2029]/u;
 
-function isMarkerSplitter(codePoint: number): boolean {
-  for (const [first, last] of MARKER_SPLITTER_RANGES) {
-    if (codePoint >= first && codePoint <= last) {
-      return true;
-    }
-  }
-  return false;
-}
+// Answers for the basic plane are remembered in a table of fixed size, so repeated characters in a
+// long hostile string cost one property test each and nothing after that. Characters outside the
+// basic plane are tested directly rather than cached, which keeps the memory here constant.
+const BMP_UNKNOWN = 0;
+const BMP_LOOK_THROUGH = 1;
+const BMP_VISIBLE = 2;
+const bmpAnswers = new Uint8Array(0x10000);
 
-function hasMarkerSplitter(text: string): boolean {
-  for (let i = 0; i < text.length; ) {
-    const codePoint = text.codePointAt(i) ?? 0;
-    if (isMarkerSplitter(codePoint)) {
-      return true;
-    }
-    i += codePoint > 0xffff ? 2 : 1;
+function isLookThrough(codePoint: number): boolean {
+  if (codePoint > 0xffff) {
+    return LOOK_THROUGH_PATTERN.test(String.fromCodePoint(codePoint));
   }
-  return false;
+
+  const remembered = bmpAnswers[codePoint] ?? BMP_UNKNOWN;
+  if (remembered !== BMP_UNKNOWN) {
+    return remembered === BMP_LOOK_THROUGH;
+  }
+
+  const answer = LOOK_THROUGH_PATTERN.test(String.fromCharCode(codePoint));
+  bmpAnswers[codePoint] = answer ? BMP_LOOK_THROUGH : BMP_VISIBLE;
+  return answer;
 }
 
 /**
@@ -74,84 +86,83 @@ function hasMarkerSplitter(text: string): boolean {
  * The search looks through invisible characters planted between the characters of a marker. A
  * marker split that way is still a marker to every reader this frame protects, because none of
  * those characters draws anything, so matching the literal alone would leave a working forgery
- * behind. Tolerance applies only while matching the marker literal, so ordinary text keeps its
- * invisible characters and words that need a joiner are never touched.
+ * behind. Looking through applies only inside a run that turns out to be a marker, so ordinary
+ * text keeps every character it arrived with.
  *
- * Cost is bounded by construction. The text is scanned left to right once to build a copy without
- * the invisible characters, and the markers are then found in that copy with plain substring
- * searches from an index that only moves forward. There is no pattern matching and nothing to
- * backtrack, so hostile input of any length costs time in proportion to its length.
+ * Time and memory are both bounded by construction rather than by a limit. The text is read once,
+ * left to right, and the only state carried between characters is, for each marker, where the
+ * current candidate started and how much of the marker it has matched. Nothing proportional to the
+ * length of the input is allocated, and there is no pattern matching and nothing to backtrack.
+ *
+ * One candidate per marker is enough because the first character of each marker appears nowhere
+ * else inside it, so a failed candidate can only ever restart at the character that failed it. A
+ * test holds that property against edits to the marker text.
+ *
+ * Exported so this boundary can be tested on its own. Run through scrubString it is impossible to
+ * tell what this recognises from what the neutralizer removed before it, and the two are meant to
+ * be independent. Callers scrubbing page text want scrubString, frameUntrusted, or scrubResult.
  */
-function removeFrameMarkers(text: string): string {
-  // Text with nothing invisible in it, which is nearly all of it, is matched literally.
-  if (!hasMarkerSplitter(text)) {
-    return text
-      .replaceAll(UNTRUSTED_FRAME_START, REMOVED_FRAME_MARKER)
-      .replaceAll(UNTRUSTED_FRAME_END, REMOVED_FRAME_MARKER);
+export function removeFrameMarkers(text: string): string {
+  // Nothing can match without the character every marker opens with.
+  if (!FRAME_MARKERS.some((marker) => text.includes(marker.charAt(0)))) {
+    return text;
   }
 
-  // The text as a reader sees it, plus, for each code unit kept, where it came from. That mapping
-  // is what lets a match found in the readable copy be cut out of the original, splitters and all.
-  let readable = '';
-  const source: number[] = [];
-  for (let i = 0; i < text.length; ) {
-    const codePoint = text.codePointAt(i) ?? 0;
-    const width = codePoint > 0xffff ? 2 : 1;
-    if (!isMarkerSplitter(codePoint)) {
-      for (let unit = 0; unit < width; unit += 1) {
-        readable += text[i + unit];
-        source.push(i + unit);
-      }
-    }
-    i += width;
-  }
+  // Per marker: where the open candidate began, and how many of its characters have matched.
+  const candidateStart = FRAME_MARKERS.map(() => -1);
+  const candidateMatched = FRAME_MARKERS.map(() => 0);
 
   let out = '';
   let copied = 0;
-  let searchFrom = 0;
+  let matchedAny = false;
 
-  // Where each marker next appears, refreshed only once the cursor has passed it. Re-running both
-  // searches every round would rescan the tail of the text once per match, which turns a page full
-  // of markers into quadratic work. Each search resumes from a cursor that only moves forward, so
-  // the whole loop stays proportional to the length of the text.
-  const nextAt = FRAME_MARKERS.map((marker) => readable.indexOf(marker));
+  for (let i = 0; i < text.length; ) {
+    const codePoint = text.codePointAt(i) ?? 0;
+    const next = i + (codePoint > 0xffff ? 2 : 1);
+    const looksThrough = isLookThrough(codePoint);
+    let spanStart = -1;
 
-  for (;;) {
-    let matchAt = -1;
-    let matchLength = 0;
     for (let m = 0; m < FRAME_MARKERS.length; m += 1) {
-      const at = nextAt[m] ?? -1;
-      if (at === -1) {
-        continue;
-      }
       const marker = FRAME_MARKERS[m] ?? '';
-      // Leftmost wins, and the longer marker wins a tie, so a match is never cut in half.
-      if (matchAt === -1 || at < matchAt || (at === matchAt && marker.length > matchLength)) {
-        matchAt = at;
-        matchLength = marker.length;
+
+      if ((candidateStart[m] ?? -1) !== -1) {
+        if (marker.charCodeAt(candidateMatched[m] ?? 0) === codePoint) {
+          candidateMatched[m] = (candidateMatched[m] ?? 0) + 1;
+        } else if (!looksThrough) {
+          candidateStart[m] = -1;
+          candidateMatched[m] = 0;
+        }
+      }
+
+      // A character that ended one candidate can open the next one, which is why this runs after.
+      if ((candidateStart[m] ?? -1) === -1 && marker.charCodeAt(0) === codePoint) {
+        candidateStart[m] = i;
+        candidateMatched[m] = 1;
+      }
+
+      if ((candidateMatched[m] ?? 0) === marker.length && marker.length > 0) {
+        const start = candidateStart[m] ?? i;
+        // Leftmost start wins, so a longer marker is never cut short by a shorter one inside it.
+        if (spanStart === -1 || start < spanStart) {
+          spanStart = start;
+        }
       }
     }
 
-    if (matchAt === -1) {
-      break;
-    }
-
-    // source has one entry per code unit of readable, so both ends of a match are always mapped.
-    const spanStart = source[matchAt] ?? 0;
-    const spanEnd = (source[matchAt + matchLength - 1] ?? spanStart) + 1;
-    out += text.slice(copied, spanStart) + REMOVED_FRAME_MARKER;
-    copied = spanEnd;
-    searchFrom = matchAt + matchLength;
-
-    for (let m = 0; m < FRAME_MARKERS.length; m += 1) {
-      const at = nextAt[m] ?? -1;
-      if (at !== -1 && at < searchFrom) {
-        nextAt[m] = readable.indexOf(FRAME_MARKERS[m] ?? '', searchFrom);
+    if (spanStart !== -1) {
+      out += text.slice(copied, spanStart) + REMOVED_FRAME_MARKER;
+      copied = next;
+      matchedAny = true;
+      for (let m = 0; m < FRAME_MARKERS.length; m += 1) {
+        candidateStart[m] = -1;
+        candidateMatched[m] = 0;
       }
     }
+
+    i = next;
   }
 
-  return out + text.slice(copied);
+  return matchedAny ? out + text.slice(copied) : text;
 }
 
 const SECRET_KEY_PATTERN =
@@ -189,16 +200,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function scrubString(text: string): string {
-  // Redaction and control-sequence stripping are separate concerns that both apply to page text.
-  // Frame markers come out last, after control stripping, because stripping a control character
-  // joins the text on either side of it. A marker split by a NUL or an escape sequence is not a
-  // marker until neutralize has run, so removing markers any earlier would miss it.
+  // Redaction and control-sequence stripping are separate concerns that both apply to page text,
+  // and the order matters in both directions, so redaction runs on either side of the strip.
   //
-  // That ordering is not what protects the marker from being split. It only ever covered the
-  // characters neutralize removes, so a marker split by a joiner that neutralize must keep passed
-  // through intact and closed the frame. removeFrameMarkers now looks through invisible characters
-  // itself, which holds whatever runs before it.
-  return removeFrameMarkers(neutralize(redactSecrets(text)));
+  // It has to run after, because stripping a control character joins the text on either side of
+  // it. A control character planted inside a key name, "to", NUL, "ken=", defeats every credential
+  // pattern, and then the strip joins the pieces back into a plainly printed credential. Redacting
+  // only before the strip prints the secret in full.
+  //
+  // It has to run before as well, because the strip can also join a value to the text next to it,
+  // and one pattern, the bare JWT, depends on a word boundary. A JWT fenced by control characters
+  // has that boundary before the strip and can lose it after.
+  //
+  // Frame markers come out last for the same joining reason: a marker split by an escape sequence
+  // is not a marker until neutralize has run. That ordering is not what protects the marker from
+  // being split, though. It only ever covered the characters neutralize removes, and neutralize
+  // deliberately keeps every invisible character that carries meaning, so removeFrameMarkers looks
+  // through invisible characters itself and holds whatever runs before it.
+  return removeFrameMarkers(redactSecrets(neutralize(redactSecrets(text))));
 }
 
 function scrubUnknown(value: unknown): unknown {

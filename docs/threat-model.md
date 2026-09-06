@@ -131,11 +131,21 @@ comments.
 - Document that transcripts may contain page data; caution for production URLs in CI.
 - Secret redaction and control-byte neutralization already run at egress: `scrubResult`
   redacts credential-shaped keys and values and `neutralize` strips control sequences and
-  invisible formatting characters, applied by the CLI, docs, and stop-hook projections
+  the characters that reorder text, applied by the CLI, docs, and stop-hook projections
   before any output leaves the tool.
+- Value redaction runs on both sides of the strip. Stripping a control character joins the
+  text on either side of it, so a control planted inside a key name defeated every credential
+  pattern and the strip then printed the credential in full. Running redaction after the
+  strip closes that. Running it before as well keeps the bare-JWT pattern, which needs a word
+  boundary the strip can remove.
+- Key-based redaction of Result fields is the structural layer and does not depend on the
+  text at all. Value patterns are a heuristic over the printed text: an escape sequence
+  consumes its final byte, so a key name mangled that way stops being an anchor for anything,
+  including a person reading it, and no value pattern can fire.
 
-**Status:** [x] Local-first; egress redaction and neutralization ship. [ ] Telemetry
-decision open.
+**Status:** [x] Local-first; egress redaction and neutralization ship, with redaction on both
+sides of the strip. [ ] Value redaction cannot anchor on a key name an escape sequence ate a
+letter from. [ ] Telemetry decision open.
 
 ---
 
@@ -197,18 +207,34 @@ which everything the page supplied reads as trusted instruction rather than as d
 
 **Controls:**
 
-- `neutralize` removes bidirectional controls and the other invisible formatting characters
-  at every egress, so what a surface prints and what usabl found are the same text.
-- The joiners U+200C and U+200D are kept. Persian, Arabic, and Indic words and emoji
-  sequences are built from them, so removing them would corrupt real content in an
-  accessibility tool.
-- Because those two survive, `removeFrameMarkers` matches the frame markers through
-  invisible characters, so a split marker is still recognised and replaced. Both places work
-  from one list of characters, so what one removes and what the other tolerates cannot drift.
+- `neutralize` removes the bidirectional controls at every egress, along with the C0 and C1
+  control bytes and the two Unicode separators a terminal draws as line breaks. What a
+  surface prints and what usabl found are then the same text.
+- It removes nothing else that is merely invisible. usabl reports the text that is really on
+  the page, including accessible names, so deleting a character because a reader cannot see
+  it would make every surface misrepresent the evidence. Tag characters spell the region in
+  a flag emoji, variation selectors choose how a glyph is drawn, invisible operators are real
+  notation in mathematics, and joiners build words in Persian, Arabic, and Indic scripts.
+- Defending a literal is that literal's own job. `removeFrameMarkers` matches the frame
+  markers through invisible characters, so a marker split by any of them is still recognised
+  and replaced whole. The characters it looks through come from the Unicode properties
+  `Default_Ignorable_Code_Point`, `Bidi_Control`, and `Cc` rather than from a list written
+  out by hand, because a hand-written list is what left this open the first time.
+- The two policies are deliberately separate and are tested separately. Removal stays narrow
+  so content is not rewritten. Looking through stays wide so nothing invisible can hide
+  inside a marker. A test holds the second as a superset of the first.
 
-**Status:** [x] Both controls ship. Six splitters and the reordering payload are covered by
-tests. [ ] usabl does not report that a page attempted either forgery; it removes them
-silently.
+**Not handled:** a fullwidth spelling of a marker is not equal to the marker and is left
+alone, but it becomes the marker under compatibility normalization (NFKC or NFKD). Nothing
+in usabl normalizes, so this is not exploitable today. It becomes real if a consumer
+compatibility-normalizes usabl's output, and the fix then belongs in that consumer, before
+it scrubs. Folding page text here would make usabl match text that no reader sees as a
+marker, and compatibility folding is lossy for legitimate content.
+
+**Status:** [x] Both controls ship. The bidirectional controls are the full Unicode
+`Bidi_Control` set. Eleven splitters, every split position, and the reordering payload are
+covered by tests. [ ] usabl does not report that a page attempted either forgery; it removes
+them silently. [ ] Compatibility-normalized markers are out of scope, as above.
 
 ---
 

@@ -31,20 +31,36 @@
 - Page-derived text can no longer make usabl's own output read differently from
   what usabl found. Unicode bidirectional controls tell a terminal, a pull
   request comment, or the overlay to draw characters in a different order than
-  they are stored, so a crafted label could render as the opposite of the
-  finding behind it. The egress neutralizer now removes those controls, along
-  with the other invisible formatting characters that can pad a string or hide
-  characters inside it. Right-to-left text is unaffected: Hebrew and Arabic
-  letters carry their own direction and are left alone, and the joiners that
-  Persian, Arabic, Indic, and emoji sequences depend on are kept.
+  they are stored, so a crafted label could render as the opposite of the finding
+  behind it. The egress neutralizer now removes all twelve of them, and the
+  DELETE control byte it used to miss. Right-to-left text is unaffected: Hebrew
+  and Arabic letters carry their own direction and are left alone.
+- Invisible characters that carry meaning are preserved rather than removed.
+  usabl reports the text that is really on the page, so deleting a character
+  because a reader cannot see it would misrepresent the evidence. Tag characters
+  spell the region in a flag emoji, variation selectors choose how a glyph is
+  drawn, invisible operators are real notation in mathematics, and joiners build
+  words in Persian, Arabic, and Indic scripts.
 - Page text can no longer close usabl's own untrusted-text frame. That frame tells
   an agent-facing reader that everything inside it is data and never instructions.
   A marker with an invisible character planted between two of its characters still
   reads as a marker, because the planted character draws nothing, but it did not
   match the literal, so it survived into the framed body and everything after it
   read as trusted. The marker search now looks through invisible characters, so a
-  split marker is recognised and replaced like any other. Words that need a joiner
-  are unaffected, because the tolerance applies only while matching a marker.
+  split marker is recognised and replaced like any other. The characters it looks
+  through come from Unicode properties rather than a hand-written list, so the
+  defense does not fall behind as Unicode grows. Ordinary text is untouched,
+  because looking through applies only inside a run that turns out to be a marker.
+- Credentials are no longer printed when a control character splits the key name.
+  Redaction ran only before control stripping, so `token=` with a control byte
+  inside it matched no credential pattern, and the strip then joined the pieces
+  back into a plainly printed credential. Redaction now runs on both sides of the
+  strip.
+- Long page text no longer costs memory out of proportion to its length. Both the
+  neutralizer and the frame marker search copy text in runs and return the
+  original string when they have nothing to change, instead of rebuilding it one
+  character at a time. On a four million character accessible name containing one
+  emoji joiner, peak heap growth drops from about 362 MiB to about 11 MiB.
 
 ### Added
 
