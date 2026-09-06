@@ -373,6 +373,41 @@ describe('makeResultCache', () => {
     expect(calls).toBe(2);
   });
 
+  it('holds a run until the wave settles and lets every read in the wave join it', async () => {
+    // Reads that arrive while an invalidation wave is open do not start runs. They wait for the wave
+    // to close and share the one run that starts then, which reads the final generation.
+    let calls = 0;
+    let settle: () => void = () => {};
+    let open = true;
+    const wave = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const cache = makeResultCache(
+      async () => {
+        calls += 1;
+        return calls;
+      },
+      { settled: () => (open ? wave : Promise.resolve()) },
+    );
+
+    cache.invalidate();
+    const a = cache.read();
+    cache.invalidate();
+    const b = cache.read({ fresh: true });
+    cache.invalidate();
+    const c = cache.read();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toBe(0);
+
+    open = false;
+    settle();
+    expect(await Promise.all([a, b, c])).toEqual([1, 1, 1]);
+    expect(calls).toBe(1);
+    // The run read the generation current when it started, so it is the cache.
+    expect(await cache.read()).toBe(1);
+    expect(calls).toBe(1);
+  });
+
   it('does not cache or join a run that was in flight when invalidated', async () => {
     // The run measured the tree before the change that invalidated it. A reader after the change
     // must get a run that saw the change, and the stale run's result must not become the cache.
@@ -388,9 +423,11 @@ describe('makeResultCache', () => {
     });
 
     const stale = cache.read();
+    // The run starts one tick after read(). It has to be under way for it to count as in flight;
+    // a run that has not started yet reads the generation current when it starts and may be joined.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     cache.invalidate();
     const afterChange = cache.read();
-    // Both runs start one tick after their read() call.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(calls).toBe(2);
 

@@ -433,45 +433,64 @@ export interface ResultCache<T> {
  * was invalidated is neither joined nor cached, so a reader after a save always gets a run that saw
  * the save.
  */
-export function makeResultCache<T>(fn: () => Promise<T>): ResultCache<T> {
+export function makeResultCache<T>(
+  fn: () => Promise<T>,
+  ports: {
+    // Resolves when no invalidation wave is open. A run is not started while a wave is open, so a
+    // burst of file events that arrive a few milliseconds apart produces one run, started once the
+    // burst has settled, that every reader in the burst shares. Without this each event made the
+    // run started by the previous read stale, and the next read started yet another run.
+    settled?: () => Promise<void>;
+  } = {},
+): ResultCache<T> {
+  const settled = ports.settled ?? (() => Promise.resolve());
   let generation = 0;
   let cached: Promise<T> | null = null;
-  let running: { generation: number; promise: Promise<T> } | null = null;
+  // The run in progress. Before it has started, that is while it waits for the wave to settle, any
+  // read may join it, because it will read the generation that is current when it starts. Once it
+  // has started, only a read of the same generation may join it: a run already under way when an
+  // invalidation arrived measured the tree before the change and is not shared with readers after
+  // the change.
+  let running: { started: boolean; generation: number; promise: Promise<T> } | null = null;
 
   return {
     read(options = {}) {
-      if (running !== null && running.generation === generation) {
+      if (running !== null && (!running.started || running.generation === generation)) {
         return running.promise;
       }
       if (options.fresh !== true && cached !== null) {
         return cached;
       }
-      const runGeneration = generation;
-      const promise = Promise.resolve().then(() => fn());
-      const entry = { generation: runGeneration, promise };
+      const entry = { started: false, generation: -1, promise: Promise.resolve() as unknown as Promise<T> };
+      entry.promise = (async () => {
+        await settled();
+        entry.started = true;
+        entry.generation = generation;
+        return fn();
+      })();
       running = entry;
       // Bookkeeping runs in the first reaction on the promise, registered here before any caller
       // can await it, so by the time a caller continues the run is no longer marked as in flight.
       // Clearing it in a later chained step left a window where a fresh read issued right after
       // completion joined the finished run instead of starting a new one.
-      const settle = (): void => {
+      const finish = (): void => {
         if (running === entry) {
           running = null;
         }
       };
-      promise.then(
+      entry.promise.then(
         () => {
-          if (runGeneration === generation) {
-            cached = promise;
+          if (entry.generation === generation) {
+            cached = entry.promise;
           }
-          settle();
+          finish();
         },
         () => {
           // Not cached. The caller sees the rejection and the next read starts a new run.
-          settle();
+          finish();
         },
       );
-      return promise;
+      return entry.promise;
     },
     invalidate() {
       generation += 1;
@@ -499,7 +518,12 @@ export function usablVitePlugin(opts: {
   // the one warm browser it kept alive across refresh waves. It is guarded so it runs at most once.
   onClose?: () => void | Promise<void>;
 }): UsablVitePlugin {
-  const results = makeResultCache(opts.run);
+  // The open invalidation wave, if any. It opens on the first watcher event and closes when the
+  // debounce timer fires. The cache does not start a run while it is open.
+  let wave: { promise: Promise<void>; resolve: () => void } | null = null;
+  const results = makeResultCache(opts.run, {
+    settled: () => (wave === null ? Promise.resolve() : wave.promise),
+  });
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let injectSourceAttributes = false;
   let configuredHost: string | null = null;
@@ -608,12 +632,27 @@ export function usablVitePlugin(opts: {
       // is debounced. Dropping the cache inside the debounce left a window, between the file event
       // and the timer, where a read was answered with the result of the tree before the change, and
       // a fresh read in that window started a second engine run for one save.
+      //
+      // The wave stays open across a burst of events. A read that lands inside the burst waits for
+      // it to close and then shares the one run for the whole burst, so three events a few
+      // milliseconds apart cost one engine run and every reader in the burst gets that run.
       const scheduleRefresh = (): void => {
         resetRun();
+        if (wave === null) {
+          let resolve: () => void = () => {};
+          const promise = new Promise<void>((done) => {
+            resolve = done;
+          });
+          wave = { promise, resolve };
+        }
         if (refreshTimer !== null) {
           clearTimeout(refreshTimer);
         }
         refreshTimer = setTimeout(() => {
+          refreshTimer = null;
+          const settledWave = wave;
+          wave = null;
+          settledWave?.resolve();
           server.ws.send({ type: 'custom', event: 'usabl:refresh' });
         }, 80);
       };
