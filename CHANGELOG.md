@@ -121,9 +121,16 @@
   location, and the gate summary. The surfaces already bounded how many entries
   they print, but one provider error the size of a stack trace could still fill
   an assistant's context on its own. A shortened field ends with
-  `[shortened, N characters omitted]` so the cut is visible. Verdict words, exit
-  codes, and counts are never shortened. At the default noise budget the whole
-  Stop hook message stays under 13,000 characters.
+  `[shortened, N characters omitted]` so the cut is visible, and a page-supplied
+  copy of that note is rewritten so only the engine can emit the real one.
+  Verdict words, exit codes, and counts are never shortened. The whole Stop hook
+  and self-check message is then held to 13,000 characters: whole lines are
+  dropped from the end, never the verdict line, the summary, or the next step,
+  and never inside the untrusted frame, with a closing note saying how many
+  lines went. At the default noise budget nothing is dropped.
+- The self-check prints a finding's source location inside the untrusted frame.
+  A renderer-tier source mapping reads its file and line from attributes on the
+  page, so the page can choose that text, and it was printed as trusted scaffold.
 
 ## 0.2.1 - 2026-09-01
 

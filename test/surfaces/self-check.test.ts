@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { Result } from '../../src/contracts/index.js';
+import type { Result, UsablConfig } from '../../src/contracts/index.js';
 import { parseCliArgs } from '../../src/surfaces/cli.js';
 import { projectSelfCheck } from '../../src/surfaces/self-check.js';
+import { AGENT_MESSAGE_BUDGET } from '../../src/output/bounded-text.js';
+import { testConfig } from '../helpers.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
   schemaVersion: 'usabl.result.v1',
@@ -107,6 +109,54 @@ describe('projectSelfCheck', () => {
     expect(projected.message).toContain('fix: FIX');
     expect(projected.message.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
     expect(projected.message.length).toBeLessThan(2_000);
+  });
+
+  it('holds the message budget as a real bound when an operator raises the noise budget', () => {
+    // Over every cap, and small enough that two hundred findings scrub quickly.
+    const huge = (seed: string) => `${seed} ${'x'.repeat(2_000)}`;
+    const findings = Array.from({ length: 200 }, (_, index) => ({
+      rule: huge(`rule-${index}`),
+      layer: huge('layer'),
+      severity: 'serious' as const,
+      evidenceClass: 'deterministic' as const,
+      screenId: huge('screen'),
+      elementPath: 'button',
+      elementName: 'Save',
+      role: 'button',
+      whatUserExperiences: huge('experience'),
+      why: '',
+      fix: huge('fix'),
+      evidence: {},
+      confidence: 'fail' as const,
+      elementKey: `k-${index}`,
+      identityBasis: 'name' as const,
+      status: 'new' as const,
+      appSource: { tier: 'renderer' as const, file: huge('file'), line: 1, candidates: [huge('file')] },
+    }));
+    // At 20 groups the headlines fit and the frame survives with fewer pieces. At 200 the
+    // headlines alone exceed the budget, so every piece goes and the frame is absent rather
+    // than broken.
+    for (const budget of [20, 200]) {
+      const config: UsablConfig = { ...testConfig(), noiseBudget: { default: budget } };
+      const projected = projectSelfCheck(
+        baseResult({ verdict: 'regression', exitCode: 1, summary: huge('regression: 200 gating finding(s)'), findings }),
+        config,
+      );
+
+      const lines = projected.message.split('\n');
+      const opens = projected.message.split('[BEGIN UNTRUSTED PAGE TEXT').length - 1;
+      const closes = projected.message.split('[END UNTRUSTED PAGE TEXT]').length - 1;
+      expect(projected.message.length).toBeLessThanOrEqual(AGENT_MESSAGE_BUDGET);
+      expect(lines[0]).toBe('usabl self-check: REGRESSION (exit 1)');
+      expect(lines[1]).toBe('advisory: the stop hook is the gate.');
+      expect(lines[3]!.startsWith('Gate summary: regression: 200 gating finding(s)')).toBe(true);
+      expect(opens).toBe(closes);
+      expect(opens).toBeLessThanOrEqual(1);
+      if (budget === 20) {
+        expect(opens).toBe(1);
+      }
+      expect(lines.at(-1)).toMatch(/^\[shortened to fit the message budget, \d+ line\(s\) omitted/);
+    }
   });
 
   it('follows the verdict line with what it means, then the gate summary', () => {

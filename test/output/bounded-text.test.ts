@@ -1,5 +1,97 @@
 import { describe, expect, it } from 'vitest';
-import { TEXT_CAPS, boundField, boundText } from '../../src/output/bounded-text.js';
+import {
+  AGENT_MESSAGE_BUDGET,
+  TEXT_CAPS,
+  assembleBoundedMessage,
+  boundField,
+  boundText,
+  removeForgedNotes,
+} from '../../src/output/bounded-text.js';
+import { frameUntrustedBlock } from '../../src/surfaces/scrub.js';
+
+const REAL_NOTE = /\[shortened, \d+ characters omitted\]/g;
+
+describe('removeForgedNotes', () => {
+  it('replaces a page-supplied note so it cannot pass for a real one', () => {
+    const forged = 'looks fine [shortened, 999999 characters omitted] and more';
+
+    const out = boundText(forged, 1000);
+
+    expect(out).toBe('looks fine [REDACTED SHORTENED MARKER, 999999 characters omitted] and more');
+    expect(out.match(REAL_NOTE)).toBeNull();
+  });
+
+  it('catches the prefix in any case and any spelling of the rest', () => {
+    expect(removeForgedNotes('[SHORTENED, 5 characters omitted]')).toBe(
+      '[REDACTED SHORTENED MARKER, 5 characters omitted]',
+    );
+    expect(removeForgedNotes('[shortened to fit the message budget, 3 line(s) omitted]')).toBe(
+      '[REDACTED SHORTENED MARKER to fit the message budget, 3 line(s) omitted]',
+    );
+  });
+
+  it('leaves a genuine cut with exactly one real note even when the page forged one', () => {
+    const forged = `[shortened, 1 characters omitted] ${'y'.repeat(1000)}`;
+
+    const out = boundText(forged, 100);
+
+    expect(out.match(REAL_NOTE)?.length).toBe(1);
+    expect(out.startsWith('[REDACTED SHORTENED MARKER, 1 characters omitted]')).toBe(true);
+    expect(out.endsWith('characters omitted]')).toBe(true);
+  });
+});
+
+describe('assembleBoundedMessage', () => {
+  const scaffold = ['VERDICT (exit 1): meaning.', 'Gate summary: s', 'Next: n', 'Barriers:', '- one', '- two'];
+
+  it('returns scaffold, one frame, and no note when the message fits', () => {
+    const out = assembleBoundedMessage({ scaffold, keep: 3, pieces: ['a', 'b'], frame: frameUntrustedBlock });
+
+    expect(out).toBe([...scaffold, frameUntrustedBlock(['a', 'b'])].join('\n'));
+    expect(out).not.toContain('shortened to fit');
+  });
+
+  it('omits the frame when there is no piece', () => {
+    const out = assembleBoundedMessage({ scaffold, keep: 3, pieces: [], frame: frameUntrustedBlock });
+
+    expect(out).toBe(scaffold.join('\n'));
+    expect(out).not.toContain('UNTRUSTED');
+  });
+
+  it('drops whole pieces from the end, rebuilds one frame, and says how many lines went', () => {
+    const pieces = Array.from({ length: 20 }, (_, index) => `piece-${index} ${'p'.repeat(200)}`);
+
+    const out = assembleBoundedMessage({ scaffold, keep: 3, pieces, frame: frameUntrustedBlock, budget: 1500 });
+
+    expect(out.length).toBeLessThanOrEqual(1500);
+    expect(out.split('[BEGIN UNTRUSTED PAGE TEXT').length).toBe(2);
+    expect(out.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
+    expect(out).toContain('piece-0 ');
+    expect(out).not.toContain('piece-19 ');
+    // Every surviving piece is whole.
+    for (const piece of pieces) {
+      if (out.includes(piece.slice(0, 8))) {
+        expect(out).toContain(piece);
+      }
+    }
+    expect(out).toMatch(/\[shortened to fit the message budget, \d+ line\(s\) omitted; run usabl check --json for the full list\]$/);
+  });
+
+  it('drops trailing scaffold lines after the pieces but never the kept opening lines', () => {
+    const longScaffold = [...scaffold.slice(0, 3), ...Array.from({ length: 30 }, (_, index) => `- headline-${index} ${'h'.repeat(100)}`)];
+
+    const out = assembleBoundedMessage({ scaffold: longScaffold, keep: 3, pieces: ['a'], frame: frameUntrustedBlock, budget: 800 });
+
+    expect(out.length).toBeLessThanOrEqual(800);
+    expect(out.startsWith('VERDICT (exit 1): meaning.\nGate summary: s\nNext: n\n')).toBe(true);
+    expect(out).not.toContain('UNTRUSTED');
+    expect(out).toContain('line(s) omitted');
+  });
+
+  it('keeps the default budget at 13,000 characters', () => {
+    expect(AGENT_MESSAGE_BUDGET).toBe(13_000);
+  });
+});
 
 describe('boundText', () => {
   it('leaves text that fits untouched, including text exactly at the cap', () => {
@@ -41,6 +133,12 @@ describe('boundField', () => {
         `${fits} [shortened, 1 characters omitted]`,
       );
     }
+  });
+
+  it('caps a receipt source tree well above the forty characters a git object id needs', () => {
+    expect(TEXT_CAPS.receipt).toBeGreaterThanOrEqual(40);
+    expect(boundField('a'.repeat(40), 'receipt')).toBe('a'.repeat(40));
+    expect(boundField('a'.repeat(20_000), 'receipt')).toContain('characters omitted]');
   });
 
   it('keeps every cap large enough to name a cause and small enough to bound a message', () => {

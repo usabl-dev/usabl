@@ -4,7 +4,7 @@
  * It must never gate, mint a verdict, or return a process-failing exit code.
  */
 import type { Result, UsablConfig } from '../contracts/index.js';
-import { boundField } from '../output/bounded-text.js';
+import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import {
   discloseGaps,
   fixOrAbsence,
@@ -40,16 +40,23 @@ function notEvaluatedPieces(result: Result): string[] {
   });
 }
 
-// The source location is derived from usabl's own source mapping, not from page text, so it stays
-// in the scaffold outside the untrusted frame. It is still bounded: a candidate list has no
-// upper bound of its own.
-function appendSourceScaffold(scaffold: string[], finding: Result['findings'][number]): void {
+// The source location goes inside the untrusted frame with the other page-derived pieces. A
+// renderer-tier mapping reads the file and line from attributes on the rendered page, so a page
+// can choose that text, and anything a page can choose must never be printed as trusted
+// scaffold. It is bounded too: a candidate list has no upper bound of its own.
+function pushSourcePieces(
+  pieces: string[],
+  finding: Result['findings'][number],
+  label: string,
+): void {
   if (finding.docsSource?.file) {
-    scaffold.push(`source: ${boundField(formatDocsSourceLocation(finding.docsSource), 'source')}`);
+    pieces.push(`source${label}: ${boundField(formatDocsSourceLocation(finding.docsSource), 'source')}`);
   } else if (finding.appSource?.file) {
-    scaffold.push(`source: ${boundField(formatAppSourceLocation(finding.appSource), 'source')}`);
+    pieces.push(`source${label}: ${boundField(formatAppSourceLocation(finding.appSource), 'source')}`);
   } else if (finding.appSource && finding.appSource.candidates.length > 0) {
-    scaffold.push(`candidates: ${boundField(finding.appSource.candidates.join(', '), 'candidates')}`);
+    pieces.push(
+      `candidates${label}: ${boundField(finding.appSource.candidates.join(', '), 'candidates')}`,
+    );
   }
 }
 
@@ -78,15 +85,17 @@ export function projectSelfCheck(
   const verdict = describeVerdict(safe);
 
   // The trusted engine scaffold stays outside the frame: the verdict line, the advisory line,
-  // the meaning, the summary, the Rule line, the source location, and the Not evaluated header.
-  // Every page-derived piece goes inside one frame with a short inline label. The pieces are
-  // bounded and the assembled block is never cut, so the single closing marker cannot be lost.
+  // the meaning, the summary, the Rule line, and the Not evaluated header. Every page-derived
+  // piece, the source location included, goes inside one frame with a short inline label. The
+  // pieces are bounded per field, the whole message is bounded by dropping whole pieces, and
+  // the frame is rebuilt around what survives, so the single closing marker cannot be lost.
   const scaffold = [
     `usabl self-check: ${formatVerdictWord(verdict)}`,
     'advisory: the stop hook is the gate.',
     verdict.meaning,
     `Gate summary: ${boundField(safe.summary, 'summary')}`,
   ];
+  const keep = scaffold.length;
   const pieces: string[] = [];
   const budget = resolveNoiseBudgetDefault(config);
   // Gating (deterministic) findings only, as the stop hook does. Advisory findings never gate, so
@@ -101,7 +110,7 @@ export function projectSelfCheck(
     const ruleLabel =
       group.count > 1 ? `${group.rule} (×${group.count})` : group.rule;
     scaffold.push(`Rule: ${ruleLabel}`);
-    appendSourceScaffold(scaffold, group.representative);
+    pushSourcePieces(pieces, group.representative, '');
     pieces.push(`experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`);
     pieces.push(`fix: ${boundField(fixOrAbsence(group.representative), 'fix')}`);
   } else if (view.groups.length > 0) {
@@ -109,7 +118,7 @@ export function projectSelfCheck(
     for (const raw of view.groups) {
       const group = boundGroup(raw);
       scaffold.push(`- ${formatCollapsedGroupHeadline(group)}`);
-      appendSourceScaffold(scaffold, group.representative);
+      pushSourcePieces(pieces, group.representative, ` (${group.rule})`);
       pieces.push(
         `experience (${group.rule}): ${boundField(group.representative.whatUserExperiences, 'experience')}`,
       );
@@ -126,10 +135,7 @@ export function projectSelfCheck(
     pieces.push(...gapPieces);
   }
 
-  const message =
-    pieces.length === 0
-      ? scaffold.join('\n')
-      : [...scaffold, frameUntrustedBlock(pieces)].join('\n');
+  const message = assembleBoundedMessage({ scaffold, keep, pieces, frame: frameUntrustedBlock });
 
   return {
     advisoryExitCode: 0,

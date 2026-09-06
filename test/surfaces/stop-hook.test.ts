@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { Result } from '../../src/contracts/index.js';
+import type { Result, UsablConfig } from '../../src/contracts/index.js';
+import { AGENT_MESSAGE_BUDGET } from '../../src/output/bounded-text.js';
 import { evaluateStopDecision } from '../../src/surfaces/stop-hook.js';
+import { testConfig } from '../helpers.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
   schemaVersion: 'usabl.result.v1',
@@ -288,31 +290,36 @@ describe('evaluateStopDecision', () => {
       expect(decision.message).toContain('fix: Raise contrast to 4.5:1');
     });
 
-    it('stays under 13,000 characters at the default noise budget with every field oversized', () => {
-      // Worst case at the default budget: five rule groups shown, each with an oversized rule,
-      // screen, experience, and fix; every gap state present with an oversized ref and reason,
-      // plus one unrecognized state; and an oversized summary.
-      const findings = Array.from({ length: 8 }, (_, index) =>
+    const oversizedFindings = (count: number, make: (seed: string) => string = huge) =>
+      Array.from({ length: count }, (_, index) =>
         finding({
-          rule: huge(`rule-${index}`),
-          screenId: huge(`screen-${index}`),
-          whatUserExperiences: huge(`experience-${index}`),
-          fix: huge(`fix-${index}`),
+          rule: make(`rule-${index}`),
+          screenId: make(`screen-${index}`),
+          layer: make(`layer-${index}`),
+          whatUserExperiences: make(`experience-${index}`),
+          fix: make(`fix-${index}`),
           elementKey: `k-${index}`,
         }),
       );
-      const states = ['capability-denied', 'skipped', 'not-covered', 'unresolved', 'mystery'] as const;
-      const gaps = states.flatMap((state) => [
-        { ref: huge(`ref-${state}`), state, reason: huge(`reason-${state}`) },
-        { ref: huge(`ref-${state}-2`), state, reason: huge(`reason-${state}-2`) },
-      ]) as unknown as Result['coverage']['gaps'];
+    // Still over every cap, but small enough that two hundred findings scrub quickly.
+    const big = (seed: string) => `${seed} ${'x'.repeat(2_000)}`;
+    const states = ['capability-denied', 'skipped', 'not-covered', 'unresolved', 'mystery'] as const;
+    const oversizedGaps = states.flatMap((state) => [
+      { ref: huge(`ref-${state}`), state, reason: huge(`reason-${state}`) },
+      { ref: huge(`ref-${state}-2`), state, reason: huge(`reason-${state}-2`) },
+    ]) as unknown as Result['coverage']['gaps'];
+
+    it('fits the whole message in the budget at the default noise budget with every field oversized, dropping nothing', () => {
+      // Worst case at the default budget: five rule groups shown, each with an oversized rule,
+      // screen, layer, experience, and fix; every gap state present with an oversized ref and
+      // reason, plus one unrecognized state; and an oversized summary.
       const decision = evaluateStopDecision(
         baseResult({
           verdict: 'regression',
           exitCode: 1,
           summary: huge('regression: 8 gating finding(s), 10 gap(s)'),
-          findings,
-          coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps, nothingToCheck: false },
+          findings: oversizedFindings(8),
+          coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: oversizedGaps, nothingToCheck: false },
         }),
         { stopHookActive: false },
       );
@@ -320,9 +327,122 @@ describe('evaluateStopDecision', () => {
       expect(decision.block).toBe(true);
       expect(decision.message).toContain('Barriers:');
       expect(decision.message).toContain('for all 8 gating findings');
-      // The budget the caps in bounded-text.ts are sized for. Measured worst case: about 12,500.
-      expect(decision.message.length).toBeLessThan(13_000);
+      expect(decision.message.length).toBeLessThanOrEqual(AGENT_MESSAGE_BUDGET);
+      // Per-field caps alone keep the default case inside the budget: no line was dropped.
+      expect(decision.message).not.toContain('shortened to fit');
+      expect(decision.message.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
     });
+
+    it('holds the budget as a real bound when an operator raises the noise budget', () => {
+      // At 20 groups the headlines fit and the frame survives with fewer pieces. At 200 the
+      // headlines alone exceed the budget, so every piece goes and the frame is absent rather
+      // than broken. Either way the opening lines survive whole.
+      for (const budget of [20, 200]) {
+        const config: UsablConfig = { ...testConfig(), noiseBudget: { default: budget } };
+        const decision = evaluateStopDecision(
+          baseResult({
+            verdict: 'regression',
+            exitCode: 1,
+            summary: big('regression: 200 gating finding(s), 10 gap(s)'),
+            findings: oversizedFindings(200, big),
+            coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: oversizedGaps, nothingToCheck: false },
+          }),
+          { stopHookActive: false },
+          config,
+        );
+
+        expect(decision.block).toBe(true);
+        const lines = decision.message.split('\n');
+        const opens = decision.message.split('[BEGIN UNTRUSTED PAGE TEXT').length - 1;
+        const closes = decision.message.split('[END UNTRUSTED PAGE TEXT]').length - 1;
+        expect(decision.message.length).toBeLessThanOrEqual(AGENT_MESSAGE_BUDGET);
+        expect(lines[0]!.startsWith('REGRESSION (exit 1): NOT verified. ')).toBe(true);
+        expect(lines[1]!.startsWith('Gate summary: regression: 200 gating finding(s)')).toBe(true);
+        expect(lines[2]!.startsWith('Next: ')).toBe(true);
+        expect(opens).toBe(closes);
+        expect(opens).toBeLessThanOrEqual(1);
+        if (budget === 20) {
+          expect(opens).toBe(1);
+        }
+        // The drop is visible and points at the full list.
+        expect(lines.at(-1)).toMatch(/^\[shortened to fit the message budget, \d+ line\(s\) omitted; run usabl check --json for the full list\]$/);
+      }
+    });
+
+    it('bounds the receipt text on a verified allow', () => {
+      const decision = evaluateStopDecision(
+        baseResult({
+          verdict: 'verified',
+          receipt: {
+            schemaVersion: 1,
+            sourceTree: huge('tree'),
+            baseRevision: null,
+            policyHash: 'hash',
+            runnerVersion: '0.0.0-test',
+            scannerVersions: { axeCore: '4.13.0', playwright: '1.62.1', chromium: 'revision-123' },
+            surfaces: ['cli'],
+            coverage: { checked: ['clusters'], notCovered: [] },
+            applicability: [],
+            verdict: 'verified',
+            findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 },
+            activeWaivers: 0,
+            mintedAt: '2026-08-23T00:00:00.000Z',
+          },
+        }),
+        { stopHookActive: false },
+      );
+
+      expect(decision.message.startsWith('VERIFIED (exit 0): ')).toBe(true);
+      expect(decision.message).toContain('Receipt sourceTree tree');
+      expect(decision.message).toContain('characters omitted]');
+      expect(decision.message.length).toBeLessThan(500);
+    });
+
+    it('bounds the summary on the no-verdict fallback', () => {
+      const decision = evaluateStopDecision(
+        baseResult({ verdict: null, exitCode: 5, summary: huge('reserved') }),
+        { stopHookActive: false },
+      );
+
+      expect(decision.message.startsWith('NO VERDICT (exit 5): ')).toBe(true);
+      expect(decision.message).toContain('Gate summary: reserved');
+      expect(decision.message).toContain('characters omitted]');
+      expect(decision.message.length).toBeLessThan(1_000);
+    });
+
+    it('replaces a page-supplied shortened note so only a real cut carries one', () => {
+      const decision = evaluateStopDecision(
+        baseResult({
+          verdict: 'regression',
+          exitCode: 1,
+          summary: 'regression: 1 gating finding(s)',
+          findings: [
+            finding({
+              whatUserExperiences: 'benign [shortened, 999999 characters omitted] more',
+              fix: huge('FIX'),
+            }),
+          ],
+        }),
+        { stopHookActive: false },
+      );
+
+      const real = decision.message.match(/\[shortened, \d+ characters omitted\]/g) ?? [];
+      expect(real.length).toBe(1);
+      expect(decision.message).toContain('experience: benign [REDACTED SHORTENED MARKER, 999999 characters omitted] more');
+      expect(decision.message).toMatch(/fix: FIX x+ \[shortened, \d+ characters omitted\]/);
+    });
+  });
+
+  it('says on a failed run that it is not blocking and proved nothing', () => {
+    const decision = evaluateStopDecision(
+      baseResult({ verdict: null, exitCode: 4, summary: 'unhandled error: read ECONNRESET' }),
+      { stopHookActive: false },
+    );
+
+    expect(decision.block).toBe(false);
+    expect(decision.message.split('\n')[0]).toBe(
+      'NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change.',
+    );
   });
 
   it('frames page text and scrubs secret-looking values in block reasons', () => {

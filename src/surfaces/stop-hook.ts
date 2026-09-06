@@ -4,7 +4,7 @@
  * It must never mint verdicts or bypass gate ownership of verdict authority.
  */
 import type { Result, UsablConfig, Verdict } from '../contracts/index.js';
-import { boundField } from '../output/bounded-text.js';
+import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import {
   discloseGaps,
   fixOrAbsence,
@@ -122,6 +122,8 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   if (nextStep !== undefined) {
     scaffold.push(nextStep);
   }
+  // The verdict line, the summary, and the next step always survive the message bound.
+  const keep = scaffold.length;
   const pieces: string[] = [];
   const budget = resolveNoiseBudgetDefault(config);
   // Only gating (deterministic) findings are barriers this block is about. Advisory findings never
@@ -159,11 +161,9 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
     pieces.push(...gapPieces);
   }
 
-  if (pieces.length === 0) {
-    return scaffold.join('\n');
-  }
-
-  return [...scaffold, frameUntrustedBlock(pieces)].join('\n');
+  // The whole message is bounded as well as each field. Whole pieces go first, then trailing
+  // scaffold lines, never the opening lines, and the frame is rebuilt around what survives.
+  return assembleBoundedMessage({ scaffold, keep, pieces, frame: frameUntrustedBlock });
 }
 
 export function evaluateStopDecision(
@@ -179,7 +179,7 @@ export function evaluateStopDecision(
     const proof =
       sourceTree === undefined
         ? 'the gate verified this change.'
-        : `the gate verified this change. Receipt sourceTree ${sourceTree}.`;
+        : `the gate verified this change. Receipt sourceTree ${boundField(sourceTree, 'receipt')}.`;
     return {
       block: false,
       message: `${formatVerdictWord(verdict)}: ${proof} You may stop.`,
@@ -187,12 +187,15 @@ export function evaluateStopDecision(
   }
 
   if (safe.exitCode === 4) {
-    // A failed run proves nothing. It never says "verified" in any form, so a model skimming
-    // the first word cannot mistake it for a pass, and it names what to do instead.
+    // A failed run proves nothing, and the hook fails open: it does not block. The line says
+    // both, so the protocol decision and its limit are read together. It never says "verified"
+    // in any form, so a model skimming the first word cannot mistake it for a pass.
+    const verdict = describeVerdict(safe);
     return {
       block: false,
       message: [
-        ...verdictScaffold(safe, ''),
+        `${formatVerdictWord(verdict)}: usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change.`,
+        `Gate summary: ${boundField(safe.summary, 'summary')}`,
         'Next: run usabl check again, or check the change by hand, before you call this change accessible.',
       ].join('\n'),
     };
@@ -214,7 +217,7 @@ export function evaluateStopDecision(
       block: false,
       message: [
         `NO VERDICT (exit ${safe.exitCode}): usabl did not reach a verdict for this change.`,
-        `Gate summary: ${safe.summary}`,
+        `Gate summary: ${boundField(safe.summary, 'summary')}`,
       ].join('\n'),
     };
   }
