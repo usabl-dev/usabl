@@ -635,6 +635,82 @@ describe('usablVitePlugin', () => {
     expect(runCount).toBe(2);
   });
 
+  it('drops the cached result the instant the watcher fires, before any timer', async () => {
+    // The notification to the browser is debounced. The cache must not be. A read that lands between
+    // the file event and the debounce timer used to get the result of the tree before the change,
+    // and a fresh read in that window started a second engine run for one save.
+    let runCount = 0;
+    const plugin = usablVitePlugin({
+      run: async () => {
+        runCount += 1;
+        return baseResult({ summary: `run ${runCount}` });
+      },
+    });
+    const watcherHandlers = new Map<string, Array<() => void>>();
+    const sentEvents: Array<{ type: string; event: string }> = [];
+    const middlewares: Array<
+      (
+        req: { method?: string; url?: string; headers?: Record<string, string | string[] | undefined> },
+        res: FakeResponse,
+        next: () => void,
+      ) => void | Promise<void>
+    > = [];
+    plugin.configureServer?.({
+      middlewares: {
+        use(handler) {
+          middlewares.push(handler);
+        },
+      },
+      ws: {
+        send(payload) {
+          sentEvents.push(payload);
+        },
+      },
+      watcher: {
+        on(event, handler) {
+          const list = watcherHandlers.get(event) ?? [];
+          list.push(handler);
+          watcherHandlers.set(event, list);
+        },
+      },
+    });
+    const middleware = middlewares[0];
+    if (middleware === undefined) {
+      throw new Error('expected middleware registration');
+    }
+
+    await callMiddleware(middleware, '/__usabl/result');
+    expect(runCount).toBe(1);
+
+    // One wave per event. The read in the window after the event, plain or fresh, sees a new run,
+    // and the read the browser makes after the debounced notification sees that same run rather
+    // than a second one. Before the fix the window read got the old result and the fresh read plus
+    // the post-notification read cost two runs for one save.
+    for (const [event, path] of [
+      ['change', '/__usabl/result'],
+      ['add', '/__usabl/result?fresh=1'],
+      ['unlink', '/__usabl/result'],
+    ] as const) {
+      const before = runCount;
+      const notified = sentEvents.length;
+      for (const handler of watcherHandlers.get(event) ?? []) {
+        handler();
+      }
+      // No timer has fired yet: the notification is still pending.
+      expect(sentEvents.length).toBe(notified);
+      const inWindow = await callMiddleware(middleware, path);
+      expect(JSON.parse(inWindow.body).summary).toBe(`run ${before + 1}`);
+      expect(runCount).toBe(before + 1);
+
+      // The debounce settles and the browser is told. Its read must not start another run.
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(sentEvents.length).toBe(notified + 1);
+      const afterNotification = await callMiddleware(middleware, '/__usabl/result');
+      expect(JSON.parse(afterNotification.body).summary).toBe(`run ${before + 1}`);
+      expect(runCount).toBe(before + 1);
+    }
+  });
+
   it('rejects the result and client endpoints when the Host header is not local', async () => {
     // These handlers run before Vite validates the Host header and they end the response, so a DNS
     // rebinding request that reaches them would otherwise read back the workspace root, source paths,

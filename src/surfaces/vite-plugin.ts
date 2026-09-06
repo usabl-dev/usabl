@@ -494,12 +494,16 @@ export function usablVitePlugin(opts: {
         next();
       });
 
+      // The cache is dropped the instant the watcher reports a change. Only the browser notification
+      // is debounced. Dropping the cache inside the debounce left a window, between the file event
+      // and the timer, where a read was answered with the result of the tree before the change, and
+      // a fresh read in that window started a second engine run for one save.
       const scheduleRefresh = (): void => {
+        resetRun();
         if (refreshTimer !== null) {
           clearTimeout(refreshTimer);
         }
         refreshTimer = setTimeout(() => {
-          resetRun();
           server.ws.send({ type: 'custom', event: 'usabl:refresh' });
         }, 80);
       };
