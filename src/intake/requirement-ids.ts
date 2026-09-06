@@ -18,47 +18,23 @@
  * disclosure, not an engine crash. It must never rewrite an id or decide a verdict.
  */
 import { configError } from './config-error.js';
-import { codePointLabel, validateId } from './id-grammar.js';
+import { describeIdProblem } from './id-grammar.js';
 
 /**
  * Returns why an id cannot be trusted as an identity, or null when it can.
  *
- * A refused character is reported by position and code point and is never printed back, because
- * every character the grammar refuses is either invisible or reorders its neighbours, so printing
- * it would show the operator nothing or something other than what the file holds. The id itself
- * is not repeated either: the message names the field, and the field names the id.
+ * The rule is the shared id grammar and nothing else. The text never repeats the id: a refused
+ * character is named by position and code point, and the field label names the id.
  */
 export function describeRequirementIdProblem(id: string): string | null {
-  const result = validateId(id);
-  if (result.ok) {
-    return null;
-  }
-
-  switch (result.problem) {
-    case 'empty':
-      return 'id is required';
-    case 'disallowed-character':
-      // The position counts characters from one, which is how a person reading the file counts.
-      return (
-        `contains a character that is not allowed, at position ${result.index + 1}: ` +
-        `${codePointLabel(result.codePoint)}. Requirement ids are matched exactly and are read by ` +
-        'the people who approve waivers, so every character in an id has to be visible. ' +
-        'Remove it.'
-      );
-    case 'not-nfc':
-      // A base letter plus a combining mark prints the same as the single composed character.
-      // Both forms are valid text; only one of them can be the id, or two ids print alike.
-      return (
-        'is not in Unicode NFC form, so it can print exactly like a different id while matching ' +
-        'separately. Save the id in NFC form.'
-      );
-  }
+  return describeIdProblem(id);
 }
 
-/** Where one requirement id was declared. */
+/** Where one requirement id was declared: the file, and the position in that file's list. */
 export interface RequirementIdSite {
   id: string;
   path: string;
+  index: number;
 }
 
 /**
@@ -69,12 +45,12 @@ export interface RequirementIdSite {
  * The template builds an Error because that is the shape every config message shares; only its
  * text is used here, because the loader returns failures rather than throwing them.
  */
-function duplicateReason(id: string, firstPath: string, repeatPath: string): string {
-  if (firstPath === repeatPath) {
-    return configError`duplicate requirement id "${id}". It is declared more than once in ${repeatPath}. Both requirements become the rule intake:${id}, and a waiver matches on the rule and the surface, so one waiver would cover a requirement its author never saw. Give each requirement its own id.`
-      .message;
-  }
-  return configError`duplicate requirement id "${id}". It is declared in ${repeatPath} and already in ${firstPath}. Both requirements become the rule intake:${id}, and a waiver matches on the rule and the surface, so one waiver would cover a requirement its author never saw. Give each requirement its own id.`
+function duplicateReason(first: RequirementIdSite, repeat: RequirementIdSite): string {
+  const where =
+    first.path === repeat.path
+      ? configError`It is declared at requirements[${first.index}] and again at requirements[${repeat.index}] in ${repeat.path}.`
+      : configError`It is declared at requirements[${repeat.index}] in ${repeat.path} and already at requirements[${first.index}] in ${first.path}.`;
+  return configError`duplicate requirement id "${repeat.id}". ${where.message} Both requirements become the rule intake:${repeat.id}, and a waiver matches on the rule and the surface, so one waiver would cover a requirement its author never saw. Give each requirement its own id.`
     .message;
 }
 
@@ -87,14 +63,14 @@ function duplicateReason(id: string, firstPath: string, repeatPath: string): str
 export function findDuplicateRequirementId(
   sites: readonly RequirementIdSite[],
 ): { path: string; reason: string } | null {
-  const firstSeenAt = new Map<string, string>();
+  const firstSeen = new Map<string, RequirementIdSite>();
 
   for (const site of sites) {
-    const firstPath = firstSeenAt.get(site.id);
-    if (firstPath !== undefined) {
-      return { path: site.path, reason: duplicateReason(site.id, firstPath, site.path) };
+    const first = firstSeen.get(site.id);
+    if (first !== undefined) {
+      return { path: site.path, reason: duplicateReason(first, site) };
     }
-    firstSeenAt.set(site.id, site.path);
+    firstSeen.set(site.id, site);
   }
 
   return null;

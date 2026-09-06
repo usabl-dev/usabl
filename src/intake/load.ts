@@ -90,9 +90,9 @@ export async function loadRequirements(fs: FsGlob, config: UsablConfig): Promise
     }
 
     requirements.push(...normalized.bundle.requirements);
-    for (const requirement of normalized.bundle.requirements) {
-      idSites.push({ id: requirement.id, path });
-    }
+    normalized.bundle.requirements.forEach((requirement, index) => {
+      idSites.push({ id: requirement.id, path, index });
+    });
   }
 
   // Uniqueness is checked here, over every file at once, and not in the per-file schema.

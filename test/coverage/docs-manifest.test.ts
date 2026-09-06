@@ -133,6 +133,27 @@ describe('parseDocsManifest', () => {
     await expect(parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify(bad) }))).rejects.toThrow(/sources/i);
   });
 
+  it('refuses a pageId that carries the empty braille pattern, by position and code point', async () => {
+    // pageId shares the screen id space with surfaces and routes, so it follows the shared id
+    // grammar. The message names where the character is and never repeats the id.
+    const bad = { ...validManifest, pages: [{ ...basePage, pageId: 'install\u2800guide' }] };
+
+    await expect(parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify(bad) }))).rejects.toThrow(
+      /pages\[0\]\.pageId contains a character that is not allowed, at position 8: U\+2800/,
+    );
+    await expect(parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify(bad) }))).rejects.not.toThrow(
+      /\u2800/,
+    );
+  });
+
+  it('refuses an empty pageId', async () => {
+    const bad = { ...validManifest, pages: [{ ...basePage, pageId: '' }] };
+
+    await expect(parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify(bad) }))).rejects.toThrow(
+      /pages\[0\]\.pageId must be a non-empty string/,
+    );
+  });
+
   it('throws when two pages reuse a pageId', async () => {
     const bad = { ...validManifest, pages: [basePage, { ...basePage, url: '/other/index.html' }] };
     await expect(parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify(bad) }))).rejects.toThrow(/pageId/i);

@@ -9,58 +9,20 @@
  */
 import type { SurfaceConfig } from '../contracts/index.js';
 import { configError } from './config-error.js';
-import { codePointLabel, validateId } from './id-grammar.js';
-
-// The character rule lives in the shared id grammar, so surface ids, screen ids, and requirement
-// ids all answer to one definition of what an id may contain. This unit only turns that grammar's
-// result into the message a config error carries, and adds the uniqueness check that needs the
-// whole surface list.
-
-const BLANK_ID_PROBLEM =
-  'must be a non-empty string. usabl tracks coverage by surface id, so a blank id cannot name a screen.';
+import { describeIdProblem } from './id-grammar.js';
 
 /**
  * Returns why an id cannot carry scan identity, or null when it can.
+ *
+ * The rule is the shared id grammar and nothing else, so surface ids, screen ids, and requirement
+ * ids all answer to one definition of what an id may contain. This unit adds only the uniqueness
+ * check, which needs the whole surface list.
  *
  * Exported so a generator can ask the question the parser is going to ask, rather than writing a
  * config the parser then refuses to read.
  */
 export function describeSurfaceIdProblem(id: string): string | null {
-  // Blankness is checked on the trimmed value so an id of only spaces is reported as the empty id
-  // it is. That is the clearer message. The grammar below still refuses the whitespace itself, and
-  // comparison never trims.
-  if (id.trim().length === 0) {
-    return BLANK_ID_PROBLEM;
-  }
-
-  const result = validateId(id);
-  if (result.ok) {
-    return null;
-  }
-
-  switch (result.problem) {
-    case 'empty':
-      // Unreachable after the trimmed check above, kept so the switch stays exhaustive.
-      return BLANK_ID_PROBLEM;
-    case 'disallowed-character':
-      // The offending character is reported as a position and a code point rather than repeated
-      // into the message, because every character the grammar rejects is either invisible or
-      // reorders its neighbours. Printing one back would show the operator nothing, or would show
-      // them something other than what the file holds. The position counts characters from one,
-      // which is how a person reading the config file counts.
-      return (
-        `contains a character that is not allowed, at position ${result.index + 1}: ` +
-        `${codePointLabel(result.codePoint)}. A surface id must not contain whitespace, and must not ` +
-        `contain invisible or control characters, because usabl tracks coverage by surface id and ` +
-        `an id that renders as nothing cannot be told from another one. Use visible characters ` +
-        `with no spaces, for example "user-settings".`
-      );
-    case 'not-nfc':
-      return (
-        'must be written in Unicode NFC form. Two canonically equivalent spellings look identical ' +
-        'but compare as different ids, so usabl would treat one screen as two.'
-      );
-  }
+  return describeIdProblem(id);
 }
 
 export function assertSurfaceIds(surfaces: readonly SurfaceConfig[]): void {

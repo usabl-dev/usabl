@@ -18,6 +18,22 @@ function bundleWithId(id: string): unknown {
   };
 }
 
+function bundleWithSurface(surface: string): unknown {
+  return {
+    version: 1,
+    requirements: [
+      {
+        id: 'account-name',
+        kind: 'content',
+        surface,
+        description: 'Primary heading should be present',
+        assertion: { type: 'content', selector: 'h1', expectedText: 'Welcome' },
+        approved: true,
+      },
+    ],
+  };
+}
+
 function reasonFor(id: string): string {
   const result = parseBundle(bundleWithId(id));
   expect(result).toMatchObject({ ok: false, verdict: 'approval_required' });
@@ -49,6 +65,9 @@ const rejected: Array<[string, string, string]> = [
   ['a variation selector', 'account\ufe0fname', 'U+FE0F'],
   ['a Hangul filler', 'account\u3164name', 'U+3164'],
   ['a blank braille cell', 'account\u2800name', 'U+2800'],
+  ['an Egyptian hieroglyph full blank', 'account\u{13441}name', 'U+13441'],
+  ['an Egyptian hieroglyph half blank', 'account\u{13442}name', 'U+13442'],
+  ['a Khitan small script filler', 'account\u{16fe4}name', 'U+16FE4'],
   ['a private-use code point', 'account\ue000name', 'U+E000'],
   ['a lone surrogate', 'account\ud800name', 'U+D800'],
 ];
@@ -95,10 +114,35 @@ describe('requirement id grammar', () => {
     }
   });
 
-  it('reports an empty id once, through the field rule', () => {
+  it('reports an empty id once, through the grammar', () => {
     const reason = reasonFor('');
-    expect(reason).toContain('requirements[0].id: id is required');
+    expect(reason).toContain('requirements[0].id: must be a non-empty string');
     expect(reason.split('requirements[0].id').length - 1).toBe(1);
+  });
+
+  it('refuses a surface reference that hides a character, by position and code point', () => {
+    // The surface is the other half of the waiver key, so it follows the same grammar as the id.
+    const result = parseBundle(bundleWithSurface('clus\u200bters'));
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('requirements[0].surface');
+    expect(result.reason).toContain('at position 5: U+200B');
+    expect(result.reason).not.toContain('\u200b');
+  });
+
+  it('refuses an empty surface reference', () => {
+    const result = parseBundle(bundleWithSurface(''));
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('requirements[0].surface: must be a non-empty string');
+  });
+
+  it('accepts an ordinary surface reference', () => {
+    expect(parseBundle(bundleWithSurface('clusters')).ok).toBe(true);
   });
 
   it('does not echo a rejected id or a terminal escape sequence it carries', () => {
@@ -113,45 +157,49 @@ describe('findDuplicateRequirementId', () => {
   it('returns null when every id is distinct', () => {
     expect(
       findDuplicateRequirementId([
-        { id: 'a', path: 'requirements/a.yaml' },
-        { id: 'b', path: 'requirements/b.yaml' },
+        { id: 'a', path: 'requirements/a.yaml', index: 0 },
+        { id: 'b', path: 'requirements/b.yaml', index: 0 },
       ]),
     ).toBeNull();
   });
 
-  it('names both files when the repeat is in another file', () => {
+  it('names both files and both positions when the repeat is in another file', () => {
     const duplicate = findDuplicateRequirementId([
-      { id: 'account-name', path: 'requirements/email.yaml' },
-      { id: 'account-name', path: 'requirements/name.yaml' },
+      { id: 'account-name', path: 'requirements/email.yaml', index: 2 },
+      { id: 'account-name', path: 'requirements/name.yaml', index: 0 },
     ]);
     expect(duplicate).not.toBeNull();
     expect(duplicate?.path).toBe('requirements/name.yaml');
     expect(duplicate?.reason).toContain('account-name');
-    expect(duplicate?.reason).toContain('requirements/name.yaml');
-    expect(duplicate?.reason).toContain('requirements/email.yaml');
+    expect(duplicate?.reason).toContain(
+      'declared at requirements[0] in requirements/name.yaml and already at requirements[2] in requirements/email.yaml',
+    );
   });
 
-  it('says so when the repeat is in the same file', () => {
+  it('names both positions when the repeat is in the same file', () => {
     const duplicate = findDuplicateRequirementId([
-      { id: 'account-name', path: 'requirements/both.yaml' },
-      { id: 'account-name', path: 'requirements/both.yaml' },
+      { id: 'other', path: 'requirements/both.yaml', index: 0 },
+      { id: 'account-name', path: 'requirements/both.yaml', index: 1 },
+      { id: 'account-name', path: 'requirements/both.yaml', index: 3 },
     ]);
-    expect(duplicate?.reason).toContain('more than once in requirements/both.yaml');
+    expect(duplicate?.reason).toContain(
+      'declared at requirements[1] and again at requirements[3] in requirements/both.yaml',
+    );
   });
 
   it('compares exactly and does not fold a cross-script confusable into a repeat', () => {
     expect(
       findDuplicateRequirementId([
-        { id: 'varia', path: 'requirements/a.yaml' },
-        { id: 'vari\u0430', path: 'requirements/b.yaml' },
+        { id: 'varia', path: 'requirements/a.yaml', index: 0 },
+        { id: 'vari\u0430', path: 'requirements/b.yaml', index: 0 },
       ]),
     ).toBeNull();
   });
 
   it('scrubs a terminal escape sequence carried by a file path', () => {
     const duplicate = findDuplicateRequirementId([
-      { id: 'account-name', path: 'requirements/a.yaml' },
-      { id: 'account-name', path: 'requirements/\u001b]0;OWNED\u0007b.yaml' },
+      { id: 'account-name', path: 'requirements/a.yaml', index: 0 },
+      { id: 'account-name', path: 'requirements/\u001b]0;OWNED\u0007b.yaml', index: 0 },
     ]);
     expect(duplicate?.reason).not.toContain('\u001b');
     expect(duplicate?.reason).not.toContain('OWNED');

@@ -90,12 +90,21 @@ describe('parseUsablConfig surface id', () => {
     expect(config.surfaces.map((entry) => entry.id)).toEqual(['profile', 'billing']);
   });
 
-  it('refuses an empty or whitespace-only id', () => {
-    for (const bad of ['', '   ', '\t']) {
-      expect(() => parseUsablConfig(configJson({ surfaces: [surface(bad, '/overview')] })), bad).toThrow(
-        /surfaces\[0\]\.id must be a non-empty string/,
-      );
-    }
+  it('refuses an empty id', () => {
+    expect(() => parseUsablConfig(configJson({ surfaces: [surface('', '/overview')] }))).toThrow(
+      /surfaces\[0\]\.id must be a non-empty string/,
+    );
+  });
+
+  it('refuses a whitespace-only id for the whitespace it holds', () => {
+    // The grammar is the only rule, so an id of spaces is refused the same way as an id with a
+    // space in it: by the position and code point of the first one.
+    expect(() => parseUsablConfig(configJson({ surfaces: [surface('   ', '/overview')] }))).toThrow(
+      /surfaces\[0\]\.id contains a character that is not allowed, at position 1: U\+0020/,
+    );
+    expect(() => parseUsablConfig(configJson({ surfaces: [surface('\t', '/overview')] }))).toThrow(
+      /at position 1: U\+0009/,
+    );
   });
 
   it('refuses two surfaces that share one id and names both entries', () => {

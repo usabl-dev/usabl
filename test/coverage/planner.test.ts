@@ -252,7 +252,7 @@ describe('computeCoverage', () => {
     );
   });
 
-  it('refuses a config with an empty surface id', async () => {
+  it('refuses a config with a blank surface id', async () => {
     const cfg: UsablConfig = { ...baseConfig, surfaces: [{ id: '  ', url: '/login', files: ['src/LoginPage.tsx'] }] };
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({ routes: [] }),
@@ -260,7 +260,7 @@ describe('computeCoverage', () => {
     });
 
     await expect(computeCoverage(fs, cfg, ['src/LoginPage.tsx'])).rejects.toThrow(
-      /surfaces\[0\]\.id must be a non-empty string/,
+      /surfaces\[0\]\.id contains a character that is not allowed, at position 1: U\+0020/,
     );
   });
 

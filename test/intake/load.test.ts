@@ -286,8 +286,9 @@ requirements:
       return;
     }
     expect(result.reason).toContain('account-name');
-    expect(result.reason).toContain('requirements/name.yaml');
-    expect(result.reason).toContain('requirements/email.yaml');
+    expect(result.reason).toContain(
+      'declared at requirements[0] in requirements/name.yaml and already at requirements[0] in requirements/email.yaml',
+    );
   });
 
   it('fails closed when one file declares the same requirement id twice', async () => {
@@ -328,6 +329,9 @@ requirements:
       return;
     }
     expect(result.reason).toContain('account-name');
+    expect(result.reason).toContain(
+      'declared at requirements[0] and again at requirements[1] in requirements/both.yaml',
+    );
   });
 
   it('accepts distinct requirement ids across files', async () => {

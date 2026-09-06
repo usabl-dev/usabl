@@ -7,6 +7,7 @@
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
 import { parseRouterFallback } from './router-parse.js';
 import { configError } from '../intake/config-error.js';
+import { describeIdProblem } from '../intake/id-grammar.js';
 
 export interface RouteEntry {
   screenId: string;
@@ -46,6 +47,18 @@ function expectRoutePathUrl(value: unknown, field: string): string {
   return url;
 }
 
+function expectScreenId(value: unknown, field: string): string {
+  const id = expectString(value, field);
+  // screenId is the planner's scan identity and keys the floor, findings, waivers, and the
+  // receipt, so it follows the same grammar as every other id. The message names the position
+  // and code point of a refused character and never repeats the id.
+  const problem = describeIdProblem(id);
+  if (problem !== null) {
+    throw configError`usabl.routes.json ${field} ${problem}`;
+  }
+  return id;
+}
+
 function expectEntryFile(value: unknown): string | null {
   if (value === null) return null;
   if (typeof value === 'string') return value;
@@ -72,7 +85,7 @@ function parseSidecar(raw: string): RouteManifest {
         throw configError`usabl.routes.json routes[${index}] must be an object`;
       }
       return {
-        screenId: expectString(entry['screenId'], `routes[${index}].screenId`),
+        screenId: expectScreenId(entry['screenId'], `routes[${index}].screenId`),
         url: expectRoutePathUrl(entry['url'], `routes[${index}].url`),
         entryFile: expectEntryFile(entry['entryFile']),
       };
