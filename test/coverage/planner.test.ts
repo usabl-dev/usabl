@@ -79,6 +79,8 @@ describe('computeCoverage', () => {
           id: 'clusters',
           url: 'http://localhost:3000/clusters?variant=fixed',
           files: ['src/ClustersPage.tsx'],
+          // The url differs from the route's own, so the config has to say the two are one screen.
+          overridesDiscoveredRoute: true,
         },
       ],
     };
@@ -262,64 +264,140 @@ describe('computeCoverage', () => {
     );
   });
 
-  it('refuses a manual surface that takes a discovered route screen id for a different screen', async () => {
-    // Surface ids and route screen ids are one namespace: both are written into the same
-    // affected-screen map. The route owns "settings" and maps Profile.tsx. The manual surface
-    // takes the same id for a different screen at a different path, mapping Billing.tsx. Whichever
-    // arrives first keeps the key, the other screen is dropped, and its changed file still counts
-    // as mapped. That is two changed screens reported as covered after one scan.
-    const cfg: UsablConfig = {
+  // Surface ids and route screen ids are one namespace: both are written into the same
+  // affected-screen map. Two entries under one id collapse to one, the dropped screen's changed
+  // file still counts as mapped, and the run reports two changed screens as covered after one scan.
+  // A url cannot tell an intended override from two different screens, because applications select
+  // screens by query, fragment, trailing slash, and userinfo, and a redirect can defeat any
+  // comparison made before navigating. So the config has to say which it is.
+  const routeAndSurface = (routeUrl: string, surfaceUrl: string, overrides?: boolean): {
+    cfg: UsablConfig;
+    fs: ReturnType<typeof fsOf>;
+  } => ({
+    cfg: {
       ...baseConfig,
-      surfaces: [{ id: 'settings', url: 'http://localhost:3000/settings/billing', files: ['src/Billing.tsx'] }],
-    };
-    const fs = fsOf({
+      surfaces: [
+        {
+          id: 'shared',
+          url: surfaceUrl,
+          files: ['src/Billing.tsx'],
+          ...(overrides === undefined ? {} : { overridesDiscoveredRoute: overrides }),
+        },
+      ],
+    },
+    fs: fsOf({
       'usabl.routes.json': JSON.stringify({
-        routes: [{ screenId: 'settings', url: '/settings/profile', entryFile: 'src/Profile.tsx' }],
+        routes: [{ screenId: 'shared', url: routeUrl, entryFile: 'src/Profile.tsx' }],
       }),
       'src/Profile.tsx': `export default function Profile() {}`,
       'src/Billing.tsx': `export default function Billing() {}`,
-    });
-
-    await expect(computeCoverage(fs, cfg, ['src/Profile.tsx', 'src/Billing.tsx'])).rejects.toThrow(
-      /surfaces\[0\]\.id "settings" is already the screen id of the discovered route/,
-    );
+    }),
   });
 
-  it('still allows a manual surface to reuse a route screen id to vary the query', async () => {
-    // The documented override: same screen, operator-controlled url. This must keep working, so
-    // the collision check cannot simply refuse every id that appears in both sets.
+  const changedPair = ['src/Profile.tsx', 'src/Billing.tsx'];
+
+  const undeclaredPairs: Array<[string, string, string]> = [
+    ['a different path', '/settings/profile', 'http://localhost:3000/settings/billing'],
+    ['a query parameter', '/app?screen=profile', 'http://localhost:3000/app?screen=billing'],
+    ['a hash route', '/app#/profile', 'http://localhost:3000/app#/billing'],
+    ['a trailing slash', '/app', 'http://localhost:3000/app/'],
+    ['userinfo', '/app', 'http://someone@localhost:3000/app'],
+  ];
+
+  it.each(undeclaredPairs)(
+    'refuses an undeclared surface that takes a route screen id and differs by %s',
+    async (_label, routeUrl, surfaceUrl) => {
+      const { cfg, fs } = routeAndSurface(routeUrl, surfaceUrl);
+      await expect(computeCoverage(fs, cfg, changedPair)).rejects.toThrow(
+        /is also the screen id of the discovered route/,
+      );
+    },
+  );
+
+  it.each(undeclaredPairs)(
+    'accepts the same pair once the surface declares the override, differing by %s',
+    async (_label, routeUrl, surfaceUrl) => {
+      const { cfg, fs } = routeAndSurface(routeUrl, surfaceUrl, true);
+      await expect(computeCoverage(fs, cfg, changedPair)).resolves.toBeDefined();
+    },
+  );
+
+  it('names the declaration to add when it refuses a taken screen id', async () => {
+    const { cfg, fs } = routeAndSurface('/app?screen=profile', 'http://localhost:3000/app?screen=billing');
+    let message = '';
+    try {
+      await computeCoverage(fs, cfg, changedPair);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('surfaces[0].id');
+    expect(message).toContain('overridesDiscoveredRoute');
+    expect(message).toMatch(/different screen, give it a different id/);
+  });
+
+  it('accepts an identical scan target with no declaration, which is what init writes', async () => {
+    // A surface that restates the route's own url is the same screen on its face. Requiring a
+    // declaration there would break every config usabl init has ever generated, since init resolves
+    // surface urls exactly the way the planner resolves route urls.
+    const { cfg, fs } = routeAndSurface('/app', 'http://localhost:3000/app');
+    await expect(computeCoverage(fs, cfg, changedPair)).resolves.toBeDefined();
+  });
+
+  it.each([
+    ['percent-encoded unreserved characters', '/users/alice', 'http://localhost:3000/users/%61lice'],
+    ['percent escape hex case', '/users/~alice', 'http://localhost:3000/users/%7Ealice'],
+  ])('treats %s as the same scan target with no declaration', async (_label, routeUrl, surfaceUrl) => {
+    await expect(
+      computeCoverage(fsOf({
+        'usabl.routes.json': JSON.stringify({
+          routes: [{ screenId: 'shared', url: routeUrl, entryFile: 'src/Profile.tsx' }],
+        }),
+        'src/Profile.tsx': `export default function Profile() {}`,
+        'src/Billing.tsx': `export default function Billing() {}`,
+      }), {
+        ...baseConfig,
+        surfaces: [{ id: 'shared', url: surfaceUrl, files: ['src/Billing.tsx'] }],
+      }, changedPair),
+    ).resolves.toBeDefined();
+  });
+
+  it('refuses a declaration that overrides no discovered route', async () => {
+    // A declaration that matches nothing reads as wired up while the surface stands alone, so the
+    // url override never applies. Say so rather than let the operator believe it took effect.
     const cfg: UsablConfig = {
       ...baseConfig,
       surfaces: [
-        { id: 'clusters', url: 'http://localhost:3000/clusters?variant=fixed#top', files: ['src/ClustersPage.tsx'] },
+        { id: 'typo', url: '/typo', files: ['src/Billing.tsx'], overridesDiscoveredRoute: true },
       ],
     };
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({
-        routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }],
+        routes: [{ screenId: 'shared', url: '/app', entryFile: 'src/Profile.tsx' }],
       }),
-      'src/ClustersPage.tsx': `export default function ClustersPage() {}`,
+      'src/Profile.tsx': `export default function Profile() {}`,
+      'src/Billing.tsx': `export default function Billing() {}`,
     });
-
-    const cov = await computeCoverage(fs, cfg, ['src/ClustersPage.tsx']);
-    expect(cov.affected).toContainEqual(
-      expect.objectContaining({ screenId: 'clusters', url: 'http://localhost:3000/clusters?variant=fixed#top' }),
+    await expect(computeCoverage(fs, cfg, changedPair)).rejects.toThrow(
+      /sets overridesDiscoveredRoute, but no discovered route has the screen id "typo"/,
     );
   });
 
-  it('treats a trailing slash as the same screen when a surface reuses a route screen id', async () => {
+  it('leaves a declaration alone when discovery found no routes at all', async () => {
+    // An empty route list is not evidence about anything, which is the rule wide-blast attribution
+    // already follows. Refusing here would turn a diverged routes manifest into a crash instead of
+    // the approval_required the guard already reports.
     const cfg: UsablConfig = {
       ...baseConfig,
-      surfaces: [{ id: 'clusters', url: 'http://localhost:3000/clusters/', files: ['src/ClustersPage.tsx'] }],
+      surfaces: [
+        { id: 'login', url: '/login', files: ['src/LoginPage.tsx'], overridesDiscoveredRoute: true },
+      ],
     };
     const fs = fsOf({
-      'usabl.routes.json': JSON.stringify({
-        routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }],
-      }),
-      'src/ClustersPage.tsx': `export default function ClustersPage() {}`,
+      'usabl.routes.json': JSON.stringify({ routes: [] }),
+      'src/LoginPage.tsx': `export default function LoginPage() {}`,
     });
-
-    await expect(computeCoverage(fs, cfg, ['src/ClustersPage.tsx'])).resolves.toBeDefined();
+    const cov = await computeCoverage(fs, cfg, ['src/LoginPage.tsx']);
+    expect(cov.affected.some((s) => s.screenId === 'login' && s.provenance === 'manual')).toBe(true);
   });
 
   it('scrubs the urls it repeats back when it refuses a taken screen id', async () => {
@@ -346,7 +424,7 @@ describe('computeCoverage', () => {
 
     let message = '';
     try {
-      await computeCoverage(fs, cfg, ['src/Profile.tsx', 'src/Billing.tsx']);
+      await computeCoverage(fs, cfg, changedPair);
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }

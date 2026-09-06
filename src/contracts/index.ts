@@ -420,6 +420,13 @@ export interface SurfaceConfig {
   // screen is marked unseen and its findings are dropped. Absent means the body-only floor is the
   // only unseen detector for this surface. When present it must be a non-empty string.
   reachedWhen?: string;
+  // Declares that this surface is the same screen as the discovered route with the same id, and
+  // exists to control that screen's scan URL. Surface ids and route screen ids are one namespace,
+  // so without this the planner cannot tell an intended URL override from two different screens
+  // that happen to share a key, and sharing a key silently drops one of them from the scan. It is
+  // only needed when the surface URL differs from the route's own URL: an identical URL is the
+  // same screen on its face and needs no declaration. Absent means false.
+  overridesDiscoveredRoute?: boolean;
 }
 export interface UsablConfig {
   appBaseUrl: string;

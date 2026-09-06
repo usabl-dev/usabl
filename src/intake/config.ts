@@ -5,26 +5,27 @@
  */
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
 import { assertSurfaceIds } from './surface-ids.js';
+import { configError } from './config-error.js';
 import { expandBraces } from '../primitives/match-glob.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 
 function expectObject(value: unknown, label: string): object {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(`${label} must be an object`);
+    throw configError`${label} must be an object`;
   }
   return value;
 }
 
 function expectString(value: unknown, label: string): string {
   if (typeof value !== 'string') {
-    throw new Error(`${label} must be a string`);
+    throw configError`${label} must be a string`;
   }
   return value;
 }
 
 function expectStringArray(value: unknown, label: string): string[] {
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
-    throw new Error(`${label} must be a string array`);
+    throw configError`${label} must be a string array`;
   }
   return value;
 }
@@ -39,19 +40,13 @@ const UNSUPPORTED_GLOB_CHARS = ['[', ']', '(', ')', '?'];
 function checkGlobSupported(pattern: string, label: string): void {
   for (const char of UNSUPPORTED_GLOB_CHARS) {
     if (pattern.includes(char)) {
-      throw new Error(
-        `${label} pattern "${pattern}" uses unsupported glob character "${char}". ` +
-          `usabl globs support only *, **, and {a,b} brace groups.`,
-      );
+      throw configError`${label} pattern "${pattern}" uses unsupported glob character "${char}". usabl globs support only *, **, and {a,b} brace groups.`;
     }
   }
   // A nested or unbalanced brace cannot be expanded, so matchGlob would treat the braces
   // as literal text while discovery would not. Refuse it for the same reason.
   if (pattern.includes('{') && expandBraces(pattern) === null) {
-    throw new Error(
-      `${label} pattern "${pattern}" uses an unsupported brace form. ` +
-        `usabl globs support only *, **, and single-level {a,b} brace groups.`,
-    );
+    throw configError`${label} pattern "${pattern}" uses an unsupported brace form. usabl globs support only *, **, and single-level {a,b} brace groups.`;
   }
 }
 
@@ -68,7 +63,7 @@ function expectGlobArray(value: unknown, label: string): string[] {
 // launches anything.
 function expectPositiveWholeNumber(value: unknown, label: string): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
-    throw new Error(`${label} must be a positive whole number of milliseconds`);
+    throw configError`${label} must be a positive whole number of milliseconds`;
   }
   return value;
 }
@@ -82,19 +77,38 @@ function parseReachedWhen(raw: unknown, index: number): string | undefined {
   }
   const selector = expectString(raw, `surfaces[${index}].reachedWhen`);
   if (selector.trim().length === 0) {
-    throw new Error(`surfaces[${index}].reachedWhen must be a non-empty string`);
+    throw configError`surfaces[${index}].reachedWhen must be a non-empty string`;
   }
   return selector;
+}
+
+// A surface id and a discovered route screen id are one namespace. This declaration is how an
+// operator says the two name the same screen, so the planner never has to guess. Only a boolean is
+// accepted: a string naming the route would be a second copy of the surface's own id, since the
+// planner matches an override by id, and two copies of one fact can disagree.
+function parseOverridesDiscoveredRoute(raw: unknown, index: number): boolean | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (typeof raw !== 'boolean') {
+    throw configError`surfaces[${index}].overridesDiscoveredRoute must be true or false`;
+  }
+  return raw;
 }
 
 function parseSurface(raw: unknown, index: number): SurfaceConfig {
   const surface = expectObject(raw, `surfaces[${index}]`);
   const reachedWhen = parseReachedWhen(Reflect.get(surface, 'reachedWhen'), index);
+  const overridesDiscoveredRoute = parseOverridesDiscoveredRoute(
+    Reflect.get(surface, 'overridesDiscoveredRoute'),
+    index,
+  );
   return {
     id: expectString(Reflect.get(surface, 'id'), `surfaces[${index}].id`),
     url: expectString(Reflect.get(surface, 'url'), `surfaces[${index}].url`),
     files: expectStringArray(Reflect.get(surface, 'files'), `surfaces[${index}].files`),
     ...(reachedWhen === undefined ? {} : { reachedWhen }),
+    ...(overridesDiscoveredRoute === undefined ? {} : { overridesDiscoveredRoute }),
   };
 }
 
@@ -104,7 +118,7 @@ export function parseUsablConfig(raw: string): UsablConfig {
   const discovery = expectObject(Reflect.get(root, 'discovery'), 'discovery');
   const surfacesRaw = Reflect.get(root, 'surfaces');
   if (!Array.isArray(surfacesRaw)) {
-    throw new Error('surfaces must be an array');
+    throw configError`surfaces must be an array`;
   }
 
   const surfaces = surfacesRaw.map((surface, index) => parseSurface(surface, index));

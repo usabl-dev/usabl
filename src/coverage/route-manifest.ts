@@ -6,6 +6,7 @@
  */
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
 import { parseRouterFallback } from './router-parse.js';
+import { configError } from '../intake/config-error.js';
 
 export interface RouteEntry {
   screenId: string;
@@ -23,7 +24,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function expectString(value: unknown, field: string): string {
   if (typeof value !== 'string') {
-    throw new Error(`usabl.routes.json ${field} must be a string`);
+    throw configError`usabl.routes.json ${field} must be a string`;
   }
   return value;
 }
@@ -33,7 +34,7 @@ function expectRoutePathUrl(value: unknown, field: string): string {
   // Sidecar route urls are path suffixes under appBaseUrl. Accepting a second
   // origin here would let discovery steer scans away from the operator app.
   if (!url.startsWith('/') || url.includes('@')) {
-    throw new Error(`usabl.routes.json ${field} must start with "/" and must not contain "@"`);
+    throw configError`usabl.routes.json ${field} must start with "/" and must not contain "@"`;
   }
   return url;
 }
@@ -41,7 +42,7 @@ function expectRoutePathUrl(value: unknown, field: string): string {
 function expectEntryFile(value: unknown): string | null {
   if (value === null) return null;
   if (typeof value === 'string') return value;
-  throw new Error('usabl.routes.json routes[].entryFile must be a string or null');
+  throw configError`usabl.routes.json routes[].entryFile must be a string or null`;
 }
 
 function parseSidecar(raw: string): RouteManifest {
@@ -49,18 +50,18 @@ function parseSidecar(raw: string): RouteManifest {
   // Pretending parse failures mean "no routes" would silently rewrite the story.
   const parsed: unknown = JSON.parse(raw);
   if (!isRecord(parsed)) {
-    throw new Error('usabl.routes.json must be an object');
+    throw configError`usabl.routes.json must be an object`;
   }
 
   const routes = parsed['routes'];
   if (!Array.isArray(routes)) {
-    throw new Error('usabl.routes.json routes must be an array');
+    throw configError`usabl.routes.json routes must be an array`;
   }
 
   return {
     routes: routes.map((entry, index): RouteEntry => {
       if (!isRecord(entry)) {
-        throw new Error(`usabl.routes.json routes[${index}] must be an object`);
+        throw configError`usabl.routes.json routes[${index}] must be an object`;
       }
       return {
         screenId: expectString(entry['screenId'], `routes[${index}].screenId`),
@@ -75,7 +76,7 @@ function assertUniqueScreenIds(routes: RouteEntry[]): void {
   const seen = new Set<string>();
   for (const route of routes) {
     if (seen.has(route.screenId)) {
-      throw new Error(`Duplicate screenId in route manifest: "${route.screenId}"`);
+      throw configError`Duplicate screenId in route manifest: "${route.screenId}"`;
     }
     seen.add(route.screenId);
   }

@@ -6,6 +6,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseUsablConfig } from '../../src/intake/config.js';
 import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
+import { describeSurfaceIdProblem } from '../../src/intake/surface-ids.js';
+import { screenIdFromUrl } from '../../src/coverage/router-parse.js';
 
 const BASE = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -130,6 +132,12 @@ describe('parseUsablConfig surface id', () => {
     ['zero width space', 'U+200B'],
     ['right to left mark', 'U+200F'],
     ['right to left override', 'U+202E'],
+    ['zero width joiner', 'U+200D'],
+    ['combining grapheme joiner', 'U+034F'],
+    ['variation selector', 'U+FE0F'],
+    ['variation selector supplement', 'U+E0100'],
+    ['hangul choseong filler', 'U+115F'],
+    ['hangul filler', 'U+3164'],
   ];
 
   const charFor = (point: string) => String.fromCodePoint(Number.parseInt(point.slice(2), 16));
@@ -162,11 +170,86 @@ describe('parseUsablConfig surface id', () => {
     },
   );
 
-  it('accepts an id discovery derives from a parameter route', () => {
-    // screenIdFromUrl turns /users/:id into users-:id, so the grammar has to leave punctuation
-    // alone or usabl init would write a config that usabl then refuses to read.
-    const config = parseUsablConfig(configJson({ surfaces: [surface('users-:id', '/users')] }));
-    expect(config.surfaces[0]?.id).toBe('users-:id');
+  it('accepts the id discovery derives from a parameter route', () => {
+    // Ask the generator for the id rather than hard-coding it, so this stays true if
+    // screenIdFromUrl changes. The grammar has to leave route punctuation alone, or usabl init
+    // would write a config that usabl then refuses to read.
+    const id = screenIdFromUrl('/users/:id');
+    const config = parseUsablConfig(configJson({ surfaces: [surface(id, '/users')] }));
+    expect(config.surfaces[0]?.id).toBe(id);
+    expect(describeSurfaceIdProblem(id)).toBeNull();
+  });
+
+  it('refuses an id that is not in Unicode NFC form', () => {
+    // Canonically equivalent spellings render identically but compare unequal, so one spelling
+    // would silently become two screens.
+    const decomposed = 'cafe\u0301';
+    expect(decomposed).not.toBe(decomposed.normalize('NFC'));
+    expect(() => parseUsablConfig(configJson({ surfaces: [surface(decomposed, '/cafe')] }))).toThrow(
+      /NFC form/,
+    );
+  });
+
+  it('accepts the composed spelling of the same id', () => {
+    const composed = 'cafe\u0301'.normalize('NFC');
+    expect(parseUsablConfig(configJson({ surfaces: [surface(composed, '/cafe')] })).surfaces[0]?.id).toBe(
+      composed,
+    );
+  });
+
+  it('keeps cross-script confusables as distinct ids, which the grammar does not claim to stop', () => {
+    // Latin "a" and Cyrillic "a" look alike and are both accepted. Both screens are scanned and
+    // both appear in coverage, so no screen is lost. The comment and the docs say so rather than
+    // claiming a property the code does not deliver.
+    const config = parseUsablConfig(
+      configJson({ surfaces: [surface('varia', '/a'), surface('vari\u0430', '/b')] }),
+    );
+    expect(config.surfaces).toHaveLength(2);
+  });
+});
+
+describe('surface id rules and usabl init agree', () => {
+  // A tool that generates configs it then refuses to read is a defect whichever rule is right.
+  // These are the route paths where screenIdFromUrl produces an id the parser rejects. init must
+  // skip them with a note rather than write them.
+  it.each([
+    ['a raw space in the path', '/user settings'],
+    ['a joining character in the path', '/family/\u{1F468}\u200D\u{1F469}'],
+  ])('reports %s as an id problem so init can skip the route', (_label, path) => {
+    expect(describeSurfaceIdProblem(screenIdFromUrl(path))).not.toBeNull();
+  });
+
+  it('reports no problem for an ordinary route path', () => {
+    expect(describeSurfaceIdProblem(screenIdFromUrl('/clusters'))).toBeNull();
+  });
+});
+
+describe('parseUsablConfig surface overridesDiscoveredRoute', () => {
+  it('reads the declaration', () => {
+    const config = parseUsablConfig(
+      configJson({
+        surfaces: [
+          { id: 'clusters', url: 'http://127.0.0.1:5173/clusters?v=1', files: [], overridesDiscoveredRoute: true },
+        ],
+      }),
+    );
+    expect(config.surfaces[0]?.overridesDiscoveredRoute).toBe(true);
+  });
+
+  it('leaves it unset when the surface omits it', () => {
+    expect(parseUsablConfig(configJson()).surfaces[0]?.overridesDiscoveredRoute).toBeUndefined();
+  });
+
+  it('refuses a non-boolean declaration', () => {
+    expect(() =>
+      parseUsablConfig(
+        configJson({
+          surfaces: [
+            { id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: [], overridesDiscoveredRoute: 'yes' },
+          ],
+        }),
+      ),
+    ).toThrow(/overridesDiscoveredRoute must be true or false/);
   });
 });
 

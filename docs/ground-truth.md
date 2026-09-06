@@ -1582,25 +1582,57 @@ self-check.
 ```
 
 Each `surfaces[].id` is the key coverage is tracked under. It must be a non-empty string, it
-must be unique across the list, and it must not contain whitespace or any invisible or control
-character. Ids are compared exactly, which is the comparison the planner, the floor, and the
-receipt already make, so the grammar is what keeps two ids from looking alike: a space, a
-no-break space, a zero-width space, or a bidirectional mark inside an id is refused rather
-than folded away. Everything a font draws is still allowed, so a discovery-derived id such as
-`users-:id` stays valid. A refused id is reported by index, with the position and code point
-of the offending character, because printing an invisible character back would show nothing.
+must be unique across the list, it must not contain whitespace or any invisible or control
+character, and it must be written in Unicode NFC form. Ids are compared exactly, which is the
+comparison the planner, the floor, and the receipt already make, so the grammar is what keeps
+two ids from looking alike rather than the comparison folding them together. Everything a font
+draws is still allowed, so a discovery-derived id such as `users-:id` stays valid. A refused id
+is reported by index, with the position and code point of the offending character, because
+printing an invisible character back would show nothing.
+
+The grammar does not claim more than it delivers. It does not stop confusables across scripts,
+so a Latin `a` and a Cyrillic `a` are both accepted and stay distinct ids. That is deliberate:
+both screens are scanned, both appear in receipt coverage, and waiver matching is exact, so no
+screen is lost by it. Unassigned code points are accepted too, because rejecting them would
+make an id's validity depend on which Unicode version the running Node build carries.
 
 A blank or repeated id is refused when the config is read. Left in, it would collapse two
 screens into one entry: the second screen is dropped from the scan while its changed files
 still count as mapped, and the run would report both screens as covered when only one was
 ever opened.
 
-Surface ids and the `screenId` values in `usabl.routes.json` are one namespace, because both
-are written into the same affected-screen map. A surface may reuse a route's screen id, which
-is how an operator overrides that screen's scan URL, but only to change the query or the
-fragment of the same screen. A surface that takes a route's screen id and points at a
-different path is refused when coverage is planned, for the same reason: one of the two
-screens would never be scanned and the run would still report both as covered.
+### Surface ids and route screen ids share one namespace
+
+The `screenId` values in `usabl.routes.json` and the ids in `surfaces[]` are written into the
+same affected-screen map, so uniqueness inside each list is not enough. Two entries under one
+id collapse to one, and the dropped screen's changed files still count as mapped, so the run
+reports two changed screens as covered after scanning one.
+
+Sharing an id is still legitimate, because that is how a surface overrides the scan URL for a
+screen discovery already owns. usabl does not try to work out which case it is looking at. A
+URL cannot answer it: applications select screens by query, by fragment, by trailing slash, and
+by userinfo, so two URLs differing in any of those may be one screen or two, and a redirect
+means even a full comparison cannot settle it before navigating. So the config says which it is.
+
+Exactly two things are accepted when a surface id matches a discovered route screen id:
+
+- The surface URL resolves to the same address as the route's own URL. That is the same screen
+  on its face and needs no declaration. Percent-encoding of unreserved characters and escape hex
+  case are normalized first, so `/users/%61lice` and `/users/alice` count as one address. This is
+  what `usabl init` writes, so generated configs need no change.
+- The surface sets `"overridesDiscoveredRoute": true`. That is the operator asserting that their
+  differing URL reaches the route's screen. Use it for query variants and deep links.
+
+Anything else is refused when coverage is planned, naming the surface, the route, and the
+declaration to add. Setting `overridesDiscoveredRoute` on a surface whose id matches no
+discovered route is also refused, since the declaration would override nothing while reading as
+though it were wired up. That check is skipped when discovery found no routes at all, because an
+empty route list is not evidence about anything.
+
+Upgrading an existing config: a surface whose id matches a discovered route screen id and whose
+URL differs will now be refused rather than silently dropping one of the two screens. Add
+`"overridesDiscoveredRoute": true` if it is the same screen, or give it a different id if it is
+not. There is no safe way to infer the answer, which is why usabl asks instead of guessing.
 
 `guardedPaths` is additive. The four policy files (`usabl.config.json`,
 `usabl.routes.json`, `.usabl-evidence.json`, `.usabl-waivers.json`) are force-guarded by

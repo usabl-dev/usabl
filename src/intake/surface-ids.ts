@@ -8,49 +8,31 @@
  * This unit validates ids only. It must never rewrite an id or choose a screen.
  */
 import type { SurfaceConfig } from '../contracts/index.js';
-import { scrubString } from '../surfaces/scrub.js';
+import { configError } from './config-error.js';
 
 // Characters a surface id may not contain.
 //
 // Ids are compared exactly, because exact is the comparison every consumer downstream already
 // makes: the planner's affected-screen map, the evidence floor, and the receipt all key on the id
-// as written. A rule that folded ids together for validation but not for lookup would refuse
-// pairs that actually work while passing pairs that actually collide.
+// as written. A rule that folded ids together for validation but not for lookup would refuse pairs
+// that actually work while passing pairs that actually collide.
 //
-// Exact comparison is only honest if distinct ids also look distinct. Two ids no reader can tell
-// apart are a hazard whether or not they are the same map key: an operator cannot see which
-// screen a report is about, and cannot see that a second screen went unscanned. So the grammar
-// removes the characters that make ids indistinguishable, rather than the comparison doing it.
+// So the grammar, not the comparison, is what removes ids that cannot be told apart on sight.
 // \s covers the space characters that render as a gap, including U+00A0 and U+3000. Cc and Cf
-// cover controls and format characters, which is where the zero-width and bidirectional
-// characters live: U+200B, U+200F, and U+202E render as nothing at all, and the bidi ones also
-// reorder the text printed around them. Cs and Co are lone surrogates and private use, which have
-// no agreed rendering. Everything a font actually draws is still allowed, so the ids discovery
-// derives from route paths, such as "users-:id", stay valid.
-const DISALLOWED_ID_CHARACTER = /[\s\p{Cc}\p{Cf}\p{Cs}\p{Co}]/u;
-
-// Caps how much of an operator string an error message repeats back.
-const MESSAGE_TEXT_LIMIT = 120;
-
-/**
- * Prepares operator text for an error message.
- *
- * Config parsing runs before a Result exists, so none of this passes through scrubResult on the
- * way out. A config error goes straight to stderr and, through the stop hook, to a model. Branch
- * config is not trusted until the guard has checked it, so a value read out of one is untrusted
- * text arriving at a terminal, and this is its egress. Reuse the surface scrubber rather than
- * write a second one: control sequences and forged frame markers have to come out here the same
- * way they come out of page text. The cap keeps one very long value from burying the sentence
- * that explains what to fix.
- */
-export function forMessage(text: string): string {
-  const scrubbed = scrubString(text);
-  const characters = [...scrubbed];
-  if (characters.length <= MESSAGE_TEXT_LIMIT) {
-    return scrubbed;
-  }
-  return `${characters.slice(0, MESSAGE_TEXT_LIMIT).join('')} (truncated)`;
-}
+// cover controls and format characters. Default_Ignorable_Code_Point covers the rest of what a
+// conforming renderer is expected to draw as nothing, which is where the variation selectors, the
+// Hangul fillers, and the combining grapheme joiner live, and it is a maintained Unicode property
+// rather than a hand-picked list that goes stale. Cs and Co are lone surrogates and private use,
+// which have no agreed rendering.
+//
+// What this does NOT deliver, stated plainly so the rule is not read as more than it is. It does
+// not stop confusables across scripts, so Latin "a" and Cyrillic "a" are both accepted and remain
+// distinct ids. That is a deliberate limit: both are scanned, both appear in receipt coverage, and
+// waiver matching is exact, so no screen is lost by it. Unassigned code points are also accepted,
+// because rejecting them would make an id's validity depend on which Unicode version the running
+// Node build happens to carry. The claim here is narrow: an accepted id renders as something, and
+// two accepted ids that differ do so visibly unless their difference is a confusable glyph.
+const DISALLOWED_ID_CHARACTER = /[\s\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Default_Ignorable_Code_Point}]/u;
 
 /**
  * Describes a code point the way a config file can be searched for it.
@@ -65,44 +47,58 @@ function codePointLabel(character: string): string {
   return `U+${point.toString(16).toUpperCase().padStart(4, '0')}`;
 }
 
-function assertIdGrammar(id: string, index: number): void {
+/**
+ * Returns why an id cannot carry scan identity, or null when it can.
+ *
+ * Exported so a generator can ask the question the parser is going to ask, rather than writing a
+ * config the parser then refuses to read.
+ */
+export function describeSurfaceIdProblem(id: string): string | null {
+  // Blankness is checked on the trimmed value so an id of only spaces is reported as the empty id
+  // it is. That is the clearer message. The grammar below still refuses the whitespace itself, and
+  // comparison never trims.
+  if (id.trim().length === 0) {
+    return 'must be a non-empty string. usabl tracks coverage by surface id, so a blank id cannot name a screen.';
+  }
+
   let position = 0;
   for (const character of id) {
     position += 1;
-    if (!DISALLOWED_ID_CHARACTER.test(character)) {
-      continue;
-    }
-    throw new Error(
-      `surfaces[${index}].id contains a character that is not allowed, at position ${position}: ` +
+    if (DISALLOWED_ID_CHARACTER.test(character)) {
+      return (
+        `contains a character that is not allowed, at position ${position}: ` +
         `${codePointLabel(character)}. A surface id must not contain whitespace, and must not ` +
         `contain invisible or control characters, because usabl tracks coverage by surface id and ` +
-        `two ids that look alike must not stand for two different screens. Use visible characters ` +
-        `with no spaces, for example "user-settings".`,
+        `an id that renders as nothing cannot be told from another one. Use visible characters ` +
+        `with no spaces, for example "user-settings".`
+      );
+    }
+  }
+
+  // Canonically equivalent spellings are the same text by definition, so they render identically
+  // while comparing unequal. Requiring one spelling keeps exact comparison honest for them without
+  // folding anything at lookup time.
+  if (id !== id.normalize('NFC')) {
+    return (
+      'must be written in Unicode NFC form. Two canonically equivalent spellings look identical ' +
+      'but compare as different ids, so usabl would treat one screen as two.'
     );
   }
+
+  return null;
 }
 
 export function assertSurfaceIds(surfaces: readonly SurfaceConfig[]): void {
   const firstIndexById = new Map<string, number>();
   surfaces.forEach((surface, index) => {
-    // Blankness is checked on the trimmed value so an id of only spaces is reported as the empty
-    // id it is. That is the clearer message for the operator. The grammar below still refuses the
-    // whitespace itself, and comparison further down never trims.
-    if (surface.id.trim().length === 0) {
-      throw new Error(
-        `surfaces[${index}].id must be a non-empty string. ` +
-          `usabl tracks coverage by surface id, so a blank id cannot name a screen.`,
-      );
+    const problem = describeSurfaceIdProblem(surface.id);
+    if (problem !== null) {
+      throw configError`surfaces[${index}].id ${problem}`;
     }
-    assertIdGrammar(surface.id, index);
 
     const firstIndex = firstIndexById.get(surface.id);
     if (firstIndex !== undefined) {
-      throw new Error(
-        `surfaces[${index}].id "${forMessage(surface.id)}" repeats surfaces[${firstIndex}].id. ` +
-          `Every surface id must be unique, because usabl tracks coverage by surface id and a ` +
-          `repeated id hides one of the two screens from the scan. Give one of them a different id.`,
-      );
+      throw configError`surfaces[${index}].id "${surface.id}" repeats surfaces[${firstIndex}].id. Every surface id must be unique, because usabl tracks coverage by surface id and a repeated id hides one of the two screens from the scan. Give one of them a different id.`;
     }
     firstIndexById.set(surface.id, index);
   });

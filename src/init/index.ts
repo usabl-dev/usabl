@@ -6,6 +6,8 @@
  */
 import { posix } from 'node:path';
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
+import { describeSurfaceIdProblem } from '../intake/surface-ids.js';
+import { operatorText } from '../intake/config-error.js';
 import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
 import {
   isRouterSource,
@@ -273,7 +275,18 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
   for (const route of routes) {
     const url = surfaceUrl(appBaseUrl, route.url);
     if (url === null) {
-      notes.push(`Review: skipped surface URL for ${route.url}; it leaves ${origin}.`);
+      notes.push(`Review: skipped surface URL for ${operatorText(route.url)}; it leaves ${origin}.`);
+      continue;
+    }
+    // Ask the question the parser is going to ask. A route path can hold a raw space or a joining
+    // character, and screenIdFromUrl carries it straight into the id, so writing that surface would
+    // produce a config usabl then refuses to read. Skipping it with a note keeps the generator and
+    // the validator agreeing, and leaves the operator a route they can name themselves.
+    const idProblem = describeSurfaceIdProblem(route.screenId);
+    if (idProblem !== null) {
+      notes.push(
+        `Review: skipped surface for route ${operatorText(route.url)}; its screen id ${idProblem}`,
+      );
       continue;
     }
     surfaces.push({
