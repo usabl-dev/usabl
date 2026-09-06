@@ -688,37 +688,92 @@ export interface SharedBrowser {
 }
 
 export function makeSharedBrowser(
-  ports: { launch?: () => Promise<LaunchedBrowser> } = {},
+  ports: { launch?: () => Promise<LaunchedBrowser>; maxContextFailures?: number } = {},
 ): SharedBrowser {
   const launch = ports.launch ?? (async (): Promise<LaunchedBrowser> => chromium.launch({ headless: true }));
-  let browser: LaunchedBrowser | null = null;
+  // How many newContext failures in a row, with the process still reporting connected, before the
+  // process is treated as unusable and replaced. A process can hang or wedge in a way that keeps its
+  // connection up while every context request fails, and a reference kept forever would fail every
+  // later scan in the dev session.
+  const maxContextFailures = ports.maxContextFailures ?? 3;
 
-  const discard = async (): Promise<void> => {
-    const dead = browser;
-    browser = null;
-    if (dead !== null) {
-      // The process is already gone. close() only releases what is left on this side.
-      await dead.close().catch(() => undefined);
+  let browser: LaunchedBrowser | null = null;
+  // One launch at a time. Two opens that both find no process share this promise rather than each
+  // launching a process, which would leave one of them running with nothing holding it.
+  let launching: Promise<LaunchedBrowser> | null = null;
+  // Once closed, stays closed. An open after close rejects rather than launching a new process that
+  // nothing would ever close.
+  let closed = false;
+  let contextFailures = 0;
+
+  const closedError = (): Error =>
+    new Error('usabl shared browser is closed; the dev server has shut down and no scan can open a page');
+
+  // Drop a process reference, but only the one the caller saw. A concurrent open may already have
+  // replaced it, and that replacement must not be dropped by mistake.
+  const discard = async (which: LaunchedBrowser): Promise<void> => {
+    if (browser !== which) {
+      return;
     }
+    browser = null;
+    contextFailures = 0;
+    // The process may already be gone. close() only releases what is left on this side.
+    await which.close().catch(() => undefined);
   };
 
   const acquire = async (): Promise<LaunchedBrowser> => {
+    if (closed) {
+      throw closedError();
+    }
     if (browser !== null && !browser.isConnected()) {
-      await discard();
+      await discard(browser);
     }
-    if (browser === null) {
-      browser = await launch();
+    if (browser !== null) {
+      return browser;
     }
-    return browser;
+    if (launching === null) {
+      launching = launch()
+        .then((launched) => {
+          browser = launched;
+          contextFailures = 0;
+          return launched;
+        })
+        .finally(() => {
+          launching = null;
+        });
+    }
+    const launched = await launching;
+    if (closed) {
+      // close() ran while the launch was in flight. It awaited the same launch and closed the
+      // process, so there is nothing to hand out.
+      throw closedError();
+    }
+    return launched;
   };
 
   const openPage = async (url: string, options: RealBrowserOptions): Promise<Page> => {
     const launched = await acquire();
     const readyTimeoutMs = readyTimeoutMsFor(options);
+
+    let context: Awaited<ReturnType<LaunchedBrowser['newContext']>>;
     try {
-      const context = await launched.newContext(
+      context = await launched.newContext(
         options.storageStatePath === undefined ? {} : { storageState: options.storageStatePath },
       );
+    } catch (error) {
+      contextFailures += 1;
+      // A process that has died, or one that stays connected but cannot make a context any more,
+      // is forgotten so the next open launches a fresh one instead of failing forever.
+      if (!launched.isConnected() || contextFailures >= maxContextFailures) {
+        await discard(launched);
+      }
+      throw error;
+    }
+    contextFailures = 0;
+
+    // From here a context exists. Any failure below must close it, or an authenticated page opened
+    // from the run's storage state stays alive with nothing holding it.
+    try {
       const page = await context.newPage();
       await page.addInitScript(LIVE_AND_PATH_INIT_SCRIPT);
       // Attach the in-flight tracker before navigating, so the navigation's own requests are
@@ -731,11 +786,12 @@ export function makeSharedBrowser(
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });
       return wrapPage(page, context, cdp, readyTimeoutMs, network);
     } catch (error) {
+      await context.close().catch(() => undefined);
       // A failure with the process gone means the process died under us. Forget it so the next
       // open relaunches instead of failing against a dead reference. A failure with the process
       // still connected is the page's own problem and the process stays.
-      if (browser === launched && !launched.isConnected()) {
-        await discard();
+      if (!launched.isConnected()) {
+        await discard(launched);
       }
       throw error;
     }
@@ -750,6 +806,12 @@ export function makeSharedBrowser(
       };
     },
     async close(): Promise<void> {
+      closed = true;
+      if (launching !== null) {
+        // A launch is in flight. Wait for it so the process it produces is the one closed here,
+        // rather than left running because close() looked before it existed.
+        await launching.catch(() => undefined);
+      }
       const open = browser;
       browser = null;
       if (open !== null) {
