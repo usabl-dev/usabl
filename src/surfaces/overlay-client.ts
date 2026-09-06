@@ -7,10 +7,8 @@ import { UNTRUSTED_FRAME_END, UNTRUSTED_FRAME_START } from './scrub.js';
 
 export const overlayClientSource = `(() => {
   const RESULT_ENDPOINT = '/__usabl/result';
-  const HOST_ID = '__usabl-overlay';
-  const PANEL_ID = '__usabl-inspector-panel';
-  const TITLE_ID = '__usabl-inspector-title';
-  const HIGHLIGHT_ID = '__usabl-highlight';
+  const HOST_ATTRIBUTE = 'data-usabl-inspector';
+  const HIGHLIGHT_ATTRIBUTE = 'data-usabl-highlight';
   const OPEN_STORAGE_KEY = 'usabl.overlay.open';
   const WIDE_STORAGE_KEY = 'usabl.overlay.wide';
   const COMPACT_WIDTH = 'min(420px, calc(100vw - 24px))';
@@ -21,6 +19,24 @@ export const overlayClientSource = `(() => {
   const UNTRUSTED_START = ${JSON.stringify(UNTRUSTED_FRAME_START)};
   const UNTRUSTED_END = ${JSON.stringify(UNTRUSTED_FRAME_END)};
 
+  // Captured at module load, before any page script has had a chance to replace them. The overlay
+  // runs in the page's own realm, so it can never be made tamper proof, but the cheapest lever is a
+  // page swapping window.fetch and feeding the inspector a result the engine never produced. Taking
+  // our own references removes that lever. This is hardening, not a security boundary: the gate,
+  // not the overlay, decides anything that matters.
+  const nativeFetch = window.fetch.bind(window);
+  const nativeResponseJson = Response.prototype.json;
+  const nativeConsoleError = console.error.bind(console);
+
+  // A page cannot suppress the overlay by pre-creating an element with a known id, because the
+  // overlay never looks its own host up by id. It keeps the reference it created. The random suffix
+  // only keeps the id from colliding with the host page's own ids.
+  const INSTANCE_SUFFIX = Math.random().toString(36).slice(2, 10);
+  const HOST_ID = '__usabl-overlay-' + INSTANCE_SUFFIX;
+  const PANEL_ID = '__usabl-inspector-panel-' + INSTANCE_SUFFIX;
+  const TITLE_ID = '__usabl-inspector-title-' + INSTANCE_SUFFIX;
+  const HIGHLIGHT_ID = '__usabl-highlight-' + INSTANCE_SUFFIX;
+
   // Severity decides the order of the list and the word on every row. The word is what carries the
   // meaning; the coloured dot beside it is decoration and is hidden from assistive technology.
   const SEVERITY_RANK = { critical: 0, serious: 1, moderate: 2, minor: 3 };
@@ -30,7 +46,19 @@ export const overlayClientSource = `(() => {
   const MISSING_ELEMENT_TEXT =
     'This was flagged here at the last scan; it is not on the page right now.';
 
+  // Bounds on the work one render is allowed to do. A Result is engine-authored but its finding text
+  // is page-derived, so a hostile or simply enormous page can hand us megabyte strings and thousands
+  // of findings. None of these bounds change what is REPORTED: the counts and the total always come
+  // from the full list. They only bound what is built into the DOM at one time.
+  const ROW_PAGE_SIZE = 40;
+  const MAX_TITLE_CHARS = 2000;
+  const MAX_PROSE_CHARS = 2000;
+  const MAX_SELECTOR_CHARS = 400;
+  const SHORTENED_NOTE = ' [shortened for display]';
+
   const state = {
+    // The host element we created. Held, never looked up, so nothing on the page can impersonate it.
+    host: null,
     open: false,
     wide: false,
     payload: null,
@@ -42,8 +70,16 @@ export const overlayClientSource = `(() => {
     expandedKey: null,
     highlightKey: null,
     highlightCleanup: null,
+    // The exact marker node and the exact element we borrowed a tabindex from, with its original
+    // value. Cleanup restores these references and never queries the document for things to undo,
+    // because a document-wide query undoes elements the overlay does not own.
+    marker: null,
+    borrowedTabindex: null,
     rows: [],
+    renderedRowCount: 0,
     liveStatus: null,
+    verdictStatus: null,
+    lastVerdictAnnouncement: '',
     navHooked: false,
   };
 
@@ -82,6 +118,17 @@ export const overlayClientSource = `(() => {
       return value.slice(UNTRUSTED_START.length, -UNTRUSTED_END.length).trim();
     }
     return value;
+  }
+
+  // Unwrap the frame, then bound the length. A single 10MB title used to take most of a second to
+  // lay out and could be used to stall the panel. Cutting it is honest as long as we say we cut it,
+  // and the full text is still in the Result that usabl check prints.
+  function boundedText(value, limit) {
+    const text = displayText(value);
+    if (text.length <= limit) {
+      return text;
+    }
+    return text.slice(0, limit) + SHORTENED_NOTE;
   }
 
   // Object.hasOwn, not a bare index, so an unexpected severity string can never read an inherited
@@ -216,6 +263,30 @@ export const overlayClientSource = `(() => {
     };
   }
 
+  // A pathname is not automatically a safe href. "//evil.example/x" is a valid pathname and also a
+  // network-path reference, so assigning it to href sends the developer off site with one click.
+  // A backslash form resolves the same way in browsers. So we reject the network-path shape outright
+  // and then resolve against the current document and require the origin to still be ours.
+  function sameOriginHref(path) {
+    if (typeof path !== 'string' || path === '' || path.charAt(0) !== '/') {
+      return null;
+    }
+    const second = path.charAt(1);
+    if (second === '/' || second === '\\\\') {
+      return null;
+    }
+    let resolved;
+    try {
+      resolved = new URL(path, window.location.href);
+    } catch (_error) {
+      return null;
+    }
+    if (resolved.origin !== window.location.origin) {
+      return null;
+    }
+    return resolved.pathname + resolved.search;
+  }
+
   function emptySplit(currentPath) {
     return {
       matched: false,
@@ -264,15 +335,31 @@ export const overlayClientSource = `(() => {
 
   // The verdict word is the meaning. The symbol repeats it for scanning speed and the colour is
   // third, so nothing here depends on a reader telling red from green.
+  //
+  // A null verdict is the dangerous case. It is produced both by a run that had nothing to check and
+  // by a run that crashed, was killed, or exited non-zero without minting a verdict. Reading every
+  // null as "nothing to check" turned a crash into a calm grey pass. Idle is now the narrow case:
+  // the run must have finished with exit code 0 AND said outright that there was nothing to check.
+  // Everything else is an absence of proof and is named as one.
   function verdictFor(payload, error, scanning) {
     if (scanning) return { key: 'scanning', word: 'Scanning', symbol: '…' };
     if (error) return { key: 'error', word: 'Not verified', symbol: '!' };
-    const verdict = payload ? payload.verdict : null;
+    if (!payload || !payload.loaded) return { key: 'pending', word: 'No result yet', symbol: '○' };
+    const verdict = payload.verdict;
     if (verdict === 'verified') return { key: 'verified', word: 'Verified', symbol: '✓' };
     if (verdict === 'regression') return { key: 'regression', word: 'Regression', symbol: '✕' };
     if (verdict === 'not_covered') return { key: 'not-covered', word: 'Not covered', symbol: '?' };
     if (verdict === 'approval_required') return { key: 'approval', word: 'Approval required', symbol: '!' };
-    return { key: 'idle', word: 'Nothing to check', symbol: '○' };
+    if (payload.exitCode === 0 && payload.coverage && payload.coverage.nothingToCheck === true) {
+      return { key: 'idle', word: 'Nothing to check', symbol: '○' };
+    }
+    return { key: 'no-verdict', word: 'No verdict', symbol: '!' };
+  }
+
+  // Only these two states mean the run is not holding anything against you. Every other state must
+  // keep the badge out of its clear appearance no matter how clean the current screen looks.
+  function isSettledClean(verdictKey) {
+    return verdictKey === 'verified' || verdictKey === 'idle';
   }
 
   // One plain line under the verdict that says what this state means for the screen in front of the
@@ -287,31 +374,52 @@ export const overlayClientSource = `(() => {
     if (!payload || !payload.loaded) {
       return 'usabl has not loaded a result yet.';
     }
-    const verdict = payload.verdict;
-    if (verdict === 'not_covered') {
+    const verdict = verdictFor(payload, error, scanning);
+    if (verdict.key === 'not-covered') {
       return 'usabl could not check the affected screens, so nothing here is proven.';
     }
-    if (verdict === 'approval_required') {
+    if (verdict.key === 'approval') {
       return 'A guarded file changed. A person has to approve that change before the gate can pass.';
     }
+    if (verdict.key === 'no-verdict') {
+      // A run that ended without a verdict proved nothing, whatever the screen looks like.
+      return 'usabl finished without a verdict (exit code ' + payload.exitCode
+        + '). Nothing on this screen is proven.';
+    }
+    if (verdict.key === 'idle') {
+      // Checked before the not-matched branch on purpose. When the run had nothing to check, no
+      // screen was scanned, so "this screen was not scanned" is true but tells the developer the
+      // wrong thing: the reason is the change, not the screen.
+      return 'Your change touched no screen usabl checks, so this run had nothing to check.';
+    }
     if (!split.matched) {
-      return 'This screen was not part of the last scan, so usabl has nothing to report on it.';
+      return verdict.key === 'verified'
+        ? 'Verified, but this screen was not part of the last scan, so that verdict does not cover it.'
+        : 'This screen was not part of the last scan, so usabl has nothing to report on it.';
     }
-    if (verdict === 'verified') {
-      return payload && payload.receipt
-        ? 'No findings on any screen usabl checked. The receipt below records what that covered.'
+    if (verdict.key === 'verified') {
+      // A verified Result can still carry waived and already-fixed findings. Saying "no findings"
+      // beside a list of them contradicts the list, so name the gating lane instead.
+      const base = split.here.length > 0 || split.elsewhereTotal > 0
+        ? 'No new gating findings. The findings listed are accepted, waived, or already fixed.'
         : 'No findings on any screen usabl checked.';
+      return payload.receipt ? base + ' The receipt below records what that covered.' : base;
     }
+    // Blocking verdict from here down.
     if (split.here.length === 0) {
       return split.elsewhereTotal > 0
-        ? 'No findings on this screen. Other screens still have findings.'
-        : 'No findings on this screen.';
+        ? 'No findings on this screen, but other screens have findings and the gate is blocked.'
+        : 'No findings on this screen, and usabl still reports ' + verdict.word.toLowerCase() + '.';
     }
     return 'usabl found ' + countLabel(split.here.length, 'accessibility barrier') + ' on this screen.';
   }
 
-  // What the collapsed badge says. The count is this screen's count, because that is the number the
-  // developer can act on from where they are standing.
+  // What the collapsed badge says.
+  //
+  // The global verdict dominates. A clean current screen never earns the clear tick while the run
+  // as a whole is blocked, because the badge is the only thing a developer sees until they open the
+  // panel, and a green badge over a regression is the false green this product exists to stop.
+  // The local count is still shown, because it is the number they can act on where they stand.
   function badgeView(payload, error, scanning, split) {
     const verdict = verdictFor(payload, error, scanning);
     if (scanning) {
@@ -321,31 +429,61 @@ export const overlayClientSource = `(() => {
       return { key: 'error', symbol: '!', count: null, label: 'usabl: could not load a result. Open inspector.' };
     }
     if (!payload || !payload.loaded) {
-      return { key: 'idle', symbol: '○', count: null, label: 'usabl: no result yet. Open inspector.' };
+      return { key: 'pending', symbol: '○', count: null, label: 'usabl: no result yet. Open inspector.' };
     }
+
+    const word = verdict.word.toLowerCase();
+    if (!isSettledClean(verdict.key)) {
+      if (split.matched && split.here.length > 0) {
+        return {
+          key: verdict.key,
+          symbol: '✕',
+          count: split.here.length,
+          label: 'usabl: ' + word + ', ' + countLabel(split.here.length, 'issue')
+            + ' on this screen. Open inspector.',
+        };
+      }
+      if (split.matched) {
+        return {
+          key: verdict.key,
+          symbol: '!',
+          count: null,
+          label: 'usabl: ' + word + ' elsewhere, no issues on this screen. Open inspector.',
+        };
+      }
+      return {
+        key: verdict.key,
+        symbol: '!',
+        count: null,
+        label: 'usabl: ' + word + '. This screen was not scanned. Open inspector.',
+      };
+    }
+
+    // Settled clean from here down: verified, or a run that genuinely had nothing to check.
     if (!split.matched) {
       return {
         key: 'unscanned',
         symbol: '?',
         count: null,
-        label: 'usabl: this screen was not scanned. Open inspector.',
+        label: 'usabl: ' + word + ', but this screen was not scanned. Open inspector.',
       };
     }
-    if (split.here.length === 0) {
+    if (split.here.length > 0) {
+      // Verified with waived or already-fixed findings on this screen. They are listed, so the count
+      // has to appear, but calling them issues would contradict the verdict beside them.
       return {
         key: 'clear',
         symbol: '✓',
-        count: null,
-        label: 'usabl: no issues on this screen. Open inspector.',
+        count: split.here.length,
+        label: 'usabl: ' + word + ', ' + countLabel(split.here.length, 'non-gating finding')
+          + ' on this screen. Open inspector.',
       };
     }
     return {
-      key: verdict.key,
-      symbol: '✕',
-      count: split.here.length,
-      label:
-        'usabl: ' + verdict.word.toLowerCase() + ', ' + countLabel(split.here.length, 'issue')
-        + ' on this screen. Open inspector.',
+      key: 'clear',
+      symbol: '✓',
+      count: null,
+      label: 'usabl: ' + word + ', no issues on this screen. Open inspector.',
     };
   }
 
@@ -452,6 +590,7 @@ export const overlayClientSource = `(() => {
       }
 
       .badge[data-state="regression"] .badge-symbol,
+      .badge[data-state="no-verdict"] .badge-symbol,
       .badge[data-state="error"] .badge-symbol {
         color: #ff9ba2;
       }
@@ -490,9 +629,46 @@ export const overlayClientSource = `(() => {
         outline-offset: 2px;
       }
 
+      /* The badge sits on the host app's content, which can be any colour, so a single-colour ring
+         can land at 1:1 against it and disappear. Two rings, white inside dark, keeps one of the two
+         edges visible against light and dark alike. */
       .badge:focus-visible {
-        outline-color: var(--ink);
-        outline-offset: 3px;
+        outline: 3px solid var(--white);
+        outline-offset: 0;
+        box-shadow: 0 0 0 6px var(--ink), 0 0 0 8px var(--white);
+      }
+
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        border: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+      }
+
+      .more-note {
+        margin-top: 10px;
+        color: var(--slate);
+        font-size: 0.75rem;
+      }
+
+      .more-button {
+        margin-top: 8px;
+      }
+
+      .more-button[hidden] {
+        display: none;
+      }
+
+      .elsewhere-nolink {
+        color: var(--amber-ink);
+        font-size: 0.75rem;
+        font-weight: 650;
       }
 
       .panel-header {
@@ -573,7 +749,9 @@ export const overlayClientSource = `(() => {
 
       .banner[data-state="verified"] .banner-verdict { background: var(--green-light); color: var(--green-ink); }
       .banner[data-state="regression"] .banner-verdict,
+      .banner[data-state="no-verdict"] .banner-verdict,
       .banner[data-state="error"] .banner-verdict { background: var(--red-light); color: var(--red-ink); }
+      .banner[data-state="pending"] .banner-verdict { background: var(--mute); color: var(--mute-ink); }
       .banner[data-state="not-covered"] .banner-verdict { background: var(--amber-light); color: var(--amber-ink); }
       .banner[data-state="approval"] .banner-verdict { background: var(--violet-light); color: var(--violet-ink); }
       .banner[data-state="scanning"] .banner-verdict { background: var(--cobalt-light); color: var(--cobalt-ink); }
@@ -1084,13 +1262,16 @@ export const overlayClientSource = `(() => {
     \`;
 
   function ensureInspector() {
-    let host = document.getElementById(HOST_ID);
-    if (host) {
-      return host;
+    // The reference we created, never a lookup by id. A page that pre-creates an element with our
+    // id can no longer take the overlay's place, and a page that rips our node out of the document
+    // gets a fresh one rather than a silent, invisible inspector.
+    if (state.host && state.host.isConnected && state.host.shadowRoot) {
+      return state.host;
     }
 
-    host = document.createElement('aside');
+    const host = document.createElement('aside');
     host.id = HOST_ID;
+    host.setAttribute(HOST_ATTRIBUTE, '');
     host.setAttribute('aria-label', 'usabl development tools');
     host.style.setProperty('all', 'initial', 'important');
     host.style.setProperty('position', 'fixed', 'important');
@@ -1104,7 +1285,23 @@ export const overlayClientSource = `(() => {
     // The badge and the open panel opt back in through the shadow stylesheet.
     host.style.setProperty('pointer-events', 'none', 'important');
 
-    const shadow = host.attachShadow({ mode: 'open' });
+    // An open shadow root on purpose. A closed root would not stop a page that runs before us from
+    // hooking Element.prototype.attachShadow, so it buys no real protection, and it would hide the
+    // overlay's own interface from axe-core and from every automated accessibility check. For an
+    // accessibility tool, being unable to prove its own interface is accessible is the worse trade.
+    let shadow;
+    try {
+      shadow = host.attachShadow({ mode: 'open' });
+    } catch (attachError) {
+      // Fail loudly. An inspector that silently renders nothing hides findings from a developer who
+      // has every reason to believe the screen is clean.
+      nativeConsoleError(
+        'usabl inspector could not attach its shadow root, so the in-page inspector is not showing. '
+          + 'Findings are still reported by usabl check and by the gate. Cause: '
+          + (attachError && attachError.message ? attachError.message : String(attachError)),
+      );
+      return null;
+    }
     const style = document.createElement('style');
     style.textContent = OVERLAY_STYLE;
 
@@ -1131,10 +1328,20 @@ export const overlayClientSource = `(() => {
     liveStatus.setAttribute('role', 'status');
     liveStatus.setAttribute('aria-live', 'polite');
     const body = make('div', 'panel-body');
+
+    // A second, visually hidden live region for the verdict itself. Without it a screen reader user
+    // watching a fix loop hears nothing: the banner changes from regression to verified silently.
+    // It is written only when the sentence actually changes, so a re-render does not repeat it.
+    const verdictStatus = make('p', 'visually-hidden');
+    verdictStatus.setAttribute('role', 'status');
+    verdictStatus.setAttribute('aria-live', 'polite');
+
     panel.appendChild(header);
+    panel.appendChild(verdictStatus);
     panel.appendChild(liveStatus);
     panel.appendChild(body);
     state.liveStatus = liveStatus;
+    state.verdictStatus = verdictStatus;
 
     shadow.addEventListener('keydown', (event) => {
       if (event.key === 'Escape' && state.open) {
@@ -1148,6 +1355,7 @@ export const overlayClientSource = `(() => {
     shadow.appendChild(style);
     shadow.appendChild(shell);
     document.body.appendChild(host);
+    state.host = host;
 
     state.open = storedValue(OPEN_STORAGE_KEY) === '1';
     state.wide = storedValue(WIDE_STORAGE_KEY) === '1';
@@ -1210,21 +1418,40 @@ export const overlayClientSource = `(() => {
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
+  // Put back exactly the element we borrowed a tabindex from, with exactly the value it had.
+  //
+  // The previous version queried the whole document for a marker attribute and stripped tabindex
+  // from everything it found. That mutates page-owned elements that happen to carry the marker, and
+  // it misses an element that detached and reattached, leaving a stray tabindex behind. Ownership is
+  // a reference we hold, never a selector we run.
+  function releaseBorrowedTabindex() {
+    const borrowed = state.borrowedTabindex;
+    state.borrowedTabindex = null;
+    if (!borrowed) {
+      return;
+    }
+    try {
+      if (borrowed.previous === null) {
+        borrowed.node.removeAttribute('tabindex');
+      } else {
+        borrowed.node.setAttribute('tabindex', borrowed.previous);
+      }
+    } catch (_error) {
+      // The node may be gone or frozen. Nothing more we can honestly do about its attributes.
+    }
+  }
+
   function clearHighlight() {
     if (typeof state.highlightCleanup === 'function') {
       state.highlightCleanup();
       state.highlightCleanup = null;
     }
     state.highlightKey = null;
-    const stale = document.getElementById(HIGHLIGHT_ID);
-    if (stale) stale.remove();
-    // Remove any tabindex we added only to focus a non-focusable flagged element, so the page's own
-    // tab order is left exactly as it was before we touched anything.
-    const temped = document.querySelectorAll('[data-usabl-temp-tabindex="true"]');
-    temped.forEach((node) => {
-      node.removeAttribute('tabindex');
-      delete node.dataset.usablTempTabindex;
-    });
+    if (state.marker) {
+      state.marker.remove();
+      state.marker = null;
+    }
+    releaseBorrowedTabindex();
   }
 
   function setLocateStatus(text, selector) {
@@ -1248,8 +1475,12 @@ export const overlayClientSource = `(() => {
     }
   }
 
-  // Look up the flagged element on the live page. A selector the browser rejects, an element that
-  // has since been removed, and an element inside our own overlay all count as not found.
+  // Look up the flagged element on the live page. Not found covers: a selector the browser rejects,
+  // an element that has since been removed, the overlay's own host, anything inside it, and any
+  // ANCESTOR of it. The ancestor case is the one that bit us: a selector such as
+  // "body:has(#__usabl-overlay)" matched body itself, so locating put a borrowed tabindex on body
+  // and scrolled the whole document. An element that contains the inspector is never the element a
+  // finding is about.
   function resolveTarget(finding) {
     const selector = displayText(finding.elementPath).trim();
     let target = null;
@@ -1258,8 +1489,12 @@ export const overlayClientSource = `(() => {
     } catch (_error) {
       target = null;
     }
-    const inspector = document.getElementById(HOST_ID);
-    if (!target || target === inspector || (inspector && inspector.contains(target))) {
+    const inspector = state.host;
+    if (
+      !target
+      || target === inspector
+      || (inspector && (inspector.contains(target) || target.contains(inspector)))
+    ) {
       return { selector, target: null };
     }
     return { selector, target };
@@ -1294,6 +1529,7 @@ export const overlayClientSource = `(() => {
 
     const marker = document.createElement('div');
     marker.id = HIGHLIGHT_ID;
+    marker.setAttribute(HIGHLIGHT_ATTRIBUTE, '');
     marker.setAttribute('aria-hidden', 'true');
     marker.style.cssText = [
       'position:fixed',
@@ -1321,6 +1557,7 @@ export const overlayClientSource = `(() => {
     ].join(';');
     marker.appendChild(label);
     document.body.appendChild(marker);
+    state.marker = marker;
 
     const position = () => {
       const rect = target.getBoundingClientRect();
@@ -1340,7 +1577,6 @@ export const overlayClientSource = `(() => {
     state.highlightCleanup = () => {
       window.removeEventListener('scroll', position, true);
       window.removeEventListener('resize', position);
-      marker.remove();
     };
     state.highlightKey = key;
     setLocateStatus('Highlighted ' + elementLabel(finding, found.selector) + ' on the page.', '');
@@ -1358,10 +1594,12 @@ export const overlayClientSource = `(() => {
     const target = found.target;
     try {
       // Some flagged elements are not focusable. A temporary tabindex of -1 lets us focus them
-      // without adding them to the page's tab order, and it is removed again on the next clear.
+      // without adding them to the page's tab order. We record the exact node and the exact value it
+      // had, and put that back later, rather than marking it and sweeping the document afterwards.
       if (!target.hasAttribute('tabindex')) {
+        releaseBorrowedTabindex();
+        state.borrowedTabindex = { node: target, previous: null };
         target.setAttribute('tabindex', '-1');
-        target.dataset.usablTempTabindex = 'true';
       }
       target.focus({ preventScroll: true });
     } catch (_error) {
@@ -1374,6 +1612,9 @@ export const overlayClientSource = `(() => {
   function applyRowState() {
     for (const row of state.rows) {
       const open = row.key === state.expandedKey;
+      if (open) {
+        fillDetail(row);
+      }
       row.button.setAttribute('aria-expanded', String(open));
       row.detail.hidden = !open;
     }
@@ -1420,7 +1661,7 @@ export const overlayClientSource = `(() => {
   }
 
   function appendDetailBlock(parent, heading, text) {
-    const value = displayText(text).trim();
+    const value = boundedText(text, MAX_PROSE_CHARS).trim();
     if (!value) {
       return;
     }
@@ -1430,12 +1671,67 @@ export const overlayClientSource = `(() => {
     parent.appendChild(block);
   }
 
-  function renderFindingRow(entry, index, workspaceRoot) {
+  // Built on first expand, not on render.
+  //
+  // Every row used to build its whole detail body up front, so a screen with a few thousand findings
+  // paid for thousands of paragraphs and buttons that nobody had asked to see. At most one row is
+  // open at a time, so at most one detail body needs to exist.
+  function fillDetail(row) {
+    if (row.filled) {
+      return;
+    }
+    row.filled = true;
+    const finding = row.finding;
+    const detail = row.detail;
+
+    appendDetailBlock(detail, 'Why this matters', finding.why);
+    appendDetailBlock(detail, 'How to fix it', finding.fix);
+
+    const elementBlock = make('div', 'detail-block');
+    elementBlock.appendChild(make('h4', '', 'Element'));
+    const elementName = boundedText(finding.elementName, MAX_SELECTOR_CHARS).trim();
+    elementBlock.appendChild(make('p', '', elementName || 'No accessible name at scan time.'));
+    elementBlock.appendChild(
+      make('code', 'detail-selector', boundedText(finding.elementPath, MAX_SELECTOR_CHARS)),
+    );
+    detail.appendChild(elementBlock);
+
+    detail.appendChild(
+      make('p', 'detail-meta', finding.rule + ' · ' + finding.layer + ' · ' + finding.severity),
+    );
+
+    const actions = make('div', 'detail-actions');
+    const showAgain = make('button', 'detail-action', 'Show on page again');
+    showAgain.type = 'button';
+    showAgain.addEventListener('click', () => highlightFinding(finding, row.key));
+    actions.appendChild(showAgain);
+
+    const focusButton = make('button', 'detail-action', 'Focus element');
+    focusButton.type = 'button';
+    focusButton.addEventListener('click', () => focusFinding(finding));
+    actions.appendChild(focusButton);
+
+    const editorHref = editorDeepLink(row.workspaceRoot, finding.appSource);
+    if (editorHref) {
+      const openEditor = make('a', 'editor-link', 'Open in editor');
+      openEditor.href = editorHref;
+      openEditor.target = '_blank';
+      openEditor.rel = 'noopener noreferrer';
+      actions.appendChild(openEditor);
+    }
+    detail.appendChild(actions);
+  }
+
+  function renderFindingRow(entry, index, workspaceRoot, total) {
     const finding = entry.finding;
     const rowId = PANEL_ID + '-row-' + index;
     const detailId = PANEL_ID + '-detail-' + index;
 
     const item = make('li', 'finding-item');
+    // The list is built a page at a time, so a screen reader is told where each row sits in the
+    // whole list rather than in the part that happens to be built.
+    item.setAttribute('aria-setsize', String(total));
+    item.setAttribute('aria-posinset', String(index + 1));
 
     // A real button, so Enter and Space work with no key handling of our own, and the browser
     // reports the expanded state through aria-expanded to the detail it controls.
@@ -1454,54 +1750,20 @@ export const overlayClientSource = `(() => {
     // The clamped title sits inside a wrapper rather than being a flex child itself, because a flex
     // item is blockified and the line clamp would never take effect.
     const titleWrap = make('span', 'finding-title-wrap');
-    titleWrap.appendChild(make('span', 'finding-title', finding.whatUserExperiences));
+    titleWrap.appendChild(
+      make('span', 'finding-title', boundedText(finding.whatUserExperiences, MAX_TITLE_CHARS)),
+    );
     button.appendChild(titleWrap);
 
     const detail = make('div', 'finding-detail');
     detail.id = detailId;
     detail.hidden = true;
 
-    appendDetailBlock(detail, 'Why this matters', finding.why);
-    appendDetailBlock(detail, 'How to fix it', finding.fix);
-
-    const elementBlock = make('div', 'detail-block');
-    elementBlock.appendChild(make('h4', '', 'Element'));
-    const elementName = displayText(finding.elementName).trim();
-    elementBlock.appendChild(make('p', '', elementName || 'No accessible name at scan time.'));
-    const selector = make('code', 'detail-selector', finding.elementPath);
-    elementBlock.appendChild(selector);
-    detail.appendChild(elementBlock);
-
-    detail.appendChild(
-      make('p', 'detail-meta', finding.rule + ' · ' + finding.layer + ' · ' + finding.severity),
-    );
-
-    const actions = make('div', 'detail-actions');
-    const showAgain = make('button', 'detail-action', 'Show on page again');
-    showAgain.type = 'button';
-    showAgain.addEventListener('click', () => highlightFinding(finding, entry.key));
-    actions.appendChild(showAgain);
-
-    const focusButton = make('button', 'detail-action', 'Focus element');
-    focusButton.type = 'button';
-    focusButton.addEventListener('click', () => focusFinding(finding));
-    actions.appendChild(focusButton);
-
-    const editorHref = editorDeepLink(workspaceRoot, finding.appSource);
-    if (editorHref) {
-      const openEditor = make('a', 'editor-link', 'Open in editor');
-      openEditor.href = editorHref;
-      openEditor.target = '_blank';
-      openEditor.rel = 'noopener noreferrer';
-      actions.appendChild(openEditor);
-    }
-    detail.appendChild(actions);
-
     button.addEventListener('click', () => activateRow(entry.key));
 
     item.appendChild(button);
     item.appendChild(detail);
-    return { item, button, detail, key: entry.key, finding };
+    return { item, button, detail, key: entry.key, finding, workspaceRoot, filled: false };
   }
 
   // The current-screen section: every finding on this screen, worst first, one row each. This is
@@ -1530,13 +1792,57 @@ export const overlayClientSource = `(() => {
     const scroll = make('div', 'finding-scroll');
     const list = make('ul', 'finding-list');
     const entries = keyedFindings(split.here);
-    entries.forEach((entry, index) => {
-      const row = renderFindingRow(entry, index, payload.workspaceRoot);
-      state.rows.push(row);
-      list.appendChild(row.item);
+    // Rows are built a page at a time.
+    //
+    // Not a scrolling window that recycles rows: recycling removes the row a keyboard user is
+    // standing on, which drops their focus to the document, and it makes the list a screen reader
+    // reads change under them. Appending on request never takes away a row somebody is using. The
+    // heading above still names the true total, so bounding what is BUILT never changes what is
+    // REPORTED.
+    const remaining = make('p', 'more-note');
+    const moreButton = make('button', 'detail-action more-button');
+    moreButton.type = 'button';
+
+    const appendPage = () => {
+      const start = state.rows.length;
+      const end = Math.min(start + ROW_PAGE_SIZE, entries.length);
+      for (let index = start; index < end; index += 1) {
+        const row = renderFindingRow(entries[index], index, payload.workspaceRoot, entries.length);
+        state.rows.push(row);
+        list.appendChild(row.item);
+      }
+      const left = entries.length - state.rows.length;
+      if (left <= 0) {
+        moreButton.hidden = true;
+        remaining.textContent = 'Showing all ' + countLabel(entries.length, 'finding') + '.';
+        return;
+      }
+      moreButton.hidden = false;
+      moreButton.textContent = 'Show ' + Math.min(ROW_PAGE_SIZE, left) + ' more';
+      remaining.textContent =
+        'Showing ' + state.rows.length + ' of ' + entries.length + ' findings on this screen.';
+    };
+
+    moreButton.addEventListener('click', () => {
+      appendPage();
+      applyRowState();
+      // Focus stays on the control the user pressed while more rows exist. When the last page lands
+      // the control disappears, so focus is moved to the first row that was just added.
+      if (moreButton.hidden) {
+        const firstNew = state.rows[state.rows.length - 1];
+        if (firstNew) {
+          firstNew.button.focus();
+        }
+      }
     });
+
+    appendPage();
     scroll.appendChild(list);
     section.appendChild(scroll);
+    if (entries.length > ROW_PAGE_SIZE) {
+      section.appendChild(remaining);
+      section.appendChild(moreButton);
+    }
     return section;
   }
 
@@ -1569,13 +1875,20 @@ export const overlayClientSource = `(() => {
       }
       item.appendChild(info);
 
-      if (entry.path) {
-        // A real anchor with an href set to the screen's pathname. Clicking navigates the browser,
-        // which works for a full page load and, because it is a real in-page anchor, is also fine
-        // for a single-page app that intercepts same-origin link clicks.
+      // A real anchor with an href set to the screen's pathname. Clicking navigates the browser,
+      // which works for a full page load and, because it is a real in-page anchor, is also fine for
+      // a single-page app that intercepts same-origin link clicks. A path that will not resolve to
+      // this origin gets no link at all: the path is still shown as text, so the developer can go
+      // there themselves, but the overlay never hands them an off-site link.
+      const href = sameOriginHref(entry.path);
+      if (href !== null) {
         const link = make('a', 'elsewhere-link', 'Go to this screen');
-        link.href = entry.path;
+        link.href = href;
         item.appendChild(link);
+      } else if (entry.path) {
+        item.appendChild(
+          make('span', 'elsewhere-nolink', 'No link: that path does not resolve to this site.'),
+        );
       }
       list.appendChild(item);
     }
@@ -1694,6 +2007,16 @@ export const overlayClientSource = `(() => {
     bar.appendChild(title);
 
     const controls = make('div', 'panel-controls');
+
+    // The user-driven way to re-read the published result. This is the path that replaced the
+    // window-level refresh event: a control a developer presses, not something any script on the
+    // page can fire. It re-reads what usabl published; it cannot make usabl decide anything.
+    const recheck = make('button', 'icon-button recheck-button', 'Check again');
+    recheck.type = 'button';
+    recheck.disabled = state.scanning;
+    recheck.addEventListener('click', () => requestRefresh());
+    controls.appendChild(recheck);
+
     const widthToggle = make('button', 'icon-button width-toggle', 'Wide');
     widthToggle.type = 'button';
     widthToggle.setAttribute('aria-pressed', String(state.wide));
@@ -1743,6 +2066,33 @@ export const overlayClientSource = `(() => {
     }
 
     header.replaceChildren(bar, banner, note, screenLine);
+    announceVerdict(verdict, split, payload);
+  }
+
+  // One short sentence per real state change, written to the hidden live region.
+  //
+  // Without this a screen reader user watching a fix loop hears nothing at all: the banner goes from
+  // regression to verified in silence. It is deliberately terse and it is written only when the
+  // sentence differs from the last one, so a re-render on a route change does not repeat it.
+  function announceVerdict(verdict, split, payload) {
+    if (!state.verdictStatus) {
+      return;
+    }
+    let sentence = 'usabl: ' + verdict.word + '.';
+    if (!state.scanning && !state.error && payload && payload.loaded) {
+      if (!split.matched) {
+        sentence += ' This screen was not scanned.';
+      } else if (split.here.length > 0) {
+        sentence += ' ' + countLabel(split.here.length, 'finding') + ' on this screen.';
+      } else {
+        sentence += ' No findings on this screen.';
+      }
+    }
+    if (sentence === state.lastVerdictAnnouncement) {
+      return;
+    }
+    state.lastVerdictAnnouncement = sentence;
+    state.verdictStatus.textContent = sentence;
   }
 
   function renderBadge(host, payload, split) {
@@ -1799,7 +2149,7 @@ export const overlayClientSource = `(() => {
     loaded: false,
     verdict: null,
     summary: '',
-    coverage: { affected: [], unresolvedFiles: [], gaps: [] },
+    coverage: { affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
     findings: [],
     receipt: null,
     dirtyGuardedPaths: [],
@@ -1835,7 +2185,7 @@ export const overlayClientSource = `(() => {
       loaded: true,
       verdict: null,
       summary: 'The inspector could not load the current result. Check the dev server logs.',
-      coverage: { affected: [], unresolvedFiles: [], gaps: [] },
+      coverage: { affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
       findings: [],
       receipt: null,
       dirtyGuardedPaths: [],
@@ -1850,7 +2200,9 @@ export const overlayClientSource = `(() => {
     state.error = false;
     state.scanning = true;
     clearHighlight();
-    render(host);
+    if (host) {
+      render(host);
+    }
   }
 
   function renderPayload(payload, error) {
@@ -1858,6 +2210,9 @@ export const overlayClientSource = `(() => {
     // The page may have been re-rendered under us, so the old outline can point at a node that is
     // no longer there. Drop it and re-anchor below if the row it belonged to survived.
     clearHighlight();
+    if (!host) {
+      return;
+    }
     state.payload = Object.assign({ loaded: true }, payload);
     state.error = error === true;
     state.scanning = false;
@@ -1879,8 +2234,8 @@ export const overlayClientSource = `(() => {
     if (state.scanning || state.error || !state.payload) {
       return;
     }
-    const host = document.getElementById(HOST_ID);
-    if (!host || !host.shadowRoot) {
+    const host = state.host;
+    if (!host || !host.isConnected || !host.shadowRoot) {
       return;
     }
     clearHighlight();
@@ -1915,32 +2270,79 @@ export const overlayClientSource = `(() => {
     window.addEventListener('usabl:locationchange', handleRouteChange);
   }
 
-  async function refresh() {
+  // Two refreshes can be in flight at once around a save, because the dev server replaces its
+  // single-flight wrapper while an older run is still finishing. Responses can then land out of
+  // order and an older verified result can overwrite a newer regression, leaving the panel green
+  // while the engine says blocked. Every request takes a generation number and any response that is
+  // not from the newest request is dropped on the floor.
+  let refreshGeneration = 0;
+  let refreshRunning = false;
+  let refreshQueued = false;
+
+  async function performRefresh() {
     const host = ensureInspector();
+    if (!host) {
+      // ensureInspector already said, once and loudly, why there is no inspector. Reading the result
+      // to render it into nothing would only burn requests.
+      return;
+    }
+    refreshGeneration += 1;
+    const generation = refreshGeneration;
+    const isCurrent = () => generation === refreshGeneration;
     renderScanning(host);
     try {
-      const response = await fetch(RESULT_ENDPOINT, { cache: 'no-store' });
+      const response = await nativeFetch(RESULT_ENDPOINT, { cache: 'no-store' });
+      if (!isCurrent()) {
+        return;
+      }
       if (!response.ok) {
         throw new Error('status ' + response.status);
       }
-      const payload = await response.json();
+      const payload = await nativeResponseJson.call(response);
+      if (!isCurrent()) {
+        return;
+      }
       renderPayload(payload, false);
     } catch (_err) {
+      if (!isCurrent()) {
+        return;
+      }
       renderPayload(errorPayload(), true);
     }
   }
 
+  // At most one request in flight and at most one waiting. A burst of saves or watcher events
+  // collapses into one more read rather than one read per event.
+  function requestRefresh() {
+    if (refreshRunning) {
+      refreshQueued = true;
+      return;
+    }
+    runQueuedRefresh();
+  }
+
+  async function runQueuedRefresh() {
+    refreshRunning = true;
+    try {
+      await performRefresh();
+    } finally {
+      refreshRunning = false;
+      if (refreshQueued) {
+        refreshQueued = false;
+        runQueuedRefresh();
+      }
+    }
+  }
+
   hookNavigation();
-  // A Vite dev server pushes a refresh over its hot channel. Any other host, and any test harness,
-  // can ask for the same re-read by dispatching this event. Both paths only re-read the published
-  // result; neither can change it.
-  window.addEventListener('usabl:refresh', () => {
-    refresh();
-  });
-  refresh();
+  requestRefresh();
+  // The dev server pushes a refresh over its own hot channel when it has re-run the engine. There is
+  // deliberately no window-level event for this: any script on the page can dispatch a window event,
+  // and a refresh the page can trigger is a lever the page can use to time what the developer sees.
+  // The "Check again" control in the panel is the user-driven path.
   if (import.meta && import.meta.hot && typeof import.meta.hot.on === 'function') {
     import.meta.hot.on('usabl:refresh', () => {
-      refresh();
+      requestRefresh();
     });
   }
 })();`;

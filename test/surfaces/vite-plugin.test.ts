@@ -194,14 +194,11 @@ describe('projectOverlay', () => {
     expect(overlay.advisory).toBe(true);
     expect(overlay.displayExitCode).toBe(0);
     expect(overlay.findingsTotalCount).toBe(1);
-    expect(overlay.noiseBudgetCollapsed).toBe(false);
-    expect(overlay.showAllHint).toBeNull();
-    expect(overlay.findings[0]?.groupCount).toBeNull();
   });
 
-  it('lists every overlay finding while still reporting the budget total and hint', () => {
-    // The overlay list is flat so that each finding can be located on the page by itself. The
-    // budget fields keep reporting the collapse for the bounded text surfaces that read them.
+  it('lists every overlay finding and reports a total that matches the list', () => {
+    // The overlay list is flat so that each finding can be located on the page by itself. There is
+    // no collapsing, so the projection carries no "showing N of M" flag that would describe one.
     const findings = Array.from({ length: 6 }, (_, index) => ({
       rule: `rule-${index}`,
       layer: 'axe',
@@ -223,10 +220,11 @@ describe('projectOverlay', () => {
     const overlay = projectOverlay(baseResult({ findings }));
 
     expect(overlay.findings).toHaveLength(6);
-    expect(overlay.findings.every((entry) => entry.groupCount === null)).toBe(true);
+    // The reported total is the length of the list the reader can actually see.
+    expect(overlay.findingsTotalCount).toBe(overlay.findings.length);
     expect(overlay.findingsTotalCount).toBe(6);
-    expect(overlay.noiseBudgetCollapsed).toBe(true);
-    expect(overlay.showAllHint).toContain('usabl check --json');
+    expect(Object.keys(overlay)).not.toContain('noiseBudgetCollapsed');
+    expect(Object.keys(overlay)).not.toContain('showAllHint');
   });
 
   it('frames page-derived finding text before browser egress', () => {
@@ -485,7 +483,7 @@ describe('usablVitePluginFromConfig', () => {
     expect(runEngineConfig).toBe(config);
     expect(closeCalls).toBe(1);
     expect(calls).toEqual(['loadConfig', 'buildDeps', 'runEngine', 'close']);
-    expect(JSON.parse(response.body)).toEqual(projectOverlay(engineResult, '/repo/app', config));
+    expect(JSON.parse(response.body)).toEqual(projectOverlay(engineResult, '/repo/app'));
   });
 
   it('closes browser when runEngine throws', async () => {

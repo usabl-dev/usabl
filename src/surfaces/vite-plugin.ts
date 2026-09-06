@@ -11,9 +11,6 @@ import { run } from '../run.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 import { overlayClientSource } from './overlay-client.js';
 import { injectJsxSourceAttributes, shouldInjectJsxSource } from './vite-jsx-source.js';
-import {
-  applyNoiseBudgetPerSurface,
-} from '../output/noise-budget.js';
 
 function overlayClientModuleSource(): string {
   return [
@@ -35,6 +32,10 @@ export interface OverlayProjection {
     affected: Result['coverage']['affected'];
     unresolvedFiles: Result['coverage']['unresolvedFiles'];
     gaps: Result['coverage']['gaps'];
+    // Carried through because a null verdict means two different things. With nothingToCheck true
+    // and exit code 0 it means the run had no affected screen and there was nothing to prove.
+    // Without it, a null verdict is an absence of proof, and the overlay must not draw that green.
+    nothingToCheck: Result['coverage']['nothingToCheck'];
   };
   findings: Array<{
     rule: string;
@@ -53,11 +54,10 @@ export interface OverlayProjection {
     why: string;
     fix: string;
     appSource: Result['findings'][number]['appSource'] | null;
-    groupCount: number | null;
   }>;
+  // The number of findings in this projection. The list is flat, one entry per finding, so this is
+  // simply its length. There is no collapsing here and therefore no "showing N of M" to disclose.
   findingsTotalCount: number;
-  noiseBudgetCollapsed: boolean;
-  showAllHint: string | null;
   receipt: {
     sourceTree: string;
     baseRevision: string | null;
@@ -146,16 +146,13 @@ function makeUsablVitePluginFactoryPorts(
 export function projectOverlay(
   result: Result,
   workspaceRoot: string | null = null,
-  config?: UsablConfig,
 ): OverlayProjection {
   // Overlay is advisory only, so displayExitCode stays 0 even when the gated Result blocked.
   const safe = scrubResult(result);
-  // The noise budget still produces the total count and the show-all hint that the bounded text
-  // surfaces rely on, so we keep computing it. The overlay's own list is flat: it shows one row per
-  // finding so every finding can be located on the page by itself. A collapsed representative row
-  // cannot be located, because it stands for elements it does not name. So the projection carries
-  // the full findings list and the budget only contributes counts.
-  const budgetView = applyNoiseBudgetPerSurface(safe.findings, config);
+  // No noise budget here. The overlay list is flat, one row per finding, so each one can be located
+  // on the page by itself. A collapsed representative row cannot be located, because it stands for
+  // elements it does not name. Carrying a "showing N of M" flag beside a list that shows all of them
+  // would describe a projection that no longer exists, so those fields are gone rather than stale.
   return {
     advisory: true,
     displayExitCode: 0,
@@ -168,6 +165,7 @@ export function projectOverlay(
       affected: safe.coverage.affected,
       unresolvedFiles: safe.coverage.unresolvedFiles,
       gaps: safe.coverage.gaps,
+      nothingToCheck: safe.coverage.nothingToCheck,
     },
     findings: safe.findings.map((finding) => {
       return {
@@ -187,13 +185,9 @@ export function projectOverlay(
         why: finding.why,
         fix: finding.fix,
         appSource: finding.appSource ?? null,
-        // Every row is one finding, so no row stands for a group of them.
-        groupCount: null,
       };
     }),
-    findingsTotalCount: budgetView.totalCount,
-    noiseBudgetCollapsed: budgetView.collapsed,
-    showAllHint: budgetView.showAllHint,
+    findingsTotalCount: safe.findings.length,
     receipt:
       safe.receipt === null
         ? null
@@ -246,7 +240,6 @@ function injectLoader(html: string): string {
 export function usablVitePlugin(opts: {
   run: () => Promise<Result>;
   workspaceRoot?: string;
-  resolveOverlayConfig?: () => UsablConfig | undefined;
 }): UsablVitePlugin {
   let runOnce = singleFlight(opts.run);
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -279,8 +272,7 @@ export function usablVitePlugin(opts: {
         }
         if (method === 'GET' && pathname === '/__usabl/result') {
           const result = await runOnce();
-          const config = opts.resolveOverlayConfig?.();
-          const projected = projectOverlay(result, opts.workspaceRoot ?? null, config);
+          const projected = projectOverlay(result, opts.workspaceRoot ?? null);
           res.statusCode = 200;
           res.setHeader('content-type', 'application/json; charset=utf-8');
           res.end(JSON.stringify(projected));
@@ -329,16 +321,12 @@ export function usablVitePluginFromConfig(
   const cwd = opts.cwd ?? resolvedPorts.cwd();
   const configPath = opts.configPath ?? 'usabl.config.json';
   const resolvedConfigPath = resolvedPorts.resolvePath(cwd, configPath);
-  let overlayConfig: UsablConfig | undefined;
-
   // Hosts should not assemble Deps. This factory keeps wiring in-package and
   // still returns a projection-only overlay backed by the gate-owned Result.
   return usablVitePlugin({
     workspaceRoot: cwd,
-    resolveOverlayConfig: () => overlayConfig,
     run: async () => {
       const config = await resolvedPorts.loadConfig(resolvedConfigPath);
-      overlayConfig = config;
       const deps = await resolvedPorts.buildDeps(config, { cwd });
       try {
         return await resolvedPorts.runEngine(deps, config);
