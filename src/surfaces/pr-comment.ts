@@ -51,14 +51,58 @@ const STOP_CAP = 20;
 // the marker already contains. Either one turns a string that is not the marker into the marker on
 // screen, which is why none of them can be left through.
 //
-// Block-level markers at the start of a line, a heading or a bullet or a rule, are deliberately
-// not escaped: they change how a line is laid out, not what the characters in it say. The cost of
-// the set is that a raw reader sees a reference where a file name had an underscore. That is worth
-// paying, because the rendered text stays exactly what the page had.
+// The cost of the set is that a raw reader sees a reference where a file name had an underscore.
+// That is worth paying, because the rendered text stays exactly what the page had.
 const MARKUP_SIGNIFICANT = /[&<>[\]`*_~\\|]/g;
 
+// Block markup is the other way a renderer changes what a reader sees. It does not delete
+// characters, but it changes what the line is: page text that begins "# usabl report: VERIFIED"
+// renders as a first-level heading, larger than the report's own headline, and a reader takes it
+// for the verdict. Each piece of page text sits on its own line, and its line breaks were folded
+// to spaces before it got here, so a block construct can only fire at the start of that line.
+// This rule defends against, in GitHub Flavored Markdown:
+//
+//   a heading, "#" at the start of the line;
+//   a bullet list item, "-", "+", or "*" at the start of the line;
+//   a numbered list item, digits then "." or ")" at the start of the line;
+//   a thematic break, "---", "***", "___", or the same with spaces between, alone on the line;
+//   a setext underline, "===" or "---" alone on the line, which turns the line before it, the
+//   frame's opening marker, into a heading.
+//
+// The first character of the marker is written as a reference, after any leading spaces, because
+// a renderer allows up to three spaces of indent before block markup. A line whose first character
+// is "&" is a paragraph line whatever follows, and the reference still renders as the character.
+// "*" and "_" are already references from the inline set; they are listed here so this rule stands
+// on its own.
+const BLOCK_MARKER_AT_LINE_START = /^(\s*)([#\-+*=]|\d(?=\d*[.)]))/;
+
+// Autolinks are the third way. A renderer turns "https://example.test/path", "www.example.test",
+// and the "<...>" form into links a reader can click, and the page then chooses where a link in
+// usabl's report goes. The "<" form is already covered by the inline set. The other two are
+// matched on the raw bytes: the "://" of a scheme and the "www." of a bare host. A reference in
+// place of the colon or the dot is not those bytes, so neither is matched, and it renders as the
+// same character, so the reader still sees the address as text. Only a colon followed by "//" is
+// touched, so a label like "why:" stays readable in the raw comment.
+//
+// One form is out of reach of a reference: an email address, "user@example.test", is found after
+// references are decoded and adjacent text is joined, so escaping cannot stop it. It is left as it
+// is and is named here so the limit is not mistaken for an oversight.
+const SCHEME_COLON = /:(?=\/\/)/g;
+const WWW_DOT = /(www)\./gi;
+
+function reference(character: string): string {
+  return `&#${character.codePointAt(0) ?? 0};`;
+}
+
 function escapeMarkdown(text: string): string {
-  return text.replace(MARKUP_SIGNIFICANT, (character) => `&#${character.codePointAt(0) ?? 0};`);
+  return text
+    .replace(MARKUP_SIGNIFICANT, reference)
+    .replace(SCHEME_COLON, reference)
+    .replace(WWW_DOT, (_whole, www: string) => `${www}${reference('.')}`)
+    .replace(
+      BLOCK_MARKER_AT_LINE_START,
+      (_whole, indent: string, marker: string) => `${indent}${reference(marker)}`,
+    );
 }
 
 // A code span, fenced long enough that nothing inside it can end the span early. Character

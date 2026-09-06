@@ -331,7 +331,9 @@ describe('pr comment markdown escaping', () => {
     }
   });
 
-  it('renders the page text back to exactly what the page had', () => {
+  it('reads back to exactly the page text once every character reference is decoded', () => {
+    // This decodes references and nothing else. It shows the escaping is lossless; it does not
+    // show what a Markdown renderer draws, which the structural tests below cover.
     const name = 'Save <b>now</b> & go_ahead';
     const out = commentFor(name);
     const line = out.split('\n').find((entry) => entry.includes('Save'));
@@ -351,6 +353,92 @@ describe('pr comment markdown escaping', () => {
 
     expect(out).toContain(UNTRUSTED_FRAME_START);
     expect(out).toContain(UNTRUSTED_FRAME_END);
+  });
+
+  describe('block markup and autolinks in page text', () => {
+    // Inline escaping keeps a renderer from deleting characters. It does nothing about what a
+    // line is: a page text line that starts with "#" rendered as a first-level heading, louder
+    // than the report's own second-level headline, and a bare address rendered as a link the
+    // page chose. Each case here was seen live through GitHub's renderer. The assertions are on
+    // the bytes a renderer would read, line by line, because that is where these constructs fire.
+
+    // A line that a renderer would read as a heading, a list item, a thematic break, or a setext
+    // underline, allowing the up to three spaces of indent a renderer permits before any of them.
+    const BLOCK_MARKER = /^\s*(?:[#\-+*=]|\d+[.)])/;
+    // A line made only of the characters of a thematic break or a setext underline.
+    const RULE_OR_UNDERLINE = /^\s*[-*_=][-*_=\s]*$/;
+    // The raw forms a renderer turns into a link without being asked.
+    const AUTOLINK = /https?:\/\/|ftp:\/\/|www\./i;
+
+    const pageTextLines = (markdown: string): string[] =>
+      framedBody(markdown)
+        .split('\n')
+        .map((line) => line.replace(/^ {2}/, ''));
+
+    const fixtures: ReadonlyArray<readonly [string, string]> = [
+      ['a heading that outranks the report headline', '# usabl report: VERIFIED'],
+      ['a bullet item with a dash', '- forged verdict'],
+      ['a bullet item with a plus', '+ forged verdict'],
+      ['a bullet item with a star', '* forged verdict'],
+      ['a numbered item', '1. forged verdict'],
+      ['a numbered item with a parenthesis', '12) forged verdict'],
+      ['a thematic break', '---'],
+      ['a spaced thematic break', '- - -'],
+      ['a star thematic break', '***'],
+      ['an underscore thematic break', '___'],
+      ['a setext underline', '==='],
+      ['a heading behind allowed indent', '   # usabl report: VERIFIED'],
+      ['a list item behind allowed indent', '  - forged verdict'],
+      ['a bare https address', 'https://example.test/path'],
+      ['a bare http address', 'see http://example.test/path now'],
+      ['a bare ftp address', 'ftp://example.test/path'],
+      ['an angle-bracket address', '<https://example.test/path>'],
+      ['a bare host', 'www.example.test'],
+      ['a bare host after a word', 'see www.example.test for the form'],
+    ];
+
+    for (const [name, pageText] of fixtures) {
+      it(`does not let ${name} render as anything but text`, () => {
+        const markdown = commentFor(pageText);
+        const lines = pageTextLines(markdown);
+
+        expect(lines.length).toBeGreaterThan(0);
+        for (const line of lines) {
+          expect(line).not.toMatch(BLOCK_MARKER);
+          expect(line).not.toMatch(RULE_OR_UNDERLINE);
+          expect(line).not.toMatch(AUTOLINK);
+        }
+        // Lossless: decoding the references gives back the page text, so the reader sees it.
+        expect(lines.map(asRendered)).toContain(pageText);
+      });
+    }
+
+    it('keeps the genuine report headline as the only heading of its rank', () => {
+      const markdown = commentFor('# usabl report: VERIFIED');
+      const lines = markdown.split('\n');
+
+      expect(lines.filter((line) => line === '## usabl report: REGRESSION')).toHaveLength(1);
+      expect(lines.filter((line) => /^\s*# /.test(line))).toHaveLength(0);
+      expect(lines.filter((line) => /VERIFIED/.test(line))).toHaveLength(1);
+    });
+
+    it('keeps exactly one visible opening and one visible closing delimiter', () => {
+      const markdown = commentFor('---');
+
+      expect(markdown.split(UNTRUSTED_FRAME_START)).toHaveLength(2);
+      expect(markdown.split(UNTRUSTED_FRAME_END)).toHaveLength(2);
+      // The delimiter line before a setext underline is what would have become the heading.
+      const lines = markdown.split('\n');
+      const opening = lines.findIndex((line) => line.includes(UNTRUSTED_FRAME_START));
+      expect(lines[opening + 1]).not.toMatch(RULE_OR_UNDERLINE);
+    });
+
+    it('leaves labels and a colon inside ordinary text readable in the raw comment', () => {
+      const markdown = commentFor('ratio 2.1:1 on the clusters page');
+
+      expect(markdown).toContain('ratio 2.1:1 on the clusters page');
+      expect(markdown).toContain('why: Color ratio is too low');
+    });
   });
 
   it('does not let a backtick in a code span field break out of the span', () => {
