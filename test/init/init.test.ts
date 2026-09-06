@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { parseCliArgs } from '../../src/surfaces/cli.js';
 import { inferInit, writeInitDrafts, type InitFs } from '../../src/init/index.js';
 import { matchGlob } from '../../src/primitives/match-glob.js';
+import { parseUsablConfig } from '../../src/intake/config.js';
+import { computeCoverage } from '../../src/coverage/planner.js';
 
 function memoryFs(files: Record<string, string>): InitFs & { store: Record<string, string> } {
   const store = { ...files };
@@ -191,5 +193,42 @@ describe('writeInitDrafts', () => {
     const routes = JSON.parse(fs.store['usabl.routes.json'] ?? '{}') as { routes: unknown[] };
     expect(config.appBaseUrl).toBe('http://127.0.0.1:5173');
     expect(routes.routes).toHaveLength(2);
+  });
+});
+
+describe('what init writes is what usabl accepts', () => {
+  // A tool that generates configs it then refuses to read is a defect whichever rule is right.
+  // These pin both directions of that agreement.
+  it('round trips: the drafted config parses and its coverage plan is accepted', async () => {
+    const fs = memoryFs(fixtureFiles());
+    const draft = await inferInit(fs);
+    await writeInitDrafts(fs, draft, { force: true });
+
+    const config = parseUsablConfig(fs.store['usabl.config.json'] as string);
+    expect(config.surfaces.length).toBeGreaterThan(0);
+
+    const planFs = {
+      readFile: async (path: string) => fs.store[path] ?? null,
+      glob: async (patterns: string[]) =>
+        Object.keys(fs.store).filter((f) => patterns.some((pattern) => matchGlob(pattern, f))),
+    };
+    await expect(computeCoverage(planFs, config, ['src/pages/Clusters.tsx'])).resolves.toBeDefined();
+  });
+
+  it('declares the override on every surface it takes from a discovered route', async () => {
+    const draft = await inferInit(memoryFs(fixtureFiles()));
+    expect(draft.config.surfaces.length).toBeGreaterThan(0);
+    for (const surface of draft.config.surfaces) {
+      expect(surface.overridesDiscoveredRoute).toBe(true);
+    }
+  });
+
+  it('skips a route whose derived screen id the parser would refuse, and says so', async () => {
+    // A raw space in a route path rides straight through screenIdFromUrl into the id.
+    const withSpace = router.replace('path="/clusters"', 'path="/user settings"');
+    const draft = await inferInit(memoryFs(fixtureFiles({ 'src/App.tsx': withSpace })));
+
+    expect(draft.config.surfaces.map((surface) => surface.id)).not.toContain('user settings');
+    expect(draft.notes.some((note) => note.includes('skipped surface for route'))).toBe(true);
   });
 });

@@ -5,6 +5,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import { parseUsablConfig } from '../../src/intake/config.js';
+import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
+import { describeSurfaceIdProblem } from '../../src/intake/surface-ids.js';
+import { screenIdFromUrl } from '../../src/coverage/router-parse.js';
 
 const BASE = {
   appBaseUrl: 'http://127.0.0.1:5173',
@@ -70,6 +73,256 @@ describe('parseUsablConfig surface reachedWhen', () => {
         }),
       ),
     ).toThrow(/reachedWhen/);
+  });
+});
+
+describe('parseUsablConfig surface id', () => {
+  const surface = (id: string, path: string) => ({
+    id,
+    url: `http://127.0.0.1:5173${path}`,
+    files: [`src${path}.tsx`],
+  });
+
+  it('loads a config whose surface ids are all distinct', () => {
+    const config = parseUsablConfig(
+      configJson({ surfaces: [surface('profile', '/profile'), surface('billing', '/billing')] }),
+    );
+    expect(config.surfaces.map((entry) => entry.id)).toEqual(['profile', 'billing']);
+  });
+
+  it('refuses an empty or whitespace-only id', () => {
+    for (const bad of ['', '   ', '\t']) {
+      expect(() => parseUsablConfig(configJson({ surfaces: [surface(bad, '/overview')] })), bad).toThrow(
+        /surfaces\[0\]\.id must be a non-empty string/,
+      );
+    }
+  });
+
+  it('refuses two surfaces that share one id and names both entries', () => {
+    let message = '';
+    try {
+      parseUsablConfig(
+        configJson({ surfaces: [surface('settings', '/settings/profile'), surface('settings', '/settings/billing')] }),
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('surfaces[1].id');
+    expect(message).toContain('surfaces[0].id');
+    expect(message).toContain('settings');
+    expect(message).toMatch(/unique/);
+  });
+
+  it('still refuses a non-string id', () => {
+    expect(() =>
+      parseUsablConfig(
+        configJson({ surfaces: [{ id: 42, url: 'http://127.0.0.1:5173/overview', files: ['src/Overview.tsx'] }] }),
+      ),
+    ).toThrow(/surfaces\[0\]\.id must be a string/);
+  });
+
+  // Ids are compared exactly, so an id has to be something a reader can tell apart from another
+  // id. Whitespace, invisible characters, and characters that reorder their neighbours all break
+  // that, and they break it whether or not the two ids happen to be different map keys. The rule
+  // is one rule, so every one of these is refused the same way.
+  const indistinguishable: Array<[string, string]> = [
+    ['ascii space', 'U+0020'],
+    ['no-break space', 'U+00A0'],
+    ['ideographic space', 'U+3000'],
+    ['zero width space', 'U+200B'],
+    ['right to left mark', 'U+200F'],
+    ['right to left override', 'U+202E'],
+    ['zero width joiner', 'U+200D'],
+    ['combining grapheme joiner', 'U+034F'],
+    ['variation selector', 'U+FE0F'],
+    ['variation selector supplement', 'U+E0100'],
+    ['hangul choseong filler', 'U+115F'],
+    ['hangul filler', 'U+3164'],
+  ];
+
+  const charFor = (point: string) => String.fromCodePoint(Number.parseInt(point.slice(2), 16));
+
+  it.each(indistinguishable)('refuses an id containing a %s and names the code point', (_label, point) => {
+    let message = '';
+    try {
+      parseUsablConfig(configJson({ surfaces: [surface(`settings${charFor(point)}`, '/settings')] }));
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('surfaces[0].id');
+    expect(message).toContain(point);
+    expect(message).toMatch(/not allowed/);
+  });
+
+  it.each(indistinguishable)(
+    'refuses a pair of ids that a reader cannot tell apart, separated by a %s',
+    (_label, point) => {
+      expect(() =>
+        parseUsablConfig(
+          configJson({
+            surfaces: [
+              surface('settings', '/settings/profile'),
+              surface(`settings${charFor(point)}`, '/settings/billing'),
+            ],
+          }),
+        ),
+      ).toThrow(/surfaces\[1\]\.id/);
+    },
+  );
+
+  it('accepts the id discovery derives from a parameter route', () => {
+    // Ask the generator for the id rather than hard-coding it, so this stays true if
+    // screenIdFromUrl changes. The grammar has to leave route punctuation alone, or usabl init
+    // would write a config that usabl then refuses to read.
+    const id = screenIdFromUrl('/users/:id');
+    const config = parseUsablConfig(configJson({ surfaces: [surface(id, '/users')] }));
+    expect(config.surfaces[0]?.id).toBe(id);
+    expect(describeSurfaceIdProblem(id)).toBeNull();
+  });
+
+  it('refuses an id that is not in Unicode NFC form', () => {
+    // Canonically equivalent spellings render identically but compare unequal, so one spelling
+    // would silently become two screens.
+    const decomposed = 'cafe\u0301';
+    expect(decomposed).not.toBe(decomposed.normalize('NFC'));
+    expect(() => parseUsablConfig(configJson({ surfaces: [surface(decomposed, '/cafe')] }))).toThrow(
+      /NFC form/,
+    );
+  });
+
+  it('accepts the composed spelling of the same id', () => {
+    const composed = 'cafe\u0301'.normalize('NFC');
+    expect(parseUsablConfig(configJson({ surfaces: [surface(composed, '/cafe')] })).surfaces[0]?.id).toBe(
+      composed,
+    );
+  });
+
+  it.each([
+    ['reserved but default-ignorable', 'U+2065', true],
+    ['reserved and not default-ignorable', 'U+0378', false],
+  ])('is honest about unassigned code points: %s is rejected=%s', (_label, point, rejected) => {
+    // The comment does not claim unassigned code points are uniformly accepted, because they are
+    // not: the reserved ranges Unicode marks default-ignorable are caught by that property.
+    const id = `screen${charFor(point)}`;
+    expect(describeSurfaceIdProblem(id) !== null).toBe(rejected);
+  });
+
+  it('keeps cross-script confusables as distinct ids, which the grammar does not claim to stop', () => {
+    // Latin "a" and Cyrillic "a" look alike and are both accepted. Both screens are scanned and
+    // both appear in coverage, so no screen is lost. The comment and the docs say so rather than
+    // claiming a property the code does not deliver.
+    const config = parseUsablConfig(
+      configJson({ surfaces: [surface('varia', '/a'), surface('vari\u0430', '/b')] }),
+    );
+    expect(config.surfaces).toHaveLength(2);
+  });
+});
+
+describe('surface id rules and usabl init agree', () => {
+  // A tool that generates configs it then refuses to read is a defect whichever rule is right.
+  // These are the route paths where screenIdFromUrl produces an id the parser rejects. init must
+  // skip them with a note rather than write them.
+  it.each([
+    ['a raw space in the path', '/user settings'],
+    ['a joining character in the path', '/family/\u{1F468}\u200D\u{1F469}'],
+  ])('reports %s as an id problem so init can skip the route', (_label, path) => {
+    expect(describeSurfaceIdProblem(screenIdFromUrl(path))).not.toBeNull();
+  });
+
+  it('reports no problem for an ordinary route path', () => {
+    expect(describeSurfaceIdProblem(screenIdFromUrl('/clusters'))).toBeNull();
+  });
+});
+
+describe('parseUsablConfig surface overridesDiscoveredRoute', () => {
+  it('reads the declaration', () => {
+    const config = parseUsablConfig(
+      configJson({
+        surfaces: [
+          { id: 'clusters', url: 'http://127.0.0.1:5173/clusters?v=1', files: [], overridesDiscoveredRoute: true },
+        ],
+      }),
+    );
+    expect(config.surfaces[0]?.overridesDiscoveredRoute).toBe(true);
+  });
+
+  it('leaves it unset when the surface omits it', () => {
+    expect(parseUsablConfig(configJson()).surfaces[0]?.overridesDiscoveredRoute).toBeUndefined();
+  });
+
+  it('refuses a non-boolean declaration', () => {
+    expect(() =>
+      parseUsablConfig(
+        configJson({
+          surfaces: [
+            { id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: [], overridesDiscoveredRoute: 'yes' },
+          ],
+        }),
+      ),
+    ).toThrow(/overridesDiscoveredRoute must be true or false/);
+  });
+});
+
+describe('parseUsablConfig surface id error text', () => {
+  // Config parsing happens before a Result exists, so nothing here goes through scrubResult.
+  // The message lands on stderr and, through the stop hook, in front of a model. A branch config
+  // is not trusted before the guard has checked it, so an id out of one is untrusted text.
+  function messageFor(surfaces: unknown): string {
+    try {
+      parseUsablConfig(JSON.stringify({ ...BASE, surfaces }));
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    throw new Error('expected the config to be refused');
+  }
+
+  const ESC = '\u001b';
+
+  it('does not let a terminal escape sequence in an id reach the message', () => {
+    // An operating system command sequence retitles the terminal window. It must not survive.
+    const message = messageFor([
+      { id: `settings${ESC}]0;OWNED\u0007`, url: 'http://127.0.0.1:5173/settings', files: ['src/Settings.tsx'] },
+    ]);
+    expect(message).not.toContain(ESC);
+    expect(message).not.toContain('OWNED');
+    expect(message).toContain('U+001B');
+  });
+
+  it('does not let a forged untrusted-text frame marker in an id reach the message', () => {
+    // A model reading the stop hook is told everything inside the frame is data. An id that closes
+    // the frame would relabel whatever follows it as trusted. Two things stop it: the marker
+    // contains spaces, so the grammar refuses the id before anything is repeated back, and the
+    // message names a code point instead of echoing the id. Assert the outcome, not the mechanism.
+    const message = messageFor([
+      { id: `settings${UNTRUSTED_FRAME_END}`, url: 'http://127.0.0.1:5173/settings', files: ['src/Settings.tsx'] },
+    ]);
+    expect(message).not.toContain(UNTRUSTED_FRAME_END);
+    expect(message).not.toContain('UNTRUSTED');
+  });
+
+  it('does not let a payload in malformed JSON reach the message', () => {
+    // A JSON.parse failure quotes the offending input back, so it is on the same egress as every
+    // other message here.
+    let message = '';
+    try {
+      parseUsablConfig(`{"appBaseUrl": zz${ESC}]0;OWNED\u0007${UNTRUSTED_FRAME_END}zz}`);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('not valid JSON');
+    expect(message).not.toContain(ESC);
+    expect(message).not.toContain('OWNED');
+    expect(message).not.toContain(UNTRUSTED_FRAME_END);
+  });
+
+  it('caps how much of a very long id it repeats back', () => {
+    const long = 'a'.repeat(5000);
+    const message = messageFor([
+      { id: long, url: 'http://127.0.0.1:5173/a', files: ['src/A.tsx'] },
+      { id: long, url: 'http://127.0.0.1:5173/b', files: ['src/B.tsx'] },
+    ]);
+    expect(message).toContain('(truncated)');
+    expect(message.length).toBeLessThan(1000);
   });
 });
 

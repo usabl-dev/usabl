@@ -6,6 +6,7 @@
  */
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
 import { parseRouterFallback } from './router-parse.js';
+import { configError } from '../intake/config-error.js';
 
 export interface RouteEntry {
   screenId: string;
@@ -15,6 +16,13 @@ export interface RouteEntry {
 
 export interface RouteManifest {
   routes: RouteEntry[];
+  // Where the route list came from, so a caller can tell a complete list from a partial one.
+  // 'sidecar' is the authored usabl.routes.json and is the only source that is complete enough to
+  // prove a screen id is absent. 'router' is the regex fallback, which recovers paths but is
+  // documented as incomplete, so absence there proves nothing. 'none' means no source was
+  // readable at all, which is also what the trust overlay produces when it suppresses a diverged
+  // manifest and no router file can be read.
+  source: 'sidecar' | 'router' | 'none';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -23,7 +31,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function expectString(value: unknown, field: string): string {
   if (typeof value !== 'string') {
-    throw new Error(`usabl.routes.json ${field} must be a string`);
+    throw configError`usabl.routes.json ${field} must be a string`;
   }
   return value;
 }
@@ -33,7 +41,7 @@ function expectRoutePathUrl(value: unknown, field: string): string {
   // Sidecar route urls are path suffixes under appBaseUrl. Accepting a second
   // origin here would let discovery steer scans away from the operator app.
   if (!url.startsWith('/') || url.includes('@')) {
-    throw new Error(`usabl.routes.json ${field} must start with "/" and must not contain "@"`);
+    throw configError`usabl.routes.json ${field} must start with "/" and must not contain "@"`;
   }
   return url;
 }
@@ -41,7 +49,7 @@ function expectRoutePathUrl(value: unknown, field: string): string {
 function expectEntryFile(value: unknown): string | null {
   if (value === null) return null;
   if (typeof value === 'string') return value;
-  throw new Error('usabl.routes.json routes[].entryFile must be a string or null');
+  throw configError`usabl.routes.json routes[].entryFile must be a string or null`;
 }
 
 function parseSidecar(raw: string): RouteManifest {
@@ -49,18 +57,19 @@ function parseSidecar(raw: string): RouteManifest {
   // Pretending parse failures mean "no routes" would silently rewrite the story.
   const parsed: unknown = JSON.parse(raw);
   if (!isRecord(parsed)) {
-    throw new Error('usabl.routes.json must be an object');
+    throw configError`usabl.routes.json must be an object`;
   }
 
   const routes = parsed['routes'];
   if (!Array.isArray(routes)) {
-    throw new Error('usabl.routes.json routes must be an array');
+    throw configError`usabl.routes.json routes must be an array`;
   }
 
   return {
+    source: 'sidecar',
     routes: routes.map((entry, index): RouteEntry => {
       if (!isRecord(entry)) {
-        throw new Error(`usabl.routes.json routes[${index}] must be an object`);
+        throw configError`usabl.routes.json routes[${index}] must be an object`;
       }
       return {
         screenId: expectString(entry['screenId'], `routes[${index}].screenId`),
@@ -75,7 +84,7 @@ function assertUniqueScreenIds(routes: RouteEntry[]): void {
   const seen = new Set<string>();
   for (const route of routes) {
     if (seen.has(route.screenId)) {
-      throw new Error(`Duplicate screenId in route manifest: "${route.screenId}"`);
+      throw configError`Duplicate screenId in route manifest: "${route.screenId}"`;
     }
     seen.add(route.screenId);
   }
@@ -98,10 +107,10 @@ export async function parseRouteManifest(
 
   const router = await fs.readFile(discovery.routerFile);
   if (router === null) {
-    return { routes: [] };
+    return { routes: [], source: 'none' };
   }
 
-  const manifest = parseRouterFallback(router);
+  const manifest = { ...parseRouterFallback(router), source: 'router' as const };
   assertUniqueScreenIds(manifest.routes);
   return manifest;
 }
@@ -137,6 +146,5 @@ export async function parseDiscoveredManifest(
   if (router === null) {
     return null;
   }
-  const manifest = parseRouterFallback(router);
-  return manifest;
+  return { ...parseRouterFallback(router), source: 'router' };
 }

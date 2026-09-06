@@ -21,9 +21,11 @@ export interface RoutesDriftOutcome {
   stderr?: string;
 }
 
+// Drift compares route urls only and never reads manifest provenance, so it asks for the routes
+// alone. That keeps every caller, including tests, free of a field this comparison does not use.
 export function computeRoutesDrift(
-  configured: RouteManifest,
-  discovered: RouteManifest,
+  configured: Pick<RouteManifest, 'routes'>,
+  discovered: Pick<RouteManifest, 'routes'>,
 ): RoutesDrift {
   const configuredUrls = new Set(configured.routes.map((r) => r.url));
   const discoveredUrls = new Set(discovered.routes.map((r) => r.url));

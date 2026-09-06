@@ -7,6 +7,7 @@
 import type { AffectedScreen, CoverageGap } from '../contracts/index.js';
 import type { DocsManifest } from './docs-manifest.js';
 import { matchGlob } from '../primitives/match-glob.js';
+import { configError } from '../intake/config-error.js';
 
 function docsPageUrl(docsBaseUrl: string, pagePath: string): string {
   const base = new URL(docsBaseUrl);
@@ -19,7 +20,7 @@ function docsPageUrl(docsBaseUrl: string, pagePath: string): string {
   // The resolved URL must stay under the docs base path. This catches protocol-relative
   // URLs, .. traversal, and backslash traversal (WHATWG normalizes backslashes to slashes).
   if (resolved.origin !== base.origin || !resolved.pathname.startsWith(joinBase)) {
-    throw new Error(`page url must stay under the docs base path: ${pagePath}`);
+    throw configError`page url must stay under the docs base path: ${pagePath}`;
   }
   return resolved.toString();
 }

@@ -358,7 +358,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function scrubString(text: string): string {
+/**
+ * Scrubs one untrusted string for egress: secrets out, control sequences out, frame markers out.
+ *
+ * Exported for the egress points that run before a Result exists, such as config parse errors,
+ * which reach stderr and the stop hook without passing through scrubResult.
+ */
+export function scrubString(text: string): string {
   // Redaction and control-sequence stripping are separate concerns that both apply to page text,
   // and the order matters in both directions, so redaction runs on either side of the strip.
   //

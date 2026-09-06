@@ -6,6 +6,7 @@
  */
 import type { Finding, NoiseBudgetConfig, UsablConfig } from '../contracts/index.js';
 import { sortBy } from '../primitives/sortKey.js';
+import { configError } from '../intake/config-error.js';
 
 export const DEFAULT_NOISE_BUDGET = 5;
 
@@ -267,7 +268,7 @@ export function parseNoiseBudgetConfig(raw: unknown): NoiseBudgetConfig | undefi
     return undefined;
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new Error('noiseBudget must be an object');
+    throw configError`noiseBudget must be an object`;
   }
   const record = raw as Record<string, unknown>;
   const parsed: NoiseBudgetConfig = {};
@@ -280,7 +281,7 @@ export function parseNoiseBudgetConfig(raw: unknown): NoiseBudgetConfig | undefi
   const perSurfaceRaw = record['perSurface'];
   if (perSurfaceRaw !== undefined) {
     if (typeof perSurfaceRaw !== 'object' || perSurfaceRaw === null || Array.isArray(perSurfaceRaw)) {
-      throw new Error('noiseBudget.perSurface must be an object');
+      throw configError`noiseBudget.perSurface must be an object`;
     }
     // Null-prototype so a key like "__proto__" is stored as an own budget rather than mutating the
     // prototype chain, and reads stay own-property lookups.
@@ -296,7 +297,7 @@ export function parseNoiseBudgetConfig(raw: unknown): NoiseBudgetConfig | undefi
 
 function expectPositiveWholeNumber(value: unknown, label: string): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
-    throw new Error(`${label} must be a positive whole number`);
+    throw configError`${label} must be a positive whole number`;
   }
   return value;
 }

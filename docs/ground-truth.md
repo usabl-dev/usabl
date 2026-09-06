@@ -1581,6 +1581,74 @@ self-check.
 }
 ```
 
+Each `surfaces[].id` is the key coverage is tracked under. It must be a non-empty string, it
+must be unique across the list, it must not contain whitespace or any invisible or control
+character, and it must be written in Unicode NFC form. Ids are compared exactly, which is the
+comparison the planner, the floor, and the receipt already make, so the grammar is what keeps
+two ids from looking alike rather than the comparison folding them together. Everything a font
+draws is still allowed, so a discovery-derived id such as `users-:id` stays valid. A refused id
+is reported by index, with the position and code point of the offending character, because
+printing an invisible character back would show nothing.
+
+The grammar does not claim more than it delivers. It does not stop confusables across scripts,
+so a Latin `a` and a Cyrillic `a` are both accepted and stay distinct ids. That is deliberate:
+both screens are scanned, both appear in receipt coverage, and waiver matching is exact, so no
+screen is lost by it. Unassigned code points are accepted too, because rejecting them would
+make an id's validity depend on which Unicode version the running Node build carries.
+
+A blank or repeated id is refused when the config is read. Left in, it would collapse two
+screens into one entry: the second screen is dropped from the scan while its changed files
+still count as mapped, and the run would report both screens as covered when only one was
+ever opened.
+
+### Three sources share one screen id space
+
+Screen ids come from three places: `surfaces[].id` in `usabl.config.json`, `screenId` in
+`usabl.routes.json`, and `pageId` in `usabl.docs.json`. App coverage and docs coverage are
+concatenated into one run, and downstream the id alone keys floor identity, finding identity,
+waiver matching, applicability, and source lookup. Each source already checked itself for
+duplicates. Nothing checked across them, so one id could stand for two screens.
+
+That is worse than losing a scan. Two screens under one id collapse to one map entry, so one is
+never opened while its changed files still count as mapped. It also lets a floor entry belonging
+to one screen absorb a genuinely new barrier on the other, which reads as carried debt and mints
+a verified receipt over a real failure.
+
+usabl refuses any id that could stand for more than one screen, checked when coverage is planned,
+before the idle return, because a docs page can be scanned in a run where no app file changed.
+
+**A surface and a discovered route may share an id, but the config has to say so.** Set
+`"overridesDiscoveredRoute": true` on the surface. That is how a surface controls the scan URL for
+a screen discovery already owns, which is what makes query variants and deep links possible.
+
+usabl does not compare the two URLs and does not infer the relationship from them, because a URL
+does not determine which screen renders:
+
+- Applications select screens by query, fragment, trailing slash, and userinfo.
+- Servers do not treat percent spellings as interchangeable. `/users/%61lice` and `/users/alice`
+  are delivered as written.
+- A redirect can send two requests for the same URL to two different screens, depending on session,
+  server state, feature assignment, or time.
+
+So even an identical URL proves only that the same address was requested. The declaration is the
+only evidence usabl will accept, and `usabl init` writes it on every surface it derives from a
+route.
+
+Setting `overridesDiscoveredRoute` on a surface whose id matches no route in an authored
+`usabl.routes.json` is refused, since the declaration would override nothing while reading as
+though it were wired up. That check runs only against an authored sidecar. Router-text discovery
+recovers paths but not ownership, so an id missing from it proves nothing, and the same shape is
+what the trust guard leaves behind when it suppresses a diverged manifest. Refusing there would
+throw away the findings of a run that can still report honestly.
+
+**A docs page id may never equal a surface id or a route screen id.** There is no override
+relationship between documentation and an application screen, so any overlap is refused outright.
+
+Upgrading an existing config: a surface whose id matches a discovered route screen id will now be
+refused until it declares the override or takes a different id. There is no safe way to infer the
+answer, which is why usabl asks instead of guessing. Configs written by `usabl init` before this
+change need `"overridesDiscoveredRoute": true` added to their surfaces.
+
 `guardedPaths` is additive. The four policy files (`usabl.config.json`,
 `usabl.routes.json`, `.usabl-evidence.json`, `.usabl-waivers.json`) are force-guarded by
 `ALWAYS_GUARDED` whether or not they are listed here, and the requirements directory is

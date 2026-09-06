@@ -8,7 +8,10 @@ import type { AffectedScreen, Coverage, CoverageGap, FsGlob, UsablConfig } from 
 import { loadAliasConfig } from './alias-config.js';
 import { buildUnresolvedReason } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
-import { parseRouteManifest } from './route-manifest.js';
+import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
+import { parseDocsManifest } from './docs-manifest.js';
+import { assertSurfaceIds } from '../intake/surface-ids.js';
+import { configError } from '../intake/config-error.js';
 import { matchGlob } from '../primitives/match-glob.js';
 
 function isWideBlastFile(file: string, globs: string[]): boolean {
@@ -26,7 +29,7 @@ function routeUrl(baseUrl: string, routePath: string): string {
   // Route paths must remain on the operator app origin. A sidecar entry that
   // changes origin would mint dishonest scan targets outside declared scope.
   if (resolved.origin !== expectedOrigin) {
-    throw new Error(`route url must stay on app origin: ${routePath}`);
+    throw configError`route url must stay on app origin: ${routePath}`;
   }
   return resolved.toString();
 }
@@ -50,6 +53,72 @@ function manualUrlOverride(config: UsablConfig, file: string, screenId: string):
   return null;
 }
 
+/**
+ * Refuses any screen id that could stand for more than one screen.
+ *
+ * Three sources mint screen ids and all three land in the same identity space: operator surfaces,
+ * discovered routes, and docs manifest pages. App coverage and docs coverage are concatenated by
+ * the caller, and downstream the id alone keys floor identity, finding identity, waiver matching,
+ * applicability, and source lookup. So one id shared by two screens does not merely drop a screen
+ * from the scan. It also lets a floor entry belonging to one screen absorb a genuinely new barrier
+ * on the other, which reads as carried debt and mints a verified receipt over a real failure.
+ * Each source checks itself for duplicates. Nothing checked across them until here.
+ *
+ * A surface and a discovered route may share an id, because that is how a surface overrides the
+ * scan url for a screen discovery already owns. usabl does not try to work out whether a given
+ * pair is that override or two different screens. It cannot: a url does not determine a screen.
+ * Applications select screens by query, fragment, trailing slash, and userinfo, servers do not
+ * treat percent spellings as interchangeable, and a redirect can send two requests for one url to
+ * two different screens depending on session, server state, or time. Even exact string equality
+ * proves only that the same address was requested. So the config declares the relationship with
+ * `overridesDiscoveredRoute` and nothing is inferred from the url at all.
+ *
+ * No such declaration exists for docs pages, because a docs page is never an alias for an app
+ * screen, so any overlap involving a docs page is refused outright.
+ */
+function assertScreenIdsAreUnambiguous(
+  config: UsablConfig,
+  manifest: RouteManifest,
+  docsPageIds: string[],
+): void {
+  const routeById = new Map<string, RouteEntry>();
+  for (const route of manifest.routes) {
+    if (!routeById.has(route.screenId)) {
+      routeById.set(route.screenId, route);
+    }
+  }
+
+  config.surfaces.forEach((surface, index) => {
+    const route = routeById.get(surface.id);
+
+    if (route !== undefined && surface.overridesDiscoveredRoute !== true) {
+      throw configError`surfaces[${index}].id "${surface.id}" is also the screen id of the discovered route "${route.url}". usabl tracks coverage by screen id, so one of the two would never be scanned and the run would still report both as covered. If this surface is that same screen, add "overridesDiscoveredRoute": true to it. If it is a different screen, give it a different id. usabl does not compare the two urls, because a url does not determine which screen renders.`;
+    }
+
+    // A declaration that overrides nothing reads as wired up while the surface stands alone, so
+    // the intended url override never applies. Only an authored sidecar lists routes completely
+    // enough to prove an id is absent from it. Router-text discovery is documented as recovering
+    // paths but not ownership, and 'none' is also what the trust overlay leaves behind when it
+    // suppresses a diverged manifest, so absence proves nothing in either of those and saying so
+    // would throw away the findings of a run that could still report honestly.
+    if (route === undefined && surface.overridesDiscoveredRoute === true && manifest.source === 'sidecar') {
+      throw configError`surfaces[${index}] sets overridesDiscoveredRoute, but usabl.routes.json has no route with the screen id "${surface.id}", so the declaration overrides nothing and this surface url will not be used for a discovered screen. Correct the id to the route you meant, or remove the declaration.`;
+    }
+  });
+
+  // Docs pages share the identity space with both other sources and have no override relationship
+  // with either, so any overlap is two screens under one id.
+  const surfaceIds = new Set(config.surfaces.map((surface) => surface.id));
+  for (const pageId of docsPageIds) {
+    if (surfaceIds.has(pageId)) {
+      throw configError`usabl.docs.json has a page with the id "${pageId}", which is also a surfaces[].id in usabl.config.json. A docs page and an app screen are never the same screen, and usabl keys coverage, floor identity, and waivers by that id alone, so one would absorb the other's findings. Rename one of them.`;
+    }
+    if (routeById.has(pageId)) {
+      throw configError`usabl.docs.json has a page with the id "${pageId}", which is also the screen id of a discovered route. A docs page and an app screen are never the same screen, and usabl keys coverage, floor identity, and waivers by that id alone, so one would absorb the other's findings. Rename the docs page, or rename the route.`;
+    }
+  }
+}
+
 function importClosure(graph: { get(file: string): string[] }, entryFile: string): Set<string> {
   const seen = new Set<string>();
   const queue = [entryFile];
@@ -67,6 +136,20 @@ function importClosure(graph: { get(file: string): string[] }, entryFile: string
 }
 
 export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFiles: string[]): Promise<Coverage> {
+  // affectedByScreen below is keyed by surface id, so a blank or repeated id silently drops a
+  // screen while its changed files still read as mapped. Config parsing refuses that document,
+  // but this planner takes a UsablConfig value from any caller, so it checks the invariant it
+  // depends on rather than trusting that every caller parsed first. Refusing is honest here:
+  // the run fails open and discloses, which is what an unscannable config deserves.
+  assertSurfaceIds(config.surfaces);
+
+  // Identity is checked before the idle return, not after. A run where no app UI file changed can
+  // still scan docs pages, and a floor entry keyed by an id shared with an app screen absorbs a
+  // docs finding whether or not this planner found anything to do.
+  const manifest = await parseRouteManifest(fs, config.discovery);
+  const docsManifest = await parseDocsManifest(fs);
+  assertScreenIdsAreUnambiguous(config, manifest, (docsManifest?.pages ?? []).map((page) => page.pageId));
+
   const uiFiles = changedFiles.filter(
     (file) => !isTestFile(file) && config.uiFileGlobs.some((glob) => matchGlob(glob, file)),
   );
@@ -74,8 +157,6 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
   if (uiFiles.length === 0) {
     return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
   }
-
-  const manifest = await parseRouteManifest(fs, config.discovery);
   const affectedByScreen = new Map<string, AffectedScreen>();
   const unresolvedFiles: string[] = [];
   const gaps: CoverageGap[] = [];
