@@ -11,8 +11,22 @@ export const overlayClientSource = `(() => {
   const HIGHLIGHT_ATTRIBUTE = 'data-usabl-highlight';
   const OPEN_STORAGE_KEY = 'usabl.overlay.open';
   const WIDE_STORAGE_KEY = 'usabl.overlay.wide';
+  const DOCK_STORAGE_KEY = 'usabl.overlay.dock';
   const COMPACT_WIDTH = 'min(420px, calc(100vw - 24px))';
   const WIDE_WIDTH = 'min(640px, calc(100vw - 24px))';
+  // The four corners the panel can dock to. The panel is fixed, so a finding in the panel's own
+  // corner sits behind it. Docking lets the user move it, and auto-dodge moves it for them when they
+  // ask to see an element the panel is covering. The offset from each edge matches the original
+  // bottom-right placement so the panel keeps the same inset wherever it docks.
+  const DOCK_INSET = '12px';
+  const DOCK_CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+  const DEFAULT_DOCK = 'bottom-right';
+  const DOCK_LABELS = {
+    'top-left': 'top left',
+    'top-right': 'top right',
+    'bottom-left': 'bottom left',
+    'bottom-right': 'bottom right',
+  };
   // Interpolated from the one definition in scrub.ts. This client unwraps a framed value by
   // matching these exact strings, so a second copy here would stop unwrapping the moment the
   // marker wording changed, and would show a user raw markers instead of the page text.
@@ -78,6 +92,8 @@ export const overlayClientSource = `(() => {
     host: null,
     open: false,
     wide: false,
+    // Which corner the panel is docked to. Persisted like the wide setting.
+    dock: DEFAULT_DOCK,
     payload: null,
     error: false,
     scanning: false,
@@ -1357,8 +1373,8 @@ export const overlayClientSource = `(() => {
     host.setAttribute('aria-label', 'usabl development tools');
     host.style.setProperty('all', 'initial', 'important');
     host.style.setProperty('position', 'fixed', 'important');
-    host.style.setProperty('right', '12px', 'important');
-    host.style.setProperty('bottom', '12px', 'important');
+    // The corner insets are set by applyDock once the shadow root exists, so the badge and panel dock
+    // to the persisted corner and can be moved later.
     host.style.setProperty('width', 'auto', 'important');
     host.style.setProperty('max-height', 'calc(100vh - 24px)', 'important');
     host.style.setProperty('display', 'block', 'important');
@@ -1448,6 +1464,8 @@ export const overlayClientSource = `(() => {
 
     state.open = storedValue(OPEN_STORAGE_KEY) === '1';
     state.wide = storedValue(WIDE_STORAGE_KEY) === '1';
+    state.dock = normalizeDock(storedValue(DOCK_STORAGE_KEY));
+    applyDock(host);
     return host;
   }
 
@@ -1505,6 +1523,115 @@ export const overlayClientSource = `(() => {
   function prefersReducedMotion() {
     return typeof window.matchMedia === 'function'
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  function normalizeDock(value) {
+    return DOCK_CORNERS.indexOf(value) === -1 ? DEFAULT_DOCK : value;
+  }
+
+  // Pin the host to one corner. Only the two edges the corner touches get an inset; the opposite
+  // edges are cleared to auto so the panel is never stretched across the viewport.
+  function applyDock(host) {
+    const dock = normalizeDock(state.dock);
+    const top = dock === 'top-left' || dock === 'top-right';
+    const left = dock === 'top-left' || dock === 'bottom-left';
+    host.style.setProperty('top', top ? DOCK_INSET : 'auto', 'important');
+    host.style.setProperty('bottom', top ? 'auto' : DOCK_INSET, 'important');
+    host.style.setProperty('left', left ? DOCK_INSET : 'auto', 'important');
+    host.style.setProperty('right', left ? 'auto' : DOCK_INSET, 'important');
+    // The shell stacks the badge and panel to the docked edge, so the badge sits at the same corner
+    // as the panel and the panel does not jump when it opens.
+    const shell = host.shadowRoot && host.shadowRoot.querySelector('.shell');
+    if (shell) {
+      shell.style.alignItems = left ? 'flex-start' : 'flex-end';
+    }
+  }
+
+  // Move the panel to a corner, persist it, and update the dock control's label. Repositioning is
+  // instant. There is no slide, which is also what prefers-reduced-motion requires, so nothing here
+  // animates in either motion setting.
+  function setDock(host, dock) {
+    state.dock = normalizeDock(dock);
+    storeValue(DOCK_STORAGE_KEY, state.dock);
+    applyDock(host);
+    const control = host.shadowRoot && host.shadowRoot.querySelector('.dock-toggle');
+    if (control) {
+      control.setAttribute('aria-label', 'Move panel. Now at ' + DOCK_LABELS[state.dock] + '.');
+    }
+  }
+
+  // The panel's current viewport rectangle, or null when it is not open. Used by auto-dodge to tell
+  // whether the panel is covering the element the user asked to see.
+  function panelRect(host) {
+    const panel = host.shadowRoot && host.shadowRoot.querySelector('.panel');
+    if (!panel || panel.hidden) {
+      return null;
+    }
+    return panel.getBoundingClientRect();
+  }
+
+  function rectsOverlap(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  // Where each corner would place the panel, as the point the panel's inner corner sits at. Used to
+  // pick the corner farthest from the target so the dodge moves the panel as far out of the way as
+  // it can.
+  function cornerAnchor(corner, width, height) {
+    const top = corner === 'top-left' || corner === 'top-right';
+    const left = corner === 'top-left' || corner === 'bottom-left';
+    return {
+      x: left ? width : window.innerWidth - width,
+      y: top ? height : window.innerHeight - height,
+    };
+  }
+
+  // If the panel is covering the target, move it to the corner farthest from the target that does
+  // not overlap it. Called after the target has been scrolled into view, so the rectangles are the
+  // ones the user is actually looking at. When every corner would still overlap, for example a target
+  // that fills the viewport, the dock is left where it is rather than moved somewhere no better.
+  function dodgePanelAwayFrom(host, target) {
+    const panel = panelRect(host);
+    if (panel === null) {
+      return;
+    }
+    const targetRect = target.getBoundingClientRect();
+    if (!rectsOverlap(panel, targetRect)) {
+      return;
+    }
+    const width = panel.width;
+    const height = panel.height;
+    const targetCenter = {
+      x: (targetRect.left + targetRect.right) / 2,
+      y: (targetRect.top + targetRect.bottom) / 2,
+    };
+    let best = null;
+    let bestDistance = -1;
+    for (const corner of DOCK_CORNERS) {
+      const anchor = cornerAnchor(corner, width, height);
+      // The rectangle the panel would occupy at this corner.
+      const left = corner === 'top-left' || corner === 'bottom-left';
+      const top = corner === 'top-left' || corner === 'top-right';
+      const candidate = {
+        left: left ? 0 : window.innerWidth - width,
+        right: left ? width : window.innerWidth,
+        top: top ? 0 : window.innerHeight - height,
+        bottom: top ? height : window.innerHeight,
+      };
+      if (rectsOverlap(candidate, targetRect)) {
+        continue;
+      }
+      const dx = anchor.x - targetCenter.x;
+      const dy = anchor.y - targetCenter.y;
+      const distance = dx * dx + dy * dy;
+      if (distance > bestDistance) {
+        bestDistance = distance;
+        best = corner;
+      }
+    }
+    if (best !== null && best !== state.dock) {
+      setDock(host, best);
+    }
   }
 
   // Put back exactly the element we borrowed a tabindex from, with exactly the value it had.
@@ -1610,11 +1737,28 @@ export const overlayClientSource = `(() => {
     }
 
     const target = found.target;
+    const reducedMotion = prefersReducedMotion();
     target.scrollIntoView({
-      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+      behavior: reducedMotion ? 'auto' : 'smooth',
       block: 'center',
       inline: 'nearest',
     });
+    // Once the target is in view, get the panel out of its way if it is covering it. With reduced
+    // motion the scroll is instant, so the rect is final now and the dodge runs at once. With a smooth
+    // scroll the rect settles a frame or two later, so the dodge waits for the next frame.
+    if (state.host) {
+      if (reducedMotion || typeof window.requestAnimationFrame !== 'function') {
+        dodgePanelAwayFrom(state.host, target);
+      } else {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            if (state.host && state.highlightKey === key) {
+              dodgePanelAwayFrom(state.host, target);
+            }
+          });
+        });
+      }
+    }
 
     const marker = document.createElement('div');
     marker.id = HIGHLIGHT_ID;
@@ -1681,6 +1825,17 @@ export const overlayClientSource = `(() => {
       return;
     }
     const target = found.target;
+    // Bring the element into view first, then get the panel out of its way, so a sighted keyboard
+    // user can see the element the focus landed on and it is not left behind the panel. Focus itself
+    // uses preventScroll because the scrollIntoView above already placed the element.
+    target.scrollIntoView({
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+      block: 'center',
+      inline: 'nearest',
+    });
+    if (state.host) {
+      dodgePanelAwayFrom(state.host, target);
+    }
     try {
       // Some flagged elements are not focusable. A temporary tabindex of -1 lets us focus them
       // without adding them to the page's tab order. We record the exact node and the exact value it
@@ -2128,6 +2283,19 @@ export const overlayClientSource = `(() => {
     widthToggle.setAttribute('aria-label', 'Wide panel');
     widthToggle.addEventListener('click', () => setWide(host, !state.wide));
     controls.appendChild(widthToggle);
+
+    // Move the panel to the next corner. The visible label is a word, so the control never depends on
+    // an icon alone, and the accessible name states where the panel is now so a screen reader user
+    // knows the result of pressing it.
+    const dockToggle = make('button', 'icon-button dock-toggle', 'Move');
+    dockToggle.type = 'button';
+    dockToggle.setAttribute('aria-label', 'Move panel. Now at ' + DOCK_LABELS[normalizeDock(state.dock)] + '.');
+    dockToggle.addEventListener('click', () => {
+      const index = DOCK_CORNERS.indexOf(normalizeDock(state.dock));
+      const next = DOCK_CORNERS[(index + 1) % DOCK_CORNERS.length];
+      setDock(host, next);
+    });
+    controls.appendChild(dockToggle);
 
     const collapse = make('button', 'icon-button collapse-button');
     collapse.type = 'button';

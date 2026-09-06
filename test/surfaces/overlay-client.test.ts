@@ -2113,3 +2113,189 @@ describe('the overlay bounds its own work', { timeout: 60_000 }, () => {
     await page.context().close();
   });
 });
+
+describe('the overlay moves out of the way of the element it points at', { timeout: 40_000 }, () => {
+  // A host page with the flagged element pinned to a corner, so a test can place the target under the
+  // panel and prove the panel dodges. The finding's selector points at that element.
+  async function mountWithTarget(options: {
+    targetCss: string;
+    reducedMotion?: boolean;
+    dockSeed?: string;
+  }): Promise<Page> {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      ...(options.reducedMotion ? { reducedMotion: 'reduce' } : {}),
+    });
+    const page = await context.newPage();
+    if (options.dockSeed !== undefined) {
+      await context.addInitScript(
+        `try { localStorage.setItem('usabl.overlay.dock', ${JSON.stringify(options.dockSeed)}); } catch (e) {}
+         try { localStorage.setItem('usabl.overlay.open', '1'); } catch (e) {}`,
+      );
+    } else {
+      await context.addInitScript(
+        `try { localStorage.setItem('usabl.overlay.open', '1'); } catch (e) {}`,
+      );
+    }
+    const projection = projectOverlay(
+      result({
+        findings: [
+          finding({
+            elementPath: '#corner-target',
+            elementName: 'Corner control',
+            whatUserExperiences: 'A control in the corner.',
+          }),
+        ],
+      }),
+    );
+    await page.route('http://usabl.test/**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/__usabl/result') {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify(projection) });
+        return;
+      }
+      await route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<!doctype html>
+          <html lang="en">
+            <head><title>Corner host</title>
+              <style>#corner-target { position: fixed; ${options.targetCss} width: 160px; height: 60px; }</style>
+            </head>
+            <body>
+              <header><h1>Fleet operations</h1></header>
+              <main>
+                <button id="corner-target" type="button">Corner control</button>
+              </main>
+              <script type="module">${overlayClientSource}</script>
+            </body>
+          </html>`,
+      });
+    });
+    await page.goto('http://usabl.test/clusters');
+    await page.locator(OVERLAY).waitFor();
+    return page;
+  }
+
+  // Read which corner the host is docked to from its inline insets.
+  async function dockCorner(page: Page): Promise<string> {
+    return page.locator(OVERLAY).evaluate((host) => {
+      const style = (host as HTMLElement).style;
+      const top = style.top !== 'auto' && style.top !== '';
+      const left = style.left !== 'auto' && style.left !== '';
+      return (top ? 'top' : 'bottom') + '-' + (left ? 'left' : 'right');
+    });
+  }
+
+  it('auto-dodges to another corner when the panel covers the target', async () => {
+    // The panel docks bottom-right by default. Put the target in the bottom-right corner so the panel
+    // covers it, then ask to show it. The panel must move to a corner that does not overlap it.
+    const page = await mountWithTarget({
+      targetCss: 'right: 20px; bottom: 20px;',
+      reducedMotion: true,
+    });
+    const host = page.locator(OVERLAY);
+    const panel = host.getByRole('region', { name: 'usabl accessibility inspector' });
+    expect(await panel.isVisible()).toBe(true);
+    expect(await dockCorner(page)).toBe('bottom-right');
+
+    // Confirm the panel and the target actually overlap at the start.
+    const overlapsBefore = await host.evaluate((h) => {
+      const panelEl = (h as HTMLElement).shadowRoot?.querySelector('.panel');
+      const target = document.querySelector('#corner-target');
+      if (!panelEl || !target) return false;
+      const a = panelEl.getBoundingClientRect();
+      const b = target.getBoundingClientRect();
+      return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    });
+    expect(overlapsBefore).toBe(true);
+
+    await panel.locator('.finding-button').click();
+    await panel.getByRole('button', { name: 'Show on page again' }).click();
+
+    // The panel moved off the bottom-right corner.
+    await expect.poll(async () => dockCorner(page)).not.toBe('bottom-right');
+
+    // And it no longer overlaps the target.
+    const overlapsAfter = await host.evaluate((h) => {
+      const panelEl = (h as HTMLElement).shadowRoot?.querySelector('.panel');
+      const target = document.querySelector('#corner-target');
+      if (!panelEl || !target) return true;
+      const a = panelEl.getBoundingClientRect();
+      const b = target.getBoundingClientRect();
+      return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    });
+    expect(overlapsAfter).toBe(false);
+
+    await context0(page);
+  });
+
+  it('leaves the panel where it is when the target does not overlap it', async () => {
+    // A target in the top-left corner is nowhere near the bottom-right panel, so nothing moves.
+    const page = await mountWithTarget({
+      targetCss: 'left: 20px; top: 80px;',
+      reducedMotion: true,
+    });
+    const panel = page
+      .locator(OVERLAY)
+      .getByRole('region', { name: 'usabl accessibility inspector' });
+    expect(await dockCorner(page)).toBe('bottom-right');
+
+    await panel.locator('.finding-button').click();
+    await panel.getByRole('button', { name: 'Show on page again' }).click();
+    await page.waitForTimeout(200);
+
+    expect(await dockCorner(page)).toBe('bottom-right');
+
+    await context0(page);
+  });
+
+  it('moves and persists the dock with the manual control', async () => {
+    const page = await mountWithTarget({ targetCss: 'left: 20px; top: 80px;', reducedMotion: true });
+    const host = page.locator(OVERLAY);
+    const panel = host.getByRole('region', { name: 'usabl accessibility inspector' });
+
+    expect(await dockCorner(page)).toBe('bottom-right');
+    const dock = panel.getByRole('button', { name: /^Move panel\./ });
+    // The accessible name states where the panel is now, so the control is not meaning by icon alone.
+    expect(await dock.getAttribute('aria-label')).toBe('Move panel. Now at bottom right.');
+
+    await dock.click();
+    const afterOne = await dockCorner(page);
+    expect(afterOne).not.toBe('bottom-right');
+    // The stored value matches the new corner.
+    const stored = await page.evaluate(() => localStorage.getItem('usabl.overlay.dock'));
+    expect(stored).toBe(afterOne);
+
+    // The choice survives a reload.
+    await page.reload();
+    await host.waitFor();
+    expect(await dockCorner(page)).toBe(afterOne);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await context0(page);
+  });
+
+  it('keeps the host click-through with only the panel taking pointer events after a dock move', async () => {
+    const page = await mountWithTarget({ targetCss: 'left: 20px; top: 80px;', reducedMotion: true });
+    const host = page.locator(OVERLAY);
+    const panel = host.getByRole('region', { name: 'usabl accessibility inspector' });
+    await panel.getByRole('button', { name: /^Move panel\./ }).click();
+
+    const pointerEvents = await host.evaluate((element) => ({
+      host: getComputedStyle(element).pointerEvents,
+      panel: getComputedStyle(
+        (element as HTMLElement).shadowRoot?.querySelector('.panel') as Element,
+      ).pointerEvents,
+    }));
+    expect(pointerEvents.host).toBe('none');
+    expect(pointerEvents.panel).toBe('auto');
+
+    await context0(page);
+  });
+});
+
+async function context0(page: Page): Promise<void> {
+  await page.context().close();
+}
