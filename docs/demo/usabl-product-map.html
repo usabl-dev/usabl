@@ -79,7 +79,7 @@
     <rect x="496" y="150" width="298" height="96" rx="13" fill="#2457e6"/>
   </g>
   <text x="645" y="192" text-anchor="middle" font-weight="800" font-size="24" fill="#fff">The gate</text>
-  <text x="645" y="220" text-anchor="middle" font-size="13.5" fill="#dbe4ff">one verdict &#183; one exit code</text>
+  <text x="645" y="220" text-anchor="middle" font-size="13.5" fill="#dbe4ff">four verdicts or none &#183; one exit code</text>
 
   <!-- gate reasoning caption -->
   <text class="lab" x="645" y="270" text-anchor="middle">weighs new barriers against the accepted floor;</text>
@@ -123,13 +123,13 @@
   <text x="892" y="130" font-weight="800" font-size="16" fill="#1a2233">Surfaces</text>
   <text x="972" y="130" font-size="12.5" fill="#8a94a6">display only</text>
   <g>
-    <circle cx="898" cy="166" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="171">command line <tspan class="surfnote">— usabl check</tspan></text>
-    <circle cx="898" cy="204" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="209">AI stop hook <tspan class="surfnote">— blocks "done"</tspan></text>
-    <circle cx="898" cy="242" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="247">browser overlay <tspan class="surfnote">— on the live app</tspan></text>
-    <circle cx="898" cy="280" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="285">pull request comment <tspan class="surfnote">— sticky</tspan></text>
-    <circle cx="898" cy="318" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="323">CI required check <tspan class="surfnote">— blocks merge</tspan></text>
-    <circle cx="898" cy="356" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="361">documentation page <tspan class="surfnote">— same engine</tspan></text>
-    <circle cx="898" cy="394" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="399">Playwright suite <tspan class="surfnote">— your existing tests</tspan></text>
+    <circle cx="898" cy="166" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="171">command line <tspan class="surfnote">&#183; usabl check</tspan></text>
+    <circle cx="898" cy="204" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="209">AI stop hook <tspan class="surfnote">&#183; blocks stop on a red verdict</tspan></text>
+    <circle cx="898" cy="242" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="247">browser overlay <tspan class="surfnote">&#183; on the live app, advisory</tspan></text>
+    <circle cx="898" cy="280" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="285">pull request comment <tspan class="surfnote">&#183; sticky</tspan></text>
+    <circle cx="898" cy="318" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="323">CI required check <tspan class="surfnote">&#183; blocks merge</tspan></text>
+    <circle cx="898" cy="356" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="361">documentation page <tspan class="surfnote">&#183; same engine and gate</tspan></text>
+    <circle cx="898" cy="394" r="3.5" fill="#2457e6"/><text class="surf" x="912" y="399">Playwright suite <tspan class="surfnote">&#183; your existing tests</tspan></text>
   </g>
   <text x="892" y="436" font-size="12.5" fill="#7c8698">Surfaces show the gate-owned verdict. Playwright's</text>
   <text x="892" y="451" font-size="12.5" fill="#7c8698">page check has no floor or waivers, so it can differ.</text>
@@ -139,7 +139,7 @@
   <rect x="48" y="502" width="6" height="96" rx="3" fill="#2457e6"/>
   <text x="78" y="534" font-weight="800" font-size="13" letter-spacing="1.4" fill="#8fb0ff">THE RULES GUARD THEMSELVES</text>
   <text x="78" y="560" font-size="13.5" fill="#d7dde8">Policy is read from the protected branch, so a change cannot grade itself. Guarded paths need a CODEOWNERS sign-off before they change.</text>
-  <text x="78" y="582" font-size="13.5" fill="#d7dde8">One required check sees both the accessibility verdict and the policy verdict. Anything usabl cannot check is reported, never passed in silence.</text>
+  <text x="78" y="582" font-size="13.5" fill="#d7dde8">One required check sees both the accessibility verdict and the policy verdict. Coverage gaps usabl detects are reported, never passed in silence.</text>
 
   <!-- wordmark -->
   <text x="1214" y="636" text-anchor="end" font-weight="800" font-size="15" fill="#101827" letter-spacing="-0.5">usabl</text>
