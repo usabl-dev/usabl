@@ -54,6 +54,9 @@ This is where we name the innovation, because the contest is Innovation Days and
 say plainly what is new. The graphic is `usabl-product-map.png`. Bring it up whole, then let three
 labels light in turn: COLLECT EVIDENCE, DECIDE ONCE, SHOW THE VERDICT.
 
+The PNG is generated from `usabl-product-map.html`. After editing the HTML, run
+`npm run render:product-map` and commit both files, so the graphic on camera matches the source.
+
 PICTURE: the product map fills the screen. The three columns light left to right. The gate pulses
 once when "DECIDE ONCE" lights. The dark "rules guard themselves" band underlines at the end.
 
