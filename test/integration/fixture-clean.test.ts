@@ -1,58 +1,68 @@
 /**
  * Verifies that the demo app's repaired clusters screen and its settings screen
  * are a zero-finding oracle: the engine reports verified, mints a receipt, exits
- * 0, and leaves no coverage gap. The repaired dialog is selected with the app's
- * explicit `?variant=fixed` preview so this suite never edits the app's source.
+ * 0, scans exactly those two screens, and leaves no coverage gap. The repaired
+ * dialog is selected with the app's explicit `?variant=fixed` preview so this
+ * suite never edits source.
+ *
+ * It runs against a disposable clone of the demo app whose `usabl` package links
+ * to this engine repository. The real checkout is never written to and must have
+ * a clean `git status` before and after.
  *
  * Run it with:
  *   USABL_FIXTURE_APP_CWD=/path/to/usabl-app npm run test:demo-integration
  *
- * It needs the demo app checkout and Playwright's Chromium. Without
- * USABL_FIXTURE_APP_CWD the suite skips. With a path that is not the demo app it
- * fails.
+ * It needs the demo app checkout, Playwright's Chromium, and a built engine
+ * (`dist/`; the npm script builds first). Without USABL_FIXTURE_APP_CWD the suite
+ * skips. With a path that is not the demo app it fails.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { UsablConfig } from '../../src/contracts/index.js';
 import { buildDeps } from '../../src/deps/build.js';
 import { run } from '../../src/run.js';
 import {
-  attachOutputBuffer,
+  assertRealAppClean,
+  createDisposableApp,
+  fixtureReadyTimeoutMs,
+  normalizeFindings,
   requestFixtureApp,
   startFixtureServer,
   stopFixtureServer,
-  waitForServerReady,
-  type FixtureServerProcess,
+  type DisposableApp,
+  type FixtureServer,
 } from './fixture-app.js';
 
-// Port 5173 is the demo's own dev server. A separate port keeps this suite runnable
-// while the demo is up.
-const FIXTURE_PORT = 5175;
-const FIXTURE_BASE_URL = `http://127.0.0.1:${FIXTURE_PORT}`;
 const FIXTURE_CHANGED_FILES = ['src/pages/Clusters.tsx', 'src/pages/Settings.tsx'];
+const EXPECTED_SCREENS = ['clusters', 'settings'];
+const TIMEOUT_MARGIN_MS = 60_000;
 
 const fixture = requestFixtureApp();
+const testTimeoutMs =
+  fixture.kind === 'run' ? EXPECTED_SCREENS.length * fixtureReadyTimeoutMs(fixture.cwd) + TIMEOUT_MARGIN_MS : 0;
 
-const fixtureConfig: UsablConfig = {
-  appBaseUrl: FIXTURE_BASE_URL,
-  uiFileGlobs: ['src/**/*.tsx'],
-  discovery: {
-    routerFile: 'src/App.tsx',
-    wideBlastGlobs: [],
-  },
-  surfaces: [
-    {
-      id: 'clusters',
-      url: `${FIXTURE_BASE_URL}/clusters?variant=fixed`,
-      files: ['src/pages/Clusters.tsx'],
+function fixtureConfig(baseUrl: string): UsablConfig {
+  return {
+    appBaseUrl: baseUrl,
+    uiFileGlobs: ['src/**/*.tsx'],
+    discovery: {
+      routerFile: 'src/App.tsx',
+      wideBlastGlobs: [],
     },
-    {
-      id: 'settings',
-      url: `${FIXTURE_BASE_URL}/settings`,
-      files: ['src/pages/Settings.tsx'],
-    },
-  ],
-  guardedPaths: ['usabl.config.json'],
-};
+    surfaces: [
+      {
+        id: 'clusters',
+        url: `${baseUrl}/clusters?variant=fixed`,
+        files: ['src/pages/Clusters.tsx'],
+      },
+      {
+        id: 'settings',
+        url: `${baseUrl}/settings`,
+        files: ['src/pages/Settings.tsx'],
+      },
+    ],
+    guardedPaths: ['usabl.config.json'],
+  };
+}
 
 describe('fixture clean oracle integration', () => {
   if (fixture.kind === 'skip') {
@@ -62,39 +72,56 @@ describe('fixture clean oracle integration', () => {
     return;
   }
 
-  const appCwd = fixture.cwd;
-  let fixtureServer: FixtureServerProcess | null = null;
-  let fixtureOutput: string[] = [];
+  const realAppCwd = fixture.cwd;
+  let app: DisposableApp | null = null;
+  let server: FixtureServer | null = null;
 
   beforeAll(async () => {
-    fixtureServer = startFixtureServer(appCwd, FIXTURE_PORT);
-    fixtureOutput = attachOutputBuffer(fixtureServer);
-    await waitForServerReady(fixtureServer, fixtureOutput, `${FIXTURE_BASE_URL}/settings`);
-  }, 60_000);
+    app = await createDisposableApp(realAppCwd);
+    console.info(`[fixture clean] clone ${app.cwd} at ${app.head}; node_modules/usabl -> ${app.enginePath}`);
+    server = await startFixtureServer(app, '/settings');
+  }, 90_000);
 
   afterAll(async () => {
-    if (fixtureServer !== null) {
-      await stopFixtureServer(fixtureServer);
+    try {
+      if (server !== null) {
+        await stopFixtureServer(server);
+      }
+    } finally {
+      if (app !== null) {
+        await app.dispose();
+      }
+      await assertRealAppClean(realAppCwd, 'after the suite finished');
     }
-  }, 10_000);
+  }, 30_000);
 
   it(
     'treats the fixed fixture variant as a verified zero-finding oracle',
     async () => {
-      const deps = await buildDeps(fixtureConfig, { cwd: appCwd });
+      if (app === null || server === null) {
+        throw new Error('fixture app and server were not started');
+      }
+      const config = fixtureConfig(server.baseUrl);
+      const deps = await buildDeps(config, { cwd: app.cwd });
       try {
-        const result = await run(deps, fixtureConfig, { changedFiles: FIXTURE_CHANGED_FILES });
-        const newFailures = result.findings.filter((finding) => finding.confidence === 'fail' && finding.status === 'new');
+        const result = await run(deps, config, { changedFiles: FIXTURE_CHANGED_FILES });
+        const findings = normalizeFindings(result.findings);
+        console.info(
+          `[fixture clean] verdict=${result.verdict} exit=${result.exitCode} findings=${findings.length} ` +
+            `screens=[${result.screens.map((screen) => screen.screenId).sort().join(', ')}]`,
+        );
 
-        expect(newFailures, `unexpected new failures: ${JSON.stringify(newFailures, null, 2)}`).toEqual([]);
+        expect(findings, `findings were ${JSON.stringify(result.findings, null, 2)}`).toEqual([]);
         expect(result.verdict, `result was ${result.summary}`).toBe('verified');
         expect(result.receipt).not.toBeNull();
         expect(result.exitCode).toBe(0);
+        expect(result.coverage.affected.map((screen) => screen.screenId).sort()).toEqual(EXPECTED_SCREENS);
+        expect(result.screens.map((screen) => screen.screenId).sort()).toEqual(EXPECTED_SCREENS);
         expect(result.coverage.gaps).toEqual([]);
       } finally {
         await deps.browser.close();
       }
     },
-    120_000,
+    testTimeoutMs,
   );
 });
