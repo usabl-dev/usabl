@@ -9,8 +9,17 @@
  * ids that cannot be told apart on sight. Every id field uses this grammar so two fields in one
  * product cannot drift into two different rules about what an id may contain.
  *
- * This unit validates text only. It must never rewrite an id, compare two ids for a caller, or
- * decide what happens when an id is refused.
+ * The contract, stated exactly. The grammar excludes whitespace, invisible characters, and explicit
+ * formatting controls, and it requires one canonical spelling. It does not claim that an accepted
+ * id never reorders text: visible right-to-left letters reorder the run they sit in without any
+ * control character, and accepting them is a product choice, because Hebrew and Arabic ids are
+ * real ids. It does not refuse a standalone combining mark, which attaches to whatever precedes
+ * it and is still drawn. It does not stop cross-script confusables. The claim is only this: every
+ * character in an accepted id is drawn as something, and two accepted ids that compare unequal are
+ * spelled differently.
+ *
+ * This unit validates text and describes the failure. It must never rewrite an id, compare two
+ * ids for a caller, or decide what happens when an id is refused.
  */
 
 // Characters an id may not contain.
@@ -23,13 +32,21 @@
 // reserved ranges Unicode has set aside for more of the same. It is a maintained Unicode property
 // rather than a hand-picked list that goes stale.
 //
-// U+2800, the empty braille pattern, is listed by hand. It is an assigned symbol (category So),
-// it is not default-ignorable, and it renders as blank space, so none of the properties above
-// catch it. The other assigned characters that render as blank were each probed against this
-// Node build's Unicode tables and are already Default_Ignorable_Code_Point, so they need no entry
-// of their own: U+115F and U+1160 (Hangul choseong and jungseong fillers), U+17B4 and U+17B5
-// (Khmer inherent vowels), U+3164 (Hangul filler), and U+FFA0 (halfwidth Hangul filler). If a
-// future probe finds one of them outside the property, add it beside U+2800.
+// Four assigned characters that render as blank are listed by hand, because no property above
+// catches them. Each was probed against this Node build's Unicode tables (Unicode 17.0):
+//   U+2800  BRAILLE PATTERN BLANK             So, not default-ignorable
+//   U+13441 EGYPTIAN HIEROGLYPH FULL BLANK    Lo, not default-ignorable
+//   U+13442 EGYPTIAN HIEROGLYPH HALF BLANK    Lo, not default-ignorable
+//   U+16FE4 KHITAN SMALL SCRIPT FILLER        Mn, not default-ignorable
+// The other assigned blanks probed are already Default_Ignorable_Code_Point and need no entry:
+// U+115F and U+1160 (Hangul choseong and jungseong fillers), U+17B4 and U+17B5 (Khmer inherent
+// vowels), U+3164 (Hangul filler), and U+FFA0 (halfwidth Hangul filler). The tests hold each of
+// these ten to being refused, so a Node build that moves one out of the property is noticed.
+//
+// The grammar refuses only what is invisible or is an explicit formatting control. It does not
+// refuse visible right-to-left letters, which reorder the run around them without any control
+// character; that is an accepted product choice, since Hebrew and Arabic ids are real ids. It does
+// not refuse a standalone combining mark, which is drawn on whatever precedes it.
 //
 // Unassigned code points (category Cn) are accepted on purpose. Which code points are unassigned
 // changes with every Unicode release, and Node carries whichever tables its ICU was built with,
@@ -42,8 +59,9 @@
 // not stop confusables across scripts, so Latin "a" and Cyrillic "a" are both accepted and remain
 // distinct ids. That is a deliberate limit: both are scanned, both appear in receipt coverage,
 // and waiver matching is exact, so no screen or requirement is lost by it. The claim here is
-// narrow, and it is only this: an accepted id renders as something.
-const DISALLOWED_ID_CHARACTER = /[\s\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Default_Ignorable_Code_Point}\u2800]/u;
+// narrow, and it is only this: every character of an accepted id renders as something.
+const DISALLOWED_ID_CHARACTER =
+  /[\s\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Default_Ignorable_Code_Point}\u2800\u{13441}\u{13442}\u{16fe4}]/u;
 
 /**
  * Why an id was refused, or that it was not.
@@ -96,4 +114,39 @@ export function validateId(id: string): IdGrammarResult {
   }
 
   return { ok: true };
+}
+
+/**
+ * Describes why an id was refused in the words a config message carries, or returns null when
+ * the id is accepted. Every id field in the product uses this text after its own field label, so
+ * a refused id reads the same way wherever it was written.
+ *
+ * The text never contains the id. A refused character is named by position and code point,
+ * because it is invisible or a formatting control, so printing it back would show the operator
+ * nothing or would show them something other than what the file holds. The position counts
+ * characters from one, which is how a person reading the file counts.
+ */
+export function describeIdProblem(id: string): string | null {
+  const result = validateId(id);
+  if (result.ok) {
+    return null;
+  }
+
+  switch (result.problem) {
+    case 'empty':
+      return 'must be a non-empty string. A blank id cannot name anything.';
+    case 'disallowed-character':
+      return (
+        `contains a character that is not allowed, at position ${result.index + 1}: ` +
+        `${codePointLabel(result.codePoint)}. An id must not contain whitespace, invisible ` +
+        'characters, or formatting controls, because ids are compared exactly and a character ' +
+        'that renders as nothing cannot be told from its absence. Use visible characters with no ' +
+        'spaces, for example "user-settings".'
+      );
+    case 'not-nfc':
+      return (
+        'must be written in Unicode NFC form. Two canonically equivalent spellings look identical ' +
+        'but compare as different ids.'
+      );
+  }
 }

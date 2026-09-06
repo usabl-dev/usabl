@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { codePointLabel, validateId } from '../../src/intake/id-grammar.js';
+import { codePointLabel, describeIdProblem, validateId } from '../../src/intake/id-grammar.js';
 import { screenIdFromUrl } from '../../src/coverage/router-parse.js';
 
 const charFor = (point: string) => String.fromCodePoint(Number.parseInt(point.slice(2), 16));
@@ -39,11 +39,14 @@ describe('validateId', () => {
     expect(codePointLabel(codePoint)).toBe(point);
   });
 
-  // Assigned characters that render as blank space. U+2800 is the one no Unicode property
-  // catches, so it is listed by hand in the grammar. The rest are Default_Ignorable_Code_Point
+  // Assigned characters that render as blank space. The first four are caught by no Unicode
+  // property, so they are listed by hand in the grammar. The rest are Default_Ignorable_Code_Point
   // on the Node build this was written against; this test is what notices if one of them is not.
   it.each([
     ['the empty braille pattern', 'U+2800'],
+    ['the Egyptian hieroglyph full blank', 'U+13441'],
+    ['the Egyptian hieroglyph half blank', 'U+13442'],
+    ['the Khitan small script filler', 'U+16FE4'],
     ['the Hangul choseong filler', 'U+115F'],
     ['the Hangul jungseong filler', 'U+1160'],
     ['the Khmer inherent vowel aq', 'U+17B4'],
@@ -77,6 +80,20 @@ describe('validateId', () => {
     expect(validateId('vari\u0430')).toEqual({ ok: true });
   });
 
+  it('accepts visible right-to-left letters, which reorder a run without any control character', () => {
+    // Hebrew and Arabic ids are real ids. The grammar refuses formatting controls, not scripts,
+    // and it does not claim that an accepted id never reorders the text around it.
+    expect(validateId('abc\u05d0\u05d1\u05d2def')).toEqual({ ok: true });
+    expect(validateId('\u0645\u0631\u062d\u0628\u0627')).toEqual({ ok: true });
+  });
+
+  it('accepts a standalone combining mark, which is drawn on whatever precedes it', () => {
+    // A combining acute on its own is not invisible and is in NFC form. The grammar does not
+    // refuse it, and says so.
+    expect(validateId('\u0301')).toEqual({ ok: true });
+    expect(validateId('x-\u0301')).toEqual({ ok: true });
+  });
+
   it('accepts the id usabl init derives from a parameter route', () => {
     const id = screenIdFromUrl('/users/:id');
     expect(id).toBe('users-:id');
@@ -103,5 +120,25 @@ describe('codePointLabel', () => {
     expect(codePointLabel(0x1b)).toBe('U+001B');
     expect(codePointLabel(0x2800)).toBe('U+2800');
     expect(codePointLabel(0xe0100)).toBe('U+E0100');
+  });
+});
+
+describe('describeIdProblem', () => {
+  it('returns null for an accepted id', () => {
+    expect(describeIdProblem('user-settings')).toBeNull();
+  });
+
+  it('names an empty id as such', () => {
+    expect(describeIdProblem('')).toMatch(/^must be a non-empty string/);
+  });
+
+  it('names the position from one and the code point, and never the character', () => {
+    const text = describeIdProblem('ab\u2800c');
+    expect(text).toContain('at position 3: U+2800');
+    expect(text).not.toContain('\u2800');
+  });
+
+  it('names a missing NFC form', () => {
+    expect(describeIdProblem('cafe\u0301')).toMatch(/NFC form/);
   });
 });
