@@ -12,8 +12,8 @@ approach. Use in judge Q&A, demo rehearsal, and alliance conversations.
 
 **Redirect:** axe finds issues on a page snapshot. usabl adds what axe cannot do alone:
 keyboard interaction walk, PatternFly composition rules, deterministic screen-reader
-announcement and accessible-name checks, fix re-verification, and a gate that stops the
-AI from calling work done. One finding from axe becomes a verified fix in the same
+announcement and accessible-name checks, fix re-verification, and a Stop hook that blocks
+the AI's first stop on a blocking verdict unless a one-use bypass was issued. One finding from axe becomes a verified fix in the same
 session.
 
 **Proof point:** Demo violation #2 (missing `aria-sort`) is invisible to axe. Violation
