@@ -401,7 +401,7 @@
         <h2 id="core-title">Three files form the core. Everything else connects to them.</h2>
         <p class="lede"><code>src/contracts/index.ts</code> defines the shared data shapes. <code>src/deps/</code> holds all code that touches the outside world. <code>src/run.ts</code> controls the order of the steps.</p>
         <ol class="flow">
-          <li><strong>Check the policy files</strong><span>The guard compares the tool's own policy files with a trusted copy in git. If any differ, the run stops here and asks for human approval.</span></li>
+          <li><strong>Check the policy files</strong><span>The guard compares the tool's own policy files with a trusted copy in git. If any differ, the verdict becomes "approval required". Affected screens still scan, so the accessibility findings are kept for the reviewer.</span></li>
           <li><strong>Read changed files</strong><span><code>run()</code> gets the list of changed files from the caller, or asks git for local changes.</span></li>
           <li><strong>Plan coverage</strong><span>The planner finds which screens the changed files affect. "Coverage" means: the set of screens the tool must check.</span></li>
           <li><strong>Scan the screens</strong><span>The check runner opens each affected screen in a browser and runs every check.</span></li>
@@ -467,7 +467,7 @@
             <li><strong>2. Verified bytes only</strong> The list of guarded files comes from the checked config bytes, never from data already in memory.</li>
             <li><strong>3. Expand folders</strong> A guarded folder becomes a list of its files, both committed files and new files. A new file cannot hide inside a guarded folder.</li>
             <li><strong>4. Compare every file</strong> Every guarded file is compared byte by byte with the trusted copy in git.</li>
-            <li><strong>5. Any change blocks</strong> If even one guarded file differs, the verdict is "approval required". A person must review it. No scan runs.</li>
+            <li><strong>5. Any change blocks</strong> If even one guarded file differs, the verdict is "approval required". A person must review it. The affected screens still scan, and the floor and waivers are read from the trusted copy, or treated as empty when there is none.</li>
           </ol>
           <div class="two-col">
             <article class="list-card">
@@ -633,7 +633,7 @@
             <article class="owner">
               <h3>1. Engine core</h3>
               <p class="owns"><code>contracts/</code> · <code>run.ts</code> · <code>gate/</code> · <code>primitives/</code> · <code>index.ts</code></p>
-              <p>Owns the one verdict, the order the pipeline runs in, the shared data shapes every other module imports, and the small pure helpers. This is where the product's honesty guarantee lives. Own this and you own the rule that only the gate decides.</p>
+              <p>Owns the one verdict, the order the pipeline runs in, the shared data shapes every other module imports, and the small pure helpers. This is where the product's honesty rule lives. Own this and you own the rule that only the gate decides.</p>
             </article>
             <article class="owner">
               <h3>2. Scan and providers</h3>
