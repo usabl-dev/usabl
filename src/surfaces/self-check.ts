@@ -16,14 +16,8 @@ import {
   resolveNoiseBudgetDefault,
 } from '../output/noise-budget.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
+import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
 import { frameUntrustedBlock, scrubResult } from './scrub.js';
-
-const VERDICT_LABELS: Record<NonNullable<Result['verdict']>, string> = {
-  verified: 'VERIFIED',
-  regression: 'REGRESSION',
-  not_covered: 'NOT COVERED',
-  approval_required: 'APPROVAL REQUIRED',
-};
 
 /**
  * What the run did not examine, one entry per gap state, bounded by the number of states.
@@ -60,16 +54,19 @@ export function projectSelfCheck(
 } {
   // Self-check is advisory by design so mid-task probes cannot bypass the stop-hook gate.
   const safe = scrubResult(result);
-  const verdictLabel = safe.verdict === null ? 'IDLE' : VERDICT_LABELS[safe.verdict];
+  // The same verdict words the terminal and the stop hook use, so a failed run reads as RUN
+  // FAILED here too and never as IDLE.
+  const verdict = describeVerdict(safe);
 
   // The trusted engine scaffold stays outside the frame: the verdict line, the advisory line,
-  // the summary, the Rule line, the source location, and the Not evaluated header. Every
-  // page-derived piece goes inside one frame with a short inline label. The pieces are bounded
-  // and the assembled block is never cut, so the single closing marker cannot be lost.
+  // the meaning, the summary, the Rule line, the source location, and the Not evaluated header.
+  // Every page-derived piece goes inside one frame with a short inline label. The pieces are
+  // bounded and the assembled block is never cut, so the single closing marker cannot be lost.
   const scaffold = [
-    `usabl self-check: ${verdictLabel}`,
+    `usabl self-check: ${formatVerdictWord(verdict)}`,
     'advisory: the stop hook is the gate.',
-    safe.summary,
+    verdict.meaning,
+    `Gate summary: ${safe.summary}`,
   ];
   const pieces: string[] = [];
   const budget = resolveNoiseBudgetDefault(config);

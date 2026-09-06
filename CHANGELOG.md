@@ -111,6 +111,11 @@
   Idle and a failed run both print `NO VERDICT`, then `IDLE` or `RUN FAILED`, so
   neither can be read as a pass. Every meaning is carried in text; no state
   depends on colour.
+- The Stop hook message and the `/usabl-check` self-check open the same way: the
+  verdict word and exit code, what it means for the change, the gate summary,
+  then the next step. A block now tells the assistant what to do before it lists
+  barriers. A failed run reads `NO VERDICT: RUN FAILED (exit 4)` on both
+  surfaces; the self-check used to label it `IDLE`.
 
 ## 0.2.1 - 2026-09-01
 

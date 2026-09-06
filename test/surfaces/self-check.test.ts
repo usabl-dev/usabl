@@ -49,11 +49,36 @@ describe('projectSelfCheck', () => {
   });
 
   it('prints the verdict keyword and maps null to IDLE', () => {
-    const regression = projectSelfCheck(baseResult({ verdict: 'regression' }));
-    const idle = projectSelfCheck(baseResult({ verdict: null }));
+    const regression = projectSelfCheck(baseResult({ verdict: 'regression', exitCode: 1 }));
+    const idle = projectSelfCheck(
+      baseResult({ verdict: null, summary: 'nothing to check (no UI-touching files)' }),
+    );
 
-    expect(regression.message).toContain('REGRESSION');
-    expect(idle.message).toContain('IDLE');
+    expect(regression.message.split('\n')[0]).toBe('usabl self-check: REGRESSION (exit 1)');
+    expect(idle.message.split('\n')[0]).toBe('usabl self-check: NO VERDICT: IDLE (exit 0)');
+    expect(idle.message.toLowerCase()).not.toContain('verified');
+  });
+
+  it('names a failed run as RUN FAILED, never as IDLE and never as verified', () => {
+    const crash = projectSelfCheck(
+      baseResult({ verdict: null, exitCode: 4, summary: 'unhandled error: read ECONNRESET' }),
+    );
+    const lines = crash.message.split('\n');
+
+    expect(lines[0]).toBe('usabl self-check: NO VERDICT: RUN FAILED (exit 4)');
+    expect(crash.message).not.toContain('IDLE');
+    expect(crash.message.toLowerCase()).not.toContain('verified');
+    expect(crash.message).toContain('Gate summary: unhandled error: read ECONNRESET');
+  });
+
+  it('follows the verdict line with what it means, then the gate summary', () => {
+    const lines = projectSelfCheck(
+      baseResult({ verdict: 'regression', exitCode: 1, summary: 'regression: 1 gating finding(s)' }),
+    ).message.split('\n');
+
+    expect(lines[1]).toBe('advisory: the stop hook is the gate.');
+    expect(lines[2]).toBe('This change adds an accessibility barrier. It is blocked until fixed.');
+    expect(lines[3]).toBe('Gate summary: regression: 1 gating finding(s)');
   });
 
   it('frames page text and scrubs secrets before egress', () => {

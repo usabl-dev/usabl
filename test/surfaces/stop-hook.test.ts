@@ -105,8 +105,86 @@ describe('evaluateStopDecision', () => {
     );
 
     expect(decision.block).toBe(false);
-    expect(decision.message).toContain('NOT verified');
-    expect(decision.message).toContain('error');
+    expect(decision.message).toContain('NO VERDICT: RUN FAILED (exit 4)');
+    expect(decision.message).toContain('read ECONNRESET');
+    expect(decision.message).toContain('Next: run usabl check again');
+  });
+
+  describe('verdict line', () => {
+    const idle = baseResult({
+      verdict: null,
+      exitCode: 0,
+      summary: 'nothing to check (no UI-touching files)',
+      coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true },
+    });
+    const crash = baseResult({ verdict: null, exitCode: 4, summary: 'unhandled error: read ECONNRESET' });
+    const blocking: Array<{ result: Result; word: string }> = [
+      {
+        result: baseResult({ verdict: 'regression', exitCode: 1, summary: 'regression: 1 gating finding(s)' }),
+        word: 'REGRESSION (exit 1)',
+      },
+      {
+        result: baseResult({ verdict: 'not_covered', exitCode: 3, summary: 'not_covered: 0 gating finding(s), 1 gap(s)' }),
+        word: 'NOT COVERED (exit 3)',
+      },
+      {
+        result: baseResult({
+          verdict: 'approval_required',
+          exitCode: 2,
+          summary: 'approval required: 1 guarded path(s) changed',
+        }),
+        word: 'APPROVAL REQUIRED (exit 2)',
+      },
+    ];
+
+    for (const { result, word } of blocking) {
+      it(`opens a ${word} block with the word, the exit code, the meaning, the summary, then the next step`, () => {
+        const lines = evaluateStopDecision(result, { stopHookActive: false }).message.split('\n');
+
+        expect(lines[0]!.startsWith(`${word}: NOT verified. `)).toBe(true);
+        expect(lines[0]!.endsWith('.')).toBe(true);
+        expect(lines[1]).toBe(`Gate summary: ${result.summary}`);
+        expect(lines[2]!.startsWith('Next: ')).toBe(true);
+      });
+    }
+
+    it('opens a verified allow with the word and the exit code', () => {
+      const message = evaluateStopDecision(baseResult({}), { stopHookActive: false }).message;
+
+      expect(message.startsWith('VERIFIED (exit 0): ')).toBe(true);
+      expect(message).toContain('You may stop.');
+    });
+
+    it('opens a continuation allow with the word, the exit code, and the reason it did not block', () => {
+      const lines = evaluateStopDecision(blocking[0]!.result, { stopHookActive: true }).message.split('\n');
+
+      expect(lines[0]!.startsWith('REGRESSION (exit 1): NOT verified. ')).toBe(true);
+      expect(lines[0]).toContain('continuation already active');
+      expect(lines[1]).toBe('Gate summary: regression: 1 gating finding(s)');
+      expect(lines[2]!.startsWith('Next: ')).toBe(true);
+    });
+
+    it('tells idle and a failed run apart, and lets neither name the word verified', () => {
+      const idleMessage = evaluateStopDecision(idle, { stopHookActive: false }).message;
+      const crashMessage = evaluateStopDecision(crash, { stopHookActive: false }).message;
+
+      expect(idleMessage.startsWith('NO VERDICT: IDLE (exit 0): ')).toBe(true);
+      expect(crashMessage.startsWith('NO VERDICT: RUN FAILED (exit 4): ')).toBe(true);
+      expect(idleMessage.toLowerCase()).not.toContain('verified');
+      expect(crashMessage.toLowerCase()).not.toContain('verified');
+      expect(idleMessage).not.toContain('FAILED');
+      expect(crashMessage).not.toContain('IDLE');
+      // Idle may stop. A failed run must not be read as permission to claim anything.
+      expect(idleMessage).toContain('You may stop.');
+      expect(crashMessage).not.toContain('You may stop.');
+    });
+
+    it('carries every meaning in text: no message relies on colour', () => {
+      const all = [idle, crash, baseResult({}), ...blocking.map((entry) => entry.result)];
+      for (const result of all) {
+        expect(evaluateStopDecision(result, { stopHookActive: false }).message).not.toContain('\u001b');
+      }
+    });
   });
 
   it('frames page text and scrubs secret-looking values in block reasons', () => {
