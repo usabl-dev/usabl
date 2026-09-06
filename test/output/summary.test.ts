@@ -109,7 +109,7 @@ describe('formatSummary', () => {
     expect(out).not.toContain('\u001b');
   });
 
-  it('drops Unicode line separators from page-derived text', () => {
+  it('keeps Unicode line separators off the terminal without welding the words together', () => {
     const r = baseResult({
       verdict: 'regression',
       exitCode: 1,
@@ -136,8 +136,10 @@ describe('formatSummary', () => {
     });
 
     const out = formatSummary(r);
-    expect(out).toContain('Low contrastusabl: VERIFIED');
-    expect(out).toContain('Raise contrastusabl: VERIFIED');
+    // The separator becomes a space, so the forged verdict cannot claim a line of its own and the
+    // words on either side are still two words rather than one.
+    expect(out).toContain('Low contrast usabl: VERIFIED');
+    expect(out).toContain('Raise contrast usabl: VERIFIED');
     expect(out).not.toContain('\u2028');
     expect(out).not.toContain('\u2029');
   });

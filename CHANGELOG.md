@@ -28,6 +28,72 @@
   JSON, stops the run rather than producing another signed-out scan. Neither the
   path nor the file contents are ever printed, because the file holds live session
   tokens.
+- Page-derived text can no longer make usabl's own output read differently from
+  what usabl found. Unicode bidirectional controls tell a terminal, a pull
+  request comment, or the overlay to draw characters in a different order than
+  they are stored, so a crafted label could render as the opposite of the finding
+  behind it. The egress neutralizer now removes all twelve of them, and the
+  DELETE control byte it used to miss. Ordinary right-to-left text is unaffected,
+  because Hebrew and Arabic letters carry their own direction and need no control
+  character. Mixed-direction text is a real trade: Unicode recommends the isolates
+  for keeping a number or an embedded Latin phrase in the right place inside a
+  right-to-left sentence, so page text that used them correctly can come out
+  looking wrong in usabl's surfaces. A verdict that renders as its own opposite is
+  the worse failure, so the controls go.
+- Invisible characters that carry meaning are preserved rather than removed.
+  usabl reports the text that is really on the page, so deleting a character
+  because a reader cannot see it would misrepresent the evidence. Tag characters
+  spell the region in a flag emoji, variation selectors choose how a glyph is
+  drawn, invisible operators are real notation in mathematics, and joiners build
+  words in Persian, Arabic, and Indic scripts.
+- Page text can no longer close usabl's own untrusted-text frame. That frame tells
+  an agent-facing reader that everything inside it is data and never instructions.
+  A marker with an invisible character planted between two of its characters still
+  reads as a marker, because the planted character draws nothing, but it did not
+  match the literal, so it survived into the framed body and everything after it
+  read as trusted. The marker search now looks through invisible characters, so a
+  split marker is recognised and replaced like any other. The characters it looks
+  through come from Unicode properties rather than a hand-written list, so the
+  defense does not fall behind as Unicode grows. Ordinary text is untouched,
+  because looking through applies only inside a run that turns out to be a marker.
+- Credentials are no longer printed when an invisible character splits the key
+  name. Redaction matches literal text, so `token=` with a zero width space, a
+  joiner, a soft hyphen, or a variation selector inside it matched no credential
+  pattern while still reading as a token to anyone looking at it. Credential
+  anchors are now read from the text with the invisible characters taken out, and
+  the span that gets replaced is the real span in the original, so surrounding
+  text keeps every character it arrived with. Redaction also runs on both sides of
+  control stripping, because stripping joins text and the bare-JWT pattern needs a
+  word boundary that stripping can remove.
+- A line break or a tab inside an accessible name is no longer deleted. Deleting
+  it welded the words on either side into one, so a label that wraps onto a second
+  line was reported as "Savebutton" rather than "Save button", which is not the
+  name the page has. Each run of separator controls becomes a single space.
+- Page text in a pull request comment is escaped for the renderer. Markdown is not
+  a plain-text container: an HTML comment disappears when rendered, a character
+  reference becomes a different character, an emphasis pair wrapped around part of
+  a word disappears and leaves the word, and a backslash disappears before
+  punctuation. Any of those puts characters on screen that are not in the string,
+  which was enough to draw usabl's own untrusted-text frame marker out of page
+  text that is not the marker. Every character a renderer could read as inline
+  markup is now written as a character reference, which renders as the character
+  it names. The first character of a block marker at the start of a page text
+  line, the colon of `://`, and the dot of `www.` are written the same way, so
+  page text cannot render as a heading, list item, thematic break, setext
+  underline, HTML block, code block, or scheme or `www.` link. GitHub still
+  applies its own post-render autolinks to email addresses, `mailto:` and
+  `xmpp:` forms, `@user` mentions, `#123` issue references, and commit SHAs,
+  because those run on decoded text after character references resolve, so page
+  text can still produce a clickable mailto, a notification to a user with
+  repository access, or a link to a repository object. None of these can forge a
+  verdict, close the untrusted-text frame, or leak engine data.
+- Long page text costs far less memory. Both the neutralizer and the frame marker
+  search copy text in runs and return the original string when they have nothing
+  to change, instead of rebuilding it one character at a time. On a four million
+  character accessible name containing one emoji joiner, peak heap growth drops
+  from about 362 MiB to about 11 MiB. Text with removals scattered all the way
+  through it still builds its result in pieces and costs several times its own
+  size.
 
 ### Added
 
