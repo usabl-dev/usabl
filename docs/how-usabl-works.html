@@ -364,7 +364,7 @@
       <div class="number" aria-hidden="true">01</div>
       <div class="body">
         <p class="eyebrow">The short answer</p>
-        <h1 id="hero-title">usabl proves an accessibility change against the code that made it.</h1>
+        <h1 id="hero-title">usabl checks an accessibility change against the code that made it, and says what it could not check.</h1>
         <p class="lede">It finds the affected screens, collects machine-checkable accessibility evidence, makes one gate-owned decision, and shows that same result wherever the team works.</p>
         <p>It is built for a specific risk. A developer or AI assistant can change interface code, run a scanner, and still call the work done after the scanner skipped a screen or after the code changed again. usabl keeps those gaps visible.</p>
         <p class="boundary"><strong>The claim:</strong> a verified result means no new deterministic accessibility barrier was found in the affected screens and checks that ran. It does not mean the whole product is accessible. It does not replace testing by disabled people or an accessibility expert.</p>
@@ -391,14 +391,14 @@
         <div class="two-col">
           <article class="list-card">
             <h3>Idle</h3>
-            <p>No configured interface file changed. usabl reports “nothing to check,” returns exit code 0, and issues no verdict.</p>
+            <p>No configured interface file or documentation page changed. usabl reports “nothing to check,” returns exit code 0, and issues no verdict. Nothing was measured, so idle is not a pass.</p>
           </article>
           <article class="list-card">
             <h3>Not covered</h3>
             <p>An interface file changed, but usabl could not map or check all required work. The gate returns <code>not_covered</code> and exit code 3.</p>
           </article>
         </div>
-        <p class="rule"><strong>Coverage rule:</strong> usabl checks every affected screen or says what it could not check. It does not sample a few screens and call the accessibility change verified.</p>
+        <p class="rule"><strong>Coverage rule:</strong> usabl checks every affected screen or says what it could not check. It does not sample a few screens and call the accessibility change verified. It proves it scanned the address it was configured or discovered to scan, and it records which files map to which screen. It cannot prove that the address showed the screen a reader expects: a redirect, a signed-out state, or a feature flag can change what an address renders. An optional <code>reachedWhen</code> selector adds partial evidence that the expected element was present.</p>
       </div>
     </section>
 
@@ -495,13 +495,13 @@
             <thead><tr><th scope="col">Surface</th><th scope="col">When to use it</th><th scope="col">What it does</th><th scope="col">Enforcement</th></tr></thead>
             <tbody>
               <tr><th scope="row">Command line</th><td>While developing or debugging</td><td><code>npx usabl check</code> prints the result and returns its exit code. JSON output is available for automation.</td><td>Direct exit code</td></tr>
-              <tr><th scope="row">App overlay</th><td>While the Vite app is running</td><td>Shows the current verdict and findings after a refresh. It hides in automated browser sessions and with <code>?usabl=off</code>.</td><td>Advisory only</td></tr>
+              <tr><th scope="row">App overlay</th><td>While the Vite app is running</td><td>Shows the gate's current verdict and findings after a refresh. It runs inside the tested page's own JavaScript, so the page can interfere with what it shows. It hides in automated browser sessions and with <code>?usabl=off</code>.</td><td>Advisory only</td></tr>
               <tr><th scope="row">AI stop hook</th><td>When an assistant tries to finish</td><td>Blocks a regression, missing coverage, or trusted-policy change. A continuation is allowed once so the assistant does not enter a stop loop.</td><td>Blocks assistant completion</td></tr>
               <tr><th scope="row">Pull request and CI</th><td>Before merge</td><td>Runs against trusted base policy, posts or updates one report, and returns the gate exit code to the check.</td><td>Repository check</td></tr>
             </tbody>
           </table>
         </div>
-        <p class="rule"><strong>Consistency rule:</strong> when two surfaces disagree, that is a product defect. The gate-owned <code>Result</code> object is the source to inspect.</p>
+        <p class="rule"><strong>Consistency rule:</strong> when two surfaces show the same <code>Result</code> differently, that is a product defect. The gate-owned <code>Result</code> object is the source to inspect. A local run and a CI run can differ, because CI reads policy from the trusted base. The Playwright page check has no floor and no waivers, so its result can differ from the gated command by design.</p>
       </div>
     </section>
 
