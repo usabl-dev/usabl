@@ -103,8 +103,9 @@ This writes four files:
 - `.cursor/commands/usabl-check.md` - the `/usabl-check` slash command
 - `.cursor/rules/usabl-accessibility.mdc` - a rule reminding the agent to self-check after UI edits
 
-The stop hook uses Cursor's `followup_message` protocol to loop the agent until the gate is green
-(up to 3 times). Set `USABL_STORAGE_STATE=./.usabl-session.json` in your shell profile or prefix it
+The stop hook uses Cursor's `followup_message` protocol: on a blocking verdict it sends the agent one
+follow-up with the findings, and when Cursor reports that the loop is already active (`loop_count`
+above 0) it allows the stop to prevent a recursive loop. Set `USABL_STORAGE_STATE=./.usabl-session.json` in your shell profile or prefix it
 when you open Cursor.
 
 Mid-task: type `/usabl-check` or ask the agent to run `npx usabl check --self-check`. That command
