@@ -496,7 +496,7 @@
             <tbody>
               <tr><th scope="row">Command line</th><td>While developing or debugging</td><td><code>npx usabl check</code> prints the result and returns its exit code. JSON output is available for automation.</td><td>Direct exit code</td></tr>
               <tr><th scope="row">App overlay</th><td>While the Vite app is running</td><td>Shows the gate's current verdict and findings after a refresh. It runs inside the tested page's own JavaScript, so the page can interfere with what it shows. It hides in automated browser sessions and with <code>?usabl=off</code>.</td><td>Advisory only</td></tr>
-              <tr><th scope="row">AI stop hook</th><td>When an assistant tries to finish</td><td>Blocks a regression, missing coverage, or trusted-policy change. A continuation is allowed once so the assistant does not enter a stop loop.</td><td>Blocks assistant completion</td></tr>
+              <tr><th scope="row">AI stop hook</th><td>When an assistant tries to finish</td><td>Blocks the first stop attempt on a regression, missing coverage, or trusted-policy change, unless a one-use bypass was issued. A continuation is allowed once so the assistant does not enter a stop loop. Idle runs, runs with no verdict, and hook errors are disclosed and allowed.</td><td>Blocks assistant completion</td></tr>
               <tr><th scope="row">Pull request and CI</th><td>Before merge</td><td>Runs against trusted base policy, posts or updates one report, and returns the gate exit code to the check.</td><td>Repository check</td></tr>
             </tbody>
           </table>
