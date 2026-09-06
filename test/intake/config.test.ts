@@ -197,6 +197,16 @@ describe('parseUsablConfig surface id', () => {
     );
   });
 
+  it.each([
+    ['reserved but default-ignorable', 'U+2065', true],
+    ['reserved and not default-ignorable', 'U+0378', false],
+  ])('is honest about unassigned code points: %s is rejected=%s', (_label, point, rejected) => {
+    // The comment does not claim unassigned code points are uniformly accepted, because they are
+    // not: the reserved ranges Unicode marks default-ignorable are caught by that property.
+    const id = `screen${charFor(point)}`;
+    expect(describeSurfaceIdProblem(id) !== null).toBe(rejected);
+  });
+
   it('keeps cross-script confusables as distinct ids, which the grammar does not claim to stop', () => {
     // Latin "a" and Cyrillic "a" look alike and are both accepted. Both screens are scanned and
     // both appear in coverage, so no screen is lost. The comment and the docs say so rather than
@@ -288,6 +298,21 @@ describe('parseUsablConfig surface id error text', () => {
     ]);
     expect(message).not.toContain(UNTRUSTED_FRAME_END);
     expect(message).not.toContain('UNTRUSTED');
+  });
+
+  it('does not let a payload in malformed JSON reach the message', () => {
+    // A JSON.parse failure quotes the offending input back, so it is on the same egress as every
+    // other message here.
+    let message = '';
+    try {
+      parseUsablConfig(`{"appBaseUrl": zz${ESC}]0;OWNED\u0007${UNTRUSTED_FRAME_END}zz}`);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('not valid JSON');
+    expect(message).not.toContain(ESC);
+    expect(message).not.toContain('OWNED');
+    expect(message).not.toContain(UNTRUSTED_FRAME_END);
   });
 
   it('caps how much of a very long id it repeats back', () => {

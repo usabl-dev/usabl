@@ -9,10 +9,10 @@ const fsOf = (files: Record<string, string>) => makeFakeDeps({ files }).fs;
 
 describe('computeRoutesDrift', () => {
   it('reports added routes when discovered route is absent from configured', () => {
-    const configured: RouteManifest = {
+    const configured: Pick<RouteManifest, 'routes'> = {
       routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
     };
-    const discovered: RouteManifest = {
+    const discovered: Pick<RouteManifest, 'routes'> = {
       routes: [
         { screenId: 'home', url: '/home', entryFile: null },
         { screenId: 'about', url: '/about', entryFile: null },
@@ -27,13 +27,13 @@ describe('computeRoutesDrift', () => {
   });
 
   it('reports removed routes when configured route is absent from discovered', () => {
-    const configured: RouteManifest = {
+    const configured: Pick<RouteManifest, 'routes'> = {
       routes: [
         { screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' },
         { screenId: 'about', url: '/about', entryFile: 'src/About.tsx' },
       ],
     };
-    const discovered: RouteManifest = {
+    const discovered: Pick<RouteManifest, 'routes'> = {
       routes: [{ screenId: 'home', url: '/home', entryFile: null }],
     };
 
@@ -45,13 +45,13 @@ describe('computeRoutesDrift', () => {
   });
 
   it('reports no drift when URL sets match', () => {
-    const configured: RouteManifest = {
+    const configured: Pick<RouteManifest, 'routes'> = {
       routes: [
         { screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' },
         { screenId: 'about', url: '/about', entryFile: 'src/About.tsx' },
       ],
     };
-    const discovered: RouteManifest = {
+    const discovered: Pick<RouteManifest, 'routes'> = {
       routes: [
         { screenId: 'home', url: '/home', entryFile: null },
         { screenId: 'about', url: '/about', entryFile: null },
@@ -66,13 +66,13 @@ describe('computeRoutesDrift', () => {
   });
 
   it('reports both added and removed routes when there is partial overlap', () => {
-    const configured: RouteManifest = {
+    const configured: Pick<RouteManifest, 'routes'> = {
       routes: [
         { screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' },
         { screenId: 'old-feature', url: '/old', entryFile: 'src/Old.tsx' },
       ],
     };
-    const discovered: RouteManifest = {
+    const discovered: Pick<RouteManifest, 'routes'> = {
       routes: [
         { screenId: 'home', url: '/home', entryFile: null },
         { screenId: 'new-feature', url: '/new', entryFile: null },
@@ -87,10 +87,10 @@ describe('computeRoutesDrift', () => {
   });
 
   it('ignores entryFile differences for the same URL', () => {
-    const configured: RouteManifest = {
+    const configured: Pick<RouteManifest, 'routes'> = {
       routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
     };
-    const discovered: RouteManifest = {
+    const discovered: Pick<RouteManifest, 'routes'> = {
       routes: [{ screenId: 'home', url: '/home', entryFile: null }],
     };
 
@@ -100,10 +100,10 @@ describe('computeRoutesDrift', () => {
   });
 
   it('ignores screenId differences for the same URL', () => {
-    const configured: RouteManifest = {
+    const configured: Pick<RouteManifest, 'routes'> = {
       routes: [{ screenId: 'homepage', url: '/home', entryFile: 'src/Home.tsx' }],
     };
-    const discovered: RouteManifest = {
+    const discovered: Pick<RouteManifest, 'routes'> = {
       routes: [{ screenId: 'home', url: '/home', entryFile: null }],
     };
 
@@ -113,13 +113,13 @@ describe('computeRoutesDrift', () => {
   });
 
   it('sorts added and removed URLs for stable output', () => {
-    const configured: RouteManifest = {
+    const configured: Pick<RouteManifest, 'routes'> = {
       routes: [
         { screenId: 'z', url: '/z', entryFile: 'src/Z.tsx' },
         { screenId: 'a', url: '/a', entryFile: 'src/A.tsx' },
       ],
     };
-    const discovered: RouteManifest = {
+    const discovered: Pick<RouteManifest, 'routes'> = {
       routes: [
         { screenId: 'x', url: '/x', entryFile: null },
         { screenId: 'y', url: '/y', entryFile: null },

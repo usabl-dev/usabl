@@ -1601,38 +1601,53 @@ screens into one entry: the second screen is dropped from the scan while its cha
 still count as mapped, and the run would report both screens as covered when only one was
 ever opened.
 
-### Surface ids and route screen ids share one namespace
+### Three sources share one screen id space
 
-The `screenId` values in `usabl.routes.json` and the ids in `surfaces[]` are written into the
-same affected-screen map, so uniqueness inside each list is not enough. Two entries under one
-id collapse to one, and the dropped screen's changed files still count as mapped, so the run
-reports two changed screens as covered after scanning one.
+Screen ids come from three places: `surfaces[].id` in `usabl.config.json`, `screenId` in
+`usabl.routes.json`, and `pageId` in `usabl.docs.json`. App coverage and docs coverage are
+concatenated into one run, and downstream the id alone keys floor identity, finding identity,
+waiver matching, applicability, and source lookup. Each source already checked itself for
+duplicates. Nothing checked across them, so one id could stand for two screens.
 
-Sharing an id is still legitimate, because that is how a surface overrides the scan URL for a
-screen discovery already owns. usabl does not try to work out which case it is looking at. A
-URL cannot answer it: applications select screens by query, by fragment, by trailing slash, and
-by userinfo, so two URLs differing in any of those may be one screen or two, and a redirect
-means even a full comparison cannot settle it before navigating. So the config says which it is.
+That is worse than losing a scan. Two screens under one id collapse to one map entry, so one is
+never opened while its changed files still count as mapped. It also lets a floor entry belonging
+to one screen absorb a genuinely new barrier on the other, which reads as carried debt and mints
+a verified receipt over a real failure.
 
-Exactly two things are accepted when a surface id matches a discovered route screen id:
+usabl refuses any id that could stand for more than one screen, checked when coverage is planned,
+before the idle return, because a docs page can be scanned in a run where no app file changed.
 
-- The surface URL resolves to the same address as the route's own URL. That is the same screen
-  on its face and needs no declaration. Percent-encoding of unreserved characters and escape hex
-  case are normalized first, so `/users/%61lice` and `/users/alice` count as one address. This is
-  what `usabl init` writes, so generated configs need no change.
-- The surface sets `"overridesDiscoveredRoute": true`. That is the operator asserting that their
-  differing URL reaches the route's screen. Use it for query variants and deep links.
+**A surface and a discovered route may share an id, but the config has to say so.** Set
+`"overridesDiscoveredRoute": true` on the surface. That is how a surface controls the scan URL for
+a screen discovery already owns, which is what makes query variants and deep links possible.
 
-Anything else is refused when coverage is planned, naming the surface, the route, and the
-declaration to add. Setting `overridesDiscoveredRoute` on a surface whose id matches no
-discovered route is also refused, since the declaration would override nothing while reading as
-though it were wired up. That check is skipped when discovery found no routes at all, because an
-empty route list is not evidence about anything.
+usabl does not compare the two URLs and does not infer the relationship from them, because a URL
+does not determine which screen renders:
 
-Upgrading an existing config: a surface whose id matches a discovered route screen id and whose
-URL differs will now be refused rather than silently dropping one of the two screens. Add
-`"overridesDiscoveredRoute": true` if it is the same screen, or give it a different id if it is
-not. There is no safe way to infer the answer, which is why usabl asks instead of guessing.
+- Applications select screens by query, fragment, trailing slash, and userinfo.
+- Servers do not treat percent spellings as interchangeable. `/users/%61lice` and `/users/alice`
+  are delivered as written.
+- A redirect can send two requests for the same URL to two different screens, depending on session,
+  server state, feature assignment, or time.
+
+So even an identical URL proves only that the same address was requested. The declaration is the
+only evidence usabl will accept, and `usabl init` writes it on every surface it derives from a
+route.
+
+Setting `overridesDiscoveredRoute` on a surface whose id matches no route in an authored
+`usabl.routes.json` is refused, since the declaration would override nothing while reading as
+though it were wired up. That check runs only against an authored sidecar. Router-text discovery
+recovers paths but not ownership, so an id missing from it proves nothing, and the same shape is
+what the trust guard leaves behind when it suppresses a diverged manifest. Refusing there would
+throw away the findings of a run that can still report honestly.
+
+**A docs page id may never equal a surface id or a route screen id.** There is no override
+relationship between documentation and an application screen, so any overlap is refused outright.
+
+Upgrading an existing config: a surface whose id matches a discovered route screen id will now be
+refused until it declares the override or takes a different id. There is no safe way to infer the
+answer, which is why usabl asks instead of guessing. Configs written by `usabl init` before this
+change need `"overridesDiscoveredRoute": true` added to their surfaces.
 
 `guardedPaths` is additive. The four policy files (`usabl.config.json`,
 `usabl.routes.json`, `.usabl-evidence.json`, `.usabl-waivers.json`) are force-guarded by

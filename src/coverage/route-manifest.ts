@@ -16,6 +16,13 @@ export interface RouteEntry {
 
 export interface RouteManifest {
   routes: RouteEntry[];
+  // Where the route list came from, so a caller can tell a complete list from a partial one.
+  // 'sidecar' is the authored usabl.routes.json and is the only source that is complete enough to
+  // prove a screen id is absent. 'router' is the regex fallback, which recovers paths but is
+  // documented as incomplete, so absence there proves nothing. 'none' means no source was
+  // readable at all, which is also what the trust overlay produces when it suppresses a diverged
+  // manifest and no router file can be read.
+  source: 'sidecar' | 'router' | 'none';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -59,6 +66,7 @@ function parseSidecar(raw: string): RouteManifest {
   }
 
   return {
+    source: 'sidecar',
     routes: routes.map((entry, index): RouteEntry => {
       if (!isRecord(entry)) {
         throw configError`usabl.routes.json routes[${index}] must be an object`;
@@ -99,10 +107,10 @@ export async function parseRouteManifest(
 
   const router = await fs.readFile(discovery.routerFile);
   if (router === null) {
-    return { routes: [] };
+    return { routes: [], source: 'none' };
   }
 
-  const manifest = parseRouterFallback(router);
+  const manifest = { ...parseRouterFallback(router), source: 'router' as const };
   assertUniqueScreenIds(manifest.routes);
   return manifest;
 }
@@ -138,6 +146,5 @@ export async function parseDiscoveredManifest(
   if (router === null) {
     return null;
   }
-  const manifest = parseRouterFallback(router);
-  return manifest;
+  return { ...parseRouterFallback(router), source: 'router' };
 }

@@ -293,6 +293,10 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
       id: route.screenId,
       url,
       files: route.entryFile === null ? [] : [route.entryFile],
+      // Every surface here takes its id from a discovered route by construction, so the config has
+      // to say the two are one screen. Without it the planner refuses the pair, because it cannot
+      // tell an intended url override from two different screens and will not guess from the url.
+      overridesDiscoveredRoute: true,
     });
   }
 
@@ -311,7 +315,8 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
 
   return {
     config,
-    routes: { routes },
+    // init authors the sidecar, so the manifest it hands back is a sidecar manifest.
+    routes: { routes, source: 'sidecar' },
     notes,
   };
 }

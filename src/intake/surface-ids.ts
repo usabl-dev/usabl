@@ -28,10 +28,12 @@ import { configError } from './config-error.js';
 // What this does NOT deliver, stated plainly so the rule is not read as more than it is. It does
 // not stop confusables across scripts, so Latin "a" and Cyrillic "a" are both accepted and remain
 // distinct ids. That is a deliberate limit: both are scanned, both appear in receipt coverage, and
-// waiver matching is exact, so no screen is lost by it. Unassigned code points are also accepted,
-// because rejecting them would make an id's validity depend on which Unicode version the running
-// Node build happens to carry. The claim here is narrow: an accepted id renders as something, and
-// two accepted ids that differ do so visibly unless their difference is a confusable glyph.
+// waiver matching is exact, so no screen is lost by it. Most unassigned code points are accepted
+// too, since no rule here targets them, and rejecting them deliberately would tie an id's validity
+// to whichever Unicode version the running Node build carries. Unassigned is not a promise in
+// either direction though: the reserved ranges that Unicode marks default-ignorable, such as
+// U+2065 and U+FFF0, are rejected by that property, while U+0378 and U+05FF are accepted.
+// The claim here is narrow, and it is only this: an accepted id renders as something.
 const DISALLOWED_ID_CHARACTER = /[\s\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Default_Ignorable_Code_Point}]/u;
 
 /**

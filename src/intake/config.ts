@@ -113,7 +113,14 @@ function parseSurface(raw: unknown, index: number): SurfaceConfig {
 }
 
 export function parseUsablConfig(raw: string): UsablConfig {
-  const parsed: unknown = JSON.parse(raw);
+  // A JSON.parse failure message quotes the offending input back, so it is operator text on the
+  // same egress as every other message here and cannot be allowed to pass through unscrubbed.
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw configError`usabl.config.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`;
+  }
   const root = expectObject(parsed, 'config');
   const discovery = expectObject(Reflect.get(root, 'discovery'), 'discovery');
   const surfacesRaw = Reflect.get(root, 'surfaces');
