@@ -1582,8 +1582,9 @@ self-check.
 ```
 
 Each `surfaces[].id` is the key coverage is tracked under. It must be a non-empty string, it
-must be unique across the list, it must not contain whitespace or any invisible or control
-character, and it must be written in Unicode NFC form. Ids are compared exactly, which is the
+must be unique across the list, it must not contain whitespace, any invisible or control
+character, or an assigned character that renders as blank such as the empty braille pattern
+U+2800, and it must be written in Unicode NFC form. Ids are compared exactly, which is the
 comparison the planner, the floor, and the receipt already make, so the grammar is what keeps
 two ids from looking alike rather than the comparison folding them together. Everything a font
 draws is still allowed, so a discovery-derived id such as `users-:id` stays valid. A refused id

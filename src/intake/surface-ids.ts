@@ -9,45 +9,15 @@
  */
 import type { SurfaceConfig } from '../contracts/index.js';
 import { configError } from './config-error.js';
+import { codePointLabel, validateId } from './id-grammar.js';
 
-// Characters a surface id may not contain.
-//
-// Ids are compared exactly, because exact is the comparison every consumer downstream already
-// makes: the planner's affected-screen map, the evidence floor, and the receipt all key on the id
-// as written. A rule that folded ids together for validation but not for lookup would refuse pairs
-// that actually work while passing pairs that actually collide.
-//
-// So the grammar, not the comparison, is what removes ids that cannot be told apart on sight.
-// \s covers the space characters that render as a gap, including U+00A0 and U+3000. Cc and Cf
-// cover controls and format characters. Default_Ignorable_Code_Point covers the rest of what a
-// conforming renderer is expected to draw as nothing, which is where the variation selectors, the
-// Hangul fillers, and the combining grapheme joiner live, and it is a maintained Unicode property
-// rather than a hand-picked list that goes stale. Cs and Co are lone surrogates and private use,
-// which have no agreed rendering.
-//
-// What this does NOT deliver, stated plainly so the rule is not read as more than it is. It does
-// not stop confusables across scripts, so Latin "a" and Cyrillic "a" are both accepted and remain
-// distinct ids. That is a deliberate limit: both are scanned, both appear in receipt coverage, and
-// waiver matching is exact, so no screen is lost by it. Most unassigned code points are accepted
-// too, since no rule here targets them, and rejecting them deliberately would tie an id's validity
-// to whichever Unicode version the running Node build carries. Unassigned is not a promise in
-// either direction though: the reserved ranges that Unicode marks default-ignorable, such as
-// U+2065 and U+FFF0, are rejected by that property, while U+0378 and U+05FF are accepted.
-// The claim here is narrow, and it is only this: an accepted id renders as something.
-const DISALLOWED_ID_CHARACTER = /[\s\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Default_Ignorable_Code_Point}]/u;
+// The character rule lives in the shared id grammar, so surface ids, screen ids, and requirement
+// ids all answer to one definition of what an id may contain. This unit only turns that grammar's
+// result into the message a config error carries, and adds the uniqueness check that needs the
+// whole surface list.
 
-/**
- * Describes a code point the way a config file can be searched for it.
- *
- * The offending character is reported as a code point rather than repeated into the message,
- * because every character the grammar rejects is either invisible or reorders its neighbours.
- * Printing one back would show the operator nothing, or would show them something other than what
- * the file holds.
- */
-function codePointLabel(character: string): string {
-  const point = character.codePointAt(0) ?? 0;
-  return `U+${point.toString(16).toUpperCase().padStart(4, '0')}`;
-}
+const BLANK_ID_PROBLEM =
+  'must be a non-empty string. usabl tracks coverage by surface id, so a blank id cannot name a screen.';
 
 /**
  * Returns why an id cannot carry scan identity, or null when it can.
@@ -60,34 +30,37 @@ export function describeSurfaceIdProblem(id: string): string | null {
   // it is. That is the clearer message. The grammar below still refuses the whitespace itself, and
   // comparison never trims.
   if (id.trim().length === 0) {
-    return 'must be a non-empty string. usabl tracks coverage by surface id, so a blank id cannot name a screen.';
+    return BLANK_ID_PROBLEM;
   }
 
-  let position = 0;
-  for (const character of id) {
-    position += 1;
-    if (DISALLOWED_ID_CHARACTER.test(character)) {
+  const result = validateId(id);
+  if (result.ok) {
+    return null;
+  }
+
+  switch (result.problem) {
+    case 'empty':
+      // Unreachable after the trimmed check above, kept so the switch stays exhaustive.
+      return BLANK_ID_PROBLEM;
+    case 'disallowed-character':
+      // The offending character is reported as a position and a code point rather than repeated
+      // into the message, because every character the grammar rejects is either invisible or
+      // reorders its neighbours. Printing one back would show the operator nothing, or would show
+      // them something other than what the file holds. The position counts characters from one,
+      // which is how a person reading the config file counts.
       return (
-        `contains a character that is not allowed, at position ${position}: ` +
-        `${codePointLabel(character)}. A surface id must not contain whitespace, and must not ` +
+        `contains a character that is not allowed, at position ${result.index + 1}: ` +
+        `${codePointLabel(result.codePoint)}. A surface id must not contain whitespace, and must not ` +
         `contain invisible or control characters, because usabl tracks coverage by surface id and ` +
         `an id that renders as nothing cannot be told from another one. Use visible characters ` +
         `with no spaces, for example "user-settings".`
       );
-    }
+    case 'not-nfc':
+      return (
+        'must be written in Unicode NFC form. Two canonically equivalent spellings look identical ' +
+        'but compare as different ids, so usabl would treat one screen as two.'
+      );
   }
-
-  // Canonically equivalent spellings are the same text by definition, so they render identically
-  // while comparing unequal. Requiring one spelling keeps exact comparison honest for them without
-  // folding anything at lookup time.
-  if (id !== id.normalize('NFC')) {
-    return (
-      'must be written in Unicode NFC form. Two canonically equivalent spellings look identical ' +
-      'but compare as different ids, so usabl would treat one screen as two.'
-    );
-  }
-
-  return null;
 }
 
 export function assertSurfaceIds(surfaces: readonly SurfaceConfig[]): void {

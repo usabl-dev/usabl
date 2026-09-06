@@ -170,6 +170,22 @@ describe('parseUsablConfig surface id', () => {
     },
   );
 
+  it('refuses an id containing the empty braille pattern, which renders as blank but is not ignorable', () => {
+    // U+2800 is an assigned symbol, not a format character and not default-ignorable, so no
+    // Unicode property refuses it. The shared grammar lists it by hand. The message names the
+    // position and the code point rather than printing a blank cell back.
+    let message = '';
+    try {
+      parseUsablConfig(configJson({ surfaces: [surface('settings\u2800', '/settings')] }));
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('surfaces[0].id');
+    expect(message).toContain('at position 9');
+    expect(message).toContain('U+2800');
+    expect(message).not.toContain('\u2800');
+  });
+
   it('accepts the id discovery derives from a parameter route', () => {
     // Ask the generator for the id rather than hard-coding it, so this stays true if
     // screenIdFromUrl changes. The grammar has to leave route punctuation alone, or usabl init
