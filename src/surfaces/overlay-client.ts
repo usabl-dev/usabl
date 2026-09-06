@@ -294,7 +294,34 @@ export const overlayClientSource = `(() => {
       here,
       elsewhere,
       elsewhereTotal,
+      gap: gapForScreen(payload, currentScreenId, normalizedCurrent),
     };
+  }
+
+  // The coverage gap that concerns the screen the browser is on, or null.
+  //
+  // A screen can be in coverage.affected and still have no scan result: the browser was unavailable,
+  // the route refused to load, a capability was denied. Listing "no findings" for that screen would
+  // read as clean when nothing was checked. A gap names its subject as a surface id, a url, or a file
+  // path. A surface id is matched against the current screen id, and a url-shaped ref against the
+  // live pathname. A bare id is never resolved as a route and a file path is never read as a screen,
+  // because either would be a guess.
+  function gapForScreen(payload, currentScreenId, currentPath) {
+    const gaps = (payload && payload.coverage && Array.isArray(payload.coverage.gaps))
+      ? payload.coverage.gaps
+      : [];
+    for (const gap of gaps) {
+      if (!gap || typeof gap.ref !== 'string') {
+        continue;
+      }
+      if (currentScreenId !== null && gap.ref === currentScreenId) {
+        return gap;
+      }
+      if (/^(https?:\\/\\/|\\/)/.test(gap.ref) && pathnameOf(gap.ref) === currentPath) {
+        return gap;
+      }
+    }
+    return null;
   }
 
   // A pathname is not automatically a safe href. "//evil.example/x" is a valid pathname and also a
@@ -329,6 +356,7 @@ export const overlayClientSource = `(() => {
       here: [],
       elsewhere: [],
       elsewhereTotal: 0,
+      gap: null,
     };
   }
 
@@ -406,8 +434,101 @@ export const overlayClientSource = `(() => {
     return verdictKey === 'verified' || verdictKey === 'idle';
   }
 
-  // One plain line under the verdict that says what this state means for the screen in front of the
-  // developer. Every branch either states a fact or states plainly that usabl does not know.
+  // Why the screen in front of the developer has no result, when it is not the screen's fault.
+  //
+  // Two different things used to share one sentence, "this screen was not part of the last scan",
+  // and a developer could not tell whether usabl skipped the screen on purpose or failed to check it.
+  // Not affected: the changed files map to other screens, so usabl did not check this one by design.
+  // The developer should go to the screens that were checked. That is a different decision from a
+  // gap, which is handled by gapLine below.
+  function unaffectedLine(payload, split) {
+    const unresolved = payload && payload.coverage && Array.isArray(payload.coverage.unresolvedFiles)
+      ? payload.coverage.unresolvedFiles.length
+      : 0;
+    // With unresolved files usabl cannot say the change did not touch this screen, only that it
+    // could not map the change to it.
+    const base = unresolved > 0
+      ? 'usabl could not map your change to this screen, so it did not check it. '
+        + countLabel(unresolved, 'changed file') + ' could not be mapped to any screen.'
+      : 'Your change did not touch this screen, so usabl did not check it.';
+    if (split.elsewhereTotal > 0) {
+      return base + ' ' + countLabel(split.elsewhereTotal, 'issue')
+        + (split.elsewhereTotal === 1 ? ' is' : ' are') + ' on '
+        + countLabel(split.elsewhere.length, 'other screen') + '.';
+    }
+    return base + ' The run found no issues on the screens it checked.';
+  }
+
+  // The same fact, worded for the empty issues list under the header.
+  function unaffectedBodyLine(payload) {
+    const unresolved = payload && payload.coverage && Array.isArray(payload.coverage.unresolvedFiles)
+      ? payload.coverage.unresolvedFiles.length
+      : 0;
+    return unresolved > 0
+      ? 'usabl did not check this screen, because it could not map your change to it. There is nothing to list.'
+      : 'usabl did not check this screen, because your change did not touch it. There is nothing to list.';
+  }
+
+  // The screen was in scope but usabl could not check it. The gap's reason is engine-authored and is
+  // the fact the developer needs, so it is quoted here as well as in the coverage table below.
+  function gapReason(gap) {
+    const reason = boundedText(gap && gap.reason, MAX_PROSE_CHARS).trim().replace(/[.]+$/, '');
+    return reason || 'no reason was given';
+  }
+
+  function gapLine(gap) {
+    return 'usabl could not check this screen: ' + gapReason(gap)
+      + '. Nothing here is proven. See the coverage gaps below.';
+  }
+
+  // The approval state, as facts a developer can act on, one per line.
+  //
+  // A guarded file changing and an accessibility barrier can happen in the same run. The approval is
+  // out of the developer's hands; the barrier is what they can fix now. So the two are stated apart.
+  // The projection this panel reads does not carry the separate accessibility verdict, so the line
+  // reports the findings this run listed, which it does carry, and points to usabl check for the
+  // verdict itself rather than inferring one.
+  function approvalLines(payload, split) {
+    const paths = Array.isArray(payload.dirtyGuardedPaths)
+      ? payload.dirtyGuardedPaths.map((path) => boundedText(path, MAX_SELECTOR_CHARS)).filter(Boolean)
+      : [];
+    const lines = [];
+    if (paths.length === 0) {
+      lines.push('A guarded file changed, but the result did not name it.');
+    } else {
+      lines.push((paths.length === 1 ? 'Guarded file changed: ' : 'Guarded files changed: ')
+        + paths.join(', ') + '.');
+    }
+    lines.push(
+      'A code owner other than the author approves it on the pull request. '
+        + 'Nothing in this panel or on your machine can approve it.',
+    );
+    lines.push(accessibilityLine(split));
+    lines.push(
+      'If the change was unintended, revert the ' + (paths.length > 1 ? 'files' : 'file')
+        + ' and this state clears.',
+    );
+    return lines;
+  }
+
+  function accessibilityLine(split) {
+    let found;
+    if (split.matched) {
+      found = 'This run found ' + countLabel(split.here.length, 'issue') + ' on this screen and '
+        + countLabel(split.elsewhereTotal, 'issue') + ' on other screens.';
+    } else if (split.elsewhereTotal > 0) {
+      found = 'This run found ' + countLabel(split.elsewhereTotal, 'issue') + ' on '
+        + countLabel(split.elsewhere.length, 'other screen') + '.';
+    } else {
+      found = 'This run found no issues on the screens it checked.';
+    }
+    return 'Accessibility is judged separately from the approval. ' + found
+      + ' Run usabl check for the accessibility verdict.';
+  }
+
+  // What the header says under the verdict: one plain line for most states, or a short list of
+  // lines when one sentence cannot carry the facts. Every line either states a fact or states plainly
+  // that usabl does not know.
   function explanationFor(payload, error, scanning, split) {
     if (scanning) {
       return 'usabl is scanning the screens your change affects.';
@@ -423,12 +544,12 @@ export const overlayClientSource = `(() => {
       return 'usabl could not check the affected screens, so nothing here is proven.';
     }
     if (verdict.key === 'approval') {
-      return 'A guarded file changed. A person has to approve that change before the gate can pass.';
+      return approvalLines(payload, split);
     }
     if (verdict.key === 'no-verdict') {
-      // A run that ended without a verdict proved nothing, whatever the screen looks like.
-      return 'usabl finished without a verdict (exit code ' + payload.exitCode
-        + '). Nothing on this screen is proven.';
+      // A run that ended without a verdict proved nothing, whatever the screen looks like. The exit
+      // code is already beside the verdict word, and the engine's reason is the one section below.
+      return 'usabl finished without a verdict, so nothing on this screen is proven.';
     }
     if (verdict.key === 'idle') {
       // Checked before the not-matched branch on purpose. When the run had nothing to check, no
@@ -436,10 +557,14 @@ export const overlayClientSource = `(() => {
       // wrong thing: the reason is the change, not the screen.
       return 'Your change touched no screen usabl checks, so this run had nothing to check.';
     }
+    if (split.gap) {
+      // In scope, but not checked. The reason is the fact that matters, so it is quoted.
+      return gapLine(split.gap);
+    }
     if (!split.matched) {
       return verdict.key === 'verified'
         ? 'Verified, but this screen was not part of the last scan, so that verdict does not cover it.'
-        : 'This screen was not part of the last scan, so usabl has nothing to report on it.';
+        : unaffectedLine(payload, split);
     }
     if (verdict.key === 'verified') {
       // A verified Result can still carry waived and already-fixed findings. Saying "no findings"
@@ -485,6 +610,15 @@ export const overlayClientSource = `(() => {
           count: split.here.length,
           label: 'usabl: ' + word + ', ' + countLabel(split.here.length, 'issue')
             + ' on this screen. Open inspector.',
+        };
+      }
+      if (split.matched && split.gap) {
+        // In scope but not checked. "No issues on this screen" would read as clean.
+        return {
+          key: verdict.key,
+          symbol: '!',
+          count: null,
+          label: 'usabl: ' + word + '. usabl could not check this screen. Open inspector.',
         };
       }
       if (split.matched) {
@@ -2099,10 +2233,31 @@ export const overlayClientSource = `(() => {
     const heading = make('div', 'section-heading');
     heading.appendChild(make('h3', '', 'Issues on this screen'));
 
-    if (!split.matched) {
+    if (split.gap) {
+      // In scope but not checked. An empty list here must not read as a clean screen.
       section.appendChild(heading);
       section.appendChild(
-        make('p', 'empty', 'This screen was not part of the last scan, so there is nothing to list.'),
+        make(
+          'p',
+          'empty',
+          'usabl could not check this screen: ' + gapReason(split.gap)
+            + '. There is nothing to list. See the coverage gaps below.',
+        ),
+      );
+      return section;
+    }
+
+    if (!split.matched) {
+      section.appendChild(heading);
+      const verdict = verdictFor(payload, false, false);
+      section.appendChild(
+        make(
+          'p',
+          'empty',
+          verdict.key === 'not-covered'
+            ? 'usabl could not check the affected screens, so there is nothing to list.'
+            : unaffectedBodyLine(payload),
+        ),
       );
       return section;
     }
@@ -2177,9 +2332,22 @@ export const overlayClientSource = `(() => {
     return section;
   }
 
+  // The lead sentence of the elsewhere guide depends on whether there is anything to do here first.
+  // "Fix this screen first" on a screen with nothing to fix sent developers looking for findings
+  // that did not exist, so a clean or unchecked screen points at the worst screen instead.
+  function elsewhereLead(split) {
+    if (split.here.length > 0) {
+      return 'Fix this screen first, then move on. These screens also have findings.';
+    }
+    if (!split.matched || split.gap) {
+      return 'usabl did not check this screen. Start with the screen that has the worst findings.';
+    }
+    return 'Nothing was found on this screen. Start with the screen that has the worst findings.';
+  }
+
   // The elsewhere guide: one entry per other scanned screen that has findings, worst screen first,
   // with a count and a real navigating link. It never lists the findings of other screens. The
-  // intent is fix this screen, then go there.
+  // intent is fix this screen, then go there, or go straight there when this screen has nothing.
   function renderElsewhere(split) {
     if (!split.elsewhere.length) {
       return null;
@@ -2189,9 +2357,7 @@ export const overlayClientSource = `(() => {
     heading.appendChild(make('h3', '', 'On other screens'));
     heading.appendChild(make('span', 'section-count', countLabel(split.elsewhereTotal, 'issue')));
     section.appendChild(heading);
-    section.appendChild(
-      make('p', 'elsewhere-lead', 'Fix this screen first, then move on. These screens also have findings.'),
-    );
+    section.appendChild(make('p', 'elsewhere-lead', elsewhereLead(split)));
 
     const list = make('ul', 'elsewhere-list');
     for (const entry of split.elsewhere) {
@@ -2406,7 +2572,11 @@ export const overlayClientSource = `(() => {
       banner.appendChild(make('span', 'banner-exit', 'exit code ' + payload.exitCode));
     }
 
-    const note = make('p', 'banner-note', explanationFor(payload, state.error, state.scanning, split));
+    // One paragraph per line. Most states are one sentence; approval is several facts, and each
+    // gets its own paragraph so a screen reader pauses between them and a sighted reader can scan.
+    const explanation = explanationFor(payload, state.error, state.scanning, split);
+    const noteLines = Array.isArray(explanation) ? explanation : [explanation];
+    const notes = noteLines.map((line) => make('p', 'banner-note', line));
 
     const screenLine = make('div', 'screen-line');
     screenLine.appendChild(make('span', 'screen-label', 'This screen'));
@@ -2424,8 +2594,10 @@ export const overlayClientSource = `(() => {
     }
 
     // On an idle run the screen split is all zeros, so it only repeats "nothing". The banner and the
-    // note already say there was nothing to check, so the line is dropped in that state.
-    const headerChildren = verdict.key === 'idle' ? [bar, banner, note] : [bar, banner, note, screenLine];
+    // note already say there was nothing to check, so the line is dropped in that state. A run with
+    // no verdict drops it too: "0 here" is not a count usabl stands behind when it proved nothing.
+    const oneStatement = verdict.key === 'idle' || verdict.key === 'no-verdict';
+    const headerChildren = oneStatement ? [bar, banner, ...notes] : [bar, banner, ...notes, screenLine];
     header.replaceChildren(...headerChildren);
     announceVerdict(verdict, split, payload);
   }
@@ -2525,6 +2697,20 @@ export const overlayClientSource = `(() => {
     const gaps = payload.coverage && Array.isArray(payload.coverage.gaps) ? payload.coverage.gaps : [];
     if (verdict.key === 'idle' && gaps.length === 0) {
       body.replaceChildren(...(tamper ? [tamper] : []));
+      return;
+    }
+
+    // No verdict: the run crashed, was refused its configuration, or ended without minting one. An
+    // empty issues list and a coverage table of "None" would bury the one thing the developer needs,
+    // which is the engine's reason. That reason is in summary, engine-authored, and may quote a
+    // config error and how to fix it. So the body is one section: the reason, then the consequence.
+    if (verdict.key === 'no-verdict') {
+      const section = make('section', 'section no-verdict');
+      section.appendChild(make('h3', '', 'Why there is no verdict'));
+      const reason = boundedText(payload.summary, MAX_PROSE_CHARS).trim();
+      section.appendChild(make('p', 'notice', reason || 'usabl gave no reason.'));
+      section.appendChild(make('p', 'notice', 'Nothing on this screen is proven.'));
+      body.replaceChildren(...(tamper ? [tamper, section] : [section]));
       return;
     }
 

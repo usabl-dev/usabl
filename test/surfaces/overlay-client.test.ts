@@ -616,11 +616,18 @@ describe('overlay screen awareness', { timeout: 30_000 }, () => {
     );
 
     const panel = await openPanel(page);
+    // The reason the screen has no result is the change, not a failure, and the developer is told
+    // where the issues are instead.
     expect(
       await panel
-        .getByText('This screen was not part of the last scan, so usabl has nothing to report on it.')
+        .getByText(
+          'Your change did not touch this screen, so usabl did not check it. 2 issues are on 1 other screen.',
+          { exact: true },
+        )
         .isVisible(),
     ).toBe(true);
+    expect(await panel.getByText('not part of the last scan', { exact: false }).count()).toBe(0);
+    expect(await panel.getByText('nothing to report', { exact: false }).count()).toBe(0);
     expect(await panel.locator('.finding-button').count()).toBe(0);
     expect(await host.locator('.finding-button').count()).toBe(0);
 
@@ -678,6 +685,12 @@ describe('overlay screen awareness', { timeout: 30_000 }, () => {
 
     const elsewhere = panel.locator('.elsewhere');
     expect(await elsewhere.getByRole('heading', { name: 'On other screens' }).isVisible()).toBe(true);
+    // This screen has a finding, so the guide says to fix it before moving on.
+    expect(
+      await elsewhere
+        .getByText('Fix this screen first, then move on. These screens also have findings.')
+        .isVisible(),
+    ).toBe(true);
     // Worst severity first: deployments carries a critical, jobs only a minor.
     expect(await elsewhere.locator('.elsewhere-name').allTextContents()).toEqual([
       'deployments',
@@ -826,12 +839,19 @@ describe('overlay states', { timeout: 30_000 }, () => {
     const panel = await openPanel(page);
 
     expect(await bannerWord(page)).toBe('!Approval required');
+    // The file is named in the sentence, not only in the chips below it.
+    expect(await panel.getByText('Guarded file changed: usabl.config.json.', { exact: true }).isVisible()).toBe(true);
     expect(
       await panel
-        .getByText('A guarded file changed. A person has to approve that change before the gate can pass.')
+        .getByText(
+          'A code owner other than the author approves it on the pull request. Nothing in this panel or on your machine can approve it.',
+          { exact: true },
+        )
         .isVisible(),
     ).toBe(true);
     expect(await panel.getByRole('heading', { name: 'Guarded paths awaiting review' }).isVisible()).toBe(true);
+    // The old sentence named nobody and no file.
+    expect(await panel.getByText('A person has to approve', { exact: false }).count()).toBe(0);
     await page.context().close();
   });
 
@@ -911,6 +931,248 @@ describe('overlay states', { timeout: 30_000 }, () => {
     const cleanPanel = await openPanel(clean);
     expect(await cleanPanel.getByText(/floor debt/i).count()).toBe(0);
     await clean.context().close();
+  });
+});
+
+/**
+ * Every sentence the panel shows is for a developer deciding what to do next. These rows pin the
+ * sentences for the states where the old wording sent them the wrong way: told to fix a screen that
+ * had nothing to fix, told a screen was "not part of the scan" with no reason, shown an empty issues
+ * list and a table of "None" instead of the engine's reason for having no verdict, and told "a
+ * person" had to approve a file without saying which file, which person, or what they could do.
+ */
+describe('the panel tells a developer what to do next', { timeout: 40_000 }, () => {
+  const twoScreens = (over: Partial<Result> = {}): Result =>
+    result({
+      summary: 'regression: 1 gating finding',
+      coverage: {
+        changedFiles: ['src/app.tsx'],
+        affected: [
+          { screenId: 'clusters', url: 'http://127.0.0.1:5173/clusters', provenance: 'route-graph' },
+          { screenId: 'jobs', url: 'http://127.0.0.1:5173/jobs', provenance: 'route-graph' },
+        ],
+        unresolvedFiles: [],
+        gaps: [],
+        nothingToCheck: false,
+      },
+      findings: [finding({ screenId: 'jobs', whatUserExperiences: 'Jobs barrier.' })],
+      ...over,
+    });
+
+  it('points at the worst screen when this screen has nothing to fix', async () => {
+    const page = await mount(projectOverlay(twoScreens()), { path: '/clusters' });
+    const panel = await openPanel(page);
+    const elsewhere = panel.locator('.elsewhere');
+
+    expect(
+      await elsewhere
+        .getByText('Nothing was found on this screen. Start with the screen that has the worst findings.')
+        .isVisible(),
+    ).toBe(true);
+    // There is nothing to fix here, so the guide must not say to fix it first.
+    expect(await panel.getByText('Fix this screen first', { exact: false }).count()).toBe(0);
+    expect(await elsewhere.getByRole('link', { name: 'Go to this screen' }).getAttribute('href')).toBe('/jobs');
+
+    await page.context().close();
+  });
+
+  it('says a screen the change did not touch was skipped by design, and where the issues are', async () => {
+    const page = await mount(projectOverlay(twoScreens()), { path: '/settings' });
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText(
+          'Your change did not touch this screen, so usabl did not check it. 1 issue is on 1 other screen.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+    // The issues list says the same thing in its own words, not "not part of the last scan".
+    expect(
+      await panel
+        .getByText(
+          'usabl did not check this screen, because your change did not touch it. There is nothing to list.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+    expect(await panel.getByText('not part of the last scan', { exact: false }).count()).toBe(0);
+    // The guide to other screens does not tell them to fix this one first.
+    expect(
+      await panel
+        .getByText('usabl did not check this screen. Start with the screen that has the worst findings.')
+        .isVisible(),
+    ).toBe(true);
+
+    await page.context().close();
+  });
+
+  it('says the run found nothing when the change did not touch this screen and no screen had issues', async () => {
+    const page = await mount(
+      projectOverlay(twoScreens({ summary: 'regression', findings: [] })),
+      { path: '/settings' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText(
+          'Your change did not touch this screen, so usabl did not check it. The run found no issues on the screens it checked.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+
+    await page.context().close();
+  });
+
+  it('says usabl could not check a screen that was in scope but has a coverage gap', async () => {
+    // clusters is affected, so it is in scope, but the engine could not scan it and said why. The
+    // panel must not list "no findings" for it as if it had been checked.
+    const withGap = twoScreens({
+      coverage: {
+        changedFiles: ['src/app.tsx'],
+        affected: [
+          { screenId: 'clusters', url: 'http://127.0.0.1:5173/clusters', provenance: 'route-graph' },
+          { screenId: 'jobs', url: 'http://127.0.0.1:5173/jobs', provenance: 'route-graph' },
+        ],
+        unresolvedFiles: [],
+        gaps: [{ ref: 'clusters', state: 'not-covered', reason: 'route did not load within 30s' }],
+        nothingToCheck: false,
+      },
+    });
+    const page = await mount(projectOverlay(withGap), { path: '/clusters' });
+    expect(await badgeLabel(page)).toBe(
+      'usabl: regression. usabl could not check this screen. Open inspector.',
+    );
+
+    const panel = await openPanel(page);
+    expect(
+      await panel
+        .getByText(
+          'usabl could not check this screen: route did not load within 30s. Nothing here is proven. See the coverage gaps below.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+    expect(
+      await panel
+        .getByText(
+          'usabl could not check this screen: route did not load within 30s. There is nothing to list. See the coverage gaps below.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+    expect(await panel.getByText('No accessibility findings on this screen.').count()).toBe(0);
+    expect(await panel.getByText('did not touch this screen', { exact: false }).count()).toBe(0);
+    // The gap it points to is really there.
+    expect(await panel.getByText('clusters: route did not load within 30s').isVisible()).toBe(true);
+
+    await page.context().close();
+  });
+
+  it('shows the engine reason as the one section when there is no verdict', async () => {
+    const refused = result({
+      verdict: null,
+      summary: 'refused: duplicate surface id "vite" in usabl.config.json. Give each surface its own id.',
+      findings: [],
+      exitCode: 4,
+    });
+    const page = await mount(projectOverlay(refused), { path: '/clusters' });
+    const panel = await openPanel(page);
+
+    expect(await bannerWord(page)).toBe('!No verdict');
+    expect(await panel.locator('.banner-exit').textContent()).toBe('exit code 4');
+    expect(await panel.getByRole('heading', { name: 'Why there is no verdict' }).isVisible()).toBe(true);
+    expect(
+      await panel
+        .getByText('refused: duplicate surface id "vite" in usabl.config.json. Give each surface its own id.')
+        .isVisible(),
+    ).toBe(true);
+    expect(await panel.getByText('Nothing on this screen is proven.', { exact: true }).isVisible()).toBe(true);
+
+    // The empty sections that used to bury the reason are gone.
+    expect(await panel.getByRole('heading', { name: 'Issues on this screen' }).count()).toBe(0);
+    expect(await panel.getByRole('heading', { name: 'Coverage' }).count()).toBe(0);
+    expect(await panel.locator('.screen-line').count()).toBe(0);
+    expect(await panel.locator('.panel-body > .section').count()).toBe(1);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  it('says usabl gave no reason when a no-verdict result carries no summary', async () => {
+    const silent = projectOverlay(result({ verdict: null, summary: '', findings: [], exitCode: 4 }));
+    delete (silent as { summary?: unknown }).summary;
+    const page = await mount(silent, { path: '/clusters' });
+    const panel = await openPanel(page);
+
+    expect(await panel.getByText('usabl gave no reason.', { exact: true }).isVisible()).toBe(true);
+    expect(await panel.getByText('Nothing on this screen is proven.', { exact: true }).isVisible()).toBe(true);
+
+    await page.context().close();
+  });
+
+  it('states the approval as facts: which file, who approves, and the accessibility result apart', async () => {
+    // A guarded file changed AND this screen has real barriers. The barriers are what the developer
+    // can fix now, so they are stated apart from the approval nobody in this panel can give.
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'approval_required',
+          summary: 'approval required: guarded policy changed',
+          dirtyGuardedPaths: ['usabl.config.json', '.usabl/waivers.json'],
+          exitCode: 2,
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+    const lines = await panel.locator('.banner-note').allTextContents();
+
+    expect(lines).toEqual([
+      'Guarded files changed: usabl.config.json, .usabl/waivers.json.',
+      'A code owner other than the author approves it on the pull request. Nothing in this panel or on your machine can approve it.',
+      'Accessibility is judged separately from the approval. This run found 2 issues on this screen and 0 issues on other screens. Run usabl check for the accessibility verdict.',
+      'If the change was unintended, revert the files and this state clears.',
+    ]);
+    expect(await panel.getByText('A person has to approve', { exact: false }).count()).toBe(0);
+    // The barriers are still listed for fixing.
+    expect(await panel.locator('.finding-button').count()).toBe(2);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  it('states the approval facts for a clean screen with one guarded file', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'approval_required',
+          summary: 'approval required',
+          findings: [],
+          dirtyGuardedPaths: ['usabl.config.json'],
+          exitCode: 2,
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+    const lines = await panel.locator('.banner-note').allTextContents();
+
+    expect(lines).toEqual([
+      'Guarded file changed: usabl.config.json.',
+      'A code owner other than the author approves it on the pull request. Nothing in this panel or on your machine can approve it.',
+      'Accessibility is judged separately from the approval. This run found 0 issues on this screen and 0 issues on other screens. Run usabl check for the accessibility verdict.',
+      'If the change was unintended, revert the file and this state clears.',
+    ]);
+
+    await page.context().close();
   });
 });
 
@@ -1190,9 +1452,10 @@ describe('the overlay never shows green for a run that is not green', { timeout:
     );
     const panel = await openPanel(page);
     expect(await bannerWord(page)).toBe('!No verdict');
+    expect(await panel.locator('.banner-exit').textContent()).toBe('exit code 4');
     expect(
       await panel
-        .getByText('usabl finished without a verdict (exit code 4). Nothing on this screen is proven.')
+        .getByText('usabl finished without a verdict, so nothing on this screen is proven.', { exact: true })
         .isVisible(),
     ).toBe(true);
     await page.context().close();
