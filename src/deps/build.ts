@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import type { Capability, Deps, UsablConfig } from "../contracts/index.js";
+import type { BrowserDriver, Capability, Deps, UsablConfig } from "../contracts/index.js";
 import { canonicalHash, sha256 } from "../primitives/canonical.js";
 import { sortBy } from "../primitives/sortKey.js";
 import { makeCheckRunner } from "../providers/check-runner.js";
@@ -175,6 +175,12 @@ export async function buildDeps(
     storageStatePath?: string;
     trustedRef?: string;
     env?: EnvReader;
+    // A caller can inject a browser driver so one warm Chromium serves many runs. The dev overlay
+    // does this: it builds fresh Deps on every save for correct git and intake state, but reuses one
+    // driver so each scan does not pay a cold browser launch and teardown. Each open still makes a
+    // fresh context, so run isolation is unchanged. When omitted, a driver is created per call and
+    // the caller closes it, which is the CLI's one-shot behavior.
+    browser?: BrowserDriver;
   } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
@@ -186,14 +192,16 @@ export async function buildDeps(
     explicit: options.storageStatePath,
     env: options.env ?? process.env,
   });
-  const browser = makeRealBrowserDriver({
-    ...(storageStatePath === null ? {} : { storageStatePath }),
-    // The operator's app is what decides how long a screen takes to render, so the budget rides
-    // the config the run was started with.
-    ...(config.readyTimeoutMs === undefined
-      ? {}
-      : { readyTimeoutMs: config.readyTimeoutMs }),
-  });
+  const browser =
+    options.browser ??
+    makeRealBrowserDriver({
+      ...(storageStatePath === null ? {} : { storageStatePath }),
+      // The operator's app is what decides how long a screen takes to render, so the budget rides
+      // the config the run was started with.
+      ...(config.readyTimeoutMs === undefined
+        ? {}
+        : { readyTimeoutMs: config.readyTimeoutMs }),
+    });
   const fs = makeFsGlob({ cwd });
   const git = makeGitReader({ cwd });
   const intakeConfig = await resolveIntakeConfig(

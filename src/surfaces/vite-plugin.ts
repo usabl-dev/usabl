@@ -5,8 +5,9 @@
  */
 import { resolve, relative } from 'node:path';
 import { loadConfig } from '../cli.js';
-import type { Deps, Result, UsablConfig } from '../contracts/index.js';
+import type { BrowserDriver, Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
+import { makeRealBrowserDriver } from '../deps/real.js';
 import { run } from '../run.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 import { overlayClientSource } from './overlay-client.js';
@@ -95,10 +96,15 @@ interface UsablWs {
   send(payload: { type: string; event: string }): void;
 }
 
+interface UsablHttpServer {
+  on(event: 'close', handler: () => void): void;
+}
+
 interface UsablServer {
   middlewares: { use(middleware: Middleware): void };
   ws: UsablWs;
   watcher?: UsablWatcher;
+  httpServer?: UsablHttpServer | null;
 }
 
 interface ResolvedServerAddress {
@@ -113,6 +119,9 @@ export interface UsablVitePlugin {
   configResolved?: (config: { command: string; server?: ResolvedServerAddress }) => void;
   transformIndexHtml?: (html: string) => string | Promise<string>;
   transform?: (code: string, id: string) => { code: string; map: null } | null;
+  // Vite calls closeBundle when the dev server or a build shuts down. It is the backstop that closes
+  // the warm browser when there is no httpServer close event, for example in a middleware-mode host.
+  closeBundle?: () => void | Promise<void>;
 }
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
@@ -216,8 +225,12 @@ interface UsablVitePluginFactoryPorts {
   cwd: () => string;
   resolvePath: (cwd: string, configPath: string) => string;
   loadConfig: (path: string) => Promise<UsablConfig>;
-  buildDeps: (config: UsablConfig, options: { cwd: string }) => Promise<Deps>;
+  buildDeps: (config: UsablConfig, options: { cwd: string; browser?: BrowserDriver }) => Promise<Deps>;
   runEngine: (deps: Deps, config: UsablConfig) => Promise<Result>;
+  // Builds the one warm browser driver the overlay reuses across refresh waves. It is a port so a
+  // test can inject a fake driver and prove the driver is built once and closed once, without a real
+  // Chromium.
+  makeBrowser: (config: UsablConfig) => BrowserDriver;
 }
 
 function makeUsablVitePluginFactoryPorts(
@@ -228,8 +241,16 @@ function makeUsablVitePluginFactoryPorts(
     resolvePath: overrides.resolvePath ?? ((cwd: string, configPath: string) => resolve(cwd, configPath)),
     loadConfig: overrides.loadConfig ?? (async (path: string) => loadConfig(path)),
     buildDeps:
-      overrides.buildDeps ?? (async (config: UsablConfig, options: { cwd: string }) => buildDeps(config, options)),
+      overrides.buildDeps ??
+      (async (config: UsablConfig, options: { cwd: string; browser?: BrowserDriver }) =>
+        buildDeps(config, options)),
     runEngine: overrides.runEngine ?? (async (deps: Deps, config: UsablConfig) => run(deps, config)),
+    makeBrowser:
+      overrides.makeBrowser ??
+      ((config: UsablConfig) =>
+        makeRealBrowserDriver(
+          config.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: config.readyTimeoutMs },
+        )),
   };
 }
 
@@ -330,16 +351,30 @@ function injectLoader(html: string): string {
 export function usablVitePlugin(opts: {
   run: () => Promise<Result>;
   workspaceRoot?: string;
+  // Called once when the dev server or build shuts down. The config-backed factory uses it to close
+  // the one warm browser it kept alive across refresh waves. It is guarded so it runs at most once.
+  onClose?: () => void | Promise<void>;
 }): UsablVitePlugin {
   let runOnce = singleFlight(opts.run);
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let injectSourceAttributes = false;
   let configuredHost: string | null = null;
   let configuredPort: number | null = null;
+  let closed = false;
   const workspaceRoot = opts.workspaceRoot ?? '';
 
   const resetRun = (): void => {
     runOnce = singleFlight(opts.run);
+  };
+
+  const closeOnce = async (): Promise<void> => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    if (opts.onClose !== undefined) {
+      await opts.onClose();
+    }
   };
 
   const rejectNonLocal = (
@@ -412,6 +447,14 @@ export function usablVitePlugin(opts: {
         server.watcher.on('add', scheduleRefresh);
         server.watcher.on('unlink', scheduleRefresh);
       }
+
+      // Close the warm browser when the dev server stops. closeBundle is the backstop for hosts with
+      // no httpServer, and closeOnce guards against running the teardown twice.
+      if (server.httpServer !== undefined && server.httpServer !== null) {
+        server.httpServer.on('close', () => {
+          void closeOnce();
+        });
+      }
     },
     transformIndexHtml(html) {
       // webdriver and usabl=off prevent the engine and Playwright oracles from grading the badge itself.
@@ -426,6 +469,9 @@ export function usablVitePlugin(opts: {
         map: null,
       };
     },
+    async closeBundle() {
+      await closeOnce();
+    },
   };
 }
 
@@ -437,18 +483,31 @@ export function usablVitePluginFromConfig(
   const cwd = opts.cwd ?? resolvedPorts.cwd();
   const configPath = opts.configPath ?? 'usabl.config.json';
   const resolvedConfigPath = resolvedPorts.resolvePath(cwd, configPath);
+
+  // One warm browser for the whole dev session. It is launched lazily on the first run and reused by
+  // every later run, so a save no longer pays a cold Chromium launch and teardown. Each run still
+  // builds fresh Deps for correct git and intake state, and each open still makes a fresh context, so
+  // run isolation is unchanged. The driver is closed once when the dev server shuts down.
+  let warmBrowser: BrowserDriver | null = null;
+
   // Hosts should not assemble Deps. This factory keeps wiring in-package and
   // still returns a projection-only overlay backed by the gate-owned Result.
   return usablVitePlugin({
     workspaceRoot: cwd,
     run: async () => {
       const config = await resolvedPorts.loadConfig(resolvedConfigPath);
-      const deps = await resolvedPorts.buildDeps(config, { cwd });
-      try {
-        return await resolvedPorts.runEngine(deps, config);
-      } finally {
-        // Vite refresh waves must always close browser state, even on throw.
-        await deps.browser.close();
+      warmBrowser ??= resolvedPorts.makeBrowser(config);
+      const deps = await resolvedPorts.buildDeps(config, { cwd, browser: warmBrowser });
+      // No browser teardown here on purpose. The warm browser is shared across refresh waves and is
+      // closed once at shutdown. Each open opens and closes its own context, so a run still leaves no
+      // page or context state behind.
+      return resolvedPorts.runEngine(deps, config);
+    },
+    onClose: async () => {
+      if (warmBrowser !== null) {
+        const browser = warmBrowser;
+        warmBrowser = null;
+        await browser.close();
       }
     },
   });

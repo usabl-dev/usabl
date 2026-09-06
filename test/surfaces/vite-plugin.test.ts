@@ -521,7 +521,7 @@ describe('usablVitePluginFromConfig', () => {
     expect(transformed).toContain("search.get('usabl') !== 'off'");
   });
 
-  it('loads config, builds deps, runs engine, and closes browser for one overlay request', async () => {
+  it('loads config, builds deps, and runs engine for one overlay request without closing the browser', async () => {
     const config = makeConfig();
     const deps = makeDeps();
     const engineResult = baseResult({
@@ -533,13 +533,20 @@ describe('usablVitePluginFromConfig', () => {
     let loadConfigPath = '';
     let buildDepsConfig: UsablConfig | null = null;
     let buildDepsCwd = '';
+    let buildDepsBrowser: Deps['browser'] | undefined;
     let runEngineDeps: Deps | null = null;
     let runEngineConfig: UsablConfig | null = null;
     let closeCalls = 0;
-    deps.browser.close = async () => {
-      closeCalls += 1;
-      calls.push('close');
+    // The warm browser the factory keeps across refreshes. It is created once and passed into every
+    // buildDeps call. A run must not close it.
+    const warm: Deps['browser'] = {
+      open: deps.browser.open,
+      close: async () => {
+        closeCalls += 1;
+        calls.push('close');
+      },
     };
+    let makeBrowserCalls = 0;
 
     const plugin = usablVitePluginFromConfig(
       { cwd: '/repo/app' },
@@ -549,9 +556,14 @@ describe('usablVitePluginFromConfig', () => {
           calls.push('loadConfig');
           return config;
         },
+        makeBrowser: () => {
+          makeBrowserCalls += 1;
+          return warm;
+        },
         buildDeps: async (resolvedConfig, options) => {
           buildDepsConfig = resolvedConfig;
           buildDepsCwd = options.cwd;
+          buildDepsBrowser = options.browser;
           calls.push('buildDeps');
           return deps;
         },
@@ -570,23 +582,46 @@ describe('usablVitePluginFromConfig', () => {
     expect(loadConfigPath).toBe(resolve('/repo/app', 'usabl.config.json'));
     expect(buildDepsConfig).toBe(config);
     expect(buildDepsCwd).toBe('/repo/app');
+    // The warm browser was created once and handed to buildDeps.
+    expect(makeBrowserCalls).toBe(1);
+    expect(buildDepsBrowser).toBe(warm);
     expect(runEngineDeps).toBe(deps);
     expect(runEngineConfig).toBe(config);
-    expect(closeCalls).toBe(1);
-    expect(calls).toEqual(['loadConfig', 'buildDeps', 'runEngine', 'close']);
+    // No close during a run. The warm browser stays alive for the next refresh.
+    expect(closeCalls).toBe(0);
+    expect(calls).toEqual(['loadConfig', 'buildDeps', 'runEngine']);
     expect(JSON.parse(response.body)).toEqual(projectOverlay(engineResult, '/repo/app'));
+
+    // A second refresh reuses the same warm browser and still never launches a new one.
+    await callMiddleware(middleware, '/__usabl/result');
+    expect(makeBrowserCalls).toBe(1);
+    expect(closeCalls).toBe(0);
+
+    // Shutdown closes the warm browser exactly once.
+    await plugin.closeBundle?.();
+    expect(closeCalls).toBe(1);
+    // A second shutdown is a no-op.
+    await plugin.closeBundle?.();
+    expect(closeCalls).toBe(1);
   });
 
-  it('closes browser when runEngine throws', async () => {
-    const deps = makeDeps();
+  it('keeps the warm browser alive when runEngine throws', async () => {
+    // A run that throws must not tear down the shared browser, or the next save would pay a cold
+    // launch again. The browser is closed only at shutdown.
     let closeCalls = 0;
-    deps.browser.close = async () => {
-      closeCalls += 1;
+    const warm: Deps['browser'] = {
+      open: async () => {
+        throw new Error('open not used in this test');
+      },
+      close: async () => {
+        closeCalls += 1;
+      },
     };
     const plugin = usablVitePluginFromConfig(
       { cwd: '/repo/app' },
       makeFactoryPorts({
-        buildDeps: async () => deps,
+        makeBrowser: () => warm,
+        buildDeps: async () => makeDeps(),
         runEngine: async () => {
           throw new Error('engine failed');
         },
@@ -604,6 +639,64 @@ describe('usablVitePluginFromConfig', () => {
         },
       ),
     ).rejects.toThrow('engine failed');
+    // The throw did not close the warm browser.
+    expect(closeCalls).toBe(0);
+
+    // Shutdown still closes it once.
+    await plugin.closeBundle?.();
+    expect(closeCalls).toBe(1);
+  });
+
+  it('closes the warm browser on dev server close', async () => {
+    let closeCalls = 0;
+    const warm: Deps['browser'] = {
+      open: async () => {
+        throw new Error('open not used in this test');
+      },
+      close: async () => {
+        closeCalls += 1;
+      },
+    };
+    const plugin = usablVitePluginFromConfig(
+      { cwd: '/repo/app' },
+      makeFactoryPorts({ makeBrowser: () => warm }),
+    );
+
+    // Wire a fake http server so the plugin can hook its close event, and drive one request so the
+    // warm browser is actually created.
+    const closeHandlers: Array<() => void> = [];
+    const middlewares: Array<
+      (
+        req: { method?: string; url?: string; headers?: Record<string, string | string[] | undefined> },
+        res: FakeResponse,
+        next: () => void,
+      ) => void | Promise<void>
+    > = [];
+    plugin.configureServer?.({
+      middlewares: {
+        use(handler) {
+          middlewares.push(handler);
+        },
+      },
+      ws: { send() {} },
+      httpServer: {
+        on(_event, handler) {
+          closeHandlers.push(handler);
+        },
+      },
+    });
+    const middleware = middlewares[0];
+    if (middleware === undefined) {
+      throw new Error('expected middleware registration');
+    }
+    await callMiddleware(middleware, '/__usabl/result');
+
+    expect(closeHandlers.length).toBe(1);
+    for (const handler of closeHandlers) {
+      handler();
+    }
+    // The close handler runs the teardown asynchronously, so wait a tick.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(closeCalls).toBe(1);
   });
 
@@ -782,16 +875,29 @@ function makeDeps(): Deps {
 
 function makeFactoryPorts(overrides: {
   loadConfig?: (path: string) => Promise<UsablConfig>;
-  buildDeps?: (config: UsablConfig, options: { cwd: string }) => Promise<Deps>;
+  buildDeps?: (
+    config: UsablConfig,
+    options: { cwd: string; browser?: Deps['browser'] },
+  ) => Promise<Deps>;
   runEngine?: (deps: Deps, config: UsablConfig) => Promise<Result>;
+  makeBrowser?: (config: UsablConfig) => Deps['browser'];
 }): {
   loadConfig: (path: string) => Promise<UsablConfig>;
-  buildDeps: (config: UsablConfig, options: { cwd: string }) => Promise<Deps>;
+  buildDeps: (config: UsablConfig, options: { cwd: string; browser?: Deps['browser'] }) => Promise<Deps>;
   runEngine: (deps: Deps, config: UsablConfig) => Promise<Result>;
+  makeBrowser: (config: UsablConfig) => Deps['browser'];
 } {
   return {
     loadConfig: overrides.loadConfig ?? (async () => makeConfig()),
     buildDeps: overrides.buildDeps ?? (async () => makeDeps()),
     runEngine: overrides.runEngine ?? (async () => baseResult({})),
+    makeBrowser:
+      overrides.makeBrowser ??
+      (() => ({
+        open: async () => {
+          throw new Error('open not used in this test');
+        },
+        close: async () => {},
+      })),
   };
 }
