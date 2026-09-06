@@ -22,8 +22,8 @@ market-landscape research (August 2026, maintained outside this repository).
 
 Tagline: *usable by default.* Supporting line: *Don't ship until it's usabl.*
 
-Scanners report findings. usabl runs a full proof loop on every change, verifies fixes,
-and gates completion until proof passes.
+usabl runs a proof loop on every change and verifies fixes. Its Stop hook blocks the
+first stop on a blocking verdict unless a one-use bypass was issued.
 
 ---
 
@@ -78,7 +78,7 @@ PatternFly teams at Red Hat are first adopters; the engine generalizes.
 
 ## What is innovative
 
-Four pillars, ranked. Each is an integrated capability no single competitor ships today.
+Four pillars, ranked. Each is a design goal of the product, stated without claims about other tools.
 
 ### 1. End-to-end proof loop
 
@@ -91,7 +91,8 @@ screen-reader announcement checks on what changed.
 
 ### 2. AI-native completion gate
 
-The stop hook blocks "I'm done" until proof passes. Mid-task self-check lets the agent
+The stop hook blocks the first "I'm done" on a blocking verdict unless a one-use bypass
+was issued; idle, no verdict, and hook errors are disclosed and allowed. Mid-task self-check lets the agent
 course-correct while context is warm. Same engine, same answer - the AI proposes fixes
 but never grades its own work.
 
@@ -138,8 +139,8 @@ enforceable as the codebase evolves.
 
 ### Vs scanners
 
-> Scanners tell you what's wrong. usabl checks the full change, verifies the fix, and
-> won't let work close until proof passes.
+> usabl checks the surfaces a change touches, verifies the fix, and blocks the first
+> stop on a blocking verdict unless a one-use bypass was issued.
 
 ### Vs AI tools
 
@@ -153,7 +154,7 @@ enforceable as the codebase evolves.
 
 ### Innovation / contest angle
 
-> The first open tool that combines AI completion gating, multi-layer accessibility
+> An open tool that combines AI completion gating, multi-layer accessibility
 > proof, differential regression, deterministic screen-reader announcement checks on the
 > PR, and PatternFly-native rules, with a re-checkable receipt when the change verifies.
 
