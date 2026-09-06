@@ -33,8 +33,13 @@
   request comment, or the overlay to draw characters in a different order than
   they are stored, so a crafted label could render as the opposite of the finding
   behind it. The egress neutralizer now removes all twelve of them, and the
-  DELETE control byte it used to miss. Right-to-left text is unaffected: Hebrew
-  and Arabic letters carry their own direction and are left alone.
+  DELETE control byte it used to miss. Ordinary right-to-left text is unaffected,
+  because Hebrew and Arabic letters carry their own direction and need no control
+  character. Mixed-direction text is a real trade: Unicode recommends the isolates
+  for keeping a number or an embedded Latin phrase in the right place inside a
+  right-to-left sentence, so page text that used them correctly can come out
+  looking wrong in usabl's surfaces. A verdict that renders as its own opposite is
+  the worse failure, so the controls go.
 - Invisible characters that carry meaning are preserved rather than removed.
   usabl reports the text that is really on the page, so deleting a character
   because a reader cannot see it would misrepresent the evidence. Tag characters
@@ -51,16 +56,35 @@
   through come from Unicode properties rather than a hand-written list, so the
   defense does not fall behind as Unicode grows. Ordinary text is untouched,
   because looking through applies only inside a run that turns out to be a marker.
-- Credentials are no longer printed when a control character splits the key name.
-  Redaction ran only before control stripping, so `token=` with a control byte
-  inside it matched no credential pattern, and the strip then joined the pieces
-  back into a plainly printed credential. Redaction now runs on both sides of the
-  strip.
-- Long page text no longer costs memory out of proportion to its length. Both the
-  neutralizer and the frame marker search copy text in runs and return the
-  original string when they have nothing to change, instead of rebuilding it one
-  character at a time. On a four million character accessible name containing one
-  emoji joiner, peak heap growth drops from about 362 MiB to about 11 MiB.
+- Credentials are no longer printed when an invisible character splits the key
+  name. Redaction matches literal text, so `token=` with a zero width space, a
+  joiner, a soft hyphen, or a variation selector inside it matched no credential
+  pattern while still reading as a token to anyone looking at it. Credential
+  anchors are now read from the text with the invisible characters taken out, and
+  the span that gets replaced is the real span in the original, so surrounding
+  text keeps every character it arrived with. Redaction also runs on both sides of
+  control stripping, because stripping joins text and the bare-JWT pattern needs a
+  word boundary that stripping can remove.
+- A line break or a tab inside an accessible name is no longer deleted. Deleting
+  it welded the words on either side into one, so a label that wraps onto a second
+  line was reported as "Savebutton" rather than "Save button", which is not the
+  name the page has. Each run of separator controls becomes a single space.
+- Page text in a pull request comment is escaped for the renderer. Markdown is not
+  a plain-text container: an HTML comment disappears when rendered, a character
+  reference becomes a different character, an emphasis pair wrapped around part of
+  a word disappears and leaves the word, and a backslash disappears before
+  punctuation. Any of those puts characters on screen that are not in the string,
+  which was enough to draw usabl's own untrusted-text frame marker out of page
+  text that is not the marker. Every character a renderer could read as markup is
+  now written as a character reference, which renders as exactly the character it
+  names, so the reader sees the page text as it really is.
+- Long page text costs far less memory. Both the neutralizer and the frame marker
+  search copy text in runs and return the original string when they have nothing
+  to change, instead of rebuilding it one character at a time. On a four million
+  character accessible name containing one emoji joiner, peak heap growth drops
+  from about 362 MiB to about 11 MiB. Text with removals scattered all the way
+  through it still builds its result in pieces and costs several times its own
+  size.
 
 ### Added
 

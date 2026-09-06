@@ -22,10 +22,76 @@ import {
   type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
-import { frameUntrustedBlock, scrubResult } from './scrub.js';
+import {
+  frameUntrustedBlock,
+  scrubResult,
+  UNTRUSTED_FRAME_END,
+  UNTRUSTED_FRAME_START,
+} from './scrub.js';
 
 const COMMENT_MARKER = '<!-- usabl-report -->';
 const STOP_CAP = 20;
+
+// Page-derived text is written into a Markdown document that a forge renders, and Markdown is not
+// a plain-text container. An HTML comment disappears when rendered, a character reference becomes
+// a different character, an empty link disappears, and emphasis markers disappear. Any of those
+// puts characters on the screen that are not in the string, which is enough to draw the
+// untrusted-text frame marker out of text that is not the marker and hand the reader a frame that
+// closes wherever the page wanted it to close.
+//
+// Every character a Markdown or HTML renderer could read as the start of markup is written as a
+// numeric character reference. A reference renders as exactly the character it names and can never
+// itself be read as markup, so a reader sees the page text as it really is and the renderer has
+// nothing left to interpret.
+//
+// The emphasis and code characters have to be in this set, which is not obvious. They cannot
+// delete text that is not their own delimiter, but that is enough: a delimiter pair wrapped around
+// a piece of the marker vanishes and leaves the piece behind, so "PAGE *TEXT*" renders as
+// "PAGE TEXT". A backslash does the same thing on its own, since it hides before the punctuation
+// the marker already contains. Either one turns a string that is not the marker into the marker on
+// screen, which is why none of them can be left through.
+//
+// Block-level markers at the start of a line, a heading or a bullet or a rule, are deliberately
+// not escaped: they change how a line is laid out, not what the characters in it say. The cost of
+// the set is that a raw reader sees a reference where a file name had an underscore. That is worth
+// paying, because the rendered text stays exactly what the page had.
+const MARKUP_SIGNIFICANT = /[&<>[\]`*_~\\|]/g;
+
+function escapeMarkdown(text: string): string {
+  return text.replace(MARKUP_SIGNIFICANT, (character) => `&#${character.codePointAt(0) ?? 0};`);
+}
+
+// A code span, fenced long enough that nothing inside it can end the span early. Character
+// references are not interpreted inside a code span, so escaping is the wrong tool here: a value
+// carrying a backtick has to be fenced away instead, or the rest of the line is read as markup.
+function inlineCode(value: string): string {
+  let longestRun = 0;
+  let run = 0;
+  for (const character of value) {
+    run = character === '`' ? run + 1 : 0;
+    longestRun = Math.max(longestRun, run);
+  }
+  const fence = '`'.repeat(longestRun + 1);
+  // CommonMark drops one leading and one trailing space, which is how a span holds a backtick at
+  // either end without the fence swallowing it.
+  const padding = value.startsWith('`') || value.endsWith('`') ? ' ' : '';
+  return `${fence}${padding}${value}${padding}${fence}`;
+}
+
+// The framed block as Markdown lines. The two markers are engine text and the interface the
+// overlay and the model match on, so they stay exactly as they are. Everything between them is
+// page text and is escaped.
+//
+// A renderer joins consecutive lines of a paragraph with a space, so pieces could in principle be
+// spliced into a marker across a line boundary. They cannot here: every piece after the first
+// starts with an engine-authored label, so no join produces the marker text.
+function framedMarkdownLines(pieces: string[]): string[] {
+  return frameUntrustedBlock(pieces)
+    .split('\n')
+    .map((line) =>
+      line === UNTRUSTED_FRAME_START || line === UNTRUSTED_FRAME_END ? line : escapeMarkdown(line),
+    );
+}
 
 const HEADLINE: Record<Verdict, string> = {
   verified: 'VERIFIED',
@@ -59,10 +125,10 @@ function renderReceipt(result: Result): string[] {
   }
   return [
     '### Receipt',
-    `- sourceTree: \`${result.receipt.sourceTree}\``,
-    `- policyHash: \`${result.receipt.policyHash}\``,
-    `- runnerVersion: \`${result.receipt.runnerVersion}\``,
-    `- mintedAt: \`${result.receipt.mintedAt}\``,
+    `- sourceTree: ${inlineCode(result.receipt.sourceTree)}`,
+    `- policyHash: ${inlineCode(result.receipt.policyHash)}`,
+    `- runnerVersion: ${inlineCode(result.receipt.runnerVersion)}`,
+    `- mintedAt: ${inlineCode(result.receipt.mintedAt)}`,
   ];
 }
 
@@ -71,7 +137,7 @@ function renderConformance(result: Result): string[] {
   const summary = computeConformance(result);
   const lines = [
     '### Conformance summary',
-    `- schemaVersion: \`${result.schemaVersion}\``,
+    `- schemaVersion: ${inlineCode(result.schemaVersion)}`,
     `- deterministic: new ${summary.deterministic.newFailures}, carried ${summary.deterministic.carried}, waived ${summary.deterministic.waived}, fixed ${summary.deterministic.fixed}`,
     `- judged: model-judgment ${summary.judged.modelJudgment}, preview ${summary.judged.preview}`,
     `- not evaluated: unresolved files ${summary.notEvaluated.unresolvedFiles}, gaps ${summary.notEvaluated.gaps}`,
@@ -132,9 +198,9 @@ function formatFinding(finding: Finding): string[] {
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
-  const framed = frameUntrustedBlock(findingPieces(finding)).split('\n');
+  const framed = framedMarkdownLines(findingPieces(finding));
   return [
-    `- [${severity}] \`${screenId}\` - \`${layer}/${rule}\``,
+    `- [${escapeMarkdown(severity)}] ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)}`,
     ...framed.map((line) => `  ${line}`),
   ];
 }
@@ -153,10 +219,10 @@ function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
-  const framed = frameUntrustedBlock(findingPieces(finding)).split('\n');
+  const framed = framedMarkdownLines(findingPieces(finding));
   return [
-    `- ${headline}`,
-    `  - rule: \`${screenId}\` - \`${layer}/${rule}\` · ${severity}`,
+    `- ${escapeMarkdown(headline)}`,
+    `  - rule: ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)} · ${escapeMarkdown(severity)}`,
     ...framed.map((line) => `  ${line}`),
   ];
 }
@@ -187,8 +253,8 @@ function renderCoverageGaps(result: Result): string[] {
       // A gap ref can be a page URL, and a reason can carry a browser or provider exception, both
       // page- or tool-derived, so they are sealed as untrusted for the model reading this comment.
       // The state is an engine enum and stays as the plain label.
-      const framed = frameUntrustedBlock([`ref: ${gap.ref}`, `reason: ${gap.reason}`]).split('\n');
-      return [`- (${neutralize(gap.state)})`, ...framed.map((line) => `  ${line}`)];
+      const framed = framedMarkdownLines([`ref: ${gap.ref}`, `reason: ${gap.reason}`]);
+      return [`- (${escapeMarkdown(neutralize(gap.state))})`, ...framed.map((line) => `  ${line}`)];
     }),
   ];
 }
@@ -217,10 +283,10 @@ function renderAnnouncements(result: Result): string[] {
     if (screen.stops.length === 0) {
       continue;
     }
-    lines.push(`#### \`${neutralize(screen.screenId)}\``);
+    lines.push(`#### ${inlineCode(neutralize(screen.screenId))}`);
     const capped = screen.stops.slice(0, STOP_CAP);
     for (const stop of capped) {
-      const framed = frameUntrustedBlock([stopAnnouncementText(stop)]).split('\n');
+      const framed = framedMarkdownLines([stopAnnouncementText(stop)]);
       lines.push(`${stop.index + 1}.`, ...framed.map((line) => `  ${line}`));
     }
     if (screen.stops.length > STOP_CAP) {

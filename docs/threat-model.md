@@ -133,19 +133,21 @@ comments.
   redacts credential-shaped keys and values and `neutralize` strips control sequences and
   the characters that reorder text, applied by the CLI, docs, and stop-hook projections
   before any output leaves the tool.
-- Value redaction runs on both sides of the strip. Stripping a control character joins the
-  text on either side of it, so a control planted inside a key name defeated every credential
-  pattern and the strip then printed the credential in full. Running redaction after the
-  strip closes that. Running it before as well keeps the bare-JWT pattern, which needs a word
-  boundary the strip can remove.
-- Key-based redaction of Result fields is the structural layer and does not depend on the
-  text at all. Value patterns are a heuristic over the printed text: an escape sequence
-  consumes its final byte, so a key name mangled that way stops being an anchor for anything,
-  including a person reading it, and no value pattern can fire.
+- Credential anchors are matched through invisible characters. The patterns match literal
+  text, and the neutralizer deliberately keeps every invisible character that carries meaning,
+  so `to`, zero width space, `ken=` reached egress matching nothing while still reading as a
+  token to anyone looking at it. Anchors are now read from the text with those characters
+  taken out, and the span that gets replaced is the real span in the original.
+- Redaction also runs on both sides of control stripping. Stripping joins the text on either
+  side of a control character, so redaction has to see the joined form, and it has to see the
+  unjoined form as well because the bare-JWT pattern depends on a word boundary that stripping
+  can remove.
+- Key-based redaction of Result fields is the structural layer and does not depend on the text
+  at all. Value patterns are a heuristic over the printed text.
 
-**Status:** [x] Local-first; egress redaction and neutralization ship, with redaction on both
-sides of the strip. [ ] Value redaction cannot anchor on a key name an escape sequence ate a
-letter from. [ ] Telemetry decision open.
+**Status:** [x] Local-first; egress redaction and neutralization ship, with anchors matched
+through invisible characters and redaction on both sides of the strip. [ ] Telemetry decision
+open.
 
 ---
 
@@ -198,28 +200,46 @@ per-surface budget is not yet exposed.
 
 ## Threat 9: Output that renders differently from what usabl found
 
-**Attack:** Page text carries Unicode formatting characters that no reader sees. Two
-effects, both reproduced against `frameUntrusted`. Bidirectional controls reorder how the
-characters around them are drawn, so a finding can render as the opposite of what usabl
-found while the stored bytes stay innocent. Invisible characters planted between the
-characters of the untrusted-text frame marker let page text close usabl's own frame, after
-which everything the page supplied reads as trusted instruction rather than as data.
+**Attack:** what a reader sees is not what the string says. Three ways in, all reproduced.
+Bidirectional controls reorder how the characters around them are drawn, so a finding can
+render as the opposite of what usabl found while the stored bytes stay innocent. Invisible
+characters planted between the characters of the untrusted-text frame marker let page text
+close usabl's own frame, after which everything the page supplied reads as trusted
+instruction rather than as data. A Markdown renderer deletes and substitutes characters of
+its own accord, so page text that is not the marker in the string becomes the marker on the
+screen.
 
 **Controls:**
 
 - `neutralize` removes the bidirectional controls at every egress, along with the C0 and C1
-  control bytes and the two Unicode separators a terminal draws as line breaks. What a
-  surface prints and what usabl found are then the same text.
+  control bytes. What a surface prints and what usabl found are then the same text. Removing
+  the bidirectional controls is a real trade, not a free win: Unicode recommends the isolates
+  for mixed-direction text, so a page that used them correctly can come out looking wrong in
+  usabl's surfaces. That is accepted because the same characters let a page make a finding
+  render as the opposite of what usabl found, and a verdict that cannot be trusted to say
+  what it means is the deeper failure.
 - It removes nothing else that is merely invisible. usabl reports the text that is really on
   the page, including accessible names, so deleting a character because a reader cannot see
   it would make every surface misrepresent the evidence. Tag characters spell the region in
   a flag emoji, variation selectors choose how a glyph is drawn, invisible operators are real
   notation in mathematics, and joiners build words in Persian, Arabic, and Indic scripts.
+- The control characters that separate words become a space rather than being deleted. An
+  accessible name that wraps onto a second line is two words, and reporting it as one welded
+  word is wrong evidence about a label, which is the thing usabl exists to report on.
 - Defending a literal is that literal's own job. `removeFrameMarkers` matches the frame
   markers through invisible characters, so a marker split by any of them is still recognised
   and replaced whole. The characters it looks through come from the Unicode properties
   `Default_Ignorable_Code_Point`, `Bidi_Control`, and `Cc` rather than from a list written
   out by hand, because a hand-written list is what left this open the first time.
+- A renderer can rebuild the marker even when the string does not contain it, so the surface
+  that emits Markdown escapes page text rather than trusting the string. An HTML comment
+  disappears when rendered, a character reference becomes another character, an emphasis pair
+  around a piece of the marker disappears and leaves the piece, and a backslash disappears
+  before punctuation the marker already contains. `pr-comment` writes every character a
+  Markdown or HTML renderer could read as markup as a numeric character reference, which
+  renders as exactly the character it names. The other surfaces were checked: the overlay
+  writes through `textContent` and never parses markup, `docs-html` escapes the five
+  HTML-significant characters already, and the CLI and stop hook emit plain text.
 - The two policies are deliberately separate and are tested separately. Removal stays narrow
   so content is not rewritten. Looking through stays wide so nothing invisible can hide
   inside a marker. A test holds the second as a superset of the first.
@@ -231,10 +251,11 @@ compatibility-normalizes usabl's output, and the fix then belongs in that consum
 it scrubs. Folding page text here would make usabl match text that no reader sees as a
 marker, and compatibility folding is lossy for legitimate content.
 
-**Status:** [x] Both controls ship. The bidirectional controls are the full Unicode
-`Bidi_Control` set. Eleven splitters, every split position, and the reordering payload are
-covered by tests. [ ] usabl does not report that a page attempted either forgery; it removes
-them silently. [ ] Compatibility-normalized markers are out of scope, as above.
+**Status:** [x] All three controls ship. The bidirectional controls are the full Unicode
+`Bidi_Control` set. Eleven splitters, every split position, the reordering payload, and eight
+renderer forgeries are covered by tests. [ ] usabl does not report that a page attempted a
+forgery; it removes them silently. [ ] Compatibility-normalized markers are out of scope, as
+above.
 
 ---
 

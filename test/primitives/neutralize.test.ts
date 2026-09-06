@@ -18,20 +18,35 @@ describe('neutralize', () => {
     expect(neutralize('alert\u0007done')).toBe('alertdone');
   });
 
-  it('strips line-feed control bytes', () => {
-    expect(neutralize('a\nb')).toBe('ab');
+  it('turns a line feed into a space rather than welding the words together', () => {
+    // An accessible name that wraps onto a second line is two words. Deleting the break would
+    // report it as one, which is not the name the page has.
+    expect(neutralize('Save\nbutton')).toBe('Save button');
+  });
+
+  it('turns a tab into a space', () => {
+    expect(neutralize('Save\tbutton')).toBe('Save button');
+  });
+
+  it('turns a run of separators into a single space', () => {
+    // A carriage return and line feed are one line break, and an indented continuation is one
+    // gap between words, so spacing them out would be its own distortion.
+    expect(neutralize('Save\r\n\tbutton')).toBe('Save button');
+  });
+
+  it('turns the Unicode separators and next line into a space', () => {
+    expect(neutralize('line\u2028separator')).toBe('line separator');
+    expect(neutralize('line\u2029separator')).toBe('line separator');
+    expect(neutralize('line\u0085separator')).toBe('line separator');
+  });
+
+  it('still deletes control bytes that are not word separators', () => {
+    expect(neutralize('alert\u0007done')).toBe('alertdone');
+    expect(neutralize('a\u0000b')).toBe('ab');
   });
 
   it('strips the DELETE control byte', () => {
     expect(neutralize('a\u007fb')).toBe('ab');
-  });
-
-  it('strips Unicode line separator bytes', () => {
-    expect(neutralize('a\u2028b')).toBe('ab');
-  });
-
-  it('strips Unicode paragraph separator bytes', () => {
-    expect(neutralize('a\u2029b')).toBe('ab');
   });
 
   it('strips C1 controls including 8-bit CSI', () => {
@@ -135,7 +150,7 @@ describe('neutralize', () => {
   });
 
   it('is idempotent', () => {
-    const text = 'status: \u202edeifirev ton\u202c \u001b[31m\u200bok\u2069';
+    const text = 'status: \u202edeifirev ton\u202c\n\u001b[31m\u200bok\u2069';
     const once = neutralize(text);
 
     expect(once).toBe('status: deifirev ton \u200bok');

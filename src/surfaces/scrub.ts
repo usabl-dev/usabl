@@ -180,15 +180,151 @@ const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: /(storage[sS]tate:?\s*)\S.*/g, replacement: '$1[REDACTED]' },
 ];
 
-/**
- * Redacts credential-shaped values while preserving nearby context.
- * This is value hygiene only and does not strip control sequences.
- */
-export function redactSecrets(text: string): string {
+// A cheap first question before the work below: is any credential anchor even present. Every
+// pattern above needs one of these words, or the opening of a JWT, so text without them cannot
+// match and does not need a second look.
+const ANCHOR_HINT = /authorization|token|password|secret|storagestate|eyJ/i;
+
+function applyValuePatterns(text: string): string {
   return VALUE_PATTERNS.reduce(
     (current, entry) => current.replace(entry.pattern, entry.replacement),
     text,
   );
+}
+
+function expandReplacement(template: string, match: RegExpExecArray): string {
+  return template.replace(/\$(\d)/g, (_whole, digit: string) => match[Number(digit)] ?? '');
+}
+
+/** The text as a reader sees it, with the invisible characters taken out. */
+function readableText(text: string): string {
+  let readable = '';
+  let copied = 0;
+
+  for (let i = 0; i < text.length; ) {
+    const codePoint = text.codePointAt(i) ?? 0;
+    const width = codePoint > 0xffff ? 2 : 1;
+    if (isLookThrough(codePoint)) {
+      readable += text.slice(copied, i);
+      copied = i + width;
+    }
+    i += width;
+  }
+
+  return readable + text.slice(copied);
+}
+
+/**
+ * For each code unit of the readable text, where it came from in the original.
+ * This is what lets a match found in the readable text be cut out of the original.
+ */
+function readableSourceIndex(text: string): Int32Array {
+  const sourceIndex = new Int32Array(text.length);
+  let kept = 0;
+
+  for (let i = 0; i < text.length; ) {
+    const codePoint = text.codePointAt(i) ?? 0;
+    const width = codePoint > 0xffff ? 2 : 1;
+    if (!isLookThrough(codePoint)) {
+      for (let unit = 0; unit < width; unit += 1) {
+        sourceIndex[kept] = i + unit;
+        kept += 1;
+      }
+    }
+    i += width;
+  }
+
+  return sourceIndex;
+}
+
+/**
+ * Redacts credentials whose key name was split by invisible characters.
+ *
+ * The patterns match literal text, and the neutralizer deliberately keeps every invisible
+ * character that carries meaning, so "to", zero width space, "ken=" reaches this point intact and
+ * matches nothing while still reading as a token to anyone looking at it. The anchors are matched
+ * against the text with those characters taken out, and the span that gets replaced is the real
+ * span in the original, the same way the frame marker search cuts a split marker.
+ *
+ * Every pattern gets this, not just the key names. An invisible character inside a value that is
+ * already shaped like a credential, a JWT for instance, has no legitimate reading either, and the
+ * value still reads as a credential to a person looking at it.
+ *
+ * Inside a span being redacted the anchor is written in its readable form, because a redaction
+ * already replaces that whole span. Text outside a redacted span keeps every character it had.
+ */
+function redactThroughInvisible(text: string): string {
+  // Three gates, cheapest first, so ordinary text pays almost nothing. Only text carrying an
+  // invisible character can be hiding an anchor, and only text that reads as having an anchor is
+  // worth mapping back to. The hint has to be asked of the readable text, because the whole point
+  // is that the raw text does not spell the anchor.
+  if (!LOOK_THROUGH_PATTERN.test(text)) {
+    return text;
+  }
+
+  const readable = readableText(text);
+  if (!ANCHOR_HINT.test(readable)) {
+    return text;
+  }
+
+  const sourceIndex = readableSourceIndex(text);
+
+  // Patterns are collected against one projection rather than applied one after another, so the
+  // cost of building it is paid once. Where two patterns cover the same text the earlier one in
+  // the list wins, which is the order they would have run in anyway.
+  const spans: Array<{ start: number; end: number; text: string }> = [];
+  for (const entry of VALUE_PATTERNS) {
+    entry.pattern.lastIndex = 0;
+    let match = entry.pattern.exec(readable);
+    while (match !== null) {
+      if (match[0].length === 0) {
+        entry.pattern.lastIndex += 1;
+      } else {
+        spans.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          text: expandReplacement(entry.replacement, match),
+        });
+      }
+      match = entry.pattern.exec(readable);
+    }
+    entry.pattern.lastIndex = 0;
+  }
+
+  if (spans.length === 0) {
+    return text;
+  }
+
+  spans.sort((left, right) => left.start - right.start);
+
+  let out = '';
+  let copied = 0;
+  let lastEnd = -1;
+  for (const span of spans) {
+    if (span.start < lastEnd) {
+      continue;
+    }
+    const start = sourceIndex[span.start] ?? 0;
+    const end = (sourceIndex[span.end - 1] ?? start) + 1;
+    out += text.slice(copied, start) + span.text;
+    copied = end;
+    lastEnd = span.end;
+  }
+
+  return out + text.slice(copied);
+}
+
+/**
+ * Redacts credential-shaped values while preserving nearby context.
+ * This is value hygiene only and does not strip control sequences.
+ *
+ * Two passes, because each catches what the other cannot. The plain pass reads the text as it
+ * stands, which is what the bare-JWT pattern needs: it depends on a word boundary that an
+ * invisible character can provide. The second reads the text as a person sees it, which is what a
+ * key name split by an invisible character needs.
+ */
+export function redactSecrets(text: string): string {
+  return redactThroughInvisible(applyValuePatterns(text));
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

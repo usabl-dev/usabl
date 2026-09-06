@@ -1,6 +1,7 @@
 /**
  * Terminal egress neutralizer for untrusted finding text.
- * It strips control bytes, control sequences, and the characters that reorder how text renders.
+ * It strips control bytes, control sequences, and the characters that reorder how text renders,
+ * and it turns the control characters that separate words into a space.
  * It must never decide verdicts, sanitize HTML, or alter identity keys.
  *
  * What it removes is deliberately narrow. usabl reports on the text that is actually on a page,
@@ -26,8 +27,15 @@
  * to make usabl print a finding that reads as the opposite of the finding usabl reached. Nothing
  * about the stored bytes looks wrong, which is what makes them worth removing rather than keeping.
  *
- * Letters that have a direction of their own, Hebrew and Arabic script, are untouched. They render
- * right to left without any control character, so real right-to-left text survives this pass.
+ * Removing them is a real trade, not a free win, and it should not be read as one. Letters that
+ * have a direction of their own, Hebrew and Arabic script, need no control character and are
+ * untouched, so ordinary right-to-left text is unaffected. Mixed-direction text is a different
+ * case: Unicode recommends the isolates for exactly that, to keep a number, a bracket, or an
+ * embedded Latin phrase from being drawn in the wrong place inside a right-to-left sentence. Page
+ * text that used them correctly can therefore come out looking wrong in usabl's own surfaces. That
+ * is accepted here because the alternative is worse: the same characters let a page make a finding
+ * render as the opposite of what usabl found, and a verdict that cannot be trusted to say what it
+ * means is a deeper failure than a mixed-direction label that reads awkwardly.
  */
 function isBidiControl(code: number): boolean {
   return (
@@ -36,6 +44,23 @@ function isBidiControl(code: number): boolean {
     code === 0x200f || // right-to-left mark
     (code >= 0x202a && code <= 0x202e) || // embeddings, overrides, and pop
     (code >= 0x2066 && code <= 0x2069) // isolates and pop
+  );
+}
+
+/**
+ * True for a control character that separates words rather than commanding a terminal.
+ *
+ * A tab, a line break, or a Unicode separator inside an accessible name is real text: it is where
+ * a label wraps. Deleting it welds the words on either side into one, so "Save" and "button" on
+ * two lines get reported as "Savebutton", which is not the name the page has. Each of these
+ * becomes a space instead, so the reported name still says two words.
+ */
+function isSeparatorControl(code: number): boolean {
+  return (
+    (code >= 0x09 && code <= 0x0d) || // tab, line feed, vertical tab, form feed, carriage return
+    code === 0x85 || // next line
+    code === 0x2028 || // line separator
+    code === 0x2029 // paragraph separator
   );
 }
 
@@ -99,8 +124,14 @@ export function neutralize(text: string): string {
   }
 
   // Kept text is copied in runs rather than one character at a time, and text with nothing to
-  // remove, which is nearly all of it, is returned as it arrived. A per-character copy allocates
-  // many times the size of the input for a long string, and page text can be long.
+  // remove, which is nearly all of it, is returned as it arrived and allocates nothing.
+  //
+  // That is the whole of the claim, and it is worth being exact about where it stops. Text with
+  // removals scattered through it still builds its result in pieces, one per run, and costs
+  // several times the size of the input: four million characters alternating between a letter and
+  // a control byte measured 61 to 64 MiB of heap across runs, against 4 MiB for the same length
+  // of clean text. The saving is on text that is mostly or entirely clean, which is what real
+  // page text is.
   let out = '';
   let copied = 0;
   let removedAnything = false;
@@ -110,29 +141,39 @@ export function neutralize(text: string): string {
   while (i < text.length) {
     const code = text.charCodeAt(i);
     let removeUntil = -1;
+    let standsIn = '';
 
     if (code === 0x1b) {
       removeUntil = endOfEscapeSequence(text, i);
     }
 
-    // U+007F is the last C0 control and sits outside the 0x00 to 0x1f block. U+2028 and U+2029 are
-    // not C0 or C1 controls at all, but terminals render them as line breaks, so page-derived text
-    // could forge extra CLI lines at this egress. Bidi controls are removed for the reason above.
+    // A whole run of separators becomes one space, not one space each. A line break written as
+    // carriage return and line feed is one break, and a label indented onto the next line is one
+    // gap between words, so spacing them out would be its own distortion of the name.
+    if (removeUntil === -1 && isSeparatorControl(code)) {
+      let end = i + 1;
+      while (end < text.length && isSeparatorControl(text.charCodeAt(end))) {
+        end += 1;
+      }
+      removeUntil = end;
+      standsIn = ' ';
+    }
+
+    // U+007F is the last C0 control and sits outside the 0x00 to 0x1f block. Bidi controls are
+    // removed for the reason given above them.
     //
-    // All of these are dropped, not replaced with a notice. None of them has a glyph, so dropping
-    // one takes nothing away that the reader could have seen, and a notice per character would let
+    // These leave nothing behind, and no notice either. None of them has a glyph, so dropping one
+    // takes nothing away that the reader could have seen, and a notice per character would let
     // page text pad usabl's own output at will.
     //
-    // The escape byte is itself a C0 control, so this runs only when the branch above did not
-    // already claim a whole sequence. Otherwise a sequence would lose its escape byte and print
-    // the rest of itself.
+    // The escape byte is itself a C0 control, so this runs only when the branches above did not
+    // already claim a span. Otherwise a sequence would lose its escape byte and print the rest of
+    // itself, and a line break would be deleted rather than kept as a space.
     if (
       removeUntil === -1 &&
       ((code >= 0x00 && code <= 0x1f) ||
         code === 0x7f ||
         (code >= 0x80 && code <= 0x9f) ||
-        code === 0x2028 ||
-        code === 0x2029 ||
         isBidiControl(code))
     ) {
       removeUntil = i + 1;
@@ -143,7 +184,7 @@ export function neutralize(text: string): string {
       continue;
     }
 
-    out += text.slice(copied, i);
+    out += text.slice(copied, i) + standsIn;
     copied = removeUntil;
     removedAnything = true;
     i = removeUntil;

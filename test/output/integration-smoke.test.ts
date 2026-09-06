@@ -78,8 +78,8 @@ describe('formatIntegrationSmokeEgress', () => {
 
     const out = formatIntegrationSmokeEgress(scan);
     expect(out).toContain('stops: 0 drafts: 1 gaps: 1');
-    expect(out).toContain('color-contrastusabl: VERIFIED');
-    expect(out).toContain('main > buttonusabl: VERIFIED');
+    expect(out).toContain('color-contrast usabl: VERIFIED');
+    expect(out).toContain('main > button usabl: VERIFIED');
     expect(out).toContain('scan failed: provider crashed');
     expect(out).not.toContain('\u001b');
     expect(out).not.toContain('\u2028');

@@ -537,14 +537,62 @@ describe('secret redaction around control stripping', () => {
     expect(out).toBe('verified: 0 gating finding(s)');
   });
 
-  it('cannot redact a value whose key name an escape sequence ate a letter from', () => {
-    // A known limit, recorded rather than hidden. An escape sequence consumes its final byte, so
-    // "tok", ESC, "en=" leaves "tokn=" and no credential pattern can anchor on it. Value patterns
-    // are a text heuristic. The structural layer, key-based redaction of Result fields, is what
-    // covers named credential fields, and that layer does not depend on the text at all.
+  it('redacts a value whose key name carries an escape byte', () => {
+    // The escape byte is invisible to a reader, so the anchor search looks through it and reads
+    // the key name as "token=". Neutralizing the sequence would eat the letter after the escape
+    // byte and destroy the anchor, which is why redaction runs before that as well as after.
     const out = scrubbedSummary(`tok${control(0x1b)}en=ABCDEF123456`);
 
-    expect(out).not.toContain('token=');
-    expect(out).toContain('ABCDEF123456');
+    expect(out).not.toContain('ABCDEF123456');
+  });
+
+  // The characters below are all preserved on purpose, so none of them is joined away before
+  // redaction runs. Each one still has to be looked through when reading a credential anchor.
+  const PRESERVED: ReadonlyArray<readonly [string, number]> = [
+    ['U+200B zero width space', 0x200b],
+    ['U+200C zero width non-joiner', 0x200c],
+    ['U+200D zero width joiner', 0x200d],
+    ['U+2060 word joiner', 0x2060],
+    ['U+00AD soft hyphen', 0x00ad],
+    ['U+034F combining grapheme joiner', 0x034f],
+    ['U+FE0F variation selector-16', 0xfe0f],
+    ['U+FEFF byte order mark', 0xfeff],
+    ['U+180E Mongolian vowel separator', 0x180e],
+    ['U+E0100 variation selector-17', 0xe0100],
+  ];
+
+  for (const [name, code] of PRESERVED) {
+    it(`redacts every credential anchor split by ${name}`, () => {
+      const splitter = String.fromCodePoint(code);
+      const split = (word: string): string => word.slice(0, 2) + splitter + word.slice(2);
+
+      expect(scrubbedSummary(`${split('token')}=ABCDEF123456`)).not.toContain('ABCDEF123456');
+      expect(scrubbedSummary(`${split('password')}=hunter2xyz`)).not.toContain('hunter2xyz');
+      expect(scrubbedSummary(`${split('secret')}=hunter2xyz`)).not.toContain('hunter2xyz');
+      expect(scrubbedSummary(`${split('authorization')}: bearer ABCDEF123456`)).not.toContain(
+        'ABCDEF123456',
+      );
+      expect(scrubbedSummary(`${split('storageState')}: {"cookies":[]}`)).not.toContain('cookies');
+      const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature';
+      expect(scrubbedSummary(`${jwt.slice(0, 10)}${splitter}${jwt.slice(10)}`)).not.toContain(
+        'signature',
+      );
+    });
+  }
+
+  it('leaves the characters it looked through in text it did not redact', () => {
+    // Looking through a character is not deleting it. Text with no credential in it comes back
+    // exactly as it arrived, joiners and all.
+    const persian = `نمی${String.fromCodePoint(0x200c)}خواهم`;
+    const out = scrubbedSummary(`button ${persian} has no accessible name`);
+
+    expect(out).toBe(`button ${persian} has no accessible name`);
+  });
+
+  it('keeps the invisible characters around a redacted span', () => {
+    const joiner = String.fromCodePoint(0x200d);
+    const out = scrubbedSummary(`${joiner}before to${joiner}ken=ABCDEF123456 after${joiner}`);
+
+    expect(out).toBe(`${joiner}before token=[REDACTED] after${joiner}`);
   });
 });
