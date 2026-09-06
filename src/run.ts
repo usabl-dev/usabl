@@ -378,11 +378,12 @@ function unreadableScanConfigGap(trustedRef: string, detail: string): CoverageGa
  * and never mints a receipt. This resolver returns a missing, unparseable, or schema-invalid
  * document as a coverage gap. Whether that gap reaches the gate depends on the rest of the run,
  * which can still crash on an independent failure, such as an invalid docs manifest. A raw read
- * failure, where the git call itself throws (for example permission denied or an I/O error), fails
- * closed as a crash instead: the guard reads the same document at the same ref before this runs,
- * so the failure surfaces there, outside any handler here, as exit 4 with no verdict and no
- * receipt. The read below sits inside the handler so that if the guard's read succeeded and this
- * one fails, that later failure is also returned as the gap rather than a crash.
+ * failure, where the git call itself throws (for example permission denied or an I/O error), is
+ * disclosed as a crash instead (exit 4, the fail-open disclosure path below: no verdict, no
+ * receipt, and CI blocks it): the guard reads the same document at the same ref before this runs,
+ * so the failure surfaces there, outside any handler here. The read below sits inside the handler
+ * so that if the guard's read succeeded and this one fails, that later failure is also returned
+ * as the gap rather than a crash.
  */
 async function scanConfigForCoverage(
   deps: Deps,

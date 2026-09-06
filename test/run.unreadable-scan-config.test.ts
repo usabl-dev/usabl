@@ -14,9 +14,10 @@
  * correct and the accessibility exit code was the lie.
  *
  * The configuration plans app screens only. Docs screens come from usabl.docs.json, which the run
- * still reads, so a changed docs page is still scanned while the app half is disclosed as not
- * covered. The gap text has to be true in that case too, which is why one test pairs an unreadable
- * configuration with a changed docs page.
+ * still reads, so a changed docs page can still be scanned while the app half is disclosed as not
+ * covered, unless a policy failure such as an invalid requirements directory suppresses every
+ * scan. The gap text has to be true in both cases, which is why one test pairs an unreadable
+ * configuration with a changed docs page and another adds invalid requirements on top.
  */
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
