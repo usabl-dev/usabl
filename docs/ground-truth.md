@@ -53,8 +53,8 @@ the null itself.
 
 **The gate always decides. Surfaces choose whether to enforce.** Overlay and the
 advisory lane display the Result without blocking. The stop hook enforces. CI
-enforces only when the check is a required status (branch protection). On GitHub
-Free private that requirement cannot be set yet; CI still runs and comments.
+enforces only when the `usabl-required` check is a required status (branch protection or
+a ruleset). On this repository it is required by the main-branch ruleset.
 
 **One check, several places it shows up.** The same engine runs behind all of these.
 Every surface is a thin wrapper over one CLI entry point that returns `Result`.
@@ -104,9 +104,8 @@ The specific things that are new, each against what exists today:
    announcement as re-checkable evidence on a code change is new. The preview is
    current-run today; an automated before/after diff against a base run is a planned
    follow-up, not a v0.2.0 claim.
-5. It has rules for our design system. There is a tool like this for one design system
-   (Microsoft built one for FluentUI) and none for PatternFly. usabl fills an empty
-   slot.
+5. It has rules for our design system. usabl ships composition rules for PatternFly,
+   the design system our products use.
 6. The rules cannot be silently weakened. Locally, policy edits are tamper-evident and
    leave a reviewable commit trail (`approval_required`). In CI with trusted-ref reads
    and required checks, policy tampering is blocked before merge.
@@ -115,7 +114,8 @@ What is honestly not new: general scanning exists, and blocking only new problem
 against a baseline exists. The CLI can be invoked like a scanner on an existing
 codebase (`usabl check`), but that is adoption plumbing, not the product claim. A
 scanner reports findings; usabl decides a verdict, diffs against a floor, and its Stop
-hook can block the first stop on a blocking verdict. The design goal is putting all of
+hook blocks the first stop on a blocking verdict (unless a one-use bypass was issued or the
+host reports that continuation is already active). The design goal is putting all of
 that into one loop that gates an AI on evidence you can re-check and that is grounded in
 what a screen reader actually hears.
 
@@ -1216,11 +1216,10 @@ Scope and limits, stated plainly so the proof is not oversold:
 
 ### CODEOWNERS + branch protection
 
-Every guarded path and the CI workflow require code-owner review before merge, once
-branch protection exists. Admins can bypass in an emergency (`enforce_admins: false`).
-This is the single highest-value security item **when it can be turned on**. A GitHub
-Free private repo cannot enable it; until Team or public, CI still runs and comments
-but cannot be a required check.
+Every guarded path and the CI workflow require code-owner review before merge under
+branch protection. Whether admins can bypass depends on the ruleset's bypass list.
+This is the single highest-value security item. On this repository the `usabl-required`
+check is required by the main-branch ruleset.
 
 ---
 
