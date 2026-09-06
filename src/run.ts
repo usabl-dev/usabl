@@ -41,6 +41,7 @@ import { checkGuard } from './trust/guard.js';
 
 // Declared here rather than imported from baseline/, which imports run() and would cycle.
 const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
+const CONFIG_PATH = 'usabl.config.json';
 // Synthesized now, so it is version 2. It holds nothing, so nothing can hide behind it.
 const EMPTY_FLOOR: EvidenceFloor = { version: 2, entries: [] };
 
@@ -107,13 +108,22 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
   try {
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
     const guardDivergedPaths = await checkGuard(deps, config, opts.trustedRef ?? 'HEAD');
-    const scanConfig = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
+    const scanConfigResolution = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
+    const scanConfig = scanConfigResolution.config;
     const coverageFs = overlayUntrustedManifests(deps, guardDivergedPaths, opts.trustedRef);
     const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed);
     const docsManifest = await parseDocsManifest(coverageFs);
     const docsCoverage = computeDocsCoverage(docsManifest, changed);
     const affected = [...discoveredCoverage.affected, ...docsCoverage.affected];
-    const nothingToCheck = discoveredCoverage.nothingToCheck && docsCoverage.nothingToCheck;
+    // Idle means nothing UI-touching changed. A run whose scan configuration could not be read
+    // cannot tell whether anything UI-touching changed, because the globs that decide it are the
+    // ones it failed to read. Both states plan zero screens, so without this the two arrive at the
+    // gate as the same fact and an unreadable configuration exits 0 as an accessibility pass. The
+    // gap below then carries the reason, and the gate ranks it as not_covered.
+    const nothingToCheck =
+      scanConfigResolution.unreadable === null &&
+      discoveredCoverage.nothingToCheck &&
+      docsCoverage.nothingToCheck;
     const intakeFs = overlayRequirementsFs(deps.fs, deps.git, scanConfig, opts.trustedRef);
     const loadedRequirements = await loadRequirements(intakeFs, scanConfig);
     const intakePolicyPaths =
@@ -162,6 +172,9 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       nothingToCheck,
       unresolvedFiles: [...discoveredCoverage.unresolvedFiles, ...docsCoverage.unresolvedFiles],
       gaps: [
+        // First, so the surfaces that name one example per gap state name this one. It explains
+        // why no app screen appears on this run. Docs screens can still appear below it.
+        ...(scanConfigResolution.unreadable === null ? [] : [scanConfigResolution.unreadable]),
         ...discoveredCoverage.gaps,
         ...docsCoverage.gaps,
         ...screens.flatMap((screen) => screen.gaps),
@@ -329,25 +342,75 @@ async function readWaiversOrEmpty(
   }
 }
 
+/**
+ * The scan configuration this run planned coverage with, plus the disclosure owed when it is not
+ * the configuration the operator wrote.
+ *
+ * `unreadable` is null when the document was read and parsed. When it is set, the config carried
+ * here declares no surfaces and no UI globs, which is a placeholder and not a statement that the
+ * repository has no UI. Those are opposite facts and the caller must keep them apart.
+ */
+interface ScanConfigResolution {
+  config: UsablConfig;
+  unreadable: CoverageGap | null;
+}
+
+// The configuration only plans app screens. Docs screens are planned from usabl.docs.json, which
+// this run still reads, so a changed docs page can still be scanned. Whether it was scanned is
+// decided later, by the same policy checks every scan waits on, so the wording must not claim it.
+// It points the reader at the docs screens and gaps on this Result, which record what happened.
+function unreadableScanConfigGap(trustedRef: string, detail: string): CoverageGap {
+  return {
+    ref: CONFIG_PATH,
+    state: 'not-covered',
+    reason:
+      `${CONFIG_PATH} changed on this branch, so the app configuration was read from ${trustedRef} ` +
+      `instead of the working tree, and that document could not be read: ${detail}. usabl therefore ` +
+      'does not know which app screens the changed files belong to, so no app screen was planned ' +
+      'or checked. Docs coverage is planned separately under usabl.docs.json; see this run\'s docs ' +
+      'screens and gaps for what was actually checked. This run cannot verify accessibility. ' +
+      `Repair the configuration at ${trustedRef}, then run usabl again.`,
+  };
+}
+
+/**
+ * What this guarantees: a trusted configuration usabl cannot read never reads as idle or verified
+ * and never mints a receipt. This resolver returns a missing, unparseable, or schema-invalid
+ * document as a coverage gap. Whether that gap reaches the gate depends on the rest of the run,
+ * which can still crash on an independent failure, such as an invalid docs manifest. A raw read
+ * failure, where the git call itself throws (for example permission denied or an I/O error), is
+ * disclosed as a crash instead (exit 4, the fail-open disclosure path below: no verdict, no
+ * receipt, and CI blocks it): the guard reads the same document at the same ref before this runs,
+ * so the failure surfaces there, outside any handler here. The read below sits inside the handler
+ * so that if the guard's read succeeded and this one fails, that later failure is also returned
+ * as the gap rather than a crash.
+ */
 async function scanConfigForCoverage(
   deps: Deps,
   config: UsablConfig,
   guardDivergedPaths: string[],
   trustedRef: string | undefined,
-): Promise<UsablConfig> {
+): Promise<ScanConfigResolution> {
   // Working-tree config URLs are untrusted when config diverged. Scan the
   // trusted-ref document so a policy PR cannot point the CI browser at a new origin.
-  if (!guardDivergedPaths.includes('usabl.config.json') || trustedRef === undefined) {
-    return config;
-  }
-  const raw = await deps.git.show(trustedRef, 'usabl.config.json');
-  if (raw === null) {
-    return { ...config, surfaces: [], uiFileGlobs: [] };
+  if (!guardDivergedPaths.includes(CONFIG_PATH) || trustedRef === undefined) {
+    return { config, unreadable: null };
   }
   try {
-    return parseUsablConfig(raw);
-  } catch {
-    return { ...config, surfaces: [], uiFileGlobs: [] };
+    const raw = await deps.git.show(trustedRef, CONFIG_PATH);
+    if (raw === null) {
+      return {
+        config: { ...config, surfaces: [], uiFileGlobs: [] },
+        unreadable: unreadableScanConfigGap(trustedRef, `no ${CONFIG_PATH} exists at that ref`),
+      };
+    }
+    return { config: parseUsablConfig(raw), unreadable: null };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      config: { ...config, surfaces: [], uiFileGlobs: [] },
+      unreadable: unreadableScanConfigGap(trustedRef, message),
+    };
   }
 }
 
