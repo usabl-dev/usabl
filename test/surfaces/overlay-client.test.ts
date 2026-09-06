@@ -1321,6 +1321,67 @@ describe('the overlay never shows green for a run that is not green', { timeout:
     expect(await bannerWord(declaredButFailed)).toBe('!No verdict');
     await declaredButFailed.context().close();
   });
+
+  // The idle branch used to fire on exit code 0 and the nothing-to-check flag alone. A projection
+  // that carries those two fields but a verdict the panel does not know, or no verdict field at all,
+  // must not slip through to the calm idle badge or the clear tick. These build a normal idle-shaped
+  // projection and then overwrite the verdict to prove the null-verdict guard, not the coverage
+  // fields, is what earns idle.
+  const idleShaped = () =>
+    projectOverlay(
+      result({
+        verdict: null,
+        summary: 'no verdict',
+        findings: [],
+        exitCode: 0 as Result['exitCode'],
+        coverage: {
+          changedFiles: [],
+          affected: [],
+          unresolvedFiles: [],
+          gaps: [],
+          nothingToCheck: true,
+        },
+      }),
+    );
+
+  it('does not read an unknown verdict string as idle even with idle coverage fields', async () => {
+    const unknown = idleShaped();
+    (unknown as { verdict: unknown }).verdict = 'sometime-future-verdict';
+    const page = await mount(unknown, { path: '/clusters' });
+    expect(await bannerWord(page)).toBe('!No verdict');
+    // The badge must not be in its clear or idle appearance either.
+    const badgeState = await page
+      .locator(OVERLAY)
+      .evaluate((host) =>
+        (host as HTMLElement).shadowRoot?.querySelector('.badge')?.getAttribute('data-state') ?? '',
+      );
+    expect(badgeState).toBe('no-verdict');
+    await page.context().close();
+  });
+
+  it('does not read a missing verdict field as idle even with idle coverage fields', async () => {
+    const missing = idleShaped();
+    delete (missing as { verdict?: unknown }).verdict;
+    const page = await mount(missing, { path: '/clusters' });
+    expect(await bannerWord(page)).toBe('!No verdict');
+    await page.context().close();
+  });
+
+  it('does not read a verified verdict with a nonzero exit code as clear', async () => {
+    // An inconsistent projection: the verdict word says verified but the exit code the gate would use
+    // is nonzero. The panel projects the verdict it was handed, so this still reads verified, but it
+    // must never fall through to the idle branch and it must show the nonzero exit code plainly.
+    const inconsistent = projectOverlay(
+      result({ verdict: 'verified', summary: 'verified', findings: [], exitCode: 0 }),
+    );
+    (inconsistent as { exitCode: number }).exitCode = 4;
+    const page = await mount(inconsistent, { path: '/clusters' });
+    // Verified is the verdict it was handed, so it is projected, but the exit code is shown as is.
+    expect(await bannerWord(page)).toBe('✓Verified');
+    const panel = await openPanel(page);
+    expect(await panel.locator('.banner-exit').textContent()).toBe('exit code 4');
+    await page.context().close();
+  });
 });
 
 describe('the overlay never shows a stale result', { timeout: 40_000 }, () => {
@@ -1381,6 +1442,75 @@ describe('the overlay never shows a stale result', { timeout: 40_000 }, () => {
 
     await expect.poll(async () => bannerWord(page), { timeout: 10_000 }).toBe('✕Regression');
     // Wait past the slow response so a late overwrite would have had time to land.
+    await expect
+      .poll(async () => bannerWord(page), { timeout: 4000, interval: 250 })
+      .toBe('✕Regression');
+    expect(await panel.locator('.banner-exit').textContent()).toBe('exit code 1');
+
+    await context.close();
+  });
+
+  it('drops an in-flight response the instant a newer refresh is requested', async () => {
+    // This reproduces the out-of-order arrival without waiting for the recheck control to re-enable.
+    // The first refresh is slow and verified. While it is still in flight, a second refresh is fired
+    // by dispatching a click straight at the control, which does not depend on the control being
+    // enabled. The second response is fast and regression. The fix advances the generation the moment
+    // the second refresh is requested, so the slow verified response is already superseded when it
+    // lands and can never render over the newer regression.
+    const staleVerified = projectOverlay(
+      result({ verdict: 'verified', summary: 'verified: stale', findings: [], exitCode: 0 }),
+    );
+    const regression = projectOverlay(result());
+
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    let served = 0;
+    await page.route('http://usabl.test/**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/__usabl/result') {
+        served += 1;
+        if (served === 1) {
+          // First load. Answer at once so the panel settles before the race.
+          await route.fulfill({ contentType: 'application/json', body: JSON.stringify(regression) });
+          return;
+        }
+        if (served === 2) {
+          // The first refresh: slow and verified, the response we must NOT let win.
+          await new Promise((resolve) => setTimeout(resolve, 900));
+          await route.fulfill({ contentType: 'application/json', body: JSON.stringify(staleVerified) });
+          return;
+        }
+        // The second refresh: fast and regression, requested while the first is still in flight.
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify(regression) });
+        return;
+      }
+      await route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<!doctype html>
+          <html lang="en">
+            <head><title>Clean host</title></head>
+            <body>
+              <header><h1>Fleet operations</h1></header>
+              <main><button id="cluster-details" type="button">Host action</button></main>
+              <script type="module">${overlayClientSource}</script>
+            </body>
+          </html>`,
+      });
+    });
+    await page.goto('http://usabl.test/clusters');
+    await page.locator(OVERLAY).waitFor();
+    const panel = await openPanel(page);
+    await expect.poll(async () => bannerWord(page)).toBe('✕Regression');
+
+    const recheck = panel.getByRole('button', { name: 'Check again' });
+    // Fire both refreshes back to back. dispatchEvent does not wait for the control to be enabled, so
+    // the second click lands while the first slow request is still in flight.
+    await recheck.dispatchEvent('click');
+    await recheck.dispatchEvent('click');
+
+    // The fast regression lands first and shows. Then wait well past the slow verified response so a
+    // late overwrite would have had every chance to land. It must stay regression.
+    await expect.poll(async () => bannerWord(page), { timeout: 10_000 }).toBe('✕Regression');
     await expect
       .poll(async () => bannerWord(page), { timeout: 4000, interval: 250 })
       .toBe('✕Regression');
@@ -1693,6 +1823,85 @@ describe('the overlay announces state changes and stays visible on any host', { 
     await page.context().close();
   });
 
+  it('keeps focus in the panel after Check again replaces the focused control', async () => {
+    // Check again rerenders the header and replaces the recheck button, and the rebuilt button is
+    // disabled while the scan runs. Without a deliberate move, focus drops to the document and a
+    // keyboard user loses their place. Focus must land on the panel, a stable region always present.
+    const page = await mount(null, {
+      path: '/clusters',
+      responseDelayMs: 400,
+      payloads: [
+        projectOverlay(result()),
+        projectOverlay(result({ verdict: 'verified', findings: [], exitCode: 0 })),
+      ],
+    });
+    const host = page.locator(OVERLAY);
+    const panel = await openPanel(page);
+    await expect.poll(async () => panel.locator('.finding-button').count()).toBe(2);
+
+    const recheck = panel.getByRole('button', { name: 'Check again' });
+    await recheck.focus();
+    await recheck.click();
+
+    // The rebuilt recheck button is disabled while scanning, so focus cannot rest there. It moved to
+    // the panel, not to the document body.
+    const focusedClass = await host.evaluate(
+      (element) => (element as HTMLElement).shadowRoot?.activeElement?.className ?? '',
+    );
+    expect(focusedClass).toContain('panel');
+    expect(focusedClass).not.toContain('finding-button');
+
+    await page.context().close();
+  });
+
+  it('keeps the verdict live region in the accessibility tree while collapsed', async () => {
+    // The overlay is collapsed by default, which is the normal state during a fix loop. The verdict
+    // live region must not sit inside the hidden panel, because a live region in a hidden subtree is
+    // not in the accessibility tree and its updates are never announced. It must be outside the
+    // panel and reachable while collapsed.
+    const page = await mount(projectOverlay(result()), { path: '/clusters' });
+    const host = page.locator(OVERLAY);
+
+    // The panel is hidden while collapsed.
+    const panelHidden = await host.evaluate(
+      (element) =>
+        (element as HTMLElement).shadowRoot?.querySelector('.panel')?.hasAttribute('hidden') ?? false,
+    );
+    expect(panelHidden).toBe(true);
+
+    const placement = await host.evaluate((element) => {
+      const root = (element as HTMLElement).shadowRoot;
+      const region = root?.querySelector('.visually-hidden[role="status"]');
+      if (!region) {
+        return { present: false, insidePanel: true, insideHiddenSubtree: true };
+      }
+      const insidePanel = region.closest('.panel') !== null;
+      // Walk up to the shadow root, checking whether any ancestor is hidden. If none is, the region
+      // is in the accessibility tree.
+      let node: Element | null = region;
+      let insideHiddenSubtree = false;
+      while (node && node !== (root as unknown as Element)) {
+        if (node.hasAttribute('hidden')) {
+          insideHiddenSubtree = true;
+          break;
+        }
+        node = node.parentElement;
+      }
+      return { present: true, insidePanel, insideHiddenSubtree };
+    });
+    expect(placement.present).toBe(true);
+    expect(placement.insidePanel).toBe(false);
+    expect(placement.insideHiddenSubtree).toBe(false);
+
+    // And it actually carries the announcement while collapsed.
+    const verdictStatus = host.locator('.visually-hidden[role="status"]');
+    await expect.poll(async () => verdictStatus.textContent(), { timeout: 10_000 }).toBe(
+      'usabl: Regression. 2 findings on this screen.',
+    );
+
+    await page.context().close();
+  });
+
   it('keeps the badge focus ring visible against a dark host page', async () => {
     // The ring used to be a single dark colour, so on a host page painted the same dark colour it
     // sat at 1:1 contrast and vanished. The earlier focus test only ever used a white page.
@@ -1801,6 +2010,37 @@ describe('the overlay bounds its own work', { timeout: 60_000 }, () => {
 
     const axe = await new AxeBuilder({ page }).analyze();
     expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  it('moves focus to the FIRST row of the final page, not the last', async () => {
+    // 60 findings: the first page builds 40 and the final "Show 20 more" appends the rest and hides
+    // the control. Focus must land on the first row of that final page (row 41 of the whole list) so
+    // a forward Tab walks the new rows in order. Landing on the last row would let Tab skip every row
+    // between the old end and it, exactly the rows the user just asked to see.
+    const page = await mount(projectOverlay(result({ findings: manyFindings(60) })), {
+      path: '/clusters',
+    });
+    const panel = await openPanel(page);
+    expect(await panel.locator('.finding-button').count()).toBe(40);
+
+    await panel.getByRole('button', { name: 'Show 20 more' }).click();
+    expect(await panel.locator('.finding-button').count()).toBe(60);
+
+    // The control is gone, so focus was moved. Read which row holds it and its position in the list.
+    const focused = await page.locator(OVERLAY).evaluate((host) => {
+      const root = (host as HTMLElement).shadowRoot;
+      const active = root?.activeElement as HTMLElement | null;
+      if (!active || !active.classList.contains('finding-button')) {
+        return { onRow: false, posinset: null as string | null };
+      }
+      const item = active.closest('.finding-item');
+      return { onRow: true, posinset: item?.getAttribute('aria-posinset') ?? null };
+    });
+    expect(focused.onRow).toBe(true);
+    // First row of the final page. The first page was 40 rows, so the final page starts at position 41.
+    expect(focused.posinset).toBe('41');
 
     await page.context().close();
   });

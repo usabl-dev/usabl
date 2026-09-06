@@ -329,7 +329,11 @@ describe('usablVitePlugin', () => {
       },
     });
     const middlewares: Array<
-      (req: { method?: string; url?: string }, res: FakeResponse, next: () => void) => void | Promise<void>
+      (
+        req: { method?: string; url?: string; headers?: Record<string, string | string[] | undefined> },
+        res: FakeResponse,
+        next: () => void,
+      ) => void | Promise<void>
     > = [];
     const watcherHandlers = new Map<string, Array<() => void>>();
     const sentEvents: Array<{ type: string; event: string }> = [];
@@ -388,6 +392,90 @@ describe('usablVitePlugin', () => {
     expect(JSON.parse(secondResult.body).summary).toContain('run 2');
     expect(runCount).toBe(2);
     expect(sentEvents).toContainEqual({ type: 'custom', event: 'usabl:refresh' });
+  });
+
+  it('rejects the result and client endpoints when the Host header is not local', async () => {
+    // These handlers run before Vite validates the Host header and they end the response, so a DNS
+    // rebinding request that reaches them would otherwise read back the workspace root, source paths,
+    // import chains, guarded paths, and findings. A non-local Host is refused with 403.
+    const plugin = usablVitePlugin({ run: async () => baseResult({ verdict: 'regression', exitCode: 1 }) });
+    const middleware = getMiddleware(plugin);
+
+    for (const path of ['/__usabl/result', '/__usabl/client.js']) {
+      const response = makeResponse();
+      let nextCalled = false;
+      await middleware(
+        { method: 'GET', url: path, headers: { host: 'attacker.example.com' } },
+        response,
+        () => {
+          nextCalled = true;
+        },
+      );
+      expect(response.statusCode).toBe(403);
+      expect(response.body).not.toContain('regression');
+      expect(response.body).not.toContain('advisory');
+      expect(nextCalled).toBe(false);
+    }
+  });
+
+  it('rejects the result endpoint when the Origin header is cross-origin', async () => {
+    const plugin = usablVitePlugin({ run: async () => baseResult({ verdict: 'regression', exitCode: 1 }) });
+    const middleware = getMiddleware(plugin);
+
+    const response = makeResponse();
+    await middleware(
+      {
+        method: 'GET',
+        url: '/__usabl/result',
+        // The Host is local, but the Origin is not. A cross-origin fetch from a hostile page is what
+        // this guards.
+        headers: { host: 'localhost:5173', origin: 'https://attacker.example.com' },
+      },
+      response,
+      () => {},
+    );
+    expect(response.statusCode).toBe(403);
+    expect(response.body).not.toContain('regression');
+  });
+
+  it('rejects a request with no Host header', async () => {
+    const plugin = usablVitePlugin({ run: async () => baseResult({}) });
+    const middleware = getMiddleware(plugin);
+    const response = makeResponse();
+    await middleware({ method: 'GET', url: '/__usabl/result', headers: {} }, response, () => {});
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('allows local hosts and a same-origin request', async () => {
+    const plugin = usablVitePlugin({ run: async () => baseResult({ verdict: 'regression', exitCode: 1 }) });
+    const middleware = getMiddleware(plugin);
+
+    for (const host of ['localhost:5173', '127.0.0.1:5173', '[::1]:5173']) {
+      const response = await callMiddleware(middleware, '/__usabl/result', { host });
+      expect(response.statusCode).toBe(200);
+      expect(JSON.parse(response.body).verdict).toBe('regression');
+    }
+
+    // A same-origin request carries a matching local Origin and is allowed.
+    const sameOrigin = await callMiddleware(middleware, '/__usabl/result', {
+      host: 'localhost:5173',
+      origin: 'http://localhost:5173',
+    });
+    expect(sameOrigin.statusCode).toBe(200);
+  });
+
+  it('allows the dev server configured host', async () => {
+    const plugin = usablVitePlugin({ run: async () => baseResult({ verdict: 'verified', exitCode: 0 }) });
+    // The dev server was told to bind to a specific host and port.
+    plugin.configResolved?.({ command: 'serve', server: { host: 'dev.internal', port: 4000 } });
+    const middleware = getMiddleware(plugin);
+
+    const allowed = await callMiddleware(middleware, '/__usabl/result', { host: 'dev.internal:4000' });
+    expect(allowed.statusCode).toBe(200);
+
+    // A host that was not configured and is not a standard local name is still refused.
+    const refused = await callMiddleware(middleware, '/__usabl/result', { host: 'other.internal:4000' });
+    expect(refused.statusCode).toBe(403);
   });
 
   it('runs before the host JSX transform so it sees raw tags', () => {
@@ -508,9 +596,13 @@ describe('usablVitePluginFromConfig', () => {
     const response = makeResponse();
 
     await expect(
-      middleware({ method: 'GET', url: '/__usabl/result' }, response, () => {
-        // middleware should throw before next() on this endpoint
-      }),
+      middleware(
+        { method: 'GET', url: '/__usabl/result', headers: { host: 'localhost:5173' } },
+        response,
+        () => {
+          // middleware should throw before next() on this endpoint
+        },
+      ),
     ).rejects.toThrow('engine failed');
     expect(closeCalls).toBe(1);
   });
@@ -589,12 +681,17 @@ function makeResponse(): FakeResponse {
 }
 
 async function callMiddleware(
-  middleware: (req: { method?: string; url?: string }, res: FakeResponse, next: () => void) => void | Promise<void>,
+  middleware: (
+    req: { method?: string; url?: string; headers?: Record<string, string | string[] | undefined> },
+    res: FakeResponse,
+    next: () => void,
+  ) => void | Promise<void>,
   url: string,
+  headers: Record<string, string | string[] | undefined> = { host: 'localhost:5173' },
 ): Promise<FakeResponse> {
   const res = makeResponse();
   let nextCalled = false;
-  await middleware({ method: 'GET', url }, res, () => {
+  await middleware({ method: 'GET', url, headers }, res, () => {
     nextCalled = true;
   });
   expect(nextCalled).toBe(false);
@@ -603,9 +700,17 @@ async function callMiddleware(
 
 function getMiddleware(
   plugin: ReturnType<typeof usablVitePlugin>,
-): (req: { method?: string; url?: string }, res: FakeResponse, next: () => void) => Promise<void> | void {
+): (
+  req: { method?: string; url?: string; headers?: Record<string, string | string[] | undefined> },
+  res: FakeResponse,
+  next: () => void,
+) => Promise<void> | void {
   const middlewares: Array<
-    (req: { method?: string; url?: string }, res: FakeResponse, next: () => void) => void | Promise<void>
+    (
+      req: { method?: string; url?: string; headers?: Record<string, string | string[] | undefined> },
+      res: FakeResponse,
+      next: () => void,
+    ) => void | Promise<void>
   > = [];
   plugin.configureServer?.({
     middlewares: {

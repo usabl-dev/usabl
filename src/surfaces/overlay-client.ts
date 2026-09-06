@@ -367,7 +367,17 @@ export const overlayClientSource = `(() => {
     if (verdict === 'regression') return { key: 'regression', word: 'Regression', symbol: '✕' };
     if (verdict === 'not_covered') return { key: 'not-covered', word: 'Not covered', symbol: '?' };
     if (verdict === 'approval_required') return { key: 'approval', word: 'Approval required', symbol: '!' };
-    if (payload.exitCode === 0 && payload.coverage && payload.coverage.nothingToCheck === true) {
+    // Idle is the narrow case. The run must have produced a verdict that is exactly null, exited 0,
+    // and said outright that there was nothing to check. The check is strict null on purpose: an
+    // unknown verdict string, or a missing verdict field that reads as undefined, must fall through
+    // to no-verdict rather than borrow the calm "Nothing to check" from its coverage fields. That
+    // calm-grey-for-an-unknown-state read is the false green this product exists to stop.
+    if (
+      verdict === null &&
+      payload.exitCode === 0 &&
+      payload.coverage &&
+      payload.coverage.nothingToCheck === true
+    ) {
       return { key: 'idle', word: 'Nothing to check', symbol: '○' };
     }
     return { key: 'no-verdict', word: 'No verdict', symbol: '!' };
@@ -1404,12 +1414,17 @@ export const overlayClientSource = `(() => {
     // A second, visually hidden live region for the verdict itself. Without it a screen reader user
     // watching a fix loop hears nothing: the banner changes from regression to verified silently.
     // It is written only when the sentence actually changes, so a re-render does not repeat it.
+    //
+    // It lives on the shell, OUTSIDE the panel, on purpose. The panel is hidden while the overlay is
+    // collapsed, and a live region inside a hidden subtree is not in the accessibility tree, so its
+    // updates are never announced. Collapsed is the normal state during a fix loop, so a verdict
+    // going from regression to verified while collapsed must still be announced. Keeping the region
+    // on the always-present shell is what lets that happen.
     const verdictStatus = make('p', 'visually-hidden');
     verdictStatus.setAttribute('role', 'status');
     verdictStatus.setAttribute('aria-live', 'polite');
 
     panel.appendChild(header);
-    panel.appendChild(verdictStatus);
     panel.appendChild(liveStatus);
     panel.appendChild(body);
     state.liveStatus = liveStatus;
@@ -1424,6 +1439,8 @@ export const overlayClientSource = `(() => {
 
     shell.appendChild(badge);
     shell.appendChild(panel);
+    // Outside the panel so it keeps announcing while the panel is hidden and the overlay is collapsed.
+    shell.appendChild(verdictStatus);
     shadow.appendChild(style);
     shadow.appendChild(shell);
     document.body.appendChild(host);
@@ -1896,12 +1913,17 @@ export const overlayClientSource = `(() => {
     };
 
     moreButton.addEventListener('click', () => {
+      // The index where this page begins, captured before appendPage grows state.rows. The first row
+      // of the new page lives here.
+      const firstNewIndex = state.rows.length;
       appendPage();
       applyRowState();
       // Focus stays on the control the user pressed while more rows exist. When the last page lands
-      // the control disappears, so focus is moved to the first row that was just added.
+      // the control disappears, so focus moves to the FIRST row that was just added, not the last.
+      // Focusing the last row would let a forward Tab skip past every row between the old end and it,
+      // which is exactly the rows a keyboard user just asked to see.
       if (moreButton.hidden) {
-        const firstNew = state.rows[state.rows.length - 1];
+        const firstNew = state.rows[firstNewIndex];
         if (firstNew) {
           firstNew.button.focus();
         }
@@ -2086,7 +2108,18 @@ export const overlayClientSource = `(() => {
     const recheck = make('button', 'icon-button recheck-button', 'Check again');
     recheck.type = 'button';
     recheck.disabled = state.scanning;
-    recheck.addEventListener('click', () => requestRefresh());
+    recheck.addEventListener('click', () => {
+      // requestRefresh renders the scanning state synchronously, which rebuilds the header and
+      // replaces this very button. The rebuilt recheck button is disabled while a scan runs, so it
+      // cannot hold focus, and leaving focus where it was drops it to the document. Move focus
+      // deliberately to the panel, a stable region that is always present, so a keyboard user keeps
+      // their place and the next Tab starts from a known point.
+      requestRefresh();
+      const panel = host.shadowRoot.querySelector('.panel');
+      if (panel && !panel.hidden) {
+        panel.focus();
+      }
+    });
     controls.appendChild(recheck);
 
     const widthToggle = make('button', 'icon-button width-toggle', 'Wide');
@@ -2401,7 +2434,9 @@ export const overlayClientSource = `(() => {
       // to render it into nothing would only burn requests.
       return;
     }
-    refreshGeneration += 1;
+    // The generation was already advanced by requestRefresh the moment this run's intent arrived, so
+    // any earlier in-flight response is already superseded. Read the current generation and hold any
+    // rendering to it, so a later refresh landing while this run is mid-fetch supersedes this one too.
     const generation = refreshGeneration;
     const isCurrent = () => generation === refreshGeneration;
     renderScanning(host);
@@ -2428,7 +2463,14 @@ export const overlayClientSource = `(() => {
 
   // At most one request in flight and at most one waiting. A burst of saves or watcher events
   // collapses into one more read rather than one read per event.
+  //
+  // Advancing the generation here, the instant refresh intent arrives, is what makes a superseded
+  // response harmless. If we only advanced it when the queued run finally started, an in-flight
+  // response could still pass isCurrent() and render an older result over a newer one. By bumping the
+  // counter now, any response from the run already in flight fails isCurrent() and is dropped, so an
+  // old verified result can never overwrite a newer regression.
   function requestRefresh() {
+    refreshGeneration += 1;
     if (refreshRunning) {
       refreshQueued = true;
       return;

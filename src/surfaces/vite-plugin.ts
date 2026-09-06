@@ -75,8 +75,10 @@ export interface OverlayProjection {
   paidDownCount: number;
 }
 
+type IncomingHeaders = Record<string, string | string[] | undefined>;
+
 type Middleware = (
-  req: { method?: string; url?: string },
+  req: { method?: string; url?: string; headers?: IncomingHeaders },
   res: {
     statusCode: number;
     setHeader(name: string, value: string): void;
@@ -99,13 +101,101 @@ interface UsablServer {
   watcher?: UsablWatcher;
 }
 
+interface ResolvedServerAddress {
+  host?: string | boolean;
+  port?: number;
+}
+
 export interface UsablVitePlugin {
   name: string;
   enforce?: 'pre' | 'post';
   configureServer?: (server: UsablServer) => void;
-  configResolved?: (config: { command: string }) => void;
+  configResolved?: (config: { command: string; server?: ResolvedServerAddress }) => void;
   transformIndexHtml?: (html: string) => string | Promise<string>;
   transform?: (code: string, id: string) => { code: string; map: null } | null;
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
+// The hostname part of a Host header value, lowercased and without a port. IPv6 hosts arrive in
+// brackets, for example "[::1]:5173", and we keep the brackets so the compared value matches the
+// bracketed form callers write.
+function hostnameOf(hostHeader: string): string {
+  const trimmed = hostHeader.trim().toLowerCase();
+  if (trimmed.startsWith('[')) {
+    const close = trimmed.indexOf(']');
+    if (close !== -1) {
+      return trimmed.slice(0, close + 1);
+    }
+    return trimmed;
+  }
+  const colon = trimmed.lastIndexOf(':');
+  return colon === -1 ? trimmed : trimmed.slice(0, colon);
+}
+
+// The result projection exposes the absolute workspace root, source paths, import chains, guarded
+// paths, and findings. These handlers run before Vite validates the Host header and they end the
+// response, so without this check they answer a request aimed at the dev server from another origin
+// through DNS rebinding. Only a local host is allowed, plus whatever host the dev server was told to
+// bind to, and a cross-origin Origin header is rejected outright.
+function isLocalHostname(name: string, configuredHost: string | null): boolean {
+  const local = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+  if (local.has(name)) {
+    return true;
+  }
+  if (configuredHost !== null && name === configuredHost.toLowerCase()) {
+    return true;
+  }
+  return false;
+}
+
+function isRequestFromLocalHost(
+  headers: IncomingHeaders | undefined,
+  configuredHost: string | null,
+  configuredPort: number | null,
+): boolean {
+  const hostHeader = firstHeader(headers?.host);
+  if (hostHeader === undefined || hostHeader === '') {
+    // A missing Host header on HTTP/1.1 is malformed. Refuse rather than guess.
+    return false;
+  }
+  if (!isLocalHostname(hostnameOf(hostHeader), configuredHost)) {
+    return false;
+  }
+  const originHeader = firstHeader(headers?.origin);
+  if (originHeader !== undefined && originHeader !== '' && originHeader !== 'null') {
+    let originHost: string;
+    let originPort: number | null;
+    try {
+      const originUrl = new URL(originHeader);
+      originHost = originUrl.hostname.toLowerCase();
+      originPort = originUrl.port === '' ? null : Number(originUrl.port);
+    } catch {
+      return false;
+    }
+    // The Origin hostname arrives without brackets even for IPv6, so compare against the bracketed
+    // and unbracketed local forms both.
+    const originCandidates = new Set([originHost, '[' + originHost + ']']);
+    let originIsLocal = false;
+    for (const candidate of originCandidates) {
+      if (isLocalHostname(candidate, configuredHost)) {
+        originIsLocal = true;
+        break;
+      }
+    }
+    if (!originIsLocal) {
+      return false;
+    }
+    if (configuredPort !== null && originPort !== null && originPort !== configuredPort) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function toRepoRelativeSourcePath(workspaceRoot: string, id: string): string {
@@ -244,10 +334,25 @@ export function usablVitePlugin(opts: {
   let runOnce = singleFlight(opts.run);
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let injectSourceAttributes = false;
+  let configuredHost: string | null = null;
+  let configuredPort: number | null = null;
   const workspaceRoot = opts.workspaceRoot ?? '';
 
   const resetRun = (): void => {
     runOnce = singleFlight(opts.run);
+  };
+
+  const rejectNonLocal = (
+    req: { headers?: IncomingHeaders },
+    res: { statusCode: number; setHeader(name: string, value: string): void; end(chunk?: string): void },
+  ): boolean => {
+    if (isRequestFromLocalHost(req.headers, configuredHost, configuredPort)) {
+      return false;
+    }
+    res.statusCode = 403;
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    res.end('forbidden');
+    return true;
   };
 
   return {
@@ -259,18 +364,29 @@ export function usablVitePlugin(opts: {
     enforce: 'pre',
     configResolved(config) {
       injectSourceAttributes = config.command === 'serve';
+      const host = config.server?.host;
+      // A string host is a specific bind address. true means all interfaces and false means
+      // localhost, neither of which names an extra allowed host, so only a string is captured.
+      configuredHost = typeof host === 'string' ? host.toLowerCase() : null;
+      configuredPort = typeof config.server?.port === 'number' ? config.server.port : null;
     },
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const method = req.method ?? 'GET';
         const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
         if (method === 'GET' && pathname === '/__usabl/client.js') {
+          if (rejectNonLocal(req, res)) {
+            return;
+          }
           res.statusCode = 200;
           res.setHeader('content-type', 'application/javascript; charset=utf-8');
           res.end(overlayClientModuleSource());
           return;
         }
         if (method === 'GET' && pathname === '/__usabl/result') {
+          if (rejectNonLocal(req, res)) {
+            return;
+          }
           const result = await runOnce();
           const projected = projectOverlay(result, opts.workspaceRoot ?? null);
           res.statusCode = 200;
