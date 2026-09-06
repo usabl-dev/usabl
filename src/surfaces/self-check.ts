@@ -4,7 +4,7 @@
  * It must never gate, mint a verdict, or return a process-failing exit code.
  */
 import type { Result, UsablConfig } from '../contracts/index.js';
-import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
+import { SELF_CHECK_MESSAGE_BUDGET, assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import {
   discloseGaps,
   fixOrAbsence,
@@ -13,7 +13,7 @@ import {
 } from '../output/disclosure.js';
 import {
   applyNoiseBudget,
-  formatCollapsedGroupHeadline,
+  formatCollapsedGroupHeadlineWithoutScreen,
   resolveNoiseBudgetDefault,
   type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
@@ -60,7 +60,9 @@ function pushSourcePieces(
   }
 }
 
-// A group whose free-text fields are bounded for printing. The count is left alone.
+// A group whose free-text fields are bounded for printing. The count is left alone. Layer and
+// rule are printed outside the frame because the first-party providers author them; the screen
+// id can come from a route literal in the application, so it is printed inside the frame.
 function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
   return {
     ...group,
@@ -117,7 +119,8 @@ export function projectSelfCheck(
     scaffold.push('Barriers:');
     for (const raw of view.groups) {
       const group = boundGroup(raw);
-      scaffold.push(`- ${formatCollapsedGroupHeadline(group)}`);
+      scaffold.push(`- ${formatCollapsedGroupHeadlineWithoutScreen(group)}`);
+      pieces.push(`screen (${group.rule}): ${group.screenId}`);
       pushSourcePieces(pieces, group.representative, ` (${group.rule})`);
       pieces.push(
         `experience (${group.rule}): ${boundField(group.representative.whatUserExperiences, 'experience')}`,
@@ -135,7 +138,15 @@ export function projectSelfCheck(
     pieces.push(...gapPieces);
   }
 
-  const message = assembleBoundedMessage({ scaffold, keep, pieces, frame: frameUntrustedBlock });
+  // This surface prints a source or candidates piece per group on top of what the stop hook
+  // prints, so it has its own budget. Nothing is dropped at the default noise budget.
+  const message = assembleBoundedMessage({
+    scaffold,
+    keep,
+    pieces,
+    frame: frameUntrustedBlock,
+    budget: SELF_CHECK_MESSAGE_BUDGET,
+  });
 
   return {
     advisoryExitCode: 0,

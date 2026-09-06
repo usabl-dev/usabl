@@ -123,14 +123,20 @@
   an assistant's context on its own. A shortened field ends with
   `[shortened, N characters omitted]` so the cut is visible, and a page-supplied
   copy of that note is rewritten so only the engine can emit the real one.
-  Verdict words, exit codes, and counts are never shortened. The whole Stop hook
-  and self-check message is then held to 13,000 characters: whole lines are
-  dropped from the end, never the verdict line, the summary, or the next step,
-  and never inside the untrusted frame, with a closing note saying how many
-  lines went. At the default noise budget nothing is dropped.
+  Verdict words, exit codes, and counts are never shortened. The whole message is
+  then held to a budget sized from those caps, 15,000 characters for the Stop
+  hook and 19,000 for the self-check, which also prints a source or candidates
+  line per group: whole lines are dropped from the end, never the verdict line,
+  the summary, or the next step, and never inside the untrusted frame, with a
+  closing note saying how many lines went. At the default noise budget nothing is
+  dropped on either surface, even with every field oversized.
 - The self-check prints a finding's source location inside the untrusted frame.
   A renderer-tier source mapping reads its file and line from attributes on the
   page, so the page can choose that text, and it was printed as trusted scaffold.
+- The Stop hook and the self-check print a grouped finding's screen id inside
+  the untrusted frame, as `screen (rule): id`, and the group headline names only
+  status, severity, layer, and rule. The router fallback derives a screen id from
+  a route literal in the application, so a page can choose it.
 
 ## 0.2.1 - 2026-09-01
 

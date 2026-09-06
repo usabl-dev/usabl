@@ -54,24 +54,59 @@ export const TEXT_CAPS = {
 export type TextCap = keyof typeof TEXT_CAPS;
 
 /**
- * The whole agent-facing message, in UTF-16 code units. A few thousand tokens for a model
- * reader. At the default noise budget the message fits with every field oversized and nothing
- * is dropped; the bound exists for an operator-raised budget and for anything not foreseen.
+ * The whole stop-hook message, in UTF-16 code units. A few thousand tokens for a model reader.
+ *
+ * Sized from the caps so that at the default noise budget the message fits with every field
+ * oversized and nothing is dropped; the bound exists for an operator-raised budget and for
+ * anything not foreseen. The default worst case is five rule groups and five gap entries (four
+ * states plus one unrecognized), every free-text field over its cap and carrying a note of about
+ * forty characters. Opening lines: about 130 for the verdict, 455 for the summary, 140 for the
+ * next step. Five headlines at about 225 each and the hint: about 1,250. Per group inside the
+ * frame: screen about 250, experience about 575, fix about 770, so about 8,000 for five. Five gap
+ * entries at about 740: about 3,700. Frame markers 106. That sums to about 13,800; 15,000 leaves
+ * room for longer omission counts and labels.
  */
-export const AGENT_MESSAGE_BUDGET = 13_000;
+export const AGENT_MESSAGE_BUDGET = 15_000;
+
+/**
+ * The whole self-check message. The self-check prints everything the stop hook prints plus an
+ * advisory line, a meaning line, and one source or candidates piece per group, which is about
+ * 680 more per group at the candidates cap, so about 3,500 more at five groups. 19,000 keeps the
+ * same margin as the stop hook.
+ */
+export const SELF_CHECK_MESSAGE_BUDGET = 19_000;
 
 // What a page-supplied copy of the note is replaced with, so only this unit can emit the real
 // one. Substitution rather than escaping, for the same reason the frame markers are substituted:
 // the reader is a language model, and an escaped marker still reads as the marker.
-const FORGED_NOTE = /\[shortened\b/giu;
 const REMOVED_NOTE = '[REDACTED SHORTENED MARKER';
+
+// The characters a reader cannot see. A note with one of these planted between two of its letters
+// renders exactly like the real note, so the match looks through them. The set is the one the
+// frame-marker scrub uses: Unicode's default-ignorable code points (joiners, variation selectors,
+// the tag block), the direction controls, the C0 and C1 controls, and the two line separators.
+// Taken from Unicode properties rather than a list, because a list falls behind each release.
+const LOOK_THROUGH = '[\\p{Default_Ignorable_Code_Point}\\p{Bidi_Control}\\p{Cc}\\u2028\\u2029]*';
+
+// Both real notes open with this word. Built from the literal so the pattern and the note cannot
+// drift apart: each character of the word may be preceded by any run of look-through characters.
+const NOTE_WORD = '[shortened';
+const FORGED_NOTE = new RegExp(
+  Array.from(NOTE_WORD, (char) => `${LOOK_THROUGH}${char === '[' ? '\\[' : char}`).join('').replace(/^.*?\\\[/u, '\\['),
+  'giu',
+);
 
 /**
  * Replaces a page-supplied shortened note so it cannot pass for a real one.
  *
  * Runs on every field before it is bounded, so the only real note in the output is the one
  * appended here. Applied whether or not the field is over its cap: a forged note under the cap
- * is the case that matters.
+ * is the case that matters. The whole matched span goes, invisible characters included, so the
+ * replacement is one clean literal and nothing planted inside the word survives to rejoin it.
+ *
+ * Callers scrub first. A note split by a NUL or an escape sequence is the neutralizer's job, and
+ * it rejoins the halves before this runs; this then catches what the neutralizer keeps on
+ * purpose, the characters that carry meaning in real text but draw nothing.
  */
 export function removeForgedNotes(text: string): string {
   return text.replace(FORGED_NOTE, REMOVED_NOTE);
@@ -120,12 +155,17 @@ function noteFor(omitted: number): string {
 /**
  * Assembles scaffold, frame, and a closing note so the whole message fits the budget.
  *
- * Whole lines are dropped from the end, framed pieces first and trailing scaffold lines after,
- * until the message fits. The first `keep` scaffold lines are never dropped, and each of them is
- * bounded per field, so the result is a proven bound as long as those lines plus the note fit,
- * which they do by a wide margin. The frame is rebuilt from the surviving pieces, so it always
- * opens once and closes once and no piece is ever cut. When anything is dropped, the last line
- * says how many lines went and where to find them.
+ * A message that fits is returned as it is. Otherwise whole lines are dropped from the end,
+ * framed pieces first and trailing scaffold lines after, until the message fits. The first
+ * `keep` scaffold lines are never dropped. The frame is rebuilt from the surviving pieces, so it
+ * always opens once and closes once and no piece is ever cut. When anything is dropped, the last
+ * line says how many lines went and where to find them.
+ *
+ * One edge is not enforced: when the `keep` lines alone exceed the budget, they are returned
+ * whole and the message is over budget. Every surface caps the free text in those lines and the
+ * rest of each is fixed wording, so at the production budget this cannot happen; a test holds
+ * the edge so a change to either side is noticed. The stop hook decides `block` before it builds
+ * the message, so even there the decision is unaffected.
  */
 export function assembleBoundedMessage(input: BoundedMessageInput): string {
   const budget = input.budget ?? AGENT_MESSAGE_BUDGET;
@@ -143,6 +183,12 @@ export function assembleBoundedMessage(input: BoundedMessageInput): string {
     }
     return lines.join('\n');
   };
+
+  // A message that fits keeps every line. The note is reserved only once a drop is certain.
+  const whole = render();
+  if (whole.length <= budget) {
+    return whole;
+  }
 
   const canDrop = (): boolean => pieces.length > 0 || scaffold.length > input.keep;
   const drop = (): string => (pieces.length > 0 ? pieces.pop()! : scaffold.pop()!);

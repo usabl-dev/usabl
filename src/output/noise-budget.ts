@@ -263,6 +263,21 @@ export function formatCollapsedGroupHeadline(group: CollapsedFindingGroup): stri
   return `[${group.status} ${group.severity}] ${group.screenId}/${group.layer}/${group.rule}${countSuffix}`;
 }
 
+/**
+ * The group headline without the screen id, for surfaces whose reader is a language model.
+ *
+ * Those surfaces print the headline as trusted scaffold outside the untrusted frame. A screen id
+ * is not always usabl's own word: the router fallback derives it from a route literal in the
+ * application, so a page can choose it. Status and severity are usabl's vocabulary, and layer
+ * and rule are authored by the providers in the first-party stack, so they stay here; the screen
+ * id goes inside the frame as data. The count is kept, so the headline still says how many
+ * findings it stands for.
+ */
+export function formatCollapsedGroupHeadlineWithoutScreen(group: CollapsedFindingGroup): string {
+  const countSuffix = group.count > 1 ? ` (×${group.count})` : '';
+  return `[${group.status} ${group.severity}] ${group.layer}/${group.rule}${countSuffix}`;
+}
+
 export function parseNoiseBudgetConfig(raw: unknown): NoiseBudgetConfig | undefined {
   if (raw === undefined) {
     return undefined;

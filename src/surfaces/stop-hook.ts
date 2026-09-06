@@ -13,7 +13,7 @@ import {
 } from '../output/disclosure.js';
 import {
   applyNoiseBudget,
-  formatCollapsedGroupHeadline,
+  formatCollapsedGroupHeadlineWithoutScreen,
   resolveNoiseBudgetDefault,
   type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
@@ -94,6 +94,11 @@ function notEvaluatedPieces(result: Result): string[] {
 /**
  * A group whose free-text fields are bounded for printing. The count is left alone, so a
  * headline can name a rule that was cut short and still say how many findings it stands for.
+ *
+ * Layer and rule are printed outside the frame. In the first-party provider stack both are
+ * authored by the providers, never read from the page, so they are trusted scaffold here. The
+ * screen id is not: the router fallback derives it from a route literal in the application, so
+ * it is printed inside the frame as a piece and never in the headline.
  */
 function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
   return {
@@ -144,7 +149,8 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
     scaffold.push('Barriers:');
     for (const raw of view.groups) {
       const group = boundGroup(raw);
-      scaffold.push(`- ${formatCollapsedGroupHeadline(group)}`);
+      scaffold.push(`- ${formatCollapsedGroupHeadlineWithoutScreen(group)}`);
+      pieces.push(`screen (${group.rule}): ${group.screenId}`);
       pieces.push(
         `experience (${group.rule}): ${boundField(group.representative.whatUserExperiences, 'experience')}`,
       );

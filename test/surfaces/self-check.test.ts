@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Result, UsablConfig } from '../../src/contracts/index.js';
 import { parseCliArgs } from '../../src/surfaces/cli.js';
 import { projectSelfCheck } from '../../src/surfaces/self-check.js';
-import { AGENT_MESSAGE_BUDGET } from '../../src/output/bounded-text.js';
+import { SELF_CHECK_MESSAGE_BUDGET } from '../../src/output/bounded-text.js';
 import { testConfig } from '../helpers.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
@@ -111,28 +111,62 @@ describe('projectSelfCheck', () => {
     expect(projected.message.length).toBeLessThan(2_000);
   });
 
-  it('holds the message budget as a real bound when an operator raises the noise budget', () => {
-    // Over every cap, and small enough that two hundred findings scrub quickly.
-    const huge = (seed: string) => `${seed} ${'x'.repeat(2_000)}`;
-    const findings = Array.from({ length: 200 }, (_, index) => ({
+  // Over every cap, and small enough that two hundred findings scrub quickly.
+  const huge = (seed: string) => `${seed} ${'x'.repeat(2_000)}`;
+  const oversizedFindings = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
       rule: huge(`rule-${index}`),
-      layer: huge('layer'),
+      layer: huge(`layer-${index}`),
       severity: 'serious' as const,
       evidenceClass: 'deterministic' as const,
-      screenId: huge('screen'),
+      screenId: huge(`screen-${index}`),
       elementPath: 'button',
       elementName: 'Save',
       role: 'button',
-      whatUserExperiences: huge('experience'),
+      whatUserExperiences: huge(`experience-${index}`),
       why: '',
-      fix: huge('fix'),
+      fix: huge(`fix-${index}`),
       evidence: {},
       confidence: 'fail' as const,
       elementKey: `k-${index}`,
       identityBasis: 'name' as const,
       status: 'new' as const,
-      appSource: { tier: 'renderer' as const, file: huge('file'), line: 1, candidates: [huge('file')] },
+      // No file, two candidates: the longest source form this surface prints per group.
+      appSource: { tier: 'coverage' as const, file: null, line: null, candidates: [huge(`cand-${index}-a`), huge(`cand-${index}-b`)] },
     }));
+  const states = ['capability-denied', 'skipped', 'not-covered', 'unresolved', 'mystery'] as const;
+  const oversizedGaps = states.flatMap((state) => [
+    { ref: huge(`ref-${state}`), state, reason: huge(`reason-${state}`) },
+    { ref: huge(`ref-${state}-2`), state, reason: huge(`reason-${state}-2`) },
+  ]) as unknown as Result['coverage']['gaps'];
+
+  it('fits the whole message in its budget at the default noise budget with every field oversized, dropping nothing', () => {
+    // Worst case at the default budget: five rule groups shown, each with an oversized rule,
+    // screen, layer, experience, fix, and candidate list; every gap state present with an
+    // oversized ref and reason, plus one unrecognized state; and an oversized summary.
+    const projected = projectSelfCheck(
+      baseResult({
+        verdict: 'regression',
+        exitCode: 1,
+        summary: huge('regression: 8 gating finding(s), 10 gap(s)'),
+        findings: oversizedFindings(8),
+        coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: oversizedGaps, nothingToCheck: false },
+      }),
+    );
+
+    expect(projected.message).toContain('Barriers:');
+    expect(projected.message.length).toBeLessThanOrEqual(SELF_CHECK_MESSAGE_BUDGET);
+    expect(projected.message).not.toContain('shortened to fit');
+    expect(projected.message.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
+    for (const state of states) {
+      expect(projected.message).toContain(`- [${state === 'mystery' ? 'unrecognized' : state}], and 1 more with this state: ref-${state}`);
+    }
+    expect(projected.message.match(/^screen \(rule-\d/gm)?.length).toBe(5);
+    expect(projected.message.match(/^candidates \(rule-\d/gm)?.length).toBe(5);
+  });
+
+  it('holds the message budget as a real bound when an operator raises the noise budget', () => {
+    const findings = oversizedFindings(200);
     // At 20 groups the headlines fit and the frame survives with fewer pieces. At 200 the
     // headlines alone exceed the budget, so every piece goes and the frame is absent rather
     // than broken.
@@ -146,7 +180,7 @@ describe('projectSelfCheck', () => {
       const lines = projected.message.split('\n');
       const opens = projected.message.split('[BEGIN UNTRUSTED PAGE TEXT').length - 1;
       const closes = projected.message.split('[END UNTRUSTED PAGE TEXT]').length - 1;
-      expect(projected.message.length).toBeLessThanOrEqual(AGENT_MESSAGE_BUDGET);
+      expect(projected.message.length).toBeLessThanOrEqual(SELF_CHECK_MESSAGE_BUDGET);
       expect(lines[0]).toBe('usabl self-check: REGRESSION (exit 1)');
       expect(lines[1]).toBe('advisory: the stop hook is the gate.');
       expect(lines[3]!.startsWith('Gate summary: regression: 200 gating finding(s)')).toBe(true);

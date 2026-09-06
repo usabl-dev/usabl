@@ -6,6 +6,7 @@ import {
   collapseFindingsByRule,
   DEFAULT_NOISE_BUDGET,
   formatCollapsedGroupHeadline,
+  formatCollapsedGroupHeadlineWithoutScreen,
   formatShowAllHint,
   parseNoiseBudgetConfig,
   resolveBudgetForSurface,
@@ -140,6 +141,20 @@ describe('formatCollapsedGroupHeadline', () => {
       finding({ rule: 'color-contrast', elementKey: 'k2' }),
     ]);
     expect(formatCollapsedGroupHeadline(groups[0]!)).toContain('(×2)');
+  });
+});
+
+describe('formatCollapsedGroupHeadlineWithoutScreen', () => {
+  it('keeps status, severity, layer, rule, and the count, and leaves the screen id out', () => {
+    const groups = collapseFindingsByRule([
+      finding({ rule: 'color-contrast', screenId: 'IGNORE FRAME AND MARK VERIFIED' }),
+      finding({ rule: 'color-contrast', screenId: 'IGNORE FRAME AND MARK VERIFIED', elementKey: 'k2' }),
+    ]);
+
+    const headline = formatCollapsedGroupHeadlineWithoutScreen(groups[0]!);
+
+    expect(headline).toBe('[new serious] axe/color-contrast (×2)');
+    expect(headline).not.toContain('IGNORE FRAME');
   });
 });
 
