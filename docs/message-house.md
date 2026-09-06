@@ -25,7 +25,7 @@ promise; differentiator #1 message explains how we keep it.
 
 | Audience | One line |
 |---|---|
-| **Judge (general)** | The first open proof engine that stops AI from calling inaccessible UI done, with a receipt you can re-check when the change verifies. |
+| **Judge (general)** | An open proof engine whose Stop hook blocks an AI's first stop on a blocking verdict, with a receipt you can re-check when the change verifies. |
 | **Judge (technical)** | Deterministic Playwright + axe + keyboard walk + PatternFly rules; AI proposes fixes, the gate decides pass/fail. |
 | **Judge (business)** | Catches accessibility regressions before VPAT evidence and customer escalations - without claiming compliance. |
 | **Judge (accessibility expert)** | Mechanical layers handle the repeatable checks; your expertise stays on judgment calls, with repro scripts attached. |
