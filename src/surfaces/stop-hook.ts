@@ -4,6 +4,7 @@
  * It must never mint verdicts or bypass gate ownership of verdict authority.
  */
 import type { Result, UsablConfig, Verdict } from '../contracts/index.js';
+import { boundField } from '../output/bounded-text.js';
 import {
   discloseGaps,
   fixOrAbsence,
@@ -14,6 +15,7 @@ import {
   applyNoiseBudget,
   formatCollapsedGroupHeadline,
   resolveNoiseBudgetDefault,
+  type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
 import { frameUntrustedBlock, scrubResult } from './scrub.js';
@@ -48,12 +50,14 @@ const NEXT_STEP: Record<string, string> = {
 /**
  * The lines every stop-hook message opens with: the verdict word and exit code, what that means
  * for the change, and the gate's own summary with its counts. Trusted scaffold, never framed.
+ * The summary is bounded because a crash summary carries the error message, and only free text
+ * is cut: the verdict word and exit code come from the verdict line, never from the summary.
  */
 function verdictScaffold(result: Result, meaningSuffix: string): string[] {
   const verdict = describeVerdict(result);
   return [
     `${formatVerdictWord(verdict)}: ${meaningSuffix}${verdict.meaning}`,
-    `Gate summary: ${result.summary}`,
+    `Gate summary: ${boundField(result.summary, 'summary')}`,
   ];
 }
 
@@ -68,15 +72,36 @@ function verdictScaffold(result: Result, meaningSuffix: string): string[] {
  * Each line pairs the gap headline, which is trusted usabl-chosen text, with the page-derived
  * detail, so the model can still map each reason to its state inside the single frame.
  *
- * The length is bounded by construction. There are four gap states, so there are at most four
- * entries, and no assembled string is ever cut to fit. Cutting could remove a closing frame
- * marker and hand the model an unterminated block of untrusted text.
+ * The number of entries is bounded by construction: there are four gap states plus one entry
+ * for unrecognized states, so at most five. The length of each entry is bounded per field, ref
+ * and reason, before the headline with its count is attached, so a provider error the size of a
+ * stack trace cannot fill the model's context and the count is never cut. No assembled string
+ * is ever cut to fit. Cutting could remove a closing frame marker and hand the model an
+ * unterminated block of untrusted text.
  */
 function notEvaluatedPieces(result: Result): string[] {
   const disclosures = discloseGaps(result.coverage.gaps);
-  return disclosures.map(
-    (disclosure) => `- ${gapHeadline(disclosure)}: ${gapDetail(disclosure)}`,
-  );
+  return disclosures.map((disclosure) => {
+    const detail = gapDetail({
+      ...disclosure,
+      ref: boundField(disclosure.ref, 'gapRef'),
+      reason: boundField(disclosure.reason, 'gapReason'),
+    });
+    return `- ${gapHeadline(disclosure)}: ${detail}`;
+  });
+}
+
+/**
+ * A group whose free-text fields are bounded for printing. The count is left alone, so a
+ * headline can name a rule that was cut short and still say how many findings it stands for.
+ */
+function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
+  return {
+    ...group,
+    screenId: boundField(group.screenId, 'screenId'),
+    layer: boundField(group.layer, 'layer'),
+    rule: boundField(group.rule, 'rule'),
+  };
 }
 
 /**
@@ -104,19 +129,24 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   const gating = result.findings.filter((finding) => finding.evidenceClass === 'deterministic');
   const view = applyNoiseBudget(gating, budget, 'gating findings');
 
+  // Each free-text field is bounded on its own before it is labelled and framed, so a huge page
+  // string shortens with a visible note and the counts around it stay whole.
   if (view.groups.length === 1 && !view.collapsed) {
-    const group = view.groups[0]!;
+    const group = boundGroup(view.groups[0]!);
     const ruleLabel =
       group.count > 1 ? `${group.rule} (×${group.count})` : group.rule;
     scaffold.push(`Rule: ${ruleLabel}`);
-    pieces.push(`experience: ${group.representative.whatUserExperiences}`);
-    pieces.push(`fix: ${fixOrAbsence(group.representative)}`);
+    pieces.push(`experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`);
+    pieces.push(`fix: ${boundField(fixOrAbsence(group.representative), 'fix')}`);
   } else if (view.groups.length > 0) {
     scaffold.push('Barriers:');
-    for (const group of view.groups) {
+    for (const raw of view.groups) {
+      const group = boundGroup(raw);
       scaffold.push(`- ${formatCollapsedGroupHeadline(group)}`);
-      pieces.push(`experience (${group.rule}): ${group.representative.whatUserExperiences}`);
-      pieces.push(`fix (${group.rule}): ${fixOrAbsence(group.representative)}`);
+      pieces.push(
+        `experience (${group.rule}): ${boundField(group.representative.whatUserExperiences, 'experience')}`,
+      );
+      pieces.push(`fix (${group.rule}): ${boundField(fixOrAbsence(group.representative), 'fix')}`);
     }
     if (view.showAllHint !== null) {
       scaffold.push(view.showAllHint);

@@ -4,6 +4,7 @@
  * It must never gate, mint a verdict, or return a process-failing exit code.
  */
 import type { Result, UsablConfig } from '../contracts/index.js';
+import { boundField } from '../output/bounded-text.js';
 import {
   discloseGaps,
   fixOrAbsence,
@@ -14,6 +15,7 @@ import {
   applyNoiseBudget,
   formatCollapsedGroupHeadline,
   resolveNoiseBudgetDefault,
+  type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
@@ -27,21 +29,38 @@ import { frameUntrustedBlock, scrubResult } from './scrub.js';
  */
 function notEvaluatedPieces(result: Result): string[] {
   const disclosures = discloseGaps(result.coverage.gaps);
-  return disclosures.map(
-    (disclosure) => `- ${gapHeadline(disclosure)}: ${gapDetail(disclosure)}`,
-  );
+  // Ref and reason are bounded on their own, before the headline with its count is attached.
+  return disclosures.map((disclosure) => {
+    const detail = gapDetail({
+      ...disclosure,
+      ref: boundField(disclosure.ref, 'gapRef'),
+      reason: boundField(disclosure.reason, 'gapReason'),
+    });
+    return `- ${gapHeadline(disclosure)}: ${detail}`;
+  });
 }
 
 // The source location is derived from usabl's own source mapping, not from page text, so it stays
-// in the scaffold outside the untrusted frame.
+// in the scaffold outside the untrusted frame. It is still bounded: a candidate list has no
+// upper bound of its own.
 function appendSourceScaffold(scaffold: string[], finding: Result['findings'][number]): void {
   if (finding.docsSource?.file) {
-    scaffold.push(`source: ${formatDocsSourceLocation(finding.docsSource)}`);
+    scaffold.push(`source: ${boundField(formatDocsSourceLocation(finding.docsSource), 'source')}`);
   } else if (finding.appSource?.file) {
-    scaffold.push(`source: ${formatAppSourceLocation(finding.appSource)}`);
+    scaffold.push(`source: ${boundField(formatAppSourceLocation(finding.appSource), 'source')}`);
   } else if (finding.appSource && finding.appSource.candidates.length > 0) {
-    scaffold.push(`candidates: ${finding.appSource.candidates.join(', ')}`);
+    scaffold.push(`candidates: ${boundField(finding.appSource.candidates.join(', '), 'candidates')}`);
   }
+}
+
+// A group whose free-text fields are bounded for printing. The count is left alone.
+function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
+  return {
+    ...group,
+    screenId: boundField(group.screenId, 'screenId'),
+    layer: boundField(group.layer, 'layer'),
+    rule: boundField(group.rule, 'rule'),
+  };
 }
 
 export function projectSelfCheck(
@@ -66,7 +85,7 @@ export function projectSelfCheck(
     `usabl self-check: ${formatVerdictWord(verdict)}`,
     'advisory: the stop hook is the gate.',
     verdict.meaning,
-    `Gate summary: ${safe.summary}`,
+    `Gate summary: ${boundField(safe.summary, 'summary')}`,
   ];
   const pieces: string[] = [];
   const budget = resolveNoiseBudgetDefault(config);
@@ -75,21 +94,26 @@ export function projectSelfCheck(
   const gating = safe.findings.filter((finding) => finding.evidenceClass === 'deterministic');
   const view = applyNoiseBudget(gating, budget, 'gating findings');
 
+  // Each free-text field is bounded on its own before it is labelled and framed, so a huge page
+  // string shortens with a visible note and the counts around it stay whole.
   if (view.groups.length === 1 && !view.collapsed) {
-    const group = view.groups[0]!;
+    const group = boundGroup(view.groups[0]!);
     const ruleLabel =
       group.count > 1 ? `${group.rule} (×${group.count})` : group.rule;
     scaffold.push(`Rule: ${ruleLabel}`);
     appendSourceScaffold(scaffold, group.representative);
-    pieces.push(`experience: ${group.representative.whatUserExperiences}`);
-    pieces.push(`fix: ${fixOrAbsence(group.representative)}`);
+    pieces.push(`experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`);
+    pieces.push(`fix: ${boundField(fixOrAbsence(group.representative), 'fix')}`);
   } else if (view.groups.length > 0) {
     scaffold.push('Barriers:');
-    for (const group of view.groups) {
+    for (const raw of view.groups) {
+      const group = boundGroup(raw);
       scaffold.push(`- ${formatCollapsedGroupHeadline(group)}`);
       appendSourceScaffold(scaffold, group.representative);
-      pieces.push(`experience (${group.rule}): ${group.representative.whatUserExperiences}`);
-      pieces.push(`fix (${group.rule}): ${fixOrAbsence(group.representative)}`);
+      pieces.push(
+        `experience (${group.rule}): ${boundField(group.representative.whatUserExperiences, 'experience')}`,
+      );
+      pieces.push(`fix (${group.rule}): ${boundField(fixOrAbsence(group.representative), 'fix')}`);
     }
     if (view.showAllHint !== null) {
       scaffold.push(view.showAllHint);

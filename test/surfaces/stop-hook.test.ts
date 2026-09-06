@@ -187,6 +187,144 @@ describe('evaluateStopDecision', () => {
     });
   });
 
+  describe('length bound on each field', () => {
+    const finding = (over: Partial<Result['findings'][number]>): Result['findings'][number] => ({
+      rule: 'color-contrast',
+      layer: 'axe',
+      severity: 'serious',
+      evidenceClass: 'deterministic',
+      screenId: 'clusters',
+      elementPath: 'button',
+      elementName: 'Save',
+      role: 'button',
+      whatUserExperiences: 'Low contrast text',
+      why: '',
+      fix: 'Raise contrast to 4.5:1',
+      evidence: {},
+      confidence: 'fail',
+      elementKey: 'k',
+      identityBasis: 'name',
+      status: 'new',
+      ...over,
+    });
+    const huge = (seed: string) => `${seed} ${'x'.repeat(50_000)}`;
+
+    it('shortens an oversized experience, fix, and gap reason with a visible note', () => {
+      const decision = evaluateStopDecision(
+        baseResult({
+          verdict: 'regression',
+          exitCode: 1,
+          summary: 'regression: 1 gating finding(s), 1 gap(s)',
+          findings: [finding({ whatUserExperiences: huge('EXPERIENCE'), fix: huge('FIX') })],
+          coverage: {
+            changedFiles: [],
+            affected: [],
+            unresolvedFiles: [],
+            gaps: [{ ref: 'http://127.0.0.1:5173/jobs', state: 'not-covered', reason: huge('REASON') }],
+            nothingToCheck: false,
+          },
+        }),
+        { stopHookActive: false },
+      );
+
+      expect(decision.block).toBe(true);
+      const notes = decision.message.match(/\[shortened, \d+ characters omitted\]/g) ?? [];
+      expect(notes.length).toBe(3);
+      // The start of each field survives, so the reader still learns the cause.
+      expect(decision.message).toContain('experience: EXPERIENCE');
+      expect(decision.message).toContain('fix: FIX');
+      expect(decision.message).toContain('http://127.0.0.1:5173/jobs: REASON');
+      // The frame still opens once and closes once, after every shortened piece.
+      expect(decision.message.split('[BEGIN UNTRUSTED PAGE TEXT').length).toBe(2);
+      expect(decision.message.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
+      expect(decision.message.trim().endsWith('[END UNTRUSTED PAGE TEXT]')).toBe(true);
+      expect(decision.message.length).toBeLessThan(3_000);
+    });
+
+    it('shortens an oversized crash summary but keeps the verdict word and exit code whole', () => {
+      const decision = evaluateStopDecision(
+        baseResult({ verdict: null, exitCode: 4, summary: huge('unhandled error: boom') }),
+        { stopHookActive: false },
+      );
+
+      expect(decision.message.startsWith('NO VERDICT: RUN FAILED (exit 4): ')).toBe(true);
+      expect(decision.message).toContain('Gate summary: unhandled error: boom');
+      expect(decision.message).toContain('characters omitted]');
+      expect(decision.message.length).toBeLessThan(1_000);
+    });
+
+    it('keeps a group count whole when the rule name is cut', () => {
+      const rule = `rule-${'r'.repeat(500)}`;
+      const decision = evaluateStopDecision(
+        baseResult({
+          verdict: 'regression',
+          exitCode: 1,
+          summary: 'regression: 3 gating finding(s)',
+          findings: [
+            finding({ rule, elementKey: 'a' }),
+            finding({ rule, elementKey: 'b' }),
+            finding({ rule, elementKey: 'c' }),
+          ],
+        }),
+        { stopHookActive: false },
+      );
+
+      expect(decision.message).toMatch(/Rule: rule-r+ \[shortened, \d+ characters omitted\] \(×3\)/);
+    });
+
+    it('leaves a normal message untouched: no note appears', () => {
+      const decision = evaluateStopDecision(
+        baseResult({
+          verdict: 'regression',
+          exitCode: 1,
+          summary: 'regression: 1 gating finding(s)',
+          findings: [finding({})],
+        }),
+        { stopHookActive: false },
+      );
+
+      expect(decision.message).not.toContain('shortened');
+      expect(decision.message).toContain('experience: Low contrast text');
+      expect(decision.message).toContain('fix: Raise contrast to 4.5:1');
+    });
+
+    it('stays under 13,000 characters at the default noise budget with every field oversized', () => {
+      // Worst case at the default budget: five rule groups shown, each with an oversized rule,
+      // screen, experience, and fix; every gap state present with an oversized ref and reason,
+      // plus one unrecognized state; and an oversized summary.
+      const findings = Array.from({ length: 8 }, (_, index) =>
+        finding({
+          rule: huge(`rule-${index}`),
+          screenId: huge(`screen-${index}`),
+          whatUserExperiences: huge(`experience-${index}`),
+          fix: huge(`fix-${index}`),
+          elementKey: `k-${index}`,
+        }),
+      );
+      const states = ['capability-denied', 'skipped', 'not-covered', 'unresolved', 'mystery'] as const;
+      const gaps = states.flatMap((state) => [
+        { ref: huge(`ref-${state}`), state, reason: huge(`reason-${state}`) },
+        { ref: huge(`ref-${state}-2`), state, reason: huge(`reason-${state}-2`) },
+      ]) as unknown as Result['coverage']['gaps'];
+      const decision = evaluateStopDecision(
+        baseResult({
+          verdict: 'regression',
+          exitCode: 1,
+          summary: huge('regression: 8 gating finding(s), 10 gap(s)'),
+          findings,
+          coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps, nothingToCheck: false },
+        }),
+        { stopHookActive: false },
+      );
+
+      expect(decision.block).toBe(true);
+      expect(decision.message).toContain('Barriers:');
+      expect(decision.message).toContain('for all 8 gating findings');
+      // The budget the caps in bounded-text.ts are sized for. Measured worst case: about 12,500.
+      expect(decision.message.length).toBeLessThan(13_000);
+    });
+  });
+
   it('frames page text and scrubs secret-looking values in block reasons', () => {
     const decision = evaluateStopDecision(
       baseResult({

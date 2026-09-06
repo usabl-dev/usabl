@@ -71,6 +71,44 @@ describe('projectSelfCheck', () => {
     expect(crash.message).toContain('Gate summary: unhandled error: read ECONNRESET');
   });
 
+  it('shortens an oversized experience and fix with a visible note and keeps one frame', () => {
+    const huge = (seed: string) => `${seed} ${'x'.repeat(50_000)}`;
+    const projected = projectSelfCheck(
+      baseResult({
+        verdict: 'regression',
+        exitCode: 1,
+        summary: 'regression: 1 gating finding(s)',
+        findings: [
+          {
+            rule: 'color-contrast',
+            layer: 'axe',
+            severity: 'serious',
+            evidenceClass: 'deterministic',
+            screenId: 'clusters',
+            elementPath: 'button',
+            elementName: 'Save',
+            role: 'button',
+            whatUserExperiences: huge('EXPERIENCE'),
+            why: '',
+            fix: huge('FIX'),
+            evidence: {},
+            confidence: 'fail',
+            elementKey: 'k',
+            identityBasis: 'name',
+            status: 'new',
+          },
+        ],
+      }),
+    );
+
+    const notes = projected.message.match(/\[shortened, \d+ characters omitted\]/g) ?? [];
+    expect(notes.length).toBe(2);
+    expect(projected.message).toContain('experience: EXPERIENCE');
+    expect(projected.message).toContain('fix: FIX');
+    expect(projected.message.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
+    expect(projected.message.length).toBeLessThan(2_000);
+  });
+
   it('follows the verdict line with what it means, then the gate summary', () => {
     const lines = projectSelfCheck(
       baseResult({ verdict: 'regression', exitCode: 1, summary: 'regression: 1 gating finding(s)' }),

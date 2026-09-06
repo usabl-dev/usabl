@@ -207,6 +207,75 @@ describe('formatSummary', () => {
     expect(formatSummary(baseResult({}))).not.toContain('barriers:');
   });
 
+  describe('length bound on each field', () => {
+    const huge = (seed: string) => `${seed} ${'x'.repeat(50_000)}`;
+    const oversized = baseResult({
+      verdict: 'regression',
+      exitCode: 1,
+      summary: 'regression: 1 gating finding(s), 1 gap(s)',
+      findings: [
+        {
+          rule: 'button-name',
+          layer: 'axe',
+          severity: 'serious',
+          evidenceClass: 'deterministic',
+          screenId: 'clusters',
+          elementPath: 'button',
+          elementName: 'Save',
+          role: 'button',
+          whatUserExperiences: huge('EXPERIENCE'),
+          why: '',
+          fix: huge('FIX'),
+          evidence: {},
+          confidence: 'fail',
+          elementKey: 'k',
+          identityBasis: 'name',
+          status: 'new',
+        },
+      ],
+      coverage: {
+        changedFiles: [],
+        affected: [],
+        unresolvedFiles: [],
+        gaps: [{ ref: 'http://127.0.0.1:5173/jobs', state: 'not-covered', reason: huge('REASON') }],
+        nothingToCheck: false,
+      },
+    });
+
+    it('shortens an oversized experience, fix, and gap reason with a visible note', () => {
+      const out = formatSummary(oversized);
+
+      const notes = out.match(/\[shortened, \d+ characters omitted\]/g) ?? [];
+      expect(notes.length).toBe(3);
+      expect(out).toContain('(serious): EXPERIENCE');
+      expect(out).toContain('fix: FIX');
+      expect(out).toContain('[not-covered] http://127.0.0.1:5173/jobs: REASON');
+      // The gap count and the verdict line are never cut.
+      expect(out).toContain('not evaluated: 1 gap(s)');
+      expect(out.split('\n')[0]).toBe('usabl: ✖ REGRESSION (exit 1)');
+      expect(out.length).toBeLessThan(3_000);
+    });
+
+    it('shortens an oversized crash summary but keeps the verdict line whole', () => {
+      const out = formatSummary(baseResult({ verdict: null, exitCode: 4, summary: huge('unhandled error: boom') }));
+
+      expect(out.split('\n')[0]).toBe('usabl: ! NO VERDICT: RUN FAILED (exit 4)');
+      expect(out).toContain('gate summary: unhandled error: boom');
+      expect(out).toContain('characters omitted]');
+      expect(out.length).toBeLessThan(1_000);
+    });
+
+    it('leaves a normal report untouched: no note appears', () => {
+      const out = formatSummary(
+        baseResult({ verdict: 'regression', exitCode: 1, findings: oversized.findings.map((f) => ({ ...f, whatUserExperiences: 'Low contrast', fix: 'Raise contrast' })) }),
+      );
+
+      expect(out).not.toContain('shortened');
+      expect(out).toContain('(serious): Low contrast');
+      expect(out).toContain('fix: Raise contrast');
+    });
+  });
+
   it('neutralizes page-derived finding text at terminal egress', () => {
     const r = baseResult({
       verdict: 'regression',

@@ -116,6 +116,14 @@
   then the next step. A block now tells the assistant what to do before it lists
   barriers. A failed run reads `NO VERDICT: RUN FAILED (exit 4)` on both
   surfaces; the self-check used to label it `IDLE`.
+- Every free-text field a surface prints is bounded in length: a finding's
+  experience and fix, a gap's ref and reason, a rule or screen name, a source
+  location, and the gate summary. The surfaces already bounded how many entries
+  they print, but one provider error the size of a stack trace could still fill
+  an assistant's context on its own. A shortened field ends with
+  `[shortened, N characters omitted]` so the cut is visible. Verdict words, exit
+  codes, and counts are never shortened. At the default noise budget the whole
+  Stop hook message stays under 13,000 characters.
 
 ## 0.2.1 - 2026-09-01
 

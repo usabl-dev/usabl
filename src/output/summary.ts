@@ -6,6 +6,7 @@
 import type { Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { discloseGaps, fixOrAbsence, gapDetail, gapHeadline } from './disclosure.js';
+import { boundField } from './bounded-text.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from './source-location.js';
 import { describeVerdict, formatVerdictLine } from './verdict-line.js';
 
@@ -39,12 +40,18 @@ function renderNotEvaluated(result: Result): string[] {
     return [];
   }
 
+  // Ref and reason are neutralized and bounded on their own, so the headline's count is never
+  // cut and a provider error the size of a stack trace prints its first lines and a note.
   return [
     `  not evaluated: ${gaps.length} gap(s)`,
-    ...discloseGaps(gaps).map(
-      (disclosure) =>
-        `    ${gapHeadline(disclosure)} ${neutralizePrintedText(gapDetail(disclosure))}`,
-    ),
+    ...discloseGaps(gaps).map((disclosure) => {
+      const detail = gapDetail({
+        ...disclosure,
+        ref: boundField(neutralizePrintedText(disclosure.ref), 'gapRef'),
+        reason: boundField(neutralizePrintedText(disclosure.reason), 'gapReason'),
+      });
+      return `    ${gapHeadline(disclosure)} ${detail}`;
+    }),
   ];
 }
 
@@ -70,7 +77,7 @@ export function formatSummary(result: Result): string {
   }
   // The gate's own summary, with its counts, printed whole and labelled so it reads as the
   // gate's sentence rather than as a second verdict.
-  lines.push(`  gate summary: ${neutralizePrintedText(result.summary)}`);
+  lines.push(`  gate summary: ${boundField(neutralizePrintedText(result.summary), 'summary')}`);
 
   const gating = result.findings.filter(
     (f) => f.evidenceClass === 'deterministic' && (f.status === 'new' || f.status === 'carried'),
@@ -78,31 +85,39 @@ export function formatSummary(result: Result): string {
   if (gating.length > 0) {
     lines.push('  barriers:');
   }
+  // Every free-text field is neutralized, then bounded on its own, so a huge page string prints
+  // its start and a visible note. Status and severity are usabl's own words and stay whole.
   for (const f of gating) {
-    const rule = neutralizePrintedText(f.rule);
-    const whatUserExperiences = neutralizePrintedText(f.whatUserExperiences);
+    const rule = boundField(neutralizePrintedText(f.rule), 'rule');
+    const screenId = boundField(neutralizePrintedText(f.screenId), 'screenId');
+    const layer = boundField(neutralizePrintedText(f.layer), 'layer');
+    const whatUserExperiences = boundField(neutralizePrintedText(f.whatUserExperiences), 'experience');
     // A docs finding carries a source mapping and a syntax-aware fix; prefer both so the author
     // reads their own markup, not the DOM. App findings have no docsSource and keep finding.fix.
     const source = f.docsSource;
     const appSource = f.appSource;
-    const fix = neutralizePrintedText(fixOrAbsence(f));
+    const fix = boundField(neutralizePrintedText(fixOrAbsence(f)), 'fix');
     lines.push(
-      `    [${f.status}] ${f.screenId} · ${f.layer}/${rule} (${f.severity}): ${whatUserExperiences}`,
+      `    [${f.status}] ${screenId} · ${layer}/${rule} (${f.severity}): ${whatUserExperiences}`,
     );
     if (source && source.file) {
-      lines.push(`        source: ${neutralizePrintedText(formatDocsSourceLocation(source))}`);
+      lines.push(`        source: ${boundField(neutralizePrintedText(formatDocsSourceLocation(source)), 'source')}`);
       if (source.candidates.length > 1) {
-        lines.push(`        candidates: ${source.candidates.map(neutralizePrintedText).join(', ')}`);
+        lines.push(
+          `        candidates: ${boundField(source.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
+        );
       }
     } else if (appSource) {
       if (appSource.file) {
-        lines.push(`        source: ${neutralizePrintedText(formatAppSourceLocation(appSource))}`);
+        lines.push(`        source: ${boundField(neutralizePrintedText(formatAppSourceLocation(appSource)), 'source')}`);
       }
       if (
         appSource.candidates.length > 0 &&
         (appSource.file === null || appSource.candidates.length > 1)
       ) {
-        lines.push(`        candidates: ${appSource.candidates.map(neutralizePrintedText).join(', ')}`);
+        lines.push(
+          `        candidates: ${boundField(appSource.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
+        );
       }
     }
     // Always printed. Most axe rules carry no curated note, so an absent fix is a common and
