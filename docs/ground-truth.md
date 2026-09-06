@@ -19,8 +19,8 @@ this document and the source disagree, the source is authoritative.
 it's usabl."
 
 **Problem.** AI tools now write a large share of UI screens, and they often build
-things a screen reader cannot use. Today's tools point out problems, but they do
-not confirm a fix actually worked, and nothing stops the AI from calling work "done"
+things a screen reader cannot use. A scanner on its own points out problems; it does
+not confirm a fix worked, and on its own it does not stop the AI from calling work "done"
 when a screen reader still cannot use it. Meanwhile, James uses a screen reader daily
 and waits releases for fixes. Priya builds the UI with great intentions but misses
 things because it is hard to know everything.
@@ -62,7 +62,7 @@ Every surface is a thin wrapper over one CLI entry point that returns `Result`.
 | Surface | Value (why it exists) |
 |---|---|
 | **CLI** | Run the full engine on demand: baseline a brownfield app, debug locally, CI invokes this, and the agent mid-task self-check (`usabl check` via Bash). Scanner-shaped entry, proof-engine semantics. |
-| **Stop hook** | Block the AI from calling work done without proof. The headline. |
+| **Stop hook** | Block the AI's first stop on a blocking verdict unless a one-use bypass was issued. The headline. |
 | **Overlay** | Show findings while hand-coding in the browser. Advises only. |
 | **CI / PR comment** | Team-visible gate on merge. Policy read from the trusted base ref. |
 | **Mid-task self-check** | Let the agent check itself while context is warm, before Stop. **CLI is sufficient** (Bash); MCP is an optional transport for discoverability (section 11.5). Stop still decides. |
@@ -75,7 +75,7 @@ loop is solid if discoverability matters.
 
 **One engine, two target surfaces.** The table above is about *where the engine runs*.
 On the other axis, *what it checks*, usabl covers two surfaces with the same engine and
-one verdict: the application UI (sections 7-8) and, since v0.2.1, the product's own
+one verdict, or none: the application UI (sections 7-8) and, since v0.2.1, the product's own
 documentation pages (sections 3, 7.6, 8). Documentation checking is not a second product
 or a separate command; it is the same `usabl check` run over a second set of scan targets.
 
@@ -83,10 +83,10 @@ or a separate command; it is the same `usabl check` run over a second set of sca
 
 ## 2. What is new
 
-The core new idea: almost every accessibility tool, including the new AI ones, scans
-and gives advice a human may or may not read. usabl's gate decides, and the stop hook
-can stop an assistant from calling work done while a machine-checkable barrier that is
-new against the reviewed floor stands on a touched surface. The overlay and the advisory lane still show findings without
+The core idea: a scanner gives advice a human may or may not read. usabl's gate decides,
+and the stop hook blocks the AI's first stop on a blocking verdict unless a one-use bypass
+was issued, so a machine-checkable barrier that is new against the reviewed floor on a
+touched surface is not called done in silence. The overlay and the advisory lane still show findings without
 blocking. That is display, not a second decision-maker.
 
 The specific things that are new, each against what exists today:
@@ -114,10 +114,10 @@ The specific things that are new, each against what exists today:
 What is honestly not new: general scanning exists, and blocking only new problems
 against a baseline exists. The CLI can be invoked like a scanner on an existing
 codebase (`usabl check`), but that is adoption plumbing, not the product claim. A
-scanner reports findings; usabl decides a verdict, diffs against a floor, and can
-stop work from being called done. The new part is putting all of that into one loop
-that gates an AI on evidence you can re-check and that is grounded in what a screen
-reader actually hears. That combination does not exist today.
+scanner reports findings; usabl decides a verdict, diffs against a floor, and its Stop
+hook can block the first stop on a blocking verdict. The design goal is putting all of
+that into one loop that gates an AI on evidence you can re-check and that is grounded in
+what a screen reader actually hears.
 
 ---
 
@@ -150,7 +150,7 @@ discoverability in Claude Code matters more than protecting hero-loop time (sect
 usabl checks two target surfaces, not one: the application UI and the product's own
 documentation pages. This shipped in v0.2.1, after the contest scope above was written,
 and it reuses the same engine rather than adding a second product. One `usabl check`
-run scans both surfaces and returns one verdict; there is no separate docs command and
+run scans both surfaces and returns one verdict, or none; there is no separate docs command and
 no `--docs` check flag.
 
 - Activation: a `usabl.docs.json` manifest. Absent means no docs surface; present means
@@ -703,7 +703,7 @@ calibration land in v0.3.0.
 The same providers run over product documentation pages when a scan target carries
 `profile: 'docs'` (`ProfileName = 'app' | 'docs'`; absent means `app`, and each
 provider reads `ctx.profile ?? 'app'`). The profile is threaded per scan target, so a
-single run scans app screens and doc pages together and the gate returns one verdict
+single run scans app screens and doc pages together and the gate returns one verdict, or none,
 across both. There is no separate docs engine and no separate command.
 
 Per-provider behavior on a docs page:
@@ -2278,7 +2278,7 @@ Credibility preflight before recording:
 | Evidence labels | On every Draft from day 1. Contest = all deterministic. |
 | Design intake in scope | Schema + YAML normalize in contest. Figma/CSV ingest is a seam. |
 | Reports in scope | Generate the three artifacts, bound to receipt. |
-| Documentation checking | Shipped in v0.2.1. Same engine, `profile: 'docs'`, activated by a `usabl.docs.json` manifest. One verdict across app and docs. |
+| Documentation checking | Shipped in v0.2.1. Same engine, `profile: 'docs'`, activated by a `usabl.docs.json` manifest. One verdict, or none, across app and docs. |
 
 ### Still to decide
 
