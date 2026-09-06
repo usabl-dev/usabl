@@ -109,7 +109,8 @@ each stage matters; this section is what a team actually types, in order.
 
 16. (automatic) A developer or an assistant changes interface code. The overlay shows
     findings live, the agent can self-check mid-task, and at stop time and PR time the
-    same engine runs on just the affected screens and returns one of the four verdicts.
+    same engine runs on just the affected screens and returns one of the four verdicts, or
+    none when nothing was checked or the run could not decide.
     `verified` mints a receipt bound to the exact code, and the Stop hook accepts a
     valid receipt without rescanning. `usabl bypass` is a loud, one-time escape that
     lets the next stop skip verification once.
@@ -178,7 +179,7 @@ read as a useful open tool, not a contest entry.
   surfaces are drafts to review, not measured facts.
 - `usabl check` as the first gate. `check` is the default command, so `usabl` with no
   positional runs it. It loads config, runs the deterministic providers, and prints
-  one verdict with each finding as a what, why, and fix line rather than a JSON dump.
+  the verdict, or the no-verdict outcome, with each finding as a what, why, and fix line rather than a JSON dump.
   `--json` is available for machine output.
 - Exit-code semantics so it works in scripts from run one: 0 for verified or idle,
   1 for a regression, 2 for approval required or a refusal, 3 for not covered, 4 for a
@@ -220,7 +221,7 @@ pin the engine and turn on branch protection.
 |---|---|---|---|
 | **CI gate** | `usabl install --ci` | Writes `.github/workflows/usabl-gate.yml`, a three-job draft (`gate-comment`, `usabl-policy`, and the required `usabl-required` aggregate). The engine ref is left as the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel for you to replace with a full commit SHA. | Sticky PR comment plus a fail-closed gate |
 | **Dev-server overlay** | `usabl install --overlay` | Wires the advisory Vite plugin into `vite.config.ts`. Writes a draft when no config exists, no-ops when already wired, and refuses to clobber a hand-tuned config. | Advisory findings badge while coding |
-| **Assistant hook** | `usabl install --claude` | Wires a Stop hook running `npx usabl stop-hook` into `.claude/settings.json`. | Blocks an assistant "done" on a blocking verdict |
+| **Assistant hook** | `usabl install --claude` | Wires a Stop hook running `npx usabl stop-hook` into `.claude/settings.json`. | Blocks the first stop on a blocking verdict unless a one-use bypass was issued |
 | **Assistant skill** | `usabl install --claude-skill` | Writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`, running the advisory `npx usabl check --self-check`. Writes a draft when absent, no-ops when it matches, and refuses to clobber a differing file. | The assistant can self-check mid-task without leaving the editor |
 | **Branch rule** | `usabl install --branch-rule` | Read-only verification through a `gh` GET that branch `main` requires the `usabl-required` status check. Writes nothing. | Confirms the gate is actually enforced |
 | **Playwright test** | `usabl/playwright` export | `assertUsablVerdict(result, allowed)` asserts a gated Result's verdict inside an existing Playwright suite. It reads a Result; it never mints one. | Reuse a check verdict in tests you already run |
