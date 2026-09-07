@@ -330,7 +330,7 @@ PatternFly team accepts the upstream rulepack proposal.
 
 | Channel | Purpose |
 |---|---|
-| **npm** (`usabl`) | Primary install path; run `npx usabl init` then `usabl check` |
+| **npm** (`usabl`) | Planned primary install path. Not yet published; today build the engine from source and link it, then run `usabl init` and `usabl check` |
 | **GitHub** (`usabl-dev/usabl`) | Source, issues, contributions, releases (Apache-2.0) |
 | **GitHub Action draft** | `usabl install --ci` writes the workflow; you pin the engine SHA and require the `usabl-required` check |
 
