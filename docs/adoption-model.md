@@ -72,7 +72,8 @@ each stage matters; this section is what a team actually types, in order.
    guarded paths are dirty, when the scan crashed, or when nothing matched the
    interface globs.
 9. (human) Review and merge the floor as an `approval_required` accept. After it lands,
-   carried debt does not gate and only new barriers do.
+   carried debt does not gate. New, unwaived barriers still do, and so do unconfirmed
+    coverage and later edits to the guarded policy files.
 10. (human, optional) Add waivers to `.usabl-waivers.json` for findings that need a
     temporary exception. Each waiver is fully typed and names `rule`, `surface`,
     `scope`, `reason`, `owner`, `approvedBy`, `created`, and `expires` (both timestamps
@@ -196,8 +197,9 @@ read as a useful open tool, not a contest entry.
 
 **Mitigation:** `usabl baseline` drafts the accepted accessibility floor into
 `.usabl-evidence.json` as a reviewable working-tree diff. It captures the current
-deterministic findings as the floor, so from then on carried debt does not gate and
-only new violations do. Baseline is an explicit, separate step; it never runs during a
+deterministic findings as the floor, so from then on carried debt does not gate. What
+still gates: a new, unwaived violation, coverage the run could not confirm, and an edit
+to a guarded policy file. Baseline is an explicit, separate step; it never runs during a
 check.
 
 **Success signal:** Reads a finding and says "yeah, that's real."
@@ -224,7 +226,7 @@ pin the engine and turn on branch protection.
 | **Assistant hook** | `usabl install --claude` | Wires a Stop hook running `npx usabl stop-hook` into `.claude/settings.json`. | Blocks the first stop on a blocking verdict unless a one-use bypass was issued |
 | **Assistant skill** | `usabl install --claude-skill` | Writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`, running the advisory `npx usabl check --self-check`. Writes a draft when absent, no-ops when it matches, and refuses to clobber a differing file. | The assistant can self-check mid-task without leaving the editor |
 | **Branch rule** | `usabl install --branch-rule` | Read-only verification through a `gh` GET that branch `main` requires the `usabl-required` status check. Writes nothing. | Confirms the gate is actually enforced |
-| **Playwright test** | `usabl/playwright` export | `assertUsablVerdict(result, allowed)` asserts a gated Result's verdict inside an existing Playwright suite. It reads a Result; it never mints one. | Reuse a check verdict in tests you already run |
+| **Playwright test** | `usabl/playwright` export | `assertUsablVerdict(result, allowed)` reads a gated Result, checks its verdict against the list you allow, and returns that answer as a `passed` flag with the verdict, the exit code, a summary line, and a scrubbed copy of the Result. Your test asserts on what it returns; the helper itself throws nothing and mints no verdict. | Reuse a check verdict in tests you already run |
 
 After wiring, `usabl doctor` gives a read-only projection of every surface and reports
 each as wired, missing, drifted, or unknown. It always exits 0 because it mints no
@@ -274,7 +276,8 @@ assistant loop.
 - Policy changes are unclear, so someone edits guarded files quietly
 - No shared view of progress, so the effort loses visibility
 
-**Mitigation:** The evidence floor means only new violations gate. Editing a guarded
+**Mitigation:** The evidence floor keeps carried debt from gating, so what gates is a new,
+unwaived violation, coverage the run could not confirm, or a guarded policy edit. Editing a guarded
 policy file (`usabl.config.json`, `usabl.routes.json`, `.usabl-evidence.json`,
 `.usabl-waivers.json`) so it diverges from the trusted ref forces an
 `approval_required` verdict, so acceptance bytes cannot be self-approved in the same
