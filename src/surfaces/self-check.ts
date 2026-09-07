@@ -87,18 +87,21 @@ export function projectSelfCheck(
   const verdict = describeVerdict(safe);
 
   // The trusted engine scaffold stays outside the frame: the verdict line, the advisory line,
-  // the meaning, the summary, the Rule line, and the Not evaluated header. Every page-derived
-  // piece, the source location included, goes inside one frame with a short inline label. The
-  // pieces are bounded per field, the whole message is bounded by dropping whole pieces, and
-  // the frame is rebuilt around what survives, so the single closing marker cannot be lost.
+  // the meaning, the Rule line, and the Not evaluated header, all engine constants. Every
+  // free-text piece goes inside one frame with a short inline label: the gate's summary first,
+  // because a summary can name a route-derived screen id or carry a raw error message and so is
+  // not always engine-only, then the source location, the experiences, the fixes, and the gap
+  // details. The frame label is being generalized to say untrusted text rather than page text,
+  // so engine free text sits there correctly. The pieces are bounded per field, the whole
+  // message is bounded by dropping whole pieces, never the summary, and the frame is rebuilt
+  // around what survives, so the single closing marker cannot be lost.
   const scaffold = [
     `usabl self-check: ${formatVerdictWord(verdict)}`,
     'advisory: the stop hook is the gate.',
     verdict.meaning,
-    `Gate summary: ${boundField(safe.summary, 'summary')}`,
   ];
   const keep = scaffold.length;
-  const pieces: string[] = [];
+  const pieces: string[] = [`engine summary: ${boundField(safe.summary, 'summary')}`];
   const budget = resolveNoiseBudgetDefault(config);
   // Gating (deterministic) findings only, as the stop hook does. Advisory findings never gate, so
   // the assistant reading this snapshot to reach verified does not act on them here.
@@ -144,6 +147,7 @@ export function projectSelfCheck(
     scaffold,
     keep,
     pieces,
+    keepPieces: 1,
     frame: frameUntrustedBlock,
     budget: SELF_CHECK_MESSAGE_BUDGET,
   });

@@ -137,6 +137,13 @@
   the untrusted frame, as `screen (rule): id`, and the group headline names only
   status, severity, layer, and rule. The router fallback derives a screen id from
   a route literal in the application, so a page can choose it.
+- The Stop hook and the self-check print the gate's summary inside the untrusted
+  frame, as `engine summary: ...`, on every state that prints it. The summary of
+  a run that never saw the application names the unseen screen ids, which the
+  router fallback can derive from a route literal, and a crash summary carries a
+  raw error message. The verdict line, its meaning, and the next step are engine
+  constants and stay outside. The summary piece is never dropped by the message
+  bound.
 
 ## 0.2.1 - 2026-09-01
 

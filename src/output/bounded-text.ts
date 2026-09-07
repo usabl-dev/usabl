@@ -141,8 +141,11 @@ export interface BoundedMessageInput {
   // verdict line, the summary, and the next step, each already bounded per field.
   scaffold: string[];
   keep: number;
-  // Page-derived pieces that go inside one frame, each already bounded per field.
+  // Free-text pieces that go inside one frame, each already bounded per field.
   pieces: string[];
+  // The first `keepPieces` pieces are never dropped. Surfaces open the frame with the gate's
+  // summary and keep it, so a reader always learns what the gate said. Defaults to none.
+  keepPieces?: number;
   // Builds the single frame around the pieces. Called with the pieces that survive.
   frame: (pieces: string[]) => string;
   budget?: number;
@@ -157,11 +160,12 @@ function noteFor(omitted: number): string {
  *
  * A message that fits is returned as it is. Otherwise whole lines are dropped from the end,
  * framed pieces first and trailing scaffold lines after, until the message fits. The first
- * `keep` scaffold lines are never dropped. The frame is rebuilt from the surviving pieces, so it
- * always opens once and closes once and no piece is ever cut. When anything is dropped, the last
- * line says how many lines went and where to find them.
+ * `keep` scaffold lines and the first `keepPieces` pieces are never dropped. The frame is
+ * rebuilt from the surviving pieces, so it always opens once and closes once and no piece is
+ * ever cut. When anything is dropped, the last line says how many lines went and where to find
+ * them.
  *
- * One edge is not enforced: when the `keep` lines alone exceed the budget, they are returned
+ * One edge is not enforced: when the kept lines alone exceed the budget, they are returned
  * whole and the message is over budget. Every surface caps the free text in those lines and the
  * rest of each is fixed wording, so at the production budget this cannot happen; a test holds
  * the edge so a change to either side is noticed. The stop hook decides `block` before it builds
@@ -169,6 +173,7 @@ function noteFor(omitted: number): string {
  */
 export function assembleBoundedMessage(input: BoundedMessageInput): string {
   const budget = input.budget ?? AGENT_MESSAGE_BUDGET;
+  const keepPieces = input.keepPieces ?? 0;
   const scaffold = [...input.scaffold];
   const pieces = [...input.pieces];
   let omitted = 0;
@@ -190,8 +195,8 @@ export function assembleBoundedMessage(input: BoundedMessageInput): string {
     return whole;
   }
 
-  const canDrop = (): boolean => pieces.length > 0 || scaffold.length > input.keep;
-  const drop = (): string => (pieces.length > 0 ? pieces.pop()! : scaffold.pop()!);
+  const canDrop = (): boolean => pieces.length > keepPieces || scaffold.length > input.keep;
+  const drop = (): string => (pieces.length > keepPieces ? pieces.pop()! : scaffold.pop()!);
 
   // First pass on line lengths alone, so the frame is not rebuilt once per dropped line. Each
   // line costs its length plus a newline, the frame costs its two markers, and the note costs

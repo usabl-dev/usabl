@@ -48,17 +48,29 @@ const NEXT_STEP: Record<string, string> = {
 };
 
 /**
- * The lines every stop-hook message opens with: the verdict word and exit code, what that means
- * for the change, and the gate's own summary with its counts. Trusted scaffold, never framed.
- * The summary is bounded because a crash summary carries the error message, and only free text
- * is cut: the verdict word and exit code come from the verdict line, never from the summary.
+ * The line every stop-hook message opens with: the verdict word and exit code, then what that
+ * means for the change. Every part is an engine constant chosen by the verdict, so it is trusted
+ * scaffold and never framed.
  */
-function verdictScaffold(result: Result, meaningSuffix: string): string[] {
+function verdictLine(result: Result, meaningPrefix: string): string {
   const verdict = describeVerdict(result);
-  return [
-    `${formatVerdictWord(verdict)}: ${meaningSuffix}${verdict.meaning}`,
-    `Gate summary: ${boundField(result.summary, 'summary')}`,
-  ];
+  return `${formatVerdictWord(verdict)}: ${meaningPrefix}${verdict.meaning}`;
+}
+
+/**
+ * The gate's own summary as a framed piece.
+ *
+ * The summary is free text and not always engine-only: the summary for a run that never saw the
+ * application names the unseen screen ids, which the router fallback can derive from a route
+ * literal in the application, and a crash summary carries a raw error message. Anything a page
+ * can influence is data to a model reader, so the summary goes inside the frame under its own
+ * label rather than beside the verdict line. The frame label is being generalized to say
+ * untrusted text rather than page text, so engine free text sits there correctly. The piece is
+ * bounded because a crash summary can be long; only the free text is cut, and the verdict word
+ * and exit code come from the verdict line, never from the summary.
+ */
+function summaryPiece(result: Result): string {
+  return `engine summary: ${boundField(result.summary, 'summary')}`;
 }
 
 /**
@@ -112,24 +124,25 @@ function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
 /**
  * The whole block message, with at most one untrusted frame.
  *
- * It opens with the verdict word and exit code, what the verdict means, the gate's summary, and
- * the next step, so a model reads the decision before any detail. The trusted engine scaffold
- * stays outside the frame: those opening lines, the Rule or Barriers headline lines, the show-all
- * hint, and the Not evaluated header. Every page-derived piece, each finding experience, each fix,
- * and each gap detail, goes inside one frame, each with a short inline label so the model can map
- * evidence to cause. The noise budget bounds how many groups appear, and the assembled block is
- * never cut to length. Cutting could remove the single closing marker and hand the model an
- * unterminated block of untrusted text.
+ * It opens with the verdict word and exit code, what the verdict means, and the next step, so a
+ * model reads the decision before any detail. The trusted engine scaffold stays outside the
+ * frame: those opening lines, the Rule or Barriers headline lines, the show-all hint, and the Not
+ * evaluated header. Every free-text piece, the gate's summary first, then each finding
+ * experience, each fix, and each gap detail, goes inside one frame, each with a short inline
+ * label so the model can map evidence to cause. The noise budget bounds how many groups appear,
+ * and the assembled block is never cut to length. Cutting could remove the single closing marker
+ * and hand the model an unterminated block of untrusted text.
  */
 function buildBlockMessage(result: Result, config?: UsablConfig): string {
-  const scaffold = verdictScaffold(result, 'NOT verified. ');
+  const scaffold = [verdictLine(result, 'NOT verified. ')];
   const nextStep = result.verdict === null ? undefined : NEXT_STEP[result.verdict];
   if (nextStep !== undefined) {
     scaffold.push(nextStep);
   }
-  // The verdict line, the summary, and the next step always survive the message bound.
+  // The verdict line and the next step always survive the message bound, as does the summary
+  // piece that opens the frame.
   const keep = scaffold.length;
-  const pieces: string[] = [];
+  const pieces: string[] = [summaryPiece(result)];
   const budget = resolveNoiseBudgetDefault(config);
   // Only gating (deterministic) findings are barriers this block is about. Advisory findings never
   // gate, so listing one here would present it as a blocker it is not. They still surface elsewhere.
@@ -168,8 +181,9 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   }
 
   // The whole message is bounded as well as each field. Whole pieces go first, then trailing
-  // scaffold lines, never the opening lines, and the frame is rebuilt around what survives.
-  return assembleBoundedMessage({ scaffold, keep, pieces, frame: frameUntrustedBlock });
+  // scaffold lines, never the opening lines or the summary piece, and the frame is rebuilt
+  // around what survives.
+  return assembleBoundedMessage({ scaffold, keep, pieces, keepPieces: 1, frame: frameUntrustedBlock });
 }
 
 export function evaluateStopDecision(
@@ -199,11 +213,16 @@ export function evaluateStopDecision(
     const verdict = describeVerdict(safe);
     return {
       block: false,
-      message: [
-        `${formatVerdictWord(verdict)}: usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change.`,
-        `Gate summary: ${boundField(safe.summary, 'summary')}`,
-        'Next: run usabl check again, or check the change by hand, before you call this change accessible.',
-      ].join('\n'),
+      message: assembleBoundedMessage({
+        scaffold: [
+          `${formatVerdictWord(verdict)}: usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change.`,
+          'Next: run usabl check again, or check the change by hand, before you call this change accessible.',
+        ],
+        keep: 2,
+        pieces: [summaryPiece(safe)],
+        keepPieces: 1,
+        frame: frameUntrustedBlock,
+      }),
     };
   }
 
@@ -221,10 +240,13 @@ export function evaluateStopDecision(
     // that usabl reached no verdict rather than guess which null state it is.
     return {
       block: false,
-      message: [
-        `NO VERDICT (exit ${safe.exitCode}): usabl did not reach a verdict for this change.`,
-        `Gate summary: ${boundField(safe.summary, 'summary')}`,
-      ].join('\n'),
+      message: assembleBoundedMessage({
+        scaffold: [`NO VERDICT (exit ${safe.exitCode}): usabl did not reach a verdict for this change.`],
+        keep: 1,
+        pieces: [summaryPiece(safe)],
+        keepPieces: 1,
+        frame: frameUntrustedBlock,
+      }),
     };
   }
 
@@ -232,13 +254,19 @@ export function evaluateStopDecision(
     // A second block while continuation is active can loop the model and hide the real operator choice.
     return {
       block: false,
-      message: [
-        ...verdictScaffold(
-          safe,
-          'NOT verified. usabl let this stop through without blocking again (continuation already active). ',
-        ),
-        'Next: fix the barriers and run usabl check before you tell the user this change is accessible.',
-      ].join('\n'),
+      message: assembleBoundedMessage({
+        scaffold: [
+          verdictLine(
+            safe,
+            'NOT verified. usabl let this stop through without blocking again (continuation already active). ',
+          ),
+          'Next: fix the barriers and run usabl check before you tell the user this change is accessible.',
+        ],
+        keep: 2,
+        pieces: [summaryPiece(safe)],
+        keepPieces: 1,
+        frame: frameUntrustedBlock,
+      }),
     };
   }
 

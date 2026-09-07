@@ -140,13 +140,15 @@ describe('evaluateStopDecision', () => {
     ];
 
     for (const { result, word } of blocking) {
-      it(`opens a ${word} block with the word, the exit code, the meaning, the summary, then the next step`, () => {
+      it(`opens a ${word} block with the word, the exit code, the meaning, the next step, then the framed summary`, () => {
         const lines = evaluateStopDecision(result, { stopHookActive: false }).message.split('\n');
 
         expect(lines[0]!.startsWith(`${word}: NOT verified. `)).toBe(true);
         expect(lines[0]!.endsWith('.')).toBe(true);
-        expect(lines[1]).toBe(`Gate summary: ${result.summary}`);
-        expect(lines[2]!.startsWith('Next: ')).toBe(true);
+        expect(lines[1]!.startsWith('Next: ')).toBe(true);
+        // The gate's summary is free text, so it opens the frame rather than sitting in the scaffold.
+        expect(lines[2]!.startsWith('[BEGIN UNTRUSTED PAGE TEXT')).toBe(true);
+        expect(lines[3]).toBe(`engine summary: ${result.summary}`);
       });
     }
 
@@ -162,8 +164,9 @@ describe('evaluateStopDecision', () => {
 
       expect(lines[0]!.startsWith('REGRESSION (exit 1): NOT verified. ')).toBe(true);
       expect(lines[0]).toContain('continuation already active');
-      expect(lines[1]).toBe('Gate summary: regression: 1 gating finding(s)');
-      expect(lines[2]!.startsWith('Next: ')).toBe(true);
+      expect(lines[1]!.startsWith('Next: ')).toBe(true);
+      expect(lines[2]!.startsWith('[BEGIN UNTRUSTED PAGE TEXT')).toBe(true);
+      expect(lines[3]).toBe('engine summary: regression: 1 gating finding(s)');
     });
 
     it('tells idle and a failed run apart, and lets neither name the word verified', () => {
@@ -250,7 +253,7 @@ describe('evaluateStopDecision', () => {
       );
 
       expect(decision.message.startsWith('NO VERDICT: RUN FAILED (exit 4): ')).toBe(true);
-      expect(decision.message).toContain('Gate summary: unhandled error: boom');
+      expect(decision.message).toContain('engine summary: unhandled error: boom');
       expect(decision.message).toContain('characters omitted]');
       expect(decision.message.length).toBeLessThan(1_000);
     });
@@ -339,7 +342,7 @@ describe('evaluateStopDecision', () => {
     });
 
     it('rewrites a forged note split by a NUL or an escape sequence, which the scrub rejoins first', () => {
-      for (const split of [' ', '[31m']) {
+      for (const split of ['\u0000', '\u001b[31m']) {
         const decision = evaluateStopDecision(
           baseResult({
             verdict: 'regression',
@@ -356,7 +359,7 @@ describe('evaluateStopDecision', () => {
     });
 
     it('rewrites a forged note carrying a zero-width character, which the scrub keeps on purpose', () => {
-      for (const invisible of ['​', '‌']) {
+      for (const invisible of ['\u200b', '\u200c']) {
         const decision = evaluateStopDecision(
           baseResult({
             verdict: 'regression',
@@ -396,13 +399,11 @@ describe('evaluateStopDecision', () => {
         const closes = decision.message.split('[END UNTRUSTED PAGE TEXT]').length - 1;
         expect(decision.message.length).toBeLessThanOrEqual(AGENT_MESSAGE_BUDGET);
         expect(lines[0]!.startsWith('REGRESSION (exit 1): NOT verified. ')).toBe(true);
-        expect(lines[1]!.startsWith('Gate summary: regression: 200 gating finding(s)')).toBe(true);
-        expect(lines[2]!.startsWith('Next: ')).toBe(true);
-        expect(opens).toBe(closes);
-        expect(opens).toBeLessThanOrEqual(1);
-        if (budget === 20) {
-          expect(opens).toBe(1);
-        }
+        expect(lines[1]!.startsWith('Next: ')).toBe(true);
+        // The summary piece opens the frame and is never dropped, so the frame always survives.
+        expect(decision.message).toContain('engine summary: regression: 200 gating finding(s)');
+        expect(opens).toBe(1);
+        expect(closes).toBe(1);
         // The drop is visible and points at the full list.
         expect(lines.at(-1)).toMatch(/^\[shortened to fit the message budget, \d+ line\(s\) omitted; run usabl check --json for the full list\]$/);
       }
@@ -444,7 +445,7 @@ describe('evaluateStopDecision', () => {
       );
 
       expect(decision.message.startsWith('NO VERDICT (exit 5): ')).toBe(true);
-      expect(decision.message).toContain('Gate summary: reserved');
+      expect(decision.message).toContain('engine summary: reserved');
       expect(decision.message).toContain('characters omitted]');
       expect(decision.message.length).toBeLessThan(1_000);
     });

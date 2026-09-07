@@ -269,7 +269,9 @@ describe('model-facing surfaces use one frame per message', () => {
         expect(markerChars).toBe(START.length + END.length);
       });
 
-      it('carries no frame when there is no page-derived text', () => {
+      it('carries one frame holding only the engine summary when there is no page-derived text', () => {
+        // The summary is free text the engine builds, and a run that never saw the application
+        // names route-derived screen ids in it, so it is framed on every state.
         const clean = multiGapResult({
           verdict: 'regression',
           summary: 'regression: no findings, no gaps',
@@ -284,8 +286,10 @@ describe('model-facing surfaces use one frame per message', () => {
         });
         const text = surface.read(clean);
 
-        expect(count(text, START)).toBe(0);
-        expect(count(text, END)).toBe(0);
+        expect(count(text, START)).toBe(1);
+        expect(count(text, END)).toBe(1);
+        const body = text.slice(text.indexOf(START) + START.length, text.indexOf(END)).trim();
+        expect(body).toBe('engine summary: regression: no findings, no gaps');
       });
     });
   }

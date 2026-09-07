@@ -70,7 +70,7 @@ describe('projectSelfCheck', () => {
     expect(lines[0]).toBe('usabl self-check: NO VERDICT: RUN FAILED (exit 4)');
     expect(crash.message).not.toContain('IDLE');
     expect(crash.message.toLowerCase()).not.toContain('verified');
-    expect(crash.message).toContain('Gate summary: unhandled error: read ECONNRESET');
+    expect(crash.message).toContain('engine summary: unhandled error: read ECONNRESET');
   });
 
   it('shortens an oversized experience and fix with a visible note and keeps one frame', () => {
@@ -183,7 +183,8 @@ describe('projectSelfCheck', () => {
       expect(projected.message.length).toBeLessThanOrEqual(SELF_CHECK_MESSAGE_BUDGET);
       expect(lines[0]).toBe('usabl self-check: REGRESSION (exit 1)');
       expect(lines[1]).toBe('advisory: the stop hook is the gate.');
-      expect(lines[3]!.startsWith('Gate summary: regression: 200 gating finding(s)')).toBe(true);
+      // The summary piece opens the frame and is never dropped, even when every other piece is.
+      expect(projected.message).toContain('engine summary: regression: 200 gating finding(s)');
       expect(opens).toBe(closes);
       expect(opens).toBeLessThanOrEqual(1);
       if (budget === 20) {
@@ -200,7 +201,9 @@ describe('projectSelfCheck', () => {
 
     expect(lines[1]).toBe('advisory: the stop hook is the gate.');
     expect(lines[2]).toBe('This change adds an accessibility barrier. It is blocked until fixed.');
-    expect(lines[3]).toBe('Gate summary: regression: 1 gating finding(s)');
+    // The gate's summary is free text, so it opens the frame rather than sitting in the scaffold.
+    expect(lines[3]!.startsWith('[BEGIN UNTRUSTED PAGE TEXT')).toBe(true);
+    expect(lines[4]).toBe('engine summary: regression: 1 gating finding(s)');
   });
 
   it('frames page text and scrubs secrets before egress', () => {
