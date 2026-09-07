@@ -12,6 +12,7 @@ import {
   createOwnedRoot,
   decideOrphanedServer,
   parseOwner,
+  removeClonesOfStoppedRun,
   removeStaleClones,
   type OwnerRecord,
   type ProcessInspector,
@@ -160,6 +161,44 @@ describe('stale clone removal', () => {
     expect(removed).toEqual([root]);
     expect(inspector.killed).toEqual([]);
     expect(log.some((line) => line.includes('left running'))).toBe(true);
+  });
+});
+
+describe('clones of a stopped run', () => {
+  it('removes every clone whose owner died with the stopped group, even ones younger than this process', async () => {
+    // Two clones from the killed Vitest group (owner pids 20 and 21 are dead), one from a concurrent run (owner 30 alive).
+    const first = await makeClone('stopped-a', { pid: 20, startedAt: 0, cwd: join(tmpRoot, `${CLONE_PREFIX}stopped-a`, 'app'), serverPid: 600 }, 0);
+    const second = await makeClone('stopped-b', { pid: 21, startedAt: 0, cwd: join(tmpRoot, `${CLONE_PREFIX}stopped-b`, 'app'), serverPid: 601 }, 0);
+    const concurrent = await makeClone('concurrent', { pid: 30, startedAt: 0, cwd: join(tmpRoot, `${CLONE_PREFIX}concurrent`, 'app') }, 0);
+    const inspector = fakeInspector({ 30: { pgid: 30, cwd: '/somewhere/else' } });
+    const reported: string[] = [];
+
+    const result = await removeClonesOfStoppedRun({ tmpRoot, inspector, timeoutMs: 5_000, log: () => {}, onRemoved: (root) => reported.push(root) });
+
+    expect(result.timedOut).toBe(false);
+    expect([...result.removed].sort()).toEqual([first, second].sort());
+    expect([...reported].sort()).toEqual([first, second].sort());
+    expect(inspector.killed).toEqual([]);
+    await expect(exists(first)).resolves.toBe(false);
+    await expect(exists(second)).resolves.toBe(false);
+    await expect(exists(concurrent)).resolves.toBe(true);
+  });
+
+  it('stops waiting at the bound and reports what it removed so far', async () => {
+    const quick = await makeClone('quick', { pid: 20, startedAt: 0, cwd: join(tmpRoot, `${CLONE_PREFIX}quick`, 'app') }, 0);
+    const stuckRoot = join(tmpRoot, `${CLONE_PREFIX}stuck`);
+    await makeClone('stuck', { pid: 21, startedAt: 0, cwd: join(stuckRoot, 'app'), serverPid: 700 }, 0);
+    // The stuck clone's server group ignores SIGKILL, so its wait runs to the helper's own limit.
+    const inspector = fakeInspector({ 700: { pgid: 700, cwd: join(stuckRoot, 'app') } });
+    inspector.kill = (target, signal) => {
+      inspector.killed.push([target, signal]);
+    };
+
+    const result = await removeClonesOfStoppedRun({ tmpRoot, inspector, timeoutMs: 200, log: () => {} });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.removed).toEqual([quick]);
+    await expect(exists(quick)).resolves.toBe(false);
   });
 });
 

@@ -9,18 +9,30 @@
  * lock left by a dead run is replaced only once that run's step group is gone too.
  *
  * Each step runs detached in its own process group. On SIGINT, SIGTERM, SIGHUP, or
- * a step timeout, the whole group is signalled (SIGTERM, then SIGKILL) and awaited
- * before the lock is released. This script is the only signal listener for those
- * signals: the Vite server that vite-node hosts in this process installs its own
- * SIGTERM listener, which exits the process as soon as that server has closed,
- * and that listener is removed so it cannot exit mid-stop. Should the process
- * still exit early by some other path, a synchronous `exit` handler kills the
- * running step group and leaves the lock for the next run to reclaim.
+ * a step timeout, the whole group is signalled (SIGTERM, then SIGKILL) and awaited,
+ * the clones that group left under the temp directory are removed (bounded), and
+ * only then is the lock released. This script is the only signal listener for
+ * those signals: the Vite server that vite-node hosts in this process installs its
+ * own SIGTERM listener, which exits the process as soon as that server has closed.
+ * Listeners installed before this script's are taken off the signal and replayed,
+ * in order and with the signal's arguments, after the step is stopped and the lock
+ * released, so their cleanup still runs; the exit code stays this script's. Should
+ * the process still exit early by some other path, a synchronous `exit` handler
+ * kills the running step group, leaves the lock for the next run to reclaim, and
+ * sets exit code 1 so an interrupted run never reports success.
  *
- * Known limits: a SIGKILL of this script cannot stop its step; the lock keeps the
- * next run out until that step group ends on its own, and nobody kills it. A step
- * process stuck in an uninterruptible kernel wait outlives SIGKILL. The lock has
- * one three-way race window, described in demo-integration-lock.ts.
+ * Known limits:
+ * - A SIGKILL of this script cannot stop its step; the lock keeps the next run
+ *   out until that step group ends on its own, and nobody kills it. A step process
+ *   stuck in an uninterruptible kernel wait outlives SIGKILL.
+ * - The lock has one three-way race: a third run that creates a lock while a
+ *   second is moving a displaced live lock back leaves two runs believing they
+ *   hold it. See demo-integration-lock.ts.
+ * - The 30-minute ceiling on the Vitest step assumes Vitest runs the two suites in
+ *   parallel. Their worst-case envelopes are 1,350 s (hero-bug-flip) and 720 s
+ *   (fixture-clean) with the app's default 60 s readiness budget: 1,350 s in
+ *   parallel, 2,070 s in sequence. A serial run (for example one forced through
+ *   forwarded Vitest arguments) must raise the ceiling or run one suite at a time.
  *
  * Usage: USABL_FIXTURE_APP_CWD=/path/to/usabl-app npm run test:demo-integration
  * Extra arguments are passed to Vitest (for example one test file path).
@@ -29,15 +41,21 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { removeClonesOfStoppedRun } from '../test/integration/fixture-app.js';
 import { acquireLock, releaseLock, updateLock, type LockDeps } from './demo-integration-lock.js';
 import { exitFallback, ownSignals } from './demo-integration-signals.js';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const lockPath = join(repoRoot, '.demo-integration.lock');
 const BUILD_TIMEOUT_MS = 5 * 60_000;
-// The suites bound their own waits; this is only a ceiling for a hung runner.
+// The suites bound their own waits; this is only a ceiling for a hung runner, and
+// it assumes the two suites run in parallel (see the header).
 const TEST_TIMEOUT_MS = 30 * 60_000;
 const GRACE_MS = 5_000;
+// Removing a stopped run's clones may wait for each clone's server group; two clones
+// with the helper's own limits fit well inside this.
+const CLONE_CLEANUP_MS = 20_000;
+const SIGNAL_EXIT_CODE = 130;
 const POLL_MS = 100;
 
 function signalAlive(target: number): boolean {
@@ -94,8 +112,26 @@ async function stopGroup(pgid: number): Promise<void> {
   }
 }
 
+/**
+ * Removes the clones a stopped Vitest group left behind. Called only once that
+ * group is confirmed gone, so every clone owner pid it recorded is dead.
+ */
+async function removeClonesLeftByStoppedStep(): Promise<void> {
+  const { removed, timedOut } = await removeClonesOfStoppedRun({
+    timeoutMs: CLONE_CLEANUP_MS,
+    log: (line) => process.stderr.write(`${line}\n`),
+    onRemoved: (root) => process.stderr.write(`removed clone ${root} left by the stopped step\n`),
+  });
+  if (timedOut) {
+    process.stderr.write(
+      `clone cleanup did not finish within ${CLONE_CLEANUP_MS}ms; ${removed.length} removed, the rest is left for the next run\n`,
+    );
+  }
+}
+
 let currentStep: ChildProcess | null = null;
 let shuttingDown = false;
+let shutdownExitCode: number | null = null;
 
 async function runStep(label: string, command: string, args: string[], timeoutMs: number, env: NodeJS.ProcessEnv): Promise<void> {
   const child = spawn(command, args, { cwd: repoRoot, stdio: 'inherit', env, detached: true });
@@ -119,6 +155,8 @@ async function runStep(label: string, command: string, args: string[], timeoutMs
     const outcome = await Promise.race([exit, timedOut]);
     if (outcome === 'timeout') {
       await stopGroup(pgid);
+      currentStep = null;
+      await removeClonesLeftByStoppedStep();
       throw new Error(`${label} did not finish within ${timeoutMs}ms`);
     }
     // The leader exited; make sure nothing it started is still running.
@@ -135,32 +173,43 @@ async function runStep(label: string, command: string, args: string[], timeoutMs
   }
 }
 
-async function shutdown(signal: NodeJS.Signals): Promise<void> {
-  if (shuttingDown) {
-    return;
-  }
-  shuttingDown = true;
-  process.stderr.write(`received ${signal}; stopping the current step before releasing the lock\n`);
-  const step = currentStep;
-  if (step !== null && step.pid !== undefined) {
-    await stopGroup(step.pid);
-  }
-  currentStep = null;
-  releaseLock(lockPath, lockDeps);
-  process.exit(130);
-}
-
 const acquired = acquireLock(lockPath, lockDeps);
 if (acquired.state === 'held') {
   process.stderr.write(`${acquired.reason}; wait for it to finish, or remove the file if that process is not a test run\n`);
   process.exit(3);
 }
-ownSignals(process, ['SIGINT', 'SIGTERM', 'SIGHUP'], (signal) => {
-  void shutdown(signal);
+
+const claimedSignals = ownSignals(process, ['SIGINT', 'SIGTERM', 'SIGHUP'], (signal, ...args) => {
+  void shutdown(signal, args);
 });
-process.on('exit', () => {
+
+async function shutdown(signal: NodeJS.Signals, args: readonly unknown[]): Promise<void> {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  shutdownExitCode = SIGNAL_EXIT_CODE;
+  process.stderr.write(`received ${signal}; stopping the current step before releasing the lock\n`);
+  const step = currentStep;
+  if (step !== null && step.pid !== undefined) {
+    await stopGroup(step.pid);
+    currentStep = null;
+    await removeClonesLeftByStoppedStep();
+  }
+  releaseLock(lockPath, lockDeps);
+  // The displaced listeners get their turn now that nothing of ours is at stake.
+  // Vite's closes its server and exits; the code set here is the one it keeps.
+  process.exitCode = SIGNAL_EXIT_CODE;
+  await claimedSignals.replay(signal, args, GRACE_MS);
+  process.exit(SIGNAL_EXIT_CODE);
+}
+
+process.on('exit', (code) => {
   exitFallback({
+    code,
     stepPgid: currentStep?.pid ?? null,
+    shutdownExitCode,
+    host: process,
     groupAlive: (pgid) => signalAlive(-pgid),
     killGroup: (pgid) => signalGroup(pgid, 'SIGKILL'),
     releaseLock: () => releaseLock(lockPath, lockDeps),

@@ -29,7 +29,9 @@
  * only when it has a valid owner file, its owner pid is dead, and the directory
  * is older than this process. Its recorded server group is signalled only when
  * every live member of that group has its working directory inside the clone.
- * A clone with a missing or corrupt owner file is reported and left alone.
+ * A clone with a missing or corrupt owner file is reported and left alone. The
+ * runner applies the same rule once more when it has stopped a Vitest group on a
+ * signal or a timeout, so a stopped run does not leave its clones for the next.
  *
  * Every wait is bounded. Server start and source propagation use the app's
  * `readyTimeoutMs`, the same budget the engine gives to reaching one screen. Git
@@ -51,6 +53,14 @@
  *   is alive elsewhere looks dead here.
  * - A process stuck in an uninterruptible kernel wait outlives SIGKILL; the stop
  *   reports it instead of waiting forever.
+ * - The runner's lock has one three-way race: a third run that creates a lock
+ *   while a second is moving a displaced live lock back leaves two runs believing
+ *   they hold it. See scripts/demo-integration-lock.ts.
+ * - The runner's 30-minute ceiling on the Vitest step assumes Vitest runs the two
+ *   suites in parallel. Their worst-case envelopes are 1,350 s (hero-bug-flip) and
+ *   720 s (fixture-clean) with the app's default 60 s readiness budget: 1,350 s in
+ *   parallel, 2,070 s in sequence. A serial run (for example one forced through
+ *   forwarded Vitest arguments) must raise the ceiling or run one suite at a time.
  */
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -395,6 +405,8 @@ export interface StaleCloneOptions {
   inspector?: ProcessInspector;
   processStartedAt?: number;
   log?: (line: string) => void;
+  /** Called for each clone as soon as it is removed, so a bounded caller can report partial progress. */
+  onRemoved?: (root: string) => void;
 }
 
 /**
@@ -444,11 +456,38 @@ export async function removeStaleClones(options: StaleCloneOptions = {}): Promis
       }
       await rm(root, { recursive: true, force: true });
       removed.push(root);
+      options.onRemoved?.(root);
     } catch {
       // Another run may have removed it first. Nothing to do.
     }
   }
   return removed;
+}
+
+/**
+ * Removes the clones a run left behind once its Vitest process group has been
+ * stopped. The runner calls this on its signal and timeout paths after that group
+ * is confirmed gone, so every owner pid those clones recorded is dead and the rule
+ * of `removeStaleClones` applies unchanged. Only the age check moves: it is taken
+ * from now rather than from this process's start, because the clones were created
+ * during this run. A concurrent run from another checkout keeps its clones, since
+ * their owner pid is alive. The work is bounded by `timeoutMs`; on timeout the
+ * clones removed so far are reported and the rest is left for the next run.
+ */
+export async function removeClonesOfStoppedRun(
+  options: StaleCloneOptions & { timeoutMs: number },
+): Promise<{ removed: string[]; timedOut: boolean }> {
+  const removed: string[] = [];
+  const work = removeStaleClones({
+    ...options,
+    processStartedAt: options.processStartedAt ?? Date.now(),
+    onRemoved: (root) => {
+      removed.push(root);
+      options.onRemoved?.(root);
+    },
+  }).then(() => 'done' as const);
+  const outcome = await Promise.race([work, delay(options.timeoutMs).then(() => 'timeout' as const)]);
+  return { removed, timedOut: outcome === 'timeout' };
 }
 
 async function linkNodeModules(sourceCwd: string, cloneCwd: string): Promise<string> {
