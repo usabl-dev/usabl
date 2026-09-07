@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Users</title>
+  </head>
+  <body>
+    <main>
+      <h1>Users</h1>
+      <button id="first" type="button">Add user</button>
+      <button id="second" type="button">Export</button>
+    </main>
+    <script>
+      // A slow application. The shell is stable, so readiness settles about 1.5 seconds after
+      // load and the identity request below has not been sent at the first read of the refused
+      // request record. It arrives while the scan is still running, which is the window this page
+      // exists to reproduce.
+      setTimeout(() => {
+        fetch('/api/v2/me').catch(() => undefined);
+      }, 2500);
+    </script>
+  </body>
+</html>

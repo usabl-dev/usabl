@@ -823,6 +823,133 @@ by writing a quoted `path` literal outside any comment and keeping stray `>` and
 out of the strings in and around the declaration, but that depends on the whole file rather than
 on the one route, so check the result instead of assuming it.
 
+#### Limits of detecting that a screen was not reached signed in
+
+A scan of a login-gated application can be handed the application's sign-in experience instead of
+the screen it asked for, and score it as that screen. Measured on a real application with an
+expired session: usabl filed the sign-in page's barriers under the requested screen ids, disclosed
+nothing, and reported all twenty-nine barriers on the committed evidence floor as resolved. The
+run was red only because that page carried barriers of its own; a clean one would have returned
+verified, with a receipt, and a claim that the accepted debt was gone.
+
+That application never leaves the requested address. It renders a blank shell for over five
+seconds, then swaps a login form in at the same URL, so neither the address nor the presence of a
+password field is reliable on its own. Its own API calls to identity endpoints answer 401.
+
+Two layers now stand against this, and neither closes the hole completely.
+
+**Before the browser opens.** When `USABL_STORAGE_STATE` names a file in which every cookie carries
+an expiry, every one of those is already past, no origin holds local storage or IndexedDB, and
+there are no stored credentials, there is nothing left in it that could authenticate. The run stops
+with no verdict (exit 4). The bar is deliberately "nothing here could possibly work" rather than
+"probably dead": one session cookie, one undated cookie, one IndexedDB entry, one local storage
+entry, or one virtual authenticator credential means the file cannot be judged and is not refused.
+Playwright restores all four of those stores, so any of them could be carrying the session. A
+missed dead session is caught below; a false refusal has no backstop.
+
+**At scan time.** Three rules, each producing a `not-covered` coverage gap on that screen. A gapped
+screen contributes no findings, records no keyboard walk, and is excluded from the cleanly-scanned
+set the gate is given, so no floored barrier on it can be reported as resolved.
+
+- **Rule A, refused data requests.** A storage state is configured and at least one of the page's
+  own `fetch` or XHR requests to the application's own hostname had answered 401 at either of two
+  reads: the first when readiness settles, the second after the walk, the checks, the source
+  attachment, and the reachability measurement have run. A refusal that arrives after the second
+  read is not seen. This is the primary signal, because it needs nothing from the address or the
+  DOM. Two reads, not one: readiness needs four equal DOM counts 500 ms apart plus 500 ms of
+  network quiet, so a stable shell settles in about 1.5 s, and an application that sends its
+  identity request later than that has sent nothing yet. Measured with the real adapter, a page
+  fetching its identity endpoint at three seconds recorded nothing at the first read. The second read deliberately includes traffic the
+  providers caused, because a request a provider click triggered is still the application answering
+  this session. 401 only; 403 means authenticated and not permitted, which a correct signed-in scan
+  can legitimately meet. Nothing overrides this rule.
+
+  The host match. A refused request counts when its hostname equals the `appBaseUrl` hostname, or
+  ends with a dot followed by it, regardless of scheme and port. So `api.example.com` counts for
+  `example.com` and `notexample.com` does not. Comparing origins instead was too narrow in three
+  ways that all happen in practice, and each was measured flowing through a real run to a verified
+  receipt with a paid-down entry: a different port, a different scheme, and an API subdomain. When
+  `appBaseUrl` does not parse there is no hostname to compare against, and then every
+  page-initiated 401 counts. That is deliberate: a base URL usabl cannot read is a configuration it
+  cannot reason about, and `not_covered` is the honest outcome where counting nothing would hand
+  back a verdict.
+- **Rule B, a password field anywhere.** A storage state is configured and a password input exists
+  anywhere in the page, in any frame or inside an open shadow root. The address is not consulted.
+  Overridden by `reachedWhen`: when the surface declares that selector and it is present at the
+  time of the check, this rule does not fire. A change-password screen, or a settings page with a
+  re-authentication prompt, is exactly the case the override exists for.
+- **Rule C, redirected to a sign-in page.** The browser ended on a different address than the one
+  requested and that page carries a password input. This applies whether or not a storage state was
+  configured, because a redirect to a sign-in page is the wrong page either way.
+
+The two session rules require a configured storage state because only that is an assertion that the
+run is signed in. Without it a 401 and a login form are ordinary things for a signed-out visitor to
+meet, and firing on them would turn every deliberate signed-out scan into a gap.
+
+**`reachedWhen` is operator-supplied policy, not independent proof.** It is a CSS selector an
+operator wrote, and usabl cannot check that it names what the operator meant. A selector that
+matches a persistent application shell, a header, a navigation, or a footer is present on a login
+wall too, so declaring one of those does not assert that this screen rendered; it asserts that the
+application's chrome rendered, which it does on the sign-in page as well. Such a selector will let
+Rule B pass the wrong page, and it will do it silently, because a matched selector reads as
+success everywhere it is consumed. To be worth anything the selector has to name content only this
+screen has: that screen's own table, its own heading, its own empty state. The config loader says
+so when it refuses an empty value, because config load is the last place an operator reads anything
+about this field.
+
+That is also why the override does not extend to Rule A. A same-host 401 with a configured session
+is the application itself saying the session was refused, which is stronger evidence than any
+selector an operator wrote.
+
+**What is still not caught.** A server-rendered sign-in page that makes no API calls and carries no
+password input: a passkey prompt, a magic-link page, an email-first identity provider, or a consent
+screen. An authentication wall that answers 200 to every request and renders a branded landing
+page. A sign-in wall whose API lives on an unrelated hostname. A sign-in page served at the very
+address that was requested, with no storage state configured. A 401 that arrives after the second
+read, which is the last observation of the page before it is closed, so a response still in flight
+at that moment is never recorded. And any screen whose `reachedWhen` selector matches a sign-in
+page, per the paragraph above. The body-only detector catches the subset of these that render
+nothing focusable; the rest stay open. The hole is narrower, not closed.
+
+A miss leaves exactly the behaviour that was there before, so none of this manufactures a new false
+green of its own. Each rule can also fire on a screen that was genuinely reached: a same-host
+endpoint that answers 401 where it means 403, every page-initiated 401 when `appBaseUrl` cannot be
+parsed, a signed-in screen with a password field and no `reachedWhen`, a stale configured URL. The cost of that is a coverage gap, so the run reports
+`not_covered` rather than a verdict it should not have minted.
+
+What an operator can do. Declare `reachedWhen` on the surface, naming content only that screen has.
+It is the answer both for a screen these heuristics miss and for a screen Rule B fires on wrongly,
+and it is only as good as the selector: see the paragraph above on what a shell selector costs.
+
+#### A credential in a configured surface URL is echoed everywhere
+
+Text that comes off the page is sanitized before it is published. A coverage gap reason strips the
+userinfo, the query, and the fragment from every address it names, and shortens a refused request
+to the front of its path, because any of those can carry a token.
+
+Exactly what a refused request discloses, so a reader can judge the risk rather than trust the word
+"shortened": the scheme; the complete hostname, as punycode when it was written in unicode; the
+numeric port when the address carries one that is not the scheme default; and either of the first
+two path segments, and only while a segment starts with an ASCII letter, is at most 24 characters,
+and contains nothing but lowercase ASCII letters, digits, dot, underscore, and hyphen. Everything
+from the first segment that fails those tests is dropped and the tail is marked with an ellipsis. A
+unicode path segment fails the character test and is cut. The consequence to take on board: a
+secret that is short, lowercase, and sitting in either of the first two path segments WILL be
+printed. `/reset/<token>` is cut because a token is normally mixed case or long, not because the
+position is protected.
+
+Configured surface URLs are not page text and are not sanitized. `gap.ref`, `ScreenScan.url`, and
+`coverage.affected[].url` carry the operator's own `usabl.config.json` value verbatim into the
+Result, and from there into the CLI output, the overlay, and the pull request comment. That is
+deliberate and predates the sanitizing above: the overlay attributes a gap to a screen by comparing
+these values exactly, so rewriting one would silently orphan the gap it belongs to.
+
+The consequence is a residual an operator has to know about. A credential written into a surface
+URL, whether HTTP basic userinfo (`https://user:pass@host/screen`), a preview token in the query,
+or anything in the fragment, will be echoed by every surface that renders a Result, including a
+comment posted to a public pull request. Do not put one in `usabl.config.json`. Reach a protected
+environment with a storage state, which never enters committed config, instead.
+
 ### Documentation coverage
 
 When a `usabl.docs.json` manifest is present, coverage extends to documentation the same
@@ -1224,9 +1351,12 @@ reports ten surfaces: config, authenticated session, route manifest, evidence fl
 waivers, overlay, stop-hook, usabl-check skill, ci, and branch-rule, each with a state
 such as wired, missing, drifted, or unknown. The session surface reads the
 `USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file:
-unset is missing, a readable JSON file is wired, and a path that names no file or names a
-file that is not JSON is drifted. Doctor reports whether a session is set and never prints
-the path or the file contents. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
+unset is missing, a readable JSON file that still holds something which could authenticate
+is wired, and a path that names no file, names a file that is not JSON, or names a state
+holding nothing that could authenticate (no unexpired or undated cookie, no local storage,
+no IndexedDB, and no stored credential) is drifted. Doctor reads the same expiry rule
+`usabl check` refuses on, so the two surfaces cannot disagree about one file. Doctor
+reports whether a session is set and never prints the path or the file contents. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
 engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the pin
 sentinel), or `drifted` (any other shape). Doctor never mints a verdict or a receipt.
 

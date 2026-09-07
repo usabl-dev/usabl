@@ -250,6 +250,9 @@ export async function buildDeps(
       // Static-only mode denies live capability explicitly so the result records not-covered gaps.
       allowedCapabilities,
       stepRunner: makeStepRunner(),
+      // The one place that knows whether this run asserted a session. Every gating surface builds
+      // its Deps here, so setting it once covers the CLI, the Vite overlay, and the Stop hook.
+      sessionConfigured: storageStatePath !== null,
     }),
   };
 }

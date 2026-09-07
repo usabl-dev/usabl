@@ -348,6 +348,24 @@ export interface ElementRef {
 }
 export interface Page {
   gotoReady(): Promise<void>;
+  // Where the browser actually is now, which is not always where it was sent. An application can
+  // answer a request for a screen with a redirect, and a scan that never asks has no way to know
+  // it measured a different page. Read it after the screen has loaded and before anything on the
+  // page is exercised, because providers click and press keys and a click can navigate.
+  currentUrl(): Promise<string>;
+  // URLs of the page's own data requests (fetch and XHR) that came back 401 between navigation and
+  // the moment this is read. A single page application that stays at the requested address and
+  // swaps in a login form leaves no trace in the URL and may not have rendered the form yet, so
+  // this is the one signal that does not depend on the address or the DOM. It is NOT free of a
+  // timing race: an application slower than the readiness settle has sent nothing when a first
+  // read happens, which is why the check runner reads it again at the end of the scan. A 401 that
+  // arrives after that last read is never seen. 401 only: 403 means authenticated and not
+  // permitted. Empty means no refused request was seen, which is not proof the session worked.
+  unauthorizedApiRequests(): Promise<string[]>;
+  // How many elements match a selector anywhere in the page: every frame, and inside open shadow
+  // roots. document.querySelectorAll sees neither, so a login form in an iframe or a web component
+  // is invisible to queryAll. This makes no claim about where the matches are, only how many.
+  countEverywhere(selector: string): Promise<number>;
   focusBody(): Promise<void>;
   tab(): Promise<void>;
   press(key: string): Promise<void>;
@@ -421,6 +439,12 @@ export interface SurfaceConfig {
   // once the screen has loaded and the walk has run. If it is absent from the rendered DOM, the
   // screen is marked unseen and its findings are dropped. Absent means the body-only floor is the
   // only unseen detector for this surface. When present it must be a non-empty string.
+  //
+  // A matched selector also overrides the password-field rule in providers/redirected.ts, so what
+  // it names matters. This is operator-supplied policy, not independent proof: a selector aimed at
+  // a persistent application shell, a header, a navigation, or a footer is present on a login wall
+  // too, and it will let a wrong page through. Name content only this screen has, such as that
+  // screen's own table, heading, or empty state.
   reachedWhen?: string;
   // Declares that this surface is the same screen as the discovered route with the same id, and
   // exists to control that screen's scan URL. Surface ids and route screen ids are one namespace,

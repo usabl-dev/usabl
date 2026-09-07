@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tooltip on focus</title>
+    <style>
+      .tip {
+        opacity: 0;
+        transition: opacity 1000ms;
+        position: absolute;
+        top: 0;
+        left: 0;
+      }
+      .tip.shown { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Toolbar</h1>
+      <button id="tipped" type="button">Save</button>
+      <button id="plain" type="button">Cancel</button>
+    </main>
+    <script>
+      // What PatternFly does: focusing the control mounts a tooltip outside any landmark, and
+      // blurring it starts a fade out that leaves the element in the DOM until the transition
+      // ends. axe reports that orphan node as a region violation on a page nobody changed.
+      //
+      // The fade here is one second, at the slow end of what a real one runs, on purpose. axe
+      // takes a few hundred milliseconds to inject and start, so a fade shorter than that clears
+      // itself before the providers look and the race cannot be reproduced at all. One second is
+      // comfortably inside the settle budget, so the wait still finishes early rather than
+      // spending it.
+      (() => {
+        const control = document.getElementById('tipped');
+        let tip = null;
+        let removal = null;
+        const mount = () => {
+          const element = document.createElement('div');
+          element.id = 'tip';
+          element.className = 'tip';
+          element.setAttribute('role', 'tooltip');
+          element.setAttribute('data-popper-placement', 'top');
+          element.textContent = 'Saves the current record';
+          document.body.append(element);
+          return element;
+        };
+        control?.addEventListener('focus', () => {
+          // One tooltip at a time. Re-focusing during a fade out reuses the element that is on
+          // its way out rather than leaving it behind and mounting a second one.
+          if (removal !== null) {
+            clearTimeout(removal);
+            removal = null;
+          }
+          if (tip === null) {
+            tip = mount();
+          }
+          tip.classList.add('shown');
+          // A real tooltip points the control at its description while it is up, and takes the
+          // reference away when it goes, so no dangling aria-describedby is left behind.
+          control.setAttribute('aria-describedby', 'tip');
+        });
+        control?.addEventListener('blur', () => {
+          if (tip === null) {
+            return;
+          }
+          tip.classList.remove('shown');
+          const fading = tip;
+          control.removeAttribute('aria-describedby');
+          removal = setTimeout(() => {
+            fading.remove();
+            tip = null;
+            removal = null;
+          }, 1000);
+        });
+      })();
+    </script>
+  </body>
+</html>

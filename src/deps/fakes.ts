@@ -1,6 +1,7 @@
 /**
  * In-memory Deps so tests can run the whole engine without git, a browser, or a network.
- * Scripted maps are the only source of truth. `browser.open` ignores the URL.
+ * Scripted maps are the only source of truth. `browser.open` never fetches the URL; it only
+ * hands it back as the page's own address, so a fake page is always where it was sent.
  * Unused Page methods throw: a test that hits them is lying about coverage, not passing.
  */
 import type { Deps, RequirementBundle, ScreenScan, Page } from '../contracts/index.js';
@@ -44,6 +45,14 @@ const notUsed = (name: string) => async (): Promise<never> => {
 export function makeFakePage(overrides: Partial<Page> = {}): Page {
   return {
     gotoReady: async () => {},
+    // An empty address is "this fake cannot say where it is", which is the honest default for a
+    // page that never navigated. Consumers must make no redirect claim from it. Fakes handed a
+    // URL by browser.open report that URL instead.
+    currentUrl: async () => '',
+    // A fake page issues no requests, so it saw no refused one. Not a claim that a session worked.
+    unauthorizedApiRequests: async () => [],
+    // A fake page has no DOM to search, so nothing matches anywhere.
+    countEverywhere: async () => 0,
     focusBody: async () => {},
     tab: async () => {},
     press: async () => {},
@@ -77,8 +86,12 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     clock: () => spec.now,
     runnerVersion: spec.runnerVersion,
     scannerVersions: spec.scannerVersions,
-    // URL is config for later Playwright wiring. Fakes never fetch it.
-    browser: { open: async (_url: string) => makeFakePage(), close: async () => {} },
+    // Fakes never fetch the URL. They do report it back as the page's address, so a fake page
+    // stands where it was sent and no test reads a redirect that never happened.
+    browser: {
+      open: async (url: string) => makeFakePage({ currentUrl: async () => url }),
+      close: async () => {},
+    },
     git: {
       writeTree: async () => spec.writeTree,
       show: async (ref, path) => (spec.refContents?.[ref] ?? spec.headContents)[path] ?? null,

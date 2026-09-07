@@ -22,7 +22,12 @@ import { parseUsablConfig } from '../intake/config.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
 import { parseWaiverLedger } from '../run.js';
-import { readStorageStateEnv, STORAGE_STATE_ENV_VAR, type EnvReader } from '../deps/session.js';
+import {
+  isStorageStateExpired,
+  readStorageStateEnv,
+  STORAGE_STATE_ENV_VAR,
+  type EnvReader,
+} from '../deps/session.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { buildGuardedSet } from '../trust/guard.js';
 import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
@@ -94,6 +99,9 @@ export interface DoctorDeps {
   // Probes the Playwright Chromium install that "usabl check" uses for browser scans. Injected
   // in tests so doctor never reaches the real environment.
   probePlaywrightChromium: () => Promise<PlaywrightBootstrapProbe>;
+  // Milliseconds since the Unix epoch, for judging session cookie expiry. Injected for the same
+  // reason env is, and defaults to the wall clock so existing callers need not pass one.
+  now?: () => number;
 }
 
 function isFsReadError(error: unknown): boolean {
@@ -183,8 +191,9 @@ async function collectSession(deps: DoctorDeps): Promise<SurfaceReport> {
       nextStep: `${STORAGE_STATE_ENV_VAR} is set but no file exists at the path it names (the path is not printed here). Re-export the session file, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
     };
   }
+  let parsed: unknown;
   try {
-    JSON.parse(raw);
+    parsed = JSON.parse(raw);
   } catch {
     return {
       id: 'session',
@@ -193,14 +202,25 @@ async function collectSession(deps: DoctorDeps): Promise<SurfaceReport> {
       nextStep: `${STORAGE_STATE_ENV_VAR} names a file that is not JSON, so it is not a Playwright storage state. Re-export the session file, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
     };
   }
+  // Set but dead is drift, not wiring. It reads the same rule "usabl check" refuses on, so the
+  // two surfaces cannot disagree about the same file: doctor must never call a session wired
+  // that the next run will stop on, and never call one drifted that the next run will accept.
+  if (isStorageStateExpired(parsed, (deps.now ?? Date.now)())) {
+    return {
+      id: 'session',
+      label: SESSION_LABEL,
+      state: 'drifted',
+      nextStep: `${STORAGE_STATE_ENV_VAR} names a Playwright storage state whose session has expired. Everything usabl can check in that file is spent: every cookie carries an expiry, every one of those is already past, no origin holds local storage or IndexedDB, and there are no stored credentials. "usabl check" stops on this rather than scanning the sign-in page. Mint a new session and re-export ${STORAGE_STATE_ENV_VAR}, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
+    };
+  }
   return {
     id: 'session',
     label: SESSION_LABEL,
     state: 'wired',
-    // Present and parsing is all doctor can confirm. Whether the session is still accepted by
-    // the application is a live question no read of the file can answer, and an expired
-    // session scans signed out, so the wired state says so instead of implying more.
-    nextStep: `Set, readable, and parses. usabl cannot tell whether the session is still valid; an expired session scans signed out.`,
+    // Readable, parsing, and holding something that could still authenticate is all doctor can
+    // confirm. Whether the application accepts the session is a live question no read of the file
+    // can answer, so the wired state says so instead of implying more.
+    nextStep: `Set, readable, parses, and still holds something that could authenticate: an unexpired or undated cookie, local storage, IndexedDB, or a stored credential. Whether the application accepts the session is not something reading the file can answer; a scan that meets a sign-in page or a refused data request is reported as a coverage gap.`,
   };
 }
 

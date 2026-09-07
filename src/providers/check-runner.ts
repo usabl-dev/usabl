@@ -2,6 +2,10 @@
  * CheckRunner executes one screen scan and returns transcript stops, provider drafts, and coverage gaps.
  * It must never throw, never mint a verdict, and never drop a failed screen on the floor.
  * Transcript collection runs before providers because interaction probes can mutate focus order.
+ *
+ * A screen this run did not reach signed in is disclosed as a coverage gap and measured no
+ * further. See providers/redirected.ts for the three rules, when each fires, and what they can
+ * and cannot see.
  */
 import type {
   Capability,
@@ -17,6 +21,8 @@ import type {
 } from '../contracts/index.js';
 import { attachDomSourceToDrafts } from './dom-source.js';
 import { measureReachability } from './reachability.js';
+import { observeLanding, readRefusedRequests, redirectedAwayGap } from './redirected.js';
+import { waitForScannerArtifactsToClear } from './scanner-artifacts.js';
 import { runProviders } from './index.js';
 
 export interface CheckRunnerDeps {
@@ -26,6 +32,13 @@ export interface CheckRunnerDeps {
   allowedCapabilities: Capability[];
   stepRunner: StepRunner;
   transcriptTabCap?: number;
+  // Whether the operator configured a storage state for this run, which is the only assertion that
+  // this scan is signed in. Two of the three not-reached rules are claims about a session that was
+  // asserted and did not work, so they say nothing without it. Absent means no session was
+  // configured, which is the honest reading for a caller that never had one: a signed-out scan
+  // legitimately meets 401s and login forms, and firing on those would turn every deliberate
+  // signed-out run into a coverage gap. The composition root sets it for every gating surface.
+  sessionConfigured?: boolean;
 }
 
 const DEFAULT_TRANSCRIPT_TAB_CAP = 50;
@@ -51,6 +64,31 @@ function failedScan(screen: { id: string; url: string }, reason: string): Screen
     applicability: [],
     reachedSelectorPresent: null,
     reachedWhenSelector: null,
+  };
+}
+
+/**
+ * A screen this run did not reach signed in. Its transcript, its drafts, and its applicability are
+ * all measurements of a page that is not the requested screen, so none of them is carried, and no
+ * reachability claim is made because the assertion describes a screen that was not shown.
+ *
+ * One shape for both the early check and the late one, so a refusal that arrives during the walk
+ * cannot be disclosed differently from one that was there on load.
+ */
+function notReachedScan(
+  screen: { id: string; url: string },
+  gap: CoverageGap,
+  reachedWhen: string | undefined,
+): ScreenScan {
+  return {
+    screenId: screen.id,
+    url: screen.url,
+    stops: [],
+    drafts: [],
+    gaps: [gap],
+    applicability: [],
+    reachedSelectorPresent: null,
+    reachedWhenSelector: reachedWhen ?? null,
   };
 }
 
@@ -99,34 +137,74 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       };
       try {
         await page.gotoReady();
-        await page.armAnnouncementCapture();
 
-        const transcript = await deps.stepRunner.run(page, tabSteps);
-        const stops = trimCycle(transcript);
+        // Whether this is the requested screen, signed in. The address and the password count are
+        // read here and only here: providers click and press keys, a click can navigate, so a
+        // later DOM read could not tell what the application did on load from what usabl did to
+        // it afterwards.
+        const landing = await observeLanding(page, {
+          requestedUrl: screen.url,
+          appBaseUrl: deps.config.appBaseUrl,
+          sessionConfigured: deps.sessionConfigured === true,
+          ...(reachedWhen === undefined ? { reachedWhen: undefined } : { reachedWhen }),
+        });
+        const notReached = redirectedAwayGap(screen.id, landing);
+        if (notReached !== null) {
+          // Not this screen. The walk and the providers are skipped rather than run and thrown
+          // away: a keyboard order and a rule result from a sign-in page are not weak evidence
+          // about the requested screen, they are evidence about a different page, and collecting
+          // them at all invites a later change to keep them. Nothing is claimed about
+          // reachability either, because this page is not the one the assertion describes.
+          result = notReachedScan(screen, notReached, reachedWhen);
+        } else {
+          await page.armAnnouncementCapture();
 
-        await page.focusBody();
-        const providerResult = await runProviders(
-          deps.providers,
-          { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
-          deps.allowedCapabilities,
-        );
-        const drafts = await attachDomSourceToDrafts(page, providerResult.drafts);
+          const transcript = await deps.stepRunner.run(page, tabSteps);
+          const stops = trimCycle(transcript);
 
-        // Measure reachability after the walk and providers have run, while the page is still open.
-        // This is the only place the live DOM exists; markUnseenScreens runs later over collected
-        // scans and cannot query the page.
-        const reachedSelectorPresent = await measureReachability(page, reachedWhen);
+          await page.focusBody();
+          // The walk can have opened a tooltip or a popover, and blurring it starts a fade out
+          // that leaves the element in the DOM for a few hundred milliseconds. Content the scanner
+          // itself caused is not the page, so the providers wait for it to go.
+          await waitForScannerArtifactsToClear(page);
+          const providerResult = await runProviders(
+            deps.providers,
+            { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
+            deps.allowedCapabilities,
+          );
+          const drafts = await attachDomSourceToDrafts(page, providerResult.drafts);
 
-        result = {
-          screenId: screen.id,
-          url: screen.url,
-          stops,
-          drafts,
-          gaps: providerResult.gaps,
-          applicability: providerResult.applicability,
-          reachedSelectorPresent,
-          reachedWhenSelector: reachedWhen ?? null,
-        };
+          // Measure reachability after the walk and providers have run, while the page is still
+          // open. This is the only place the live DOM exists; markUnseenScreens runs later over
+          // collected scans and cannot query the page.
+          const reachedSelectorPresent = await measureReachability(page, reachedWhen);
+
+          // Rule A again, on the record as it stands now. Readiness settles about 1.5 seconds
+          // after a stable shell appears, so an application that sends its identity request later
+          // than that had sent nothing at the first read. A refusal recorded by either read means
+          // the screen was not reached signed in, and everything collected from it goes with it.
+          // This is the second and last read: a refusal that arrives after it is not seen. Only
+          // the refused-request record is re-read; the address and the password count keep their
+          // load-time values for the reason given above.
+          const lateRefusal = redirectedAwayGap(screen.id, {
+            ...landing,
+            unauthorizedApiUrls: await readRefusedRequests(page),
+          });
+          if (lateRefusal !== null) {
+            result = notReachedScan(screen, lateRefusal, reachedWhen);
+          } else {
+            result = {
+              screenId: screen.id,
+              url: screen.url,
+              stops,
+              drafts,
+              gaps: providerResult.gaps,
+              applicability: providerResult.applicability,
+              reachedSelectorPresent,
+              reachedWhenSelector: reachedWhen ?? null,
+            };
+          }
+        }
       } catch (err) {
         result = failedScan(screen, `scan failed: ${errorMessage(err)}`);
       } finally {

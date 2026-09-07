@@ -12,6 +12,8 @@ import {
   hashEngineFiles,
   normalizeSeparators,
 } from "../../src/deps/build.js";
+import { makeFakePage } from "../../src/deps/fakes.js";
+import type { BrowserDriver } from "../../src/contracts/index.js";
 import { testConfig } from "../helpers.js";
 
 const packageJsonPath = fileURLToPath(
@@ -129,6 +131,119 @@ describe("buildDeps", () => {
     } finally {
       vi.unstubAllEnvs();
       launchSpy.mockRestore();
+      await rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to build Deps from an expired session, and opens no browser", async () => {
+    // The dead-session refusal, held at the seam every operator surface funnels through. The
+    // point is not only that it throws: it throws before anything constructs a browser driver,
+    // so no Chromium starts and no page is opened against the application's sign-in wall. The
+    // CLI turns this throw into exit 4 with the message and no verdict.
+    const sessionDir = await mkdtemp(join(tmpdir(), "usabl-session-expired-"));
+    const storageStatePath = join(sessionDir, "storage-state.json");
+    const expiredSeconds = Math.floor(Date.now() / 1000) - 86_400;
+    await writeFile(
+      storageStatePath,
+      JSON.stringify({
+        cookies: [
+          {
+            name: "session",
+            value: "stale-value",
+            domain: "app.test",
+            path: "/",
+            expires: expiredSeconds,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax",
+          },
+        ],
+        origins: [],
+      }),
+      "utf8",
+    );
+    const launchSpy = vi.spyOn(chromium, "launch");
+    const browserFor = vi.fn(() => {
+      throw new Error("a browser driver must never be built for a dead session");
+    });
+    vi.stubEnv("USABL_STORAGE_STATE", storageStatePath);
+
+    try {
+      await expect(buildDeps(testConfig(), { browserFor })).rejects.toThrow(
+        /session has expired/,
+      );
+      expect(browserFor).not.toHaveBeenCalled();
+      expect(launchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      launchSpy.mockRestore();
+      await rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tells the check runner that a session was configured, and that it was not", async () => {
+    // Two of the three not-reached rules are claims about a session that was asserted and did not
+    // work, so they are off unless someone asserted one. This is the only place in the product
+    // that knows, and every gating surface builds its Deps here, so the wiring is held at this
+    // seam rather than at each surface. The probe is the behaviour itself: a page that answers
+    // 401 to its own data request is a coverage gap with a session, and an ordinary scan without.
+    const sessionDir = await mkdtemp(join(tmpdir(), "usabl-session-flag-"));
+    const storageStatePath = join(sessionDir, "storage-state.json");
+    await writeFile(
+      storageStatePath,
+      JSON.stringify({
+        cookies: [
+          {
+            name: "session",
+            value: "live-value",
+            domain: "app.test",
+            path: "/",
+            expires: Math.floor(Date.now() / 1000) + 86_400,
+          },
+        ],
+        origins: [],
+      }),
+      "utf8",
+    );
+    const refusedPage = {
+      ...makeFakePage({
+        currentUrl: async () => "http://app.test/users",
+        unauthorizedApiRequests: async () => ["http://app.test/api/me"],
+        activePath: async () => "html > body > main > button#save",
+      }),
+    };
+    const browserFor = (): BrowserDriver => ({
+      open: async () => refusedPage,
+      close: async () => {},
+    });
+
+    try {
+      vi.stubEnv("USABL_STORAGE_STATE", storageStatePath);
+      // The refused request has to be on the appBaseUrl hostname, or a subdomain of it, because a
+      // refusal from an unrelated host deliberately does not fire the rule. Scheme and port are
+      // not compared, so only the host has to line up here.
+      const config = testConfig({ appBaseUrl: "http://app.test" });
+      const withSession = await buildDeps(config, { browserFor });
+      const gated = await withSession.checkRunner.scan({
+        id: "clusters",
+        url: "http://app.test/users",
+      });
+      expect(gated.gaps).toHaveLength(1);
+      expect(gated.gaps[0]?.reason).toContain("401");
+      expect(gated.drafts).toEqual([]);
+
+      vi.unstubAllEnvs();
+      const withoutSession = await buildDeps(config, { browserFor });
+      const ungated = await withoutSession.checkRunner.scan({
+        id: "clusters",
+        url: "http://app.test/users",
+      });
+      // No session was asserted, so a 401 is an ordinary thing for a signed-out visitor to meet
+      // and raises nothing. The scan went on to the walk and the real providers, which have their
+      // own opinion of a fake page; only the absence of the refused-request gap is asserted here.
+      expect(ungated.gaps.some((gap) => gap.reason.includes("401"))).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
       await rm(sessionDir, { recursive: true, force: true });
     }
   });

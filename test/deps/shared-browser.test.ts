@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { makeRealBrowserDriver, makeSharedBrowser, type LaunchedBrowser } from '../../src/deps/real.js';
+import {
+  makeRealBrowserDriver,
+  makeSharedBrowser,
+  redactStorageStatePath,
+  type LaunchedBrowser,
+} from '../../src/deps/real.js';
 
 /**
  * A browser process stand-in. It is connected until a test says otherwise, records the options of
@@ -325,5 +330,70 @@ describe('makeRealBrowserDriver', () => {
     expect(launched.contextOptions).toEqual([{ storageState: '/tmp/session.json' }]);
     await driver.close();
     expect(launched.closeCalls()).toBe(1);
+  });
+});
+
+describe('a browser error never publishes the storage state path', () => {
+  // The leak this closes. usabl never puts the path in a message of its own, but the browser is
+  // not usabl. Delete the session file, or take read permission off it, between the pre-check and
+  // the moment a context is created, and Playwright raises its own ENOENT or EACCES naming the
+  // file in full. The check runner turns a failed open into a coverage gap carrying that message,
+  // and that gap is rendered by the CLI, the overlay, and the pull request comment, so a private
+  // path would be published to a repository.
+  const SECRET_PATH = '/home/operator/.usabl/very-secret-session.json';
+
+  it('replaces a context error that quotes the path with a fixed sentence', async () => {
+    const ports = launcher();
+    const shared = makeSharedBrowser({ launch: ports.launch });
+    const driver = shared.driver({ storageStatePath: SECRET_PATH });
+    await driver.open('http://127.0.0.1:1/a');
+
+    ports.processes[0]?.failNextContext(
+      new Error(`ENOENT: no such file or directory, open '${SECRET_PATH}'`),
+    );
+    const error = await driver.open('http://127.0.0.1:1/b').catch((err: unknown) => err);
+
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).not.toContain(SECRET_PATH);
+    expect(message).not.toContain('very-secret-session');
+    expect(message).toContain('USABL_STORAGE_STATE');
+    expect(message).toContain('unreadable at scan time');
+  });
+
+  it('replaces a later open error that quotes the path', async () => {
+    const ports = launcher();
+    const shared = makeSharedBrowser({ launch: ports.launch });
+    const driver = shared.driver({ storageStatePath: SECRET_PATH });
+    await driver.open('http://127.0.0.1:1/a');
+
+    ports.processes[0]?.failNextGoto(new Error(`EACCES reading ${SECRET_PATH}`));
+    const error = await driver.open('http://127.0.0.1:1/b').catch((err: unknown) => err);
+
+    expect(error instanceof Error ? error.message : String(error)).not.toContain(SECRET_PATH);
+  });
+
+  it('leaves an unrelated browser failure with its own diagnosis', async () => {
+    // Rewriting every error would cost the operator the one thing that tells them what went
+    // wrong. Only a message that actually quotes this run's path is replaced.
+    const ports = launcher();
+    const shared = makeSharedBrowser({ launch: ports.launch });
+    const driver = shared.driver({ storageStatePath: SECRET_PATH });
+    await driver.open('http://127.0.0.1:1/a');
+
+    ports.processes[0]?.failNextContext(new Error('net::ERR_CONNECTION_REFUSED'));
+    await expect(driver.open('http://127.0.0.1:1/b')).rejects.toThrow('ERR_CONNECTION_REFUSED');
+  });
+
+  it('redactStorageStatePath passes everything through when no session is configured', () => {
+    const original = new Error('some browser failure');
+    expect(redactStorageStatePath(original, undefined)).toBe(original);
+    expect(redactStorageStatePath(original, '')).toBe(original);
+    expect(redactStorageStatePath(original, '/tmp/other.json')).toBe(original);
+  });
+
+  it('redactStorageStatePath handles a thrown non-Error that quotes the path', () => {
+    const replaced = redactStorageStatePath(`open failed for ${SECRET_PATH}`, SECRET_PATH);
+    expect(replaced).toBeInstanceOf(Error);
+    expect((replaced as Error).message).not.toContain(SECRET_PATH);
   });
 });

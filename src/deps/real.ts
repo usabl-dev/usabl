@@ -370,19 +370,56 @@ export function readyTimeoutMsFor(config: { readyTimeoutMs?: number }): number {
 // A request that errors or is aborted fires requestfailed rather than requestfinished, so both
 // decrement the count. Without that a failed request would pin the count above zero forever and a
 // page with one broken request would never read as idle.
-interface NetworkActivity {
+// unauthorizedApiUrls reports the other thing worth knowing about the same traffic: which of the
+// page's own data requests came back 401. It rides this tracker rather than a second listener path
+// because both facts are read off the same request lifecycle, and a second set of handlers attached
+// somewhere else would be a second thing to keep in step with navigation and adoption. It is
+// cumulative for the life of the page, so a caller decides which window it means by choosing when
+// to read.
+export interface NetworkActivity {
   networkQuietFor(windowMs: number): boolean;
+  unauthorizedApiUrls(): string[];
+}
+
+// The subset of a Playwright response this tracker reads. Narrow so a test can drive it.
+export interface ResponseEvent {
+  status(): number;
+  url(): string;
+  request(): { resourceType(): string };
 }
 
 // The subset of a Playwright page this tracker listens to. Narrow so a test can drive it.
-interface RequestEvents {
+export interface RequestEvents {
   on(event: 'request' | 'requestfinished' | 'requestfailed', handler: () => void): void;
+  on(event: 'response', handler: (response: ResponseEvent) => void): void;
 }
 
-function makeNetworkActivityTracker(page: RequestEvents, now: () => number = Date.now): NetworkActivity {
+// The resource types Playwright gives a request the page's own script issued. A document, a
+// stylesheet, an image, or a font that answers 401 is a missing asset, not a refused session, so
+// only these two count.
+const PAGE_DATA_RESOURCE_TYPES = new Set(['fetch', 'xhr']);
+
+// 401 only. 403 means the request was authenticated and the identity is not allowed to have the
+// thing, which is a real application state a signed-in scan can legitimately meet, so it must not
+// fire. 401 is the one status HTTP defines as "not authenticated".
+const UNAUTHENTICATED_STATUS = 401;
+
+// Exported for tests. Product code reaches it through Page.gotoReady() and
+// Page.unauthorizedApiRequests().
+export function makeNetworkActivityTracker(
+  page: RequestEvents,
+  now: () => number = Date.now,
+): NetworkActivity {
   let inFlight = 0;
   // The last instant the count was zero. A page starts idle, so it begins now.
   let idleSince = now();
+  // Every refused data request seen since this tracker was attached, in arrival order. The tracker
+  // is attached before navigation and never stops recording, so a read late in a scan includes
+  // traffic a provider click caused as well as traffic the load caused. That is deliberate: a
+  // request a provider triggered is still the application answering this session, and the check
+  // runner reads this twice for exactly that reason. What it cannot hold is a response that
+  // arrives after the last read, which is the one boundary nothing here can close.
+  const unauthorized: string[] = [];
 
   const settled = (): void => {
     inFlight = Math.max(0, inFlight - 1);
@@ -396,6 +433,21 @@ function makeNetworkActivityTracker(page: RequestEvents, now: () => number = Dat
   });
   page.on('requestfinished', settled);
   page.on('requestfailed', settled);
+  page.on('response', (response) => {
+    // A listener that throws would take down the page event emitter, and a status read on a
+    // response from a frame that has already gone can throw. Nothing here is worth that.
+    try {
+      if (response.status() !== UNAUTHENTICATED_STATUS) {
+        return;
+      }
+      if (!PAGE_DATA_RESOURCE_TYPES.has(response.request().resourceType())) {
+        return;
+      }
+      unauthorized.push(response.url());
+    } catch {
+      return;
+    }
+  });
 
   return {
     networkQuietFor(windowMs: number): boolean {
@@ -403,6 +455,9 @@ function makeNetworkActivityTracker(page: RequestEvents, now: () => number = Dat
         return false;
       }
       return now() - idleSince >= windowMs;
+    },
+    unauthorizedApiUrls(): string[] {
+      return [...unauthorized];
     },
   };
 }
@@ -517,6 +572,30 @@ function wrapPage(
   const page: Page = {
     async gotoReady(): Promise<void> {
       await waitForRendered(readiness, readyTimeoutMs);
+    },
+    async currentUrl(): Promise<string> {
+      // Playwright tracks the committed navigation, so this is the address after any redirect
+      // chain the server or the application ran, not the one open() was handed.
+      return pw.url();
+    },
+    async unauthorizedApiRequests(): Promise<string[]> {
+      return network.unauthorizedApiUrls();
+    },
+    async countEverywhere(selector: string): Promise<number> {
+      // A Playwright locator pierces open shadow roots on its own, and every frame is asked, so a
+      // login form mounted in a web component or an iframe is counted where querySelectorAll on
+      // the top document would report nothing.
+      let total = 0;
+      for (const frame of pw.frames()) {
+        try {
+          total += await frame.locator(selector).count();
+        } catch {
+          // A frame that detached mid-scan, or a selector the engine rejects, contributes nothing.
+          // Counting is a probe, never a reason to fail a whole screen.
+          continue;
+        }
+      }
+      return total;
     },
     async focusBody(): Promise<void> {
       await pw.evaluate(() => {
@@ -687,6 +766,38 @@ export interface SharedBrowser {
   close(): Promise<void>;
 }
 
+/**
+ * Replace any browser error that quotes the storage state path with a fixed sentence.
+ *
+ * The path never reaches a message on any path usabl controls, but the browser is not usabl. If
+ * the session file is deleted or loses read permission between the pre-check and the moment a
+ * context is created, Playwright raises its own ENOENT or EACCES naming the file in full. The
+ * check runner turns a failed open into a coverage gap carrying that message, and that gap is
+ * rendered by the CLI, the overlay, and the pull request comment. A private path would then be
+ * published to a repository.
+ *
+ * Matching is on the exact path string this run was given, so nothing else is rewritten and an
+ * unrelated browser failure keeps its own diagnosis. The replacement says what happened and what
+ * to do, which is everything the operator needs and nothing they do not already know.
+ *
+ * Exported for tests, which drive it directly rather than trying to make a real browser race a
+ * file deletion.
+ */
+export function redactStorageStatePath(error: unknown, storageStatePath: string | undefined): unknown {
+  if (storageStatePath === undefined || storageStatePath.length === 0) {
+    return error;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (!message.includes(storageStatePath)) {
+    return error;
+  }
+  return new Error(
+    'the browser could not open a context with the configured session; the file named by ' +
+      'USABL_STORAGE_STATE was unreadable at scan time (the path is not printed here). Re-export ' +
+      'the session file, or unset USABL_STORAGE_STATE to scan signed out on purpose.',
+  );
+}
+
 export function makeSharedBrowser(
   ports: { launch?: () => Promise<LaunchedBrowser>; maxContextFailures?: number } = {},
 ): SharedBrowser {
@@ -767,7 +878,7 @@ export function makeSharedBrowser(
       if (!launched.isConnected() || contextFailures >= maxContextFailures) {
         await discard(launched);
       }
-      throw error;
+      throw redactStorageStatePath(error, options.storageStatePath);
     }
     contextFailures = 0;
 
@@ -793,7 +904,10 @@ export function makeSharedBrowser(
       if (!launched.isConnected()) {
         await discard(launched);
       }
-      throw error;
+      // Belt and braces. Nothing below newContext reads the storage state file, so no error here
+      // should carry the path, but this is the last point before the message becomes a coverage
+      // gap in a pull request comment and the cost of being wrong is a leaked private path.
+      throw redactStorageStatePath(error, options.storageStatePath);
     }
   };
 
