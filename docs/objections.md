@@ -89,11 +89,11 @@ passes; whether an administrator can bypass depends on the ruleset's bypass list
 **Acknowledge:** Real repos are not green on day one. A tool that blocks everything on
 legacy code is useless.
 
-**Redirect:** Three mechanisms: (1) ratchet - only new violations block, existing debt
-is in the evidence floor; (2) waiver ledger - known debt tracked with expiry, not hidden;
-(3) brownfield adoption path - install, accept the floor for legacy surfaces, and the
-tool gates only new, unwaived barriers on the screens it scans from day one. Teams are
-not punished for history.
+**Redirect:** Three mechanisms: (1) ratchet - carried debt does not block, it sits in the
+evidence floor; (2) waiver ledger - known debt tracked with expiry, not hidden;
+(3) brownfield adoption path - install, accept the floor for legacy surfaces, and from day
+one the tool blocks a new, unwaived barrier on the screens it scans, coverage it could not
+confirm, and an edit to a guarded policy file. Teams are not punished for history.
 
 **Proof point:** Onboarding journey in personas: Morgan installs usabl, accepts the
 evidence floor on legacy surfaces, and ratchets from there. No legacy surface blocks
