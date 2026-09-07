@@ -1045,7 +1045,7 @@ Blocked:        yes
         <div class="layers">
           <article class="layer"><strong>always() is load-bearing</strong>GitHub counts a skipped required job as satisfied. An aggregate that could be skipped would be an open gate, so this job always runs and always decides.</article>
           <article class="layer"><strong>Approvals flip the gate without re-scanning</strong>A CODEOWNERS approval fires a review event. The scan does not re-run. usabl-policy finds the completed scan for that exact commit and reads its Result artifact, so an approval flips the gate deterministically and no head code runs on the event that carries secrets.</article>
-          <article class="layer"><strong>One verdict path</strong>The accessibility verdict travels as data read from the Result, never inferred from a job's pass or fail. On a review re-run, where the scan job is skipped, that artifact is the only accessibility authority that exists.</article>
+          <article class="layer"><strong>One verdict path</strong>The accessibility verdict the gate wrote travels as data read from the Result, never inferred from a job's pass or fail; a missing or unparseable Result blocks. On a review re-run, where the scan job is skipped, that artifact is the only accessibility authority that exists.</article>
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#ci-comment">Previous</a>
