@@ -92,8 +92,11 @@ legacy code is useless.
 **Redirect:** Three mechanisms: (1) ratchet - carried debt does not block, it sits in the
 evidence floor; (2) waiver ledger - known debt tracked with expiry, not hidden;
 (3) brownfield adoption path - install, accept the floor for legacy surfaces, and from day
-one the tool blocks a new, unwaived barrier on the screens it scans, coverage it could not
-confirm, and an edit to a guarded policy file. Teams are not punished for history.
+one the tool blocks a new, unwaived barrier above the floor on the screens it scans, coverage
+it could not confirm, and an edit to a guarded policy file. Teams are not punished for
+history. One residual, disclosed in the ground truth: a barrier that lands in headroom the
+floor still records counts as carried until `usabl floor prune` re-arms the floor, and usabl
+reports that headroom on every run where it exists.
 
 **Proof point:** Onboarding journey in personas: Morgan installs usabl, accepts the
 evidence floor on legacy surfaces, and ratchets from there. No legacy surface blocks
