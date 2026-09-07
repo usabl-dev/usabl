@@ -125,7 +125,7 @@ Look for `stop-hook`, `claude usabl-check skill`, and `cursor stop hook + assist
 ## Test ansible-ui as a brownfield app
 
 ansible-ui is a real, login-gated monorepo. usabl treats it as **brownfield**: existing accessibility
-debt is expected until you baseline it. The gate then blocks only **new** barriers on touched surfaces.
+debt is expected until you baseline it. The gate then blocks only **new**, unwaived barriers on the screens mapped from the changed UI files.
 
 ### What to expect on first run
 
