@@ -224,51 +224,102 @@ describe('what init writes is what usabl accepts', () => {
     }
   });
 
-  it('skips a route whose derived screen id the parser would refuse, and says so', async () => {
-    // A raw space in a route path rides straight through screenIdFromUrl into the id. The route
-    // is skipped where the id is derived, so it reaches neither the sidecar nor the surfaces.
-    const withSpace = router.replace('path="/clusters"', 'path="/user settings"');
-    const draft = await inferInit(memoryFs(fixtureFiles({ 'src/App.tsx': withSpace })));
+  // The fixture router with one more route after /clusters, on line 10, sharing the Clusters
+  // entry file. Two urls on one entry file is the case a skipped route would have hidden.
+  function routerWithExtraRoute(path: string): string {
+    return router.replace(
+      '<Route path="/clusters" element={<Clusters />} />',
+      `<Route path="/clusters" element={<Clusters />} />\n      <Route path="${path}" element={<Clusters />} />`,
+    );
+  }
 
-    expect(draft.routes.routes.map((route) => route.screenId)).not.toContain('user settings');
-    expect(draft.config.surfaces.map((surface) => surface.id)).not.toContain('user settings');
-    expect(draft.notes.some((note) => note.includes('skipped route') && note.includes('U+0020'))).toBe(true);
+  async function refusalOf(fs: InitFs): Promise<string> {
+    try {
+      await inferInit(fs);
+    } catch (error: unknown) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    return '';
+  }
+
+  it('refuses the whole draft when a route path holds a raw space, and names the file and line', async () => {
+    // A raw space in a route path rides straight through screenIdFromUrl into the id. The route
+    // cannot be written, and it cannot be left out either, so nothing is written at all. The
+    // refusal locates the route by file and line and never prints the path.
+    const withSpace = router.replace('path="/clusters"', 'path="/user settings"');
+    const fs = memoryFs(fixtureFiles({ 'src/App.tsx': withSpace }));
+
+    const message = await refusalOf(fs);
+    expect(message).toContain('usabl init refused to write usabl.config.json and usabl.routes.json');
+    expect(message).toContain('src/App.tsx line 9: the screen id derived from the route path there');
+    expect(message).toContain('at position 5: U+0020');
+    expect(message).not.toContain('user settings');
+    expect(fs.store['usabl.config.json']).toBeUndefined();
+    expect(fs.store['usabl.routes.json']).toBeUndefined();
   });
 
   it.each([
-    ['a bidi control', '/acct\u202eadmin', 'U+202E'],
-    ['the empty braille pattern', '/docs\u2800private', 'U+2800'],
-  ])('never writes a sidecar the parser refuses: a route path with %s', async (_label, hostilePath, point) => {
-    // The whole path: infer from a router that carries the hostile literal, write the drafts,
-    // then read them back through the same parsers usabl runs with. The hostile route must be
-    // absent from what was written, the note must say why by code point, and planning must
-    // succeed on the written files.
-    const hostileRouter = router.replace(
+    ['a bidi control', '/acct\u202eadmin', 'at position 5: U+202E', '\u202e'],
+    ['the empty braille pattern', '/docs\u2800private', 'at position 5: U+2800', '\u2800'],
+  ])(
+    'refuses the whole draft rather than write sidecars without the route: a route path with %s',
+    async (_label, hostilePath, expectedPoint, rawCharacter) => {
+      // A written sidecar takes precedence over router fallback, and the planner records no gap
+      // for a route that is not in it, so sidecars written without this route would let a change
+      // to the shared Clusters entry file, or a wide-blast file, read as fully checked while the
+      // route is never scanned. The only honest draft is none. The refusal names the file and
+      // line, the position and code point, and the fix, and never the path or the id.
+      const fs = memoryFs(fixtureFiles({ 'src/App.tsx': routerWithExtraRoute(hostilePath) }));
+
+      const message = await refusalOf(fs);
+      expect(message).toContain('usabl init refused to write usabl.config.json and usabl.routes.json');
+      expect(message).toContain('src/App.tsx line 10: the screen id derived from the route path there');
+      expect(message).toContain(expectedPoint);
+      expect(message).toContain('change the route path in the router file');
+      expect(message).not.toContain(rawCharacter);
+      expect(message).not.toContain(hostilePath);
+      expect(fs.store['usabl.config.json']).toBeUndefined();
+      expect(fs.store['usabl.routes.json']).toBeUndefined();
+
+      // Once the path is fixed the same router drafts, writes, reparses, and plans with every
+      // route, and a change to the shared entry file queues both routes that use it.
+      const fixedFs = memoryFs(fixtureFiles({ 'src/App.tsx': routerWithExtraRoute('/acct-admin') }));
+      const draft = await inferInit(fixedFs);
+      const result = await writeInitDrafts(fixedFs, draft, { force: false });
+      expect(result.ok).toBe(true);
+
+      const planFs = {
+        readFile: async (path: string) => fixedFs.store[path] ?? null,
+        glob: async (patterns: string[]) =>
+          Object.keys(fixedFs.store).filter((f) => patterns.some((pattern) => matchGlob(pattern, f))),
+      };
+      const sidecar = await parseRouteManifest(planFs, { routerFile: 'src/App.tsx', wideBlastGlobs: [] });
+      expect(sidecar.source).toBe('sidecar');
+      expect(sidecar.routes.map((route) => route.url)).toEqual(['/', '/clusters', '/acct-admin']);
+
+      const config = parseUsablConfig(fixedFs.store['usabl.config.json'] as string);
+      expect(config.surfaces.map((surface) => surface.id).sort()).toEqual(['acct-admin', 'clusters', 'root']);
+
+      const sharedEntryFile = await computeCoverage(planFs, config, ['src/pages/Clusters.tsx']);
+      expect(sharedEntryFile.affected.map((screen) => screen.screenId).sort()).toEqual(['acct-admin', 'clusters']);
+      expect(sharedEntryFile.gaps).toEqual([]);
+
+      const wideBlast = await computeCoverage(planFs, config, ['src/App.tsx']);
+      expect(wideBlast.affected.map((screen) => screen.screenId).sort()).toEqual(['acct-admin', 'clusters', 'root']);
+      expect(wideBlast.gaps).toEqual([]);
+    },
+  );
+
+  it('names every unusable route in one refusal, so one run shows the whole fix', async () => {
+    const twoBad = router.replace(
       '<Route path="/clusters" element={<Clusters />} />',
-      `<Route path="/clusters" element={<Clusters />} />\n      <Route path="${hostilePath}" element={<Clusters />} />`,
+      `<Route path="/a\u2800a" element={<Clusters />} />\n      <Route path="/b\u200bb" element={<Clusters />} />`,
     );
-    const fs = memoryFs(fixtureFiles({ 'src/App.tsx': hostileRouter }));
-    const draft = await inferInit(fs);
-    await writeInitDrafts(fs, draft, { force: true });
-
-    const note = draft.notes.find((entry) => entry.includes('skipped route'));
-    expect(note).toBeDefined();
-    expect(note).toContain(point);
-
-    const planFs = {
-      readFile: async (path: string) => fs.store[path] ?? null,
-      glob: async (patterns: string[]) =>
-        Object.keys(fs.store).filter((f) => patterns.some((pattern) => matchGlob(pattern, f))),
-    };
-    const sidecar = await parseRouteManifest(planFs, { routerFile: 'src/App.tsx', wideBlastGlobs: [] });
-    expect(sidecar.source).toBe('sidecar');
-    expect(sidecar.routes.map((route) => route.url)).toEqual(['/', '/clusters']);
-    expect(fs.store['usabl.routes.json']).not.toContain(hostilePath);
-
-    const config = parseUsablConfig(fs.store['usabl.config.json'] as string);
-    expect(config.surfaces.map((surface) => surface.id).sort()).toEqual(['clusters', 'root']);
-    const coverage = await computeCoverage(planFs, config, ['src/App.tsx']);
-    expect(coverage.affected.map((screen) => screen.screenId).sort()).toEqual(['clusters', 'root']);
-    expect(coverage.gaps).toEqual([]);
+    const message = await refusalOf(memoryFs(fixtureFiles({ 'src/App.tsx': twoBad })));
+    expect(message).toContain('2 routes have ids');
+    expect(message).toContain('src/App.tsx line 9:');
+    expect(message).toContain('at position 2: U+2800');
+    expect(message).toContain('src/App.tsx line 10:');
+    expect(message).toContain('at position 2: U+200B');
   });
 });

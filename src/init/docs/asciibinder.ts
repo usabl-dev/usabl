@@ -12,10 +12,10 @@ import { posix } from 'node:path';
 import yaml from 'js-yaml';
 import { buildAdocIncludeGraph } from '../../coverage/asciidoc-include-graph.js';
 import type { DocsManifest, DocsPageEntry } from '../../coverage/docs-manifest.js';
-import { describeIdProblem } from '../../intake/id-grammar.js';
+import { validateId } from '../../intake/id-grammar.js';
 import { slug } from '../../primitives/slug.js';
+import { DOCS_INIT_REFUSAL, unusableIdsError, type UnusableId } from '../unusable-ids.js';
 import type { DocsInitDraft, DocsInitFs } from './index.js';
-import { unusablePagesError, type UnusablePage } from './unusable-pages.js';
 
 const TOPIC_MAP_PATH = '_topic_maps/_topic_map.yml';
 const DISTRO_MAP_PATH = '_distro_map.yml';
@@ -96,7 +96,7 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
   }
 
   const pages: DocsPageEntry[] = [];
-  const unusable: UnusablePage[] = [];
+  const unusable: UnusableId[] = [];
   const usedPageIds = new Set<string>();
 
   const uniquePageId = (candidate: string): string => {
@@ -143,9 +143,9 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
     // a shared-file change look fully checked while the page is never scanned, so the page is
     // collected and the whole draft is refused once every leaf has been seen.
     const candidate = slug(chainWithFile.join('/'));
-    const problem = describeIdProblem(candidate);
-    if (problem !== null) {
-      unusable.push({ file: assemblyFile, origin: 'the pageId slugged from its path', problem });
+    const refusal = validateId(candidate);
+    if (!refusal.ok) {
+      unusable.push({ source: assemblyFile, origin: 'the pageId slugged from its path', refusal });
       continue;
     }
     const pageId = uniquePageId(candidate);
@@ -160,7 +160,7 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
   // Refuse before the empty check, because a map whose every leaf is unusable is empty for a
   // reason the operator can fix, and that reason is the one to print.
   if (unusable.length > 0) {
-    throw unusablePagesError(unusable);
+    throw unusableIdsError(DOCS_INIT_REFUSAL, unusable);
   }
 
   if (pages.length === 0) {

@@ -89,6 +89,9 @@ export type IdGrammarResult =
   | { ok: false; problem: 'disallowed-character'; index: number; codePoint: number }
   | { ok: false; problem: 'not-nfc' };
 
+/** The refusing half of `IdGrammarResult`, for callers that keep a refusal to report later. */
+export type IdGrammarRefusal = Exclude<IdGrammarResult, { ok: true }>;
+
 /**
  * Formats a code point the way a config file can be searched for it, for example U+200B.
  */
@@ -139,10 +142,16 @@ export function validateId(id: string): IdGrammarResult {
  */
 export function describeIdProblem(id: string): string | null {
   const result = validateId(id);
-  if (result.ok) {
-    return null;
-  }
+  return result.ok ? null : describeIdRefusal(result);
+}
 
+/**
+ * The words for one refusal, for a caller that validated earlier and kept the result. Same text
+ * as `describeIdProblem`, same no-echo rule: a refused character is named by position and code
+ * point; an id that is empty or not in NFC form has no single character to name, so those two
+ * are described by the rule they broke.
+ */
+export function describeIdRefusal(result: IdGrammarRefusal): string {
   switch (result.problem) {
     case 'empty':
       return 'must be a non-empty string. A blank id cannot name anything.';

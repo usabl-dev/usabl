@@ -16,10 +16,10 @@
 import { posix } from 'node:path';
 import { buildAdocIncludeGraph } from '../../coverage/asciidoc-include-graph.js';
 import type { DocsManifest, DocsPageEntry } from '../../coverage/docs-manifest.js';
-import { describeIdProblem } from '../../intake/id-grammar.js';
+import { validateId } from '../../intake/id-grammar.js';
 import { slug } from '../../primitives/slug.js';
+import { DOCS_INIT_REFUSAL, unusableIdsError, type UnusableId } from '../unusable-ids.js';
 import type { DocsInitDraft, DocsInitFs } from './index.js';
-import { unusablePagesError, type UnusablePage } from './unusable-pages.js';
 
 const PANTHEON_MASTER_GLOB = 'titles/*/master.adoc';
 const DEFAULT_BUILT_ROOT = 'build';
@@ -141,7 +141,7 @@ async function discoverSharedGlobs(fs: DocsInitFs): Promise<string[]> {
 export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraft> {
   const notes: string[] = [];
   const pages: DocsPageEntry[] = [];
-  const unusable: UnusablePage[] = [];
+  const unusable: UnusableId[] = [];
   const usedPageIds = new Set<string>();
 
   const uniquePageId = (candidate: string): string => {
@@ -188,12 +188,12 @@ export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraf
       // then refuses to read. The page is not skipped either: a manifest without it would let a
       // shared-file change look fully checked while the page is never scanned. Every such page is
       // collected so the whole draft can be refused at once, naming each one.
-      const problem = describeIdProblem(candidate);
-      if (problem !== null) {
+      const refusal = validateId(candidate);
+      if (!refusal.ok) {
         unusable.push({
-          file: assemblyFile,
+          source: assemblyFile,
           origin: anchor !== null ? 'its anchor pageId' : 'the pageId guessed from its filename',
-          problem,
+          refusal,
         });
         continue;
       }
@@ -217,7 +217,7 @@ export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraf
   // Refuse before the empty check, because a guide whose every page is unusable is empty for a
   // reason the operator can fix, and that reason is the one to print.
   if (unusable.length > 0) {
-    throw unusablePagesError(unusable);
+    throw unusableIdsError(DOCS_INIT_REFUSAL, unusable);
   }
 
   if (pages.length === 0) {

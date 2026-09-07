@@ -262,6 +262,26 @@ include::../../assemblies/__.adoc[]
     expect(fs.store[DOCS_MANIFEST_PATH]).toBeUndefined();
   });
 
+  it('says an anchor that is not in NFC form must be normalized, without a position it cannot give', async () => {
+    // A decomposed spelling looks identical to the composed one and compares as a different id.
+    // There is no single character to point at, so the refusal names the rule and the fix is to
+    // normalize, and the id itself is still never printed.
+    const decomposed = 'cafe\u0301';
+    const fs = memoryFs(guideWithAnchor(decomposed));
+
+    let message = '';
+    try {
+      await inferAsciidocModular(fs);
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('assemblies/assembly_other.adoc: its anchor pageId must be written in Unicode NFC form');
+    expect(message).toContain('must be normalized to NFC, or retyped');
+    expect(message).not.toContain('at position');
+    expect(message).not.toContain(decomposed);
+    expect(fs.store[DOCS_MANIFEST_PATH]).toBeUndefined();
+  });
+
   it('names every unusable page in one refusal, so one run shows the whole fix', async () => {
     const fs = memoryFs({
       'titles/aap/master.adoc': `= AAP

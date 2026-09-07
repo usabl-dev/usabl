@@ -12,8 +12,10 @@ import {
   isRouterSource,
   mergeParsedRoutes,
   parseDataRouterRoutes,
-  deriveScreenId,
+  screenIdFromUrl,
 } from '../coverage/router-parse.js';
+import { validateId } from '../intake/id-grammar.js';
+import { APP_INIT_REFUSAL, unusableIdsError, type UnusableId } from './unusable-ids.js';
 
 // Init writes only these two drafts. Waivers stay human-authored judgment.
 const POLICY_FILES = ['usabl.config.json', 'usabl.routes.json'] as const;
@@ -210,6 +212,7 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
   }
 
   const routes: RouteEntry[] = [];
+  const unusable: UnusableId[] = [];
   if (routerRaw !== null) {
     const imports = parseLocalImports(routerRaw);
     const parsed = mergeParsedRoutes(parseRouteTags(routerRaw), parseDataRouterRoutes(routerRaw));
@@ -233,12 +236,23 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
       }
       // Ask the question the parser is going to ask, at the point the id is made. A route path
       // can hold a raw space, a joining character, or a blank glyph, and the derived id would
-      // carry it, so writing that route would produce a sidecar usabl then refuses to read.
-      // Skipping it with a note keeps the generator and the validator agreeing, and leaves the
-      // operator a route they can name themselves.
-      const derived = deriveScreenId(route.path);
-      if (!derived.ok) {
-        notes.push(`Review: skipped route ${operatorText(route.path)}; its screen id ${derived.problem}`);
+      // carry it, so writing that route would produce a sidecar usabl then refuses to read. The
+      // route is not skipped either: a written sidecar takes precedence over router fallback and
+      // the planner records no gap for a route that is not in it, so a sidecar without this route
+      // would let a change to a shared entry file or a wide-blast file look fully checked while
+      // the route is never scanned. Every such route is collected so the whole draft can be
+      // refused at once. The route is named by file and line, never by its path, because the
+      // path is what carries the refused character.
+      const screenId = screenIdFromUrl(route.path);
+      const refusal = validateId(screenId);
+      if (!refusal.ok) {
+        const at = routerRaw.indexOf(route.path);
+        const line = at < 0 ? null : routerRaw.slice(0, at).split('\n').length;
+        unusable.push({
+          source: line === null ? routerFile : `${routerFile} line ${line}`,
+          origin: 'the screen id derived from the route path there',
+          refusal,
+        });
         continue;
       }
       // Missing attribution stays null. Guessing an entry file would hide a
@@ -249,7 +263,7 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
         notes.push(`Review: ${route.path} has no proven entry file.`);
       }
       routes.push({
-        screenId: derived.screenId,
+        screenId,
         url: route.path,
         entryFile,
       });
@@ -258,6 +272,11 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
     if (routerRaw.includes('path="*"') || routerRaw.includes("path='*'")) {
       notes.push('Review: skipped catch-all route path="*".');
     }
+  }
+
+  // Refuse once every route has been seen, so one run shows the whole fix.
+  if (unusable.length > 0) {
+    throw unusableIdsError(APP_INIT_REFUSAL, unusable);
   }
 
   const srcTsx = await fs.glob(['src/**/*.tsx']);
