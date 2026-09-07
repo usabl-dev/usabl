@@ -1715,9 +1715,13 @@ There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 
 Work on this section that is known and deferred until after the freeze.
 
-- Re-validate floor screen ids, waiver surfaces, and receipt `checked` and applicability inputs
-  at the exported library boundary, so the id grammar holds for `gate()` and `mintReceipt()`
-  callers and not only for the `usabl` command path.
+- Re-validate every identity a caller can pass directly to the exported library functions, so
+  the id grammar holds for `gate()` and `mintReceipt()` callers and not only for the `usabl`
+  command path. For `gate()` that is every identity-bearing field of `GateInput`:
+  `coverage.affected[].screenId`, `drafts[].screenId`, `floor.entries[].screenId`,
+  `waivers[].surface`, and every member of `cleanlyScannedScreens`. For `mintReceipt()` it is
+  `surfaces`, `checked`, `notCovered`, and `applicability[].screenId`. None of these is checked
+  today on the library path.
 
 ---
 
