@@ -181,10 +181,11 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
 
           // Rule A again, on the record as it stands now. Readiness settles about 1.5 seconds
           // after a stable shell appears, so an application that sends its identity request later
-          // than that had sent nothing at the first read. A refusal that arrived at any point in
-          // the scan means the screen was not reached signed in, and everything collected from it
-          // goes with it. Only the refused-request record is re-read; the address and the password
-          // count keep their load-time values for the reason given above.
+          // than that had sent nothing at the first read. A refusal recorded by either read means
+          // the screen was not reached signed in, and everything collected from it goes with it.
+          // This is the second and last read: a refusal that arrives after it is not seen. Only
+          // the refused-request record is re-read; the address and the password count keep their
+          // load-time values for the reason given above.
           const lateRefusal = redirectedAwayGap(screen.id, {
             ...landing,
             unauthorizedApiUrls: await readRefusedRequests(page),

@@ -852,14 +852,14 @@ screen contributes no findings, records no keyboard walk, and is excluded from t
 set the gate is given, so no floored barrier on it can be reported as resolved.
 
 - **Rule A, refused data requests.** A storage state is configured and at least one of the page's
-  own `fetch` or XHR requests to the application's own hostname answered 401 at any point during
-  the scan. This is the primary signal, because it needs nothing from the address or the DOM. It is
-  checked twice, once when readiness settles and again after the walk, the providers, the source
-  attachment, and the reachability measurement have all run. One read is not enough: readiness
-  needs four equal DOM counts 500 ms apart plus 500 ms of network quiet, so a stable shell settles
-  in about 1.5 s, and an application that sends its identity request later than that has sent
-  nothing yet. Measured with the real adapter, a page fetching its identity endpoint at three
-  seconds recorded nothing at the first read. The second read deliberately includes traffic the
+  own `fetch` or XHR requests to the application's own hostname had answered 401 at either of two
+  reads: the first when readiness settles, the second after the walk, the checks, the source
+  attachment, and the reachability measurement have run. A refusal that arrives after the second
+  read is not seen. This is the primary signal, because it needs nothing from the address or the
+  DOM. Two reads, not one: readiness needs four equal DOM counts 500 ms apart plus 500 ms of
+  network quiet, so a stable shell settles in about 1.5 s, and an application that sends its
+  identity request later than that has sent nothing yet. Measured with the real adapter, a page
+  fetching its identity endpoint at three seconds recorded nothing at the first read. The second read deliberately includes traffic the
   providers caused, because a request a provider click triggered is still the application answering
   this session. 401 only; 403 means authenticated and not permitted, which a correct signed-in scan
   can legitimately meet. Nothing overrides this rule.

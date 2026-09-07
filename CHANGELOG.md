@@ -15,10 +15,11 @@
   same URL, so neither the address nor a password field is reliable on its own.
   Three rules now stand against it, each producing a not-covered coverage gap.
   Rule A: with a storage state configured, one of the page's own fetch or XHR
-  requests to the application's own hostname came back 401 at any point during the
-  scan. It is checked when readiness settles and again at the end of the scan,
-  because a stable shell settles in about 1.5 seconds and an application slower
-  than that has sent nothing yet at the first read. A refusal counts when its
+  requests to the application's own hostname had come back 401 at either of two
+  reads, the first when readiness settles and the second after the walk, the
+  checks, source attachment, and reachability have run. Two reads, because a stable
+  shell settles in about 1.5 seconds and an application slower than that has sent
+  nothing yet at the first. A refusal arriving after the second read is not seen. A refusal counts when its
   hostname equals the `appBaseUrl` hostname or ends with a dot followed by it, on
   any scheme and any port, so an API subdomain counts and a third-party service
   with its own stale credentials does not; when `appBaseUrl` cannot be parsed every

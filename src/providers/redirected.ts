@@ -24,8 +24,10 @@
  * signed-out scan into a coverage gap.
  *
  * Rule A, refused data requests. Fires when a storage state is configured AND at least one of the
- *   page's own fetch or XHR requests to the application's own hostname answered 401 at any point
- *   during the scan. Nothing overrides it.
+ *   page's own fetch or XHR requests to the application's own hostname had answered 401 at either
+ *   of two reads: the first when readiness settles, the second after the walk, the checks, the
+ *   source attachment, and the reachability measurement have run. A refusal that arrives after the
+ *   second read is not seen. Nothing overrides it.
  *
  *   The application's hostname, not any host. An optional widget, an analytics beacon, or a
  *   third-party service whose own credentials are stale can answer 401 while the application
@@ -34,15 +36,14 @@
  *   accept this session. See refusalsFromAppHost for the match and why an unreadable appBaseUrl
  *   counts everything.
  *
- *   Checked twice: once when readiness settles, and again after the walk, the providers, the
- *   source attachment, and the reachability measurement have all run. It is NOT free of a timing
- *   race. Readiness needs four equal DOM counts 500 ms apart plus 500 ms of network quiet, so a
- *   stable shell settles in about 1.5 s, and an application that sends its identity request later
- *   than that has sent nothing yet when the first read happens. Measured with the real adapter: a
- *   page fetching its identity endpoint at three seconds recorded nothing at the first read and
- *   the 401 during the walk window. The second read closes that window, and it deliberately
- *   includes traffic the providers caused, because a request a provider click triggered is still
- *   the application answering this session.
+ *   Two reads, not one, and not a continuous watch. It is NOT free of a timing race. Readiness
+ *   needs four equal DOM counts 500 ms apart plus 500 ms of network quiet, so a stable shell
+ *   settles in about 1.5 s, and an application that sends its identity request later than that has
+ *   sent nothing yet when the first read happens. Measured with the real adapter: a page fetching
+ *   its identity endpoint at three seconds recorded nothing at the first read and the 401 during
+ *   the walk window. The second read closes that window, and it deliberately includes traffic the
+ *   providers caused, because a request a provider click triggered is still the application
+ *   answering this session.
  *
  *   One boundary remains, and it cannot be closed from here: a 401 that arrives after the second
  *   read is not seen. That read is the last observation of the page before it is closed, so a

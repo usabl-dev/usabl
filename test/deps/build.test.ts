@@ -219,8 +219,9 @@ describe("buildDeps", () => {
 
     try {
       vi.stubEnv("USABL_STORAGE_STATE", storageStatePath);
-      // The refused request has to be same-origin with appBaseUrl, because a third-party 401
-      // deliberately does not fire the rule.
+      // The refused request has to be on the appBaseUrl hostname, or a subdomain of it, because a
+      // refusal from an unrelated host deliberately does not fire the rule. Scheme and port are
+      // not compared, so only the host has to line up here.
       const config = testConfig({ appBaseUrl: "http://app.test" });
       const withSession = await buildDeps(config, { browserFor });
       const gated = await withSession.checkRunner.scan({

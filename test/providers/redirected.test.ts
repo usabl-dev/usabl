@@ -190,8 +190,8 @@ describe('rule A: the page\'s own data requests were refused as unauthenticated'
         }),
       ),
     ).toBeNull();
-    // A same-origin refusal beside the third-party ones still fires, and the count is the
-    // same-origin count, not the raw one.
+    // A refusal from the application's own hostname beside the third-party ones still fires, and
+    // the count is the matched count, not the raw one.
     const gap = redirectedAwayGap(
       SCREEN.id,
       observation({
