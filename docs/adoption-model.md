@@ -117,10 +117,11 @@ each stage matters; this section is what a team actually types, in order.
     as `fixed` and stops appearing. `floor prune` re-arms the gate on screens that scanned
     cleanly: it removes entries whose identity is gone and lowers the recorded count where
     fewer barriers remain. A run that finds the floor claiming more barriers than are present
-    says so and names this command, so this is a step a run asks for rather than a chore to
-    remember. It is a notice and not a block: the verdict does not move, and until the floor
-    is re-armed a new barrier at that identity is recorded as accepted debt. Merge the floor
-    diff with the fix. The
+    says so and names this command, so you find out on a run rather than having to remember.
+    It reports both counts without guessing why they differ: barriers may have been paid
+    down, or the page may render fewer rows today. It is a notice and not a block: the
+    verdict does not move, and until the floor is re-armed a new barrier at that identity is
+    recorded as accepted debt. Merge the floor diff with the fix. The
     floor only ratchets downward with review; it never grows silently.
 
 ---

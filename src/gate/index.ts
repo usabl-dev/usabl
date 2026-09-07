@@ -429,11 +429,13 @@ function verdictSummary(
   if (recorded > 0) {
     clauses.push(`${recorded} recorded`);
   }
-  // Named as work, not as a fault, because it is neither a barrier nor a gap and it does not move
-  // the verdict. It appears on a verified run, which is the point: that is when the floor drifts
-  // ahead of the application and nothing else would say so.
+  // Named as a relation, not as work. "To re-arm" would presume the barriers were fixed, and this
+  // count cannot tell that from a table rendering fewer rows today. "Ahead of this run" is what was
+  // actually observed, and it matches the heading the terminal prints. It is neither a barrier nor
+  // a gap and it does not move the verdict. It appears on a verified run, which is the point: that
+  // is when the floor drifts ahead of the application and nothing else would say so.
   if (headroom > 0) {
-    clauses.push(`${headroom} floor entr${headroom === 1 ? 'y' : 'ies'} to re-arm`);
+    clauses.push(`${headroom} floor entr${headroom === 1 ? 'y' : 'ies'} ahead of this run`);
   }
   if (notEvaluated.gaps > 0) {
     clauses.push(`${notEvaluated.gaps} gap(s)`);

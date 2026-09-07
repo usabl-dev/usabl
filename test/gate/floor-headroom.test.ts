@@ -167,7 +167,7 @@ describe('stale floor headroom', () => {
     expect(out.floorGaps).toEqual([]);
     expect(out.floorHeadroom).toEqual([]);
     expect(out.summary).not.toContain('gap');
-    expect(out.summary).not.toContain('re-arm');
+    expect(out.summary).not.toContain('ahead of this run');
   });
 
   it('makes no stale claim about a run with no UI-touching files', () => {
@@ -196,13 +196,16 @@ describe('stale floor headroom', () => {
 });
 
 describe('the summary line carries headroom', () => {
-  it('names the entries to re-arm on a verified run, where nothing else would say so', () => {
+  it('names the entries the floor is ahead of, on a verified run where nothing else would', () => {
     const out = gate({ ...base, floor: dialogFloor(3), drafts: [dialogAt(1)] });
 
-    // The clause sits beside the verdict word, so it reads as maintenance under a pass and never
-    // as a failure. A verified run is exactly when this needs saying: no barrier, no gap, and the
-    // floor quietly ahead of the application.
-    expect(out.summary).toBe('verified: nothing blocking, 1 recorded, 1 floor entry to re-arm');
+    // The clause sits beside the verdict word, so it reads as a note under a pass and never as a
+    // failure. A verified run is exactly when this needs saying: no barrier, no gap, and the floor
+    // quietly ahead of the application.
+    expect(out.summary).toBe('verified: nothing blocking, 1 recorded, 1 floor entry ahead of this run');
+    // "To re-arm" would presume the barriers were fixed. The gate counted two numbers and cannot
+    // tell a pay-down from a table rendering fewer rows today.
+    expect(out.summary).not.toContain('to re-arm');
   });
 
   it('counts the entries, not the barriers behind them', () => {
@@ -221,14 +224,14 @@ describe('the summary line carries headroom', () => {
     const out = gate({ ...base, floor, drafts: [dialogAt(1), other] });
 
     expect(out.floorHeadroom).toHaveLength(2);
-    expect(out.summary).toContain('2 floor entries to re-arm');
+    expect(out.summary).toContain('2 floor entries ahead of this run');
   });
 
   it('says nothing about re-arming when the floor matches the run', () => {
     const out = gate({ ...base, floor: dialogFloor(1), drafts: [dialogAt(1)] });
 
     expect(out.summary).toBe('verified: nothing blocking, 1 recorded');
-    expect(out.summary).not.toContain('re-arm');
+    expect(out.summary).not.toContain('ahead of this run');
   });
 });
 

@@ -81,7 +81,16 @@ const BLOCKING_HEADING = 'barriers that block this run';
 const RECORDED_HEADING = 'recorded, not blocking';
 const RECORDED_NOTE = 'usabl already recorded these. They do not block this run.';
 const HEADROOM_HEADING = 'floor ahead of this run';
-const HEADROOM_NOTE = 'Barriers were fixed here. Run usabl floor prune to re-arm the floor.';
+// Says what was observed and offers the action, without asserting a cause. usabl cannot tell a
+// fixed barrier from a shorter list: on the application this was measured against, an icon-button
+// entry standing at 15 tracks how many rows a table happens to render, so a run that sees 3 may
+// mean twelve barriers went away or may mean the page has less content today. Both readings are
+// given, and the operator is the only one who knows which applies.
+const HEADROOM_NOTE = [
+  'Fewer barriers are present at these identities than the floor records.',
+  'If they were fixed, run usabl floor prune to re-arm the floor.',
+  'If the page shows less content today, nothing needs to change.',
+];
 
 /** The label on a fix line. Under a barrier it is work. Under recorded debt it is a choice. */
 const BLOCKING_FIX_LABEL = 'fix';
@@ -99,10 +108,15 @@ function isRecordedNotBlocking(finding: Finding): boolean {
  * that is the group they are about.
  *
  * This never blocks and never changes the verdict, so it appears under a verified run and must not
- * read like a failure. It reads as maintenance with a command attached. Each line names the screen,
- * the rule, both numbers, and nothing page-derived: screen ids and rule names are usabl's and the
- * operator's own words, and an element key would carry a neutralized accessible name into a
- * surface that also feeds a pull request comment.
+ * read like a failure. Each line names the screen, the rule, both numbers, and nothing
+ * page-derived: screen ids and rule names are usabl's and the operator's own words, and an element
+ * key would carry a neutralized accessible name into a surface that also feeds a pull request
+ * comment.
+ *
+ * It claims only what was counted. "Floor records 15, this run saw 3" is an observation; "twelve
+ * barriers were fixed" would be a guess, because the same numbers are produced by a table that is
+ * rendering fewer rows today. The note offers both readings and the command, and leaves the
+ * operator to say which one applies.
  *
  * Why an operator should care about a line that blocks nothing: while the floor claims more
  * barriers at an identity than are present, a new barrier can take the difference and be recorded
@@ -115,7 +129,7 @@ function renderFloorHeadroom(result: Result): string[] {
   }
   const lines = [
     `  ${HEADROOM_HEADING}: ${result.floorHeadroom.length} entr${result.floorHeadroom.length === 1 ? 'y' : 'ies'}`,
-    `    ${HEADROOM_NOTE}`,
+    ...HEADROOM_NOTE.map((note) => `    ${note}`),
   ];
   for (const entry of result.floorHeadroom) {
     lines.push(

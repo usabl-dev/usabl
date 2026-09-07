@@ -1076,11 +1076,16 @@ The count comparison runs in both directions, and both are gate decisions:
 - **Above the recorded count** is new debt. More barriers at a known identity than the floor
   accepted is `new`, which gates: `regression` for a definite failure, `not_covered` for one
   usabl could not confirm. A brand new identity is `new` the same way.
-- **Below the recorded count** is a pay-down, and it is not a regression. The findings present stay
-  `carried` and the verdict does not move. The run discloses the difference on every surface: the
-  summary line gains a `N floor entries to re-arm` clause and the terminal prints the screen, the
-  rule, both numbers, and `usabl floor prune` under the recorded group. This is disclosure, not a
-  coverage gap, because a gap makes a run `not_covered` by definition.
+- **Below the recorded count** is not a regression. The findings present stay `carried` and the
+  verdict does not move. The run discloses the difference on every surface: the summary line gains
+  a `N floor entries ahead of this run` clause, and the terminal prints the screen, the rule and
+  both numbers under the recorded group. This is disclosure, not a coverage gap, because a gap
+  makes a run `not_covered` by definition.
+
+  The disclosure states the observation and never the cause. usabl counted two numbers and cannot
+  tell a paid-down barrier from a page rendering fewer rows today, so it says both readings and
+  leaves the operator to pick: if the barriers were fixed, `usabl floor prune` re-arms the floor to
+  what is present; if the page simply shows less content today, nothing needs to change.
 
 ### The residual hole, and why it is open
 

@@ -88,9 +88,12 @@
   claiming the old number, and a new barrier could arrive, take the freed slot, keep the
   tally at or under what was accepted, and be recorded as debt somebody had already
   agreed to. Nothing said so. Every run that finds the floor ahead now says so on every
-  surface: the engine summary gains a `1 floor entry to re-arm` clause, and the terminal
-  prints the screen, the rule, how many barriers the floor claims, how many are actually
-  there, and the command, under the recorded group. `usabl floor prune` now lowers the
+  surface: the engine summary gains a `1 floor entry ahead of this run` clause, and the
+  terminal prints the screen, the rule, how many barriers the floor claims and how many
+  are actually there, under the recorded group. It reports the two counts and does not
+  guess why they differ, because a paid-down barrier and a table rendering fewer rows
+  today look identical from here: if they were fixed, prune re-arms the floor; if the page
+  shows less content today, nothing needs to change. `usabl floor prune` now lowers the
   recorded count to what the run observed as well as removing identities that are gone,
   so one prune clears it. It never raises a count: accepting new debt stays the job of
   `usabl baseline`, under review.

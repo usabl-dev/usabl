@@ -238,10 +238,11 @@ export interface Result {
   // not modify the floor; pruning does. This is projection only; the gate never consumes
   // it and it never influences a verdict.
   paidDownCount: number;
-  // Floored identities where the floor records more barriers than this run observed, so an
-  // accepted entry has probably been fixed and the floor is now ahead of the application. Every
-  // surface shows these so an operator knows to re-arm. Required, never optional: an absent field
-  // would read as "no headroom", and a disclosure that can go missing is not a disclosure.
+  // Floored identities where the floor records more barriers than this run observed, so the floor
+  // is ahead of the application. Why is not knowable from here: barriers may have been fixed, or
+  // the page may render fewer rows today. Surfaces report the two counts and leave the cause to
+  // the operator. Required, never optional: an absent field would read as "no headroom", and a
+  // disclosure that can go missing is not a disclosure.
   // Projection only. The gate never consumes it and it never influences a verdict.
   floorHeadroom: FloorHeadroom[];
 }

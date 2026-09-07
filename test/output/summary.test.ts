@@ -386,14 +386,14 @@ describe('formatSummary', () => {
       expect(out).not.toContain(RECORDED_HEADING);
     });
 
-    it('lists the floor entries to re-arm under the recorded group, without a barrier heading', () => {
+    it('lists the entries the floor is ahead of, under the recorded group, with no barrier heading', () => {
       // Headroom is maintenance, not work. It appears under a verified run, so it must never be
       // rendered as something blocking and must never be filed under the barrier heading.
       const out = formatSummary(
         baseResult({
           verdict: 'verified',
           exitCode: 0,
-          summary: 'verified: nothing blocking, 1 recorded, 1 floor entry to re-arm',
+          summary: 'verified: nothing blocking, 1 recorded, 1 floor entry ahead of this run',
           findings: [withStatus({ status: 'carried' })],
           floorHeadroom: [{ screenId: 'clusters', rule: 'pf-icon-button-name', recorded: 15, observed: 12 }],
         }),
@@ -403,7 +403,12 @@ describe('formatSummary', () => {
       expect(out).toContain('VERIFIED');
       expect(out).not.toContain(BLOCKING_HEADING);
       expect(lines).toContain('  floor ahead of this run: 1 entry');
-      expect(lines).toContain('    Barriers were fixed here. Run usabl floor prune to re-arm the floor.');
+      // The note states the observation and offers the action without asserting a cause: the same
+      // two numbers are produced by twelve fixed barriers and by a table rendering nine fewer rows.
+      expect(lines).toContain('    Fewer barriers are present at these identities than the floor records.');
+      expect(lines).toContain('    If they were fixed, run usabl floor prune to re-arm the floor.');
+      expect(lines).toContain('    If the page shows less content today, nothing needs to change.');
+      expect(out).not.toContain('Barriers were fixed here');
       // Both numbers, so the reader can see how far ahead the floor is without opening the file.
       expect(lines).toContain('    clusters - pf-icon-button-name: floor records 15, this run saw 12');
     });
