@@ -4,6 +4,31 @@
 
 ### Fixed
 
+- A screen the browser was redirected away from is no longer scored as that
+  screen. On a login-gated application whose scan session had expired, every
+  screen request answered with the application's own sign-in page. usabl scanned
+  that page under the requested screen ids, disclosed nothing, and reported all
+  twenty-nine barriers on the committed evidence floor as paid down. The verdict
+  came back red only because that sign-in page carried barriers of its own; a
+  clean one would have produced `verified`, with a receipt, and a claim that the
+  accepted debt was gone. A scan now compares the address the browser ended on
+  against the one requested, and when they differ and the page carries a password
+  input, that screen becomes a coverage gap naming where the browser landed. It
+  contributes no findings, records no keyboard walk, and cannot mark any floor
+  entry resolved. A run whose screens were all redirected reports `not_covered`,
+  never `verified`. Both conditions must hold, so an ordinary redirect that still
+  lands on the intended screen is scanned normally, and a sign-in screen an
+  operator listed on purpose is measured like any other.
+- A storage state whose session has expired stops the run before a browser opens.
+  `USABL_STORAGE_STATE` is read at composition, and a state in which every cookie
+  carrying an expiry is already past it cannot authenticate anything. The run
+  refuses with a message that says the session has expired and to mint a new one,
+  and returns no verdict. `usabl doctor` reports the same state as drifted rather
+  than wired, reading the same rule, so the two surfaces cannot disagree about one
+  file. Neither the path nor any cookie value is printed. Cookie dates are all this
+  check can see; a token in local storage carries no expiry, so the scan-time
+  redirect check above is what covers the rest.
+
 - The gate no longer reports green when several new barriers hide behind one
   accepted floor entry. Barriers on different nodes can neutralize to the same
   name or structural identity and collapse into a single finding. The floor

@@ -69,7 +69,9 @@ usabl check
 
 usabl reads the variable once, where it builds its dependencies, so every surface picks up the same session: the CLI, the Vite overlay, and the Claude Stop hook. It is an environment variable rather than a flag because the overlay and the Stop hook have no command line, and rather than a config field because the file holds live cookies and tokens. A path to a storage state never enters committed config, and the file itself never enters the repository.
 
-If the variable names a file usabl cannot read, or a file that is not JSON, the run stops with an error instead of quietly scanning signed out. usabl prints neither the path nor the contents, in errors or in reports. It also cannot tell whether a session is still accepted by your application: an expired session scans signed out.
+If the variable names a file usabl cannot read, a file that is not JSON, or a session in which every cookie carrying an expiry is already past it, the run stops with an error instead of quietly scanning signed out. It stops before it opens a browser and returns no verdict. usabl prints neither the path nor the contents, in errors or in reports.
+
+Reading the file cannot tell you everything. A token held in local storage carries no expiry, and your application can end a session before its cookie says so, so a file that looks live can still be dead. That case is caught at scan time instead: when usabl asks for a screen and the browser ends up somewhere else that asks for a password, that screen becomes a coverage gap naming where the browser landed. It contributes no findings, and no barrier on your evidence floor can be reported as resolved from it. A run whose screens were all redirected reports `not_covered`, never `verified`.
 
 ## Command surface
 
