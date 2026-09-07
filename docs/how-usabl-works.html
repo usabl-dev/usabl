@@ -367,7 +367,7 @@
         <h1 id="hero-title">usabl checks an accessibility change against the code that made it, and discloses every gap it detected.</h1>
         <p class="lede">It finds the affected screens, collects machine-checkable accessibility evidence, makes one gate-owned decision, and shows that result in the terminal, the overlay, the stop hook, and the pull request. CI runs the engine again against trusted-base policy, and the Playwright page check can differ.</p>
         <p>It is built for a specific risk. A developer or AI assistant can change interface code, run a scanner, and still call the work done after the scanner skipped a screen or after the code changed again. usabl keeps those gaps visible.</p>
-        <p class="boundary"><strong>The claim:</strong> a verified result means no new unwaived deterministic accessibility barrier was found in the affected screens and checks that ran. It does not mean the whole product is accessible. It does not replace testing by disabled people or an accessibility expert.</p>
+        <p class="boundary"><strong>The claim:</strong> a verified result means no new unwaived deterministic accessibility barrier above the reviewed evidence floor was found in the affected screens and checks that ran. One residual is open by design: a barrier that lands in headroom the floor still records counts as carried until <code>usabl floor prune</code> re-arms the floor, and usabl discloses that headroom on every run where it exists. It does not mean the whole product is accessible. It does not replace testing by disabled people or an accessibility expert.</p>
         <div class="actions">
           <a class="action primary" href="https://github.com/usabl-dev/usabl/blob/main/docs/guides/proof-loop.md">Run the accessibility proof</a>
           <a class="action" href="team-orientation.html">Return to team orientation</a>
@@ -442,12 +442,12 @@
             <li><strong>5. Otherwise</strong> Report verified.</li>
           </ol>
           <div class="verdicts" role="list">
-            <div class="verdict" role="listitem"><strong class="verified">Verified, exit 0</strong><p>No new unwaived deterministic accessibility barrier was found on the screens coverage mapped from the changed UI files, and no coverage gap or unconfirmed deterministic finding was detected.</p></div>
+            <div class="verdict" role="listitem"><strong class="verified">Verified, exit 0</strong><p>No new unwaived deterministic accessibility barrier above the reviewed floor was found on the screens coverage mapped from the changed UI files, no new deterministic finding was left unconfirmed, and no coverage gap was detected. Every surface states it as “No new barrier blocks this change. It can proceed.”</p></div>
             <div class="verdict" role="listitem"><strong class="regression">Regression, exit 1</strong><p>A deterministic check found a new accessibility barrier compared with the accepted floor.</p></div>
             <div class="verdict" role="listitem"><strong class="not-covered">Not covered, exit 3</strong><p>Required accessibility coverage or evidence could not be completed.</p></div>
             <div class="verdict" role="listitem"><strong class="approval">Approval required, exit 2</strong><p>Trusted policy, evidence, or gate code changed and must not approve itself.</p></div>
           </div>
-          <p class="idle-note"><strong>Errors are not a fifth verdict.</strong> An unhandled error returns no verdict, exit code 4, and an explicit “NOT verified” message. Local assistant handling discloses the error instead of presenting it as proof.</p>
+          <p class="idle-note"><strong>Errors are not a fifth verdict.</strong> An unhandled error returns no verdict, exit code 4, and the line “NO VERDICT: RUN FAILED (exit 4)”. The stop hook allows that stop and says usabl proved nothing about the change; the pull request comment prints the same line.</p>
         </div>
       </section>
     </div>
