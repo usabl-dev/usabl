@@ -1664,8 +1664,8 @@ not blocking).
 
 ### Must ship
 
-1. CODEOWNERS on every guarded path and the workflow. Branch protection / required
-   checks when the host allows them (not on GitHub Free private).
+1. CODEOWNERS on every guarded path and the workflow. Branch protection or a ruleset
+   that requires the `usabl-required` check (in place on this repository).
 2. Config-guards-itself (integrity check before reading contents).
 3. CI reads policy from trusted ref, refuses without base ref.
 4. Receipt binding (four bindings, receipt store excluded from version control).
@@ -2286,7 +2286,7 @@ Credibility preflight before recording:
 | The demo PatternFly app and the hero bug | Ed + Nitin | Before NVDA hero recording |
 | Real PatternFly repo for smoke pass | Ed | Week 2 |
 | Verified-verdict-rate target to state on stage | Vishali + Ed | After measurement |
-| CI host for branch protection (private repo needs Team plan) | Ed | Week 2 |
+| CI host for branch protection (done: the main-branch ruleset requires `usabl-required`) | Ed | Week 2 |
 | Real bug sample for rule validation | Nitin + Vishali | Week 1 |
 | MCP wrapper vs Bash-only mid-task check | Ed | After hero loop works; before demo polish |
 
