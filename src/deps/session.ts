@@ -39,7 +39,7 @@ export function readStorageStateEnv(env: EnvReader): string | null {
  * Whether a parsed storage state has nothing left in it that could authenticate anything.
  *
  * This refuses a run, so the bar is not "probably dead". It is "there is nothing here that could
- * possibly work". Three conditions must all hold:
+ * possibly work". Four conditions must all hold:
  *
  *   1. Every cookie in the file carries a real expiry. Playwright writes a negative `expires` for a
  *      session cookie, which dies with the browser and states no expiry to judge. One session
@@ -47,21 +47,27 @@ export function readStorageStateEnv(env: EnvReader): string | null {
  *      so it makes the whole file unjudgeable.
  *   2. There is at least one such cookie, and every one of them is already past. A file with no
  *      cookies at all says nothing.
- *   3. No origin holds any local storage. A bearer or refresh token is recorded there as an opaque
- *      name and value with no expiry field, so its presence is a thing that might still
- *      authenticate and this cannot rule on it.
+ *   3. No origin holds any local storage or any IndexedDB. A bearer or refresh token is recorded in
+ *      local storage as an opaque name and value with no expiry field, and Playwright also records
+ *      and restores IndexedDB per origin, which is where token libraries that outgrew local storage
+ *      keep their state. Either one is a thing that might still authenticate.
+ *   4. The state declares no top-level `credentials`. Playwright records virtual authenticator
+ *      credentials there, which is how a passkey session is carried, and they have no expiry to
+ *      judge at all.
  *
  * The consequence is deliberate: this errs entirely toward letting a dead session through. A
- * session cookie beside a stale dated cookie is not refused. A local storage entry beside a wall
- * of expired cookies is not refused. A missed dead session is caught at scan time by the rules in
- * providers/redirected.ts, which measure the page rather than guessing from a file. A false
- * refusal has no such backstop: it stops a working run for no reason.
+ * session cookie beside a stale dated cookie is not refused. One IndexedDB entry, one local storage
+ * entry, or one passkey credential beside a wall of expired cookies is not refused. A missed dead
+ * session is caught at scan time by the rules in providers/redirected.ts, which measure the page
+ * rather than guessing from a file. A false refusal has no such backstop: it stops a working run.
  *
- * What this check can see: expiry times the file itself states.
+ * What this check can see: expiry times the file itself states, and whether the other stores are
+ * empty.
  *
  * What this check cannot see: whether the server still honours a cookie that has not expired,
- * whether a token in local storage is live, whether a cookie is scoped to the origin being
- * scanned, and any session ended server side ahead of its stated dates.
+ * whether a token in local storage or IndexedDB is live, whether a passkey credential still
+ * authenticates, whether a cookie is scoped to the origin being scanned, and any session ended
+ * server side ahead of its stated dates.
  *
  * `nowMs` is milliseconds since the Unix epoch and must be finite. Infinity would put every expiry
  * in the past and refuse every session; NaN would fail every comparison and accept every session.
@@ -76,7 +82,10 @@ export function isStorageStateExpired(parsed: unknown, nowMs: number): boolean {
   if (typeof parsed !== 'object' || parsed === null) {
     return false;
   }
-  if (holdsAnyLocalStorage(Reflect.get(parsed, 'origins'))) {
+  if (holdsAnyOriginState(Reflect.get(parsed, 'origins'))) {
+    return false;
+  }
+  if (holdsAnyCredential(Reflect.get(parsed, 'credentials'))) {
     return false;
   }
   const cookies: unknown = Reflect.get(parsed, 'cookies');
@@ -105,11 +114,11 @@ export function isStorageStateExpired(parsed: unknown, nowMs: number): boolean {
 }
 
 /**
- * Whether any origin in a storage state holds a local storage entry. A permissive read on purpose:
- * anything that is not confidently empty counts as holding something, because the caller uses this
- * only to decide not to refuse.
+ * Whether any origin in a storage state holds local storage or IndexedDB. A permissive read on
+ * purpose: anything that is not confidently empty counts as holding something, because the caller
+ * uses this only to decide not to refuse.
  */
-function holdsAnyLocalStorage(origins: unknown): boolean {
+function holdsAnyOriginState(origins: unknown): boolean {
   if (origins === undefined || origins === null) {
     return false;
   }
@@ -121,12 +130,27 @@ function holdsAnyLocalStorage(origins: unknown): boolean {
     if (typeof origin !== 'object' || origin === null) {
       return true;
     }
-    const entries: unknown = Reflect.get(origin, 'localStorage');
-    if (entries === undefined || entries === null) {
-      return false;
-    }
-    return !Array.isArray(entries) || entries.length > 0;
+    return (
+      holdsAnyEntry(Reflect.get(origin, 'localStorage')) ||
+      holdsAnyEntry(Reflect.get(origin, 'indexedDB'))
+    );
   });
+}
+
+/** Whether a per-origin store records anything. Absent is empty; any other unknown shape is not. */
+function holdsAnyEntry(entries: unknown): boolean {
+  if (entries === undefined || entries === null) {
+    return false;
+  }
+  return !Array.isArray(entries) || entries.length > 0;
+}
+
+/**
+ * Whether the state declares any virtual authenticator credential. Playwright records these at the
+ * top level and restores them into the browser, so one is a passkey the state can still sign with.
+ */
+function holdsAnyCredential(credentials: unknown): boolean {
+  return holdsAnyEntry(credentials);
 }
 
 /**
@@ -188,7 +212,7 @@ export async function resolveStorageStatePath(options: {
   if (isStorageStateExpired(parsed, options.now ?? Date.now())) {
     // No cookie value, no origin, and no path reaches this message. Only the fact of expiry does.
     throw new Error(
-      `${STORAGE_STATE_ENV_VAR} names a Playwright storage state whose session has expired: every cookie in it carries an expiry, every one of those is already past, and it holds no local storage, so nothing in the file can authenticate and usabl would scan the sign-in page instead of the application. Mint a new session, point ${STORAGE_STATE_ENV_VAR} at the new file, and run usabl again, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose. The path is not printed here because it can name a private location.`,
+      `${STORAGE_STATE_ENV_VAR} names a Playwright storage state whose session has expired. Everything usabl can check in that file is spent: every cookie carries an expiry, every one of those is already past, no origin holds local storage or IndexedDB, and there are no stored credentials. Mint a new session, point ${STORAGE_STATE_ENV_VAR} at the new file, and run usabl again, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose. The path is not printed here because it can name a private location.`,
     );
   }
   return path;

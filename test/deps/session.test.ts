@@ -132,6 +132,9 @@ describe("resolveStorageStatePath", () => {
       resolveStorageStatePath({ env: { [STORAGE_STATE_ENV_VAR]: deadPath }, now: NOW_MS });
 
     await expect(attempt()).rejects.toThrow(/session has expired/);
+    // The message names exactly what was checked rather than claiming more than it can know.
+    await expect(attempt()).rejects.toThrow(/local storage or IndexedDB/);
+    await expect(attempt()).rejects.toThrow(/no stored credentials/);
     await expect(attempt()).rejects.toThrow(/[Mm]int a new session/);
     await expect(attempt()).rejects.toThrow(STORAGE_STATE_ENV_VAR);
     // Same rule as every other message here: no path and no cookie value.
@@ -156,6 +159,42 @@ describe("resolveStorageStatePath", () => {
     await expect(
       resolveStorageStatePath({ env: { [STORAGE_STATE_ENV_VAR]: tokenPath }, now: NOW_MS }),
     ).resolves.toBe(tokenPath);
+  });
+
+  it("accepts a wall of expired cookies when an origin still holds IndexedDB", async () => {
+    // Playwright records and restores IndexedDB per origin, which is where token libraries that
+    // outgrew local storage keep their state. It carries no expiry to judge, so its presence means
+    // this file cannot be called dead.
+    const idbPath = join(dir, "indexeddb-session.json");
+    await writeFile(
+      idbPath,
+      JSON.stringify({
+        cookies: [cookie(NOW_SECONDS - 3_600)],
+        origins: [{ origin: "http://app.test", localStorage: [], indexedDB: [{ name: "auth" }] }],
+      }),
+      "utf8",
+    );
+    await expect(
+      resolveStorageStatePath({ env: { [STORAGE_STATE_ENV_VAR]: idbPath }, now: NOW_MS }),
+    ).resolves.toBe(idbPath);
+  });
+
+  it("accepts a wall of expired cookies when the state carries stored credentials", async () => {
+    // Playwright records virtual authenticator credentials at the top level and restores them,
+    // which is how a passkey session is carried. They have no expiry at all.
+    const passkeyPath = join(dir, "passkey-session.json");
+    await writeFile(
+      passkeyPath,
+      JSON.stringify({
+        cookies: [cookie(NOW_SECONDS - 3_600)],
+        origins: [],
+        credentials: [{ credentialId: "abc", rpId: "app.test" }],
+      }),
+      "utf8",
+    );
+    await expect(
+      resolveStorageStatePath({ env: { [STORAGE_STATE_ENV_VAR]: passkeyPath }, now: NOW_MS }),
+    ).resolves.toBe(passkeyPath);
   });
 
   it("accepts a session cookie sitting beside expired dated cookies", async () => {
@@ -226,9 +265,10 @@ describe("isStorageStateExpired", () => {
     ).toBe(false);
   });
 
-  it("never refuses when any origin still holds local storage", () => {
-    // A bearer or refresh token is recorded there as an opaque name and value with no expiry
-    // field, so its presence is a thing that might still authenticate.
+  it("never refuses when any origin still holds local storage or IndexedDB", () => {
+    // A bearer or refresh token is recorded in local storage as an opaque name and value with no
+    // expiry field, and Playwright restores IndexedDB per origin too. Either could still
+    // authenticate, so either one makes this file unjudgeable.
     const expired = [cookie(NOW_SECONDS - 1)];
     expect(
       isStorageStateExpired(
@@ -236,17 +276,49 @@ describe("isStorageStateExpired", () => {
         NOW_MS,
       ),
     ).toBe(false);
-    // An origin entry holding nothing is not something that could authenticate, so it does not
-    // block the refusal.
     expect(
       isStorageStateExpired(
-        { cookies: expired, origins: [{ origin: "http://app.test", localStorage: [] }] },
+        { cookies: expired, origins: [{ origin: "http://app.test", indexedDB: [{ name: "auth" }] }] },
+        NOW_MS,
+      ),
+    ).toBe(false);
+    expect(
+      isStorageStateExpired(
+        {
+          cookies: expired,
+          origins: [{ origin: "http://app.test", localStorage: [], indexedDB: [{ name: "auth" }] }],
+        },
+        NOW_MS,
+      ),
+    ).toBe(false);
+    // An origin entry holding nothing in either store is not something that could authenticate,
+    // so it does not block the refusal.
+    expect(
+      isStorageStateExpired(
+        { cookies: expired, origins: [{ origin: "http://app.test", localStorage: [], indexedDB: [] }] },
         NOW_MS,
       ),
     ).toBe(true);
     // An origins field in a shape this does not understand is treated as holding something.
     expect(isStorageStateExpired({ cookies: expired, origins: "some" }, NOW_MS)).toBe(false);
     expect(isStorageStateExpired({ cookies: expired, origins: [null] }, NOW_MS)).toBe(false);
+  });
+
+  it("never refuses when the state declares any stored credential", () => {
+    // Playwright records virtual authenticator credentials at the top level and restores them into
+    // the browser, so one is a passkey the state can still sign with. They carry no expiry.
+    const expired = [cookie(NOW_SECONDS - 1)];
+    expect(
+      isStorageStateExpired(
+        { cookies: expired, origins: [], credentials: [{ credentialId: "abc" }] },
+        NOW_MS,
+      ),
+    ).toBe(false);
+    // An empty or absent credentials list holds nothing and does not block the refusal.
+    expect(isStorageStateExpired({ cookies: expired, origins: [], credentials: [] }, NOW_MS)).toBe(true);
+    expect(isStorageStateExpired({ cookies: expired, origins: [] }, NOW_MS)).toBe(true);
+    // A credentials field in a shape this does not understand is treated as holding something.
+    expect(isStorageStateExpired({ cookies: expired, origins: [], credentials: {} }, NOW_MS)).toBe(false);
   });
 
   it("says nothing about a state with no cookies at all", () => {

@@ -204,13 +204,13 @@ async function collectSession(deps: DoctorDeps): Promise<SurfaceReport> {
   }
   // Set but dead is drift, not wiring. It reads the same rule "usabl check" refuses on, so the
   // two surfaces cannot disagree about the same file: doctor must never call a session wired
-  // that the next run will stop on.
+  // that the next run will stop on, and never call one drifted that the next run will accept.
   if (isStorageStateExpired(parsed, (deps.now ?? Date.now)())) {
     return {
       id: 'session',
       label: SESSION_LABEL,
       state: 'drifted',
-      nextStep: `${STORAGE_STATE_ENV_VAR} names a Playwright storage state whose session has expired: every cookie in it carries an expiry, every one of those is already past, and it holds no local storage, so nothing in the file can authenticate. "usabl check" stops on this rather than scanning the sign-in page. Mint a new session and re-export ${STORAGE_STATE_ENV_VAR}, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
+      nextStep: `${STORAGE_STATE_ENV_VAR} names a Playwright storage state whose session has expired. Everything usabl can check in that file is spent: every cookie carries an expiry, every one of those is already past, no origin holds local storage or IndexedDB, and there are no stored credentials. "usabl check" stops on this rather than scanning the sign-in page. Mint a new session and re-export ${STORAGE_STATE_ENV_VAR}, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
     };
   }
   return {
@@ -220,7 +220,7 @@ async function collectSession(deps: DoctorDeps): Promise<SurfaceReport> {
     // Readable, parsing, and holding something that could still authenticate is all doctor can
     // confirm. Whether the application accepts the session is a live question no read of the file
     // can answer, so the wired state says so instead of implying more.
-    nextStep: `Set, readable, parses, and still holds something that could authenticate. Whether the application accepts the session is not something reading the file can answer; a scan that meets a sign-in page or a refused data request is reported as a coverage gap.`,
+    nextStep: `Set, readable, parses, and still holds something that could authenticate: an unexpired or undated cookie, local storage, IndexedDB, or a stored credential. Whether the application accepts the session is not something reading the file can answer; a scan that meets a sign-in page or a refused data request is reported as a coverage gap.`,
   };
 }
 
