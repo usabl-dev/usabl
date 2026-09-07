@@ -32,7 +32,7 @@ axe-core is one of our check layers.
 credibility, edit locks until an accessibility lead agent runs.
 
 **What we add:** Per-change deterministic verdicts from Playwright + axe + keyboard
-walk + PF rules - the AI never grades its own homework.
+walk + PF rules; the gate decides and the AI only proposes.
 
 **Complementary?** Potentially - their specialist prompts could inform fix suggestions
 while our gate holds the verdict. Different architectural bets (LLM review vs
@@ -54,7 +54,8 @@ enforcement on one Result.
 **Complementary?** Yes - Tactual or Speakable could be adopted as a provider behind the
 usabl gate for richer phrasing validation. Guidepup is a candidate too.
 
-**One-liner:** "They let you hear the UI. We prove the change is ready to ship."
+**One-liner:** "They let you hear the UI. We prove the change added no new
+machine-checkable barrier on the screens we scanned."
 
 ---
 
@@ -67,11 +68,12 @@ enterprises with budget and procurement process.
 before enterprise process, on the engineer's machine and in the PR.
 
 **Complementary?** Different audience and lifecycle stage. Enterprise tools govern
-programs; usabl prevents regressions at creation. They can coexist - usabl reduces
-the findings enterprise dashboards eventually report.
+programs; usabl blocks new machine-checkable regressions at creation on the screens it
+scans. They can coexist; a barrier blocked at creation never reaches an enterprise
+dashboard.
 
-**One-liner:** "They govern the program. We prove each change in the workflow where it's
-written."
+**One-liner:** "They govern the program. We check each change, in the workflow where it
+is written, for new machine-checkable barriers, and report the gaps."
 
 ---
 
@@ -96,8 +98,9 @@ broader page health. usabl adds a change-level gate with a receipt on verified r
 **What we add:** Prevent upstream in the assistant loop and produce the same PR
 evidence bundle from a stronger verdict source.
 
-**Complementary?** Partially - if a team already has a PR bot, usabl's CI leg replaces
-it with a stronger signal. The upstream prevention in the assistant loop is additive.
+**Complementary?** Partially - if a team already has a PR bot, usabl's CI leg can run
+beside it; usabl's verdict is read from the Result, never from a comment. The upstream
+prevention in the assistant loop is additive.
 
 **One-liner:** "They comment on the PR. usabl blocks the assistant's first stop on a blocking verdict, before the PR exists, unless a one-use bypass was issued."
 
@@ -109,8 +112,8 @@ it with a stronger signal. The upstream prevention in the assistant loop is addi
 buying an enforcement story.
 
 **What we add:** Full multi-layer proof (keyboard walk, PF rules, deterministic
-screen-reader announcement checks), OSS, PatternFly-native, integrated with MCP-capable
-assistants and CI. No subscription, no vendor lock.
+screen-reader announcement checks), OSS, PatternFly-native, integrated with the assistant
+Stop hook and CI. No subscription, no vendor lock.
 
 **Complementary?** No - different philosophical bets. Jeikin is closed-source SaaS;
 usabl is open and local-first.
@@ -127,5 +130,5 @@ the receipt."
 **What usabl adds:** Encode their guidance in an extensible rulepack inside
 a proof engine that gates AI completion - alliance, not rivalry.
 
-**One-liner:** "They build accessible components. We prove teams compose them
-correctly."
+**One-liner:** "They build accessible components. We check that each change composes
+them without a new machine-checkable barrier on the screens we scan."
