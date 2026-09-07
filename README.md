@@ -26,9 +26,9 @@ A `usabl check` that checked something ends in one of four verdicts, each with a
 
 | Verdict               | Meaning                                                                                                  |
 | --------------------- | -------------------------------------------------------------------------------------------------------- |
-| **Verified**          | No new gating barriers on the touched surfaces, and coverage was complete. A receipt is minted.          |
+| **Verified**          | No new gating barriers on the touched surfaces, and no coverage gap was detected. A receipt is minted.  |
 | **Regression**        | A new machine-checkable barrier appeared. The change is blocked.                                         |
-| **Not covered**       | usabl could not check a touched surface, so it refuses to guess. This is honest uncertainty, not a pass. |
+| **Not covered**       | usabl detected a touched surface it could not check, so it refuses to guess. This is honest uncertainty, not a pass. |
 | **Approval required** | The change edits policy itself, which needs a human code-owner decision before it can land.              |
 
 Two outcomes carry no verdict. The `verdict` field is `null` and no receipt is minted:
