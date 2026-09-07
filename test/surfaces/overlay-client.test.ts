@@ -616,17 +616,18 @@ describe('overlay screen awareness', { timeout: 30_000 }, () => {
     );
 
     const panel = await openPanel(page);
-    // The reason the screen has no result is the change, not a failure, and the developer is told
+    // The reason the screen has no result is the mapping, not a failure, and the developer is told
     // where the issues are instead.
     expect(
       await panel
         .getByText(
-          'Your change did not touch this screen, so usabl did not check it. 2 issues are on 1 other screen.',
+          'usabl did not map your change to this screen, so it did not check it. 2 issues are on 1 other screen.',
           { exact: true },
         )
         .isVisible(),
     ).toBe(true);
     expect(await panel.getByText('not part of the last scan', { exact: false }).count()).toBe(0);
+    expect(await panel.getByText('did not touch', { exact: false }).count()).toBe(0);
     expect(await panel.getByText('nothing to report', { exact: false }).count()).toBe(0);
     expect(await panel.locator('.finding-button').count()).toBe(0);
     expect(await host.locator('.finding-button').count()).toBe(0);
@@ -981,14 +982,16 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
     await page.context().close();
   });
 
-  it('says a screen the change did not touch was skipped by design, and where the issues are', async () => {
+  it('says a screen the change was not mapped to was skipped, and where the issues are', async () => {
     const page = await mount(projectOverlay(twoScreens()), { path: '/settings' });
     const panel = await openPanel(page);
 
+    // The payload proves which screens the planner mapped the change to. It does not prove the
+    // change left this screen alone, so the panel states the mapping and never the change.
     expect(
       await panel
         .getByText(
-          'Your change did not touch this screen, so usabl did not check it. 1 issue is on 1 other screen.',
+          'usabl did not map your change to this screen, so it did not check it. 1 issue is on 1 other screen.',
           { exact: true },
         )
         .isVisible(),
@@ -997,12 +1000,13 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
     expect(
       await panel
         .getByText(
-          'usabl did not check this screen, because your change did not touch it. There is nothing to list.',
+          'usabl did not check this screen, because it did not map your change to it. There is nothing to list.',
           { exact: true },
         )
         .isVisible(),
     ).toBe(true);
     expect(await panel.getByText('not part of the last scan', { exact: false }).count()).toBe(0);
+    expect(await panel.getByText('did not touch', { exact: false }).count()).toBe(0);
     // The guide to other screens does not tell them to fix this one first.
     expect(
       await panel
@@ -1013,7 +1017,7 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
     await page.context().close();
   });
 
-  it('says the run found nothing when the change did not touch this screen and no screen had issues', async () => {
+  it('says the run found nothing when the change was not mapped to this screen and no screen had issues', async () => {
     const page = await mount(
       projectOverlay(twoScreens({ summary: 'regression', findings: [] })),
       { path: '/settings' },
@@ -1023,11 +1027,53 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
     expect(
       await panel
         .getByText(
-          'Your change did not touch this screen, so usabl did not check it. The run found no issues on the screens it checked.',
+          'usabl did not map your change to this screen, so it did not check it. The run found no issues on the screens it checked.',
           { exact: true },
         )
         .isVisible(),
     ).toBe(true);
+    expect(await panel.getByText('did not touch', { exact: false }).count()).toBe(0);
+
+    await page.context().close();
+  });
+
+  it('keeps the mapping wording when some changed files could not be mapped at all', async () => {
+    const page = await mount(
+      projectOverlay(
+        twoScreens({
+          coverage: {
+            changedFiles: ['src/app.tsx', 'src/shared/theme.css'],
+            affected: [
+              { screenId: 'clusters', url: 'http://127.0.0.1:5173/clusters', provenance: 'route-graph' },
+              { screenId: 'jobs', url: 'http://127.0.0.1:5173/jobs', provenance: 'route-graph' },
+            ],
+            unresolvedFiles: ['src/shared/theme.css'],
+            gaps: [],
+            nothingToCheck: false,
+          },
+        }),
+      ),
+      { path: '/settings' },
+    );
+    const panel = await openPanel(page);
+
+    expect(
+      await panel
+        .getByText(
+          'usabl did not map your change to this screen, so it did not check it. 1 changed file could not be mapped to any screen. 1 issue is on 1 other screen.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+    expect(
+      await panel
+        .getByText(
+          'usabl did not check this screen, because it did not map your change to it. There is nothing to list.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+    expect(await panel.getByText('did not touch', { exact: false }).count()).toBe(0);
 
     await page.context().close();
   });

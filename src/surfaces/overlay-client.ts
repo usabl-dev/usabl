@@ -488,19 +488,22 @@ export const overlayClientSource = `(() => {
   //
   // Two different things used to share one sentence, "this screen was not part of the last scan",
   // and a developer could not tell whether usabl skipped the screen on purpose or failed to check it.
-  // Not affected: the changed files map to other screens, so usabl did not check this one by design.
-  // The developer should go to the screens that were checked. That is a different decision from a
-  // gap, which is handled by gapLine below.
+  // Not affected: the planner mapped the changed files to other screens, so usabl did not check this
+  // one. The developer should go to the screens that were checked. That is a different decision from
+  // a gap, which is handled by gapLine below.
+  //
+  // The fact stated is the mapping, never the change itself. The payload proves which screens the
+  // planner mapped the change to. It does not prove that the change left this screen alone: a
+  // missing manual declaration or an incomplete route graph can omit an affected screen without
+  // listing any unresolved file. "Your change did not touch this screen" was that overclaim.
   function unaffectedLine(payload, split) {
     const unresolved = payload && payload.coverage && Array.isArray(payload.coverage.unresolvedFiles)
       ? payload.coverage.unresolvedFiles.length
       : 0;
-    // With unresolved files usabl cannot say the change did not touch this screen, only that it
-    // could not map the change to it.
-    const base = unresolved > 0
-      ? 'usabl could not map your change to this screen, so it did not check it. '
-        + countLabel(unresolved, 'changed file') + ' could not be mapped to any screen.'
-      : 'Your change did not touch this screen, so usabl did not check it.';
+    let base = 'usabl did not map your change to this screen, so it did not check it.';
+    if (unresolved > 0) {
+      base += ' ' + countLabel(unresolved, 'changed file') + ' could not be mapped to any screen.';
+    }
     if (split.elsewhereTotal > 0) {
       return base + ' ' + countLabel(split.elsewhereTotal, 'issue')
         + (split.elsewhereTotal === 1 ? ' is' : ' are') + ' on '
@@ -510,13 +513,8 @@ export const overlayClientSource = `(() => {
   }
 
   // The same fact, worded for the empty issues list under the header.
-  function unaffectedBodyLine(payload) {
-    const unresolved = payload && payload.coverage && Array.isArray(payload.coverage.unresolvedFiles)
-      ? payload.coverage.unresolvedFiles.length
-      : 0;
-    return unresolved > 0
-      ? 'usabl did not check this screen, because it could not map your change to it. There is nothing to list.'
-      : 'usabl did not check this screen, because your change did not touch it. There is nothing to list.';
+  function unaffectedBodyLine() {
+    return 'usabl did not check this screen, because it did not map your change to it. There is nothing to list.';
   }
 
   // The screen was in scope but usabl could not check it. The gap's reason is engine-authored and is
@@ -2350,7 +2348,7 @@ export const overlayClientSource = `(() => {
           'empty',
           verdict.key === 'not-covered'
             ? 'usabl could not check the affected screens, so there is nothing to list.'
-            : unaffectedBodyLine(payload),
+            : unaffectedBodyLine(),
         ),
       );
       return section;
