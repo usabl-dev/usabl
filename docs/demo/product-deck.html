@@ -472,7 +472,7 @@
           </article>
           <article class="tile">
             <strong>Strict Enforcement</strong>
-            Compares results against a known baseline. Blocks new regressions while allowing existing technical debt to be managed over time.
+            Compares results against a known baseline. Blocks a new barrier above the reviewed floor while allowing existing technical debt to be managed over time.
           </article>
         </div>
         <figure class="diagram">
@@ -895,7 +895,7 @@
             <rect class="bar-new" x="700" y="30" width="14" height="14"></rect>
             <text class="legend-label" x="720" y="41">New barriers (blocked)</text>
           </svg>
-          <figcaption class="quiet">Known issues shrink as debt is paid down. A new, unwaived machine-checkable barrier on a scanned screen makes the accessibility result a regression at every checkpoint. If the same change also edits a guarded policy file, the overall verdict is approval required and that accessibility result stays red inside it.</figcaption>
+          <figcaption class="quiet">Known issues shrink as debt is paid down. A new, unwaived machine-checkable barrier above the reviewed floor on a scanned screen makes the accessibility result a regression at every checkpoint. A barrier that lands in headroom the floor still records counts as carried until the floor is pruned, and usabl discloses that headroom on every run where it exists. If the same change also edits a guarded policy file, the overall verdict is approval required and that accessibility result stays red inside it.</figcaption>
         </figure>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#surfaces">Previous</a>
@@ -1099,7 +1099,7 @@ test('cluster list stays accessible', async ({ page }) => {
         <div class="surfaces">
           <article class="surface"><strong>Same engine</strong>The hook runs the same axe-core, keyboard-walk, and PatternFly engine as CI, against the local evidence floor and waivers. CI reads those files from the trusted base branch, so the two can differ when the local files differ from the base.</article>
           <article class="surface"><strong>Closes the agent loop</strong>Without it, an agent can ship an inaccessible change between human reviews. The hook puts the check at the moment of completion, where it is cheapest to fix.</article>
-          <article class="surface"><strong>Blocks on new only</strong>Like CI, it blocks new deterministic barriers, not the pre-existing floor, so it does not stall an agent on legacy debt it did not create. Missing coverage and a changed policy file also block.</article>
+          <article class="surface"><strong>Blocks on new only</strong>Like CI, it blocks new deterministic barriers above the reviewed floor, never the floor itself, so it does not stall an agent on legacy debt it did not create. Missing coverage and a changed policy file also block.</article>
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#playwright">Previous</a>
@@ -1177,7 +1177,7 @@ test('cluster list stays accessible', async ({ page }) => {
           </article>
           <article class="tile">
             <strong>Targeted Re-Checks</strong>
-            It only re-checks the pages whose sources changed, so it stays fast, and it blocks a new machine-checkable barrier on the pages it scanned.
+            It only re-checks the pages whose sources changed, so it stays fast, and it blocks a new machine-checkable barrier above the reviewed floor on the pages it scanned.
           </article>
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
@@ -1232,7 +1232,7 @@ test('cluster list stays accessible', async ({ page }) => {
           </article>
           <article class="tile">
             <strong>Baseline First</strong>
-            Existing issues are recorded as a known baseline on day one. A new, unwaived problem blocks; so does coverage the run could not confirm, and so does an edit to a guarded policy file, which needs a code owner. Quality improves steadily instead of every change stalling behind a wall of pre-existing findings.
+            Existing issues are recorded as a known baseline on day one. A new, unwaived problem above the floor blocks; so does coverage the run could not confirm, and so does an edit to a guarded policy file, which needs a code owner. A problem that lands in headroom the floor still records counts as carried until the floor is pruned, and usabl says so on every run where it exists. Quality improves steadily instead of every change stalling behind a wall of pre-existing findings.
           </article>
           <article class="tile">
             <strong>Fits the Existing Pipeline</strong>
@@ -1403,7 +1403,7 @@ test('cluster list stays accessible', async ({ page }) => {
         <p class="kicker">Summary</p>
         <h1 tabindex="-1">Continuous Accessibility Verification</h1>
         <p class="lede">usabl moves accessibility checking into the everyday workflow, the CLI, CI, and AI assistants, instead of a separate audit that happens later.</p>
-        <p class="lede">It records existing issues as a baseline and points the same engine at both the application and its documentation. It blocks a new, unwaived barrier, coverage it could not confirm, and an edit to a guarded policy file. Teams can change the UI, and the docs, knowing that no new unwaived machine-checkable barrier reached the screens and pages it checked, and that every gap it detected was disclosed.</p>
+        <p class="lede">It records existing issues as a baseline and points the same engine at both the application and its documentation. It blocks a new, unwaived barrier above the reviewed floor, coverage it could not confirm, and an edit to a guarded policy file. Teams can change the UI, and the docs, knowing that no new unwaived machine-checkable barrier above the reviewed floor reached the screens and pages it checked, that headroom the floor still records was disclosed, and that every gap it detected was disclosed.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#usage">Previous</a>
           <span class="pos">31 / 31</span>
