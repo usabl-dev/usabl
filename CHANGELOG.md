@@ -114,7 +114,8 @@
   invisible or reorders the text around it. At run time a route in application
   source whose derived id fails is set aside instead of scanned and reported as a
   coverage gap, so the gate reads that screen as not covered rather than as
-  absent. Ids already written into `.usabl-evidence.json` and
+  absent, for the routes discovery recovers from the router source.
+  Ids already written into `.usabl-evidence.json` and
   `.usabl-waivers.json`, and inputs passed straight to the exported library
   functions, are not re-checked. That includes the config handed to
   `mintReceipt()`: the command line parses the config before the receipt sees
@@ -127,9 +128,13 @@
   no gap for an entry that is not in it, so a draft written without that route or
   page let such a change read as fully checked while that screen was never
   scanned. The message names every unusable entry by where to look, the file and,
-  for a route, the line the route is declared on, with the position and code point
+  for a route, the line the route was matched on, with the position and code point
   of the refused character, the reason when there is no single character to name,
-  and what to change. It never prints the id or the path it came from.
+  and what to change. It never prints the id or the path it came from. Routes are
+  recovered from router source by pattern, not by a parser, so the line is the line
+  of the match: a commented-out route is matched like any other. What that parsing
+  does and does not find is written up in the ground truth document, under the
+  documented limits of coverage and discovery.
 - Every key of `noiseBudget.perSurface` is checked by that same rule when the
   config is read. A key is a screen id, matched against one by exact comparison,
   so a key holding a space, an invisible character, or a spelling that is not in

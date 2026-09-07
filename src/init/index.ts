@@ -259,9 +259,10 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
       // the route is never scanned. Every such route is collected so the whole draft can be
       // refused at once. The route is named by file and line, never by its path, because the
       // path is what carries the refused character. The line comes from the offset the parser
-      // recorded for the path literal, so it is the line the route is declared on. Searching the
-      // file for the path text instead would find the first occurrence anywhere, including a
-      // comment that names the same path, and would send the operator to the wrong line.
+      // recorded for the path literal it matched, so it is the line of that match and not the
+      // first place the same text appears in the file. The parser does not strip comments, so a
+      // commented-out route is matched like any other and the line can name a commented
+      // declaration. The operator still gets the file and a line to open.
       const screenId = screenIdFromUrl(route.path);
       const refusal = validateId(screenId);
       if (!refusal.ok) {

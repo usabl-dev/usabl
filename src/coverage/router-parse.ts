@@ -14,10 +14,17 @@ export interface ParsedRoutePath {
 /**
  * One route literal found in router source.
  *
- * `offset` is the index in the router source of the `path` literal that declared the route, so a
- * caller that has to name the route can report the declaration itself. Searching the file for the
- * path text instead would find the first occurrence anywhere, including a comment that mentions
- * the same path, and would name the wrong line.
+ * `offset` is the index in the router source of the `path` literal this route was matched from, so
+ * a caller that has to name the route reports the match rather than the first place the same text
+ * happens to appear. That is the whole of the promise, and it is worth stating what it is not.
+ *
+ * These parsers match raw text and do not strip comments, so a commented-out route is matched like
+ * any other. When a commented-out entry and a real one carry the same path, the first match wins
+ * and the offset names the comment's line. A route is also missed outright when its `element`
+ * attribute is written before its `path`, when its path is an expression rather than a quoted
+ * literal, or when a comment inside the declaration holds a character the pattern stops at. The
+ * limits and what to do about them are written up in the ground truth document, under the
+ * documented limits of coverage and discovery.
  */
 export interface ParsedRouteSite {
   path: string;

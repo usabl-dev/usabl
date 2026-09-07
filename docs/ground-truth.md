@@ -764,6 +764,41 @@ this PR. Coverage grows as the team works, not as a boil-the-ocean inventory.
 
 These are honest `not_covered` outcomes, not silent passes.
 
+#### Limits of reading routes out of router source
+
+Routes are recovered from router source with regular expressions, not with a parser. That buys a
+route manifest with no build step and no dependency on the application's toolchain, and the price
+is that some declarations are read wrongly and some are not read at all.
+
+Read this part differently from the list above. A route the parser never sees is not a
+`not_covered` outcome. The planner records a gap only for routes it knows about, so a route that
+was never recovered leaves no gap behind: a change to that screen's entry file, or to a
+wide-blast file, can read as fully checked while the screen is never scanned. These are the known
+cases.
+
+- **A commented-out route is read as a route.** Commented text is matched like any other text. The
+  route is added to the manifest, so usabl plans a scan of a screen the application does not
+  serve. When a commented-out declaration and a live one carry the same path, the first one in the
+  file wins, and a message that names a line names the commented line.
+- **A route whose `element` attribute is written before its `path` is not read at all.** The JSX
+  pattern ends the tag at the first `/>`, which is the nested element's own self-close, so every
+  attribute after the element is invisible and no path is found. Attribute order carries no
+  meaning in JSX, so this is ordinary source. A file that writes every route this way yields no
+  routes and no complaint.
+- **A path written as an expression is not read.** Only a quoted literal is matched, so
+  `path={ROUTES.home}` or `path={base + '/x'}` is skipped and that route is absent from the
+  manifest.
+- **A comment inside a declaration can hide it.** In a JSX tag, a comment containing `>` ends the
+  attribute run early and the whole route is dropped. In a `create*Router(...)` call, a comment
+  containing an unmatched `)` closes the call argument early and every route after it is dropped.
+
+What an operator can do, in every one of these cases: write the routes into `usabl.routes.json`.
+An authored sidecar takes precedence over router-source discovery, so the manifest is then exactly
+what the file says and none of the above applies. `usabl init` drafts that sidecar from the same
+patterns, so read the draft against the router before merging it and add any route it missed. The
+other option is to write the declaration in a form the patterns do read: a quoted `path` literal,
+placed before the `element` attribute, outside any comment.
+
 ### Documentation coverage
 
 When a `usabl.docs.json` manifest is present, coverage extends to documentation the same
@@ -1634,6 +1669,13 @@ unusable route or page by file (and line, for a route), with the position and co
 character was refused and the grammar reason otherwise (an empty id, or one not in NFC form,
 which must be normalized), and the fix, never the id or the path it came from, and writes
 nothing.
+
+What that covers, and what it does not. The grammar holds for every id these commands actually
+derive, and the line in a route refusal is the line of the match the parser made. It says nothing
+about a route the parser never recovered from the router source: no id is derived for it, so
+nothing refuses it, and it is simply absent from the draft. Router source is matched by pattern,
+not parsed, and the cases it reads wrongly or not at all are listed under the documented limits in
+section 8.
 
 The boundary, stated exactly. Ids already present in the evidence floor (`.usabl-evidence.json`)
 and in waiver files (`.usabl-waivers.json`), and the inputs a caller passes directly to the
