@@ -10,7 +10,12 @@
  *
  * Each step runs detached in its own process group. On SIGINT, SIGTERM, SIGHUP, or
  * a step timeout, the whole group is signalled (SIGTERM, then SIGKILL) and awaited
- * before the lock is released.
+ * before the lock is released. This script is the only signal listener for those
+ * signals: the Vite server that vite-node hosts in this process installs its own
+ * SIGTERM listener, which exits the process as soon as that server has closed,
+ * and that listener is removed so it cannot exit mid-stop. Should the process
+ * still exit early by some other path, a synchronous `exit` handler kills the
+ * running step group and leaves the lock for the next run to reclaim.
  *
  * Known limits: a SIGKILL of this script cannot stop its step; the lock keeps the
  * next run out until that step group ends on its own, and nobody kills it. A step
@@ -25,6 +30,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireLock, releaseLock, updateLock, type LockDeps } from './demo-integration-lock.js';
+import { exitFallback, ownSignals } from './demo-integration-signals.js';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const lockPath = join(repoRoot, '.demo-integration.lock');
@@ -139,6 +145,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (step !== null && step.pid !== undefined) {
     await stopGroup(step.pid);
   }
+  currentStep = null;
   releaseLock(lockPath, lockDeps);
   process.exit(130);
 }
@@ -148,11 +155,18 @@ if (acquired.state === 'held') {
   process.stderr.write(`${acquired.reason}; wait for it to finish, or remove the file if that process is not a test run\n`);
   process.exit(3);
 }
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-  process.on(signal, () => {
-    void shutdown(signal);
+ownSignals(process, ['SIGINT', 'SIGTERM', 'SIGHUP'], (signal) => {
+  void shutdown(signal);
+});
+process.on('exit', () => {
+  exitFallback({
+    stepPgid: currentStep?.pid ?? null,
+    groupAlive: (pgid) => signalAlive(-pgid),
+    killGroup: (pgid) => signalGroup(pgid, 'SIGKILL'),
+    releaseLock: () => releaseLock(lockPath, lockDeps),
+    warn: (message) => process.stderr.write(`${message}\n`),
   });
-}
+});
 
 try {
   await runStep('npm run build', 'npm', ['run', 'build'], BUILD_TIMEOUT_MS, process.env);
