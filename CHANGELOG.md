@@ -103,6 +103,48 @@
   absent or unparseable reads as drifted, never wired. Doctor says whether a
   session is configured, never what it is.
 
+### Changed
+
+- `usabl check` opens with a verdict line: a symbol, the verdict word, and the exit
+  code, followed by one sentence saying what the verdict means for the change. The
+  gate's own summary, the barriers, the gaps, and the receipt follow under labels.
+  Idle and a failed run both print `NO VERDICT`, then `IDLE` or `RUN FAILED`, so
+  neither can be read as a pass. Every meaning is carried in text; no state
+  depends on colour.
+- The Stop hook message and the `/usabl-check` self-check open the same way: the
+  verdict word and exit code, what it means for the change, the gate summary,
+  then the next step. A block now tells the assistant what to do before it lists
+  barriers. A failed run reads `NO VERDICT: RUN FAILED (exit 4)` on both
+  surfaces; the self-check used to label it `IDLE`.
+- Every free-text field a surface prints is bounded in length: a finding's
+  experience and fix, a gap's ref and reason, a rule or screen name, a source
+  location, and the gate summary. The surfaces already bounded how many entries
+  they print, but one provider error the size of a stack trace could still fill
+  an assistant's context on its own. A shortened field ends with
+  `[shortened, N characters omitted]` so the cut is visible, and a page-supplied
+  copy of that note is rewritten so only the engine can emit the real one.
+  Verdict words, exit codes, and counts are never shortened. The whole message is
+  then held to a budget sized from those caps, 15,000 characters for the Stop
+  hook and 19,000 for the self-check, which also prints a source or candidates
+  line per group: whole lines are dropped from the end, never the verdict line,
+  the summary, or the next step, and never inside the untrusted frame, with a
+  closing note saying how many lines went. At the default noise budget nothing is
+  dropped on either surface, even with every field oversized.
+- The self-check prints a finding's source location inside the untrusted frame.
+  A renderer-tier source mapping reads its file and line from attributes on the
+  page, so the page can choose that text, and it was printed as trusted scaffold.
+- The Stop hook and the self-check print a grouped finding's screen id inside
+  the untrusted frame, as `screen (rule): id`, and the group headline names only
+  status, severity, layer, and rule. The router fallback derives a screen id from
+  a route literal in the application, so a page can choose it.
+- The Stop hook and the self-check print the gate's summary inside the untrusted
+  frame, as `engine summary: ...`, on every state that prints it. The summary of
+  a run that never saw the application names the unseen screen ids, which the
+  router fallback can derive from a route literal, and a crash summary carries a
+  raw error message. The verdict line, its meaning, and the next step are engine
+  constants and stay outside. The summary piece is never dropped by the message
+  bound.
+
 ## 0.2.1 - 2026-09-01
 
 Version files name 0.2.1. This freeze does not create a git tag or publish to
