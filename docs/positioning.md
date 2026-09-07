@@ -37,7 +37,7 @@ does not prove completeness, readiness to ship, or compliance.
 
 | What users get | What that means for them |
 |---|---|
-| **Change coverage with honest gaps** | Touched UI surfaces are mapped, exercised, and checked. A changed file usabl cannot map to a screen is reported as not_covered, and every gap it detects is disclosed. |
+| **Change coverage with honest gaps** | Changed UI files are mapped to screens, and those screens are exercised and checked. A changed file usabl cannot map to a screen is reported as not_covered, and every gap it detects is disclosed. |
 | **Fix verification** | Problems are found and re-checked after the fix; the Stop hook blocks the assistant's first stop on a blocking verdict unless a one-use bypass was issued. |
 | **Screen-reader announcement checks** | Deterministically verifies the accessible names and announcement expectations screen reader users depend on, on the actual change. |
 | **Keyboard and interaction proof** | Tab order, focus, and interaction paths are walked, not just static markup rules. |
@@ -88,15 +88,15 @@ The Stop hook blocks the AI's first stop on a blocking verdict unless a one-use 
 axe-core, PatternFly composition rules, a live keyboard walk, and deterministic
 screen-reader announcement checks on what changed.
 
-**Why it matters:** Teams get a re-checked answer on the screens they touched instead of
+**Why it matters:** Teams get a re-checked answer on the screens mapped from the files they changed instead of
 a "probably fixed".
 
 ### 2. AI-native completion gate
 
 The stop hook blocks the first "I'm done" on a blocking verdict unless a one-use bypass
 was issued; idle, no verdict, and hook errors are disclosed and allowed. Mid-task self-check lets the agent
-course-correct while context is warm. Same engine, same answer - the AI proposes fixes
-but never grades its own work.
+course-correct while context is warm. The same engine runs locally and in CI, though CI
+reads policy from the trusted base; the AI proposes fixes but never grades its own work.
 
 **Why it matters:** Accessibility proof is built into how AI builds UI, not bolted on
 after the fact.
@@ -126,7 +126,7 @@ the codebase evolves.
 
 - **PatternFly rulepack** - purpose-built composition rules for the design system our
   products use.
-- **Coverage per change** - maps touched surfaces, runs the full stack on that set,
+- **Coverage per change** - maps changed UI files to screens, runs the full stack on that set,
   and returns one of four verdicts, or none, for the whole change, with any surface it cannot reach flagged
   as not_covered.
 - **Receipt-backed verified results** - each verified change carries a re-checkable
@@ -144,7 +144,7 @@ the codebase evolves.
 
 ### Vs scanners
 
-> usabl checks the surfaces a change touches, verifies the fix, and blocks the first
+> usabl checks the screens mapped from a change's UI files, verifies the fix, and blocks the first
 > stop on a blocking verdict unless a one-use bypass was issued.
 
 ### Vs AI tools
