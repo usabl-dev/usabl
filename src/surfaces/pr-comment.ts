@@ -33,6 +33,19 @@ import {
 const COMMENT_MARKER = '<!-- usabl-report -->';
 const STOP_CAP = 20;
 
+// Every value this document carries from the Result is written inside a code span, whoever
+// authored it, and only text usabl itself wrote is left as prose.
+//
+// That rule replaces an argument. The values printed as prose here used to be the ones a first
+// party authored: a rule, a layer, and a severity come from the providers, a status is the
+// gate's own enum. That holds while a Result is built in this process. It does not hold at this
+// surface's own entry point: `usabl comment` reads a Result as a document from standard input,
+// the parse checks a few fields and takes the rest on trust, and a library caller can hand the
+// engine a check runner of its own. A severity carrying a mention and an address was fed in that
+// way and rendered as a live mention and a mailto link. Deciding by author cannot survive a
+// boundary where the author is whoever wrote the document, so the decision is by carrier
+// instead: if the Result carried it, it is sealed.
+//
 // Two kinds of text reach this Markdown document, and each gets its own defense.
 //
 // Page-derived text, everything inside an untrusted frame, is written as a code span. Inside a
@@ -44,13 +57,13 @@ const STOP_CAP = 20;
 // text; the span is the mitigation the threat model names. The span is fenced with one more
 // backtick than the longest run inside it, so a value cannot close its own span.
 //
-// Provider-authored text that prints as prose outside the frame, a rule or layer name and a
-// severity in a headline, and a gap state, is escaped instead. Every character a renderer could
-// read as the start of markup is written as a numeric character reference, which renders as
-// exactly the character it names, so the report's own lines cannot be read as markup and still
-// read as prose. The set includes the emphasis and code characters: a delimiter pair wrapped
-// around a piece of text vanishes and leaves the piece behind, so "UNTRUSTED *TEXT*" renders as
-// "UNTRUSTED TEXT", and a backslash hides before punctuation the same way.
+// usabl's own prose is escaped instead. Every character a renderer could read as the start of
+// markup is written as a numeric character reference, which renders as exactly the character it
+// names, so the report's own lines cannot be read as markup and still read as prose. The set
+// includes the emphasis and code characters: a delimiter pair wrapped around a piece of text
+// vanishes and leaves the piece behind, so "UNTRUSTED *TEXT*" renders as "UNTRUSTED TEXT", and a
+// backslash hides before punctuation the same way. What is escaped is fixed text this file
+// wrote, so the escape is defense in depth rather than the thing holding the line.
 const MARKUP_SIGNIFICANT = /[&<>[\]`*_~\\|]/g;
 
 // Block markup changes what a line is rather than what it says: a line that begins "#" renders
@@ -72,6 +85,7 @@ function reference(character: string): string {
   return `&#${character.codePointAt(0) ?? 0};`;
 }
 
+
 function escapeMarkdown(text: string): string {
   return text
     .replace(MARKUP_SIGNIFICANT, reference)
@@ -82,6 +96,16 @@ function escapeMarkdown(text: string): string {
       (_whole, indent: string, marker: string) => `${indent}${reference(marker)}`,
     );
 }
+
+// The brackets a headline wraps its status and severity in.
+//
+// They are usabl's own punctuation, and they still go through the escape, as they did when a
+// whole headline was escaped at once: the line renders exactly as it always did, and a pair of
+// brackets can never be read as a reference-style link. Sealing the values is what holds the
+// line now, so this is the escape's remaining job on this surface, and it stays because prose
+// this file writes is the only thing that should ever reach it.
+const OPEN_BRACKET = escapeMarkdown('[');
+const CLOSE_BRACKET = escapeMarkdown(']');
 
 // A code span, fenced long enough that nothing inside it can end the span early. Character
 // references are not interpreted inside a code span, so escaping is the wrong tool here: a value
@@ -161,7 +185,9 @@ function renderNoVerdict(result: Result): string[] {
     return [COMMENT_MARKER, `## usabl report: ${formatVerdictWord(line)}`, '', line.meaning];
   }
   const failed = result.exitCode === 4;
-  const word = failed ? formatVerdictWord(line) : `NO VERDICT (exit ${result.exitCode})`;
+  // Both words come from the shared verdict unit, which prints an exit code only when it really
+  // is a whole number, so this heading carries no text the Result chose.
+  const word = failed ? formatVerdictWord(line) : formatVerdictWord({ ...line, word: 'NO VERDICT' });
   const meaning = failed ? line.meaning : 'usabl did not reach a verdict for this change.';
   return [
     COMMENT_MARKER,
@@ -210,7 +236,10 @@ function renderConformance(result: Result): string[] {
     `- not evaluated: unresolved files ${summary.notEvaluated.unresolvedFiles}, gaps ${summary.notEvaluated.gaps}`,
     `- blocked: ${summary.blocked ? 'yes' : 'no'}`,
   ];
-  if (result.paidDownCount > 0) {
+  // The count is carried by the Result, so it is printed only once it is really a whole number.
+  // A count is the one kind of carried value a code span would make harder to read, and a whole
+  // number cannot be a link, a mention, or markup of any kind.
+  if (Number.isInteger(result.paidDownCount) && result.paidDownCount > 0) {
     const plural = result.paidDownCount === 1 ? 'entry' : 'entries';
     lines.push(`- floor debt resolved: ${result.paidDownCount} ${plural} (run usabl floor prune to re-arm)`);
   }
@@ -289,7 +318,7 @@ function formatFinding(finding: Finding): string[] {
   const severity = neutralize(finding.severity);
   return listItem(
     '-',
-    `[${escapeMarkdown(severity)}] ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)}`,
+    `${OPEN_BRACKET}${inlineCode(severity)}${CLOSE_BRACKET} ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)}`,
     framedMarkdownLines(findingPieces(finding)),
   );
 }
@@ -301,29 +330,26 @@ function renderFindingGroup(title: string, findings: Finding[]): string[] {
   return [`### ${title}`, ...findings.flatMap((finding) => formatFinding(finding))];
 }
 
-// The headline is built from the group's fields rather than from one formatted string, so the
-// screen id can be sealed on its own. It is the only part of this line the application chooses:
-// the router fallback derives a screen id from a route literal, so an id can be written to read
-// as a mention, an address, an issue reference, or a commit id, and a post-render filter would
-// then turn it into a link or a notification. It gets the same code span the rule line gives it.
-// Status and severity are usabl's own vocabulary and the count is a number this surface
-// computed, so those stay as escaped prose.
+// The headline is built from the group's fields rather than from one formatted string, so every
+// field the Result carried can be sealed on its own: the screen id, which the router fallback
+// derives from a route literal in the application, and the status, severity, layer, and rule,
+// which arrive as whatever the document handed to `usabl comment` said. The brackets and the
+// count are the only prose left on the line. The status and the severity share one span, so the
+// line keeps the shape it had when it was one escaped string.
 function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
   const finding = group.representative;
   const rule = neutralize(finding.rule);
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
-  // The prose around the spans is escaped as a whole, brackets included, so this line renders
-  // exactly as it did when the whole headline was one escaped string.
-  const status = escapeMarkdown(`[${group.status} ${severity}]`);
-  const count = escapeMarkdown(formatCollapsedGroupCount(group));
-  const headline = `${status} ${inlineCode(screenId)}/${inlineCode(`${layer}/${rule}`)}${count}`;
+  const status = neutralize(group.status);
+  const count = formatCollapsedGroupCount(group);
+  const headline = `${OPEN_BRACKET}${inlineCode(`${status} ${severity}`)}${CLOSE_BRACKET} ${inlineCode(screenId)}/${inlineCode(`${layer}/${rule}`)}${count}`;
   // The rule line is a continuation of the item, not a nested item. A nested item would make
   // the framed lines after it lazy continuations of the nested paragraph, so they would render
   // inside the wrong item.
   return listItem('-', headline, [
-    `rule: ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)} · ${escapeMarkdown(severity)}`,
+    `rule: ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)} · ${inlineCode(severity)}`,
     ...framedMarkdownLines(findingPieces(finding)),
   ]);
 }
@@ -393,14 +419,21 @@ function renderAnnouncements(result: Result): string[] {
     }
     lines.push(`#### ${inlineCode(neutralize(screen.screenId))}`);
     const capped = screen.stops.slice(0, STOP_CAP);
-    for (const stop of capped) {
+    capped.forEach((stop, position) => {
+      // The marker counts the stops this list prints and is never built from the stop's own
+      // index. An index is carried by the Result, and text where a marker belongs is not a
+      // marker: the line would leave the list and render as a paragraph beginning with whatever
+      // the Result said, which is the one thing a code span cannot be used to stop, since a
+      // marker has to be literal digits to work at all. Stops are printed in the order they
+      // arrived, so the position says the same thing about any Result the engine wrote.
+      //
       // The frame opens on the marker's line. A bare "1." renders as an empty item, and the
       // frame under it, indented two columns where "1. " needs three, would leave the list.
       const [first, ...rest] = framedMarkdownLines([
         { label: 'announced', value: stopAnnouncementText(stop) },
       ]);
-      lines.push(...listItem(`${stop.index + 1}.`, first!, rest));
-    }
+      lines.push(...listItem(`${position + 1}.`, first!, rest));
+    });
     if (screen.stops.length > STOP_CAP) {
       lines.push(`- showing first ${STOP_CAP} of ${screen.stops.length} stops`);
     }

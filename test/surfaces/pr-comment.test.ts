@@ -612,7 +612,7 @@ describe('pr comment page text is sealed in code spans', () => {
       it(`seals ${name} in a code span, in the headline as well as the rule line`, () => {
         const markdown = collapsedFor(screenId);
         const lines = markdown.split('\n');
-        const headline = lines.find((line) => line.startsWith('- &#91;new serious&#93;'));
+        const headline = lines.find((line) => line.startsWith('- &#91;'));
 
         expect(markdown).toContain('### Findings (collapsed by rule)');
         expect(headline).toBeDefined();
@@ -631,11 +631,142 @@ describe('pr comment page text is sealed in code spans', () => {
       });
     }
 
-    it('keeps the count and the engine vocabulary outside the span', () => {
+    it('leaves only the brackets and the count outside the spans', () => {
       const markdown = collapsedFor('clusters');
-      const headline = markdown.split('\n').find((line) => line.startsWith('- &#91;new serious&#93;'));
+      const headline = markdown.split('\n').find((line) => line.startsWith('- &#91;'));
 
-      expect(headline).toBe('- &#91;new serious&#93; `clusters`/`axe/color-contrast` (×2)');
+      expect(headline).toBe('- &#91;`new serious`&#93; `clusters`/`axe/color-contrast` (×2)');
+    });
+  });
+
+  describe('a value the Result carried, whoever authored it', () => {
+    // Deciding by author does not survive this surface's own entry point. `usabl comment` reads
+    // a Result as a document from standard input and the parse takes most fields on trust, so a
+    // severity, a status, a layer, or a rule is whatever that document says. A severity carrying
+    // a mention and an address rendered as a live mention and a mailto link. Every value the
+    // Result carries is sealed now, so none of them can reach the filters.
+    const payload = '@octocat owner@example.test #123 0123456789abcdef0123456789abcdef01234567';
+
+    const sealed = (markdown: string, value: string): boolean => {
+      let at = markdown.indexOf(value);
+      if (at === -1) {
+        return false;
+      }
+      while (at !== -1) {
+        const before = markdown.lastIndexOf('`', at);
+        const after = markdown.indexOf('`', at + value.length);
+        if (before === -1 || after === -1 || markdown.slice(before, after).includes('\n')) {
+          return false;
+        }
+        at = markdown.indexOf(value, at + value.length);
+      }
+      return true;
+    };
+
+    const carried = (over: Partial<Finding>) =>
+      baseResult({
+        findings: [baseFinding(over), baseFinding({ ...over, elementKey: 'k2' })],
+        screens: [],
+        coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
+      });
+
+    const fields: ReadonlyArray<readonly [string, Partial<Finding>]> = [
+      ['a severity', { severity: payload as unknown as Finding['severity'] }],
+      ['a layer', { layer: payload }],
+      ['a rule', { rule: payload }],
+      ['a screen id', { screenId: payload }],
+    ];
+
+    for (const [name, over] of fields) {
+      it(`seals ${name} in the collapsed path`, () => {
+        expect(sealed(projectPrComment(carried(over)), payload)).toBe(true);
+      });
+
+      it(`seals ${name} in the uncollapsed path`, () => {
+        const single = baseResult({
+          findings: [baseFinding(over)],
+          screens: [],
+          coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
+        });
+
+        expect(sealed(projectPrComment(single), payload)).toBe(true);
+      });
+    }
+
+    it('seals a status, and prints no finding whose status it does not recognize', () => {
+      // A status reaches the page only through a lane, and the lanes are chosen by an exact
+      // match on new, carried, or an advisory evidence class, so the word printed is one of
+      // usabl's own. It is sealed anyway rather than trusted by that argument, because the lane
+      // check and the line that prints it are free to drift apart.
+      const carriedStatus = projectPrComment(
+        baseResult({
+          findings: [baseFinding({ status: 'carried' }), baseFinding({ status: 'carried', elementKey: 'k2' })],
+          screens: [],
+          coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
+        }),
+      );
+      expect(carriedStatus).toContain('&#91;`carried serious`&#93;');
+      expect(sealed(carriedStatus, 'carried serious')).toBe(true);
+
+      const unrecognized = projectPrComment(carried({ status: payload as unknown as Finding['status'] }));
+      expect(unrecognized).not.toContain(payload);
+    });
+
+    it('never builds a list marker from a stop index the Result carried', () => {
+      // A marker has to be literal digits to work, so text where a marker belongs cannot be
+      // sealed: the line would leave the list and render as a paragraph starting with whatever
+      // the Result said. The marker counts the printed stops instead.
+      const markdown = projectPrComment(
+        baseResult({
+          screens: [
+            {
+              screenId: 'clusters',
+              url: 'https://app.local/clusters',
+              stops: [
+                { ...makeStop(0, 'Create cluster'), index: payload as unknown as number },
+                { ...makeStop(1, 'Delete cluster'), index: payload as unknown as number },
+              ],
+              drafts: [],
+              gaps: [],
+              applicability: [],
+              reachedSelectorPresent: null,
+            },
+          ],
+        }),
+      );
+      const lines = markdown.split('\n');
+
+      expect(lines.some((line) => line.startsWith(`1. ${UNTRUSTED_FRAME_START}`))).toBe(true);
+      expect(lines.some((line) => line.startsWith(`2. ${UNTRUSTED_FRAME_START}`))).toBe(true);
+      expect(lines.every((line) => !line.startsWith(payload))).toBe(true);
+    });
+
+    it('prints a floor pay-down count only when it really is a whole number', () => {
+      const hostile = projectPrComment(
+        baseResult({ verdict: 'verified', findings: [], paidDownCount: payload as unknown as number }),
+      );
+      const real = projectPrComment(baseResult({ verdict: 'verified', findings: [], paidDownCount: 2 }));
+
+      expect(hostile).not.toContain('floor debt resolved');
+      expect(hostile).not.toContain(payload);
+      expect(real).toContain('floor debt resolved: 2 entries');
+    });
+
+    it('prints an exit code in the no-verdict heading only when it really is a whole number', () => {
+      const markdown = projectPrComment(
+        baseResult({
+          verdict: null,
+          exitCode: payload as unknown as Result['exitCode'],
+          summary: 'reserved',
+          findings: [],
+          screens: [],
+          receipt: null,
+          coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
+        }),
+      );
+
+      expect(markdown).toContain('## usabl report: NO VERDICT (exit unknown)');
+      expect(markdown.split('\n')[1]).not.toContain(payload);
     });
   });
 
@@ -721,7 +852,7 @@ describe('pr comment page text is sealed in code spans', () => {
       expect(markdown).not.toMatch(/^\s+- rule: /m);
       // The headline is escaped prose around sealed fields, so its brackets are character
       // references and the screen id and rule are code spans.
-      expect(markdown).toMatch(/^- &#91;new serious&#93; `clusters`\/`axe\/rule-0`\n  rule: `clusters` - `axe\/rule-0` · serious\n  \[BEGIN UNTRUSTED TEXT/m);
+      expect(markdown).toMatch(/^- &#91;`new serious`&#93; `clusters`\/`axe\/rule-0`\n  rule: `clusters` - `axe\/rule-0` · `serious`\n  \[BEGIN UNTRUSTED TEXT/m);
     });
   });
 

@@ -289,15 +289,53 @@ unsealed by accident. Tests force the collapsed path with ids spelled as a menti
 address, an issue reference, and a commit id, and assert every occurrence sits inside a
 span.
 
-What is still printed as prose, outside every span: the verdict word and its meaning, the
-section headings, the receipt and conformance labels, the counts, a coverage gap's ref and
-reason labels, and a finding's status, severity, layer, and rule. The counts are numbers
-the engine computed. Status is usabl's own enum. Severity, layer, and rule are authored by
-the providers in the first-party stack, which is the residual assumption here and is
-recorded as such: a hostile third-party provider could put an autolinkable string in a rule
-name, and usabl's answer to a hostile provider is not to load one. A gap's state label is
-also an engine enum, but `Result` is exported and a caller can compose one outside the
-engine, so it is sealed anyway rather than trusted by argument.
+The comment seals every value the Result carries, whoever authored it. An earlier version
+of this section argued that a severity, a layer, and a rule are written by the first-party
+providers and so could stay as prose. That argument holds only while a Result is built in
+this process. It does not hold at this surface's own entry point: `usabl comment` reads a
+Result as a document from standard input, `parseResultJson` checks the schema version, the
+accessibility exit code, and one forbidden accessibility verdict, and takes every other
+field on trust, and a library caller can hand the engine a check runner of its own. A
+severity carrying a mention and an address was fed in that way and came back from the
+renderer as a live mention and a mailto link. Deciding what to seal by who authored it
+cannot survive a boundary where the author is whoever wrote the document, so the decision
+is by carrier: a value the Result carried is sealed, and only text usabl itself wrote is
+left as prose.
+
+What remains as prose is therefore engine constants and numbers this surface computed: the
+report headline and the verdict words, the meaning sentences, the section headings, the
+labels on every framed and unframed line, the brackets around a headline's status and
+severity, the conformance counts, the collapsed group count, and the announcement list
+markers. The counts are computed here from the findings and the transcript, never taken
+from a field. Two values the Result carries are whole numbers rather than spans, because a
+span would make them harder to read and a whole number cannot be markup: the exit code in a
+no-verdict heading and the floor pay-down count are each printed only after a check that
+they really are integers, and are named as unknown or left out otherwise. The announcement
+list marker is the one place a code span is no use, because a list marker has to be literal
+digits to work at all, so the marker counts the stops this list prints and is never built
+from the stop index the Result carried.
+
+The stop hook and the self-check are held to the same rule by their own mechanism. They
+print plain text to a language model with no renderer involved, so the question there is
+the untrusted frame rather than a code span, and every value the Result carries is inside
+it: the gate's summary, each finding's experience, fix, source, and screen id, and each
+coverage gap's ref and reason. What those two surfaces print outside the frame is the
+verdict word and its meaning, the next step, the labels, the counts, a group's status,
+severity, layer, and rule, and the list of guarded files that changed. The guarded paths
+are the one carried value there that is not written by a provider: they are the paths in
+this branch's own diff that the operator's policy guards. They are scrubbed like every
+other string, so they cannot forge a frame marker or carry a control sequence, and naming
+them outside the frame is what lets the model tell the user which file needs approval.
+Both surfaces run locally against the developer's own working tree, so a path in that list
+is a file that developer wrote. There is no document entry point into either surface: both
+project a Result built by `run()` in the same process, and the exported `evaluateStopDecision`
+is reached only by a caller running its own code on its own machine, which is not an
+attacker this model defends against. That is the residual assumption for those two
+surfaces, and it is narrower than the one this section used to make for the comment,
+because it does not depend on who wrote a provider. Two values that a Result could carry
+are no longer pasted into either line whatever their content: an unrecognized verdict is
+named with a fixed word rather than echoed, and an exit code that is not a whole number is
+named as unknown.
 
 **Not handled:** credential-dense hostile input costs more than it did. About three million
 characters of back-to-back credentials take roughly 0.7 s to redact, and roughly 1.5 s with

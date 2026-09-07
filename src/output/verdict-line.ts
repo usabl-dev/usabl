@@ -51,6 +51,30 @@ const IDLE_SYMBOL = '○'; // white circle: nothing happened
 const FAILED_SYMBOL = '!';
 
 /**
+ * The word for a verdict usabl has no word for.
+ *
+ * A fixed label, never the verdict that arrived. `Result` is exported and one can be composed
+ * outside the engine or parsed from a document, so at runtime `verdict` is any string, and this
+ * word is printed in the one position every surface treats as its own: the opening line, outside
+ * the untrusted frame on the surfaces that have one. Echoing an unrecognized verdict there would
+ * put text usabl did not write where a reader, and on two surfaces a language model, reads
+ * usabl's own voice. The reader still learns the state, because the exit code and the meaning
+ * sentence are printed beside it. The gap disclosure holds the same line for a gap state.
+ */
+const UNRECOGNIZED_VERDICT_WORD = 'UNRECOGNIZED VERDICT';
+
+/**
+ * The exit code as text, or a word saying it was not one.
+ *
+ * The contract types this a number and a Result from `run()` always carries one, but a composed
+ * or parsed Result can carry anything, and this is printed as usabl's own text. A value that is
+ * not a whole number is named as unknown rather than pasted into the line.
+ */
+function formatExitCode(exitCode: number): string {
+  return Number.isInteger(exitCode) ? String(exitCode) : 'unknown';
+}
+
+/**
  * Names the state of a Result for a reader who sees this line first.
  *
  * `verdict` null with exit 4 is a run usabl could not finish. `verdict` null with any other
@@ -79,7 +103,7 @@ export function describeVerdict(result: Result): VerdictLine {
   }
   return {
     symbol: VERDICT_SYMBOLS[result.verdict] ?? '',
-    word: VERDICT_WORDS[result.verdict] ?? result.verdict,
+    word: VERDICT_WORDS[result.verdict] ?? UNRECOGNIZED_VERDICT_WORD,
     exitCode: result.exitCode,
     meaning: VERDICT_MEANINGS[result.verdict] ?? 'usabl reached a verdict it has no words for.',
     noVerdict: false,
@@ -88,7 +112,7 @@ export function describeVerdict(result: Result): VerdictLine {
 
 /** The verdict word and exit code with no symbol, for readers that gain nothing from one. */
 export function formatVerdictWord(line: VerdictLine): string {
-  return `${line.word} (exit ${line.exitCode})`;
+  return `${line.word} (exit ${formatExitCode(line.exitCode)})`;
 }
 
 /** The full verdict line: symbol, word, and exit code. */

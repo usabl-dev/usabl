@@ -278,14 +278,21 @@
   the page under test, and the frame also holds the engine's own summary, so
   that was false on its face. The overlay client matches the new strings, and
   the usabl-fix skill prose says what the frame holds.
-- The Stop hook chooses the APPROVAL REQUIRED next step from the accessibility
-  verdict the gate wrote, not from whether any finding is present, and both
-  model-facing surfaces select barriers with the gate's own blocking rule:
-  deterministic evidence that is neither waived nor fixed. A run carrying a
-  finding the gate marked fixed or waived was told to fix a barrier the gate
-  says is done, and a guarded-file run whose accessibility half was
-  `not_covered` lost the instruction to resolve the coverage gaps whenever an
-  old finding was attached. That case now keeps it.
+- The Stop hook chooses its next step from the verdict and, for a guarded-file
+  block, from the accessibility verdict the gate wrote, never from whether some
+  finding is present. Every path uses that one selector, including the message
+  for a stop let through because continuation is already active, which used to
+  tell every blocking verdict to fix the barriers. That is wrong when guarded
+  files are the only thing standing and wrong again when the work is resolving
+  coverage gaps, and that message now also names the guarded files, because it
+  asks the assistant to raise them with the user.
+- Both model-facing surfaces list a barrier only when the gate is not verified
+  because of it: deterministic evidence that is neither waived nor fixed, and
+  either new and failing or unverified. A carried finding is accepted debt in
+  the evidence floor and the gate lets a run carrying one pass as verified, so
+  listing it sent a reader to fix something that was blocking nothing. A test
+  pins that rule against the gate by driving the gate with its own inputs, so a
+  change to either side fails.
 - APPROVAL REQUIRED on the Stop hook and the self-check names the guarded file
   or files that changed and says how the state clears: where a code owner is
   assigned to that path, a code owner other than the author approves it on the
@@ -336,6 +343,22 @@
 
 ### Security
 
+- The pull request comment seals every value the Result carries, whoever wrote
+  it, including a finding's severity, status, layer, and rule. Those were left
+  as prose because the first-party providers author them, which holds only
+  while a Result is built in this process. `usabl comment` reads a Result as a
+  document from standard input and takes most fields on trust, so a severity
+  carrying a mention and an address rendered as a live mention and a mailto
+  link. What stays as prose is now engine constants and numbers the surface
+  computed. The exit code in a no-verdict heading and the floor pay-down count
+  are printed only after a check that they really are whole numbers, and the
+  announcement list marker counts the stops the list prints rather than reading
+  the stop index the Result carried, because a list marker has to be literal
+  digits and cannot be sealed.
+- An unrecognized verdict is no longer echoed into the line every surface opens
+  with. It is named with a fixed word, the way an unrecognized coverage gap
+  state already was. An exit code that is not a whole number is named as
+  unknown rather than printed.
 - A screen id in the pull request comment can no longer reach GitHub's
   post-render filters. The collapsed finding headline printed the id as prose,
   outside both the code span and the untrusted frame. A screen id is not
