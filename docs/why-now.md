@@ -11,8 +11,9 @@ claim compliance.
 ### European Accessibility Act (enforceable 2025)
 
 - **What:** EU Directive 2019/882 requires in-scope digital products and services sold
-  to EU consumers to meet accessibility requirements; EN 301 549 (WCAG 2.1 AA) is the
-  harmonized technical standard.
+  to EU consumers to meet accessibility requirements. EN 301 549 is the European ICT
+  accessibility standard; its current version is harmonized for the Web Accessibility
+  Directive and is being updated to support Directive 2019/882.
 - **When:** Application date **28 June 2025** - enforcement is live, not upcoming.
 - **Why usabl:** Teams need continuous proof of accessibility work on shipped UI, not
   annual audit snapshots.
