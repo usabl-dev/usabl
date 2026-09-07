@@ -19,26 +19,47 @@
  * do every break and repair edit in the clone. The real app must have a clean
  * `git status` before and after, and the suites assert it.
  *
- * The dev server runs detached in its own process group and is stopped by
- * signalling that group. If the test runner itself is killed, `afterAll` never
- * runs: the clone stays in the temp dir and its Vite process keeps running until
- * the next run finds the clone's owner process dead and removes both. A clone
- * whose owner is still alive is never touched.
+ * Each clone directory is created under a hidden pending name, gets its
+ * `owner.json` (owner pid, start time, clone path, later the dev server's group
+ * id), and is then renamed into place, so no other run ever sees a clone without
+ * an owner file. The dev server runs detached in its own process group and is
+ * stopped by signalling that group and waiting until every member is gone.
+ *
+ * Cleanup of earlier runs happens at the start of each run. A clone is removed
+ * only when it has a valid owner file, its owner pid is dead, and the directory
+ * is older than this process. Its recorded server group is signalled only when
+ * every live member of that group has its working directory inside the clone.
+ * A clone with a missing or corrupt owner file is reported and left alone.
  *
  * Every wait is bounded. Server start and source propagation use the app's
  * `readyTimeoutMs`, the same budget the engine gives to reaching one screen. Git
- * and the demo's switch script have their own timeouts. The clone's dev server
- * loads `usabl/vite` from `node_modules/usabl`, so the engine's built `dist/`
- * must exist. `npm run test:demo-integration` builds first under a lock.
+ * and the demo's switch script have their own timeouts. Test and hook timeouts are
+ * sums of those budgets plus a margin. Filesystem calls and the free-port probe
+ * have no deadline of their own and rely on the surrounding Vitest hook timeout.
+ * The build and Vitest process trees are bounded by the runner's group kill in
+ * scripts/run-demo-integration.ts.
+ *
+ * Known limits:
+ * - If the test runner is killed, `afterAll` never runs. The clone and its Vite
+ *   group stay until the next run removes them. If that later run cannot read
+ *   `/proc` (a non-Linux host) or a group member's working directory lies outside
+ *   the clone, the clone is removed and the process is left running.
+ * - Process identity comes from pids and `/proc`. A reused owner pid makes a
+ *   stale clone look live and leaves it in place; that is a leak, never a
+ *   removal of live work.
+ * - A `/tmp` shared across machines or pid namespaces is out of scope: a pid that
+ *   is alive elsewhere looks dead here.
+ * - A process stuck in an uninterruptible kernel wait outlives SIGKILL; the stop
+ *   reports it instead of waiting forever.
  */
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { accessSync, readFileSync, statSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, readlink, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -54,8 +75,9 @@ const ENGINE_PACKAGE_NAME = 'usabl';
 // Vite writes its dependency cache into these entries. The clone gets its own so the
 // real app's node_modules is never written to.
 const NODE_MODULES_NOT_LINKED = new Set([ENGINE_PACKAGE_NAME, '.vite', '.vite-temp', '.tmp']);
-const CLONE_PREFIX = 'usabl-demo-app-';
-const OWNER_FILE = 'owner.json';
+export const CLONE_PREFIX = 'usabl-demo-app-';
+const PENDING_PREFIX = '.usabl-demo-app-pending-';
+export const OWNER_FILE = 'owner.json';
 const MARKER_FILE = 'usabl-fixture-marker.txt';
 const OVERLAY_LOADER = "import('/__usabl/client.js')";
 const DEFAULT_READY_TIMEOUT_MS = 60_000;
@@ -64,21 +86,30 @@ const GIT_TIMEOUT_MS = 60_000;
 const SOURCE_SWITCH_TIMEOUT_MS = 30_000;
 const GRACEFUL_STOP_MS = 5_000;
 const FORCED_STOP_MS = 5_000;
+const POLL_MS = 100;
 
 /**
  * Time budgets for one suite. `readyTimeoutMs` is the engine's budget for reaching
  * one screen. Starting the dev server and re-serving an edited module are the same
- * class of wait, so they share it. Test timeouts add these up per operation.
+ * class of wait, so they share it. `sourceSwitchExecMs` bounds the switch script
+ * itself. Test timeouts add these up per operation.
  */
 export interface Budgets {
   readyTimeoutMs: number;
   serverStartMs: number;
   sourceSwitchMs: number;
+  sourceSwitchExecMs: number;
   gitMs: number;
 }
 
 export function budgetsFor(readyTimeoutMs: number): Budgets {
-  return { readyTimeoutMs, serverStartMs: readyTimeoutMs, sourceSwitchMs: readyTimeoutMs, gitMs: GIT_TIMEOUT_MS };
+  return {
+    readyTimeoutMs,
+    serverStartMs: readyTimeoutMs,
+    sourceSwitchMs: readyTimeoutMs,
+    sourceSwitchExecMs: SOURCE_SWITCH_TIMEOUT_MS,
+    gitMs: GIT_TIMEOUT_MS,
+  };
 }
 
 export type FixtureAppRequest =
@@ -109,12 +140,80 @@ export interface FixtureServer {
   output: string[];
 }
 
-interface OwnerRecord {
+export interface OwnerRecord {
   pid: number;
   startedAt: number;
   cwd: string;
   serverPid?: number;
 }
+
+/** Process inspection the cleanup relies on. Injectable so tests can fake `/proc`. */
+export interface ProcessInspector {
+  /** True when a signal could be delivered to the pid (or, negative, the group). */
+  alive(target: number): boolean;
+  /** Pids of the live members of a process group. */
+  groupMembers(pgid: number): Promise<number[]>;
+  /** Current working directory of a live process, or null when unknown. */
+  cwdOf(pid: number): Promise<string | null>;
+  kill(target: number, signal: NodeJS.Signals): void;
+}
+
+function signalAlive(target: number): boolean {
+  try {
+    process.kill(target, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the target exists but belongs to someone else. Treat it as alive.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+async function linuxGroupMembers(pgid: number): Promise<number[]> {
+  const members: number[] = [];
+  let entries: string[];
+  try {
+    entries = await readdir('/proc');
+  } catch {
+    return members;
+  }
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) {
+      continue;
+    }
+    try {
+      const status = await readFile(`/proc/${entry}/stat`, 'utf8');
+      // The command name sits in parentheses and may contain spaces; fields follow the last one.
+      const rest = status.slice(status.lastIndexOf(')') + 2).split(' ');
+      if (Number(rest[2]) === pgid) {
+        members.push(Number(entry));
+      }
+    } catch {
+      // The process ended while we were reading.
+    }
+  }
+  return members;
+}
+
+export const systemInspector: ProcessInspector = {
+  alive: signalAlive,
+  groupMembers: linuxGroupMembers,
+  async cwdOf(pid) {
+    try {
+      return await readlink(`/proc/${pid}/cwd`);
+    } catch {
+      return null;
+    }
+  },
+  kill(target, signal) {
+    try {
+      process.kill(target, signal);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+        throw error;
+      }
+    }
+  },
+};
 
 function readPackageName(cwd: string): string | null {
   const raw = readFileSync(join(cwd, 'package.json'), 'utf8');
@@ -215,19 +314,9 @@ export function fixtureReadyTimeoutMs(cwd: string): number {
   return parseUsablConfig(readFileSync(join(cwd, 'usabl.config.json'), 'utf8')).readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
 }
 
-function processAlive(pid: number): boolean {
+export function parseOwner(raw: string): OwnerRecord | null {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM means the process exists but belongs to someone else. Treat it as alive.
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-async function readOwner(root: string): Promise<OwnerRecord | null> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(join(root, OWNER_FILE), 'utf8'));
+    const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) {
       return null;
     }
@@ -244,37 +333,85 @@ async function readOwner(root: string): Promise<OwnerRecord | null> {
   }
 }
 
-/**
- * Kills the dev server group a dead run left behind, but only when the group
- * leader's command line still names that run's clone. A reused pid never matches.
- */
-async function killOrphanedServer(owner: OwnerRecord): Promise<void> {
-  if (owner.serverPid === undefined || !processAlive(owner.serverPid)) {
-    return;
-  }
-  let cmdline: string;
+async function readOwner(root: string): Promise<OwnerRecord | null> {
   try {
-    cmdline = await readFile(`/proc/${owner.serverPid}/cmdline`, 'utf8');
+    return parseOwner(await readFile(join(root, OWNER_FILE), 'utf8'));
   } catch {
-    return;
+    return null;
   }
-  if (!cmdline.includes(owner.cwd)) {
-    return;
+}
+
+async function writeOwner(root: string, record: OwnerRecord): Promise<void> {
+  await writeFile(join(root, OWNER_FILE), JSON.stringify(record), 'utf8');
+}
+
+function insideClone(cwd: string, path: string): boolean {
+  return path === cwd || path.startsWith(`${cwd}/`);
+}
+
+export type OrphanDecision =
+  | { action: 'none'; reason: string }
+  | { action: 'kill'; members: number[] }
+  | { action: 'leave'; reason: string };
+
+/**
+ * Decides what to do with the server group a dead run recorded. The group is
+ * signalled only when every live member works inside that run's clone, so a reused
+ * pid or an unrelated group is never touched.
+ */
+export async function decideOrphanedServer(owner: OwnerRecord, inspector: ProcessInspector): Promise<OrphanDecision> {
+  if (owner.serverPid === undefined) {
+    return { action: 'none', reason: 'no server was recorded' };
   }
-  killGroup(owner.serverPid, 'SIGKILL');
+  const members = await inspector.groupMembers(owner.serverPid);
+  if (members.length === 0) {
+    return { action: 'none', reason: `process group ${owner.serverPid} is gone` };
+  }
+  for (const pid of members) {
+    const cwd = await inspector.cwdOf(pid);
+    if (cwd === null || !insideClone(owner.cwd, cwd)) {
+      return {
+        action: 'leave',
+        reason: `process ${pid} in group ${owner.serverPid} works in ${cwd ?? 'an unknown directory'}, not in ${owner.cwd}`,
+      };
+    }
+  }
+  return { action: 'kill', members };
+}
+
+async function waitGroupGone(pgid: number, inspector: ProcessInspector, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!inspector.alive(-pgid)) {
+      return true;
+    }
+    await delay(POLL_MS);
+  }
+  return !inspector.alive(-pgid);
+}
+
+export interface StaleCloneOptions {
+  tmpRoot?: string;
+  inspector?: ProcessInspector;
+  processStartedAt?: number;
+  log?: (line: string) => void;
 }
 
 /**
  * Removes clones from earlier runs whose owner process is gone. A clone is only
- * removed when it is older than this process and no live process owns it, so a
- * concurrent run's clone is never touched.
+ * removed when it has a valid owner file, that owner is dead, and the directory is
+ * older than this process, so a concurrent run's clone is never touched. A clone
+ * without a readable owner file is reported and left alone.
  */
-export async function removeStaleClones(): Promise<string[]> {
-  const processStartedAt = Date.now() - process.uptime() * 1000;
+export async function removeStaleClones(options: StaleCloneOptions = {}): Promise<string[]> {
+  const tmpRoot = options.tmpRoot ?? tmpdir();
+  const inspector = options.inspector ?? systemInspector;
+  const processStartedAt = options.processStartedAt ?? Date.now() - process.uptime() * 1000;
+  const log = options.log ?? ((line: string) => console.info(line));
   const removed: string[] = [];
   let entries: string[];
   try {
-    entries = await readdir(tmpdir());
+    entries = await readdir(tmpRoot);
   } catch {
     return removed;
   }
@@ -282,18 +419,28 @@ export async function removeStaleClones(): Promise<string[]> {
     if (!entry.startsWith(CLONE_PREFIX)) {
       continue;
     }
-    const root = join(tmpdir(), entry);
+    const root = join(tmpRoot, entry);
     try {
       const info = await stat(root);
       if (!info.isDirectory() || info.mtimeMs >= processStartedAt) {
         continue;
       }
       const owner = await readOwner(root);
-      if (owner !== null && processAlive(owner.pid)) {
+      if (owner === null) {
+        log(`[fixture app] ${root} has no readable ${OWNER_FILE}; left in place`);
         continue;
       }
-      if (owner !== null) {
-        await killOrphanedServer(owner);
+      if (inspector.alive(owner.pid)) {
+        continue;
+      }
+      const decision = await decideOrphanedServer(owner, inspector);
+      if (decision.action === 'kill' && owner.serverPid !== undefined) {
+        inspector.kill(-owner.serverPid, 'SIGKILL');
+        if (!(await waitGroupGone(owner.serverPid, inspector, FORCED_STOP_MS))) {
+          log(`[fixture app] server group ${owner.serverPid} of ${root} survived SIGKILL`);
+        }
+      } else if (decision.action === 'leave') {
+        log(`[fixture app] ${root}: ${decision.reason}; its process group is left running`);
       }
       await rm(root, { recursive: true, force: true });
       removed.push(root);
@@ -337,8 +484,22 @@ async function linkNodeModules(sourceCwd: string, cloneCwd: string): Promise<str
   return resolvedEngine;
 }
 
-async function writeOwner(root: string, record: OwnerRecord): Promise<void> {
-  await writeFile(join(root, OWNER_FILE), JSON.stringify(record), 'utf8');
+/**
+ * Creates the clone root with its owner file already inside, then renames it into
+ * its final name, so no other run ever observes a clone directory without an owner.
+ */
+export async function createOwnedRoot(tmpRoot: string, owner: Omit<OwnerRecord, 'cwd'>): Promise<{ root: string; cwd: string }> {
+  const pending = await mkdtemp(join(tmpRoot, PENDING_PREFIX));
+  const root = join(tmpRoot, `${CLONE_PREFIX}${basename(pending).slice(PENDING_PREFIX.length)}`);
+  const cwd = join(root, 'app');
+  try {
+    await writeOwner(pending, { ...owner, cwd });
+    await rename(pending, root);
+  } catch (error) {
+    await rm(pending, { recursive: true, force: true });
+    throw error;
+  }
+  return { root, cwd };
 }
 
 /**
@@ -353,10 +514,8 @@ export async function createDisposableApp(sourceCwd: string): Promise<Disposable
   }
   const budgets = budgetsFor(fixtureReadyTimeoutMs(sourceCwd));
   const head = (await git(sourceCwd, ['rev-parse', 'HEAD'])).trim();
-  const root = await mkdtemp(join(tmpdir(), CLONE_PREFIX));
-  const cwd = join(root, 'app');
+  const { root, cwd } = await createOwnedRoot(tmpdir(), { pid: process.pid, startedAt: Date.now() });
   try {
-    await writeOwner(root, { pid: process.pid, startedAt: Date.now(), cwd });
     await git(root, ['clone', '--quiet', '--no-hardlinks', sourceCwd, cwd]);
     await git(cwd, ['checkout', '--quiet', '--detach', head]);
     const cloneHead = (await git(cwd, ['rev-parse', 'HEAD'])).trim();
@@ -385,7 +544,7 @@ export async function createDisposableApp(sourceCwd: string): Promise<Disposable
 
 /** Runs the demo app's own source switch script inside the clone. */
 export async function switchDemoSource(app: DisposableApp, script: string, mode: string): Promise<void> {
-  await runBounded(`${script} ${mode}`, 'node', [script, mode], app.cwd, SOURCE_SWITCH_TIMEOUT_MS);
+  await runBounded(`${script} ${mode}`, 'node', [script, mode], app.cwd, app.budgets.sourceSwitchExecMs);
 }
 
 /**
@@ -468,7 +627,10 @@ export async function startFixtureServer(app: DisposableApp, probePath: string):
   const output = attachOutputBuffer(child);
   const server: FixtureServer = { process: child, baseUrl, port, output };
   if (child.pid !== undefined) {
-    await writeOwner(app.root, { pid: process.pid, startedAt: Date.now(), cwd: app.cwd, serverPid: child.pid });
+    const owner = await readOwner(app.root);
+    if (owner !== null) {
+      await writeOwner(app.root, { ...owner, serverPid: child.pid });
+    }
   }
   try {
     await waitForServerReady(server, app, probePath);
@@ -535,18 +697,7 @@ async function waitForServerReady(server: FixtureServer, app: DisposableApp, pro
   );
 }
 
-/** Signals a whole process group. A group that is already gone is not an error. */
-function killGroup(leaderPid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-leaderPid, signal);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
-      throw error;
-    }
-  }
-}
-
-async function exitedWithin(child: ReturnType<typeof spawn>, timeoutMs: number): Promise<boolean> {
+async function leaderExitedWithin(child: ReturnType<typeof spawn>, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return true;
   }
@@ -556,20 +707,22 @@ async function exitedWithin(child: ReturnType<typeof spawn>, timeoutMs: number):
 
 /**
  * Stops the dev server and everything npm started under it by signalling the
- * process group: SIGTERM first, SIGKILL after a grace period. Both waits are
- * bounded; a group that survives SIGKILL is reported, not waited on forever.
+ * process group: SIGTERM first, SIGKILL after a grace period. It returns only once
+ * the whole group is gone, and reports a group that survives SIGKILL instead of
+ * waiting forever.
  */
-export async function stopFixtureServer(server: FixtureServer): Promise<void> {
+export async function stopFixtureServer(server: FixtureServer, inspector: ProcessInspector = systemInspector): Promise<void> {
   const child = server.process;
-  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+  if (child.pid === undefined) {
     return;
   }
-  killGroup(child.pid, 'SIGTERM');
-  if (await exitedWithin(child, GRACEFUL_STOP_MS)) {
+  const pgid = child.pid;
+  inspector.kill(-pgid, 'SIGTERM');
+  if (await leaderExitedWithin(child, GRACEFUL_STOP_MS) && (await waitGroupGone(pgid, inspector, GRACEFUL_STOP_MS))) {
     return;
   }
-  killGroup(child.pid, 'SIGKILL');
-  if (!(await exitedWithin(child, FORCED_STOP_MS))) {
-    throw new Error(`fixture dev server group ${child.pid} did not exit within ${FORCED_STOP_MS}ms of SIGKILL`);
+  inspector.kill(-pgid, 'SIGKILL');
+  if (!(await leaderExitedWithin(child, FORCED_STOP_MS)) || !(await waitGroupGone(pgid, inspector, FORCED_STOP_MS))) {
+    throw new Error(`fixture dev server group ${pgid} did not exit within ${FORCED_STOP_MS}ms of SIGKILL`);
   }
 }

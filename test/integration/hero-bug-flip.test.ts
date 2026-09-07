@@ -84,11 +84,14 @@ type SourceMode = 'broken' | 'repaired';
 
 const fixture = requestFixtureApp();
 const budgets = fixture.kind === 'run' ? budgetsFor(fixtureReadyTimeoutMs(fixture.cwd)) : null;
-// Every wait in the test has a budget; the test timeout is their sum plus a margin.
+// Every wait in the test has a budget; the test timeout is their sum plus a margin:
+// page opens, then per phase one switch script run and one propagation poll.
 const testTimeoutMs =
   budgets === null
     ? 0
-    : PAGE_OPENS_PER_PHASE * PHASES * budgets.readyTimeoutMs + PHASES * budgets.sourceSwitchMs + TIMEOUT_MARGIN_MS;
+    : PAGE_OPENS_PER_PHASE * PHASES * budgets.readyTimeoutMs +
+      PHASES * (budgets.sourceSwitchExecMs + budgets.sourceSwitchMs) +
+      TIMEOUT_MARGIN_MS;
 const setupTimeoutMs = budgets === null ? 0 : SETUP_GIT_CALLS * budgets.gitMs + budgets.serverStartMs + TIMEOUT_MARGIN_MS;
 const teardownTimeoutMs = budgets === null ? 0 : budgets.gitMs + TIMEOUT_MARGIN_MS;
 
