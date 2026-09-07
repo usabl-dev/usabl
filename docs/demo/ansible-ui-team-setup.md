@@ -275,15 +275,24 @@ HTML marker). You will never get comment spam.
 
 ### How CI verdicts map to the merge gate
 
-| Verdict | `gate-comment` job | `usabl-policy` check | Merge |
-| --- | --- | --- | --- |
-| `verified` | Green, posts receipt | Green | Allowed |
-| `regression` | Red, posts findings | Red | Blocked (if required) |
-| `not_covered` | Red, posts disclosure | Red | Blocked |
-| `approval_required` | Red, names changed policy | Red | Blocked until CODEOWNERS approve |
+The three jobs read different things. `gate-comment` ends with `enforce accessibility`, so its color
+follows the accessibility result of the scan. `usabl-policy` depends only on the guarded paths: it is
+green whenever no guarded path diverged from the trusted ref, whatever the scan found. `usabl-required`
+reads both and is the only job that decides the merge.
 
-The `usabl-policy` check is the one you make required in branch protection. `gate-comment` posts the
-readable result but is not required by itself.
+| Verdict | `gate-comment` job | `usabl-policy` check | `usabl-required` check | Merge (normal path, `usabl-required` required) |
+| --- | --- | --- | --- | --- |
+| `verified` | Green, posts receipt | Green | Green | Allowed |
+| `regression` | Red, posts findings | Green (no guarded path changed) | Red | Blocked |
+| `not_covered` | Red, posts disclosure | Green (no guarded path changed) | Red | Blocked |
+| `approval_required` | Follows the accessibility sub-result: green when it is verified, red when it is regression or not covered; the comment names the changed policy | Red until a CODEOWNERS reviewer other than the author approves that exact head | Red until both are green | Blocked until CODEOWNERS approve |
+| no verdict (crash, exit 4) | Red | Red | Red | Blocked |
+| idle (no verdict) | Green, nothing to check | Green | Green | Allowed |
+
+The `usabl-required` check is the one you make required in branch protection. `gate-comment` posts the
+readable result and cannot run on a review event; `usabl-policy` alone can be green while the scan is
+red. Neither is the required check by itself. Whether an administrator can bypass the required check
+depends on the ruleset's bypass list.
 
 ---
 
@@ -336,7 +345,7 @@ gh pr create --base devel --fill
 
 CI runs `usabl-gate`. Watch for:
 - The sticky bot comment with the verdict.
-- The `usabl-policy` check (green or red) in the PR checks tab.
+- The `usabl-required` check (green or red) in the PR checks tab. It is the one that decides the merge.
 
 ### 7. Interpret the result
 
@@ -368,7 +377,7 @@ Commit the `.usabl-evidence.json` diff alongside the fix PR so the floor ratchet
 | Stop hook (Cursor) | `npx usabl stop-hook --cursor` | Yes (followup_message loop) | Agent completes a turn |
 | Vite overlay | `usabl install --overlay` | No (advisory badge) | Dev server is running |
 | PR comment | `usabl comment` (via CI) | No (informational) | Every PR push |
-| CI gate | `usabl-policy` (via CI) | Yes (required check) | Every PR push + review |
+| CI gate | `usabl-required` (via CI) | Yes (required check, normal merge path) | Every PR push + review |
 | Doctor | `usabl doctor` | No (read-only report) | You run it to diagnose setup |
 | Baseline | `usabl baseline` | No (drafts evidence floor) | Once, at brownfield adoption |
 | Floor prune | `usabl floor prune` | No (removes paid debt) | After fixing a floored finding |
