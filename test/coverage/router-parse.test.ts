@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  deriveScreenId,
   isRouterSource,
   mergeParsedRoutes,
   parseDataRouterRoutes,
@@ -12,6 +13,33 @@ describe('router-parse', () => {
     expect(screenIdFromUrl('/')).toBe('root');
     expect(screenIdFromUrl('/clusters')).toBe('clusters');
     expect(screenIdFromUrl('/a/b')).toBe('a-b');
+  });
+
+  it('sets aside a route whose derived id fails the grammar, and says where the character is', () => {
+    // A route literal in application source is not a policy file, so this is the first and only
+    // place the derived id is checked. The route is kept apart, not dropped, so the planner can
+    // report it. The reason names the position and code point and never repeats the id.
+    const manifest = parseRouterFallback(`
+      <Route path="/clusters" element={<Clusters />} />
+      <Route path="/acct\u202eadmin" element={<Admin />} />
+      createBrowserRouter([{ path: '/docs\u2800private', element: <Docs /> }])
+    `);
+    expect(manifest.routes.map((route) => route.screenId)).toEqual(['clusters']);
+    expect(manifest.unusable.map((route) => route.url)).toEqual(['/acct\u202eadmin', '/docs\u2800private']);
+    expect(manifest.unusable[0]?.reason).toContain('at position 5: U+202E');
+    expect(manifest.unusable[0]?.reason).not.toContain('\u202e');
+    expect(manifest.unusable[1]?.reason).toContain('at position 5: U+2800');
+    expect(manifest.unusable[1]?.reason).not.toContain('\u2800');
+  });
+
+  it('derives and validates a screen id in one step', () => {
+    expect(deriveScreenId('/users/:id')).toEqual({ ok: true, screenId: 'users-:id' });
+    expect(deriveScreenId('/')).toEqual({ ok: true, screenId: 'root' });
+    const refused = deriveScreenId('/user settings');
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.problem).toContain('at position 5: U+0020');
+    }
   });
 
   it('parses jsx and object literal paths in router fallback', () => {

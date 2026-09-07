@@ -8,6 +8,7 @@ import { inferInit, writeInitDrafts, type InitFs } from '../../src/init/index.js
 import { matchGlob } from '../../src/primitives/match-glob.js';
 import { parseUsablConfig } from '../../src/intake/config.js';
 import { computeCoverage } from '../../src/coverage/planner.js';
+import { parseRouteManifest } from '../../src/coverage/route-manifest.js';
 
 function memoryFs(files: Record<string, string>): InitFs & { store: Record<string, string> } {
   const store = { ...files };
@@ -224,11 +225,50 @@ describe('what init writes is what usabl accepts', () => {
   });
 
   it('skips a route whose derived screen id the parser would refuse, and says so', async () => {
-    // A raw space in a route path rides straight through screenIdFromUrl into the id.
+    // A raw space in a route path rides straight through screenIdFromUrl into the id. The route
+    // is skipped where the id is derived, so it reaches neither the sidecar nor the surfaces.
     const withSpace = router.replace('path="/clusters"', 'path="/user settings"');
     const draft = await inferInit(memoryFs(fixtureFiles({ 'src/App.tsx': withSpace })));
 
+    expect(draft.routes.routes.map((route) => route.screenId)).not.toContain('user settings');
     expect(draft.config.surfaces.map((surface) => surface.id)).not.toContain('user settings');
-    expect(draft.notes.some((note) => note.includes('skipped surface for route'))).toBe(true);
+    expect(draft.notes.some((note) => note.includes('skipped route') && note.includes('U+0020'))).toBe(true);
+  });
+
+  it.each([
+    ['a bidi control', '/acct\u202eadmin', 'U+202E'],
+    ['the empty braille pattern', '/docs\u2800private', 'U+2800'],
+  ])('never writes a sidecar the parser refuses: a route path with %s', async (_label, hostilePath, point) => {
+    // The whole path: infer from a router that carries the hostile literal, write the drafts,
+    // then read them back through the same parsers usabl runs with. The hostile route must be
+    // absent from what was written, the note must say why by code point, and planning must
+    // succeed on the written files.
+    const hostileRouter = router.replace(
+      '<Route path="/clusters" element={<Clusters />} />',
+      `<Route path="/clusters" element={<Clusters />} />\n      <Route path="${hostilePath}" element={<Clusters />} />`,
+    );
+    const fs = memoryFs(fixtureFiles({ 'src/App.tsx': hostileRouter }));
+    const draft = await inferInit(fs);
+    await writeInitDrafts(fs, draft, { force: true });
+
+    const note = draft.notes.find((entry) => entry.includes('skipped route'));
+    expect(note).toBeDefined();
+    expect(note).toContain(point);
+
+    const planFs = {
+      readFile: async (path: string) => fs.store[path] ?? null,
+      glob: async (patterns: string[]) =>
+        Object.keys(fs.store).filter((f) => patterns.some((pattern) => matchGlob(pattern, f))),
+    };
+    const sidecar = await parseRouteManifest(planFs, { routerFile: 'src/App.tsx', wideBlastGlobs: [] });
+    expect(sidecar.source).toBe('sidecar');
+    expect(sidecar.routes.map((route) => route.url)).toEqual(['/', '/clusters']);
+    expect(fs.store['usabl.routes.json']).not.toContain(hostilePath);
+
+    const config = parseUsablConfig(fs.store['usabl.config.json'] as string);
+    expect(config.surfaces.map((surface) => surface.id).sort()).toEqual(['clusters', 'root']);
+    const coverage = await computeCoverage(planFs, config, ['src/App.tsx']);
+    expect(coverage.affected.map((screen) => screen.screenId).sort()).toEqual(['clusters', 'root']);
+    expect(coverage.gaps).toEqual([]);
   });
 });

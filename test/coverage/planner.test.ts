@@ -158,6 +158,61 @@ describe('computeCoverage', () => {
     expect(cov.gaps).toEqual([]);
   });
 
+  it('never plans a fallback route whose derived id fails the grammar, and records it as a gap', async () => {
+    // No sidecar, so discovery falls back to the router source. One route literal carries a bidi
+    // control and another a blank braille cell. Neither may become a screen id, because the id
+    // would key the floor, findings, waivers, and the receipt. Wide blast would have queued them,
+    // so each is a skipped gap the gate reads as not covered, with the position and code point of
+    // the refused character and never the id itself.
+    const fs = fsOf({
+      'src/router.tsx': `
+        <Route path="/clusters" element={<Clusters />} />
+        <Route path="/acct\u202eadmin" element={<Admin />} />
+        <Route path="/docs\u2800private" element={<Docs />} />
+      `,
+      'src/App.tsx': `export default function App() {}`,
+    });
+    const cov = await computeCoverage(fs, baseConfig, ['src/App.tsx']);
+
+    expect(cov.affected.map((screen) => screen.screenId)).toEqual(['clusters']);
+    expect(cov.affected.some((screen) => screen.screenId.includes('\u202e'))).toBe(false);
+    expect(cov.affected.some((screen) => screen.screenId.includes('\u2800'))).toBe(false);
+    expect(cov.unresolvedFiles).toEqual([]);
+    expect(cov.gaps.map((gap) => [gap.ref, gap.state])).toEqual([
+      ['/acct\u202eadmin', 'skipped'],
+      ['/docs\u2800private', 'skipped'],
+    ]);
+    expect(cov.gaps[0]?.reason).toContain('at position 5: U+202E');
+    expect(cov.gaps[0]?.reason).not.toContain('\u202e');
+    expect(cov.gaps[1]?.reason).toContain('at position 5: U+2800');
+    expect(cov.gaps[1]?.reason).toMatch(/usabl\.routes\.json/);
+  });
+
+  it('reports both the skipped route and the unresolved file when the only fallback route is unusable', async () => {
+    const fs = fsOf({
+      'src/router.tsx': `<Route path="/acct\u202eadmin" element={<Admin />} />`,
+      'src/App.tsx': `export default function App() {}`,
+    });
+    const cov = await computeCoverage(fs, baseConfig, ['src/App.tsx']);
+
+    expect(cov.affected).toEqual([]);
+    expect(cov.unresolvedFiles).toEqual(['src/App.tsx']);
+    expect(cov.gaps.map((gap) => gap.state)).toEqual(['skipped', 'unresolved']);
+  });
+
+  it('does not report an unusable fallback route as a gap when no wide-blast file changed', async () => {
+    // Fallback routes have no entry file, so only wide blast can queue them. A change that does
+    // not touch a wide-blast file would never have scanned the route, so there is nothing to gap.
+    const fs = fsOf({
+      'src/router.tsx': `<Route path="/acct\u202eadmin" element={<Admin />} />`,
+      'src/pages/Other.tsx': `export default function Other() {}`,
+    });
+    const cov = await computeCoverage(fs, baseConfig, ['src/pages/Other.tsx']);
+
+    expect(cov.affected).toEqual([]);
+    expect(cov.gaps.map((gap) => gap.state)).toEqual(['unresolved']);
+  });
+
   it('records unresolved coverage when wide-blast matches and no routes exist', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({ routes: [] }),

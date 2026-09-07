@@ -6,14 +6,13 @@
  */
 import { posix } from 'node:path';
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
-import { describeSurfaceIdProblem } from '../intake/surface-ids.js';
 import { operatorText } from '../intake/config-error.js';
 import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
 import {
   isRouterSource,
   mergeParsedRoutes,
   parseDataRouterRoutes,
-  screenIdFromUrl,
+  deriveScreenId,
 } from '../coverage/router-parse.js';
 
 // Init writes only these two drafts. Waivers stay human-authored judgment.
@@ -232,6 +231,16 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
           entryFile = await resolveEntryFile(fs, routerFile, specifier);
         }
       }
+      // Ask the question the parser is going to ask, at the point the id is made. A route path
+      // can hold a raw space, a joining character, or a blank glyph, and the derived id would
+      // carry it, so writing that route would produce a sidecar usabl then refuses to read.
+      // Skipping it with a note keeps the generator and the validator agreeing, and leaves the
+      // operator a route they can name themselves.
+      const derived = deriveScreenId(route.path);
+      if (!derived.ok) {
+        notes.push(`Review: skipped route ${operatorText(route.path)}; its screen id ${derived.problem}`);
+        continue;
+      }
       // Missing attribution stays null. Guessing an entry file would hide a
       // coverage gap behind a mapping we cannot prove.
       if (entryFile !== null) {
@@ -240,7 +249,7 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
         notes.push(`Review: ${route.path} has no proven entry file.`);
       }
       routes.push({
-        screenId: screenIdFromUrl(route.path),
+        screenId: derived.screenId,
         url: route.path,
         entryFile,
       });
@@ -278,17 +287,8 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
       notes.push(`Review: skipped surface URL for ${operatorText(route.url)}; it leaves ${origin}.`);
       continue;
     }
-    // Ask the question the parser is going to ask. A route path can hold a raw space or a joining
-    // character, and screenIdFromUrl carries it straight into the id, so writing that surface would
-    // produce a config usabl then refuses to read. Skipping it with a note keeps the generator and
-    // the validator agreeing, and leaves the operator a route they can name themselves.
-    const idProblem = describeSurfaceIdProblem(route.screenId);
-    if (idProblem !== null) {
-      notes.push(
-        `Review: skipped surface for route ${operatorText(route.url)}; its screen id ${idProblem}`,
-      );
-      continue;
-    }
+    // Every route here already passed the id grammar when its id was derived above, so a surface
+    // taken from it is one the parser will accept.
     surfaces.push({
       id: route.screenId,
       url,

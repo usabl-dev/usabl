@@ -3,11 +3,18 @@
  * Regex-based and conservative: it recovers literal paths and inline components
  * only when they appear in source text. It must never invent entry files.
  */
+import { describeIdProblem } from '../intake/id-grammar.js';
 
 export interface ParsedRoutePath {
   screenId: string;
   url: string;
   entryFile: null;
+}
+
+/** A route whose path cannot be turned into a screen id, with the reason in config-message words. */
+export interface UnusableRoute {
+  url: string;
+  reason: string;
 }
 
 export function screenIdFromUrl(url: string): string {
@@ -16,35 +23,52 @@ export function screenIdFromUrl(url: string): string {
   return trimmed.replace(/\//g, '-');
 }
 
-export function parseRouterFallback(rawRouter: string): { routes: ParsedRoutePath[] } {
+/**
+ * Derives a screen id from a route path and checks it against the shared id grammar in one step.
+ *
+ * A route literal in application source is not a policy file, so nothing has validated it before
+ * this point, and a raw bidi control or a blank glyph in the path would ride straight into the id
+ * and from there into floors, findings, waivers, and receipts. Every place that turns a path into
+ * an id goes through here, so a derived id that no parser would accept is never minted. The
+ * problem text names the position and code point and never repeats the id.
+ */
+export function deriveScreenId(url: string): { ok: true; screenId: string } | { ok: false; problem: string } {
+  const screenId = screenIdFromUrl(url);
+  const problem = describeIdProblem(screenId);
+  return problem === null ? { ok: true, screenId } : { ok: false, problem };
+}
+
+export function parseRouterFallback(rawRouter: string): { routes: ParsedRoutePath[]; unusable: UnusableRoute[] } {
   const attributeRe = /path=["'`](\/[^"'`]*)["'`]/g;
   const objectRe = /path:\s*["'`](\/[^"'`]*)["'`]/g;
   const urlsSeen = new Set<string>();
   const routes: ParsedRoutePath[] = [];
+  // Routes the fallback found but cannot name. They are kept apart rather than dropped, so the
+  // planner can report each one as a gap when it would otherwise have been scanned.
+  const unusable: UnusableRoute[] = [];
+
+  const collect = (url: string): void => {
+    if (urlsSeen.has(url)) return;
+    urlsSeen.add(url);
+    const derived = deriveScreenId(url);
+    if (!derived.ok) {
+      unusable.push({ url, reason: `the screen id derived from this route path ${derived.problem}` });
+      return;
+    }
+    routes.push({ screenId: derived.screenId, url, entryFile: null });
+  };
 
   for (const match of rawRouter.matchAll(attributeRe)) {
     const [, url] = match;
-    if (typeof url !== 'string' || urlsSeen.has(url)) continue;
-    urlsSeen.add(url);
-    routes.push({
-      screenId: screenIdFromUrl(url),
-      url,
-      entryFile: null,
-    });
+    if (typeof url === 'string') collect(url);
   }
 
   for (const match of rawRouter.matchAll(objectRe)) {
     const [, url] = match;
-    if (typeof url !== 'string' || urlsSeen.has(url)) continue;
-    urlsSeen.add(url);
-    routes.push({
-      screenId: screenIdFromUrl(url),
-      url,
-      entryFile: null,
-    });
+    if (typeof url === 'string') collect(url);
   }
 
-  return { routes };
+  return { routes, unusable };
 }
 
 export function isRouterSource(raw: string): boolean {

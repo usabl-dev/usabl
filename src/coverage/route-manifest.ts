@@ -5,7 +5,7 @@
  * It must never invent entry-file attribution from router text.
  */
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
-import { parseRouterFallback } from './router-parse.js';
+import { parseRouterFallback, type UnusableRoute } from './router-parse.js';
 import { configError } from '../intake/config-error.js';
 import { describeIdProblem } from '../intake/id-grammar.js';
 
@@ -24,6 +24,11 @@ export interface RouteManifest {
   // readable at all, which is also what the trust overlay produces when it suppresses a diverged
   // manifest and no router file can be read.
   source: 'sidecar' | 'router' | 'none';
+  // Routes the router fallback found but could not name, because the id derived from the path
+  // fails the id grammar. Only the fallback produces these: an authored sidecar refuses such an
+  // id at parse, and init never writes one. The planner reports each as a gap when wide blast
+  // would otherwise have queued it, so a route that cannot be scanned is not silently absent.
+  unusable?: UnusableRoute[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
