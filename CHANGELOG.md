@@ -116,7 +116,9 @@
   coverage gap, so the gate reads that screen as not covered rather than as
   absent. Ids already written into `.usabl-evidence.json` and
   `.usabl-waivers.json`, and inputs passed straight to the exported library
-  functions, are not re-checked.
+  functions, are not re-checked. That includes the config handed to
+  `mintReceipt()`: the command line parses the config before the receipt sees
+  it, but the function itself accepts whatever it is given.
 - `usabl init` and `usabl init --docs` now write nothing at all when any id they
   would derive is one usabl would refuse to read, and exit 2 rather than 0. They
   used to leave that route or page out and write the rest. A written sidecar
@@ -133,8 +135,9 @@
   so a key holding a space, an invisible character, or a spelling that is not in
   NFC form could never match a screen: the budget it set applied to nothing, and
   the operator saw the default budget on that screen with no reason why. The
-  refusal names the field and the position of the key in the object, never the
-  key itself.
+  refusal names the field and where the key falls in the order the keys are read
+  back, never the key itself, and it says that this order is not always the order
+  the keys appear in the file.
 
 ### Added
 

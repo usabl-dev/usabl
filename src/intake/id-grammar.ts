@@ -17,7 +17,10 @@
  * in the evidence floor and in waiver files, and inputs passed directly to the exported library
  * functions, are not re-validated; on the command path they were minted from or matched against
  * ids that had already passed here at parse, and a library caller that builds those inputs itself
- * bypasses that parse.
+ * bypasses that parse. That includes the `UsablConfig` handed to `mintReceipt()`: the command path
+ * parses it first, but the function accepts any structurally valid config and does not parse one
+ * itself, so a library caller can hand it a surface id or a per-surface budget key the grammar
+ * would refuse.
  *
  * The contract, stated exactly. The grammar refuses whitespace, control and format characters,
  * surrogates, private use, default-ignorable characters, and the known assigned blank glyphs, and

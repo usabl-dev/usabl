@@ -1724,10 +1724,13 @@ Work on this section that is known and deferred until after the freeze.
   only for the `usabl` command path. For `gate()` those fields of `GateInput` are
   `coverage.affected[].screenId`, `drafts[].screenId`, `floor.entries[].screenId`,
   `waivers[].surface`, and every member of `cleanlyScannedScreens`. For `mintReceipt()` they are
-  `checked` and `applicability[].screenId`. None of these is checked today on the library path.
-  `mintReceipt()` also takes the whole `UsablConfig`, but that argument is the parsed config, so
-  `surfaces[].id` and the keys of `noiseBudget.perSurface` reach it already validated; both are
-  checked when the config is read and neither is part of this item.
+  `checked`, `applicability[].screenId`, and the id fields of the `UsablConfig` it is handed:
+  `surfaces[].id` and the keys of `noiseBudget.perSurface`. `mintReceipt()` is exported from the
+  package entry and takes any structurally valid `UsablConfig`; it never calls `parseUsablConfig`,
+  so a library caller can hand it ids the grammar would refuse. On the `usabl` command path the
+  config is parsed before it reaches the receipt, so those two fields arrive validated there, but
+  that is a property of the path, not of the function, and it is the function this item is about.
+  None of these is checked today on the library path.
   The grammar governs screen and surface ids only. It does not govern rule ids, element keys,
   waiver scopes, receipt `notCovered` entries (file references), or receipt `surfaces` (output
   channels), and this item makes no claim about them.
