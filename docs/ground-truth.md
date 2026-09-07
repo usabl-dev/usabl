@@ -1011,10 +1011,19 @@ their own.
 5. **Identity, dedup, differential, waivers.**
 6. **Verdict priority order:**
    - Any new deterministic failure (`confidence: 'fail'`): `regression`.
-   - Anything unverifiable (unreachable surface, incomplete check, unmapped file,
-     `confidence: 'unverified'`): `not_covered`. Unverified is not a silent pass and
-     is not a regression.
+   - Anything unverifiable (unreachable surface, incomplete check, unmapped file, or a
+     new deterministic finding at `confidence: 'unverified'`): `not_covered`. Unverified
+     is not a silent pass and is not a regression.
    - Everything else: `verified`.
+
+   Status decides on both finding clauses, not just the failing one. A finding the
+   evidence floor already accepted is `carried` and does not gate, whether it fails or
+   could not be confirmed. Blocking on carried uncertainty would hold every large
+   application at `not_covered` forever, because any real UI has some results a checker
+   declines to judge and no work clears them. What protects against several barriers
+   hiding behind one accepted entry is the recorded count, not the confidence: the floor
+   stores how many barriers it accepted at an identity, and more than that comes back as
+   `new` and blocks.
 
 ### Identity
 

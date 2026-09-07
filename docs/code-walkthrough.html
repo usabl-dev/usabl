@@ -493,7 +493,7 @@
         <div class="cards">
           <article class="card">
             <h3>axe/</h3>
-            <p>Runs axe-core, a widely used open-source accessibility scanner, and turns its results into drafts. When axe is not sure about a result, the draft is marked "unverified". Unsure results are kept, not dropped. They push the verdict toward "not covered".</p>
+            <p>Runs axe-core, a widely used open-source accessibility scanner, and turns its results into drafts. When axe is not sure about a result, the draft is marked "unverified". Unsure results are kept, not dropped. A new one pushes the verdict toward "not covered". One the evidence floor already accepted is shown as recorded debt and does not block.</p>
           </article>
           <article class="card">
             <h3>rulepack/</h3>
@@ -544,7 +544,7 @@
             <p><code>primitives/canonical.ts</code> turns data into bytes in a fixed order and hashes them. <code>sortKey.ts</code> sorts in a fixed order. The clock is injected, never read from the machine. The same input always produces the same bytes and the same hash. That is why a receipt can be checked again later.</p>
           </article>
         </div>
-        <p class="rule"><strong>Verdict order:</strong> first, a changed policy file means "approval required", exit 2. Second, nothing to check means no verdict, exit 0. Third, a new deterministic failure means "regression", exit 1. Fourth, missing coverage or unsure evidence means "not covered", exit 3. Only after all of that: "verified", exit 0.</p>
+        <p class="rule"><strong>Verdict order:</strong> first, a changed policy file means "approval required", exit 2. Second, nothing to check means no verdict, exit 0. Third, a new deterministic failure means "regression", exit 1. Fourth, missing coverage or a new piece of unsure evidence means "not covered", exit 3. Only after all of that: "verified", exit 0. New is the test on both finding rules. Evidence the floor already accepted does not block, whether it failed or could not be confirmed.</p>
       </div>
     </section>
 

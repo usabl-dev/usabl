@@ -41,16 +41,20 @@ not one card per node.
 
 Severity is display metadata, not the gate input. The four severities are `critical`,
 `serious`, `moderate`, and `minor`. What actually gates is separate: a deterministic
-finding with `confidence: 'fail'` at `new` status is a regression, and any coverage gap or
-unverified finding is `not_covered`. Severity orders the list; it does not decide the
-verdict.
+finding with `confidence: 'fail'` at `new` status is a regression, and a coverage gap or a
+deterministic `unverified` finding at `new` status is `not_covered`. Status decides on both
+sides, so a finding the evidence floor already accepted does not gate whether it fails or
+could not be confirmed. Severity orders the list; it does not decide the verdict.
 
 Display order:
 
-1. **Blocking findings** - deterministic fails at `new` status. These are what turn the
-   verdict to `regression`, whatever their severity label.
-2. **Carried and unverified findings** - shown, contribute to `not_covered` when they leave
-   a gap, but are not new regressions.
+1. **Blocking findings** - deterministic findings at `new` status, whether they fail or
+   could not be confirmed. These are what turn the verdict to `regression` or
+   `not_covered`, whatever their severity label.
+2. **Carried findings** - shown as recorded debt. They do not gate, whether they fail or
+   could not be confirmed, because the evidence floor accepted the identity. Adding more
+   barriers at an accepted identity is what gates: the count passes what the floor recorded
+   and the finding comes back as `new`.
 3. **Waived and fixed findings** - visible for context; they never gate.
 
 Within a group, findings sort by `screen | layer | rule | element key` for stable diffs

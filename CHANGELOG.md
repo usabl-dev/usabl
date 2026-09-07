@@ -81,6 +81,20 @@
   backstop. `usabl doctor` reports the same state as drifted rather than wired,
   reading the same rule, so the two surfaces cannot disagree about one file.
   Neither the path nor any cookie value is printed.
+- Recorded debt that usabl could not confirm no longer blocks. A finding usabl
+  declines to judge is marked `unverified`, and until now any of them held the run
+  at `not_covered`, even one already accepted on the evidence floor. A carried
+  failure did not block but carried uncertainty did, so a floored application
+  stayed blocked on every run and no work cleared it. Any application large enough
+  has some results a checker will not judge, so this affected real projects and not
+  test fixtures: one product UI with a committed floor reported 29 findings, all
+  carried, no new findings and no coverage gaps, and still exited `not_covered`.
+  Uncertainty now blocks on the same terms a failure does, which is when it is new
+  against the floor. Nothing else about the verdict changed. Coverage gaps and
+  unmapped files still make a run `not_covered`, and adding barriers at an accepted
+  identity still blocks, because the floor records how many it accepted and more
+  than that comes back as new. Terminal output, the pull request comment, and the
+  overlay now list carried uncertainty as recorded debt rather than as work to do.
 - The gate no longer reports green when several new barriers hide behind one
   accepted floor entry. Barriers on different nodes can neutralize to the same
   name or structural identity and collapse into a single finding. The floor
