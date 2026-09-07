@@ -54,15 +54,34 @@ function fakeInspector(processes: Record<number, FakeProcess>): ProcessInspector
   };
 }
 
+/**
+ * How far back a clone of age zero is stamped. The cleanup keeps any clone whose
+ * mtime is at or after the moment the scan starts. A clone stamped with the exact
+ * current millisecond lands on the keep side of that line whenever the stamp and the
+ * scan fall in the same millisecond, which happens often. Stamping a hair earlier
+ * makes "age zero" mean "made just before the call", which is what every test here
+ * means by it, and takes the millisecond out of the result.
+ */
+const JUST_BEFORE_MS = 5;
+
 async function makeClone(name: string, owner: OwnerRecord | string | null, ageMs: number): Promise<string> {
   const root = join(tmpRoot, `${CLONE_PREFIX}${name}`);
   await mkdir(join(root, 'app'), { recursive: true });
   if (owner !== null) {
     await writeFile(join(root, OWNER_FILE), typeof owner === 'string' ? owner : JSON.stringify(owner), 'utf8');
   }
-  const then = (Date.now() - ageMs) / 1000;
+  const then = (Date.now() - ageMs - JUST_BEFORE_MS) / 1000;
   await utimes(root, then, then);
   return root;
+}
+
+/** A promise and the function that settles it, so a test can hold a step and release it. */
+function deferred(): { promise: Promise<void>; release: () => void } {
+  let release = () => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
 }
 
 function exists(path: string): Promise<boolean> {
@@ -185,20 +204,45 @@ describe('clones of a stopped run', () => {
   });
 
   it('stops waiting at the bound and reports what it removed so far', async () => {
+    // Pins the bound: when one clone is still being removed as the bound arrives, the helper
+    // returns, says it timed out, and reports only the clones it has already removed.
+    //
+    // Nothing here waits on the clock. The slow clone is held on a promise this test releases,
+    // and the bound is a promise this test settles the moment the quick clone is gone, so the
+    // result is taken at a known point on any machine. Do not put a real sleep back.
     const quick = await makeClone('quick', { pid: 20, startedAt: 0, cwd: join(tmpRoot, `${CLONE_PREFIX}quick`, 'app') }, 0);
     const stuckRoot = join(tmpRoot, `${CLONE_PREFIX}stuck`);
     await makeClone('stuck', { pid: 21, startedAt: 0, cwd: join(stuckRoot, 'app'), serverPid: 700 }, 0);
-    // The stuck clone's server group ignores SIGKILL, so its wait runs to the helper's own limit.
     const inspector = fakeInspector({ 700: { pgid: 700, cwd: join(stuckRoot, 'app') } });
-    inspector.kill = (target, signal) => {
-      inspector.killed.push([target, signal]);
+
+    // The stuck clone's server group does not answer until this test lets it, which is what
+    // keeps that clone's removal in flight while the bound arrives.
+    const stuckAnswers = deferred();
+    const answerGroup = inspector.groupMembers;
+    inspector.groupMembers = async (pgid) => {
+      await stuckAnswers.promise;
+      return answerGroup(pgid);
     };
 
-    const result = await removeClonesOfStoppedRun({ tmpRoot, inspector, timeoutMs: 200, log: () => {} });
+    const boundReached = deferred();
+    const stuckRemoved = deferred();
+
+    const result = await removeClonesOfStoppedRun({
+      tmpRoot,
+      inspector,
+      timeoutMs: 200,
+      log: () => {},
+      onRemoved: (root) => (root === quick ? boundReached.release() : stuckRemoved.release()),
+      waitForBound: () => boundReached.promise,
+    });
 
     expect(result.timedOut).toBe(true);
     expect(result.removed).toEqual([quick]);
     await expect(exists(quick)).resolves.toBe(false);
+
+    // Let the held clone finish, so no work is left running past the end of this test.
+    stuckAnswers.release();
+    await stuckRemoved.promise;
   });
 });
 

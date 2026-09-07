@@ -2116,12 +2116,15 @@ describe('the overlay never shows a stale result', { timeout: 40_000 }, () => {
   });
 
   it('collapses a burst of refresh requests into one active and one queued', async () => {
-    // The response is held long enough that all twelve presses below land while the first read is
-    // still in flight. Each press is a driver round trip, so a short delay lets the tail of the burst
-    // slip into the second read and queue a third, which would test timing rather than coalescing.
+    // The read the burst starts is held until every press has landed, so all twelve are pressed
+    // while one read is in flight. Each press is a driver round trip, so a fixed delay here is a
+    // race: on a loaded machine the tail of the burst slips into the second read and queues a third,
+    // and the test then measures the machine rather than the coalescing. A promise this test
+    // releases cannot slip.
+    const burstRead = deferred();
     const page = await mount(null, {
       path: '/clusters',
-      responseDelayMs: 900,
+      holdResults: [undefined, burstRead.promise],
       payloads: [projectOverlay(result())],
     });
     const panel = await openPanel(page);
@@ -2134,6 +2137,7 @@ describe('the overlay never shows a stale result', { timeout: 40_000 }, () => {
     for (let press = 0; press < 12; press += 1) {
       await recheck.dispatchEvent('click');
     }
+    burstRead.release();
     await expect.poll(async () => bannerWord(page), { timeout: 10_000 }).toBe('✕Regression');
 
     const after = await page.evaluate(
@@ -2767,11 +2771,21 @@ describe('the overlay bounds its own work', { timeout: 60_000 }, () => {
   });
 
   it('keeps a large result under control in nodes and in time', async () => {
-    const started = Date.now();
-    const page = await mount(projectOverlay(result({ findings: manyFindings(3000, 1000) })), {
-      path: '/clusters',
-    });
+    // The result is held until the browser, the page and the open panel are all up, and the clock
+    // only starts when it is released. What this bounds is the overlay's work on a huge result, not
+    // how long a loaded machine takes to start Chromium and load a page, which used to be most of
+    // the measured span and pushed it past the budget under load for no reason to do with the
+    // overlay.
+    const huge = projectOverlay(result({ findings: manyFindings(3000, 1000) }));
+    const hugeResult = deferred();
+    const page = await mount(huge, { path: '/clusters', holdResults: [hugeResult.promise] });
     const panel = await openPanel(page);
+
+    const started = Date.now();
+    hugeResult.release();
+    await expect
+      .poll(async () => panel.locator('.finding-button').count(), { timeout: 20_000 })
+      .toBe(40);
     const elapsed = Date.now() - started;
 
     const nodes = await page.evaluate(() => document.querySelectorAll('*').length);
@@ -2835,6 +2849,45 @@ describe('the overlay bounds its own work', { timeout: 60_000 }, () => {
   });
 });
 
+// A smooth scroll this test drives, in place of the browser's. It stands in for a scroll that is
+// still running: every frame it reports that the page moved and shifts the target by a pixel, which
+// is what the overlay watches to decide a scroll has not settled. The target is only reached, and
+// scrollend only fired, when the test releases the scroll.
+//
+// The page clock is frozen with it. The overlay gives up waiting for a scroll after about a second,
+// and on a loaded machine a real smooth scroll is still moving then, so the corners get judged half
+// way through it and the panel lands on the target with no warning. Freezing the clock takes that
+// race out. afterScrollSettles is the only place the overlay reads Date.now.
+const HELD_SMOOTH_SCROLL = `
+  window.__usablHeldScroll = { requests: 0, release: function () {} };
+  const nativeScrollIntoView = Element.prototype.scrollIntoView;
+  const frozenNow = Date.now();
+  Date.now = function () { return frozenNow; };
+  Element.prototype.scrollIntoView = function (options) {
+    if (!options || options.behavior !== 'smooth') {
+      return nativeScrollIntoView.apply(this, arguments);
+    }
+    const element = this;
+    let released = false;
+    let nudge = 0;
+    window.__usablHeldScroll.requests += 1;
+    window.__usablHeldScroll.release = function () { released = true; };
+    const step = function () {
+      if (released) {
+        element.style.transform = '';
+        nativeScrollIntoView.call(element, { behavior: 'auto', block: 'center', inline: 'nearest' });
+        window.dispatchEvent(new Event('scrollend'));
+        return;
+      }
+      nudge = nudge === 0 ? 1 : 0;
+      element.style.transform = 'translateY(' + nudge + 'px)';
+      document.dispatchEvent(new Event('scroll', { bubbles: true }));
+      window.requestAnimationFrame(step);
+    };
+    window.requestAnimationFrame(step);
+  };
+`;
+
 describe('the overlay moves out of the way of the element it points at', { timeout: 40_000 }, () => {
   // A host page with the flagged element pinned to a corner, so a test can place the target under the
   // panel and prove the panel dodges. The finding's selector points at that element.
@@ -2842,12 +2895,17 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     targetCss: string;
     reducedMotion?: boolean;
     dockSeed?: string;
+    /** Hands the smooth scroll to the test instead of the browser. See HELD_SMOOTH_SCROLL. */
+    holdSmoothScroll?: boolean;
   }): Promise<Page> {
     const context = await browser.newContext({
       viewport: { width: 1280, height: 900 },
       ...(options.reducedMotion ? { reducedMotion: 'reduce' } : {}),
     });
     const page = await context.newPage();
+    if (options.holdSmoothScroll) {
+      await context.addInitScript(HELD_SMOOTH_SCROLL);
+    }
     if (options.dockSeed !== undefined) {
       await context.addInitScript(
         `try { localStorage.setItem('usabl.overlay.dock', ${JSON.stringify(options.dockSeed)}); } catch (e) {}
@@ -2963,7 +3021,8 @@ describe('the overlay moves out of the way of the element it points at', { timeo
 
     await panel.locator('.finding-button').click();
     await panel.getByRole('button', { name: 'Highlight it' }).click();
-    await page.waitForTimeout(200);
+    // Frames, not milliseconds: any move the panel made would be made on one of these.
+    await passFrames(page, 15);
 
     expect(await dockCorner(page)).toBe('bottom-right');
 
@@ -2997,6 +3056,41 @@ describe('the overlay moves out of the way of the element it points at', { timeo
 
     await context0(page);
   });
+
+  // Wait until the overlay has asked for its nth smooth scroll, then let that scroll reach the
+  // target and announce that it ended.
+  async function releaseHeldScroll(page: Page, request: number): Promise<void> {
+    await page.waitForFunction(
+      (wanted) =>
+        (window as unknown as { __usablHeldScroll: { requests: number } }).__usablHeldScroll.requests >= wanted,
+      request,
+    );
+    await page.evaluate(() =>
+      (window as unknown as { __usablHeldScroll: { release: () => void } }).__usablHeldScroll.release(),
+    );
+  }
+
+  // Let a fixed number of animation frames go by. Frames, not milliseconds: what a test needs is for
+  // the overlay's own frame work to have run, and that is true after N frames however long the
+  // machine takes over them.
+  async function passFrames(page: Page, frames: number): Promise<void> {
+    await page.evaluate(
+      (count) =>
+        new Promise<void>((resolve) => {
+          let left = count;
+          const tick = (): void => {
+            left -= 1;
+            if (left <= 0) {
+              resolve();
+              return;
+            }
+            window.requestAnimationFrame(tick);
+          };
+          window.requestAnimationFrame(tick);
+        }),
+      frames,
+    );
+  }
 
   // Shared by the two geometry tests: does the open panel overlap the corner target right now.
   async function panelOverlapsTarget(page: Page): Promise<boolean> {
@@ -3049,7 +3143,8 @@ describe('the overlay moves out of the way of the element it points at', { timeo
 
     await panel.locator('.finding-button').click();
     await panel.getByRole('button', { name: 'Highlight it' }).click();
-    await page.waitForTimeout(150);
+    // Frames, not milliseconds: the dodge is decided on a frame, so frames are what to wait for.
+    await passFrames(page, 15);
 
     expect(await dockCorner(page)).toBe('top-left');
     const status = await host.locator('.locate-status').textContent();
@@ -3074,9 +3169,15 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     // the scroll read the target's starting position, found the panel clear, and never warned. The
     // dodge must run once the scroll has settled, and the blocked sentence must be announced exactly
     // once, for the row activation and again exactly once for Move focus to it.
+    //
+    // The scroll is held by this test and released on command, and the page clock is frozen, so the
+    // overlay's own give-up cannot fire and nothing here waits on the wall clock. Do not put a real
+    // scroll or a sleep back: on a loaded machine the give-up wins, the corners are judged half way
+    // through the scroll, and the test fails for a reason that is not the behaviour.
     const page = await mountWithTarget({
       targetCss: 'position: absolute; left: 421px; top: 2400px; width: 480px; height: 700px;',
       dockSeed: 'top-left',
+      holdSmoothScroll: true,
     });
     const host = page.locator(OVERLAY);
     const panel = host.getByRole('region', { name: 'usabl accessibility inspector' });
@@ -3084,24 +3185,24 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     const blockedCount = (text: string | null): number => (text ?? '').split('no corner is clear').length - 1;
 
     await panel.locator('.finding-button').click();
-    await expect.poll(async () => blockedCount(await status.textContent()), { timeout: 5000 }).toBe(1);
-    // It settled: the sentence is not repeated on later frames, and the panel is still docked.
-    await page.waitForTimeout(400);
+    await releaseHeldScroll(page, 1);
+    await passFrames(page, 8);
     const highlightStatus = await status.textContent();
     expect(blockedCount(highlightStatus)).toBe(1);
     expect(highlightStatus).toContain('Highlighted Corner control on the page.');
+    // It settled: the sentence is not repeated on later frames, and the panel is still docked.
+    await passFrames(page, 30);
+    expect(blockedCount(await status.textContent())).toBe(1);
     // The panel could not move, so the final geometry is either clear or blocked and announced.
     const overlap = await panelOverlapsTarget(page);
     expect(overlap === false || blockedCount(highlightStatus) === 1).toBe(true);
 
     await panel.getByRole('button', { name: 'Move focus to it' }).click();
-    await expect
-      .poll(async () => {
-        const text = await status.textContent();
-        return (text ?? '').includes('Keyboard focus moved to Corner control.') && blockedCount(text) === 1;
-      }, { timeout: 5000 })
-      .toBe(true);
-    await page.waitForTimeout(400);
+    await releaseHeldScroll(page, 2);
+    await passFrames(page, 8);
+    const focusStatus = await status.textContent();
+    expect((focusStatus ?? '').includes('Keyboard focus moved to Corner control.') && blockedCount(focusStatus) === 1).toBe(true);
+    await passFrames(page, 30);
     expect(blockedCount(await status.textContent())).toBe(1);
 
     await context0(page);

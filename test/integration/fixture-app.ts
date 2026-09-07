@@ -423,7 +423,10 @@ export async function removeStaleClones(options: StaleCloneOptions = {}): Promis
   const removed: string[] = [];
   let entries: string[];
   try {
-    entries = await readdir(tmpRoot);
+    // Sorted, so the scan order is the same on every filesystem. A bounded caller
+    // reports the clones removed so far, and that report only means something when
+    // the order the clones are visited in is fixed.
+    entries = (await readdir(tmpRoot)).sort();
   } catch {
     return removed;
   }
@@ -475,7 +478,16 @@ export async function removeStaleClones(options: StaleCloneOptions = {}): Promis
  * clones removed so far are reported and the rest is left for the next run.
  */
 export async function removeClonesOfStoppedRun(
-  options: StaleCloneOptions & { timeoutMs: number },
+  options: StaleCloneOptions & {
+    timeoutMs: number;
+    /**
+     * How the bound is waited out. It sleeps for `timeoutMs` unless a caller passes
+     * something else, so the runner behaves exactly as before. A test passes a promise
+     * it settles itself, so it can place the bound at a known point instead of racing
+     * the clock.
+     */
+    waitForBound?: (timeoutMs: number) => Promise<unknown>;
+  },
 ): Promise<{ removed: string[]; timedOut: boolean }> {
   const removed: string[] = [];
   const work = removeStaleClones({
@@ -486,7 +498,8 @@ export async function removeClonesOfStoppedRun(
       options.onRemoved?.(root);
     },
   }).then(() => 'done' as const);
-  const outcome = await Promise.race([work, delay(options.timeoutMs).then(() => 'timeout' as const)]);
+  const waitForBound = options.waitForBound ?? delay;
+  const outcome = await Promise.race([work, waitForBound(options.timeoutMs).then(() => 'timeout' as const)]);
   return { removed, timedOut: outcome === 'timeout' };
 }
 
