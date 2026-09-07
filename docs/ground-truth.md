@@ -1316,7 +1316,7 @@ On save, the overlay client requests a scan from the same engine as the stop hoo
 (single-flight per repo so hook and overlay do not storm browsers). It renders
 `Result`. It never constructs a Verdict and never blocks the page. It is advisory: the
 client runs inside the tested page's own JavaScript realm, so the page can interfere with
-what the overlay shows, and the CLI and CI remain the verdict authority. Oracle-preserving:
+what the overlay shows; the gate computes the verdict and the CLI and CI enforce it. Oracle-preserving:
 mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
 
 ### 11.4 CI/PR comment (trusted-ref policy read)
