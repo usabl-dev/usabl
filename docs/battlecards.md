@@ -55,7 +55,7 @@ enforcement on one Result.
 **Complementary?** Yes - Tactual or Speakable could be adopted as a provider behind the
 usabl gate for richer phrasing validation. Guidepup is a candidate too.
 
-**One-liner:** "They let you hear the UI. We prove the change added no new
+**One-liner:** "They let you hear the UI. We prove the change added no new unwaived
 machine-checkable barrier on the screens we scanned."
 
 ---
@@ -134,4 +134,4 @@ a proof engine whose Stop hook blocks an assistant's first stop on a blocking ve
 unless a one-use bypass was issued - alliance, not rivalry.
 
 **One-liner:** "They build accessible components. We check that each change composes
-them without a new machine-checkable barrier on the screens we scan."
+them without a new unwaived machine-checkable barrier on the screens we scan."
