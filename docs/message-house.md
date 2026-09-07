@@ -12,12 +12,13 @@ Expanded messaging in [positioning.md](./positioning.md). Competitive positionin
 ## Core promise (all audiences)
 
 **usabl proves that a UI change added no new machine-checkable accessibility barrier on
-the screens it scanned, and says what it could not check.**
+the screens it scanned, and discloses every gap it detected.**
 
 Supporting: *usable by default.* / *Don't ship until it's usabl.*
 
 **Lead order for pitch:** Open with the tagline (outcome, emotional), then explain with
-the mechanism ("AI suggests, rules decide, done waits for proof"). Tagline sets the
+the mechanism ("AI suggests, rules decide, the first stop on a blocking verdict waits
+unless a one-use bypass was issued"). Tagline sets the
 promise; differentiator #1 message explains how we keep it.
 
 ---
@@ -44,7 +45,7 @@ promise; differentiator #1 message explains how we keep it.
 
 | Rank | Differentiator | Message |
 |---|---|---|
-| 1 | Verified-fix assistant loop | "AI suggests. Rules decide. Done waits for proof." |
+| 1 | Verified-fix assistant loop | "AI suggests. Rules decide. The first stop on a blocking verdict waits, unless a one-use bypass was issued." |
 | 2 | Screen-reader announcement checks in loop | "Catch broken announcements before merge, in the PR and in the session." |
 | 3 | CI ratchet + PR evidence | "Same proof at scale: block new debt, ship the receipt." |
 
