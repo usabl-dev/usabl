@@ -81,6 +81,18 @@
   backstop. `usabl doctor` reports the same state as drifted rather than wired,
   reading the same rule, so the two surfaces cannot disagree about one file.
   Neither the path nor any cookie value is printed.
+- The conformance summary in the pull request comment counts what it lists. It
+  reported `new` as the number of new deterministic findings that were definite
+  failures, while the list below it showed every new deterministic finding, so a run
+  with two unconfirmed findings and one failure printed `new 1` directly above three
+  barriers. `new` now counts all of them, with the breakdown beside it as
+  `new 3 (1 failing, 2 unconfirmed)`.
+- The same summary no longer reports a blocked run as unblocked. `blocked` was
+  recomputed from new failures alone, so a run the gate stopped at exit 3 for
+  unconfirmed findings printed `blocked: no` under a `NOT COVERED` heading. It now
+  reads the exit code the gate wrote, which also makes a crashed run read as blocked
+  rather than as a pass.
+
 - Two deterministic findings at one identity, one a definite failure and one usabl
   could not confirm, no longer give a different verdict depending on which the
   scanner reported first. The collapsed finding kept the confidence of whichever

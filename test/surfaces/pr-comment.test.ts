@@ -113,6 +113,60 @@ describe('projectPrComment', () => {
     expect(markdown).toContain('not evaluated');
   });
 
+  it('counts in the conformance summary exactly what it lists beneath it', () => {
+    // The rehearsal case, found on a real run: three new deterministic findings, two unconfirmed
+    // and one failing. The summary counted only the failure and printed "new 1" directly above a
+    // list of three, so the two numbers on one screen disagreed.
+    const findings = [
+      baseFinding({ rule: 'walk-a', elementKey: 'k-a', confidence: 'unverified' }),
+      baseFinding({ rule: 'walk-b', elementKey: 'k-b', confidence: 'unverified' }),
+      baseFinding({ rule: 'color-contrast', elementKey: 'k-c', confidence: 'fail' }),
+    ];
+    const markdown = projectPrComment(
+      baseResult({ verdict: 'regression', exitCode: 1, findings }),
+    );
+
+    // The headline is the count of what is listed, with the split beside it and adding up to it.
+    expect(markdown).toContain('- deterministic: new 3 (1 failing, 2 unconfirmed), carried 0, waived 0, fixed 0');
+
+    // The number really is the number of items rendered, counted out of the markdown rather than
+    // asserted from the fixture, so the headline and the list cannot drift apart again.
+    const lines = markdown.split('\n');
+    const start = lines.indexOf('### New barriers');
+    expect(start).toBeGreaterThan(-1);
+    const rest = lines.slice(start + 1);
+    const end = rest.findIndex((line) => line.startsWith('### '));
+    const listed = rest.slice(0, end === -1 ? rest.length : end)
+      .filter((line) => line.startsWith('- ') && line !== '- none').length;
+    const printed = Number(/- deterministic: new (\d+)/.exec(markdown)?.[1]);
+    expect(listed).toBe(3);
+    expect(printed).toBe(listed);
+  });
+
+  it('says a run held at not_covered by unconfirmed findings is blocked', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'not_covered',
+        exitCode: 3,
+        findings: [baseFinding({ confidence: 'unverified' })],
+      }),
+    );
+
+    // "blocked: no" under a NOT COVERED heading is the same contradiction one line apart.
+    expect(markdown).toContain('## usabl report: NOT COVERED');
+    expect(markdown).toContain('- blocked: yes');
+    expect(markdown).not.toContain('- blocked: no');
+  });
+
+  it('leaves the split off the conformance line when nothing is new', () => {
+    const markdown = projectPrComment(
+      baseResult({ verdict: 'verified', exitCode: 0, findings: [baseFinding({ status: 'carried' })] }),
+    );
+
+    expect(markdown).toContain('- deterministic: new 0, carried 1, waived 0, fixed 0');
+    expect(markdown).not.toContain('0 failing');
+  });
+
   it('renders announcement section as current-run-only and caps at twenty stops per screen', () => {
     const stops = Array.from({ length: 21 }, (_, index) => makeStop(index, `Create cluster ${index + 1}`));
     const markdown = projectPrComment(

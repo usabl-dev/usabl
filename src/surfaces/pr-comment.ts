@@ -4,6 +4,7 @@
  * It must never recompute findings, mint a verdict, or act as a second gate.
  */
 import type {
+  ConformanceSummary,
   AppSourceMapping,
   DocsSourceMapping,
   Finding,
@@ -272,7 +273,10 @@ function renderConformance(result: Result): string[] {
   const lines = [
     '### Conformance summary',
     `- schemaVersion: ${inlineCode(result.schemaVersion)}`,
-    `- deterministic: new ${wholeNumber(summary.deterministic.newFailures)}, carried ${wholeNumber(summary.deterministic.carried)}, waived ${wholeNumber(summary.deterministic.waived)}, fixed ${wholeNumber(summary.deterministic.fixed)}`,
+    // The headline is the count of what is listed below. The split follows in parentheses, and
+    // only when there is something new, because "(0 failing, 0 unconfirmed)" on a clean run is
+    // noise that teaches the reader to skip the clause on the runs where it carries something.
+    `- deterministic: new ${wholeNumber(summary.deterministic.new)}${newSplit(summary)}, carried ${wholeNumber(summary.deterministic.carried)}, waived ${wholeNumber(summary.deterministic.waived)}, fixed ${wholeNumber(summary.deterministic.fixed)}`,
     `- judged: model-judgment ${wholeNumber(summary.judged.modelJudgment)}, preview ${wholeNumber(summary.judged.preview)}`,
     `- not evaluated: unresolved files ${wholeNumber(summary.notEvaluated.unresolvedFiles)}, gaps ${wholeNumber(summary.notEvaluated.gaps)}`,
     `- blocked: ${summary.blocked ? 'yes' : 'no'}`,
@@ -505,6 +509,14 @@ function renderAnnouncements(result: Result): string[] {
   }
 
   return lines;
+}
+
+/** The failing and unconfirmed breakdown behind the new count, omitted when nothing is new. */
+function newSplit(summary: ConformanceSummary): string {
+  if (!Number.isInteger(summary.deterministic.new) || summary.deterministic.new <= 0) {
+    return '';
+  }
+  return ` (${wholeNumber(summary.deterministic.newFailing)} failing, ${wholeNumber(summary.deterministic.newUnconfirmed)} unconfirmed)`;
 }
 
 export function projectPrComment(result: Result, config?: UsablConfig): string {

@@ -256,8 +256,21 @@ export interface Result {
 // verdict stays the authority; this is a read-only view for CI comments and the ACCESSIBILITY.md row.
 export interface ConformanceSummary {
   verdict: Verdict | null; // echoes Result.verdict (the gate is the authority)
-  blocked: boolean; // any in-scope deterministic new failure caps the summary
-  deterministic: { newFailures: number; carried: number; waived: number; fixed: number };
+  // Whether this run stops the work, read from the exit code the gate wrote. Not recomputed from
+  // the findings: while it was, a run held at not_covered by a new unconfirmed finding reported
+  // "blocked: no" directly under a NOT COVERED heading.
+  blocked: boolean;
+  deterministic: {
+    // Every new deterministic finding, which is what the gate counts and what the surfaces list.
+    // The failing and unconfirmed split is reported beside it, never instead of it: while `new`
+    // held failures only, the pull request comment printed "new 1" above a list of three.
+    new: number;
+    newFailing: number;
+    newUnconfirmed: number;
+    carried: number;
+    waived: number;
+    fixed: number;
+  };
   judged: { modelJudgment: number; preview: number }; // advisory provenance; never gates
   notEvaluated: { unresolvedFiles: number; gaps: number };
 }

@@ -63,7 +63,7 @@ describe('contracts', () => {
     const summary: ConformanceSummary = {
       verdict: 'verified',
       blocked: false,
-      deterministic: { newFailures: 0, carried: 1, waived: 0, fixed: 2 },
+      deterministic: { new: 0, newFailing: 0, newUnconfirmed: 0, carried: 1, waived: 0, fixed: 2 },
       judged: { modelJudgment: 3, preview: 1 },
       notEvaluated: { unresolvedFiles: 0, gaps: 0 },
     };
