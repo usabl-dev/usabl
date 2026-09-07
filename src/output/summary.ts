@@ -6,18 +6,9 @@
 import type { Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { discloseGaps, fixOrAbsence, gapDetail, gapHeadline } from './disclosure.js';
+import { boundField } from './bounded-text.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from './source-location.js';
-
-/**
- * CLI summary output for a Result.
- * It must never re-derive findings, mint verdicts, or mutate raw Result data.
- */
-const HEADLINE: Record<string, string> = {
-  verified: 'VERIFIED',
-  regression: 'REGRESSION',
-  not_covered: 'NOT COVERED',
-  approval_required: 'APPROVAL REQUIRED',
-};
+import { describeVerdict, formatVerdictLine } from './verdict-line.js';
 
 /**
  * Page and scanner strings are untrusted at terminal egress.
@@ -49,66 +40,89 @@ function renderNotEvaluated(result: Result): string[] {
     return [];
   }
 
+  // Ref and reason are neutralized and bounded on their own, so the headline's count is never
+  // cut and a provider error the size of a stack trace prints its first lines and a note.
   return [
     `  not evaluated: ${gaps.length} gap(s)`,
-    ...discloseGaps(gaps).map(
-      (disclosure) =>
-        `    ${gapHeadline(disclosure)} ${neutralizePrintedText(gapDetail(disclosure))}`,
-    ),
+    ...discloseGaps(gaps).map((disclosure) => {
+      const detail = gapDetail({
+        ...disclosure,
+        ref: boundField(neutralizePrintedText(disclosure.ref), 'gapRef'),
+        reason: boundField(neutralizePrintedText(disclosure.reason), 'gapReason'),
+      });
+      return `    ${gapHeadline(disclosure)} ${detail}`;
+    }),
   ];
 }
 
 /**
  * Human CLI projection of a Result. Never re-derives findings or a verdict.
- * `verdict === null` prints IDLE (nothing to check), not NOT COVERED.
+ *
+ * The first line is the verdict: a symbol, the verdict word, and the exit code. The second is
+ * one sentence saying what that means for the change. Everything else is labelled and indented
+ * under it. `verdict === null` prints NO VERDICT: IDLE (nothing to check) or NO VERDICT: RUN
+ * FAILED (exit 4), never NOT COVERED and never anything that reads as a pass.
+ *
+ * Data lines (findings, gaps, paths) are printed whole rather than wrapped to 80 columns, so an
+ * operator can grep the output for a rule, a URL, or a file and copy a line in one piece. The
+ * lines usabl authors itself stay within 80 columns.
  */
 export function formatSummary(result: Result): string {
   const lines: string[] = [];
-  // Idle and a failed run both leave verdict null, and they are opposite facts: idle means there
-  // was nothing to prove, exit 4 means there was something and the run could not prove it. The
-  // headline reads the exit code so a crash, or a run that never saw the application, cannot be
-  // mistaken for a quiet pass.
-  const head =
-    result.exitCode === 4
-      ? 'FAILED'
-      : result.verdict === null
-        ? 'IDLE'
-        : HEADLINE[result.verdict] ?? result.verdict;
-  lines.push(`usabl: ${head} - ${result.summary}`);
+  const verdict = describeVerdict(result);
+  lines.push(`usabl: ${formatVerdictLine(verdict)}`);
+  lines.push(`  ${verdict.meaning}`);
+  if (verdict.exitCode === 4) {
+    lines.push('  next: run usabl check again, or check the change by hand.');
+  }
+  // The gate's own summary, with its counts, printed whole and labelled so it reads as the
+  // gate's sentence rather than as a second verdict.
+  lines.push(`  gate summary: ${boundField(neutralizePrintedText(result.summary), 'summary')}`);
 
   const gating = result.findings.filter(
     (f) => f.evidenceClass === 'deterministic' && (f.status === 'new' || f.status === 'carried'),
   );
+  if (gating.length > 0) {
+    lines.push('  barriers:');
+  }
+  // Every free-text field is neutralized, then bounded on its own, so a huge page string prints
+  // its start and a visible note. Status and severity are usabl's own words and stay whole.
   for (const f of gating) {
-    const rule = neutralizePrintedText(f.rule);
-    const whatUserExperiences = neutralizePrintedText(f.whatUserExperiences);
+    const rule = boundField(neutralizePrintedText(f.rule), 'rule');
+    const screenId = boundField(neutralizePrintedText(f.screenId), 'screenId');
+    const layer = boundField(neutralizePrintedText(f.layer), 'layer');
+    const whatUserExperiences = boundField(neutralizePrintedText(f.whatUserExperiences), 'experience');
     // A docs finding carries a source mapping and a syntax-aware fix; prefer both so the author
     // reads their own markup, not the DOM. App findings have no docsSource and keep finding.fix.
     const source = f.docsSource;
     const appSource = f.appSource;
-    const fix = neutralizePrintedText(fixOrAbsence(f));
+    const fix = boundField(neutralizePrintedText(fixOrAbsence(f)), 'fix');
     lines.push(
-      `  [${f.status}] ${f.screenId} · ${f.layer}/${rule} (${f.severity}) - ${whatUserExperiences}`,
+      `    [${f.status}] ${screenId} · ${layer}/${rule} (${f.severity}): ${whatUserExperiences}`,
     );
     if (source && source.file) {
-      lines.push(`      source: ${neutralizePrintedText(formatDocsSourceLocation(source))}`);
+      lines.push(`        source: ${boundField(neutralizePrintedText(formatDocsSourceLocation(source)), 'source')}`);
       if (source.candidates.length > 1) {
-        lines.push(`      candidates: ${source.candidates.map(neutralizePrintedText).join(', ')}`);
+        lines.push(
+          `        candidates: ${boundField(source.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
+        );
       }
     } else if (appSource) {
       if (appSource.file) {
-        lines.push(`      source: ${neutralizePrintedText(formatAppSourceLocation(appSource))}`);
+        lines.push(`        source: ${boundField(neutralizePrintedText(formatAppSourceLocation(appSource)), 'source')}`);
       }
       if (
         appSource.candidates.length > 0 &&
         (appSource.file === null || appSource.candidates.length > 1)
       ) {
-        lines.push(`      candidates: ${appSource.candidates.map(neutralizePrintedText).join(', ')}`);
+        lines.push(
+          `        candidates: ${boundField(appSource.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
+        );
       }
     }
     // Always printed. Most axe rules carry no curated note, so an absent fix is a common and
     // real state, and a missing line reads as a rendering bug rather than as an absence.
-    lines.push(`      fix: ${fix}`);
+    lines.push(`        fix: ${fix}`);
   }
   lines.push(...renderNotEvaluated(result));
   if (result.dirtyGuardedPaths.length > 0) {

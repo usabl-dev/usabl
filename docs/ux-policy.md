@@ -168,9 +168,10 @@ silent pass.
    throws or is denied a capability becomes a coverage gap, which resolves to `not_covered`
    (exit 3). An unhandled crash in `run()` fails open to exit 4 with `verdict: null`.
    Receipts carry no error field, because a receipt exists only for a `verified` run.
-2. **Message to the developer:** state that the change is not verified and give the summary,
-   for example "NOT verified - " plus the crash or gap reason, then "Run again or check
-   manually."
+2. **Message to the developer:** open with the state and the exit code, say what it means,
+   give the gate summary with the crash or gap reason, then the next step. A failed run
+   reads "NO VERDICT: RUN FAILED (exit 4)" and never names the word "verified" in any form,
+   so it cannot be skimmed as a pass. It then says to run again or check by hand.
 3. **Timeouts:** the shipped bounds are the keyboard-walk 15s wall-clock cap and the 50-tab
    transcript cap. A timed-out scan becomes a gap and lands on `not_covered`, which blocks.
    There is no timeout-as-warn mode and no configurable per-surface budget yet; usabl is on
