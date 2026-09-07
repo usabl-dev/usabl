@@ -437,6 +437,26 @@ async function badgeLabel(page: Page): Promise<string> {
   );
 }
 
+/**
+ * What the header shows, rebuilt from the DOM: the verdict word without its decorative symbol, then
+ * every note line, then the no-verdict reason when that section is present. The live region must
+ * equal this, so a screen reader user hears exactly what a sighted reader sees.
+ */
+async function announcementShown(page: Page): Promise<string> {
+  return page.locator(OVERLAY).evaluate((host) => {
+    const root = (host as HTMLElement).shadowRoot;
+    if (!root) return '';
+    const chip = root.querySelector('.banner-verdict');
+    const word = Array.from(chip?.childNodes ?? [])
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.textContent ?? '')
+      .join('');
+    const notes = Array.from(root.querySelectorAll('.banner-note')).map((note) => note.textContent ?? '');
+    const reason = root.querySelector('.no-verdict .notice')?.textContent ?? '';
+    return 'usabl: ' + word + '. ' + notes.join(' ') + (reason ? ' ' + reason : '');
+  });
+}
+
 async function bannerWord(page: Page): Promise<string> {
   return page.locator(OVERLAY).evaluate(
     (host) =>
@@ -2340,25 +2360,147 @@ describe('the overlay announces state changes and stays visible on any host', { 
     const verdictStatus = host.locator('.visually-hidden[role="status"]');
 
     expect(await verdictStatus.getAttribute('aria-live')).toBe('polite');
+    // The announcement is the verdict word plus the header's own lines, so it says what a sighted
+    // reader sees and nothing else.
     await expect.poll(async () => verdictStatus.textContent(), { timeout: 10_000 }).toBe(
-      'usabl: Regression. 2 findings on this screen.',
+      'usabl: Regression. usabl found 2 accessibility barriers on this screen.',
     );
 
     const panel = await openPanel(page);
+    expect(await verdictStatus.textContent()).toBe(await announcementShown(page));
     // Opening and closing the panel is not a state change, so nothing is re-announced.
     await panel.getByRole('button', { name: 'Collapse the usabl inspector' }).click();
     await host.getByRole('button', { name: /Open inspector/i }).click();
-    expect(await verdictStatus.textContent()).toBe('usabl: Regression. 2 findings on this screen.');
+    expect(await verdictStatus.textContent()).toBe(
+      'usabl: Regression. usabl found 2 accessibility barriers on this screen.',
+    );
 
     await panel.getByRole('button', { name: 'Check again' }).click();
-    await expect.poll(async () => verdictStatus.textContent()).toBe('usabl: Scanning.');
+    await expect
+      .poll(async () => verdictStatus.textContent())
+      .toBe('usabl: Scanning. usabl is scanning the screens your change affects.');
     await expect
       .poll(async () => verdictStatus.textContent(), { timeout: 10_000 })
-      .toBe('usabl: Verified. No findings on this screen.');
+      .toBe('usabl: Verified. No findings on any screen usabl checked.');
+    expect(await verdictStatus.textContent()).toBe(await announcementShown(page));
 
     // It is a live region, not a visible duplicate of the banner.
     const box = await verdictStatus.boundingBox();
     expect(box?.width ?? 99).toBeLessThanOrEqual(2);
+
+    await page.context().close();
+  });
+
+  it('announces a screen it could not check as unchecked, never as having no findings', async () => {
+    // The visible badge says the screen could not be checked. The live region used to say "No
+    // findings on this screen" for the same state, which is the opposite claim.
+    const withGap = result({
+      summary: 'regression: 1 gating finding',
+      coverage: {
+        changedFiles: ['src/app.tsx'],
+        affected: [
+          { screenId: 'clusters', url: 'http://127.0.0.1:5173/clusters', provenance: 'route-graph' },
+          { screenId: 'jobs', url: 'http://127.0.0.1:5173/jobs', provenance: 'route-graph' },
+        ],
+        unresolvedFiles: [],
+        gaps: [{ ref: 'clusters', state: 'not-covered', reason: 'route did not load within 30s' }],
+        nothingToCheck: false,
+      },
+      findings: [finding({ screenId: 'jobs', whatUserExperiences: 'Jobs barrier.' })],
+    });
+    const page = await mount(projectOverlay(withGap), { path: '/clusters' });
+    const host = page.locator(OVERLAY);
+    const verdictStatus = host.locator('.visually-hidden[role="status"]');
+
+    await expect.poll(async () => verdictStatus.textContent(), { timeout: 10_000 }).toBe(
+      'usabl: Regression. usabl could not check this screen: route did not load within 30s. Nothing here is proven. See the coverage gaps below.',
+    );
+    expect(await verdictStatus.textContent()).not.toContain('No findings');
+    await openPanel(page);
+    expect(await verdictStatus.textContent()).toBe(await announcementShown(page));
+
+    await page.context().close();
+  });
+
+  it('announces the accessibility verdict changing while approval is still pending', async () => {
+    // The top-level verdict stays "Approval required" and the finding count stays zero, so the old
+    // announcement never changed. The accessibility verdict is a line in the header, and a change
+    // to it is a real change.
+    const pending = (
+      accessibilityVerdict: Result['accessibilityVerdict'],
+      accessibilityExitCode: Result['accessibilityExitCode'],
+    ) =>
+      projectOverlay(
+        result({
+          verdict: 'approval_required',
+          summary: 'approval required',
+          findings: [],
+          dirtyGuardedPaths: ['usabl.config.json'],
+          exitCode: 2,
+          accessibilityVerdict,
+          accessibilityExitCode,
+        }),
+      );
+    const page = await mount(null, {
+      path: '/clusters',
+      responseDelayMs: 400,
+      payloads: [pending('not_covered', 3), pending('verified', 0)],
+    });
+    const host = page.locator(OVERLAY);
+    const verdictStatus = host.locator('.visually-hidden[role="status"]');
+
+    const before =
+      'usabl: Approval required. Guarded file changed: usabl.config.json. '
+      + 'Where a code owner is assigned to that path, a code owner other than the author approves it on the pull request; '
+      + 'the policy check on the pull request says exactly what it needs. Nothing in this panel or on your machine can approve it. '
+      + 'Accessibility for this run: NOT COVERED (exit 3). '
+      + 'If the change was unintended, revert the file and this state clears.';
+    await expect.poll(async () => verdictStatus.textContent(), { timeout: 10_000 }).toBe(before);
+
+    const panel = await openPanel(page);
+    expect(await verdictStatus.textContent()).toBe(await announcementShown(page));
+    await panel.getByRole('button', { name: 'Check again' }).click();
+    await expect
+      .poll(async () => verdictStatus.textContent())
+      .toBe('usabl: Scanning. usabl is scanning the screens your change affects.');
+    await expect
+      .poll(async () => verdictStatus.textContent(), { timeout: 10_000 })
+      .toBe(before.replace('NOT COVERED (exit 3)', 'VERIFIED (exit 0)'));
+    expect(await verdictStatus.textContent()).toBe(await announcementShown(page));
+
+    await page.context().close();
+  });
+
+  it('announces a changed no-verdict reason even though the verdict word did not change', async () => {
+    const refused = (summary: string) =>
+      projectOverlay(result({ verdict: null, summary, findings: [], exitCode: 4 }));
+    const page = await mount(null, {
+      path: '/clusters',
+      responseDelayMs: 400,
+      payloads: [
+        refused('refused: duplicate surface id "vite" in usabl.config.json. Give each surface its own id.'),
+        refused('refused: usabl.config.json is not valid JSON.'),
+      ],
+    });
+    const host = page.locator(OVERLAY);
+    const verdictStatus = host.locator('.visually-hidden[role="status"]');
+
+    await expect.poll(async () => verdictStatus.textContent(), { timeout: 10_000 }).toBe(
+      'usabl: No verdict. usabl finished without a verdict, so nothing on this screen is proven. '
+        + 'refused: duplicate surface id "vite" in usabl.config.json. Give each surface its own id.',
+    );
+
+    const panel = await openPanel(page);
+    expect(await verdictStatus.textContent()).toBe(await announcementShown(page));
+    await panel.getByRole('button', { name: 'Check again' }).click();
+    await expect
+      .poll(async () => verdictStatus.textContent())
+      .toBe('usabl: Scanning. usabl is scanning the screens your change affects.');
+    await expect.poll(async () => verdictStatus.textContent(), { timeout: 10_000 }).toBe(
+      'usabl: No verdict. usabl finished without a verdict, so nothing on this screen is proven. '
+        + 'refused: usabl.config.json is not valid JSON.',
+    );
+    expect(await verdictStatus.textContent()).toBe(await announcementShown(page));
 
     await page.context().close();
   });
@@ -2436,7 +2578,7 @@ describe('the overlay announces state changes and stays visible on any host', { 
     // And it actually carries the announcement while collapsed.
     const verdictStatus = host.locator('.visually-hidden[role="status"]');
     await expect.poll(async () => verdictStatus.textContent(), { timeout: 10_000 }).toBe(
-      'usabl: Regression. 2 findings on this screen.',
+      'usabl: Regression. usabl found 2 accessibility barriers on this screen.',
     );
 
     await page.context().close();

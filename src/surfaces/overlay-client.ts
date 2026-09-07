@@ -2690,27 +2690,32 @@ export const overlayClientSource = `(() => {
     const oneStatement = verdict.key === 'idle' || verdict.key === 'no-verdict';
     const headerChildren = oneStatement ? [bar, banner, ...notes] : [bar, banner, ...notes, screenLine];
     header.replaceChildren(...headerChildren);
-    announceVerdict(verdict, split, payload);
+    announceVerdict(verdict, noteLines, payload);
   }
 
-  // One short sentence per real state change, written to the hidden live region.
+  // The engine's reason for a run that ended without a verdict, bounded the way the body shows it.
+  function noVerdictReason(payload) {
+    const reason = boundedText(payload && payload.summary, MAX_PROSE_CHARS).trim();
+    return reason || 'usabl gave no reason.';
+  }
+
+  // What the header shows, written to the hidden live region once per real change.
   //
   // Without this a screen reader user watching a fix loop hears nothing at all: the banner goes from
-  // regression to verified in silence. It is deliberately terse and it is written only when the
-  // sentence differs from the last one, so a re-render on a route change does not repeat it.
-  function announceVerdict(verdict, split, payload) {
+  // regression to verified in silence. The announcement is built from the very lines the header
+  // renders, so it can never say "no findings" over a screen the header says was not checked, and
+  // a change that only the lines carry, such as the accessibility verdict flipping while approval
+  // is still pending, is announced too. A run with no verdict adds the engine's reason, which is
+  // the one fact the body shows for that state and the only thing that can change within it. The
+  // region is written only when the text differs from the last one, so opening the panel or a
+  // re-render on a route change to the same state does not repeat it.
+  function announceVerdict(verdict, noteLines, payload) {
     if (!state.verdictStatus) {
       return;
     }
-    let sentence = 'usabl: ' + verdict.word + '.';
-    if (!state.scanning && !state.error && payload && payload.loaded) {
-      if (!split.matched) {
-        sentence += ' This screen was not scanned.';
-      } else if (split.here.length > 0) {
-        sentence += ' ' + countLabel(split.here.length, 'finding') + ' on this screen.';
-      } else {
-        sentence += ' No findings on this screen.';
-      }
+    let sentence = 'usabl: ' + verdict.word + '. ' + noteLines.join(' ');
+    if (verdict.key === 'no-verdict' && !state.scanning && !state.error) {
+      sentence += ' ' + noVerdictReason(payload);
     }
     if (sentence === state.lastVerdictAnnouncement) {
       return;
@@ -2798,8 +2803,7 @@ export const overlayClientSource = `(() => {
     if (verdict.key === 'no-verdict') {
       const section = make('section', 'section no-verdict');
       section.appendChild(make('h3', '', 'Why there is no verdict'));
-      const reason = boundedText(payload.summary, MAX_PROSE_CHARS).trim();
-      section.appendChild(make('p', 'notice', reason || 'usabl gave no reason.'));
+      section.appendChild(make('p', 'notice', noVerdictReason(payload)));
       section.appendChild(make('p', 'notice', 'Nothing on this screen is proven.'));
       body.replaceChildren(...(tamper ? [tamper, section] : [section]));
       return;
