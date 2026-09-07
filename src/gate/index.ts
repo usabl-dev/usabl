@@ -54,8 +54,19 @@ function accessibilityOutcome(input: GateInput): {
   // Waived and fixed stay visible. They do not block and they do not mint verified.
   const gating = findings.filter((f) => GATES(f.evidenceClass) && f.status !== 'waived' && f.status !== 'fixed');
   const hasNewFail = gating.some((f) => f.confidence === 'fail' && f.status === 'new');
+  // Uncertainty blocks only when it is new, the same test the failing side uses. A carried
+  // unverified finding is on the evidence floor: the floor accepted that identity, and the
+  // gate has already decided a carried failure does not block. Blocking on carried uncertainty
+  // instead would hold every real application at not_covered forever, because a large UI always
+  // has some results the checker declines to judge, and no amount of work clears them.
+  //
+  // Growth at a floored identity is not lost by this. buildFindings tallies every draft that
+  // lands on an identity and marks the collapsed finding `new` when the tally is above the count
+  // the floor recorded, so a second barrier hiding behind one accepted entry comes back as new
+  // and blocks here. The recorded count is what protects that case, not the confidence test.
   const hasUnverified =
-    gating.some((f) => f.confidence === 'unverified') || coverageIncomplete(input.coverage);
+    gating.some((f) => f.confidence === 'unverified' && f.status === 'new') ||
+    coverageIncomplete(input.coverage);
 
   const { verdict, exitCode } = decideAccessibilityVerdict({
     hasBlockingFailure: hasNewFail,

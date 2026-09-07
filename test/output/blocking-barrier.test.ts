@@ -12,8 +12,9 @@
  * be about findings at all, because a gap alone also holds a run at not_covered.
  *
  * A change to either side breaks this. Widening the predicate to include carried debt fails the
- * carried case, because the gate calls that run verified. Narrowing it to drop a finding usabl
- * could not verify fails the unverified case, because the gate does not call that run verified.
+ * two carried cases, because the gate calls both of those runs verified. Narrowing it to drop a
+ * new finding usabl could not verify fails that case, because the gate does not call that run
+ * verified.
  */
 import { describe, expect, it } from 'vitest';
 import { gate } from '../../src/gate/index.js';
@@ -92,7 +93,7 @@ const CASES: ReadonlyArray<{
     verified: false,
   },
   {
-    name: 'a finding usabl could not verify',
+    name: 'a new finding usabl could not verify',
     input: { ...base, drafts: [draft({ confidence: 'unverified' })], floor: emptyFloor },
     status: 'new',
     verified: false,
@@ -107,7 +108,7 @@ const CASES: ReadonlyArray<{
     name: 'accepted debt usabl could not verify this run',
     input: { ...base, drafts: [draft({ confidence: 'unverified' })], floor: flooredOnce },
     status: 'carried',
-    verified: false,
+    verified: true,
   },
   {
     name: 'a waived finding',
@@ -153,8 +154,17 @@ describe('isBlockingBarrier against the gate', () => {
     expect(isBlockingBarrier(out.findings[0]!)).toBe(false);
   });
 
-  it('calls a finding it could not verify a barrier, because the run is not verified either', () => {
+  it('never calls carried uncertainty a barrier, because the gate stopped blocking on it', () => {
     const out = gate({ ...base, drafts: [draft({ confidence: 'unverified' })], floor: flooredOnce });
+
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]!.status).toBe('carried');
+    expect(out.accessibilityVerdict).toBe('verified');
+    expect(isBlockingBarrier(out.findings[0]!)).toBe(false);
+  });
+
+  it('calls a new finding it could not verify a barrier, because the run is not verified either', () => {
+    const out = gate({ ...base, drafts: [draft({ confidence: 'unverified' })], floor: emptyFloor });
 
     expect(out.accessibilityVerdict).toBe('not_covered');
     expect(out.findings.some(isBlockingBarrier)).toBe(true);

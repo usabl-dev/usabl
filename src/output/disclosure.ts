@@ -154,14 +154,15 @@ export function fixOrAbsence(finding: Finding): string {
  * barrier exactly when the gate is not verified because of it.
  *
  * What that excludes is the point. Advisory evidence never gates. A waived or fixed finding is
- * one the gate has already accounted for. A carried failing finding is accepted debt: it is in
- * the evidence floor, the gate lets a run carrying it pass as verified, and calling it a barrier
- * tells a reader to go and fix something that is not blocking anything. Carried debt still
- * belongs on surfaces that report the state of a change; it does not belong under an instruction
- * to fix it.
+ * one the gate has already accounted for. Carried findings are accepted debt: they are in the
+ * evidence floor, the gate lets a run carrying them pass as verified, and calling one a barrier
+ * tells a reader to go and fix something that is not blocking anything. That holds for carried
+ * uncertainty as much as for a carried failure, because the gate stopped separating them: the
+ * floor accepted the identity either way. Carried debt still belongs on surfaces that report the
+ * state of a change; it does not belong under an instruction to fix it.
  *
- * A finding usabl could not verify is included whatever its status, because the gate's own
- * unverified test does not look at status either: an unproven finding leaves the run unproven.
+ * Waived and fixed need no test of their own. A status is one of new, carried, fixed and waived,
+ * so requiring `new` already excludes all three of the others.
  *
  * Shared so a surface cannot answer this differently from the gate, and pinned by a test that
  * drives the gate with its own inputs and checks that a run with no such finding, and complete
@@ -172,10 +173,10 @@ export function isBlockingBarrier(finding: Finding): boolean {
   if (finding.evidenceClass !== 'deterministic') {
     return false;
   }
-  if (finding.status === 'waived' || finding.status === 'fixed') {
+  if (finding.status !== 'new') {
     return false;
   }
-  return finding.confidence === 'unverified' || finding.status === 'new';
+  return finding.confidence === 'fail' || finding.confidence === 'unverified';
 }
 
 /**

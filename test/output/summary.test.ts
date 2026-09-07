@@ -354,15 +354,30 @@ describe('formatSummary', () => {
       expect(out).toContain('not evaluated: 1 gap(s)');
     });
 
-    it('calls a finding usabl could not verify a barrier even when it is carried', () => {
-      // The gate cannot call a run verified while a finding is unverified, whatever its status, so
-      // this one is work. The shared predicate is what decides that, and this pins the surface to it.
+    it('lists carried uncertainty as recorded debt, not as a barrier', () => {
+      // The floor accepted this identity, so the gate lets the run pass and the reader is not
+      // sent to fix it. The shared predicate is what decides that, and this pins the surface to it.
+      const out = formatSummary(
+        baseResult({
+          verdict: 'verified',
+          exitCode: 0,
+          summary: 'verified: 1 gating finding(s)',
+          findings: [withStatus({ status: 'carried', confidence: 'unverified' })],
+        }),
+      );
+
+      expect(out).toContain(`${RECORDED_HEADING} 1 finding(s)`);
+      expect(out).not.toContain(BLOCKING_HEADING);
+    });
+
+    it('calls a new finding usabl could not verify a barrier', () => {
+      // The gate cannot call a run verified while a new finding is unverified, so this one is work.
       const out = formatSummary(
         baseResult({
           verdict: 'not_covered',
           exitCode: 3,
           summary: 'not_covered: 1 gating finding(s)',
-          findings: [withStatus({ status: 'carried', confidence: 'unverified' })],
+          findings: [withStatus({ status: 'new', confidence: 'unverified' })],
         }),
       );
 
