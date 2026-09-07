@@ -1947,7 +1947,7 @@ export const overlayClientSource = `(() => {
   }
 
   // Scroll to the flagged element and outline it. This never moves focus. A developer who activates
-  // a row with the keyboard stays in the list; "Focus element" is the explicit way to leave it.
+  // a row with the keyboard stays in the list; "Move focus to it" is the explicit way to leave it.
   function highlightFinding(finding, key) {
     clearHighlight();
     const found = resolveTarget(finding);
@@ -2183,12 +2183,12 @@ export const overlayClientSource = `(() => {
     );
 
     const actions = make('div', 'detail-actions');
-    const showAgain = make('button', 'detail-action', 'Show on page again');
+    const showAgain = make('button', 'detail-action', 'Highlight it');
     showAgain.type = 'button';
     showAgain.addEventListener('click', () => highlightFinding(finding, row.key));
     actions.appendChild(showAgain);
 
-    const focusButton = make('button', 'detail-action', 'Focus element');
+    const focusButton = make('button', 'detail-action', 'Move focus to it');
     focusButton.type = 'button';
     focusButton.addEventListener('click', () => focusFinding(finding));
     actions.appendChild(focusButton);

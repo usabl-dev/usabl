@@ -349,10 +349,10 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
     const panel = await openPanel(page);
     await panel.getByRole('button', { name: /Focus stays behind the dialog/i }).click();
 
-    await panel.getByRole('button', { name: 'Show on page again' }).click();
+    await panel.getByRole('button', { name: 'Highlight it' }).click();
     expect(await page.locator(HIGHLIGHT).count()).toBe(1);
 
-    await panel.getByRole('button', { name: 'Focus element' }).click();
+    await panel.getByRole('button', { name: 'Move focus to it' }).click();
     expect(await page.evaluate(() => document.activeElement?.id)).toBe('cluster-details');
     expect(
       await page.locator(OVERLAY).getByText('Keyboard focus moved to View cluster details.').isVisible(),
@@ -373,7 +373,7 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
     const panel = await openPanel(page);
     const row = panel.getByRole('button', { name: /Focus stays behind the dialog/i });
     await row.click();
-    await panel.getByRole('button', { name: 'Focus element' }).click();
+    await panel.getByRole('button', { name: 'Move focus to it' }).click();
 
     expect(await page.evaluate(() => document.activeElement?.id)).toBe('plain-target');
     expect(await page.locator('#plain-target').getAttribute('tabindex')).toBe('-1');
@@ -410,11 +410,11 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
     expect(await status.textContent()).toContain('#gone-since-scan');
 
     // Both explicit buttons report the same honest status rather than claiming success.
-    await panel.getByRole('button', { name: 'Show on page again' }).click();
+    await panel.getByRole('button', { name: 'Highlight it' }).click();
     expect(await page.locator(HIGHLIGHT).count()).toBe(0);
     expect(await status.textContent()).toContain('it is not on the page right now');
 
-    await panel.getByRole('button', { name: 'Focus element' }).click();
+    await panel.getByRole('button', { name: 'Move focus to it' }).click();
     expect(await page.evaluate(() => document.activeElement?.id ?? '')).not.toBe('gone-since-scan');
     expect(await status.textContent()).toContain('it is not on the page right now');
 
@@ -2030,7 +2030,7 @@ describe('the overlay only touches what it owns', { timeout: 40_000 }, () => {
       await page.locator(OVERLAY).locator('.locate-status').textContent(),
     ).toContain('it is not on the page right now');
 
-    await panel.getByRole('button', { name: 'Focus element' }).click();
+    await panel.getByRole('button', { name: 'Move focus to it' }).click();
     expect(await page.locator('body').getAttribute('tabindex')).toBeNull();
 
     await page.context().close();
@@ -2055,7 +2055,7 @@ describe('the overlay only touches what it owns', { timeout: 40_000 }, () => {
     const panel = await openPanel(page);
     const row = panel.locator('.finding-button');
     await row.click();
-    await panel.getByRole('button', { name: 'Focus element' }).click();
+    await panel.getByRole('button', { name: 'Move focus to it' }).click();
     await row.click();
 
     // The element we borrowed is restored, and the page's own element is untouched.
@@ -2562,7 +2562,7 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(overlapsBefore).toBe(true);
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Show on page again' }).click();
+    await panel.getByRole('button', { name: 'Highlight it' }).click();
 
     // The panel moved off the bottom-right corner.
     await expect.poll(async () => dockCorner(page)).not.toBe('bottom-right');
@@ -2593,7 +2593,7 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(await dockCorner(page)).toBe('bottom-right');
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Show on page again' }).click();
+    await panel.getByRole('button', { name: 'Highlight it' }).click();
     await page.waitForTimeout(200);
 
     expect(await dockCorner(page)).toBe('bottom-right');
@@ -2655,7 +2655,7 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(await panelOverlapsTarget(page)).toBe(true);
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Show on page again' }).click();
+    await panel.getByRole('button', { name: 'Highlight it' }).click();
 
     await expect.poll(async () => dockCorner(page)).toMatch(/-right$/);
     expect(await panelOverlapsTarget(page)).toBe(false);
@@ -2679,7 +2679,7 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     const panel = host.getByRole('region', { name: 'usabl accessibility inspector' });
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Show on page again' }).click();
+    await panel.getByRole('button', { name: 'Highlight it' }).click();
     await page.waitForTimeout(150);
 
     expect(await dockCorner(page)).toBe('top-left');
@@ -2687,8 +2687,8 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(status).toContain('Highlighted Corner control on the page.');
     expect(status).toContain('no corner is clear');
 
-    // Focus element says the same, because it dodges the same way.
-    await panel.getByRole('button', { name: 'Focus element' }).click();
+    // Move focus to it says the same, because it dodges the same way.
+    await panel.getByRole('button', { name: 'Move focus to it' }).click();
     const focusStatus = await host.locator('.locate-status').textContent();
     expect(focusStatus).toContain('Keyboard focus moved to Corner control.');
     expect(focusStatus).toContain('no corner is clear');
@@ -2704,7 +2704,7 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     // centres it, it covers the band every corner would occupy. Judging the corners two frames into
     // the scroll read the target's starting position, found the panel clear, and never warned. The
     // dodge must run once the scroll has settled, and the blocked sentence must be announced exactly
-    // once, for the row activation and again exactly once for Focus element.
+    // once, for the row activation and again exactly once for Move focus to it.
     const page = await mountWithTarget({
       targetCss: 'position: absolute; left: 421px; top: 2400px; width: 480px; height: 700px;',
       dockSeed: 'top-left',
@@ -2725,7 +2725,7 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     const overlap = await panelOverlapsTarget(page);
     expect(overlap === false || blockedCount(highlightStatus) === 1).toBe(true);
 
-    await panel.getByRole('button', { name: 'Focus element' }).click();
+    await panel.getByRole('button', { name: 'Move focus to it' }).click();
     await expect
       .poll(async () => {
         const text = await status.textContent();
