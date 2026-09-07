@@ -439,6 +439,10 @@ export function scrubResult(result: Result): Result {
     exitCode: result.exitCode,
     accessibilityVerdict: result.accessibilityVerdict,
     accessibilityExitCode: result.accessibilityExitCode,
+    // Screen ids and rule names, both engine and config words, and two integers. Nothing
+    // page-derived, so there is nothing here to scrub, but it is copied explicitly rather than
+    // spread so a new field can never reach egress without someone deciding it is safe.
+    floorHeadroom: result.floorHeadroom.map((entry) => ({ ...entry })),
     paidDownCount: result.paidDownCount,
   };
 }

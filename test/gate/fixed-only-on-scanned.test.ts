@@ -47,7 +47,10 @@ function d(over: Partial<Draft>): Draft {
 
 function floorWith(screenId: string, rule: string): EvidenceFloor {
   return {
-    version: 1,
+    // Version 2, so these cases isolate the `fixed` claim rule. A version 1 floor with a name
+    // entry cannot prove its counts and the gate holds any run reading one at not_covered, which
+    // would mask what these tests are about.
+    version: 2,
     entries: [
       {
         screenId,

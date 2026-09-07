@@ -61,6 +61,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   accessibilityVerdict: null,
   accessibilityExitCode: 0,
   paidDownCount: 0,
+  floorHeadroom: [],
   ...over,
 });
 

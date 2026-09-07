@@ -54,6 +54,7 @@ function resultWith(findings: Finding[]): Result {
     accessibilityVerdict: 'regression',
     accessibilityExitCode: 1,
     paidDownCount: 0,
+    floorHeadroom: [],
   };
 }
 

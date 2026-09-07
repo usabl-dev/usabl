@@ -81,6 +81,35 @@
   backstop. `usabl doctor` reports the same state as drifted rather than wired,
   reading the same rule, so the two surfaces cannot disagree about one file.
   Neither the path nor any cookie value is printed.
+- usabl now shows when the evidence floor is ahead of the application, and
+  `usabl floor prune` re-arms it. The recorded barrier count only ever went up, through
+  `usabl baseline`, because prune removed whole entries and never lowered a count. So
+  after one of several barriers at a collapsed identity was fixed, the floor kept
+  claiming the old number, and a new barrier could arrive, take the freed slot, keep the
+  tally at or under what was accepted, and be recorded as debt somebody had already
+  agreed to. Nothing said so. Every run that finds the floor ahead now says so on every
+  surface: the engine summary gains a `1 floor entry to re-arm` clause, and the terminal
+  prints the screen, the rule, how many barriers the floor claims, how many are actually
+  there, and the command, under the recorded group. `usabl floor prune` now lowers the
+  recorded count to what the run observed as well as removing identities that are gone,
+  so one prune clears it. It never raises a count: accepting new debt stays the job of
+  `usabl baseline`, under review.
+- This is a notice, not a block. The verdict does not move, because on a real
+  application these counts follow how many rows a live table renders, and a run that
+  failed whenever a list came back one row shorter would be unusable. So a new barrier
+  arriving into that difference is still recorded as accepted debt until the floor is
+  re-armed, and one barrier swapped for another at the same collapsed identity in a
+  single change is invisible to any count. Both limits are now written down in the
+  ground truth rather than left to be discovered, along with the two things that shrink
+  them: stronger element keys, and pruning promptly when a run asks.
+- The exported `gate()` is now safe on its own. The protection against a floor that
+  predates barrier counting lived in the run path only, so calling the gate directly
+  returned verified where a full run reported a gap and blocked.
+- A preview finding sharing an identity with a deterministic one no longer changes the
+  verdict, and no longer changes it based on the order the two arrived in. The gate
+  tallied every kind of evidence against a floor written from deterministic findings
+  only, and kept whichever of the two it saw first as the survivor, so the same inputs in
+  the other order gave a different answer and a surviving preview finding could not gate.
 - The engine summary line counts only what blocks. It used to count every
   deterministic finding that was neither waived nor fixed and call the total
   gating, but that set holds carried debt, which does not gate. A verified run

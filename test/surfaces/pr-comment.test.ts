@@ -73,6 +73,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   accessibilityVerdict: null,
   accessibilityExitCode: 0,
   paidDownCount: 0,
+  floorHeadroom: [],
   ...over,
 });
 
@@ -283,6 +284,7 @@ describe('projectPrComment', () => {
         summary: 'verified: 0 gating finding(s)',
         findings: [],
         paidDownCount: 2,
+        floorHeadroom: [],
       }),
     );
 
@@ -297,6 +299,7 @@ describe('projectPrComment', () => {
         summary: 'verified: 0 gating finding(s)',
         findings: [],
         paidDownCount: 0,
+        floorHeadroom: [],
       }),
     );
 
@@ -810,6 +813,7 @@ describe('pr comment page text is sealed in code spans', () => {
           findings: [],
           screens: [],
           paidDownCount: { length: payload } as unknown as number,
+          floorHeadroom: [],
         }),
       );
 

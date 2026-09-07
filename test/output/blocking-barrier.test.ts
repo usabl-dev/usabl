@@ -56,8 +56,12 @@ const flooredEntry = {
   identityBasis: 'name' as const,
   count: 1,
 };
-const emptyFloor: EvidenceFloor = { version: 1, entries: [] };
-const flooredOnce: EvidenceFloor = { version: 1, entries: [flooredEntry] };
+// Version 2. A version 1 floor with a name entry records a placeholder count rather than an
+// observation, and the gate holds any run reading one at not_covered. These cases are about the
+// equivalence between the barrier predicate and the verdict, so the floor they use has to be one
+// the gate can actually reason about.
+const emptyFloor: EvidenceFloor = { version: 2, entries: [] };
+const flooredOnce: EvidenceFloor = { version: 2, entries: [flooredEntry] };
 
 const waiver: Waiver = {
   rule: 'color-contrast',

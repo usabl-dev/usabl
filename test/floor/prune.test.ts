@@ -347,6 +347,102 @@ describe('runFloorPrune', () => {
   });
 });
 
+/**
+ * Prune re-arms the floor, and until now it only did half of that.
+ *
+ * It dropped entries whose identity had vanished, but it left the recorded count alone on every
+ * entry that survived. Because `usabl baseline` is the only thing that writes a count and it only
+ * ever writes what it saw, the count became a high-water mark: pay down one of three barriers at a
+ * collapsed identity and the floor kept claiming three forever. The gate then had headroom it could
+ * not account for, and now reports it as a coverage gap telling the reader to run this command. The
+ * command has to actually close it.
+ */
+describe('runFloorPrune lowers counts', () => {
+  // Two barriers on different nodes that collapse to one name identity, so the count is the only
+  // thing that separates one accepted barrier from two.
+  const collapsing = (path: string): Draft => draft({ elementPath: path });
+
+  const floorAtCount = (count: number, version: 1 | 2 = 2): string =>
+    JSON.stringify({
+      version,
+      entries: [{
+        screenId: 'clusters', layer: 'axe', rule: 'color-contrast',
+        elementKey: 'clusters|color-contrast|name:save', identityBasis: 'name', count,
+      }],
+    });
+
+  it('lowers a surviving entry to the count this run observed', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': floorAtCount(3) }),
+      scans: { clusters: scanWith([collapsing('button'), collapsing('footer button')]) },
+    });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, testConfig(), writer);
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.wrote).toBe(true);
+    // The identity is still there, so nothing is removed. The re-arming is the count coming down.
+    expect(outcome.prunedCount).toBe(0);
+    expect(outcome.loweredCount).toBe(1);
+    expect(parseWrittenFloor(writer).entries[0]!.count).toBe(2);
+    // A floor diff was written, so the message must not report zero work over it.
+    expect(outcome.message).toContain('lowered the barrier count on 1 entry');
+    expect(outcome.message).not.toContain('removed 0');
+  });
+
+  it('never raises a count, because accepting new debt is the baseline command with review', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': floorAtCount(1) }),
+      scans: { clusters: scanWith([collapsing('button'), collapsing('footer button')]) },
+    });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, testConfig(), writer);
+
+    // Two barriers stand where the floor accepted one. The gate calls that a regression; prune
+    // silently writing 2 here would launder it into accepted debt with no review.
+    expect(outcome.wrote).toBe(false);
+    expect(outcome.loweredCount).toBe(0);
+    expect(writer.writes).toHaveLength(0);
+  });
+
+  it('leaves a version 1 count alone, because the file still says it is a placeholder', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': floorAtCount(3, 1) }),
+      scans: { clusters: scanWith([collapsing('button')]) },
+    });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, testConfig(), writer);
+
+    // A version 1 name entry records a placeholder, not an observation, and the gate ignores it.
+    // Writing a real number under a version that says otherwise would present it as observed debt.
+    // `usabl baseline` is what moves a floor to version 2.
+    expect(outcome.loweredCount).toBe(0);
+    expect(outcome.wrote).toBe(false);
+  });
+
+  it('does not lower a count on a screen it did not cleanly scan', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': floorAtCount(3) }),
+      scans: {
+        clusters: scanWith([collapsing('button')], [
+          { ref: 'clusters', state: 'not-covered', reason: 'provider pf-rulepack failed: boom' },
+        ]),
+      },
+    });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, testConfig(), writer);
+
+    // A gapped scan yields fewer drafts than the screen holds, so its tally is not a measurement.
+    // Lowering on it would re-arm the gate against barriers that are still there.
+    expect(outcome.loweredCount).toBe(0);
+    expect(outcome.wrote).toBe(false);
+  });
+});
+
 describe('floor command parsing', () => {
   it('parses floor prune and refuses floor without prune', async () => {
     const parsed = parseCliArgs(['floor', 'prune']);

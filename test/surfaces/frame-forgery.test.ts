@@ -122,6 +122,7 @@ describe('frameUntrusted against a forged frame close', () => {
       accessibilityVerdict: 'verified',
       accessibilityExitCode: 0,
       paidDownCount: 0,
+      floorHeadroom: [],
     });
 
     expect(scrubbed.summary).not.toContain(END);

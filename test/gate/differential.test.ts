@@ -29,7 +29,10 @@ const find = (out: { findings: Finding[] }, rule: string) => out.findings.filter
 
 describe('gate differential', () => {
   it('marks a finding already in the floor as carried and does not regress', () => {
-    const floor: EvidenceFloor = { version: 1, entries: [
+    // Version 2 throughout this block: a version 1 floor cannot prove its name and structural
+    // counts, and the gate holds any run reading one at not_covered, which would mask the
+    // differential these cases are about. The version 1 rule is pinned on its own below.
+    const floor: EvidenceFloor = { version: 2, entries: [
       { screenId: 'clusters', layer: 'axe', rule: 'color-contrast', elementKey: 'clusters|color-contrast|name:save', identityBasis: 'name', count: 1 },
     ] };
     const out = gate({ ...base, floor, drafts: [d({})] });
@@ -38,7 +41,7 @@ describe('gate differential', () => {
   });
 
   it('marks a disappeared floor entry as fixed', () => {
-    const floor: EvidenceFloor = { version: 1, entries: [
+    const floor: EvidenceFloor = { version: 2, entries: [
       { screenId: 'clusters', layer: 'axe', rule: 'gone-rule', elementKey: 'clusters|gone-rule|name:save', identityBasis: 'name', count: 1 },
     ] };
     const out = gate({ ...base, floor, drafts: [] });
@@ -47,7 +50,7 @@ describe('gate differential', () => {
   });
 
   it('gives fixed findings honest placeholder text instead of blank strings', () => {
-    const floor: EvidenceFloor = { version: 1, entries: [
+    const floor: EvidenceFloor = { version: 2, entries: [
       { screenId: 'clusters', layer: 'axe', rule: 'gone-rule', elementKey: 'clusters|gone-rule|name:save', identityBasis: 'name', count: 1 },
     ] };
     const out = gate({ ...base, floor, drafts: [] });
@@ -112,7 +115,7 @@ describe('gate differential', () => {
         identityBasis: 'structural', count: 1,
       },
     ] };
-    const out = gate({ ...base, floor, drafts: [roundTwo] });
+    const out = gate({ ...base, floor: { ...floor, version: 2 }, drafts: [roundTwo] });
     const kept = find(out, 'color-contrast');
     expect(kept).toHaveLength(1);
     expect(kept[0]!.status).toBe('carried');
@@ -165,10 +168,15 @@ describe('gate collapsed identity counts', () => {
     expect(out.verdict).toBe('regression');
   });
 
-  it('keeps three collapsed structural findings carried against a version 1 floor', () => {
+  it('keeps three collapsed structural findings carried against a version 1 floor, and blocks', () => {
+    // A version 1 floor wrote a placeholder 1 here rather than what it saw, so the gate has no
+    // count it may compare and cannot call these three new. Carried is the honest status. What it
+    // must not do is call the run clean on the strength of a number it knows is not an
+    // observation, so the run is not_covered and the disclosure names the baseline command.
     const out = gate({ ...base, floor: structEntry(1, 1), drafts: [structDraft(1), structDraft(2), structDraft(3)] });
     expect(find(out, 'pf-focus-into-dialog')[0]!.status).toBe('carried');
-    expect(out.verdict).toBe('verified');
+    expect(out.verdict).toBe('not_covered');
+    expect(out.floorGaps.some((g) => g.reason.includes('usabl baseline'))).toBe(true);
   });
 
   it('keeps an equal structural count carried against a version 2 floor', () => {
@@ -177,10 +185,25 @@ describe('gate collapsed identity counts', () => {
     expect(out.verdict).toBe('verified');
   });
 
-  it('keeps a reduced structural count carried against a version 2 floor', () => {
+  it('keeps a reduced structural count carried against a version 2 floor, and discloses it', () => {
+    // Fewer barriers than the floor accepted is progress and never a regression, so the finding
+    // stays carried and the run still passes. The floor is now ahead of the application, which is
+    // reported rather than gated on: these counts follow how many rows a live table renders, so a
+    // verdict that moved with them would flap on unchanged code.
     const out = gate({ ...base, floor: structEntry(2, 3), drafts: [structDraft(1)] });
     expect(find(out, 'pf-focus-into-dialog')[0]!.status).toBe('carried');
     expect(out.verdict).toBe('verified');
+    expect(out.floorHeadroom).toEqual([
+      { screenId: 'clusters', rule: 'pf-focus-into-dialog', recorded: 3, observed: 1 },
+    ]);
+  });
+
+  it('says nothing about a reduced structural count once the floor is re-armed to it', () => {
+    // The same run against the floor a prune would write.
+    const out = gate({ ...base, floor: structEntry(2, 1), drafts: [structDraft(1)] });
+    expect(find(out, 'pf-focus-into-dialog')[0]!.status).toBe('carried');
+    expect(out.verdict).toBe('verified');
+    expect(out.floorHeadroom).toEqual([]);
   });
 
   it('gates duplicate name-basis findings as new against a version 2 floor of one', () => {

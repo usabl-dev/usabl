@@ -80,6 +80,8 @@ function renderNotEvaluated(result: Result): string[] {
 const BLOCKING_HEADING = 'barriers that block this run';
 const RECORDED_HEADING = 'recorded, not blocking';
 const RECORDED_NOTE = 'usabl already recorded these. They do not block this run.';
+const HEADROOM_HEADING = 'floor ahead of this run';
+const HEADROOM_NOTE = 'Barriers were fixed here. Run usabl floor prune to re-arm the floor.';
 
 /** The label on a fix line. Under a barrier it is work. Under recorded debt it is a choice. */
 const BLOCKING_FIX_LABEL = 'fix';
@@ -90,6 +92,39 @@ function isRecordedNotBlocking(finding: Finding): boolean {
     return false;
   }
   return finding.status === 'carried' || finding.status === 'waived';
+}
+
+/**
+ * The floor entries this run found the floor ahead of, printed under the recorded group because
+ * that is the group they are about.
+ *
+ * This never blocks and never changes the verdict, so it appears under a verified run and must not
+ * read like a failure. It reads as maintenance with a command attached. Each line names the screen,
+ * the rule, both numbers, and nothing page-derived: screen ids and rule names are usabl's and the
+ * operator's own words, and an element key would carry a neutralized accessible name into a
+ * surface that also feeds a pull request comment.
+ *
+ * Why an operator should care about a line that blocks nothing: while the floor claims more
+ * barriers at an identity than are present, a new barrier can take the difference and be recorded
+ * as debt somebody already accepted. Re-arming closes that. Blocking instead was rejected because
+ * these counts track how many rows a live table renders.
+ */
+function renderFloorHeadroom(result: Result): string[] {
+  if (result.floorHeadroom.length === 0) {
+    return [];
+  }
+  const lines = [
+    `  ${HEADROOM_HEADING}: ${result.floorHeadroom.length} entr${result.floorHeadroom.length === 1 ? 'y' : 'ies'}`,
+    `    ${HEADROOM_NOTE}`,
+  ];
+  for (const entry of result.floorHeadroom) {
+    lines.push(
+      `    ${boundField(neutralizePrintedText(entry.screenId), 'screenId')} - ` +
+      `${boundField(neutralizePrintedText(entry.rule), 'rule')}: ` +
+      `floor records ${entry.recorded}, this run saw ${entry.observed}`,
+    );
+  }
+  return lines;
 }
 
 /**
@@ -183,6 +218,7 @@ export function formatSummary(result: Result): string {
       lines.push(...renderFinding(finding, RECORDED_FIX_LABEL));
     }
   }
+  lines.push(...renderFloorHeadroom(result));
   lines.push(...renderNotEvaluated(result));
   if (result.dirtyGuardedPaths.length > 0) {
     lines.push(`  guarded paths changed: ${result.dirtyGuardedPaths.join(', ')}`);

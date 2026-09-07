@@ -1055,23 +1055,73 @@ The field stays `string` so a later provider can add a layer without a gate chan
 ### Dedup
 
 Collapse Drafts that share `rule` + identity across layers. Keep one Finding. Prefer
-the PatternFly why/fix when both axe and the rulepack fire on the same control.
+deterministic evidence, then the PatternFly why/fix when both axe and the rulepack fire on
+the same control. Evidence class outranks layer because only deterministic evidence gates,
+so a preview Draft must never be the survivor that represents a deterministic barrier.
+Ranking by class first also makes the choice independent of the order Drafts arrived in.
+
+Only deterministic Drafts are counted against the floor, because only deterministic Drafts
+are what `usabl baseline` counted when it wrote the floor.
 
 ### Evidence floor
 
 `.usabl-evidence.json` is the accepted deterministic finding set for a surface. A code
-owner writes it in an `approval_required` accept commit. The floor never grows
-silently: new identities, or a count above the floor at a known identity, are
-`regression`; disappeared identities are `fixed`. Advisory findings are never written to
-the floor. The accept loop converges: after the acceptance commit lands, the next
-unchanged run sees the same floor and settles to `verified` (or `not_covered` only if
+owner writes it in an `approval_required` accept commit. Advisory findings are never
+written to the floor. The accept loop converges: after the acceptance commit lands, the
+next unchanged run sees the same floor and settles to `verified` (or `not_covered` only if
 coverage cannot be re-established).
+
+The count comparison runs in both directions, and both are gate decisions:
+
+- **Above the recorded count** is new debt. More barriers at a known identity than the floor
+  accepted is `new`, which gates: `regression` for a definite failure, `not_covered` for one
+  usabl could not confirm. A brand new identity is `new` the same way.
+- **Below the recorded count** is a pay-down, and it is not a regression. The findings present stay
+  `carried` and the verdict does not move. The run discloses the difference on every surface: the
+  summary line gains a `N floor entries to re-arm` clause and the terminal prints the screen, the
+  rule, both numbers, and `usabl floor prune` under the recorded group. This is disclosure, not a
+  coverage gap, because a gap makes a run `not_covered` by definition.
+
+### The residual hole, and why it is open
+
+The recorded count is a high-water mark. `usabl baseline` writes it, `usabl floor prune` lowers it,
+and nothing else moves it. Between a pay-down and a prune the floor claims more barriers at an
+identity than are present, and that difference is headroom.
+
+**A new barrier arriving at an identity with headroom is counted as `carried` until
+`usabl floor prune` re-arms the floor.** It fills the slot the fixed barrier left, the tally stays
+at or under what was accepted, and no comparison of counts can separate it from the debt that was
+accepted. The same is true, without even the headroom, of a single change that fixes one barrier
+and adds another at the same collapsed identity: the tally never moves at all. usabl discloses the
+headroom on every run where it exists so an operator can re-arm, and it cannot disclose the
+same-run swap because nothing about it is visible to a count.
+
+usabl does not block on headroom, and that is a deliberate trade measured against a real
+brownfield floor. Several collapsed identities on that application count icon buttons in table
+rows, one entry standing at 15. The count therefore tracks how many rows the live application
+renders, and a jobs list or a user list changes size on its own. Blocking on "below the recorded
+count" would fail an unchanged codebase whenever a list came back one row shorter, the operator
+would prune, and the next run with one more row would report a new barrier. A verdict that flaps
+with row counts is worse than a disclosed hole, because a gate that cries wolf stops being read.
+
+This is the price of collapsing several barriers onto one identity on pages whose content changes
+size. Two things shrink it, and neither is a better count rule. **Strong element keys**: an
+identity that keys each barrier separately never collapses and needs no count, so a name-basis or
+count-basis identity is weaker here than a structural one, and a structural one is weaker than a
+key that survives per element. **Prompt pruning**: headroom only exists between a pay-down and a
+re-arm, so the window is as short as the operator makes it, which is why every run that has one
+says so and names the command.
 
 The file carries a `version`. Version 1 wrote a placeholder count of 1 for every name and
 structural entry, so those counts are not observations and the gate must not compare them.
 Version 2 writes the observed count for every entry. Reading a version 1 floor that holds
 name or structural entries produces a coverage gap, so the run reports `not_covered`
 instead of a green it cannot support. `usabl baseline` regenerates the floor at version 2.
+Both floor disclosures are decided inside `gate()`, not in the run path, because `gate()` is
+exported and CI, the overlay and the page helper reach it directly. A check that lived only in
+`run()` made the verdict depend on which door the caller came through. The gate weighs its own
+gaps and names them in its summary; `run()` appends them to the Result's coverage so the gaps a
+reader sees are the gaps the verdict was reached from.
 
 ### Failure taxonomy
 
@@ -1194,8 +1244,13 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   are different commands (see section 12).
 - Baseline drafts: `usabl baseline` runs a full UI scan and writes `.usabl-evidence.json`
   as a reviewable working-tree diff.
-- Floor prune: `usabl floor prune` removes paid-down floor entries on cleanly scanned
-  screens, re-arming the gate. `prune` is the only subcommand; anything else exits 2.
+- Floor prune: `usabl floor prune` re-arms the gate on cleanly scanned screens. It removes
+  entries whose identity is gone, and lowers the recorded count on entries whose identity is
+  still present but now holds fewer barriers. It never raises a count and never adds an
+  identity: accepting new debt is what `usabl baseline` does, under review. It leaves version 1
+  name and structural counts alone, because those are placeholders the gate does not compare and
+  writing a real number under them would present a placeholder as an observation. `prune` is the
+  only subcommand; anything else exits 2.
 - Routes drift: `usabl drift routes` compares `usabl.routes.json` against the app router.
   `routes` is the only subcommand; anything else exits 2.
 - Health check: `usabl doctor` is a read-only projection over the wired surfaces and always

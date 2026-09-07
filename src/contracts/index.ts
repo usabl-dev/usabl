@@ -159,6 +159,25 @@ export interface AffectedScreen {
   importChain?: string[];
   profile?: ProfileName;
 }
+/**
+ * One floored identity where the evidence floor records more barriers than the run observed.
+ *
+ * Disclosure, never a verdict input. The recorded count is a high-water mark that only
+ * `usabl floor prune` lowers, so the difference is room a new barrier can take at a collapsed
+ * identity while the tally stays at or under what was accepted. That hole is open until the floor
+ * is re-armed, and usabl says so on every run rather than blocking: on a real brownfield floor
+ * these counts track how many rows a live table renders, so a blocking rule would fail unchanged
+ * code whenever a list came back shorter.
+ *
+ * Screen id and rule only. An element key carries a neutralized accessible name or element path,
+ * both page-derived, and this travels into a pull request comment and into what a model reads.
+ */
+export interface FloorHeadroom {
+  screenId: string;
+  rule: string;
+  recorded: number; // barriers the floor accepted at this identity
+  observed: number; // deterministic barriers this run actually saw there
+}
 export interface CoverageGap {
   ref: string; // surface id, url, or file path this gap concerns
   state: 'unresolved' | 'not-covered' | 'skipped' | 'capability-denied';
@@ -219,6 +238,12 @@ export interface Result {
   // not modify the floor; pruning does. This is projection only; the gate never consumes
   // it and it never influences a verdict.
   paidDownCount: number;
+  // Floored identities where the floor records more barriers than this run observed, so an
+  // accepted entry has probably been fixed and the floor is now ahead of the application. Every
+  // surface shows these so an operator knows to re-arm. Required, never optional: an absent field
+  // would read as "no headroom", and a disclosure that can go missing is not a disclosure.
+  // Projection only. The gate never consumes it and it never influences a verdict.
+  floorHeadroom: FloorHeadroom[];
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);
@@ -540,4 +565,11 @@ export interface GateOutput {
   summary: string;
   accessibilityVerdict: AccessibilityVerdict | null;
   accessibilityExitCode: AccessibilityExitCode;
+  // A floor that predates barrier counting, whose placeholder counts cannot be compared at all.
+  // The gate counts the floor, so only the gate can find this, and it has already weighed it into
+  // the verdict and named it in the summary. A caller that assembles a Coverage for the Result
+  // appends these so the gaps a reader sees match the gaps the verdict was reached from.
+  floorGaps: CoverageGap[];
+  // Floored identities the floor is ahead of. Disclosure only: this never moves the verdict.
+  floorHeadroom: FloorHeadroom[];
 }

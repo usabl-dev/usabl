@@ -10,12 +10,16 @@
  * `not_covered` means there was something to prove and we could not.
  * Dirty guarded paths are `approval_required` and still carry accessibility findings.
  */
-import type { AccessibilityExitCode, AccessibilityVerdict, Coverage, Draft, EvidenceFacts, Finding, FloorEntry, GateInput, GateOutput, Waiver } from '../contracts/index.js';
+import type { AccessibilityExitCode, AccessibilityVerdict, Coverage, CoverageGap, Draft, EvidenceFacts, EvidenceFloor, Finding, FloorEntry, FloorHeadroom, GateInput, GateOutput, Waiver } from '../contracts/index.js';
 import { coverageIncomplete, decideAccessibilityVerdict, notEvaluatedCounts } from '../coverage/completeness.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { computeIdentity, identityKey } from '../primitives/identity.js';
 
 const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
+
+// Declared here rather than imported from the baseline module, which imports run(), which imports
+// this one. run.ts keeps its own copy for the same reason.
+const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
 
 export function gate(input: GateInput): GateOutput {
   const accessibility = accessibilityOutcome(input);
@@ -29,6 +33,10 @@ export function gate(input: GateInput): GateOutput {
       summary: approvalSummary(input.guardDivergedPaths.length, accessibility),
       accessibilityVerdict: accessibility.verdict,
       accessibilityExitCode: accessibility.exitCode,
+      // Carried through, not dropped. The accessibility half ran and reached these, and a reader
+      // blocked on approval still needs to know the floor needs re-arming before the next run.
+      floorGaps: accessibility.floorGaps,
+      floorHeadroom: accessibility.floorHeadroom,
     };
   }
   return {
@@ -43,18 +51,33 @@ function accessibilityOutcome(input: GateInput): {
   findings: Finding[];
   exitCode: AccessibilityExitCode;
   summary: string;
+  floorGaps: CoverageGap[];
+  floorHeadroom: FloorHeadroom[];
 } {
-  // Idle is not a fifth verdict and not not_covered.
+  // Idle is not a fifth verdict and not not_covered. A run with no UI-touching file measured
+  // nothing, so it makes no claim the floor could be stale against and discloses none.
   if (input.coverage.nothingToCheck) {
-    return { verdict: null, findings: [], exitCode: 0, summary: 'nothing to check (no UI-touching files)' };
+    return { verdict: null, findings: [], exitCode: 0, summary: 'nothing to check (no UI-touching files)', floorGaps: [], floorHeadroom: [] };
   }
 
-  const findings = buildFindings(input);
+  const { findings, staleIdentities } = differential(input);
+
+  // A floor that predates barrier counting cannot be compared at all, so it is a coverage gap and
+  // the run is not covered. Headroom is different and is deliberately not a gap: see floorHeadroom.
+  const floorGaps = staleFloorGaps(input.floor);
+
+  // The gate weighs and reports its own gaps. Handing the caller a gap it did not count would let
+  // the Result show a gap the summary never mentioned, which is the same line-against-surface
+  // contradiction the summary counts exist to avoid.
+  const coverage: Coverage =
+    floorGaps.length === 0
+      ? input.coverage
+      : { ...input.coverage, gaps: [...input.coverage.gaps, ...floorGaps] };
 
   const blocking = findings.filter(BLOCKS);
   const hasNewFail = blocking.some((f) => f.confidence === 'fail');
   const hasUnverified =
-    blocking.some((f) => f.confidence === 'unverified') || coverageIncomplete(input.coverage);
+    blocking.some((f) => f.confidence === 'unverified') || coverageIncomplete(coverage);
 
   const { verdict, exitCode } = decideAccessibilityVerdict({
     hasBlockingFailure: hasNewFail,
@@ -64,8 +87,46 @@ function accessibilityOutcome(input: GateInput): {
     verdict,
     findings,
     exitCode,
-    summary: verdictSummary(verdict, blocking.length, findings.filter(RECORDED).length, input.coverage),
+    floorGaps,
+    floorHeadroom: staleIdentities,
+    summary: verdictSummary(
+      verdict,
+      blocking.length,
+      findings.filter(RECORDED).length,
+      staleIdentities.length,
+      coverage,
+    ),
   };
+}
+
+/**
+ * The disclosure owed when the floor predates count tracking.
+ *
+ * A version 1 floor recorded a literal 1 for every name and structural entry instead of the
+ * barriers it actually saw. Several barriers can neutralize to one of those keys, so the gate
+ * cannot tell one accepted barrier from many and cannot compare their counts. Any green against
+ * such a floor would be unproven.
+ *
+ * This lives in the gate, not in `run()`, because `gate()` is exported and CI, the overlay and the
+ * page helper can reach it directly. While the check sat in the run path only, the bare exported
+ * gate returned verified on a version 1 floor that the full path blocked, so the verdict depended
+ * on which door the caller came through. Count-basis entries always carried real counts, so they
+ * need no disclosure.
+ */
+function staleFloorGaps(floor: EvidenceFloor): CoverageGap[] {
+  if (floor.version >= 2) return [];
+  const collapsible = floor.entries.filter((entry) => entry.identityBasis !== 'count');
+  if (collapsible.length === 0) return [];
+  return [{
+    ref: EVIDENCE_FLOOR_PATH,
+    state: 'not-covered',
+    reason:
+      `${EVIDENCE_FLOOR_PATH} predates count tracking (version 1), so ${collapsible.length} name or ` +
+      'structural entr' + (collapsible.length === 1 ? 'y' : 'ies') + ' record a placeholder count of 1 ' +
+      'instead of the barriers observed. Several barriers can share one of those identities, so this ' +
+      'run cannot compare their counts and cannot prove no new barrier is hiding behind an accepted one. ' +
+      'Run "usabl baseline" to regenerate the floor with real counts, then review and merge the diff.',
+  }];
 }
 
 /**
@@ -78,10 +139,17 @@ function accessibilityOutcome(input: GateInput): {
  * every real application at not_covered forever, because a large UI always has some results the
  * checker declines to judge and no amount of work clears them.
  *
- * Growth at a floored identity is not lost by that. buildFindings tallies every draft that lands
- * on an identity and marks the collapsed finding `new` when the tally is above the count the
- * floor recorded, so a second barrier hiding behind one accepted entry comes back as new and
- * blocks here. The recorded count is what protects that case, not the confidence test.
+ * Growth at a floored identity is what catches a barrier hiding behind an accepted one, not the
+ * confidence test. buildFindings tallies the deterministic drafts landing on an identity and marks
+ * the collapsed finding `new` when the tally rises above the count the floor recorded, and that
+ * blocks here.
+ *
+ * The tally is not a complete guard, and the gap is deliberate rather than overlooked. While the
+ * floor is ahead of the application, a new barrier can fill the difference without raising the
+ * tally, and a barrier swapped in for one fixed in the same change never moves it at all. Both are
+ * counted as carried. usabl discloses the first on every run it can see it (see floorHeadroom) and
+ * documents the second, and neither is closed by requiring a status on the confidence test: this
+ * hole is open for definite failures in exactly the same way.
  *
  * Waived and fixed need no test of their own. A status is one of new, carried, fixed and waived,
  * so requiring `new` already excludes all three of the others.
@@ -122,8 +190,31 @@ function mergeEvidence(winner: EvidenceFacts, loser: EvidenceFacts): EvidenceFac
   };
 }
 
+/**
+ * Rank for choosing which of two findings at one identity survives as the representative.
+ *
+ * Evidence class outranks layer. Deterministic evidence is the only class that gates, so if a
+ * preview draft and a deterministic draft land on one identity, the survivor has to be the
+ * deterministic one or the collapse quietly disarms the barrier. Ranking by class first also
+ * makes the choice independent of the order the drafts arrived in: the old rule compared layer
+ * only and fell back to whichever came first, so the same two drafts in the other order produced
+ * a different verdict.
+ */
+const CLASS_RANK: Record<Draft['evidenceClass'], number> = {
+  deterministic: 0,
+  'human-confirmed': 1,
+  'model-judgment': 2,
+  preview: 3,
+};
+
+/** Prefer deterministic evidence, then the PatternFly why/fix when axe and pf fire together. */
 function preferLayer(a: Finding, b: Finding): Finding {
-  const winner = a.layer === 'pf' ? a : b.layer === 'pf' ? b : a;
+  const rankA = CLASS_RANK[a.evidenceClass];
+  const rankB = CLASS_RANK[b.evidenceClass];
+  const winner =
+    rankA !== rankB
+      ? (rankA < rankB ? a : b)
+      : a.layer === 'pf' ? a : b.layer === 'pf' ? b : a;
   const loser = winner === a ? b : a;
   return { ...winner, evidence: mergeEvidence(winner.evidence, loser.evidence) };
 }
@@ -140,7 +231,17 @@ function applyWaivers(findings: Finding[], waivers: Waiver[], now: string): Find
   });
 }
 
+/** The findings for a run, plus the floored identities whose recorded count this run cannot account for. */
+interface Differential {
+  findings: Finding[];
+  staleIdentities: FloorHeadroom[];
+}
+
 export function buildFindings(input: GateInput): Finding[] {
+  return differential(input).findings;
+}
+
+function differential(input: GateInput): Differential {
   const raw = input.drafts.map((draft: Draft): Finding => {
     const { elementKey, identityBasis } = computeIdentity(draft);
     return { ...draft, elementKey, identityBasis, status: 'new' };
@@ -149,11 +250,18 @@ export function buildFindings(input: GateInput): Finding[] {
   // Count every key, not only count-basis keys. Several barriers can neutralize to the same
   // name or structural key and then collapse into one finding here. Without a tally, three
   // barriers behind one floored identity read as the single barrier the floor accepted.
+  //
+  // Only deterministic drafts are counted, because only deterministic drafts are what
+  // `usabl baseline` wrote the floor counts from. Counting every class here compared this run's
+  // mixed tally against a deterministic-only floor, so one preview draft sharing an identity with
+  // a deterministic one read as growth and reported a barrier that was not there.
   const byIdentity = new Map<string, Finding>();
   const countByGroup = new Map<string, number>();
   for (const f of raw) {
     const key = identityKey(f);
-    countByGroup.set(key, (countByGroup.get(key) ?? 0) + 1);
+    if (GATES(f.evidenceClass)) {
+      countByGroup.set(key, (countByGroup.get(key) ?? 0) + 1);
+    }
     const existing = byIdentity.get(key);
     byIdentity.set(key, existing ? preferLayer(existing, f) : f);
   }
@@ -162,20 +270,44 @@ export function buildFindings(input: GateInput): Finding[] {
   for (const e of input.floor.entries) floorByKey.set(identityKey(e), e);
 
   // Version 1 floors wrote a literal 1 for name and structural entries, so those counts are
-  // not observations. Comparing them would report untouched surfaces as regressions. run()
+  // not observations. Comparing them would report untouched surfaces as regressions. The gate
   // discloses a coverage gap for that case so the verdict cannot be a green we cannot support.
   const countsAreObserved = (basis: Finding['identityBasis']): boolean =>
     basis === 'count' || input.floor.version >= 2;
 
   const findings: Finding[] = [];
+  const staleIdentities: Differential['staleIdentities'] = [];
   for (const [key, f] of byIdentity) {
     const floor = floorByKey.get(key);
     if (!floor) { findings.push({ ...f, status: 'new' }); continue; }
     if (countsAreObserved(f.identityBasis)) {
-      // More barriers at this identity than the floor accepted means new debt.
-      // Fewer is progress, never a regression, so it stays carried.
       const now = countByGroup.get(key) ?? 0;
+      // More barriers at this identity than the floor accepted means new debt.
       findings.push({ ...f, status: now > floor.count ? 'new' : 'carried' });
+      // Fewer than the floor accepted is headroom, and headroom is DISCLOSED, NEVER BLOCKING.
+      //
+      // What headroom is: the recorded count is a high-water mark that only `usabl floor prune`
+      // lowers, so once a barrier at a floored identity is fixed and the entry is not re-armed,
+      // the difference is room a new barrier can take. It arrives, fills the freed slot, keeps the
+      // tally at or under the recorded count, and is marked carried. That is a real hole, it is
+      // open until the floor is re-armed, and usabl cannot close it by counting.
+      //
+      // Why this does not block, decided against a real brownfield floor: several collapsed
+      // identities on that application count icon buttons in table rows, one entry standing at 15.
+      // The count therefore tracks how many rows the live application happens to render, and a
+      // jobs list or a user list changes size on its own. Blocking on "below the recorded count"
+      // would fail an unchanged codebase whenever a list came back one row shorter, the operator
+      // would prune, and the next run with one more row would report a new barrier. That is
+      // flapping on dynamic content, and it would make the ratchet unusable on exactly the kind of
+      // application it exists for. A verdict that moves with row counts is worse than a disclosed
+      // hole, because nobody keeps reading a gate that cries wolf.
+      //
+      // So the finding stays carried, the verdict is untouched, and every surface says the floor
+      // is ahead of what is here and names the command that re-arms it. The operator, not the row
+      // count, decides when to close it.
+      if (now < floor.count) {
+        staleIdentities.push({ screenId: f.screenId, rule: f.rule, recorded: floor.count, observed: now });
+      }
     } else {
       findings.push({ ...f, status: 'carried' });
     }
@@ -210,7 +342,10 @@ export function buildFindings(input: GateInput): Finding[] {
     });
   }
 
-  return sortBy(applyWaivers(findings, input.waivers, input.now), findingKey);
+  return {
+    findings: sortBy(applyWaivers(findings, input.waivers, input.now), findingKey),
+    staleIdentities: sortBy(staleIdentities, (s) => `${s.screenId}|${s.rule}`),
+  };
 }
 
 export function findingKey(f: Finding): string {
@@ -285,6 +420,7 @@ function verdictSummary(
   verdict: AccessibilityVerdict,
   blocking: number,
   recorded: number,
+  headroom: number,
   coverage: Coverage,
 ): string {
   const notEvaluated = notEvaluatedCounts(coverage);
@@ -292,6 +428,12 @@ function verdictSummary(
 
   if (recorded > 0) {
     clauses.push(`${recorded} recorded`);
+  }
+  // Named as work, not as a fault, because it is neither a barrier nor a gap and it does not move
+  // the verdict. It appears on a verified run, which is the point: that is when the floor drifts
+  // ahead of the application and nothing else would say so.
+  if (headroom > 0) {
+    clauses.push(`${headroom} floor entr${headroom === 1 ? 'y' : 'ies'} to re-arm`);
   }
   if (notEvaluated.gaps > 0) {
     clauses.push(`${notEvaluated.gaps} gap(s)`);

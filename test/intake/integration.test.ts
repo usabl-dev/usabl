@@ -78,6 +78,7 @@ function fixtureResult(stops: ScreenScan['stops']): Result {
     accessibilityVerdict: 'verified',
     accessibilityExitCode: 0,
     paidDownCount: 0,
+    floorHeadroom: [],
   };
 }
 

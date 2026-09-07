@@ -77,6 +77,7 @@ function multiGapResult(over: Partial<Result> = {}): Result {
     accessibilityVerdict: 'regression',
     accessibilityExitCode: 1,
     paidDownCount: 0,
+    floorHeadroom: [],
     ...over,
   };
 }
