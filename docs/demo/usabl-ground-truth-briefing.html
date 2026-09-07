@@ -107,6 +107,8 @@
   .callout .label { font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em; display: block; margin-bottom: 4px; }
   .callout.warn .label { color: #96590a; }
   .callout.risk .label { color: var(--block); }
+  .historical { border-left: 6px solid var(--block); padding-left: 22px; margin-top: 22px; }
+  .historical > .hist-label { font-weight: 700; color: var(--block); text-transform: uppercase; letter-spacing: .06em; font-size: 12.5px; }
   .callout.rec .label { color: var(--accent); }
 
   .chip { display: inline-block; background: var(--chip); color: #46505f; border-radius: 20px; padding: 2px 11px; font-size: 12.5px; font-weight: 600; margin: 0 4px 4px 0; }
@@ -174,8 +176,11 @@
 
 <div class="callout risk" role="note" aria-label="Historical document notice">
   <span class="label">Historical briefing, superseded (note added 2026-09-06)</span>
-  <p>This scope-lock briefing was written during the contest build and is kept for history. Where it differs from the code, the code wins. The current, code-checked descriptions are the <a href="../../README.md">README</a> and <a href="../how-usabl-works.html">How usabl works</a>. Do not quote this page for what usabl does today. On 2026-09-06 the plainly false statements about verdicts, the Stop hook, the receipt, and merge blocking were corrected in place; the plans, effort estimates, criteria counts, and cut orders were not refreshed.</p>
+  <p>This scope-lock briefing was written during the contest build and is kept for history. Nothing below this notice is a current description of usabl. Where the text differs from the code, the code wins. The current, code-checked descriptions are the <a href="../../README.md">README</a> and <a href="../how-usabl-works.html">How usabl works</a>. Do not quote this page for what usabl does today. The body below is marked as historical text; a few sentences were edited on 2026-09-06, but no statement below should be relied on for current behavior.</p>
 </div>
+
+<section class="historical" aria-label="Historical text, superseded">
+<p class="hist-label">Historical text, superseded. Written during the contest build; not a current description.</p>
 
 <section id="summary">
   <h2><span class="num">1</span>What usabl does</h2>
@@ -196,7 +201,7 @@
     <h3 style="margin-top:0">How it works</h3>
     <p style="margin-bottom:6px">There is one engine that does the actual work: figure out which screens changed, run the checks, decide the verdict. The CLI (<code>usabl check</code>) is the main way to call it. Every other surface calls the same engine underneath - they just trigger it from different places:</p>
     <ul style="margin:6px 0 0">
-      <li><strong>Stop hook</strong> - blocks the AI assistant's first stop on a blocking verdict</li>
+      <li><strong>Stop hook</strong> - blocks the AI assistant's first stop on a blocking verdict unless a one-use bypass was issued</li>
       <li><strong>Browser overlay</strong> - shows findings while you develop</li>
       <li><strong>CI comment</strong> - posts the verdict on a pull request</li>
       <li><strong>Mid-task self-check</strong> - the AI checks its own progress partway through</li>
@@ -390,7 +395,7 @@
     </tr>
     <tr>
       <td><strong>Can the repo block merges, and what if it cannot</strong></td>
-      <td><strong>Update (2026-09-06):</strong> resolved. The <code>usabl-required</code> check is required by the main-branch ruleset, so a blocking verdict blocks the merge. The original open decision follows.<br><br>Our repo is private on GitHub Free. GitHub Free does not let you require a status check to pass before merging. So right now, usabl's CI verdict can post a comment saying "this PR has a regression," but nothing actually prevents someone from clicking Merge anyway.
+      <td>Our repo is private on GitHub Free. GitHub Free does not let you require a status check to pass before merging. So right now, usabl's CI verdict can post a comment saying "this PR has a regression," but nothing actually prevents someone from clicking Merge anyway.
         <br><br>This matters because the product story is about stopping bad code from shipping. If we cannot demonstrate an actual block, we have to explain the gap.
         <br><br><strong>Options:</strong>
         <ul style="margin:6px 0 0">
@@ -557,6 +562,7 @@
       Cut rules 8, 7, 6 first. Then MCP. Then stretch goals. Never cut: the verdict engine, the receipt, the integrity guard, CODEOWNERS, the four verdicts, the transcript diff, the hero loop, the overlay, Reports, and the CLI self-check.
     </li>
   </ol>
+</section>
 </section>
 
 <footer>
