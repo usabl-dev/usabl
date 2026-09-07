@@ -298,6 +298,22 @@
   `Not evaluated:` label sits directly above the gap lines rather than outside
   the frame, so a reader never meets `Not evaluated:` and then reads about a
   button. `Rule:` stays outside the frame.
+- The pull request comment tells a failed run apart from idle. Every null
+  verdict rendered as `IDLE`, so a crash read as a clean run with nothing to
+  check. Idle is now exit 0 with nothing to check and reads
+  `NO VERDICT: IDLE (exit 0)` with one sentence, no sections, and no receipt
+  line. A failed run reads `NO VERDICT: RUN FAILED (exit 4)` with the engine's
+  reason sealed in the untrusted frame. Every section is still printed for a
+  real verdict.
+- Page-derived text in the pull request comment is written in code spans, each
+  under an engine label. GitHub applies its own filters after rendering, turning
+  an email address, `@user`, `#123`, or a commit id into a link, a mention, or a
+  notification. Those filters read the rendered text, so escaping could never
+  stop them, and they skip code spans, so the span does. The span is fenced
+  with one more backtick than the longest run in the value, so page text cannot
+  close it, leading and trailing spaces are preserved, and the frame markers
+  stay outside the spans as the visible seal. Provider-authored text that
+  prints as prose outside the frame is still escaped.
 
 ## 0.2.1 - 2026-09-01
 

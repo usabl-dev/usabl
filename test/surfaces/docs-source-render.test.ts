@@ -108,10 +108,9 @@ describe('projectPrComment source mapping', () => {
     // Source now sits inside the finding's untrusted frame (an app source can be read from a
     // renderer-injected DOM attribute), so it renders as a plain piece, not a markdown list line.
     const out = projectPrComment(resultWith([finding({ docsSource: contentMapping() })]));
-    // Markdown-significant characters are written as character references at this surface, so a
-    // renderer cannot read page text as markup. A reference renders as the character it names, so
-    // the brackets of the AsciiDoc construct still reach the reader as brackets.
-    expect(out).toContain('source: modules/proc&#95;create.adoc -&#62; image::create-cluster.png');
+    // Page-derived values are written as code spans at this surface, so a renderer reads no
+    // markup in them and the brackets of the AsciiDoc construct reach the reader as brackets.
+    expect(out).toContain('source: `modules/proc_create.adoc -> image::create-cluster.png`');
     expect(out).toContain('Add alt text between the brackets in AsciiDoc');
   });
 
@@ -126,7 +125,7 @@ describe('projectPrComment source mapping', () => {
         }),
       ]),
     );
-    expect(out).toContain('candidates: modules/a.adoc, modules/b.adoc');
+    expect(out).toContain('candidates: `modules/a.adoc, modules/b.adoc`');
   });
 
   it('renders no source line for an app finding', () => {
