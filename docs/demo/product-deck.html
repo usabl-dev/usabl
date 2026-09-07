@@ -464,7 +464,7 @@
       <div class="card">
         <p class="kicker">System Concept</p>
         <h1 tabindex="-1">Automated Accessibility Proof</h1>
-        <p class="lede">The gap is between what gets written and what ships to a user who depends on accessibility. usabl closes it by evaluating UI changes automatically, as part of the existing merge workflow, before code reaches production.</p>
+        <p class="lede">The gap is between what gets written and what ships to a user who depends on accessibility. usabl narrows it by checking UI changes automatically, as part of the existing merge workflow, before code reaches production.</p>
         <div class="tiles" style="margin-top:1rem">
           <article class="tile">
             <strong>Targeted Execution</strong>
@@ -625,7 +625,7 @@
       <div class="card">
         <p class="kicker">Gate Outputs</p>
         <h1 tabindex="-1">Four Deterministic Verdicts</h1>
-        <p class="lede">A list of issues is not an answer. In a CI pipeline or an AI-assisted workflow, the system needs one unambiguous decision: can this change ship? When the Gate checks something, it produces exactly one of four verdicts. Each names a specific state with a specific required response.</p>
+        <p class="lede">A list of issues is not an answer. In a CI pipeline or an AI-assisted workflow, the system needs one unambiguous decision: did this change add a new machine-checkable barrier on the screens that were checked? When the Gate checks something, it produces exactly one of four verdicts. Each names a specific state with a specific required response.</p>
         <div class="verdicts">
           <article class="verdict">
             <div><span class="stamp stamp-verified">verified</span><span class="cite">exit 0</span></div>
@@ -658,7 +658,7 @@
       <div class="card">
         <p class="kicker">Evaluation</p>
         <h1 tabindex="-1">Multi-Layered Checks</h1>
-        <p class="lede">No single scanner catches everything. DOM validation misses keyboard behavior. Focus testing misses ARIA attributes. Neither understands design system composition contracts. Three layers each cover a different part of the machine-checkable surface. Together they do not cover all of WCAG 2.2 AA.</p>
+        <p class="lede">No single check layer covers everything. axe-core, the keyboard walk, and the PatternFly rules are separate providers, and each covers a different part of the machine-checkable surface. Together they do not cover all of WCAG 2.2 AA.</p>
         <div class="layers">
           <article class="layer">
             <strong>axe-core</strong>
@@ -670,7 +670,7 @@
           </article>
           <article class="layer">
             <strong>PatternFly Rules</strong>
-            Component-specific composition rules (e.g., modal focus return, menu state) that generic scanners miss.
+            Component-specific composition rules (e.g., modal focus return, menu state). In the recorded test, a standalone axe run reported zero violations on the broken fixture dialog while pf-focus-into-dialog and pf-modal-focus-return failed.
           </article>
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
@@ -686,7 +686,7 @@
       <div class="card">
         <p class="kicker">Deep Dive</p>
         <h1 tabindex="-1">Keyboard Walk Provider</h1>
-        <p class="lede">Static analysis cannot verify interactive focus behavior. The Keyboard Walk provider physically tabs through the document and inspects the accessibility tree at each stop.</p>
+        <p class="lede">Focus behavior only shows when the page is exercised. The Keyboard Walk provider physically tabs through the document and inspects the accessibility tree at each stop.</p>
         <div class="tiles">
           <article class="tile">
             <strong>Unnamed Interactive Elements</strong>
@@ -861,7 +861,7 @@
           </article>
           <article class="layer">
             <strong>The Ratchet</strong>
-            The gate only blocks on <em>new</em> deterministic failures. As legacy issues are fixed, the floor is pruned, preventing regressions.
+            The gate only blocks on <em>new</em> deterministic failures. As legacy issues are fixed, the floor is pruned, so a reintroduced barrier gates as new.
           </article>
           <article class="layer">
             <strong>Waivers</strong>
@@ -1240,7 +1240,7 @@ test('cluster list stays accessible', async ({ page }) => {
           </article>
           <article class="tile">
             <strong>Results Where Writers Already Look</strong>
-            Findings show up in a pull request the same way a failing test does, so problems are visible and get fixed before anything ships.
+            Findings show up in a pull request the same way a failing test does, so problems are visible before merge.
           </article>
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
@@ -1361,7 +1361,7 @@ test('cluster list stays accessible', async ({ page }) => {
       <div class="card">
         <p class="kicker">Ways to Use It</p>
         <h1 tabindex="-1">Every Surface, and What It Enforces</h1>
-        <p class="lede">The same engine backs every way you use usabl. Most surfaces block a new barrier the moment it appears; the dev-server overlay is advisory; design intake feeds the engine your own rules; and changing policy files needs a human sign-off.</p>
+        <p class="lede">The same engine backs every way you use usabl. Most surfaces block a new machine-checkable barrier on the screens they check; the dev-server overlay is advisory; design intake feeds the engine your own rules; and changing policy files needs a human sign-off.</p>
         <div class="surfaces">
           <article class="surface">
             <strong>AI assistant</strong>
@@ -1385,7 +1385,7 @@ test('cluster list stays accessible', async ({ page }) => {
           </article>
           <article class="surface">
             <strong>Product docs</strong>
-            <span class="tag tag-block">Blocks</span> Point the same engine at your built AsciiDoc docs at WCAG 2.2 AA. Findings map back to the source <code>.adoc</code> file.
+            <span class="tag tag-block">Blocks</span> Point the same engine at your built AsciiDoc docs, using the WCAG 2.2 A and AA rules it can check by machine. Findings map back to the source <code>.adoc</code> file.
           </article>
         </div>
         <p class="lede"><span class="tag tag-approval">Approval</span> Policy and config files (the config, the evidence floor, the waiver ledger, the route manifest, and any guarded paths) are protected. A pull request that changes them stays <em>approval required</em> until a CODEOWNERS reviewer other than the author approves that exact commit on GitHub. <code>usabl bypass</code> affects only the next local Stop hook run; nothing local bypasses the pull request gate.</p>
