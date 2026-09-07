@@ -174,19 +174,20 @@ did (the recorded test in demo-script 3.4). This is the headline. Give it room.
 - **VO, part one:** "Apply the real fix, and the verdict flips to verified. usabl mints a
   receipt. It records the exact code, the policy, the engine, and the exact scanner and
   browser that made the call, so anyone can re-check it later."
-- **Picture, part two:** A two-panel comparison. On the left, a standard accessibility
-  scanner reports zero problems on the broken dialog. On the right, usabl reports a
+- **Picture, part two:** A two-panel comparison. On the left, a standalone axe-core run
+  reports zero violations on the broken dialog. On the right, usabl reports a
   regression. Under it, a clip of Escape being pressed while focus lands nowhere.
 - **VO, part two:** "And this is a problem a standalone axe run did not report. A dialog that fails
   to send focus back when you press Escape is not a mistake in the markup. It only exists
   after a key is pressed. usabl opens the dialog, presses Escape, and checks where focus
   actually went."
 - **Audio:** narrator.
-- **Text and graphics:** left panel labeled "standard scanner: 0 issues," right panel
+- **Text and graphics:** left panel labeled "standalone axe: 0 violations," right panel
   labeled "usabl: regression."
 - **Transition:** cut to scene 4.
-- **Intent:** Prove the receipt is re-checkable and that usabl catches what static tools
-  miss.
+- **Intent:** Prove the receipt is re-checkable and show the recorded contrast: a
+  standalone axe run reported zero violations on the broken dialog while usabl reported
+  `pf-focus-into-dialog` and `pf-modal-focus-return`.
 
 ---
 
@@ -293,8 +294,8 @@ Assets the edit needs, called out early so they can be captured in time.
   possible, so the bookend reads as the same session resolved.
 - A recorded run of the product demo for scene 3: the break, the overlay, the blocked stop
   hook, the real fix, and the receipt mint. Capture the git diff of the break on screen.
-- A recorded two-panel comparison for shot 3.3: a standard scanner reporting zero problems
-  on the broken dialog next to usabl reporting a regression, plus a clip of the Escape
+- A recorded two-panel comparison for shot 3.3: a standalone axe-core run reporting zero
+  violations on the broken dialog next to usabl reporting a regression, plus a clip of the Escape
   keypress and focus going nowhere.
 - Screen capture of one real issue for shot 5.1.
 - Motion graphics: the pipeline timeline (scene 2), the four verdict chips, the receipt
