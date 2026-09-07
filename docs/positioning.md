@@ -139,8 +139,8 @@ the codebase evolves.
 ### Elevator
 
 > usabl proves that a UI change added no new unwaived machine-checkable accessibility
-> barrier on the screens it scanned, and discloses every gap it detected, from the AI
-> session to the PR to CI.
+> barrier above the reviewed floor on the screens it scanned, and discloses every gap it
+> detected, from the AI session to the PR to CI.
 
 ### Vs scanners
 
@@ -150,7 +150,7 @@ the codebase evolves.
 ### Vs AI tools
 
 > Your AI can write the UI. usabl decides whether the change added a new unwaived
-> machine-checkable barrier on the screens it scanned.
+> machine-checkable barrier above the reviewed floor on the screens it scanned.
 
 ### Vs screen reader simulation tools
 
