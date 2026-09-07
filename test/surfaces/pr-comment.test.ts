@@ -578,6 +578,91 @@ describe('pr comment page text is sealed in code spans', () => {
     });
   });
 
+  describe('list layout', () => {
+    // CommonMark puts a continuation line inside a list item only when it is indented to the
+    // item's content column, the marker plus one space: two for "- ", three for "1. ", four for
+    // "10. ". A marker with nothing after it is an empty item, and a frame indented two columns
+    // under "1." renders as a paragraph outside the list. No dependency of this repository
+    // renders CommonMark, and none is added for a layout check, so these assertions are on the
+    // structure of the text a renderer reads rather than on rendered HTML.
+    const MARKER = /^(\s*)((?:[-+*]|\d+[.)]) )/;
+    const BARE_MARKER = /^\s*(?:[-+*]|\d+[.)])\s*$/;
+
+    // Twenty-one stops, so the numbered list reaches two-digit markers and the cap line.
+    const stops = Array.from({ length: 21 }, (_, index) => makeStop(index, `Create cluster ${index + 1}`));
+    const fixtures: ReadonlyArray<readonly [string, string]> = [
+      [
+        'the regression comment',
+        projectPrComment(
+          baseResult({
+            screens: [{ screenId: 'clusters', url: 'https://app.local/clusters', stops, drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null }],
+          }),
+        ),
+      ],
+      [
+        'the collapsed comment',
+        projectPrComment(
+          baseResult({
+            findings: Array.from({ length: 6 }, (_, index) => baseFinding({ rule: `rule-${index}`, elementKey: `k-${index}` })),
+          }),
+        ),
+      ],
+    ];
+
+    for (const [name, markdown] of fixtures) {
+      it(`never emits a bare list marker in ${name}`, () => {
+        for (const line of markdown.split('\n')) {
+          expect(line).not.toMatch(BARE_MARKER);
+        }
+      });
+
+      it(`indents every continuation line by its marker's content offset in ${name}`, () => {
+        let offset: number | null = null;
+        let checked = 0;
+        for (const line of markdown.split('\n')) {
+          const item = MARKER.exec(line);
+          if (item !== null) {
+            offset = item[1]!.length + item[2]!.length;
+            continue;
+          }
+          if (line.length === 0 || line.startsWith('#')) {
+            offset = null;
+            continue;
+          }
+          if (offset !== null) {
+            const indent = line.length - line.trimStart().length;
+            expect(indent, `continuation "${line}" under an item with content offset ${offset}`).toBe(offset);
+            checked += 1;
+          }
+        }
+        expect(checked).toBeGreaterThan(0);
+      });
+    }
+
+    it('opens the frame on the numbered marker line and keeps two-digit indexes aligned', () => {
+      const [, markdown] = fixtures[0]!;
+      const lines = markdown.split('\n');
+      const first = lines.indexOf(`1. ${UNTRUSTED_FRAME_START}`);
+      const tenth = lines.indexOf(`10. ${UNTRUSTED_FRAME_START}`);
+
+      expect(first).toBeGreaterThan(-1);
+      expect(lines[first + 1]!.startsWith('   announced: `')).toBe(true);
+      expect(lines[first + 2]).toBe(`   ${UNTRUSTED_FRAME_END}`);
+      expect(tenth).toBeGreaterThan(-1);
+      expect(lines[tenth + 1]!.startsWith('    announced: `')).toBe(true);
+      expect(lines[tenth + 2]).toBe(`    ${UNTRUSTED_FRAME_END}`);
+      expect(markdown).toContain('- showing first 20 of 21 stops');
+    });
+
+    it('keeps the collapsed rule line as a continuation of its item, not a nested item', () => {
+      const [, markdown] = fixtures[1]!;
+
+      expect(markdown).not.toMatch(/^\s+- rule: /m);
+      // The headline is escaped prose, so its brackets are character references.
+      expect(markdown).toMatch(/^- &#91;new serious&#93; clusters\/axe\/rule-0\n  rule: `clusters` - `axe\/rule-0` · serious\n  \[BEGIN UNTRUSTED TEXT/m);
+    });
+  });
+
   it('does not let a backtick in a code span field break out of the span', () => {
     const out = projectPrComment(
       baseResult({

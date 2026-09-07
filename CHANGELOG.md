@@ -314,6 +314,13 @@
   close it, leading and trailing spaces are preserved, and the frame markers
   stay outside the spans as the visible seal. Provider-authored text that
   prints as prose outside the frame is still escaped.
+- List items in the pull request comment keep their continuation lines. An
+  announcement was a bare `1.` with its frame indented two columns under it,
+  which renders as an empty item followed by a paragraph outside the list. The
+  frame now opens on the marker's line and every continuation line is indented
+  to the item's content column, computed from the marker so `10.` stays
+  aligned. The collapsed finding's rule line is a continuation of its item
+  rather than a nested item, so the frame under it belongs to the right item.
 
 ## 0.2.1 - 2026-09-01
 

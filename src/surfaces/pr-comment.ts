@@ -268,16 +268,30 @@ function findingPieces(finding: Finding): FramedPiece[] {
   ];
 }
 
+// One list item: the marker and first line, then every continuation line indented by the
+// marker's content offset.
+//
+// CommonMark makes a continuation line part of the item only when it is indented to where the
+// item's content starts, which is the marker plus the space after it: two columns for "- ",
+// three for "1. ", four for "10. ". A continuation indented less than that leaves the item and
+// renders as a paragraph outside the list, and a marker with nothing after it renders as an empty
+// item. So the first line always goes on the marker's line, and the indent is computed from the
+// marker text rather than written as a constant, so a two-digit index stays correct.
+function listItem(marker: string, first: string, continuation: string[]): string[] {
+  const indent = ' '.repeat(marker.length + 1);
+  return [`${marker} ${first}`, ...continuation.map((line) => `${indent}${line}`)];
+}
+
 function formatFinding(finding: Finding): string[] {
   const rule = neutralize(finding.rule);
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
-  const framed = framedMarkdownLines(findingPieces(finding));
-  return [
-    `- [${escapeMarkdown(severity)}] ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)}`,
-    ...framed.map((line) => `  ${line}`),
-  ];
+  return listItem(
+    '-',
+    `[${escapeMarkdown(severity)}] ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)}`,
+    framedMarkdownLines(findingPieces(finding)),
+  );
 }
 
 function renderFindingGroup(title: string, findings: Finding[]): string[] {
@@ -294,12 +308,13 @@ function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
-  const framed = framedMarkdownLines(findingPieces(finding));
-  return [
-    `- ${escapeMarkdown(headline)}`,
-    `  - rule: ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)} · ${escapeMarkdown(severity)}`,
-    ...framed.map((line) => `  ${line}`),
-  ];
+  // The rule line is a continuation of the item, not a nested item. A nested item would make
+  // the framed lines after it lazy continuations of the nested paragraph, so they would render
+  // inside the wrong item.
+  return listItem('-', escapeMarkdown(headline), [
+    `rule: ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)} · ${escapeMarkdown(severity)}`,
+    ...framedMarkdownLines(findingPieces(finding)),
+  ]);
 }
 
 function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): string[] {
@@ -333,7 +348,7 @@ function renderCoverageGaps(result: Result): string[] {
         { label: 'ref', value: gap.ref },
         { label: 'reason', value: gap.reason },
       ]);
-      return [`- (${escapeMarkdown(neutralize(gap.state))})`, ...framed.map((line) => `  ${line}`)];
+      return listItem('-', `(${escapeMarkdown(neutralize(gap.state))})`, framed);
     }),
   ];
 }
@@ -365,8 +380,12 @@ function renderAnnouncements(result: Result): string[] {
     lines.push(`#### ${inlineCode(neutralize(screen.screenId))}`);
     const capped = screen.stops.slice(0, STOP_CAP);
     for (const stop of capped) {
-      const framed = framedMarkdownLines([{ label: 'announced', value: stopAnnouncementText(stop) }]);
-      lines.push(`${stop.index + 1}.`, ...framed.map((line) => `  ${line}`));
+      // The frame opens on the marker's line. A bare "1." renders as an empty item, and the
+      // frame under it, indented two columns where "1. " needs three, would leave the list.
+      const [first, ...rest] = framedMarkdownLines([
+        { label: 'announced', value: stopAnnouncementText(stop) },
+      ]);
+      lines.push(...listItem(`${stop.index + 1}.`, first!, rest));
     }
     if (screen.stops.length > STOP_CAP) {
       lines.push(`- showing first ${STOP_CAP} of ${screen.stops.length} stops`);
