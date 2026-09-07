@@ -210,17 +210,17 @@ async function collectSession(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'session',
       label: SESSION_LABEL,
       state: 'drifted',
-      nextStep: `${STORAGE_STATE_ENV_VAR} names a Playwright storage state whose session has expired: every cookie in it that carries an expiry is already past it. "usabl check" stops on this rather than scanning the sign-in page. Mint a new session and re-export ${STORAGE_STATE_ENV_VAR}, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
+      nextStep: `${STORAGE_STATE_ENV_VAR} names a Playwright storage state whose session has expired: every cookie in it carries an expiry, every one of those is already past, and it holds no local storage, so nothing in the file can authenticate. "usabl check" stops on this rather than scanning the sign-in page. Mint a new session and re-export ${STORAGE_STATE_ENV_VAR}, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
     };
   }
   return {
     id: 'session',
     label: SESSION_LABEL,
     state: 'wired',
-    // Readable, parsing, and not expired by its own cookie dates is all doctor can confirm.
-    // Whether the application still accepts the session is a live question no read of the file
+    // Readable, parsing, and holding something that could still authenticate is all doctor can
+    // confirm. Whether the application accepts the session is a live question no read of the file
     // can answer, so the wired state says so instead of implying more.
-    nextStep: `Set, readable, parses, and no cookie in it has passed its expiry. Whether the application still accepts the session is not something reading the file can answer; a scan redirected to a sign-in page is reported as a coverage gap.`,
+    nextStep: `Set, readable, parses, and still holds something that could authenticate. Whether the application accepts the session is not something reading the file can answer; a scan that meets a sign-in page or a refused data request is reported as a coverage gap.`,
   };
 }
 

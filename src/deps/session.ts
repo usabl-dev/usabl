@@ -36,52 +36,97 @@ export function readStorageStateEnv(env: EnvReader): string | null {
 }
 
 /**
- * Whether the cookies in a parsed storage state are all past their expiry.
+ * Whether a parsed storage state has nothing left in it that could authenticate anything.
  *
- * Playwright records `expires` on a cookie as seconds since the Unix epoch, and uses a negative
- * value to mark a session cookie, which dies with the browser and carries no expiry to judge.
- * So the only cookies this can rule on are the ones with a positive `expires`. If there are none,
- * this says nothing. If there is at least one and every one of them is already past, the file
- * cannot authenticate anything and a scan opened with it would land on the sign-in page.
+ * This refuses a run, so the bar is not "probably dead". It is "there is nothing here that could
+ * possibly work". Three conditions must all hold:
  *
- * What this check can see: cookie expiry times written into the file.
+ *   1. Every cookie in the file carries a real expiry. Playwright writes a negative `expires` for a
+ *      session cookie, which dies with the browser and states no expiry to judge. One session
+ *      cookie, or one cookie with no `expires` field at all, could still be carrying the session,
+ *      so it makes the whole file unjudgeable.
+ *   2. There is at least one such cookie, and every one of them is already past. A file with no
+ *      cookies at all says nothing.
+ *   3. No origin holds any local storage. A bearer or refresh token is recorded there as an opaque
+ *      name and value with no expiry field, so its presence is a thing that might still
+ *      authenticate and this cannot rule on it.
  *
- * What this check cannot see: a bearer or refresh token held in `origins[].localStorage`, because
- * a storage state records those as opaque name and value pairs with no expiry field; a cookie the
- * server revoked before its stated expiry; a session ended server side while the cookie still
- * looks current; and a cookie that is live but scoped to a different origin than the one scanned.
- * A false reading in that direction is a missed catch, never a false alarm: this returns true only
- * on expiry times the file itself states, so it can fail to notice a dead session but cannot call
- * a live one dead. The scan-time redirect check is what covers the cases this cannot see.
+ * The consequence is deliberate: this errs entirely toward letting a dead session through. A
+ * session cookie beside a stale dated cookie is not refused. A local storage entry beside a wall
+ * of expired cookies is not refused. A missed dead session is caught at scan time by the rules in
+ * providers/redirected.ts, which measure the page rather than guessing from a file. A false
+ * refusal has no such backstop: it stops a working run for no reason.
+ *
+ * What this check can see: expiry times the file itself states.
+ *
+ * What this check cannot see: whether the server still honours a cookie that has not expired,
+ * whether a token in local storage is live, whether a cookie is scoped to the origin being
+ * scanned, and any session ended server side ahead of its stated dates.
+ *
+ * `nowMs` is milliseconds since the Unix epoch and must be finite. Infinity would put every expiry
+ * in the past and refuse every session; NaN would fail every comparison and accept every session.
+ * Both are programmer errors in the caller's clock and neither may be answered with a boolean.
  *
  * Exported so the rule is testable on its own, without a file or a clock.
  */
 export function isStorageStateExpired(parsed: unknown, nowMs: number): boolean {
+  if (typeof nowMs !== 'number' || !Number.isFinite(nowMs)) {
+    throw new TypeError('isStorageStateExpired needs a finite millisecond timestamp');
+  }
   if (typeof parsed !== 'object' || parsed === null) {
+    return false;
+  }
+  if (holdsAnyLocalStorage(Reflect.get(parsed, 'origins'))) {
     return false;
   }
   const cookies: unknown = Reflect.get(parsed, 'cookies');
   if (!Array.isArray(cookies)) {
     return false;
   }
-  const expiries: number[] = [];
+  const nowSeconds = nowMs / 1000;
+  let dated = 0;
   for (const cookie of cookies) {
     if (typeof cookie !== 'object' || cookie === null) {
-      continue;
+      // Not a cookie shape this understands, so the file is not one this may rule on.
+      return false;
     }
     const expires: unknown = Reflect.get(cookie, 'expires');
-    // Negative is Playwright's session-cookie marker. Zero, a non-number, and a non-finite value
-    // are not expiry times either, so none of them lets this rule on the cookie.
     if (typeof expires !== 'number' || !Number.isFinite(expires) || expires <= 0) {
-      continue;
+      // A session cookie, or a cookie with no usable expiry. It could still be carrying the
+      // session, so nothing here can be called dead.
+      return false;
     }
-    expiries.push(expires);
+    if (expires > nowSeconds) {
+      return false;
+    }
+    dated += 1;
   }
-  if (expiries.length === 0) {
+  return dated > 0;
+}
+
+/**
+ * Whether any origin in a storage state holds a local storage entry. A permissive read on purpose:
+ * anything that is not confidently empty counts as holding something, because the caller uses this
+ * only to decide not to refuse.
+ */
+function holdsAnyLocalStorage(origins: unknown): boolean {
+  if (origins === undefined || origins === null) {
     return false;
   }
-  const nowSeconds = nowMs / 1000;
-  return expiries.every((expires) => expires <= nowSeconds);
+  if (!Array.isArray(origins)) {
+    // Present in some shape this does not understand. Treat it as holding something.
+    return true;
+  }
+  return origins.some((origin) => {
+    if (typeof origin !== 'object' || origin === null) {
+      return true;
+    }
+    const entries: unknown = Reflect.get(origin, 'localStorage');
+    if (entries === undefined || entries === null) {
+      return false;
+    }
+    return !Array.isArray(entries) || entries.length > 0;
+  });
 }
 
 /**
@@ -143,7 +188,7 @@ export async function resolveStorageStatePath(options: {
   if (isStorageStateExpired(parsed, options.now ?? Date.now())) {
     // No cookie value, no origin, and no path reaches this message. Only the fact of expiry does.
     throw new Error(
-      `${STORAGE_STATE_ENV_VAR} names a Playwright storage state whose session has expired: every cookie in it that carries an expiry is already past it, so usabl would scan the sign-in page instead of the application. Mint a new session, point ${STORAGE_STATE_ENV_VAR} at the new file, and run usabl again, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose. The path is not printed here because it can name a private location.`,
+      `${STORAGE_STATE_ENV_VAR} names a Playwright storage state whose session has expired: every cookie in it carries an expiry, every one of those is already past, and it holds no local storage, so nothing in the file can authenticate and usabl would scan the sign-in page instead of the application. Mint a new session, point ${STORAGE_STATE_ENV_VAR} at the new file, and run usabl again, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose. The path is not printed here because it can name a private location.`,
     );
   }
   return path;

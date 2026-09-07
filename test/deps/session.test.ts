@@ -113,16 +113,17 @@ describe("resolveStorageStatePath", () => {
     ).rejects.not.toThrow(/letmein/);
   });
 
-  it("throws when every cookie that carries an expiry is past it, and says to mint a new session", async () => {
+  it("throws when the file holds nothing that could authenticate, and says to mint a new session", async () => {
     // The cheap half of the expired-session fix. The file reads and parses, so nothing upstream
-    // objects, but no cookie in it can authenticate anything. Stopping here costs one file read
-    // and never opens a browser, and the run mints no verdict at all.
+    // objects, but every cookie is dated, every date is past, and there is no local storage, so
+    // there is nothing left in it that could work. Stopping here costs one file read and never
+    // opens a browser, and the run mints no verdict at all.
     const deadPath = join(dir, "dead-session.json");
     await writeFile(
       deadPath,
       JSON.stringify({
         cookies: [cookie(NOW_SECONDS - 3_600), cookie(NOW_SECONDS - 60)],
-        origins: [{ origin: "http://app.test", localStorage: [{ name: "token", value: "letmein" }] }],
+        origins: [],
       }),
       "utf8",
     );
@@ -133,10 +134,42 @@ describe("resolveStorageStatePath", () => {
     await expect(attempt()).rejects.toThrow(/session has expired/);
     await expect(attempt()).rejects.toThrow(/[Mm]int a new session/);
     await expect(attempt()).rejects.toThrow(STORAGE_STATE_ENV_VAR);
-    // Same rule as every other message here: no path, no cookie value, no local storage value.
+    // Same rule as every other message here: no path and no cookie value.
     await expect(attempt()).rejects.not.toThrow(deadPath);
     await expect(attempt()).rejects.not.toThrow(/not-a-real-token/);
-    await expect(attempt()).rejects.not.toThrow(/letmein/);
+  });
+
+  it("accepts a wall of expired cookies when local storage still holds something", async () => {
+    // The false refusal this must never make. A bearer token in local storage carries no expiry,
+    // so nothing about those cookie dates says the session is dead. Refusing here would stop a
+    // working run for no reason, and a false refusal has no backstop; a missed dead session is
+    // caught at scan time by the rules that measure the page.
+    const tokenPath = join(dir, "local-storage-session.json");
+    await writeFile(
+      tokenPath,
+      JSON.stringify({
+        cookies: [cookie(NOW_SECONDS - 3_600), cookie(NOW_SECONDS - 60)],
+        origins: [{ origin: "http://app.test", localStorage: [{ name: "jwt", value: "letmein" }] }],
+      }),
+      "utf8",
+    );
+    await expect(
+      resolveStorageStatePath({ env: { [STORAGE_STATE_ENV_VAR]: tokenPath }, now: NOW_MS }),
+    ).resolves.toBe(tokenPath);
+  });
+
+  it("accepts a session cookie sitting beside expired dated cookies", async () => {
+    // A session cookie dies with the browser and states no expiry, so it could still be the one
+    // carrying the session. One of them makes the whole file unjudgeable.
+    const mixedPath = join(dir, "mixed-session.json");
+    await writeFile(
+      mixedPath,
+      JSON.stringify({ cookies: [cookie(-1), cookie(NOW_SECONDS - 3_600)], origins: [] }),
+      "utf8",
+    );
+    await expect(
+      resolveStorageStatePath({ env: { [STORAGE_STATE_ENV_VAR]: mixedPath }, now: NOW_MS }),
+    ).resolves.toBe(mixedPath);
   });
 
   it("accepts a session with one cookie still in date", async () => {
@@ -165,36 +198,72 @@ describe("resolveStorageStatePath", () => {
 });
 
 describe("isStorageStateExpired", () => {
-  it("calls a state dead only when every cookie carrying an expiry is past it", () => {
+  it("refuses only when every cookie is dated and every date is past", () => {
     expect(isStorageStateExpired({ cookies: [cookie(NOW_SECONDS - 1)] }, NOW_MS)).toBe(true);
     expect(isStorageStateExpired({ cookies: [cookie(NOW_SECONDS)] }, NOW_MS)).toBe(true);
+    expect(
+      isStorageStateExpired({ cookies: [cookie(NOW_SECONDS - 1), cookie(NOW_SECONDS - 2)] }, NOW_MS),
+    ).toBe(true);
     expect(isStorageStateExpired({ cookies: [cookie(NOW_SECONDS + 1)] }, NOW_MS)).toBe(false);
     expect(
       isStorageStateExpired({ cookies: [cookie(NOW_SECONDS - 1), cookie(NOW_SECONDS + 1)] }, NOW_MS),
     ).toBe(false);
   });
 
-  it("judges only the cookies with a real expiry and ignores the rest", () => {
-    // A negative value is Playwright's session-cookie marker. Zero and a non-number are not
-    // expiry times either. A state that offers nothing to judge is never called dead.
+  it("never refuses when one cookie carries no usable expiry", () => {
+    // A negative value is Playwright's session-cookie marker. Zero, a missing field, and a value
+    // that is not a number all state no expiry, so any one of them could still be carrying the
+    // session and makes the whole file unjudgeable. This is the case an earlier version of this
+    // rule got wrong: it skipped those cookies and refused on the dated ones beside them.
     expect(isStorageStateExpired({ cookies: [cookie(-1)] }, NOW_MS)).toBe(false);
     expect(isStorageStateExpired({ cookies: [cookie(0)] }, NOW_MS)).toBe(false);
     expect(isStorageStateExpired({ cookies: [{ name: "s", value: "v" }] }, NOW_MS)).toBe(false);
     expect(
       isStorageStateExpired({ cookies: [cookie(-1), cookie(NOW_SECONDS - 1)] }, NOW_MS),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      isStorageStateExpired({ cookies: [{ name: "s", value: "v" }, cookie(NOW_SECONDS - 1)] }, NOW_MS),
+    ).toBe(false);
   });
 
-  it("says nothing about a state with no cookies at all", () => {
-    // A bearer token in origins[].localStorage has no expiry field, so this rule cannot see it.
-    // The scan-time redirect check is what covers a session that dies without a dated cookie.
-    expect(isStorageStateExpired({ cookies: [], origins: [] }, NOW_MS)).toBe(false);
+  it("never refuses when any origin still holds local storage", () => {
+    // A bearer or refresh token is recorded there as an opaque name and value with no expiry
+    // field, so its presence is a thing that might still authenticate.
+    const expired = [cookie(NOW_SECONDS - 1)];
     expect(
       isStorageStateExpired(
-        { origins: [{ origin: "http://app.test", localStorage: [{ name: "jwt", value: "x" }] }] },
+        { cookies: expired, origins: [{ origin: "http://app.test", localStorage: [{ name: "jwt", value: "x" }] }] },
         NOW_MS,
       ),
     ).toBe(false);
+    // An origin entry holding nothing is not something that could authenticate, so it does not
+    // block the refusal.
+    expect(
+      isStorageStateExpired(
+        { cookies: expired, origins: [{ origin: "http://app.test", localStorage: [] }] },
+        NOW_MS,
+      ),
+    ).toBe(true);
+    // An origins field in a shape this does not understand is treated as holding something.
+    expect(isStorageStateExpired({ cookies: expired, origins: "some" }, NOW_MS)).toBe(false);
+    expect(isStorageStateExpired({ cookies: expired, origins: [null] }, NOW_MS)).toBe(false);
+  });
+
+  it("says nothing about a state with no cookies at all", () => {
+    expect(isStorageStateExpired({ cookies: [], origins: [] }, NOW_MS)).toBe(false);
+    expect(isStorageStateExpired({ origins: [] }, NOW_MS)).toBe(false);
+  });
+
+  it("rejects a clock that is not a finite number of milliseconds", () => {
+    // Infinity would put every expiry in the past and refuse every session. NaN would fail every
+    // comparison and accept every session. Both are programmer errors in the caller's clock and
+    // neither may be answered with a boolean.
+    const dead = { cookies: [cookie(NOW_SECONDS - 1)], origins: [] };
+    const live = { cookies: [cookie(NOW_SECONDS + 1)], origins: [] };
+    for (const clock of [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN]) {
+      expect(() => isStorageStateExpired(dead, clock)).toThrow(TypeError);
+      expect(() => isStorageStateExpired(live, clock)).toThrow(TypeError);
+    }
   });
 
   it("says nothing about a shape it does not recognise", () => {
