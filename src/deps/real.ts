@@ -518,6 +518,11 @@ function wrapPage(
     async gotoReady(): Promise<void> {
       await waitForRendered(readiness, readyTimeoutMs);
     },
+    async currentUrl(): Promise<string> {
+      // Playwright tracks the committed navigation, so this is the address after any redirect
+      // chain the server or the application ran, not the one open() was handed.
+      return pw.url();
+    },
     async focusBody(): Promise<void> {
       await pw.evaluate(() => {
         if (!(document.body instanceof HTMLElement)) {

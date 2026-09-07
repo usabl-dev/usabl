@@ -2,6 +2,9 @@
  * CheckRunner executes one screen scan and returns transcript stops, provider drafts, and coverage gaps.
  * It must never throw, never mint a verdict, and never drop a failed screen on the floor.
  * Transcript collection runs before providers because interaction probes can mutate focus order.
+ *
+ * A screen the browser was redirected away from is disclosed as a coverage gap and measured no
+ * further. See providers/redirected.ts for the rule and what it can and cannot see.
  */
 import type {
   Capability,
@@ -17,6 +20,7 @@ import type {
 } from '../contracts/index.js';
 import { attachDomSourceToDrafts } from './dom-source.js';
 import { measureReachability } from './reachability.js';
+import { observeLanding, redirectedAwayGap } from './redirected.js';
 import { runProviders } from './index.js';
 
 export interface CheckRunnerDeps {
@@ -99,34 +103,57 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       };
       try {
         await page.gotoReady();
-        await page.armAnnouncementCapture();
 
-        const transcript = await deps.stepRunner.run(page, tabSteps);
-        const stops = trimCycle(transcript);
+        // Where the browser actually landed, read before anything on this page is exercised.
+        // Providers click and press keys, and a click can navigate, so a later read could not
+        // tell an application's own redirect from a move usabl made itself.
+        const redirected = redirectedAwayGap(screen.id, await observeLanding(page, screen.url));
+        if (redirected !== null) {
+          // Not this screen. The walk and the providers are skipped rather than run and thrown
+          // away: a keyboard order and a rule result from a sign-in page are not weak evidence
+          // about the requested screen, they are evidence about a different page, and collecting
+          // them at all invites a later change to keep them. Nothing is claimed about
+          // reachability either, because this page is not the one the assertion describes.
+          result = {
+            screenId: screen.id,
+            url: screen.url,
+            stops: [],
+            drafts: [],
+            gaps: [redirected],
+            applicability: [],
+            reachedSelectorPresent: null,
+            reachedWhenSelector: reachedWhen ?? null,
+          };
+        } else {
+          await page.armAnnouncementCapture();
 
-        await page.focusBody();
-        const providerResult = await runProviders(
-          deps.providers,
-          { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
-          deps.allowedCapabilities,
-        );
-        const drafts = await attachDomSourceToDrafts(page, providerResult.drafts);
+          const transcript = await deps.stepRunner.run(page, tabSteps);
+          const stops = trimCycle(transcript);
 
-        // Measure reachability after the walk and providers have run, while the page is still open.
-        // This is the only place the live DOM exists; markUnseenScreens runs later over collected
-        // scans and cannot query the page.
-        const reachedSelectorPresent = await measureReachability(page, reachedWhen);
+          await page.focusBody();
+          const providerResult = await runProviders(
+            deps.providers,
+            { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
+            deps.allowedCapabilities,
+          );
+          const drafts = await attachDomSourceToDrafts(page, providerResult.drafts);
 
-        result = {
-          screenId: screen.id,
-          url: screen.url,
-          stops,
-          drafts,
-          gaps: providerResult.gaps,
-          applicability: providerResult.applicability,
-          reachedSelectorPresent,
-          reachedWhenSelector: reachedWhen ?? null,
-        };
+          // Measure reachability after the walk and providers have run, while the page is still
+          // open. This is the only place the live DOM exists; markUnseenScreens runs later over
+          // collected scans and cannot query the page.
+          const reachedSelectorPresent = await measureReachability(page, reachedWhen);
+
+          result = {
+            screenId: screen.id,
+            url: screen.url,
+            stops,
+            drafts,
+            gaps: providerResult.gaps,
+            applicability: providerResult.applicability,
+            reachedSelectorPresent,
+            reachedWhenSelector: reachedWhen ?? null,
+          };
+        }
       } catch (err) {
         result = failedScan(screen, `scan failed: ${errorMessage(err)}`);
       } finally {

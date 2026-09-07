@@ -348,6 +348,11 @@ export interface ElementRef {
 }
 export interface Page {
   gotoReady(): Promise<void>;
+  // Where the browser actually is now, which is not always where it was sent. An application can
+  // answer a request for a screen with a redirect, and a scan that never asks has no way to know
+  // it measured a different page. Read it after the screen has loaded and before anything on the
+  // page is exercised, because providers click and press keys and a click can navigate.
+  currentUrl(): Promise<string>;
   focusBody(): Promise<void>;
   tab(): Promise<void>;
   press(key: string): Promise<void>;

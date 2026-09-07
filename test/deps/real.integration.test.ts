@@ -14,6 +14,13 @@ interface FixtureServer {
   lateMountUrl: string;
   neverSettlesUrl: string;
   hangingRequestUrl: string;
+  // Answers 302 to /sign-in.html, the way a login-gated application answers a request made with
+  // an expired session. This is the whole failure, driven through a real browser and a real
+  // redirect rather than a fake page told to report a different address.
+  gatedUrl: string;
+  // Answers 302 to /labelledby.html, an ordinary redirect that still lands on a real screen.
+  redirectToScreenUrl: string;
+  reachedScreenUrl: string;
   close: () => Promise<void>;
 }
 
@@ -27,6 +34,7 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/late-mount.html': await readFixture('late-mount.html'),
     '/never-settles.html': await readFixture('never-settles.html'),
     '/hanging-request.html': await readFixture('hanging-request.html'),
+    '/sign-in.html': await readFixture('sign-in.html'),
   };
 
   const server = createServer((req, res) => {
@@ -34,6 +42,19 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     if (reqUrl.pathname === '/' || reqUrl.pathname === '/labelledby.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(html);
+      return;
+    }
+    // What a login-gated application does with an expired session: it sends the browser to its
+    // sign-in page, carrying the requested screen back as a return address.
+    if (reqUrl.pathname === '/gated') {
+      res.writeHead(302, { location: '/sign-in.html?next=%2Fgated' });
+      res.end();
+      return;
+    }
+    // An ordinary redirect that still ends on the screen that was asked for.
+    if (reqUrl.pathname === '/redirect-to-screen') {
+      res.writeHead(302, { location: '/labelledby.html' });
+      res.end();
       return;
     }
     const page = pages[reqUrl.pathname];
@@ -77,6 +98,9 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     lateMountUrl: `http://127.0.0.1:${address.port}/late-mount.html`,
     neverSettlesUrl: `http://127.0.0.1:${address.port}/never-settles.html`,
     hangingRequestUrl: `http://127.0.0.1:${address.port}/hanging-request.html`,
+    gatedUrl: `http://127.0.0.1:${address.port}/gated`,
+    redirectToScreenUrl: `http://127.0.0.1:${address.port}/redirect-to-screen`,
+    reachedScreenUrl: `http://127.0.0.1:${address.port}/labelledby.html`,
     close: async () =>
       new Promise<void>((resolve, reject) => {
         // The hang route leaves a socket open, and server.close() waits for it forever.
@@ -196,6 +220,118 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
 
     expect(scan.reachedSelectorPresent).toBe(false);
     expect(scan.reachedWhenSelector).toBe('#never-rendered-marker');
+  });
+
+  it('reports the address the browser ended on after a real redirect, not the one requested', async () => {
+    const page = await driver.open(fixture.gatedUrl);
+    try {
+      await page.gotoReady();
+      expect(await page.currentUrl()).toContain('/sign-in.html');
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('refuses to measure a screen a real redirect sent to a sign-in page', async () => {
+    // The whole failure, end to end and with nothing faked: the server answers the screen request
+    // with a 302 to its sign-in page, Chromium follows it, and the scan must report a coverage gap
+    // instead of filing the sign-in page's barriers under this screen id.
+    const barrierOnEveryPage: Provider = {
+      id: 'always-fires',
+      layer: 'test',
+      capabilities: ['live'],
+      run: async () => [
+        {
+          rule: 'page-has-heading-one',
+          layer: 'test',
+          severity: 'moderate' as const,
+          evidenceClass: 'deterministic' as const,
+          screenId: 'gated-screen',
+          elementPath: 'html',
+          elementName: null,
+          role: null,
+          whatUserExperiences: 'placeholder',
+          why: 'placeholder',
+          fix: 'placeholder',
+          evidence: {},
+          confidence: 'fail' as const,
+        },
+      ],
+    };
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [barrierOnEveryPage],
+      config: testConfig({
+        surfaces: [{ id: 'gated-screen', url: fixture.gatedUrl, files: [] }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+    });
+
+    const scan = await runner.scan({ id: 'gated-screen', url: fixture.gatedUrl });
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: fixture.gatedUrl, state: 'not-covered' });
+    expect(scan.gaps[0]?.reason).toContain('redirected away');
+    expect(scan.gaps[0]?.reason).toContain('/sign-in.html');
+    // The return address the server put in the query is a token-shaped value in the real world,
+    // so it never reaches the reason.
+    expect(scan.gaps[0]?.reason).not.toContain('next=');
+    expect(scan.drafts).toEqual([]);
+    expect(scan.stops).toEqual([]);
+    expect(scan.applicability).toEqual([]);
+  });
+
+  it('scans normally when a real redirect still lands on the screen that was asked for', async () => {
+    // The false positive that would make this check unusable. A 302 to the canonical address of
+    // the same screen is an ordinary thing for an application to do, and the screen was measured.
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [],
+      config: testConfig({
+        surfaces: [
+          {
+            id: 'redirected-screen',
+            url: fixture.redirectToScreenUrl,
+            files: [],
+            reachedWhen: '#labelledby-button',
+          },
+        ],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+    });
+
+    const scan = await runner.scan({ id: 'redirected-screen', url: fixture.redirectToScreenUrl });
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.stops.length).toBeGreaterThan(0);
+    // Positive proof the screen really was reached, not merely that nothing objected.
+    expect(scan.reachedSelectorPresent).toBe(true);
+  });
+
+  it('scans a sign-in screen normally when the sign-in screen is what was asked for', async () => {
+    // Condition two on its own must never fire. An operator who lists the sign-in page as a
+    // surface is asking for it to be measured, password field and all.
+    const signInUrl = `${fixture.reachedScreenUrl.replace('/labelledby.html', '/sign-in.html')}`;
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [],
+      config: testConfig({
+        surfaces: [{ id: 'sign-in', url: signInUrl, files: [], reachedWhen: '#password' }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+    });
+
+    const scan = await runner.scan({ id: 'sign-in', url: signInUrl });
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.reachedSelectorPresent).toBe(true);
+    expect(scan.stops.length).toBeGreaterThan(0);
   });
 
   it('waits for a page that keeps mounting after the network is quiet', async () => {
