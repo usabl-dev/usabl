@@ -33,6 +33,25 @@ export function operatorText(value: unknown): string {
 }
 
 /**
+ * Prepares an operator-authored file path to be quoted in a message.
+ *
+ * The scrubber removes a whole terminal control sequence, payload included, so a file named
+ * "ok<ESC>]0;title<BEL>.yaml" would print as "ok.yaml" and read as the same file as a clean one.
+ * Each control character is first replaced by its visible code point label, which is plain
+ * ASCII, so the sequence is inert and the two names stay distinguishable. The rest of the
+ * scrubbing still applies through the caller.
+ */
+export function operatorPath(path: string): string {
+  let out = '';
+  for (const character of path) {
+    const code = character.codePointAt(0) ?? 0;
+    const isControl = code < 0x20 || (code >= 0x7f && code <= 0x9f);
+    out += isControl ? `<U+${code.toString(16).toUpperCase().padStart(4, '0')}>` : character;
+  }
+  return out;
+}
+
+/**
  * Builds a config error whose interpolated values are all scrubbed.
  *
  * Use it for every message that quotes anything read out of a config or manifest file, including

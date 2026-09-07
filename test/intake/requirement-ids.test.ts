@@ -196,12 +196,32 @@ describe('findDuplicateRequirementId', () => {
     ).toBeNull();
   });
 
-  it('scrubs a terminal escape sequence carried by a file path', () => {
+  it('shows a control character in a file path as a code point label so the two files stay distinct', () => {
+    // The scrubber would remove the whole control sequence and print "b.yaml", the same as a clean
+    // file. The label keeps the name distinguishable and leaves the sequence inert.
     const duplicate = findDuplicateRequirementId([
-      { id: 'account-name', path: 'requirements/a.yaml', index: 0 },
+      { id: 'account-name', path: 'requirements/b.yaml', index: 0 },
       { id: 'account-name', path: 'requirements/\u001b]0;OWNED\u0007b.yaml', index: 0 },
     ]);
     expect(duplicate?.reason).not.toContain('\u001b');
-    expect(duplicate?.reason).not.toContain('OWNED');
+    expect(duplicate?.reason).not.toContain('\u0007');
+    expect(duplicate?.reason).toContain('requirements/<U+001B>]0;OWNED<U+0007>b.yaml');
+    expect(duplicate?.reason).toContain('already at requirements[0] in requirements/b.yaml');
+  });
+
+  it('names both locations even when both paths are very long', () => {
+    // Each interpolated value is capped on its own, so a long first path must not push the second
+    // location out of the message. Paths are shortened from the middle with a visible marker.
+    const firstPath = `requirements/${'a'.repeat(300)}/first.yaml`;
+    const repeatPath = `requirements/${'b'.repeat(300)}/second.yaml`;
+    const duplicate = findDuplicateRequirementId([
+      { id: 'same', path: firstPath, index: 34 },
+      { id: 'same', path: repeatPath, index: 7 },
+    ]);
+    expect(duplicate?.reason).toContain('at requirements[7] in requirements/bbb');
+    expect(duplicate?.reason).toContain('bbb/second.yaml and already at requirements[34] in requirements/aaa');
+    expect(duplicate?.reason).toContain('aaa/first.yaml.');
+    expect(duplicate?.reason).toContain('...');
+    expect(duplicate?.reason).not.toContain('(truncated)');
   });
 });

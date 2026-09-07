@@ -5,6 +5,7 @@
  */
 import type { FsGlob, RequirementBundle, UsablConfig } from '../contracts/index.js';
 import { scrubString } from '../surfaces/scrub.js';
+import { operatorPath } from './config-error.js';
 import { normalize } from './normalize.js';
 import { findDuplicateRequirementId, type RequirementIdSite } from './requirement-ids.js';
 import type { ParseBundleResult } from './schema.js';
@@ -21,13 +22,15 @@ function stripTrailingSlashes(path: string): string {
  * can quote file bytes, for example an unrecognised key name from the schema or a source line from
  * the YAML parser, and both reach a terminal, so the whole sentence is scrubbed here. Scrubbing
  * text that a producer already scrubbed changes nothing, so a reason may arrive clean or not.
+ * Control characters in the path are shown as code point labels first, so a file name that
+ * carried a control sequence still reads as a different file from a clean one.
  */
 function pathFailure(path: string, reason: string): LoadRequirementsResult {
   return {
     ok: false,
     verdict: 'approval_required',
     path,
-    reason: scrubString(`requirements path ${path}: ${reason}`),
+    reason: scrubString(`requirements path ${operatorPath(path)}: ${reason}`),
   };
 }
 

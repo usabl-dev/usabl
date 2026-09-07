@@ -17,7 +17,7 @@
  * throws throughout, because intake is policy input and a bad bundle is an approval_required
  * disclosure, not an engine crash. It must never rewrite an id or decide a verdict.
  */
-import { configError } from './config-error.js';
+import { configError, operatorPath } from './config-error.js';
 import { describeIdProblem } from './id-grammar.js';
 
 /**
@@ -37,21 +37,46 @@ export interface RequirementIdSite {
   index: number;
 }
 
+// The longest a file path is printed in a duplicate reason. Each interpolated value is capped by
+// the config error template on its own, so a path is bounded here, before interpolation, and each
+// path is interpolated as its own value. That way a long first path can never push the second
+// location past the cap and out of the message.
+const PATH_TEXT_LIMIT = 72;
+
+/**
+ * Shortens a path from the middle, keeping its start and its file name, with a visible marker
+ * where characters were removed. Control characters are shown as code point labels first, so a
+ * file name that carried a control sequence still reads as a different file from a clean one.
+ */
+function boundedPath(path: string): string {
+  const characters = [...operatorPath(path)];
+  if (characters.length <= PATH_TEXT_LIMIT) {
+    return characters.join('');
+  }
+  const marker = '...';
+  const keep = PATH_TEXT_LIMIT - marker.length;
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return `${characters.slice(0, head).join('')}${marker}${characters.slice(characters.length - tail).join('')}`;
+}
+
 /**
  * Builds the duplicate message through the config error template so the id and both paths are
  * scrubbed by construction. The id has already passed the grammar by the time it can repeat, so
  * every character in it renders; the paths are operator-authored file names that reach a
  * terminal, and scrubbing them is what keeps a control sequence in a file name out of the log.
+ * Both locations are interpolated as separate values so both always survive the per-value cap.
  * The template builds an Error because that is the shape every config message shares; only its
  * text is used here, because the loader returns failures rather than throwing them.
  */
 function duplicateReason(first: RequirementIdSite, repeat: RequirementIdSite): string {
-  const where =
+  const repeatPath = boundedPath(repeat.path);
+  const firstPath = boundedPath(first.path);
+  const error =
     first.path === repeat.path
-      ? configError`It is declared at requirements[${first.index}] and again at requirements[${repeat.index}] in ${repeat.path}.`
-      : configError`It is declared at requirements[${repeat.index}] in ${repeat.path} and already at requirements[${first.index}] in ${first.path}.`;
-  return configError`duplicate requirement id "${repeat.id}". ${where.message} Both requirements become the rule intake:${repeat.id}, and a waiver matches on the rule and the surface, so one waiver would cover a requirement its author never saw. Give each requirement its own id.`
-    .message;
+      ? configError`duplicate requirement id "${repeat.id}". It is declared at requirements[${first.index}] and again at requirements[${repeat.index}] in ${repeatPath}. Both requirements become the rule intake:${repeat.id}, and a waiver matches on the rule and the surface, so one waiver would cover a requirement its author never saw. Give each requirement its own id.`
+      : configError`duplicate requirement id "${repeat.id}". It is declared at requirements[${repeat.index}] in ${repeatPath} and already at requirements[${first.index}] in ${firstPath}. Both requirements become the rule intake:${repeat.id}, and a waiver matches on the rule and the surface, so one waiver would cover a requirement its author never saw. Give each requirement its own id.`;
+  return error.message;
 }
 
 /**

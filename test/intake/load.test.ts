@@ -469,15 +469,17 @@ requirements:
     );
 
     // The loader sorts paths, and the escape byte sorts before the dot, so the hostile path is the
-    // first declaration and the clean one is the repeat. The reason names both either way.
+    // first declaration and the clean one is the repeat. The reason names both, and the control
+    // characters in the hostile name print as code point labels so it still reads as a different
+    // file from the clean one.
     expect(result.ok).toBe(false);
     if (result.ok) {
       return;
     }
     expect(rawControlBytes(result.reason)).toEqual([]);
-    expect(result.reason).not.toContain('OWNED');
     expect(result.reason).toContain('same-id');
-    expect(result.reason).toContain('requirements/ok.yaml');
+    expect(result.reason).toContain('at requirements[0] in requirements/ok.yaml');
+    expect(result.reason).toContain('already at requirements[0] in requirements/ok<U+001B>]0;OWNED<U+0007>.yaml');
   });
 
   it('strips an escape sequence carried by a file path in a read failure', async () => {
@@ -492,6 +494,7 @@ requirements:
       return;
     }
     expect(rawControlBytes(result.reason)).toEqual([]);
+    expect(result.reason).toContain('requirements path requirements/<U+001B>[2J.yaml:');
   });
 
   it('strips an unrecognised key name that the schema quotes back', async () => {
