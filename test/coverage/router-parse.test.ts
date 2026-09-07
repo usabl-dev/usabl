@@ -73,6 +73,71 @@ describe('router-parse', () => {
     ]);
   });
 
+  // A commented-out route is not a route. Both parsers match raw text, so without blanking the
+  // comment first the commented entry is found before the real one, and the duplicate rule keeps
+  // the comment and discards the route the application actually serves.
+  describe('comments are not declarations', () => {
+    it('ignores a commented-out data router entry written before the real one', () => {
+      const source = `createBrowserRouter([
+  // { path: '/decoy', element: <Decoy /> },
+  { path: '/home', element: <Home /> },
+])`;
+      const routes = parseDataRouterRoutes(source);
+      expect(routes.map((route) => route.path)).toEqual(['/home']);
+      expect(source.slice(0, routes[0]?.offset).split('\n').length).toBe(3);
+    });
+
+    it('ignores a commented-out data router entry written after the real one', () => {
+      const source = `createBrowserRouter([
+  { path: '/home', element: <Home /> },
+  // { path: '/decoy', element: <Decoy /> },
+])`;
+      expect(parseDataRouterRoutes(source).map((route) => route.path)).toEqual(['/home']);
+    });
+
+    it('ignores a block comment that spans lines, and keeps the line numbers after it', () => {
+      const source = `createBrowserRouter([
+  /*
+    { path: '/decoy', element: <Decoy /> },
+  */
+  { path: '/home', element: <Home /> },
+])`;
+      const routes = parseDataRouterRoutes(source);
+      expect(routes.map((route) => route.path)).toEqual(['/home']);
+      expect(source.slice(0, routes[0]?.offset).split('\n').length).toBe(5);
+    });
+
+    it('does not treat a comment marker inside a string literal as a comment', () => {
+      // The `//` belongs to the URL. Blanking from there would erase the rest of the line and
+      // lose the route that follows on it.
+      const source = `createBrowserRouter([
+  { path: '/docs', loader: fetchFrom('https://example.com/api') },
+  { path: '/home', element: <Home /> },
+])`;
+      expect(parseDataRouterRoutes(source).map((route) => route.path)).toEqual(['/docs', '/home']);
+    });
+
+    it('keeps a double slash that is part of the route path itself', () => {
+      const source = `createBrowserRouter([{ path: '/a//b', element: <Odd /> }])`;
+      expect(parseDataRouterRoutes(source).map((route) => route.path)).toEqual(['/a//b']);
+    });
+
+    it('ignores commented-out routes in the router fallback, in both forms', () => {
+      const manifest = parseRouterFallback(`
+        // <Route path="/decoy" element={<Decoy />} />
+        <Route path="/home" element={<Home />} />
+        /* createBrowserRouter([{ path: '/ghost' }]) */
+        createBrowserRouter([{ path: '/about', element: <About /> }])
+      `);
+      expect(manifest.routes.map((route) => route.url).sort()).toEqual(['/about', '/home']);
+    });
+
+    it('keeps a router fallback path whose string holds a double slash', () => {
+      const manifest = parseRouterFallback(`<Route path="/a//b" element={<Odd />} />`);
+      expect(manifest.routes.map((route) => route.url)).toEqual(['/a//b']);
+    });
+  });
+
   it('records where each route was declared, not where its path text first appears', () => {
     // A comment that names a route path is the case an offset guards against. A caller that
     // searched the file for the path text would report the comment line as the declaration.
