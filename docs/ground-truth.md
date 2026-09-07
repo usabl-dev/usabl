@@ -26,14 +26,14 @@ and waits releases for fixes. Priya builds the UI with great intentions but miss
 things because it is hard to know everything.
 
 **What usabl is.** A proof engine for accessibility in product development workflows.
-It checks whether touched surfaces have any machine-checkable accessibility barrier
-that is new against a reviewed evidence floor, before work can be called done. When it
-checked something, it gives one of four answers (a run that checked nothing, or that
-crashed, gives no verdict; see below):
+It checks whether the screens mapped from the changed UI files have any machine-checkable
+accessibility barrier that is new against a reviewed evidence floor, before work can be
+called done. When it checked something, it gives one of four answers (a run that checked
+nothing, or that crashed, gives no verdict; see below):
 
 | Verdict | Meaning |
 |---|---|
-| `verified` | No new distinguishable identity, and no count growth at a recorded one, under the reviewed floor. |
+| `verified` | No new distinguishable identity, and no count growth at a recorded one, under the reviewed floor, on the screens mapped from the changed UI files. |
 | `regression` | A new problem appeared. |
 | `not_covered` | Could not identify or exercise what the change touched. |
 | `approval_required` | Policy changed; the tool will not judge itself. |
@@ -85,8 +85,8 @@ or a separate command; it is the same `usabl check` run over a second set of sca
 
 The core idea: a scanner gives advice a human may or may not read. usabl's gate decides,
 and the stop hook blocks the AI's first stop on a blocking verdict unless a one-use bypass
-was issued, so a machine-checkable barrier that is new against the reviewed floor on a
-touched surface is not called done in silence. The overlay and the advisory lane still show findings without
+was issued, so a machine-checkable barrier that is new against the reviewed floor on the
+mapped screens is not called done in silence. The overlay and the advisory lane still show findings without
 blocking. That is display, not a second decision-maker.
 
 The specific things that are new, each against what exists today:
