@@ -548,8 +548,14 @@ export const overlayClientSource = `(() => {
       lines.push((paths.length === 1 ? 'Guarded file changed: ' : 'Guarded files changed: ')
         + paths.join(', ') + '.');
     }
+    // Conditional on purpose. A guarded path that no ownership rule covers can never be cleared by a
+    // review, and the payload does not say whether an owner is assigned. The policy check on the
+    // pull request is the surface that knows, so the developer is sent there rather than promised
+    // an approval that may not exist.
     lines.push(
-      'A code owner other than the author approves it on the pull request. '
+      'Where a code owner is assigned to ' + (paths.length > 1 ? 'those paths' : 'that path')
+        + ', a code owner other than the author approves it on the pull request; '
+        + 'the policy check on the pull request says exactly what it needs. '
         + 'Nothing in this panel or on your machine can approve it.',
     );
     lines.push(accessibilityLine(payload, split));

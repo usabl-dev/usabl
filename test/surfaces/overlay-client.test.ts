@@ -841,14 +841,19 @@ describe('overlay states', { timeout: 30_000 }, () => {
     expect(await bannerWord(page)).toBe('!Approval required');
     // The file is named in the sentence, not only in the chips below it.
     expect(await panel.getByText('Guarded file changed: usabl.config.json.', { exact: true }).isVisible()).toBe(true);
+    // Conditional: a guarded path no ownership rule covers cannot be cleared by any review, and the
+    // payload does not say whether an owner is assigned. The policy check is the surface that knows.
     expect(
       await panel
         .getByText(
-          'A code owner other than the author approves it on the pull request. Nothing in this panel or on your machine can approve it.',
+          'Where a code owner is assigned to that path, a code owner other than the author approves it on the pull request; the policy check on the pull request says exactly what it needs. Nothing in this panel or on your machine can approve it.',
           { exact: true },
         )
         .isVisible(),
     ).toBe(true);
+    expect(
+      await panel.getByText('A code owner other than the author approves it on the pull request. Nothing', { exact: false }).count(),
+    ).toBe(0);
     expect(await panel.getByRole('heading', { name: 'Guarded paths awaiting review' }).isVisible()).toBe(true);
     // The old sentence named nobody and no file.
     expect(await panel.getByText('A person has to approve', { exact: false }).count()).toBe(0);
@@ -1274,7 +1279,7 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
 
     expect(lines).toEqual([
       'Guarded files changed: usabl.config.json, .usabl/waivers.json.',
-      'A code owner other than the author approves it on the pull request. Nothing in this panel or on your machine can approve it.',
+      'Where a code owner is assigned to those paths, a code owner other than the author approves it on the pull request; the policy check on the pull request says exactly what it needs. Nothing in this panel or on your machine can approve it.',
       'Accessibility for this run: REGRESSION (exit 1), 2 issues on this screen and 0 on other screens.',
       'If the change was unintended, revert the files and this state clears.',
     ]);
@@ -1308,7 +1313,7 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
 
     expect(lines).toEqual([
       'Guarded file changed: usabl.config.json.',
-      'A code owner other than the author approves it on the pull request. Nothing in this panel or on your machine can approve it.',
+      'Where a code owner is assigned to that path, a code owner other than the author approves it on the pull request; the policy check on the pull request says exactly what it needs. Nothing in this panel or on your machine can approve it.',
       'Accessibility for this run: VERIFIED (exit 0).',
       'If the change was unintended, revert the file and this state clears.',
     ]);
