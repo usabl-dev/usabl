@@ -665,9 +665,101 @@ describe('evaluateStopDecision', () => {
         expect(next).toContain('Do not edit those files to clear this block.');
         // The gap the reader has to resolve is still disclosed with its reason.
         expect(message).toContain('provider pf-rulepack denied capability: network');
-        // A carried finding still blocks, so it is still shown as a barrier.
-        expect(message).toContain('barrier: button-name');
+        // A carried finding is accepted debt in the evidence floor. The gate lets a run carrying
+        // one pass as verified, so it is not a barrier and is never listed as something to fix.
+        expect(message).not.toContain('barrier: button-name');
+        expect(message).not.toContain('Rule: button-name');
       });
+    });
+  });
+
+  describe('a stop let through because continuation is already active', () => {
+    // The stop goes through either way, but the guidance still has to be the guidance for this
+    // verdict. This path used to tell every blocking verdict to fix the barriers, which is wrong
+    // when guarded files are the only thing standing and wrong again when the work is resolving
+    // coverage gaps.
+    const active = (over: Partial<Result>): string =>
+      evaluateStopDecision(baseResult(over), { stopHookActive: true }).message;
+    const gaps: Result['coverage'] = {
+      changedFiles: [],
+      affected: [],
+      unresolvedFiles: [],
+      gaps: [{ ref: 'provider:pf-rulepack', state: 'capability-denied', reason: 'provider pf-rulepack denied capability: network' }],
+      nothingToCheck: false,
+    };
+
+    it('does not block, whatever the verdict', () => {
+      for (const verdict of ['regression', 'not_covered', 'approval_required'] as const) {
+        expect(evaluateStopDecision(baseResult({ verdict }), { stopHookActive: true }).block).toBe(false);
+      }
+    });
+
+    it('asks for the barriers to be fixed on a regression', () => {
+      const lines = active({ verdict: 'regression', exitCode: 1 }).split('\n');
+
+      expect(lines[0]).toContain('continuation already active');
+      expect(lines[1]).toBe(
+        'Next: fix each barrier usabl reported, then run usabl check before you tell the user this change is accessible.',
+      );
+    });
+
+    it('asks for the gaps to be resolved when coverage is incomplete', () => {
+      const lines = active({ verdict: 'not_covered', exitCode: 3, coverage: gaps }).split('\n');
+
+      expect(lines[1]).toBe(
+        'Next: resolve every reason usabl reported under Not evaluated, then run usabl check before you tell the user this change is accessible.',
+      );
+      expect(lines[1]).not.toContain('fix each barrier');
+    });
+
+    it('asks only for the user to be told when guarded files are the only thing standing', () => {
+      const lines = active({
+        verdict: 'approval_required',
+        exitCode: 2,
+        accessibilityVerdict: 'verified',
+        accessibilityExitCode: 0,
+        dirtyGuardedPaths: ['.usabl-waivers.json'],
+      }).split('\n');
+
+      expect(lines[1]).toBe(
+        'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+      );
+      expect(lines[1]).not.toContain('fix each barrier');
+      // The step tells the model to raise the files, so the files are named here too.
+      expect(lines[2]).toBe('Guarded file changed: .usabl-waivers.json');
+      expect(lines[3]).toContain('a code owner other than the author approves it on the pull request');
+      expect(lines[4]).toBe('To let the assistant stop once without clearing this, a person can run usabl bypass.');
+    });
+
+    it('asks for both when guarded files changed and the accessibility half regressed', () => {
+      const lines = active({
+        verdict: 'approval_required',
+        exitCode: 2,
+        accessibilityVerdict: 'regression',
+        accessibilityExitCode: 1,
+        dirtyGuardedPaths: ['.usabl-waivers.json'],
+      }).split('\n');
+
+      expect(lines[1]).toBe(
+        'Next: fix each barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+      );
+      expect(lines[2]).toBe('Guarded file changed: .usabl-waivers.json');
+    });
+
+    it('asks for the gaps and the telling when guarded files changed and coverage is incomplete', () => {
+      const lines = active({
+        verdict: 'approval_required',
+        exitCode: 2,
+        accessibilityVerdict: 'not_covered',
+        accessibilityExitCode: 3,
+        coverage: gaps,
+        dirtyGuardedPaths: ['.usabl-waivers.json'],
+      }).split('\n');
+
+      expect(lines[1]).toBe(
+        'Next: resolve every reason usabl reported under Not evaluated, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+      );
+      expect(lines[2]).toBe('Guarded file changed: .usabl-waivers.json');
     });
   });
 

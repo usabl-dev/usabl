@@ -51,41 +51,73 @@ const BLOCKING_VERDICTS: ReadonlySet<Verdict> = new Set(['regression', 'approval
  * Guarded policy files are the one thing the model must not touch to clear a block, so that step
  * says so.
  */
-const NEXT_STEP: Record<string, string> = {
+interface NextSteps {
+  regression: string;
+  notCovered: string;
+  approvalOnly: string;
+  approvalWithRegression: string;
+  approvalWithGaps: string;
+}
+
+const BLOCK_STEPS: NextSteps = {
   regression: 'Next: fix each barrier below, then stop again so usabl can re-check the change.',
-  not_covered:
+  notCovered:
     'Next: resolve every reason under Not evaluated below: make each unreachable screen reachable, map each unmapped file to a screen, grant each denied capability, and fix each failed provider (both are gaps named provider:<id>). Then stop again.',
-  approval_required:
+  approvalOnly:
     'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+  approvalWithRegression:
+    'Next: fix each barrier below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+  approvalWithGaps:
+    'Next: resolve every reason under Not evaluated below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
 };
 
 /**
- * The step when guarded files changed and the accessibility run did not pass either.
+ * The same guidance for the run that is let through because continuation is already active.
  *
- * Both facts need the model: the accessibility work is its to do, and the policy change is the
- * user's to hear about. Saying only one would let the other pass unmentioned.
- *
- * Which one is chosen comes from `accessibilityVerdict`, the gate's own answer for the
- * accessibility half of the run, and never from whether some finding exists. A run can carry a
- * finding the gate marked fixed or waived and still be verified, and a run can be `not_covered`
- * with an old finding attached; reading the findings would tell the model to fix a barrier the
- * gate says is fixed in the first case and would drop the coverage instruction in the second.
+ * The work is the same work, so the same selector chooses it; only the framing differs. Nothing
+ * is listed in that message beyond the gate's summary, so no step says "below", and each one
+ * ends by naming the check that has to pass before the model may call the change accessible.
+ * This path used to tell every blocking verdict to fix the barriers, which is wrong when
+ * guarded files are the only thing standing and wrong again when the work is resolving gaps.
  */
-const APPROVAL_REQUIRED_WITH_REGRESSION_STEP =
-  'Next: fix each barrier below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.';
+const CONTINUATION_STEPS: NextSteps = {
+  regression:
+    'Next: fix each barrier usabl reported, then run usabl check before you tell the user this change is accessible.',
+  notCovered:
+    'Next: resolve every reason usabl reported under Not evaluated, then run usabl check before you tell the user this change is accessible.',
+  approvalOnly:
+    'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+  approvalWithRegression:
+    'Next: fix each barrier usabl reported, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+  approvalWithGaps:
+    'Next: resolve every reason usabl reported under Not evaluated, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
+};
 
-const APPROVAL_REQUIRED_WITH_GAPS_STEP =
-  'Next: resolve every reason under Not evaluated below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.';
-
-/** The step for a guarded-file block, given what the gate said about accessibility. */
-function approvalRequiredStep(result: Result): string {
-  if (result.accessibilityVerdict === 'regression') {
-    return APPROVAL_REQUIRED_WITH_REGRESSION_STEP;
+/**
+ * The step for one Result, from one set of wordings.
+ *
+ * A guarded-file block asks what the accessibility half of the run said, because that half is a
+ * separate verdict the gate wrote and the two can disagree: policy can block a run whose
+ * accessibility is verified, regressed, or unproven, and each of those is different work. Every
+ * caller routes through here so no path can answer this on its own.
+ */
+function chooseNextStep(result: Result, steps: NextSteps): string | undefined {
+  if (result.verdict === 'approval_required') {
+    if (result.accessibilityVerdict === 'regression') {
+      return steps.approvalWithRegression;
+    }
+    if (result.accessibilityVerdict === 'not_covered') {
+      return steps.approvalWithGaps;
+    }
+    return steps.approvalOnly;
   }
-  if (result.accessibilityVerdict === 'not_covered') {
-    return APPROVAL_REQUIRED_WITH_GAPS_STEP;
+  if (result.verdict === 'regression') {
+    return steps.regression;
   }
-  return NEXT_STEP['approval_required'] ?? '';
+  if (result.verdict === 'not_covered') {
+    return steps.notCovered;
+  }
+  return undefined;
 }
 
 /**
@@ -204,12 +236,7 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   const gating = result.findings.filter(isBlockingBarrier);
   const view = applyNoiseBudget(gating, budget, 'gating findings');
 
-  const nextStep =
-    result.verdict === 'approval_required'
-      ? approvalRequiredStep(result)
-      : result.verdict === null
-        ? undefined
-        : NEXT_STEP[result.verdict];
+  const nextStep = chooseNextStep(result, BLOCK_STEPS);
   if (nextStep !== undefined) {
     scaffold.push(nextStep);
   }
@@ -324,18 +351,29 @@ export function evaluateStopDecision(
   }
 
   if (ctx.stopHookActive) {
-    // A second block while continuation is active can loop the model and hide the real operator choice.
+    // A second block while continuation is active can loop the model and hide the real operator
+    // choice. The stop goes through, and the guidance is still the guidance for this verdict:
+    // the same selector the block message uses, in the wording this path needs. A guarded-file
+    // state also names the files here, because the step tells the model to raise them with the
+    // user and a model cannot name a file it was not given.
+    const scaffold = [
+      verdictLine(
+        safe,
+        'NOT verified. usabl let this stop through without blocking again (continuation already active). ',
+      ),
+    ];
+    const step = chooseNextStep(safe, CONTINUATION_STEPS);
+    if (step !== undefined) {
+      scaffold.push(step);
+    }
+    if (safe.verdict === 'approval_required') {
+      scaffold.push(...approvalLines(safe));
+    }
     return {
       block: false,
       message: assembleBoundedMessage({
-        scaffold: [
-          verdictLine(
-            safe,
-            'NOT verified. usabl let this stop through without blocking again (continuation already active). ',
-          ),
-          'Next: fix the barriers and run usabl check before you tell the user this change is accessible.',
-        ],
-        keep: 2,
+        scaffold,
+        keep: scaffold.length,
         pieces: [summaryPiece(safe)],
         keepPieces: 1,
         frame: frameUntrustedBlock,
