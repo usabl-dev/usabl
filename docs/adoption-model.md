@@ -72,8 +72,10 @@ each stage matters; this section is what a team actually types, in order.
    guarded paths are dirty, when the scan crashed, or when nothing matched the
    interface globs.
 9. (human) Review and merge the floor as an `approval_required` accept. After it lands,
-   carried debt does not gate. New, unwaived barriers still do, and so do unconfirmed
-    coverage and later edits to the guarded policy files.
+   carried debt does not gate. New, unwaived barriers above the floor still do, and so do
+    unconfirmed coverage and later edits to the guarded policy files. A barrier that lands
+    in headroom the floor still records counts as carried until `usabl floor prune` re-arms
+    the floor; usabl discloses that headroom on every run where it exists.
 10. (human, optional) Add waivers to `.usabl-waivers.json` for findings that need a
     temporary exception. Each waiver is fully typed and names `rule`, `surface`,
     `scope`, `reason`, `owner`, `approvedBy`, `created`, and `expires` (both timestamps
@@ -198,7 +200,7 @@ read as a useful open tool, not a contest entry.
 **Mitigation:** `usabl baseline` drafts the accepted accessibility floor into
 `.usabl-evidence.json` as a reviewable working-tree diff. It captures the current
 deterministic findings as the floor, so from then on carried debt does not gate. What
-still gates: a new, unwaived violation, coverage the run could not confirm, and an edit
+still gates: a new, unwaived violation above the floor, coverage the run could not confirm, and an edit
 to a guarded policy file. Baseline is an explicit, separate step; it never runs during a
 check.
 
@@ -277,7 +279,7 @@ assistant loop.
 - No shared view of progress, so the effort loses visibility
 
 **Mitigation:** The evidence floor keeps carried debt from gating, so what gates is a new,
-unwaived violation, coverage the run could not confirm, or a guarded policy edit. Editing a guarded
+unwaived violation above the floor, coverage the run could not confirm, or a guarded policy edit. Editing a guarded
 policy file (`usabl.config.json`, `usabl.routes.json`, `.usabl-evidence.json`,
 `.usabl-waivers.json`) so it diverges from the trusted ref forces an
 `approval_required` verdict, so acceptance bytes cannot be self-approved in the same
