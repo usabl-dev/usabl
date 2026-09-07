@@ -7,7 +7,7 @@
 
 **usable by default.**
 
-usabl is an accessibility proof engine for product development. It checks that a change adds no new machine-checkable accessibility barriers on the surfaces it touched. In CI, a required check blocks the merge on a blocking verdict. In an assistant, its Stop hook blocks the first attempt to stop on a blocking verdict (regression, not covered, or approval required) unless the user has issued a one-use bypass; idle runs, runs with no verdict, and hook errors are disclosed and allowed. A run that checked something returns one of four verdicts: verified, regression, not covered, or approval required. A run can also return no verdict: the change touched no covered surface (idle), or the run could not produce a verdict (a crash, or every affected screen failing to render). No verdict is not a pass. The scope is accessibility aligned with WCAG 2.2 AA. Screen-reader announcement is the differentiating layer, not the whole claim.
+usabl is an accessibility proof engine for product development. It checks that a change adds no new machine-checkable accessibility barriers on the screens its coverage mapped from the changed UI files, and discloses every gap it detected. In CI, when `usabl-required` is a required check, a blocking verdict blocks the normal merge path, subject to the ruleset's bypass list. In an assistant, its Stop hook blocks the first attempt to stop on a blocking verdict (regression, not covered, or approval required) unless the user has issued a one-use bypass; idle runs, runs with no verdict, and hook errors are disclosed and allowed. A run that checked something returns one of four verdicts: verified, regression, not covered, or approval required. A run can also return no verdict: the change touched no covered surface (idle), or the run could not produce a verdict (a crash, or every affected screen failing to render). No verdict is not a pass. The scope is accessibility aligned with WCAG 2.2 AA. Screen-reader announcement is the differentiating layer, not the whole claim.
 
 > **The AI can suggest fixes. It does not get to grade its own work.**
 
@@ -18,7 +18,7 @@ usabl is built to decide whether a change may be called done, rather than to pro
 - **A verdict with a receipt.** Only a verified run counts as proof. A verified run mints a receipt you can re-check later against the same source tree, policy hash, engine version, and scanner versions.
 - **One engine behind every surface.** The same engine runs behind the CLI, the Stop hook, the dev-server overlay, and CI. The overlay is advisory. CI reads policy from the trusted base branch, so a local run and a CI run can differ when local policy files differ from the base.
 - **Honest by construction.** The engine keeps verified, not covered, and merely observed apart in words, never by color. It never claims compliance, and it says so on its own output.
-- **Debt that only shrinks.** Known barriers sit in a reviewed evidence floor, recorded by screen, rule, and element identity. Exceptions live in a separate waiver ledger, where each waiver carries an owner, an approver, a reason, and an expiry date. New barriers block. `usabl floor prune` removes floor entries that a full scan no longer observes, so a reintroduced barrier gates as new.
+- **Debt that only shrinks.** Known barriers sit in a reviewed evidence floor, recorded by screen, rule, and element identity. Exceptions live in a separate waiver ledger, where each waiver carries an owner, an approver, a reason, and an expiry date. A new, unwaived barrier on a scanned screen blocks. `usabl floor prune` removes floor entries that a full scan no longer observes, so a reintroduced barrier gates as new.
 
 ## The four verdicts
 
@@ -26,8 +26,8 @@ A `usabl check` that checked something ends in one of four verdicts, each with a
 
 | Verdict               | Meaning                                                                                                  |
 | --------------------- | -------------------------------------------------------------------------------------------------------- |
-| **Verified**          | No new gating barriers on the touched surfaces, and no coverage gap was detected. A receipt is minted.  |
-| **Regression**        | A new machine-checkable barrier appeared. The change is blocked.                                         |
+| **Verified**          | No new gating barriers on the screens coverage mapped from the changed UI files, and no coverage gap was detected. A receipt is minted. |
+| **Regression**        | A new machine-checkable barrier appeared. Exit 1; the Stop hook, the required CI check, or your own script turns that into a block. |
 | **Not covered**       | usabl detected a touched surface it could not check, so it refuses to guess. This is honest uncertainty, not a pass. |
 | **Approval required** | The change edits policy itself, which needs a human code-owner decision before it can land.              |
 
