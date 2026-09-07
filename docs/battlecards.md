@@ -38,7 +38,7 @@ walk + PF rules - the AI never grades its own homework.
 while our gate holds the verdict. Different architectural bets (LLM review vs
 deterministic proof).
 
-**One-liner:** "They review once per session. We prove every change."
+**One-liner:** "They review once per session. usabl runs its gate on every change and reports what it could not check."
 
 ---
 
@@ -83,7 +83,7 @@ written."
 evidence the developer and the AI already saw.
 
 **Complementary?** Yes - Lighthouse and WAVE remain useful for ad-hoc audits and
-broader page health. usabl covers the change-level proof they don't.
+broader page health. usabl adds a change-level gate with a receipt on verified runs.
 
 **One-liner:** "They report after the fact. We complete the check before done."
 
@@ -99,7 +99,7 @@ evidence bundle from a stronger verdict source.
 **Complementary?** Partially - if a team already has a PR bot, usabl's CI leg replaces
 it with a stronger signal. The upstream prevention in the assistant loop is additive.
 
-**One-liner:** "They comment on the PR. We stop the defect before the PR."
+**One-liner:** "They comment on the PR. usabl blocks the assistant's first stop on a blocking verdict, before the PR exists, unless a one-use bypass was issued."
 
 ---
 
@@ -124,7 +124,7 @@ the receipt."
 
 **What they do well:** Own the components and the official guidance.
 
-**What we do that they do not:** Encode their guidance in an extensible rulepack inside
+**What usabl adds:** Encode their guidance in an extensible rulepack inside
 a proof engine that gates AI completion - alliance, not rivalry.
 
 **One-liner:** "They build accessible components. We prove teams compose them
