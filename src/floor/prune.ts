@@ -3,7 +3,7 @@
  * This unit writes a floor prune draft from a gated scan.
  * It must never mint a verdict, never edit the floor inside `run()`, and never treat an unscanned screen as fixed.
  */
-import type { Deps, ScreenScan, UsablConfig } from '../contracts/index.js';
+import type { Deps, FloorEntry, ScreenScan, UsablConfig } from '../contracts/index.js';
 import { EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
 import { coverageIncomplete } from '../coverage/completeness.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
@@ -23,6 +23,11 @@ export interface FloorPruneOutcome {
   wrote: boolean;
   message: string;
   prunedCount: number;
+  // Entries kept but re-armed to the count this run observed. A pay-down that removes some but not
+  // all barriers at one identity lowers a count without removing an entry, so a run can write a
+  // floor diff with prunedCount 0. Reported separately because the two are different work: one is
+  // an identity that is gone, the other is an identity with fewer barriers behind it than before.
+  loweredCount: number;
 }
 
 function formatDirtyGuardedPaths(paths: string[]): string {
@@ -37,33 +42,54 @@ function floorEntrySortKey(value: { screenId: string; layer: string; rule: strin
   return `${value.screenId}|${value.layer}|${value.rule}|${value.elementKey ?? 'count'}`;
 }
 
-function observedDeterministicKeys(screens: ScreenScan[]): Set<string> {
-  const keys = new Set<string>();
+/**
+ * How many deterministic barriers this run actually observed at each identity.
+ *
+ * Counts, not a presence set. An entry whose identity is still observed used to be kept exactly as
+ * written, so the recorded count only ever went up, through `usabl baseline`, and never came back
+ * down. That made the count a high-water mark: after a barrier at a floored identity was fixed, the
+ * entry still claimed the old number, and the gate had no way to tell a new barrier taking the
+ * freed slot from the accepted one that used to hold it. Lowering the count here is what re-arms
+ * the gate, and it is what makes the pay-down message this unit already prints true.
+ *
+ * Deterministic drafts only, matching what `usabl baseline` counts and what the gate compares
+ * against. Counting advisory evidence here would write a number the gate never sees.
+ */
+function observedDeterministicCounts(screens: ScreenScan[]): Map<string, number> {
+  const counts = new Map<string, number>();
   for (const screen of screens) {
     for (const draft of screen.drafts) {
       if (draft.evidenceClass !== 'deterministic') {
         continue;
       }
       const identity = computeIdentity(draft);
-      keys.add(
-        identityKey({
-          screenId: draft.screenId,
-          rule: draft.rule,
-          elementKey: identity.elementKey,
-        }),
-      );
+      const key = identityKey({
+        screenId: draft.screenId,
+        rule: draft.rule,
+        elementKey: identity.elementKey,
+      });
+      counts.set(key, (counts.get(key) ?? 0) + 1);
     }
   }
-  return keys;
+  return counts;
 }
 
 function formatNoopReport(): string {
   return `nothing was pruned from ${EVIDENCE_FLOOR_PATH}.`;
 }
 
-function formatSuccessReport(prunedCount: number, hasCoverageGaps: boolean): string {
+function formatSuccessReport(prunedCount: number, loweredCount: number, hasCoverageGaps: boolean): string {
+  // Both numbers, and only the ones that happened. A prune that lowered a count without removing
+  // an entry would otherwise report "removed 0 floor entries" over a real floor diff.
+  const changes: string[] = [];
+  if (prunedCount > 0) {
+    changes.push(`removed ${prunedCount} floor entr${prunedCount === 1 ? 'y' : 'ies'}`);
+  }
+  if (loweredCount > 0) {
+    changes.push(`lowered the barrier count on ${loweredCount} entr${loweredCount === 1 ? 'y' : 'ies'}`);
+  }
   const lines = [
-    `removed ${prunedCount} floor entr${prunedCount === 1 ? 'y' : 'ies'} from ${EVIDENCE_FLOOR_PATH}.`,
+    `${changes.join(' and ')} in ${EVIDENCE_FLOOR_PATH}.`,
     'pruning re-arms the gate, so a reintroduced barrier gates as new.',
     'review and merge this floor diff with the fix.',
   ];
@@ -90,6 +116,7 @@ export async function runFloorPrune(
         wrote: false,
         message: formatDirtyGuardedPaths(otherGuardedDirty),
         prunedCount: 0,
+        loweredCount: 0,
       };
     }
 
@@ -98,11 +125,11 @@ export async function runFloorPrune(
     const readFloor = floorFs.readFile ?? deps.fs.readFile;
     const rawFloor = await readFloor(EVIDENCE_FLOOR_PATH);
     if (rawFloor === null || rawFloor.trim().length === 0) {
-      return { exitCode: 0, wrote: false, message: formatNoopReport(), prunedCount: 0 };
+      return { exitCode: 0, wrote: false, message: formatNoopReport(), prunedCount: 0, loweredCount: 0 };
     }
     const floor = parseEvidenceFloor(JSON.parse(rawFloor));
     if (floor.entries.length === 0) {
-      return { exitCode: 0, wrote: false, message: formatNoopReport(), prunedCount: 0 };
+      return { exitCode: 0, wrote: false, message: formatNoopReport(), prunedCount: 0, loweredCount: 0 };
     }
 
     const changedFiles = [...new Set(await deps.fs.glob(config.uiFileGlobs))].sort();
@@ -118,6 +145,7 @@ export async function runFloorPrune(
         wrote: false,
         message: `refused: ${result.summary}. No floor entries were pruned.`,
         prunedCount: 0,
+        loweredCount: 0,
       };
     }
     if (result.coverage.nothingToCheck) {
@@ -126,6 +154,7 @@ export async function runFloorPrune(
         wrote: false,
         message: 'refused: no UI files matched uiFileGlobs for floor prune.',
         prunedCount: 0,
+        loweredCount: 0,
       };
     }
 
@@ -138,9 +167,18 @@ export async function runFloorPrune(
     const cleanlyScannedScreens = new Set(
       result.screens.filter((screen) => screen.gaps.length === 0).map((screen) => screen.screenId),
     );
-    const observedKeys = observedDeterministicKeys(result.screens);
+    const observedCounts = observedDeterministicCounts(result.screens);
+    // The same test the gate applies before it compares a count. A version 1 floor wrote a
+    // placeholder 1 for name and structural entries, so those numbers are not observations and the
+    // gate ignores them. Writing a real count into one would present it as observed debt while the
+    // file still says version 1, which is the confusion the version field exists to prevent. Those
+    // entries are re-armed by `usabl baseline`, which rewrites the floor at version 2.
+    const countIsObserved = (entry: FloorEntry): boolean =>
+      entry.identityBasis === 'count' || floor.version >= 2;
+
     const keptEntries: typeof floor.entries = [];
     let prunedCount = 0;
+    let loweredCount = 0;
     for (const entry of floor.entries) {
       // Keep entries for any screen we did not fully verify this run: not affected,
       // not scanned, or scanned with a coverage gap. Absence is not proof of a fix.
@@ -148,29 +186,42 @@ export async function runFloorPrune(
         keptEntries.push(entry);
         continue;
       }
-      if (observedKeys.has(identityKey(entry))) {
-        keptEntries.push(entry);
+      const observed = observedCounts.get(identityKey(entry)) ?? 0;
+      if (observed === 0) {
+        prunedCount += 1;
         continue;
       }
-      prunedCount += 1;
+      // Lower only, never raise. Fewer barriers than the floor accepted is a pay-down this run
+      // measured, and recording it is what re-arms the gate. More barriers than the floor accepted
+      // is new debt, and accepting that silently here would let prune do the job `usabl baseline`
+      // exists to do under review. The gate already reports that case as a regression.
+      if (countIsObserved(entry) && observed < entry.count) {
+        keptEntries.push({ ...entry, count: observed });
+        loweredCount += 1;
+        continue;
+      }
+      keptEntries.push(entry);
     }
 
-    if (prunedCount === 0) {
-      return { exitCode: 0, wrote: false, message: formatNoopReport(), prunedCount: 0 };
+    if (prunedCount === 0 && loweredCount === 0) {
+      return { exitCode: 0, wrote: false, message: formatNoopReport(), prunedCount: 0, loweredCount: 0 };
     }
 
     const hasCoverageGaps = coverageIncomplete(result.coverage);
-    // Prune only removes entries, so it must keep the version it read. Claiming version 2
-    // over version 1 counts would present placeholder counts as observed debt.
+    // Prune removes entries and lowers counts. It never raises one and never adds an identity, so
+    // it must keep the version it read. Claiming version 2 over version 1 counts would present
+    // placeholder counts as observed debt.
     const nextFloor = { version: floor.version, entries: sortBy(keptEntries, floorEntrySortKey) };
     await floorFs.writeFile(EVIDENCE_FLOOR_PATH, `${JSON.stringify(nextFloor, null, 2)}\n`);
     return {
       exitCode: 0,
       wrote: true,
-      // Removing only paid-down identities closes the disarmed window where
-      // a reintroduced barrier would otherwise stay carried instead of new.
-      message: formatSuccessReport(prunedCount, hasCoverageGaps),
+      // Removing paid-down identities and lowering the counts behind the ones that remain closes
+      // the disarmed window where a reintroduced barrier would otherwise stay carried instead of
+      // new.
+      message: formatSuccessReport(prunedCount, loweredCount, hasCoverageGaps),
       prunedCount,
+      loweredCount,
     };
   } catch (err) {
     // The error can carry page-derived text with control bytes. Neutralize it before
@@ -181,6 +232,7 @@ export async function runFloorPrune(
       wrote: false,
       message: `refused: floor prune crashed (${message}).`,
       prunedCount: 0,
+      loweredCount: 0,
     };
   }
 }

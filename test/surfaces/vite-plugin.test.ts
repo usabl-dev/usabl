@@ -33,6 +33,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   accessibilityVerdict: null,
   accessibilityExitCode: 0,
   paidDownCount: 0,
+  floorHeadroom: [],
   ...over,
 });
 
@@ -295,11 +296,11 @@ describe('projectOverlay', () => {
     );
     const finding = overlay.findings[0];
 
-    expect(finding?.elementPath).toContain('[BEGIN UNTRUSTED PAGE TEXT');
-    expect(finding?.elementName).toContain('[BEGIN UNTRUSTED PAGE TEXT');
-    expect(finding?.role).toContain('[BEGIN UNTRUSTED PAGE TEXT');
-    expect(finding?.elementKey).toContain('[BEGIN UNTRUSTED PAGE TEXT');
-    expect(finding?.whatUserExperiences).toContain('[BEGIN UNTRUSTED PAGE TEXT');
+    expect(finding?.elementPath).toContain('[BEGIN UNTRUSTED TEXT');
+    expect(finding?.elementName).toContain('[BEGIN UNTRUSTED TEXT');
+    expect(finding?.role).toContain('[BEGIN UNTRUSTED TEXT');
+    expect(finding?.elementKey).toContain('[BEGIN UNTRUSTED TEXT');
+    expect(finding?.whatUserExperiences).toContain('[BEGIN UNTRUSTED TEXT');
     expect(JSON.stringify(finding)).not.toContain('SECRETPOISON');
   });
 });

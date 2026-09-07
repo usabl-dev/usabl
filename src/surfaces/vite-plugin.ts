@@ -73,6 +73,9 @@ export interface OverlayProjection {
     mintedAt: string;
   } | null;
   dirtyGuardedPaths: string[];
+  // Floor entries this run counted fewer barriers at than the floor records. Disclosure only: the
+  // overlay lists them under the recorded group and nothing about them is a finding or a verdict.
+  floorHeadroom: Result['floorHeadroom'];
   paidDownCount: number;
   // The accessibility outcome with the policy divergence set aside, copied from the gate-owned
   // Result and never computed here. An approval_required run can also carry a real barrier, and the
@@ -414,6 +417,14 @@ export function projectOverlay(
           },
     dirtyGuardedPaths: safe.dirtyGuardedPaths,
     paidDownCount: safe.paidDownCount,
+    // Screen ids, rule names and two integers. Copied field by field like everything else here, so
+    // the overlay is handed exactly what it renders and nothing rides along.
+    floorHeadroom: (safe.floorHeadroom ?? []).map((entry) => ({
+      screenId: entry.screenId,
+      rule: entry.rule,
+      recorded: entry.recorded,
+      observed: entry.observed,
+    })),
     accessibilityVerdict: safe.accessibilityVerdict ?? null,
     accessibilityExitCode: safe.accessibilityExitCode ?? null,
   };

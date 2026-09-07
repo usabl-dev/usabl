@@ -256,14 +256,122 @@ compatibility-normalizes usabl's output, and the fix then belongs in that consum
 it scrubs. Folding page text here would make usabl match text that no reader sees as a
 marker, and compatibility folding is lossy for legitimate content.
 
-**Not handled:** GitHub applies its own autolinks after the Markdown is rendered. Email
+**Handled:** GitHub applies its own autolinks after the Markdown is rendered. Email
 addresses, the `mailto:` and `xmpp:` forms, `@user` mentions, `#123` issue references, and
 commit SHAs are matched on decoded text, after character references have resolved, so a
-reference cannot stop them. Page text in a pull request comment can therefore still produce
-a clickable `mailto:` link, a notification to a user who has access to the repository, or a
+reference cannot stop them. Page text in a pull request comment could therefore produce a
+clickable `mailto:` link, a notification to a user who has access to the repository, or a
 link to a repository object. None of these can forge a verdict, close the untrusted-text
-frame, or leak engine data. The mitigation is to wrap page-derived text in code spans, which
-GitHub's post-render filters skip, and that is scheduled for the sealed-text visual work.
+frame, or leak engine data. Every page-derived value in the comment is now written as an
+inline code span under an engine-authored label, `experience: `, `why: `, `fix: `,
+`source: `, `candidates: `, `ref: `, `reason: `, `announced: `, and `engine summary: `,
+inside the untrusted frame, whose markers stay outside the spans. GitHub's post-render
+filters skip code spans, so nothing in the value becomes a link, a mention, or a
+notification. The span is fenced with one more backtick than the longest run inside the
+value, so the value cannot close it; a value that begins or ends with a space or a backtick
+is padded by one space on each side, which the renderer strips, so it comes back whole; an
+empty value is written as a span holding one space, because two bare backticks are not a
+span. Because every framed line starts with its label, no line starts with backticks, so a
+value opening with three of them cannot open a fenced code block either. Tests cover an
+email address, a mention, an issue reference, a forty-hex commit id, backtick runs at every
+position, leading and trailing spaces, and empty values.
+
+A screen id is attacker-influenced text and is sealed as such. usabl's router fallback
+derives a screen id from a route literal in the application source, so whoever writes the
+application chooses it, and it is the same author whose page usabl treats as untrusted
+everywhere else. An earlier version of this section claimed no page-derived value remained
+outside a code span while the collapsed finding headline printed the id as prose. It did:
+an id spelled as a mention rendered as a real notification to a person with access to the
+repository, and other ids rendered as a mailto link and an issue link. The headline is now
+built from the group's separate fields, with the id in a code span, and the formatter that
+welded an id into a headline string has been removed so that no surface can print one
+unsealed by accident. Tests force the collapsed path with ids spelled as a mention, an
+address, an issue reference, and a commit id, and assert every occurrence sits inside a
+span.
+
+The comment seals every value the Result carries, whoever authored it. An earlier version
+of this section argued that a severity, a layer, and a rule are written by the first-party
+providers and so could stay as prose. That argument holds only while a Result is built in
+this process. It does not hold at this surface's own entry point: `usabl comment` reads a
+Result as a document from standard input, `parseResultJson` checks the schema version, the
+accessibility exit code, and one forbidden accessibility verdict, and takes every other
+field on trust, and a library caller can hand the engine a check runner of its own. A
+severity carrying a mention and an address was fed in that way and came back from the
+renderer as a live mention and a mailto link. Deciding what to seal by who authored it
+cannot survive a boundary where the author is whoever wrote the document, so the decision
+is by carrier: a value the Result carried is sealed, and only text usabl itself wrote is
+left as prose.
+
+Sealing by carrier covers every string. It does not reach a number, and a number was the
+way through. `usabl comment` does not structurally validate the document it reads:
+`parseResultJson` checks the schema version, the accessibility exit code, and one forbidden
+accessibility verdict, and takes every other field on trust. A field typed as a number is
+therefore whatever the document said, and it does not even have to be a field. A list
+supplied as `{"length": "@user"}` is never iterated by the coverage counts, so nothing
+throws and that text was printed as a count, outside every span, where the post-render
+filters reached it.
+
+So the rule for numbers is the one already used for the exit code: every value this
+document prints as a bare number is checked where it is printed, and a value that is not a
+whole number is named as unknown rather than printed. That covers all four deterministic
+counts and both judged counts, both not-evaluated counts, the floor pay-down count, the
+collapsed group count, the counts in the show-all hint, and the stop cap line. It is
+applied to counts this surface computes as well as to counts it reads, because which is
+which is not visible to a reader of the line, and the next count added should not have to
+know the difference. A code span would seal a number just as well; a number is the one
+value a span makes harder to read, and a whole number cannot be markup, a link, or a
+mention, so the check is the better seal here.
+
+Two shapes are not numbers and not strings. A verdict this unit has no headline for is
+named as an unrecognized verdict rather than printed, which also removes the word
+"undefined" from the heading. A field typed as a list that is not a list is reported as
+unreadable in the section that would have listed it, rather than walked, which used to
+throw part way through a document already half assembled, and rather than reported as
+none, which would be a claim about a run the document never made.
+
+What remains as prose is therefore engine constants and numbers that have been checked: the
+report headline and the verdict words, the meaning sentences, the section headings, the
+labels on every framed and unframed line, the brackets around a headline's status and
+severity, and the counts above. The announcement list marker is the one place a code span
+is no use, because a list marker has to be literal digits to work at all, so the marker
+counts the stops this list prints, from the iteration itself, and is never built from the
+stop index the Result carried.
+
+**Not handled:** `usabl comment` still does not validate the shape of the document it is
+given. Sealing every string and checking every printed number bounds what a malformed or
+hostile document can put on the page, and it does not make the document trustworthy: the
+counts, the sections, and the verdict shown are only as true as the file that supplied
+them. Full structural validation of an externally supplied Result is not implemented. A
+consumer that pipes a Result from an untrusted source into `usabl comment` is reporting
+that source's claims, and the receipt, not the comment, is what proves a run happened.
+
+The stop hook and the self-check are held to the same rule by their own mechanism. They
+print plain text to a language model with no renderer involved, so the question there is
+the untrusted frame rather than a code span, and every value the Result carries is inside
+it: the gate's summary, each finding's experience, fix, source, and screen id, and each
+coverage gap's ref and reason. What those two surfaces print outside the frame is the
+verdict word and its meaning, the next step, the labels, the counts, a group's status,
+severity, layer, and rule, and the list of guarded files that changed.
+
+Both surfaces project a Result built by `run()` in the same process. Their projectors,
+`evaluateStopDecision` and `projectSelfCheck`, are internal modules that the package does
+not export: the package root exports neither, and there is no subpath under which either
+can be imported. Verified against the packed and installed package rather than by reading
+the source. `Object.keys(await import('usabl'))` contains neither name, and every subpath
+form, `usabl/surfaces/stop-hook.js`, `usabl/dist/surfaces/stop-hook.js`, `usabl/stop-hook`,
+and `usabl/dist/index.js`, fails to resolve with `ERR_PACKAGE_PATH_NOT_EXPORTED`, because
+the `exports` map lists only the root, `./vite`, `./playwright`, `./docs`, and `./measure`.
+`projectPrComment` is not exported either; the comment is reached through the `usabl
+comment` command, which is why that command is the document boundary this section is about.
+
+Neither surface therefore has a document entry point for a consumer of this package. Inside
+this repository the modules can of course be imported and handed anything, and someone
+running arbitrary code in this repository is not an attacker this model defends against:
+they can edit the surfaces themselves. That is the residual assumption, and it is a
+statement about the supported package surface rather than about who wrote a provider. Two
+values that a Result could carry are no longer pasted into either line whatever their
+content: an unrecognized verdict is named with a fixed word rather than echoed, and an exit
+code that is not a whole number is named as unknown.
 
 **Not handled:** credential-dense hostile input costs more than it did. About three million
 characters of back-to-back credentials take roughly 0.7 s to redact, and roughly 1.5 s with
@@ -274,10 +382,10 @@ field caps limit what reaches an agent.
 
 **Status:** [x] All three controls ship. The bidirectional controls are the full Unicode
 `Bidi_Control` set. Eleven splitters, every split position, the reordering payload, eight
-renderer forgeries, and nineteen block-markup and autolink forms are covered by tests. [ ]
-usabl does not report that a page attempted a forgery; it removes them silently. [ ]
-Compatibility-normalized markers are out of scope, as above. [ ] Post-render autolinks and
-credential-dense input cost are open, as above.
+renderer forgeries, and the block-markup and autolink forms are covered by tests. [x]
+Post-render autolinks are mitigated by the code spans, as above. [ ] usabl does not report
+that a page attempted a forgery; it removes them silently. [ ] Compatibility-normalized
+markers are out of scope, as above. [ ] Credential-dense input cost is open, as above.
 
 ---
 

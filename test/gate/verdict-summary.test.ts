@@ -1,15 +1,23 @@
 /**
- * The verdict summary is often the only line an operator reads. It has to say what blocked the
- * run, not just how many findings there were.
+ * The verdict summary is often the only line an operator reads, and the only one a model is given
+ * on the stop hook and the self check. It has to say what blocked the run, not just how many
+ * findings there were, and every number in it has to mean what the verdict means.
  *
- * The reported defect: a run blocked because screens went unchecked said
+ * The first reported defect: a run blocked because screens went unchecked said
  * "not_covered: 0 gating finding(s)", which names a count of zero and no cause at all. The rule
  * these tests hold the summary to is that the line alone tells you whether the block came from a
  * finding or from coverage the run never reached.
+ *
+ * The second: the count called gating held carried debt, which does not gate. A verified run
+ * carrying an accepted floor read "verified: 29 gating finding(s)" while the panel under it said
+ * none of the 29 blocked anything. The line and the surface contradicted each other on one
+ * screen. The count is now the blocking set, the set the verdict itself was decided from, and
+ * accepted debt is named separately.
  */
 import { describe, it, expect } from 'vitest';
 import { gate } from '../../src/gate/index.js';
-import type { Coverage, CoverageGap, Draft, EvidenceFloor } from '../../src/contracts/index.js';
+import { computeIdentity } from '../../src/primitives/identity.js';
+import type { Coverage, CoverageGap, Draft, EvidenceFloor, Waiver } from '../../src/contracts/index.js';
 
 const emptyFloor: EvidenceFloor = { version: 1, entries: [] };
 const base = {
@@ -69,7 +77,7 @@ describe('verdict summary names unseen coverage', () => {
 
     expect(out.accessibilityVerdict).toBe('not_covered');
     expect(out.accessibilityExitCode).toBe(3);
-    expect(out.summary).toBe('not_covered: 0 gating finding(s), 2 gap(s)');
+    expect(out.summary).toBe('not_covered: nothing blocking, 2 gap(s)');
   });
 
   it('still names unseen coverage when a new failure sets the verdict', () => {
@@ -83,14 +91,14 @@ describe('verdict summary names unseen coverage', () => {
 
     expect(out.accessibilityVerdict).toBe('regression');
     expect(out.accessibilityExitCode).toBe(1);
-    expect(out.summary).toBe('regression: 1 gating finding(s), 1 gap(s)');
+    expect(out.summary).toBe('regression: 1 blocking finding(s), 1 gap(s)');
   });
 
   it('says nothing about coverage on a clean run that reached everything', () => {
     const out = gate({ ...base, coverage: coverage(), drafts: [] });
 
     expect(out.accessibilityVerdict).toBe('verified');
-    expect(out.summary).toBe('verified: 0 gating finding(s)');
+    expect(out.summary).toBe('verified: nothing blocking');
     expect(out.summary).not.toContain('gap');
   });
 
@@ -114,7 +122,7 @@ describe('verdict summary names unseen coverage', () => {
     });
 
     expect(out.accessibilityVerdict).toBe('not_covered');
-    expect(out.summary).toBe('not_covered: 0 gating finding(s), 1 gap(s)');
+    expect(out.summary).toBe('not_covered: nothing blocking, 1 gap(s)');
   });
 
   it('blocks on an unverified finding without inventing coverage language', () => {
@@ -127,7 +135,7 @@ describe('verdict summary names unseen coverage', () => {
     });
 
     expect(out.accessibilityVerdict).toBe('not_covered');
-    expect(out.summary).toBe('not_covered: 1 gating finding(s)');
+    expect(out.summary).toBe('not_covered: 1 blocking finding(s)');
     expect(out.summary).not.toContain('gap');
   });
 
@@ -142,7 +150,7 @@ describe('verdict summary names unseen coverage', () => {
     });
 
     expect(out.accessibilityVerdict).toBe('not_covered');
-    expect(out.summary).toBe('not_covered: 0 gating finding(s), 1 unmapped file(s)');
+    expect(out.summary).toBe('not_covered: nothing blocking, 1 unmapped file(s)');
   });
 
   it('never reports not_covered without naming a cause', () => {
@@ -164,11 +172,121 @@ describe('verdict summary names unseen coverage', () => {
           continue;
         }
         sawNotCovered = true;
-        expect(out.summary).not.toBe('not_covered: 0 gating finding(s)');
+        expect(out.summary).not.toBe('not_covered: nothing blocking');
       }
     }
 
     // Guard the guard: a loop that never reached the verdict would pass while proving nothing.
     expect(sawNotCovered).toBe(true);
+  });
+});
+
+// A floor that accepts exactly the drafts handed to it, so those findings come back carried.
+function floorAccepting(drafts: Draft[]): EvidenceFloor {
+  return {
+    version: 2,
+    entries: drafts.map((draft) => {
+      const identity = computeIdentity(draft);
+      return {
+        screenId: draft.screenId,
+        layer: draft.layer,
+        rule: draft.rule,
+        elementKey: identity.elementKey,
+        identityBasis: identity.identityBasis,
+        count: 1,
+      };
+    }),
+  };
+}
+
+const waiverFor = (rule: string): Waiver => ({
+  rule,
+  surface: 'clusters',
+  scope: '*',
+  reason: 'tracked',
+  owner: 'team',
+  approvedBy: 'owner',
+  created: '2025-01-01T00:00:00.000Z',
+  expires: '2027-01-01T00:00:00.000Z',
+});
+
+describe('verdict summary counts only what blocks', () => {
+  it('says nothing is blocking on a verified run that carries an accepted floor', () => {
+    // The line as it appears under a VERIFIED verdict on a real application. It used to read
+    // "verified: 29 gating finding(s)" while the panel below it said none of the 29 blocked.
+    const drafts = Array.from({ length: 29 }, (_, i) => d({ rule: `rule-${i}` }));
+    const out = gate({ ...base, floor: floorAccepting(drafts), coverage: coverage(), drafts });
+
+    expect(out.accessibilityVerdict).toBe('verified');
+    expect(out.summary).toBe('verified: nothing blocking, 29 recorded');
+    // The word the surfaces reserve for work never attaches to a number on a verified run.
+    expect(out.summary).not.toMatch(/\d+ blocking/);
+  });
+
+  it('counts the new finding as blocking and the floor as recorded on a regression', () => {
+    const carried = Array.from({ length: 29 }, (_, i) => d({ rule: `rule-${i}` }));
+    const out = gate({
+      ...base,
+      floor: floorAccepting(carried),
+      coverage: coverage(),
+      drafts: [...carried, d({ rule: 'brand-new' })],
+    });
+
+    expect(out.accessibilityVerdict).toBe('regression');
+    // One barrier caused this verdict, so the line says one. It used to say 30.
+    expect(out.summary).toBe('regression: 1 blocking finding(s), 29 recorded');
+  });
+
+  it('counts a waived finding as recorded, the way every surface groups it', () => {
+    // The terminal report and the inspector panel list carried and waived together under
+    // "recorded, not blocking". The gate's own line has to reach the same number they do.
+    const out = gate({
+      ...base,
+      coverage: coverage(),
+      drafts: [d({ rule: 'waived-rule' })],
+      waivers: [waiverFor('waived-rule')],
+    });
+
+    expect(out.accessibilityVerdict).toBe('verified');
+    expect(out.summary).toBe('verified: nothing blocking, 1 recorded');
+  });
+
+  it('leaves the recorded clause off a run with no accepted debt', () => {
+    // Same rule the gap clause follows: inventing "0 recorded" on every clean run teaches the
+    // reader to skip the clause on the runs where it carries something.
+    const out = gate({ ...base, coverage: coverage(), drafts: [] });
+
+    expect(out.summary).toBe('verified: nothing blocking');
+    expect(out.summary).not.toContain('recorded');
+  });
+
+  it('never reports a blocking count the verdict does not support', () => {
+    // The contradiction, stated as an invariant over every shape these tests build: a verified
+    // run never names a blocking finding, and a blocked run always does or names its coverage.
+    const carried = [d({ rule: 'carried-fail' }), d({ rule: 'carried-unsure', confidence: 'unverified' })];
+    const shapes: Array<{ drafts: Draft[]; floor: EvidenceFloor; cov: Coverage }> = [
+      { drafts: [], floor: emptyFloor, cov: coverage() },
+      { drafts: carried, floor: floorAccepting(carried), cov: coverage() },
+      { drafts: carried, floor: floorAccepting(carried), cov: coverage({ gaps: [gap()] }) },
+      { drafts: [...carried, d({ rule: 'new-fail' })], floor: floorAccepting(carried), cov: coverage() },
+      { drafts: [...carried, d({ rule: 'new-unsure', confidence: 'unverified' })], floor: floorAccepting(carried), cov: coverage() },
+    ];
+
+    let sawVerified = false;
+    let sawBlocked = false;
+    for (const shape of shapes) {
+      const out = gate({ ...base, floor: shape.floor, coverage: shape.cov, drafts: shape.drafts });
+      if (out.accessibilityVerdict === 'verified') {
+        sawVerified = true;
+        expect(out.summary).toContain('nothing blocking');
+      } else {
+        sawBlocked = true;
+        expect(out.summary).toMatch(/\d+ blocking finding\(s\)|\d+ gap\(s\)|\d+ unmapped file\(s\)/);
+      }
+    }
+
+    // Guard the guard: a loop that reached only one side would pass while proving half of it.
+    expect(sawVerified).toBe(true);
+    expect(sawBlocked).toBe(true);
   });
 });

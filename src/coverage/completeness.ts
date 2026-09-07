@@ -41,8 +41,10 @@ export function coverageIncomplete(coverage: NotEvaluated): boolean {
  *
  * A blocking failure outranks missing coverage. A real barrier is the actionable answer, and
  * answering not_covered first would bury it. Missing coverage in turn outranks clean, because
- * usabl never upgrades something it did not check into verified. Only a run that was clean and
- * examined everything is verified.
+ * usabl never upgrades something it did not check into verified. `verified` is therefore the
+ * answer to a narrow question: nothing blocking was found and nothing was left unexamined. It is
+ * not a claim that the surface holds no barriers, because a run carrying an accepted evidence
+ * floor is verified while barriers the floor recorded are still standing on the page.
  *
  * This function does not define what counts as blocking. That is the caller's decision and the
  * two callers do not make it the same way. The gate counts a finding as blocking only when it is

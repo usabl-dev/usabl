@@ -52,6 +52,7 @@ function makeResult(receipt: Receipt | null): Result {
     accessibilityVerdict: receipt === null ? null : 'verified',
     accessibilityExitCode: 0,
     paidDownCount: 0,
+    floorHeadroom: [],
   };
 }
 

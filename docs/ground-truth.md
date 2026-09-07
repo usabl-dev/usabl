@@ -26,12 +26,12 @@ and waits releases for fixes. Priya builds the UI with great intentions but miss
 things because it is hard to know everything.
 
 **What usabl is.** A proof engine for accessibility in product development workflows.
-It checks whether touched surfaces have any new machine-checkable accessibility
-barriers before work can be called done. It gives one of four clear answers:
+It checks whether touched surfaces have any machine-checkable accessibility barrier
+that is new against a reviewed evidence floor, before work can be called done. It gives one of four clear answers:
 
 | Verdict | Meaning |
 |---|---|
-| `verified` | No new machine-checkable barriers on touched surfaces. |
+| `verified` | No new distinguishable identity, and no count growth at a recorded one, under the reviewed floor. |
 | `regression` | A new problem appeared. |
 | `not_covered` | Could not identify or exercise what the change touched. |
 | `approval_required` | Policy changed; the tool will not judge itself. |
@@ -83,16 +83,17 @@ or a separate command; it is the same `usabl check` run over a second set of sca
 
 The core new idea: almost every accessibility tool, including the new AI ones, scans
 and gives advice a human may or may not read. usabl's gate decides, and the stop hook
-can stop the AI from calling work done until no new machine-checkable barrier remains
-on the touched surfaces. The overlay and the advisory lane still show findings without
+can stop an assistant from calling work done while a machine-checkable barrier that is
+new against the reviewed floor stands on a touched surface. The overlay and the advisory lane still show findings without
 blocking. That is display, not a second decision-maker.
 
 The specific things that are new, each against what exists today:
 
-1. It verifies the fix, not just finds the problem. The field's own reviews say most
-   tools find issues and almost none confirm the fix actually worked. usabl closes
-   that gap.
-2. It proves it checked everything. It reports "we could not check this" as a real
+1. It re-checks the fix, not just finds the problem. The field's own reviews say most
+   tools find issues and almost none re-check that the finding is gone. usabl compares
+   the next run against the floor and reports what it no longer observes. It observes
+   absence; it does not witness the fix.
+2. It reports what it did not check. It reports "we could not check this" as a real
    answer instead of quietly passing. Reporting unknown as unknown is rare.
 3. Its answers can be re-checked. Every result is tied to the exact code and can be
    recomputed by anyone.
@@ -453,8 +454,9 @@ export interface Result {
   exitCode: 0 | 1 | 2 | 3 | 4 | 5;
   accessibilityVerdict: AccessibilityVerdict | null;
   accessibilityExitCode: AccessibilityExitCode;
-  paidDownCount: number;          // floor entries this run confirms resolved on cleanly
-                                  // scanned screens; projection only, never gates
+  paidDownCount: number;          // floor entries whose barrier this run did not observe on
+                                  // a cleanly scanned screen; not a count of fixes;
+                                  // projection only, never gates
 }
 
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
@@ -1011,10 +1013,20 @@ their own.
 5. **Identity, dedup, differential, waivers.**
 6. **Verdict priority order:**
    - Any new deterministic failure (`confidence: 'fail'`): `regression`.
-   - Anything unverifiable (unreachable surface, incomplete check, unmapped file,
-     `confidence: 'unverified'`): `not_covered`. Unverified is not a silent pass and
-     is not a regression.
+   - Anything unverifiable (unreachable surface, incomplete check, unmapped file, or a
+     new deterministic finding at `confidence: 'unverified'`): `not_covered`. Unverified
+     is not a silent pass and is not a regression.
    - Everything else: `verified`.
+
+   Status decides on both finding clauses, not just the failing one. A finding the
+   evidence floor already accepted is `carried` and does not gate, whether it fails or
+   could not be confirmed. Blocking on carried uncertainty would hold every large
+   application at `not_covered` forever, because any real UI has some results a checker
+   declines to judge and no work clears them. What stands between several barriers and one
+   accepted entry is the recorded count, not the confidence, and it is a partial guard: see
+   the residual section under Evidence floor. The floor
+   stores how many barriers it accepted at an identity, and more than that comes back as
+   `new` and blocks.
 
 ### Identity
 
@@ -1031,14 +1043,18 @@ Priority:
 
 Identity-weak rules are an allow-list of "this element has no accessible name" checks
 (`button-name` from axe, `pf-icon-button-name`). You cannot honestly key an unnamed
-element by name. A count increase is a regression. Named rules still catch a swap
-(one fixed, one newly broken, count unchanged).
+element by name. A count increase is a regression. A named rule catches a swap that a
+count cannot, but only when the two barriers key differently; one fixed and one newly broken
+at the SAME collapsed identity leaves the count unchanged and is not caught. See the residual
+section under Evidence floor.
 
 Every basis can collapse several barriers onto one key, not just `count`. Two dialogs at
 the same neutralized path share a structural key; two controls with the same accessible
 name share a name key. So the floor records the observed barrier count for every entry and
 the gate compares it for every basis: more than the floor accepted is `new`, equal or fewer
-is `carried`. Fewer is progress and never a regression.
+is `carried`. Fewer is never a regression. It is also not proof of progress: the same reading
+comes from a page rendering fewer rows, which is why the surfaces report both counts and let
+the operator say which happened.
 
 Contest layer ids are stable (`axe`, `pf`, `walk`) so dedup and identity do not churn.
 The field stays `string` so a later provider can add a layer without a gate change.
@@ -1046,23 +1062,80 @@ The field stays `string` so a later provider can add a layer without a gate chan
 ### Dedup
 
 Collapse Drafts that share `rule` + identity across layers. Keep one Finding. Prefer
-the PatternFly why/fix when both axe and the rulepack fire on the same control.
+deterministic evidence, then the PatternFly why/fix when both axe and the rulepack fire on
+the same control. Evidence class outranks layer because only deterministic evidence gates,
+so a preview Draft must never be the survivor that represents a deterministic barrier.
+Ranking by class first also makes the choice independent of the order Drafts arrived in.
+
+Only deterministic Drafts are counted against the floor, because only deterministic Drafts
+are what `usabl baseline` counted when it wrote the floor.
 
 ### Evidence floor
 
 `.usabl-evidence.json` is the accepted deterministic finding set for a surface. A code
-owner writes it in an `approval_required` accept commit. The floor never grows
-silently: new identities, or a count above the floor at a known identity, are
-`regression`; disappeared identities are `fixed`. Advisory findings are never written to
-the floor. The accept loop converges: after the acceptance commit lands, the next
-unchanged run sees the same floor and settles to `verified` (or `not_covered` only if
+owner writes it in an `approval_required` accept commit. Advisory findings are never
+written to the floor. The accept loop converges: after the acceptance commit lands, the
+next unchanged run sees the same floor and settles to `verified` (or `not_covered` only if
 coverage cannot be re-established).
+
+The count comparison runs in both directions, and both are gate decisions:
+
+- **Above the recorded count** is new debt. More barriers at a known identity than the floor
+  accepted is `new`, which gates: `regression` for a definite failure, `not_covered` for one
+  usabl could not confirm. A brand new identity is `new` the same way.
+- **Below the recorded count** is not a regression. The findings present stay `carried` and the
+  verdict does not move. The run discloses the difference on the summary line, which gains a
+  `N floor entries ahead of this run` clause, and on the terminal and the overlay, which both
+  print the screen, the rule and both numbers under the recorded group. This is disclosure, not a coverage gap, because a gap
+  makes a run `not_covered` by definition.
+
+  The disclosure states the observation and never the cause. usabl counted two numbers and cannot
+  tell a paid-down barrier from a page rendering fewer rows today, so it says both readings and
+  leaves the operator to pick: if the barriers were fixed, `usabl floor prune` re-arms the floor to
+  what is present; if the page simply shows less content today, nothing needs to change.
+
+### The residual hole, and why it is open
+
+The recorded count is a high-water mark. `usabl baseline` writes it, `usabl floor prune` lowers it,
+and nothing else moves it. Between a pay-down and a prune the floor claims more barriers at an
+identity than are present, and that difference is headroom.
+
+**A new barrier arriving at an identity with headroom is counted as `carried` until
+`usabl floor prune` re-arms the floor.** It fills the slot the fixed barrier left, the tally stays
+at or under what was accepted, and no comparison of counts can separate it from the debt that was
+accepted. The same is true, without even the headroom, of a single change that fixes one barrier
+and adds another at the same collapsed identity: the tally never moves at all. usabl discloses the
+headroom on every run where it exists so an operator can re-arm, and it cannot disclose the
+same-run swap because nothing about it is visible to a count.
+
+usabl does not block on headroom, and that is a deliberate trade measured against a real
+brownfield floor. Several collapsed identities on that application count icon buttons in table
+rows, one entry standing at 15. The count therefore tracks how many rows the live application
+renders, and a jobs list or a user list changes size on its own. Blocking on "below the recorded
+count" would fail an unchanged codebase whenever a list came back one row shorter, the operator
+would prune, and the next run with one more row would report a new barrier. A verdict that flaps
+with row counts is worse than a disclosed hole, because a gate that cries wolf stops being read.
+
+This is the price of collapsing several barriers onto one identity on pages whose content changes
+size. Two things shrink it, and neither is a better count rule. **Strong element keys**: an
+identity that keys each barrier separately never collapses and needs no count, so a name-basis or
+count-basis identity is weaker here than a structural one, and a structural one is weaker than a
+key that survives per element. **Prompt pruning**: headroom only exists between a pay-down and a
+re-arm, so the window is as short as the operator makes it, which is why a run that observes one
+says so and names the command. Headroom is not only left behind by a pay-down: a page that renders
+fewer rows than the floor recorded opens the same window, and usabl reports it the same way
+because it cannot tell the two apart.
 
 The file carries a `version`. Version 1 wrote a placeholder count of 1 for every name and
 structural entry, so those counts are not observations and the gate must not compare them.
 Version 2 writes the observed count for every entry. Reading a version 1 floor that holds
 name or structural entries produces a coverage gap, so the run reports `not_covered`
 instead of a green it cannot support. `usabl baseline` regenerates the floor at version 2.
+Both floor disclosures are decided inside `gate()`, not in the run path, because `gate()` is
+exported and CI, the overlay and the page helper reach it directly. A check that lived only in
+`run()` made the verdict depend on which door the caller came through. The gate weighs its own
+gaps and names them in its summary; `run()` appends them to the Result's coverage so the gaps a
+reader sees are the gaps the verdict was reached from.
 
 ### Failure taxonomy
 
@@ -1185,8 +1258,13 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   are different commands (see section 12).
 - Baseline drafts: `usabl baseline` runs a full UI scan and writes `.usabl-evidence.json`
   as a reviewable working-tree diff.
-- Floor prune: `usabl floor prune` removes paid-down floor entries on cleanly scanned
-  screens, re-arming the gate. `prune` is the only subcommand; anything else exits 2.
+- Floor prune: `usabl floor prune` re-arms the gate on cleanly scanned screens. It removes
+  entries whose identity is gone, and lowers the recorded count on entries whose identity is
+  still present but now holds fewer barriers. It never raises a count and never adds an
+  identity: accepting new debt is what `usabl baseline` does, under review. It leaves version 1
+  name and structural counts alone, because those are placeholders the gate does not compare and
+  writing a real number under them would present a placeholder as an observation. `prune` is the
+  only subcommand; anything else exits 2.
 - Routes drift: `usabl drift routes` compares `usabl.routes.json` against the app router.
   `routes` is the only subcommand; anything else exits 2.
 - Health check: `usabl doctor` is a read-only projection over the wired surfaces and always
@@ -1217,8 +1295,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. Surface the meaning explicitly as
-  "verified: no new machine-checkable barriers on touched surfaces," with advisory
-  findings shown adjacent when present.
+  "verified: no new barrier blocks this change," with advisory findings shown adjacent
+  when present. Not "no barriers": a verified run routinely carries barriers the floor
+  recorded.
 - `regression`: block.
 - `approval_required`: block.
 - `not_covered`: default block. Recalibrate after week-2 real-repo measurement
@@ -1393,8 +1472,9 @@ screens on Monday.
    hand-written map entry.
 5. First check of that page: likely a pile of existing findings. A code owner accepts
    the evidence floor (and maybe a few waivers). That is one `approval_required` commit.
-6. Next PR on that page: full default stack. New problems block. Old ones are visible
-   debt that burns down when fixed or when a waiver expires.
+6. Next PR on that page: full default stack. A problem at an identity the floor does not
+   hold, or above the count it recorded there, blocks. Recorded ones stay visible debt, and
+   the floor comes down through `usabl floor prune` and waiver expiry.
 
 Coverage grows as the team works. It does not require Design to declare epic scope.
 

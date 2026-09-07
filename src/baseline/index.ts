@@ -119,7 +119,9 @@ function formatSuccessReport(entryCount: number): string {
   return [
     `wrote ${entriesWord(entryCount)} to ${EVIDENCE_FLOOR_PATH}.`,
     'draft only: review and merge this working-tree diff.',
-    'after merge, matching findings carry and extra findings still gate as new.',
+    // "extra findings" would promise more than the floor can deliver. What gates is a finding at
+    // an identity the floor does not hold, or a count above what it recorded there.
+    'after merge, matching findings carry; a new identity, or more barriers at a recorded one, gates.',
   ].join('\n');
 }
 
@@ -152,7 +154,8 @@ function formatPartialReport(entryCount: number, coveredScreens: string[], skipp
   const lines = [
     `wrote ${entriesWord(entryCount)} to ${EVIDENCE_FLOOR_PATH} as a partial baseline.`,
     'draft only: review and merge this working-tree diff.',
-    'after merge, matching findings carry and extra findings still gate as new.',
+    // Same correction as the full report: "extra findings" promises more than the floor delivers.
+    'after merge, matching findings carry; a new identity, or more barriers at a recorded one, gates.',
     `covered ${coveredScreens.length} cleanly scanned screen${coveredScreens.length === 1 ? '' : 's'}: ${coveredScreens.join(', ')}.`,
   ];
   if (skippedScreens.length > 0) {

@@ -268,7 +268,9 @@ async function collectEvidenceFloor(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'evidence-floor',
       label: EVIDENCE_FLOOR_LABEL,
       state: 'missing',
-      nextStep: `No evidence floor. Run "usabl baseline" to record current debt so only new barriers gate.`,
+      // Not "only new barriers gate". A barrier arriving at an identity the floor already holds,
+      // while the floor is ahead of the application, is recorded as accepted debt until a prune.
+      nextStep: `No evidence floor. Run "usabl baseline" to record current debt so recorded debt stops gating.`,
     };
   }
   try {

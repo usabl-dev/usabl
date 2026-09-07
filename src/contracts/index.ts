@@ -159,6 +159,25 @@ export interface AffectedScreen {
   importChain?: string[];
   profile?: ProfileName;
 }
+/**
+ * One floored identity where the evidence floor records more barriers than the run observed.
+ *
+ * Disclosure, never a verdict input. The recorded count is a high-water mark that only
+ * `usabl floor prune` lowers, so the difference is room a new barrier can take at a collapsed
+ * identity while the tally stays at or under what was accepted. That hole is open until the floor
+ * is re-armed, and usabl says so on every run rather than blocking: on a real brownfield floor
+ * these counts track how many rows a live table renders, so a blocking rule would fail unchanged
+ * code whenever a list came back shorter.
+ *
+ * Screen id and rule only. An element key carries a neutralized accessible name or element path,
+ * both page-derived, and this travels into a pull request comment and into what a model reads.
+ */
+export interface FloorHeadroom {
+  screenId: string;
+  rule: string;
+  recorded: number; // barriers the floor accepted at this identity
+  observed: number; // deterministic barriers this run actually saw there
+}
 export interface CoverageGap {
   ref: string; // surface id, url, or file path this gap concerns
   state: 'unresolved' | 'not-covered' | 'skipped' | 'capability-denied';
@@ -214,11 +233,19 @@ export interface Result {
   // Never approval_required and never exit 2. Crash runs use exitCode 4 and leave these as null / 4.
   accessibilityVerdict: AccessibilityVerdict | null;
   accessibilityExitCode: AccessibilityExitCode;
-  // Count of previously accepted floor barriers that this run confirms are resolved on
-  // cleanly scanned screens. These are the entries a floor prune would remove. run() does
-  // not modify the floor; pruning does. This is projection only; the gate never consumes
-  // it and it never influences a verdict.
+  // Count of floor entries whose barrier this run did not observe on a cleanly scanned screen.
+  // Not a count of fixes: absence is what a paid-down barrier looks like and equally what a table
+  // rendering no rows looks like, and nothing here can tell the two apart. These are the entries a
+  // floor prune would remove. run() does not modify the floor; pruning does. This is projection
+  // only; the gate never consumes it and it never influences a verdict.
   paidDownCount: number;
+  // Floored identities where the floor records more barriers than this run observed, so the floor
+  // is ahead of the application. Why is not knowable from here: barriers may have been fixed, or
+  // the page may render fewer rows today. Surfaces report the two counts and leave the cause to
+  // the operator. Required, never optional: an absent field would read as "no headroom", and a
+  // disclosure that can go missing is not a disclosure.
+  // Projection only. The gate never consumes it and it never influences a verdict.
+  floorHeadroom: FloorHeadroom[];
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);
@@ -229,8 +256,21 @@ export interface Result {
 // verdict stays the authority; this is a read-only view for CI comments and the ACCESSIBILITY.md row.
 export interface ConformanceSummary {
   verdict: Verdict | null; // echoes Result.verdict (the gate is the authority)
-  blocked: boolean; // any in-scope deterministic new failure caps the summary
-  deterministic: { newFailures: number; carried: number; waived: number; fixed: number };
+  // Whether this run stops the work, read from the exit code the gate wrote. Not recomputed from
+  // the findings: while it was, a run held at not_covered by a new unconfirmed finding reported
+  // "blocked: no" directly under a NOT COVERED heading.
+  blocked: boolean;
+  deterministic: {
+    // Every new deterministic finding, which is what the gate counts and what the surfaces list.
+    // The failing and unconfirmed split is reported beside it, never instead of it: while `new`
+    // held failures only, the pull request comment printed "new 1" above a list of three.
+    new: number;
+    newFailing: number;
+    newUnconfirmed: number;
+    carried: number;
+    waived: number;
+    fixed: number;
+  };
   judged: { modelJudgment: number; preview: number }; // advisory provenance; never gates
   notEvaluated: { unresolvedFiles: number; gaps: number };
 }
@@ -540,4 +580,11 @@ export interface GateOutput {
   summary: string;
   accessibilityVerdict: AccessibilityVerdict | null;
   accessibilityExitCode: AccessibilityExitCode;
+  // A floor that predates barrier counting, whose placeholder counts cannot be compared at all.
+  // The gate counts the floor, so only the gate can find this, and it has already weighed it into
+  // the verdict and named it in the summary. A caller that assembles a Coverage for the Result
+  // appends these so the gaps a reader sees match the gaps the verdict was reached from.
+  floorGaps: CoverageGap[];
+  // Floored identities the floor is ahead of. Disclosure only: this never moves the verdict.
+  floorHeadroom: FloorHeadroom[];
 }

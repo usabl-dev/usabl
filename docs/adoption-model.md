@@ -13,7 +13,7 @@ usabl install <one>   wire one integration surface at a time (--overlay | --clau
 usabl baseline        draft the accepted accessibility floor (.usabl-evidence.json)
 usabl doctor          read-only health check across every wired surface
 usabl check           run the local gate (this is the default command)
-usabl floor prune     re-arm the floor as debt is paid down
+usabl floor prune     re-arm the floor as debt is paid down (removes and lowers counts)
 usabl drift routes    check the route manifest against the app router
 ```
 
@@ -113,9 +113,15 @@ each stage matters; this section is what a team actually types, in order.
     `verified` mints a receipt bound to the exact code, and the Stop hook accepts a
     valid receipt without rescanning. `usabl bypass` is a loud, one-time escape that
     lets the next stop skip verification once.
-17. (human, periodically, `usabl floor prune`) When a floor finding is fixed it shows
-    as `fixed` and stops appearing. `floor prune` removes paid-down entries from screens
-    that scanned cleanly and re-arms the gate; merge the floor diff with the fix. The
+17. (human, when a run says to, `usabl floor prune`) When a floor finding is fixed it shows
+    as `fixed` and stops appearing. `floor prune` re-arms the gate on screens that scanned
+    cleanly: it removes entries whose identity is gone and lowers the recorded count where
+    fewer barriers remain. A run that finds the floor claiming more barriers than are present
+    says so and names this command, so you find out on a run rather than having to remember.
+    It reports both counts without guessing why they differ: barriers may have been paid
+    down, or the page may render fewer rows today. It is a notice and not a block: the
+    verdict does not move, and until the floor is re-armed a new barrier at that identity is
+    recorded as accepted debt. Merge the floor diff with the fix. The
     floor only ratchets downward with review; it never grows silently.
 
 ---

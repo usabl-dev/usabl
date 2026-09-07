@@ -146,6 +146,61 @@ export function fixOrAbsence(finding: Finding): string {
 }
 
 /**
+ * Whether a finding is one of the reasons the gate cannot call this run verified.
+ *
+ * The gate keeps two facts about its gating findings, and either one stops a verified run: a new
+ * failing finding, which makes the run a regression, and a finding it could not verify, which
+ * makes the run unproven. This is the union of those two, so a surface lists a finding as a
+ * barrier exactly when the gate is not verified because of it.
+ *
+ * What that excludes is the point. Advisory evidence never gates. A waived or fixed finding is
+ * one the gate has already accounted for. Carried findings are accepted debt: they are in the
+ * evidence floor, the gate lets a run carrying them pass as verified, and calling one a barrier
+ * tells a reader to go and fix something that is not blocking anything. That holds for carried
+ * uncertainty as much as for a carried failure, because the gate stopped separating them: the
+ * floor accepted the identity either way. Carried debt still belongs on surfaces that report the
+ * state of a change; it does not belong under an instruction to fix it.
+ *
+ * Waived and fixed need no test of their own. A status is one of new, carried, fixed and waived,
+ * so requiring `new` already excludes all three of the others.
+ *
+ * Shared so a surface cannot answer this differently from the gate, and pinned by a test that
+ * drives the gate with its own inputs and checks that a run with no such finding, and complete
+ * coverage, is exactly a verified run. The gate remains the only verdict authority; this reads
+ * the status and confidence it already wrote.
+ */
+export function isBlockingBarrier(finding: Finding): boolean {
+  if (finding.evidenceClass !== 'deterministic') {
+    return false;
+  }
+  if (finding.status !== 'new') {
+    return false;
+  }
+  return finding.confidence === 'fail' || finding.confidence === 'unverified';
+}
+
+/**
+ * What a blocked reader is owed when guarded policy files changed: how the state clears, and
+ * the one lever a person has over the stop.
+ *
+ * The same account the overlay gives a person, held here so the stop hook and the self-check
+ * cannot tell the assistant a different story. Nothing in it is a step the assistant can take.
+ * Approval happens on the pull request, from a code owner other than the author, and the only
+ * other way out is to revert the file. Neither happens on this machine.
+ */
+export const APPROVAL_REQUIRED_HOW_IT_CLEARS =
+  'Where a code owner is assigned to that path, a code owner other than the author approves it on the pull request; the policy check on the pull request says exactly what it needs. Nothing on this machine can approve it. If the change was unintended, revert the file and this state clears.';
+
+/** The one-shot escape a person can use. It lets the next stop through; it approves nothing. */
+export const APPROVAL_REQUIRED_HUMAN_LEVER =
+  'To let the assistant stop once without clearing this, a person can run usabl bypass.';
+
+/** The label for the guarded files that changed. The caller appends the paths, bounded. */
+export function guardedFilesHeadline(count: number): string {
+  return count === 1 ? 'Guarded file changed' : 'Guarded files changed';
+}
+
+/**
  * The one barrier a bounded surface names. New and carried findings are what the reader can act
  * on, so they come first; anything else is better than naming nothing.
  */

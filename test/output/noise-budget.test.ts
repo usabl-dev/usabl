@@ -5,7 +5,7 @@ import {
   applyNoiseBudgetPerSurface,
   collapseFindingsByRule,
   DEFAULT_NOISE_BUDGET,
-  formatCollapsedGroupHeadline,
+  formatCollapsedGroupCount,
   formatCollapsedGroupHeadlineWithoutScreen,
   formatShowAllHint,
   parseNoiseBudgetConfig,
@@ -134,13 +134,51 @@ describe('applyNoiseBudgetPerSurface', () => {
   });
 });
 
-describe('formatCollapsedGroupHeadline', () => {
+describe('formatCollapsedGroupCount', () => {
   it('includes a count suffix when a group has multiple findings', () => {
     const groups = collapseFindingsByRule([
       finding({ rule: 'color-contrast' }),
       finding({ rule: 'color-contrast', elementKey: 'k2' }),
     ]);
-    expect(formatCollapsedGroupHeadline(groups[0]!)).toContain('(×2)');
+    expect(formatCollapsedGroupCount(groups[0]!)).toBe(' (×2)');
+  });
+
+  it('is empty for a group standing for one finding', () => {
+    const groups = collapseFindingsByRule([finding({ rule: 'color-contrast' })]);
+    expect(formatCollapsedGroupCount(groups[0]!)).toBe('');
+  });
+
+  it('names a count that is not a whole number rather than printing it', () => {
+    // Every surface prints this suffix as a bare number, outside whatever seal it uses. The
+    // count is computed here, but a Result can be composed outside the engine or read from a
+    // document, so the check is made where the number is printed rather than by tracing it.
+    const groups = collapseFindingsByRule([finding({ rule: 'color-contrast' })]);
+    const hostile = { ...groups[0]!, count: '@octocat #123' as unknown as number };
+
+    expect(formatCollapsedGroupCount(hostile)).toBe(' (×unknown)');
+  });
+});
+
+describe('formatShowAllHint', () => {
+  it('names any count that is not a whole number rather than printing it', () => {
+    const hint = formatShowAllHint(
+      {
+        totalFindingCount: '@octocat' as unknown as number,
+        shownGroupCount: 5,
+        totalGroupCount: '#123' as unknown as number,
+      },
+      'gating findings',
+    );
+
+    expect(hint).not.toContain('@octocat');
+    expect(hint).not.toContain('#123');
+    expect(hint).toContain('unknown');
+  });
+
+  it('prints real counts unchanged', () => {
+    expect(formatShowAllHint({ totalFindingCount: 8, shownGroupCount: 5, totalGroupCount: 6 })).toContain(
+      'for all 8 findings (5 of 6 rule groups shown).',
+    );
   });
 });
 

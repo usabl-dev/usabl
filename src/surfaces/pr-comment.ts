@@ -4,6 +4,7 @@
  * It must never recompute findings, mint a verdict, or act as a second gate.
  */
 import type {
+  ConformanceSummary,
   AppSourceMapping,
   DocsSourceMapping,
   Finding,
@@ -17,14 +18,15 @@ import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence } from '../output/disclosure.js';
 import {
   applyNoiseBudget,
-  formatCollapsedGroupHeadline,
+  formatCollapsedGroupCount,
   resolveNoiseBudgetDefault,
   type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
+import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
 import {
-  frameUntrustedBlock,
   scrubResult,
+  scrubString,
   UNTRUSTED_FRAME_END,
   UNTRUSTED_FRAME_START,
 } from './scrub.js';
@@ -32,73 +34,58 @@ import {
 const COMMENT_MARKER = '<!-- usabl-report -->';
 const STOP_CAP = 20;
 
-// Page-derived text is written into a Markdown document that a forge renders, and Markdown is not
-// a plain-text container. An HTML comment disappears when rendered, a character reference becomes
-// a different character, an empty link disappears, and emphasis markers disappear. Any of those
-// puts characters on the screen that are not in the string, which is enough to draw the
-// untrusted-text frame marker out of text that is not the marker and hand the reader a frame that
-// closes wherever the page wanted it to close.
+// Every value this document carries from the Result is written inside a code span, whoever
+// authored it, and only text usabl itself wrote is left as prose.
 //
-// Every character a Markdown or HTML renderer could read as the start of markup is written as a
-// numeric character reference. A reference renders as exactly the character it names and can never
-// itself be read as markup, so a reader sees the page text as it really is and the renderer has
-// nothing left to interpret.
+// That rule replaces an argument. The values printed as prose here used to be the ones a first
+// party authored: a rule, a layer, and a severity come from the providers, a status is the
+// gate's own enum. That holds while a Result is built in this process. It does not hold at this
+// surface's own entry point: `usabl comment` reads a Result as a document from standard input,
+// the parse checks a few fields and takes the rest on trust, and a library caller can hand the
+// engine a check runner of its own. A severity carrying a mention and an address was fed in that
+// way and rendered as a live mention and a mailto link. Deciding by author cannot survive a
+// boundary where the author is whoever wrote the document, so the decision is by carrier
+// instead: if the Result carried it, it is sealed.
 //
-// The emphasis and code characters have to be in this set, which is not obvious. They cannot
-// delete text that is not their own delimiter, but that is enough: a delimiter pair wrapped around
-// a piece of the marker vanishes and leaves the piece behind, so "PAGE *TEXT*" renders as
-// "PAGE TEXT". A backslash does the same thing on its own, since it hides before the punctuation
-// the marker already contains. Either one turns a string that is not the marker into the marker on
-// screen, which is why none of them can be left through.
+// Two kinds of text reach this Markdown document, and each gets its own defense.
 //
-// The cost of the set is that a raw reader sees a reference where a file name had an underscore.
-// That is worth paying, because the rendered text stays exactly what the page had.
+// Page-derived text, everything inside an untrusted frame, is written as a code span. Inside a
+// code span Markdown is inert: no character reference, HTML, emphasis, link, or block construct
+// is read, so nothing a renderer does can delete or add characters and draw the frame marker out
+// of text that is not the marker. GitHub's post-render filters, which turn an email address,
+// "@user", "#123", or a commit id into a link, a mention, or a notification, run on the rendered
+// text and skip code spans. Escaping could never have stopped those, because they read decoded
+// text; the span is the mitigation the threat model names. The span is fenced with one more
+// backtick than the longest run inside it, so a value cannot close its own span.
+//
+// usabl's own prose is escaped instead. Every character a renderer could read as the start of
+// markup is written as a numeric character reference, which renders as exactly the character it
+// names, so the report's own lines cannot be read as markup and still read as prose. The set
+// includes the emphasis and code characters: a delimiter pair wrapped around a piece of text
+// vanishes and leaves the piece behind, so "UNTRUSTED *TEXT*" renders as "UNTRUSTED TEXT", and a
+// backslash hides before punctuation the same way. What is escaped is fixed text this file
+// wrote, so the escape is defense in depth rather than the thing holding the line.
 const MARKUP_SIGNIFICANT = /[&<>[\]`*_~\\|]/g;
 
-// Block markup is the other way a renderer changes what a reader sees. It does not delete
-// characters, but it changes what the line is: page text that begins "# usabl report: VERIFIED"
-// renders as a first-level heading, larger than the report's own headline, and a reader takes it
-// for the verdict. Each piece of page text sits on its own line, and its line breaks were folded
-// to spaces before it got here, so a block construct can only fire at the start of that line.
-// This rule defends against, in GitHub Flavored Markdown:
-//
-//   a heading, "#" at the start of the line;
-//   a bullet list item, "-", "+", or "*" at the start of the line;
-//   a numbered list item, digits then "." or ")" at the start of the line;
-//   a thematic break, "---", "***", "___", or the same with spaces between, alone on the line;
-//   a setext underline, "===" or "---" alone on the line, which turns the line before it, the
-//   frame's opening marker, into a heading.
-//
-// The first character of the marker is written as a reference, after any leading spaces, because
-// a renderer allows up to three spaces of indent before block markup. A line whose first character
-// is "&" is a paragraph line whatever follows, and the reference still renders as the character.
-// "*" and "_" are already references from the inline set; they are listed here so this rule stands
-// on its own.
+// Block markup changes what a line is rather than what it says: a line that begins "#" renders
+// as a heading, "-" as a list item, "---" alone as a rule or, under another line, a setext
+// underline that turns that line into a heading. The escaped values above never start a line,
+// but the rule is kept so escapeMarkdown stands on its own if that changes. The first character
+// is written as a reference, after any leading spaces, because a renderer allows up to three
+// spaces of indent before block markup.
 const BLOCK_MARKER_AT_LINE_START = /^(\s*)([#\-+*=]|\d(?=\d*[.)]))/;
 
-// Autolinks are the third way. A renderer turns "https://example.test/path", "www.example.test",
-// and the "<...>" form into links a reader can click, and the page then chooses where a link in
-// usabl's report goes. The "<" form is already covered by the inline set. The other two are
-// matched on the raw bytes: the "://" of a scheme and the "www." of a bare host. A reference in
-// place of the colon or the dot is not those bytes, so neither is matched, and it renders as the
-// same character, so the reader still sees the address as text. Only a colon followed by "//" is
-// touched, so a label like "why:" stays readable in the raw comment.
-//
-// Some forms are out of reach of a reference, and they are named here so the limit is not mistaken
-// for an oversight. An email address, "user@example.test", and the "mailto:" and "xmpp:" forms are
-// found by the Markdown renderer after references are decoded and adjacent text is joined. GitHub
-// then runs its own filters on the rendered text: "@user" becomes a mention that notifies that
-// user if they have access to the repository, "#123" becomes a link to that issue or pull request,
-// and a commit SHA becomes a link to that commit. All of these read decoded text, so escaping
-// cannot stop any of them. None can forge a verdict, close the untrusted-text frame, or leak
-// engine data. The filters skip code spans, so wrapping page text in one is the mitigation, and
-// that belongs to the sealed-text visual work rather than to this escape.
+// A renderer turns "https://example.test/path" and "www.example.test" into links without being
+// asked. Both are matched on the raw bytes, the "://" of a scheme and the "www." of a bare host,
+// so a reference in place of the colon or the dot stops the link and still renders as the same
+// character. Only a colon followed by "//" is touched, so a label like "why:" stays readable.
 const SCHEME_COLON = /:(?=\/\/)/g;
 const WWW_DOT = /(www)\./gi;
 
 function reference(character: string): string {
   return `&#${character.codePointAt(0) ?? 0};`;
 }
+
 
 function escapeMarkdown(text: string): string {
   return text
@@ -111,10 +98,57 @@ function escapeMarkdown(text: string): string {
     );
 }
 
+// The brackets a headline wraps its status and severity in.
+//
+// They are usabl's own punctuation, and they still go through the escape, as they did when a
+// whole headline was escaped at once: the line renders exactly as it always did, and a pair of
+// brackets can never be read as a reference-style link. Sealing the values is what holds the
+// line now, so this is the escape's remaining job on this surface, and it stays because prose
+// this file writes is the only thing that should ever reach it.
+const OPEN_BRACKET = escapeMarkdown('[');
+const CLOSE_BRACKET = escapeMarkdown(']');
+
+// What a value is called when it is not the type the contract says it is.
+const UNKNOWN_VALUE = 'unknown';
+
+// What a section says when the field it lists is not a list.
+//
+// Saying "none" there would be a claim about the run, and a document that did not carry a list
+// said nothing about the run. Walking it anyway throws part way through a document that is
+// already half assembled, and the reader gets no comment at all.
+const NOT_A_LIST = '- unreadable: this Result did not carry a list here';
+
+/**
+ * A count printed as a bare number, checked at the point of printing.
+ *
+ * Sealing by carrier holds for strings. It does not reach a number, and this surface reads a
+ * document rather than a Result it built: `usabl comment` parses standard input and checks the
+ * schema version, the accessibility exit code, and one forbidden accessibility verdict, then
+ * takes every other field on trust. A field typed as a number is therefore whatever the document
+ * said, and it does not even have to be a field. A list shaped `{"length": "@user"}` is never
+ * iterated by the coverage counts, so nothing throws and the text lands in a line as a number.
+ *
+ * A number is printed only when it really is a whole number, and named otherwise. A code span
+ * would seal it just as well, but a count is the one value a span makes harder to read, and a
+ * whole number cannot be markup, a link, or a mention, so the check is the better seal here.
+ */
+function wholeNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : UNKNOWN_VALUE;
+}
+
 // A code span, fenced long enough that nothing inside it can end the span early. Character
 // references are not interpreted inside a code span, so escaping is the wrong tool here: a value
 // carrying a backtick has to be fenced away instead, or the rest of the line is read as markup.
+//
+// The value is rendered exactly, spaces included. CommonMark strips one space from each end of
+// a span only when the content begins and ends with a space and is not all spaces, so a value
+// that does both is padded by one space on each side and comes back whole; so is a value that
+// begins or ends with a backtick, which the padding keeps off the fence. An empty value is
+// written as a span holding one space, because two bare backticks are not a span at all.
 function inlineCode(value: string): string {
+  if (value.length === 0) {
+    return '` `';
+  }
   let longestRun = 0;
   let run = 0;
   for (const character of value) {
@@ -122,25 +156,36 @@ function inlineCode(value: string): string {
     longestRun = Math.max(longestRun, run);
   }
   const fence = '`'.repeat(longestRun + 1);
-  // CommonMark drops one leading and one trailing space, which is how a span holds a backtick at
-  // either end without the fence swallowing it.
-  const padding = value.startsWith('`') || value.endsWith('`') ? ' ' : '';
+  const needsPadding =
+    value.startsWith('`') ||
+    value.endsWith('`') ||
+    (value.startsWith(' ') && value.endsWith(' ') && value.trim().length > 0);
+  const padding = needsPadding ? ' ' : '';
   return `${fence}${padding}${value}${padding}${fence}`;
 }
 
-// The framed block as Markdown lines. The two markers are engine text and the interface the
-// overlay and the model match on, so they stay exactly as they are. Everything between them is
-// page text and is escaped.
+// One line inside a frame: an engine-authored label and a page-derived value.
+interface FramedPiece {
+  label: string;
+  value: string;
+}
+
+// The framed block as Markdown lines: the opening marker, one line per piece, the closing marker.
 //
-// A renderer joins consecutive lines of a paragraph with a space, so pieces could in principle be
-// spliced into a marker across a line boundary. They cannot here: every piece after the first
-// starts with an engine-authored label, so no join produces the marker text.
-function framedMarkdownLines(pieces: string[]): string[] {
-  return frameUntrustedBlock(pieces)
-    .split('\n')
-    .map((line) =>
-      line === UNTRUSTED_FRAME_START || line === UNTRUSTED_FRAME_END ? line : escapeMarkdown(line),
-    );
+// The two markers are engine text and the interface the overlay and the model match on, so they
+// stay exactly as they are and sit outside the code spans, where they render as the visible seal.
+// Each value is scrubbed here, the same scrub frameUntrustedBlock applies, so it cannot carry a
+// marker and the only markers in the block are the two this function writes. A scrubbed value
+// holds no line break, because the neutralizer folds separators to a space, so one piece is one
+// line, and every line starts with its label. That matters twice: a line that starts with a
+// label can never open a fenced code block, which a line starting with three backticks would,
+// and no join of consecutive lines can produce the marker text.
+function framedMarkdownLines(pieces: FramedPiece[]): string[] {
+  return [
+    UNTRUSTED_FRAME_START,
+    ...pieces.map((piece) => `${piece.label}: ${inlineCode(scrubString(piece.value))}`),
+    UNTRUSTED_FRAME_END,
+  ];
 }
 
 const HEADLINE: Record<Verdict, string> = {
@@ -150,10 +195,44 @@ const HEADLINE: Record<Verdict, string> = {
   approval_required: 'APPROVAL REQUIRED',
 };
 
-function projectHeadline(verdict: Verdict | null): string {
-  // `verdict: null` is explicit idle disclosure from the gate, not a fallback verdict.
-  const headline = verdict === null ? 'IDLE' : HEADLINE[verdict];
-  return `## usabl report: ${headline}`;
+// A verdict this unit has no headline for is named, never printed. The document decides the
+// verdict string, so the lookup can miss, and printing the miss put the word "undefined" where
+// the verdict belongs.
+function headlineFor(verdict: Verdict): string {
+  return HEADLINE[verdict] ?? 'UNRECOGNIZED VERDICT';
+}
+
+function projectHeadline(verdict: Verdict): string {
+  return `## usabl report: ${headlineFor(verdict)}`;
+}
+
+// A Result with no verdict is one of two opposite facts, and the shared verdict line tells them
+// apart. Idle is exit 0 with nothing to check: no UI file changed, so there is nothing to report
+// and the comment says only that. A failed run is exit 4: usabl proved nothing, and the comment
+// says so with the engine's reason, sealed, because a crash summary carries a raw error message.
+// Neither prints the sections a real verdict fills, since "none" under every heading reads as a
+// clean run, and neither prints a receipt line, since a receipt exists only for a verified run
+// and "run was not verified" would read as a run that was checked and failed. A null verdict
+// with any other exit code can only be composed outside run(); it reads as no verdict with the
+// reason, and never as idle, the same way the Stop hook reads it.
+function renderNoVerdict(result: Result): string[] {
+  const line = describeVerdict(result);
+  if (result.exitCode === 0 && result.coverage.nothingToCheck) {
+    return [COMMENT_MARKER, `## usabl report: ${formatVerdictWord(line)}`, '', line.meaning];
+  }
+  const failed = result.exitCode === 4;
+  // Both words come from the shared verdict unit, which prints an exit code only when it really
+  // is a whole number, so this heading carries no text the Result chose.
+  const word = failed ? formatVerdictWord(line) : formatVerdictWord({ ...line, word: 'NO VERDICT' });
+  const meaning = failed ? line.meaning : 'usabl did not reach a verdict for this change.';
+  return [
+    COMMENT_MARKER,
+    `## usabl report: ${word}`,
+    '',
+    meaning,
+    '',
+    ...framedMarkdownLines([{ label: 'engine summary', value: result.summary }]),
+  ];
 }
 
 function renderAccessibilitySplit(result: Result): string[] {
@@ -161,7 +240,7 @@ function renderAccessibilitySplit(result: Result): string[] {
     return [];
   }
   const accessibility =
-    result.accessibilityVerdict === null ? 'IDLE' : HEADLINE[result.accessibilityVerdict];
+    result.accessibilityVerdict === null ? 'IDLE' : headlineFor(result.accessibilityVerdict);
   return [
     '',
     `Policy changed. Accessibility on this run: **${accessibility}**. Merge still needs a CODEOWNERS user approval of this head from someone other than the pull request author.`,
@@ -185,62 +264,101 @@ function renderReceipt(result: Result): string[] {
 function renderConformance(result: Result): string[] {
   // This is a read-only three-bucket projection and never a score.
   const summary = computeConformance(result);
+  // Every count here is checked at the point of printing. The deterministic and judged counts are
+  // computed from the findings this surface already walked, so they are numbers by construction;
+  // the two not-evaluated counts are read straight off the lengths of two lists the document
+  // supplied and are the ones that were reachable. All of them go through the same check, because
+  // which counts are computed and which are read is not a property a reader of this line can see,
+  // and the next count added here should not have to know the difference.
   const lines = [
     '### Conformance summary',
     `- schemaVersion: ${inlineCode(result.schemaVersion)}`,
-    `- deterministic: new ${summary.deterministic.newFailures}, carried ${summary.deterministic.carried}, waived ${summary.deterministic.waived}, fixed ${summary.deterministic.fixed}`,
-    `- judged: model-judgment ${summary.judged.modelJudgment}, preview ${summary.judged.preview}`,
-    `- not evaluated: unresolved files ${summary.notEvaluated.unresolvedFiles}, gaps ${summary.notEvaluated.gaps}`,
+    // The headline is the count of what is listed below. The split follows in parentheses, and
+    // only when there is something new, because "(0 failing, 0 unconfirmed)" on a clean run is
+    // noise that teaches the reader to skip the clause on the runs where it carries something.
+    `- deterministic: new ${wholeNumber(summary.deterministic.new)}${newSplit(summary)}, carried ${wholeNumber(summary.deterministic.carried)}, waived ${wholeNumber(summary.deterministic.waived)}, fixed ${wholeNumber(summary.deterministic.fixed)}`,
+    `- judged: model-judgment ${wholeNumber(summary.judged.modelJudgment)}, preview ${wholeNumber(summary.judged.preview)}`,
+    `- not evaluated: unresolved files ${wholeNumber(summary.notEvaluated.unresolvedFiles)}, gaps ${wholeNumber(summary.notEvaluated.gaps)}`,
     `- blocked: ${summary.blocked ? 'yes' : 'no'}`,
   ];
-  if (result.paidDownCount > 0) {
-    const plural = result.paidDownCount === 1 ? 'entry' : 'entries';
-    lines.push(`- floor debt resolved: ${result.paidDownCount} ${plural} (run usabl floor prune to re-arm)`);
+  // The count is carried by the Result, so it is printed only once it is really a whole number.
+  // A count is the one kind of carried value a code span would make harder to read, and a whole
+  // number cannot be a link, a mention, or markup of any kind.
+  if (Number.isInteger(result.paidDownCount) && result.paidDownCount > 0) {
+    lines.push(
+      // An observation, not a conclusion: absence on a cleanly scanned screen is what a fixed
+      // barrier looks like and also what a table rendering no rows looks like. The label carries
+      // the noun, so the count needs no separate plural word.
+      `- floor entries not observed this run: ${wholeNumber(result.paidDownCount)}` +
+      ' (if they were fixed, run usabl floor prune to re-arm)',
+    );
   }
   return lines;
 }
 
-// The source location and candidates as plain pieces for the untrusted frame. An app finding's
-// source file can be read from a renderer-injected DOM attribute, so it is page-influenced and
-// belongs inside the frame with the rest of the dynamic finding text. frameUntrustedBlock scrubs
-// each piece, so these are passed raw rather than pre-neutralized.
+// The source location and candidates as pieces for the untrusted frame. An app finding's source
+// file can be read from a renderer-injected DOM attribute, so it is page-influenced and belongs
+// inside the frame with the rest of the dynamic finding text. The frame scrubs each value, so
+// these are passed raw rather than pre-neutralized.
 function sourcePieces(
   source: DocsSourceMapping | undefined,
   appSource: AppSourceMapping | undefined,
-): string[] {
+): FramedPiece[] {
   if (source !== undefined && source.file !== null) {
-    const pieces = [`source: ${formatDocsSourceLocation(source)}`];
+    const pieces = [{ label: 'source', value: formatDocsSourceLocation(source) }];
     if (source.candidates.length > 1) {
-      pieces.push(`candidates: ${source.candidates.join(', ')}`);
+      pieces.push({ label: 'candidates', value: source.candidates.join(', ') });
     }
     return pieces;
   }
   if (appSource !== undefined && appSource.file !== null) {
-    const pieces = [`source: ${formatAppSourceLocation(appSource)}`];
+    const pieces = [{ label: 'source', value: formatAppSourceLocation(appSource) }];
     if (appSource.candidates.length > 1) {
-      pieces.push(`candidates: ${appSource.candidates.join(', ')}`);
+      pieces.push({ label: 'candidates', value: appSource.candidates.join(', ') });
     }
     return pieces;
   }
   if (appSource !== undefined && appSource.candidates.length > 0) {
-    return [`candidates: ${appSource.candidates.join(', ')}`];
+    return [{ label: 'candidates', value: appSource.candidates.join(', ') }];
   }
   return [];
 }
 
-// One frame around every dynamic finding field. whatUserExperiences, why, the fix, and the source
-// location can each carry page-derived or scanner-derived text: an axe rule with no curated note
-// falls back to node.failureSummary for both why and fix, and an app source can be read from a
-// renderer-injected DOM attribute. This comment is read by a model, so all of it is sealed as
-// untrusted in one frame, and only the engine-authored header (severity, screen id, layer, rule)
-// stays outside. That matches how the stop hook already frames its block.
-function findingPieces(finding: Finding): string[] {
+// One frame around every dynamic finding field, and every value in it in a code span. Where each
+// value comes from decides that:
+//
+//   experience is page text. usabl builds it from the element's accessible name, or a scanner
+//   describes the node, so it says whatever the page says.
+//   why and fix are provider-authored for the built-in providers, but only five axe rules carry
+//   a curated note; for every other rule both fall back to axe's failureSummary, whose check
+//   messages quote attribute values from the page. So they are page-influenced and spanned.
+//   source and candidates are path text. A docs mapping comes from the repository, but an app
+//   mapping can be read from a renderer-injected DOM attribute, so a page can choose it. Spanned,
+//   and a path reads well in a code span anyway.
+//
+// Only the engine-authored header (severity, screen id, layer, rule) stays outside the frame.
+// That matches how the stop hook frames its block.
+function findingPieces(finding: Finding): FramedPiece[] {
   return [
-    finding.whatUserExperiences,
-    `why: ${finding.why}`,
+    { label: 'experience', value: finding.whatUserExperiences },
+    { label: 'why', value: finding.why },
     ...sourcePieces(finding.docsSource, finding.appSource),
-    `fix: ${fixOrAbsence(finding)}`,
+    { label: 'fix', value: fixOrAbsence(finding) },
   ];
+}
+
+// One list item: the marker and first line, then every continuation line indented by the
+// marker's content offset.
+//
+// CommonMark makes a continuation line part of the item only when it is indented to where the
+// item's content starts, which is the marker plus the space after it: two columns for "- ",
+// three for "1. ", four for "10. ". A continuation indented less than that leaves the item and
+// renders as a paragraph outside the list, and a marker with nothing after it renders as an empty
+// item. So the first line always goes on the marker's line, and the indent is computed from the
+// marker text rather than written as a constant, so a two-digit index stays correct.
+function listItem(marker: string, first: string, continuation: string[]): string[] {
+  const indent = ' '.repeat(marker.length + 1);
+  return [`${marker} ${first}`, ...continuation.map((line) => `${indent}${line}`)];
 }
 
 function formatFinding(finding: Finding): string[] {
@@ -248,11 +366,11 @@ function formatFinding(finding: Finding): string[] {
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
-  const framed = framedMarkdownLines(findingPieces(finding));
-  return [
-    `- [${escapeMarkdown(severity)}] ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)}`,
-    ...framed.map((line) => `  ${line}`),
-  ];
+  return listItem(
+    '-',
+    `${OPEN_BRACKET}${inlineCode(severity)}${CLOSE_BRACKET} ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)}`,
+    framedMarkdownLines(findingPieces(finding)),
+  );
 }
 
 function renderFindingGroup(title: string, findings: Finding[]): string[] {
@@ -262,19 +380,28 @@ function renderFindingGroup(title: string, findings: Finding[]): string[] {
   return [`### ${title}`, ...findings.flatMap((finding) => formatFinding(finding))];
 }
 
+// The headline is built from the group's fields rather than from one formatted string, so every
+// field the Result carried can be sealed on its own: the screen id, which the router fallback
+// derives from a route literal in the application, and the status, severity, layer, and rule,
+// which arrive as whatever the document handed to `usabl comment` said. The brackets and the
+// count are the only prose left on the line. The status and the severity share one span, so the
+// line keeps the shape it had when it was one escaped string.
 function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
   const finding = group.representative;
-  const headline = formatCollapsedGroupHeadline(group);
   const rule = neutralize(finding.rule);
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
-  const framed = framedMarkdownLines(findingPieces(finding));
-  return [
-    `- ${escapeMarkdown(headline)}`,
-    `  - rule: ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)} · ${escapeMarkdown(severity)}`,
-    ...framed.map((line) => `  ${line}`),
-  ];
+  const status = neutralize(group.status);
+  const count = formatCollapsedGroupCount(group);
+  const headline = `${OPEN_BRACKET}${inlineCode(`${status} ${severity}`)}${CLOSE_BRACKET} ${inlineCode(screenId)}/${inlineCode(`${layer}/${rule}`)}${count}`;
+  // The rule line is a continuation of the item, not a nested item. A nested item would make
+  // the framed lines after it lazy continuations of the nested paragraph, so they would render
+  // inside the wrong item.
+  return listItem('-', headline, [
+    `rule: ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)} · ${inlineCode(severity)}`,
+    ...framedMarkdownLines(findingPieces(finding)),
+  ]);
 }
 
 function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): string[] {
@@ -294,6 +421,9 @@ function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): str
 }
 
 function renderCoverageGaps(result: Result): string[] {
+  if (!Array.isArray(result.coverage.gaps)) {
+    return ['### Coverage gaps', NOT_A_LIST];
+  }
   if (result.coverage.gaps.length === 0) {
     return ['### Coverage gaps', '- none'];
   }
@@ -301,17 +431,24 @@ function renderCoverageGaps(result: Result): string[] {
     '### Coverage gaps',
     ...result.coverage.gaps.flatMap((gap) => {
       // A gap ref can be a page URL, and a reason can carry a browser or provider exception, both
-      // page- or tool-derived, so they are sealed as untrusted for the model reading this comment.
-      // The state is an engine enum and stays as the plain label.
-      const framed = framedMarkdownLines([`ref: ${gap.ref}`, `reason: ${gap.reason}`]);
-      return [`- (${escapeMarkdown(neutralize(gap.state))})`, ...framed.map((line) => `  ${line}`)];
+      // page- or tool-derived, so they are sealed as untrusted for the model reading this comment
+      // and spanned so a URL in the ref cannot become a link the page chose. The state is an
+      // engine enum and stays as the plain label.
+      const framed = framedMarkdownLines([
+        { label: 'ref', value: gap.ref },
+        { label: 'reason', value: gap.reason },
+      ]);
+      // A state is an engine enum and no page can choose one, but `Result` is exported and a
+      // caller can compose one outside the engine, so the label is any string at runtime. It
+      // costs one code span to keep that out of the renderer's and the filters' reach.
+      return listItem('-', `(${inlineCode(neutralize(gap.state))})`, framed);
     }),
   ];
 }
 
 // The announcement text for one stop, page-derived: tokens come from the accessibility tree and
 // live regions, and the element-path fallback is a DOM selector. Returned raw; the caller frames
-// it, and frameUntrustedBlock scrubs it, so it is not pre-neutralized here.
+// it, and the frame scrubs it, so it is not pre-neutralized here.
 function stopAnnouncementText(stop: TranscriptStop): string {
   const nonLiveTokens = stop.announcement
     .filter((token) => token.kind !== 'live' && token.text !== null)
@@ -329,18 +466,41 @@ function renderAnnouncements(result: Result): string[] {
     '_Screen reader announcements captured on this run. This is current state, not a before/after comparison against a base run._',
   ];
 
-  for (const screen of result.screens) {
-    if (screen.stops.length === 0) {
+  // Both lists are taken as lists only when they really are lists. The document supplies them,
+  // and this section is where a length becomes a printed number and an index would become a list
+  // marker. A list that is not a list contributes nothing rather than throwing part way through
+  // an already assembled document.
+  const screens = Array.isArray(result.screens) ? result.screens : [];
+  for (const screen of screens) {
+    if (!Array.isArray(screen.stops)) {
+      lines.push(`#### ${inlineCode(neutralize(screen.screenId))}`, NOT_A_LIST);
+      continue;
+    }
+    const stops = screen.stops;
+    if (stops.length === 0) {
       continue;
     }
     lines.push(`#### ${inlineCode(neutralize(screen.screenId))}`);
-    const capped = screen.stops.slice(0, STOP_CAP);
-    for (const stop of capped) {
-      const framed = framedMarkdownLines([stopAnnouncementText(stop)]);
-      lines.push(`${stop.index + 1}.`, ...framed.map((line) => `  ${line}`));
-    }
-    if (screen.stops.length > STOP_CAP) {
-      lines.push(`- showing first ${STOP_CAP} of ${screen.stops.length} stops`);
+    const capped = stops.slice(0, STOP_CAP);
+    capped.forEach((stop, position) => {
+      // The marker counts the stops this list prints and is never built from the stop's own
+      // index. An index is carried by the Result, and text where a marker belongs is not a
+      // marker: the line would leave the list and render as a paragraph beginning with whatever
+      // the Result said, which is the one thing a code span cannot be used to stop, since a
+      // marker has to be literal digits to work at all. Stops are printed in the order they
+      // arrived, so the position says the same thing about any Result the engine wrote.
+      //
+      // The frame opens on the marker's line. A bare "1." renders as an empty item, and the
+      // frame under it, indented two columns where "1. " needs three, would leave the list.
+      const [first, ...rest] = framedMarkdownLines([
+        { label: 'announced', value: stopAnnouncementText(stop) },
+      ]);
+      lines.push(...listItem(`${position + 1}.`, first!, rest));
+    });
+    if (stops.length > STOP_CAP) {
+      // Both numbers are real: the cap is this file's own constant, and the total is the length
+      // of a list this function proved was a list.
+      lines.push(`- showing first ${wholeNumber(STOP_CAP)} of ${wholeNumber(stops.length)} stops`);
     }
   }
 
@@ -351,9 +511,20 @@ function renderAnnouncements(result: Result): string[] {
   return lines;
 }
 
+/** The failing and unconfirmed breakdown behind the new count, omitted when nothing is new. */
+function newSplit(summary: ConformanceSummary): string {
+  if (!Number.isInteger(summary.deterministic.new) || summary.deterministic.new <= 0) {
+    return '';
+  }
+  return ` (${wholeNumber(summary.deterministic.newFailing)} failing, ${wholeNumber(summary.deterministic.newUnconfirmed)} unconfirmed)`;
+}
+
 export function projectPrComment(result: Result, config?: UsablConfig): string {
   // Scrub first because PR comments are public egress for page-derived text.
   const safe = scrubResult(result);
+  if (safe.verdict === null) {
+    return renderNoVerdict(safe).join('\n');
+  }
   const deterministicNew = safe.findings.filter(
     (finding) => finding.evidenceClass === 'deterministic' && finding.status === 'new',
   );
@@ -378,6 +549,8 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
           ...renderFindingGroup('Advisory (non-gating)', advisory),
         ];
 
+  // Every section is printed for a real verdict, "none" included: under a real verdict an empty
+  // section is a fact about the run, where under no verdict it would read as a clean one.
   return [
     COMMENT_MARKER,
     projectHeadline(safe.verdict),

@@ -27,6 +27,7 @@ const result = (over: Partial<Result>): Result => ({
   accessibilityVerdict: 'verified',
   accessibilityExitCode: 0,
   paidDownCount: 0,
+  floorHeadroom: [],
   ...over,
 });
 

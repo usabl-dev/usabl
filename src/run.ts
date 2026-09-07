@@ -178,7 +178,6 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
         ...discoveredCoverage.gaps,
         ...docsCoverage.gaps,
         ...screens.flatMap((screen) => screen.gaps),
-        ...staleFloorGaps(floor),
       ],
     };
 
@@ -201,6 +200,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
         accessibilityVerdict: null,
         accessibilityExitCode: 4,
         paidDownCount: 0,
+        floorHeadroom: [],
       };
     }
 
@@ -223,29 +223,41 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       cleanlyScannedScreens,
     });
 
+    // The gate is the only unit that counts the evidence floor, so it is the only one that can see
+    // a floor which predates count tracking or one whose recorded counts stand above what this run
+    // observed. It has already weighed both into its verdict and named them in its summary, so
+    // appending them here is disclosure catching up with a decision, never a second decision. The
+    // Result must carry them or a reader sees a not_covered run whose coverage names no cause.
+    const coverageWithFloorGaps: Coverage =
+      gated.floorGaps.length === 0
+        ? coverage
+        : { ...coverage, gaps: [...coverage.gaps, ...gated.floorGaps] };
+
     // Enrich docs findings so they speak the author's markup: source file, AsciiDoc construct, and a
     // syntax-aware fix. This runs after the gate on purpose. It reads source, never a verdict, and
     // never changes identity, status, or the floor. Source is read from the working tree (deps.fs),
     // where the author fixes it, even when the manifest itself was read from a trusted ref.
     const docsEnriched = await enrichDocsFindings(gated.findings, docsManifest, deps.fs);
-    const findings = enrichAppFindings(docsEnriched, coverage);
+    const findings = enrichAppFindings(docsEnriched, coverageWithFloorGaps);
 
     // Receipts are reserved for verified. Preview and model-judgment cannot mint one.
     const receipt =
       gated.verdict === 'verified'
         ? await mintReceipt(deps, config, {
             surfaces: ['cli'],
-            checked: coverage.affected.map((a) => a.screenId),
-            notCovered: coverage.unresolvedFiles,
+            checked: coverageWithFloorGaps.affected.map((a) => a.screenId),
+            notCovered: coverageWithFloorGaps.unresolvedFiles,
             applicability: summarizeApplicability(screens),
             findingsSummary: summarize(gated.findings),
             activeWaivers: gated.findings.filter((f) => f.status === 'waived').length,
           })
         : null;
 
-    // Count previously floored barriers this run confirms are resolved. The gate already marks an
-    // identity `fixed` only when its screen was scanned cleanly and the barrier was not observed, so
-    // every `fixed` finding here is a confirmed pay-down. Counting the status directly keeps this on
+    // Count the floored barriers this run did not observe. The gate marks an identity `fixed` only
+    // when its screen was scanned cleanly and the barrier was not seen, so every `fixed` finding
+    // here is an observed absence. Whether it was fixed is not knowable from here, because a screen
+    // rendering fewer rows produces the same absence, and the surfaces word it that way. Counting
+    // the status directly keeps this on
     // the same single definition the gate used, rather than re-deriving the cleanly-scanned filter.
     const paidDownCount = gated.findings.filter((f) => f.status === 'fixed').length;
 
@@ -254,7 +266,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       verdict: gated.verdict,
       summary: gated.summary,
       screens,
-      coverage,
+      coverage: coverageWithFloorGaps,
       findings,
       receipt,
       dirtyGuardedPaths: policyDivergedPaths,
@@ -262,6 +274,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       accessibilityVerdict: gated.accessibilityVerdict,
       accessibilityExitCode: gated.accessibilityExitCode,
       paidDownCount,
+      floorHeadroom: gated.floorHeadroom,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -280,6 +293,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       accessibilityVerdict: null,
       accessibilityExitCode: 4,
       paidDownCount: 0,
+      floorHeadroom: [],
     };
   }
 }
@@ -293,27 +307,6 @@ function unseenRunSummary(unseenScreenIds: string[]): string {
     `(${unseenScreenIds.join(', ')}) scanned without rendering, so nothing was measured and no ` +
     'accessibility verdict would be honest. See coverage gaps for what each screen returned.'
   );
-}
-
-// A version 1 floor recorded a literal 1 for every name and structural entry instead of the
-// barriers it actually saw. Several barriers can neutralize to one of those keys, so the gate
-// cannot tell one accepted barrier from many and cannot compare their counts. Any green against
-// such a floor would be unproven, so disclose it as a coverage gap and let the verdict be
-// not_covered. Count-basis entries always carried real counts, so they need no disclosure.
-function staleFloorGaps(floor: EvidenceFloor): CoverageGap[] {
-  if (floor.version >= 2) return [];
-  const collapsible = floor.entries.filter((entry) => entry.identityBasis !== 'count');
-  if (collapsible.length === 0) return [];
-  return [{
-    ref: EVIDENCE_FLOOR_PATH,
-    state: 'not-covered',
-    reason:
-      `${EVIDENCE_FLOOR_PATH} predates count tracking (version 1), so ${collapsible.length} name or ` +
-      'structural entr' + (collapsible.length === 1 ? 'y' : 'ies') + ' record a placeholder count of 1 ' +
-      'instead of the barriers observed. Several barriers can share one of those identities, so this ' +
-      'run cannot compare their counts and cannot prove no new barrier is hiding behind an accepted one. ' +
-      'Run "usabl baseline" to regenerate the floor with real counts, then review and merge the diff.',
-  }];
 }
 
 async function readFloorOrEmpty(

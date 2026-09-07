@@ -151,13 +151,17 @@ export interface ShowAllHintCounts {
 // exist. The overlay counts all findings and keeps the default.
 export function formatShowAllHint(counts: ShowAllHintCounts, noun = 'findings'): string {
   const { totalFindingCount, shownGroupCount, totalGroupCount } = counts;
+  // The comparisons read the values as they arrived; only what is printed goes through the check.
+  const total = countText(totalFindingCount);
+  const shown = countText(shownGroupCount);
+  const groups = countText(totalGroupCount);
   if (shownGroupCount < totalGroupCount) {
-    return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} ${noun} (${shownGroupCount} of ${totalGroupCount} rule groups shown).`;
+    return `${SHOW_ALL_JSON_HINT} for all ${total} ${noun} (${shown} of ${groups} rule groups shown).`;
   }
   if (totalFindingCount > shownGroupCount) {
-    return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} ${noun} (${totalGroupCount} rule groups; some rules repeat across elements).`;
+    return `${SHOW_ALL_JSON_HINT} for all ${total} ${noun} (${groups} rule groups; some rules repeat across elements).`;
   }
-  return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} ${noun}.`;
+  return `${SHOW_ALL_JSON_HINT} for all ${total} ${noun}.`;
 }
 
 export function applyNoiseBudget(
@@ -257,26 +261,47 @@ export function applyNoiseBudgetPerSurface(
   };
 }
 
-export function formatCollapsedGroupHeadline(group: CollapsedFindingGroup): string {
-  // Show status alongside severity so a reader can tell a new gating barrier from carried debt or a
-  // waived item at a glance, rather than judging a collapsed group by severity alone.
-  const countSuffix = group.count > 1 ? ` (×${group.count})` : '';
-  return `[${group.status} ${group.severity}] ${group.screenId}/${group.layer}/${group.rule}${countSuffix}`;
+/**
+ * A count as text, or a word saying it was not one.
+ *
+ * The counts this unit prints are sizes of arrays it built, so they are numbers by construction.
+ * They are still checked before printing, because every surface prints them as bare numbers
+ * outside whatever seal that surface uses, and a printed number should be provably a number
+ * where it is printed rather than by tracing where it came from. A Result can be composed
+ * outside the engine or read from a document, so the difference between a computed count and a
+ * carried one is not something a reader of one of these lines can see.
+ */
+function countText(value: number): string {
+  return Number.isInteger(value) ? String(value) : 'unknown';
 }
 
 /**
- * The group headline without the screen id, for surfaces whose reader is a language model.
+ * The count suffix a collapsed headline ends with, so a headline says how many findings it
+ * stands for.
+ */
+export function formatCollapsedGroupCount(group: CollapsedFindingGroup): string {
+  if (!Number.isInteger(group.count)) {
+    return ` (×${countText(group.count)})`;
+  }
+  return group.count > 1 ? ` (×${group.count})` : '';
+}
+
+/**
+ * The group headline without the screen id.
  *
- * Those surfaces print the headline as trusted scaffold outside the untrusted frame. A screen id
- * is not always usabl's own word: the router fallback derives it from a route literal in the
- * application, so a page can choose it. Status and severity are usabl's vocabulary, and layer
- * and rule are authored by the providers in the first-party stack, so they stay here; the screen
- * id goes inside the frame as data. The count is kept, so the headline still says how many
- * findings it stands for.
+ * There is deliberately no formatter here that welds the screen id into a headline string. A
+ * screen id is not usabl's own word: the router fallback derives it from a route literal in the
+ * application source, so whoever writes the application chooses it, and page text reaches usabl
+ * through the same routes. One did exist, and every caller that printed the string it returned
+ * printed that id as trusted text, which is exactly the mistake a formatter of that shape
+ * invites. A surface that wants the id in a headline now has to take it from the group and seal
+ * it itself, the way it seals any other value the application chose.
+ *
+ * Status and severity are usabl's vocabulary, and layer and rule are authored by the providers
+ * in the first-party stack, so they stay here.
  */
 export function formatCollapsedGroupHeadlineWithoutScreen(group: CollapsedFindingGroup): string {
-  const countSuffix = group.count > 1 ? ` (×${group.count})` : '';
-  return `[${group.status} ${group.severity}] ${group.layer}/${group.rule}${countSuffix}`;
+  return `[${group.status} ${group.severity}] ${group.layer}/${group.rule}${formatCollapsedGroupCount(group)}`;
 }
 
 export function parseNoiseBudgetConfig(raw: unknown): NoiseBudgetConfig | undefined {

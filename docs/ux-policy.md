@@ -41,16 +41,20 @@ not one card per node.
 
 Severity is display metadata, not the gate input. The four severities are `critical`,
 `serious`, `moderate`, and `minor`. What actually gates is separate: a deterministic
-finding with `confidence: 'fail'` at `new` status is a regression, and any coverage gap or
-unverified finding is `not_covered`. Severity orders the list; it does not decide the
-verdict.
+finding with `confidence: 'fail'` at `new` status is a regression, and a coverage gap or a
+deterministic `unverified` finding at `new` status is `not_covered`. Status decides on both
+sides, so a finding the evidence floor already accepted does not gate whether it fails or
+could not be confirmed. Severity orders the list; it does not decide the verdict.
 
 Display order:
 
-1. **Blocking findings** - deterministic fails at `new` status. These are what turn the
-   verdict to `regression`, whatever their severity label.
-2. **Carried and unverified findings** - shown, contribute to `not_covered` when they leave
-   a gap, but are not new regressions.
+1. **Blocking findings** - deterministic findings at `new` status, whether they fail or
+   could not be confirmed. These are what turn the verdict to `regression` or
+   `not_covered`, whatever their severity label.
+2. **Carried findings** - shown as recorded debt. They do not gate, whether they fail or
+   could not be confirmed, because the evidence floor accepted the identity. Adding more
+   barriers at an accepted identity is what gates: the count passes what the floor recorded
+   and the finding comes back as `new`.
 3. **Waived and fixed findings** - visible for context; they never gate.
 
 Within a group, findings sort by `screen | layer | rule | element key` for stable diffs
@@ -169,9 +173,12 @@ silent pass.
    (exit 3). An unhandled crash in `run()` fails open to exit 4 with `verdict: null`.
    Receipts carry no error field, because a receipt exists only for a `verified` run.
 2. **Message to the developer:** open with the state and the exit code, say what it means,
-   give the gate summary with the crash or gap reason, then the next step. A failed run
-   reads "NO VERDICT: RUN FAILED (exit 4)" and never names the word "verified" in any form,
-   so it cannot be skimmed as a pass. It then says to run again or check by hand.
+   give the next step, then the gate summary with the crash or gap reason. On the Stop hook
+   and in the pull request comment the summary sits inside the untrusted frame. The
+   self-check prints no next step: it is advisory, and the Stop hook is the gate. A failed
+   run reads "NO VERDICT: RUN FAILED (exit 4)" and never names the word "verified" in any
+   form, so it cannot be skimmed as a pass. It says to run again or check by hand, then
+   gives the reason.
 3. **Timeouts:** the shipped bounds are the keyboard-walk 15s wall-clock cap and the 50-tab
    transcript cap. A timed-out scan becomes a gap and lands on `not_covered`, which blocks.
    There is no timeout-as-warn mode and no configurable per-surface budget yet; usabl is on

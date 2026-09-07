@@ -3,9 +3,15 @@
  * This unit renders operator-facing text only.
  * It must never mutate Result, mint a verdict, or pass through untrusted text unsanitized.
  */
-import type { Result } from '../contracts/index.js';
+import type { Finding, Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
-import { discloseGaps, fixOrAbsence, gapDetail, gapHeadline } from './disclosure.js';
+import {
+  discloseGaps,
+  fixOrAbsence,
+  gapDetail,
+  gapHeadline,
+  isBlockingBarrier,
+} from './disclosure.js';
 import { boundField } from './bounded-text.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from './source-location.js';
 import { describeVerdict, formatVerdictLine } from './verdict-line.js';
@@ -56,6 +62,135 @@ function renderNotEvaluated(result: Result): string[] {
 }
 
 /**
+ * The two lists this surface prints, and the line that introduces each one.
+ *
+ * A blocking barrier is a reason the gate could not call this run verified, so it is work. Every
+ * other deterministic finding the run carried is accepted debt: the gate already accounted for it,
+ * a run carrying it can still be verified, and printing it under a heading that says "barriers"
+ * with a "fix:" line told a developer to go and fix something that blocks nothing. That is what the
+ * evidence floor promises not to do, so the two are printed apart and named for what they are.
+ *
+ * Membership comes from the shared predicate, so this surface cannot answer "does it block" any
+ * differently from the gate or from the other surfaces.
+ *
+ * The recorded list holds carried and waived findings. Fixed findings are left out, as they always
+ * were: a finding the run proved gone is not something a developer can act on. Advisory evidence is
+ * left out too, again as before, because this surface has never listed it.
+ */
+const BLOCKING_HEADING = 'barriers that block this run';
+const RECORDED_HEADING = 'recorded, not blocking';
+const RECORDED_NOTE = 'usabl already recorded these. They do not block this run.';
+const HEADROOM_HEADING = 'floor ahead of this run';
+// Says what was observed and offers the action, without asserting a cause. usabl cannot tell a
+// fixed barrier from a shorter list: on the application this was measured against, an icon-button
+// entry standing at 15 tracks how many rows a table happens to render, so a run that sees 3 may
+// mean twelve barriers went away or may mean the page has less content today. Both readings are
+// given, and the operator is the only one who knows which applies.
+const HEADROOM_NOTE = [
+  'This run observed fewer deterministic barriers at these identities than the floor records.',
+  'If they were fixed, run usabl floor prune to re-arm the floor.',
+  'If the page shows less content today, nothing needs to change.',
+];
+
+/** The label on a fix line. Under a barrier it is work. Under recorded debt it is a choice. */
+const BLOCKING_FIX_LABEL = 'fix';
+const RECORDED_FIX_LABEL = 'fix when you choose to';
+
+function isRecordedNotBlocking(finding: Finding): boolean {
+  if (finding.evidenceClass !== 'deterministic' || isBlockingBarrier(finding)) {
+    return false;
+  }
+  return finding.status === 'carried' || finding.status === 'waived';
+}
+
+/**
+ * The floor entries this run found the floor ahead of, printed under the recorded group because
+ * that is the group they are about.
+ *
+ * This never blocks and never changes the verdict, so it appears under a verified run and must not
+ * read like a failure. Each line names the screen, the rule, both numbers, and nothing
+ * page-derived: screen ids and rule names are usabl's and the operator's own words, and an element
+ * key would carry a neutralized accessible name into a surface that also feeds a pull request
+ * comment.
+ *
+ * It claims only what was counted. "Floor records 15, this run saw 3" is an observation; "twelve
+ * barriers were fixed" would be a guess, because the same numbers are produced by a table that is
+ * rendering fewer rows today. The note offers both readings and the command, and leaves the
+ * operator to say which one applies.
+ *
+ * Why an operator should care about a line that blocks nothing: while the floor claims more
+ * barriers at an identity than are present, a new barrier can take the difference and be recorded
+ * as debt somebody already accepted. Re-arming closes that. Blocking instead was rejected because
+ * these counts track how many rows a live table renders.
+ */
+function renderFloorHeadroom(result: Result): string[] {
+  if (result.floorHeadroom.length === 0) {
+    return [];
+  }
+  const lines = [
+    `  ${HEADROOM_HEADING}: ${result.floorHeadroom.length} entr${result.floorHeadroom.length === 1 ? 'y' : 'ies'}`,
+    ...HEADROOM_NOTE.map((note) => `    ${note}`),
+  ];
+  for (const entry of result.floorHeadroom) {
+    lines.push(
+      `    ${boundField(neutralizePrintedText(entry.screenId), 'screenId')} - ` +
+      `${boundField(neutralizePrintedText(entry.rule), 'rule')}: ` +
+      `floor records ${entry.recorded}, this run saw ${entry.observed}`,
+    );
+  }
+  return lines;
+}
+
+/**
+ * One finding, with its source mapping and its fix.
+ *
+ * Every free-text field is neutralized, then bounded on its own, so a huge page string prints its
+ * start and a visible note. Status and severity are usabl's own words and stay whole.
+ */
+function renderFinding(finding: Finding, fixLabel: string): string[] {
+  const lines: string[] = [];
+  const rule = boundField(neutralizePrintedText(finding.rule), 'rule');
+  const screenId = boundField(neutralizePrintedText(finding.screenId), 'screenId');
+  const layer = boundField(neutralizePrintedText(finding.layer), 'layer');
+  const whatUserExperiences = boundField(
+    neutralizePrintedText(finding.whatUserExperiences),
+    'experience',
+  );
+  // A docs finding carries a source mapping and a syntax-aware fix; prefer both so the author
+  // reads their own markup, not the DOM. App findings have no docsSource and keep finding.fix.
+  const source = finding.docsSource;
+  const appSource = finding.appSource;
+  const fix = boundField(neutralizePrintedText(fixOrAbsence(finding)), 'fix');
+  lines.push(
+    `    [${finding.status}] ${screenId} · ${layer}/${rule} (${finding.severity}): ${whatUserExperiences}`,
+  );
+  if (source && source.file) {
+    lines.push(`        source: ${boundField(neutralizePrintedText(formatDocsSourceLocation(source)), 'source')}`);
+    if (source.candidates.length > 1) {
+      lines.push(
+        `        candidates: ${boundField(source.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
+      );
+    }
+  } else if (appSource) {
+    if (appSource.file) {
+      lines.push(`        source: ${boundField(neutralizePrintedText(formatAppSourceLocation(appSource)), 'source')}`);
+    }
+    if (
+      appSource.candidates.length > 0 &&
+      (appSource.file === null || appSource.candidates.length > 1)
+    ) {
+      lines.push(
+        `        candidates: ${boundField(appSource.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
+      );
+    }
+  }
+  // Always printed. Most axe rules carry no curated note, so an absent fix is a common and
+  // real state, and a missing line reads as a rendering bug rather than as an absence.
+  lines.push(`        ${fixLabel}: ${fix}`);
+  return lines;
+}
+
+/**
  * Human CLI projection of a Result. Never re-derives findings or a verdict.
  *
  * The first line is the verdict: a symbol, the verdict word, and the exit code. The second is
@@ -79,51 +214,25 @@ export function formatSummary(result: Result): string {
   // gate's sentence rather than as a second verdict.
   lines.push(`  gate summary: ${boundField(neutralizePrintedText(result.summary), 'summary')}`);
 
-  const gating = result.findings.filter(
-    (f) => f.evidenceClass === 'deterministic' && (f.status === 'new' || f.status === 'carried'),
-  );
-  if (gating.length > 0) {
-    lines.push('  barriers:');
-  }
-  // Every free-text field is neutralized, then bounded on its own, so a huge page string prints
-  // its start and a visible note. Status and severity are usabl's own words and stay whole.
-  for (const f of gating) {
-    const rule = boundField(neutralizePrintedText(f.rule), 'rule');
-    const screenId = boundField(neutralizePrintedText(f.screenId), 'screenId');
-    const layer = boundField(neutralizePrintedText(f.layer), 'layer');
-    const whatUserExperiences = boundField(neutralizePrintedText(f.whatUserExperiences), 'experience');
-    // A docs finding carries a source mapping and a syntax-aware fix; prefer both so the author
-    // reads their own markup, not the DOM. App findings have no docsSource and keep finding.fix.
-    const source = f.docsSource;
-    const appSource = f.appSource;
-    const fix = boundField(neutralizePrintedText(fixOrAbsence(f)), 'fix');
-    lines.push(
-      `    [${f.status}] ${screenId} · ${layer}/${rule} (${f.severity}): ${whatUserExperiences}`,
-    );
-    if (source && source.file) {
-      lines.push(`        source: ${boundField(neutralizePrintedText(formatDocsSourceLocation(source)), 'source')}`);
-      if (source.candidates.length > 1) {
-        lines.push(
-          `        candidates: ${boundField(source.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
-        );
-      }
-    } else if (appSource) {
-      if (appSource.file) {
-        lines.push(`        source: ${boundField(neutralizePrintedText(formatAppSourceLocation(appSource)), 'source')}`);
-      }
-      if (
-        appSource.candidates.length > 0 &&
-        (appSource.file === null || appSource.candidates.length > 1)
-      ) {
-        lines.push(
-          `        candidates: ${boundField(appSource.candidates.map(neutralizePrintedText).join(', '), 'candidates')}`,
-        );
-      }
+  // Blocking work first, always. Recorded debt after it, never above it: a reader who has
+  // something to fix must not have to scroll past a list of things that are not blocking to
+  // find it.
+  const blocking = result.findings.filter(isBlockingBarrier);
+  const recorded = result.findings.filter(isRecordedNotBlocking);
+  if (blocking.length > 0) {
+    lines.push(`  ${BLOCKING_HEADING}: ${blocking.length} finding(s)`);
+    for (const finding of blocking) {
+      lines.push(...renderFinding(finding, BLOCKING_FIX_LABEL));
     }
-    // Always printed. Most axe rules carry no curated note, so an absent fix is a common and
-    // real state, and a missing line reads as a rendering bug rather than as an absence.
-    lines.push(`        fix: ${fix}`);
   }
+  if (recorded.length > 0) {
+    lines.push(`  ${RECORDED_HEADING}: ${recorded.length} finding(s)`);
+    lines.push(`    ${RECORDED_NOTE}`);
+    for (const finding of recorded) {
+      lines.push(...renderFinding(finding, RECORDED_FIX_LABEL));
+    }
+  }
+  lines.push(...renderFloorHeadroom(result));
   lines.push(...renderNotEvaluated(result));
   if (result.dirtyGuardedPaths.length > 0) {
     lines.push(`  guarded paths changed: ${result.dirtyGuardedPaths.join(', ')}`);
@@ -135,7 +244,12 @@ export function formatSummary(result: Result): string {
     lines.push(`  accessibility exit code: ${result.accessibilityExitCode}`);
   }
   if (result.paidDownCount > 0) {
-    lines.push(`  floor debt resolved: ${result.paidDownCount} (run usabl floor prune to re-arm)`);
+    // An observation, not a conclusion. These identities were not seen on a screen that scanned
+    // cleanly, which a fixed barrier produces and so does a table rendering no rows today.
+    lines.push(
+      `  floor entries not observed this run: ${result.paidDownCount}` +
+      ' (if they were fixed, run usabl floor prune to re-arm)',
+    );
   }
   if (result.receipt) {
     lines.push(`  receipt: sourceTree ${result.receipt.sourceTree} @ ${result.receipt.mintedAt}`);
