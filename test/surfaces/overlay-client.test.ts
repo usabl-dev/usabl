@@ -86,6 +86,22 @@ interface MountOptions {
   payloads?: Array<Projection | null>;
   /** Runs in the page before any script, so it can seed or break localStorage. */
   initScript?: string;
+  /**
+   * One gate per result response, in serving order: the nth response is held until the nth promise
+   * settles. A response with no entry is served at once. A fixed delay is a race under load, since
+   * the response can land before the test looks at the in-between state. A promise the test
+   * releases cannot.
+   */
+  holdResults?: Array<Promise<void> | undefined>;
+}
+
+/** A promise and the function that settles it, so a test can hold a response and release it. */
+function deferred(): { promise: Promise<void>; release: () => void } {
+  let release = () => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
 }
 
 async function mount(
@@ -115,7 +131,11 @@ async function mount(
         await new Promise((resolve) => setTimeout(resolve, responseDelayMs));
       }
       const current = payloads[Math.min(served, payloads.length - 1)] ?? null;
+      const gate = options.holdResults?.[served];
       served += 1;
+      if (gate) {
+        await gate;
+      }
       if (current === null) {
         await route.fulfill({ status: 500, contentType: 'text/plain', body: 'unavailable' });
         return;
@@ -515,10 +535,13 @@ describe('the fix loop', { timeout: 30_000 }, () => {
   });
 
   it('shows the scanning state during a re-scan without wiping the last result', async () => {
+    // The re-scan response is held until this test releases it, so the scanning state is observed
+    // for certain rather than inside a delay that a loaded machine can outrun.
+    const rescan = deferred();
     const page = await mount(null, {
       path: '/clusters',
-      responseDelayMs: 700,
       payloads: [projectOverlay(result()), projectOverlay(CLEAN_AFTER_FIX)],
+      holdResults: [undefined, rescan.promise],
     });
     const panel = await openPanel(page);
     await expect.poll(async () => panel.locator('.finding-button').count()).toBe(2);
@@ -529,6 +552,7 @@ describe('the fix loop', { timeout: 30_000 }, () => {
     // The previous result stays on screen while the new scan runs, so the panel does not flicker.
     expect(await panel.locator('.finding-button').count()).toBe(2);
 
+    rescan.release();
     await expect.poll(async () => bannerWord(page), { timeout: 10_000 }).toBe('✓Verified');
 
     await page.context().close();
@@ -538,10 +562,16 @@ describe('the fix loop', { timeout: 30_000 }, () => {
     // The dev server caches the last completed result. On page load the client cannot tell whether
     // the server will answer from that cache or scan, so it must not claim "Scanning". Check again
     // is the one user-driven re-run, and it says so to the server with fresh=1.
+    //
+    // Each response is held behind a promise this test releases, so the pending state and the
+    // scanning state are observed for certain rather than inside a delay that a loaded machine can
+    // outrun.
+    const initial = deferred();
+    const recheck = deferred();
     const page = await mount(null, {
       path: '/clusters',
-      responseDelayMs: 600,
       payloads: [projectOverlay(result())],
+      holdResults: [initial.promise, recheck.promise],
     });
     const requests: string[] = [];
     page.on('request', (request) => {
@@ -554,12 +584,16 @@ describe('the fix loop', { timeout: 30_000 }, () => {
     expect(await badgeLabel(page)).toBe('usabl: no result yet. Open inspector.');
     const panel = await openPanel(page);
     expect(await bannerWord(page)).toBe('○No result yet');
+
+    initial.release();
     await expect.poll(async () => bannerWord(page), { timeout: 10_000 }).toBe('✕Regression');
 
     await panel.getByRole('button', { name: 'Check again' }).click();
     await expect.poll(async () => bannerWord(page)).toBe('…Scanning');
     await expect.poll(async () => requests.length).toBe(1);
     expect(requests[0]).toContain('/__usabl/result?fresh=1');
+
+    recheck.release();
     await expect.poll(async () => bannerWord(page), { timeout: 10_000 }).toBe('✕Regression');
 
     await page.context().close();
@@ -779,8 +813,13 @@ describe('overlay states', { timeout: 30_000 }, () => {
     // takes many seconds, and the client cannot tell which. "No result yet" is true in both cases.
     // "Scanning" is reserved for reads that really run the engine: a server-pushed refresh after a
     // file change, and the user's Check again.
-    const page = await mount(projectOverlay(result()), { responseDelayMs: 1000 });
+    //
+    // The response is held until this test releases it, so the pending state is observed for
+    // certain rather than inside a delay that a loaded machine can outrun.
+    const initial = deferred();
+    const page = await mount(projectOverlay(result()), { holdResults: [initial.promise] });
     expect(await badgeLabel(page)).toBe('usabl: no result yet. Open inspector.');
+    initial.release();
     await page.context().close();
   });
 
