@@ -10,29 +10,47 @@
   all twenty-nine barriers on the committed evidence floor as paid down. The
   verdict came back red only because that page carried barriers of its own; a
   clean one would have produced `verified`, with a receipt, and a claim that the
-  accepted debt was gone. Three rules now stand against that, each producing a
-  not-covered coverage gap on the screen. First: the page's own fetch or XHR
-  requests came back 401 during load, with a storage state configured. That is the
-  primary signal, because it is there before anything renders and needs nothing
-  from the address or the DOM; 401 only, since 403 means authenticated and not
-  permitted. Second: a password input anywhere in the page, in any frame or inside
-  an open shadow root, with a storage state configured. Third: the browser ended on
-  a different address than the one requested and that page asks for a password,
+  accepted debt was gone. That application never leaves the requested address: it
+  renders a blank shell for over five seconds and then swaps a login form in at the
+  same URL, so neither the address nor a password field is reliable on its own.
+  Three rules now stand against it, each producing a not-covered coverage gap.
+  Rule A: with a storage state configured, one of the page's own fetch or XHR
+  requests to the origin of `appBaseUrl` came back 401 at any point during the
+  scan. It is checked when readiness settles and again after the walk and the
+  providers, because a stable shell settles in about 1.5 seconds and an
+  application slower than that has sent nothing yet at the first read. Only
+  same-origin refusals count, so a third-party service with its own stale
+  credentials cannot fire it, and 401 only, since 403 means authenticated and not
+  permitted. Rule B: with a storage state configured, a password input anywhere in
+  the page, in any frame or inside an open shadow root. Rule C: the browser ended
+  on a different address than the one requested and that page asks for a password,
   which applies with or without a configured session. A gapped screen contributes
   no findings, records no keyboard walk, and cannot mark any floor entry resolved,
   so a run whose screens were all like that reports `not_covered`, never
-  `verified`. The two session rules need a configured storage state because only
-  that asserts the run is signed in; without it a 401 and a login form are ordinary
-  things for a signed-out visitor to meet. What is still not caught is written out
-  in the ground truth: a sign-in page with no API traffic and no password field, and
-  an authentication wall that answers 200 to everything. A `reachedWhen` selector on
-  the surface remains the operator's positive assertion for those.
+  `verified`. A `reachedWhen` selector that matches overrides Rule B, which is what
+  keeps a genuine change-password screen scannable; it does not override Rule A,
+  because a selector aimed at a persistent shell matches on a login wall too. The
+  two session rules need a configured storage state because only that asserts the
+  run is signed in. What is still not caught is written out in the ground truth.
+- usabl no longer reports content its own scan created as a barrier. The keyboard
+  walk could focus a control whose tooltip opened, `focusBody()` blurred it, and
+  the providers ran while the element was still in the DOM through its fade out.
+  axe reported a `region` violation on that orphan node as a NEW barrier on an
+  unchanged page, about one run in five: often enough to block a merge, rare enough
+  to read as an intermittent bug in the application. The providers now wait, up to
+  1.5 seconds, for any element with `role="tooltip"` or a `data-popper-placement`
+  attribute to leave the page, then proceed regardless, because a page can carry
+  one of those legitimately and waiting on such a page would never finish.
 - Addresses in a coverage gap reason no longer carry credentials. The sign-in
   userinfo, the query string, and the fragment are all removed from both the
   requested and the landing address, because HTTP basic credentials live in the
   first, authorization codes and return addresses in the second, and a live OAuth
-  implicit-flow access token in the third. Gap `ref` keeps the operator's own
-  configured surface URL, which is what the overlay matches a gap to a screen by.
+  implicit-flow access token in the third. A refused request keeps only the front
+  of its path, at most two segments and only while they read as route words, so a
+  `/reset/<token>` endpoint is printed as `/reset/...`. Gap `ref` keeps the
+  operator's own configured surface URL, which is what the overlay matches a gap to
+  a screen by; the ground truth records that a credential written into a surface
+  URL in committed config is echoed verbatim by every surface.
 - A browser error that quotes the storage state path no longer reaches a report. If
   the session file is deleted or loses read permission between the pre-check and
   the moment a context is created, Playwright raises its own error naming the file
@@ -42,14 +60,16 @@
   what happened and what to do. Unrelated failures keep their own diagnosis.
 - A storage state whose session has expired stops the run before a browser opens.
   `USABL_STORAGE_STATE` is read at composition, and a state in which every cookie
-  carries an expiry, every one of those is past, and no origin holds local storage
-  cannot authenticate anything. The run refuses with a message that says the session
-  has expired and to mint a new one, and returns no verdict. The bar is "nothing
-  here could possibly work", not "probably dead": one session cookie, one undated
-  cookie, or one local storage entry means the file cannot be judged and is not
-  refused, because a missed dead session is caught at scan time and a false refusal
-  has no backstop. `usabl doctor` reports the same state as drifted rather than
-  wired, reading the same rule, so the two surfaces cannot disagree about one file.
+  carries an expiry, every one of those is past, no origin holds local storage or
+  IndexedDB, and there are no stored credentials cannot authenticate anything. The
+  run refuses with a message that names exactly what was checked, and returns no
+  verdict. The bar is "nothing here could possibly work", not "probably dead": one
+  session cookie, one undated cookie, one IndexedDB entry, one local storage entry,
+  or one virtual authenticator credential means the file cannot be judged and is
+  not refused, because Playwright restores all of those and any could be carrying
+  the session. A missed dead session is caught at scan time; a false refusal has no
+  backstop. `usabl doctor` reports the same state as drifted rather than wired,
+  reading the same rule, so the two surfaces cannot disagree about one file.
   Neither the path nor any cookie value is printed.
 - The gate no longer reports green when several new barriers hide behind one
   accepted floor entry. Barriers on different nodes can neutralize to the same
