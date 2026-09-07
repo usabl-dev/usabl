@@ -336,7 +336,7 @@
       <div class="body">
         <p class="eyebrow">The short answer</p>
         <h1 id="hero-title">One pipeline. One decision-maker.</h1>
-        <p class="lede">The engine is about 114 source files and more than 22,000 lines of TypeScript in <code>src/</code>. A separate test folder mirrors it, with about 34,000 lines and more than 1,500 automated tests. Every source file has one of three jobs: collect evidence, make the one decision, or show that decision to people.</p>
+        <p class="lede">The engine is about 121 source files and more than 25,000 lines of TypeScript in <code>src/</code>. A separate test folder mirrors it, with about 44,000 lines and more than 1,900 automated tests. Every source file has one of three jobs: collect evidence, make the one decision, or show that decision to people.</p>
         <p>This page explains the code in the order it runs. One tip before you start: every file begins with a short comment. The comment says what the file does and what it must never do. The most common "must never" is: never decide the final answer. Only one module can do that. It is called the gate.</p>
         <p class="boundary"><strong>The main design rule:</strong> checks produce evidence. The gate turns the evidence into one final answer, called the verdict. All other code only displays the verdict. If any other code produces its own answer, that is a bug, even when the answer happens to be correct.</p>
         <figure class="diagram">
