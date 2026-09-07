@@ -101,6 +101,32 @@ Words.
     expect(await roundTrips(JSON.stringify(draft.manifest))).toBe(true);
   });
 
+  it('skips a leaf whose path slugs to an empty pageId instead of writing a blank id', async () => {
+    // A top-level topic with no Dir and a File made of underscores slugs to nothing. The parser
+    // refuses a blank pageId, so the adapter must skip the page rather than write one.
+    const fs = memoryFs({
+      '_topic_maps/_topic_map.yml': `---
+Name: Loose
+Topics:
+  - Name: Blank
+    File: __
+  - Name: Fine
+    File: fine
+`,
+      '__.adoc': `= Blank name
+`,
+      'fine.adoc': `= Fine
+`,
+    });
+
+    const draft = await inferAsciibinder(fs);
+    expect(draft.manifest.pages.map((page) => page.pageId)).toEqual(['fine']);
+    const note = draft.notes.find((entry) => entry.includes('skipped topic source __.adoc'));
+    expect(note).toBeDefined();
+    expect(note).toContain('non-empty');
+    expect(await roundTrips(JSON.stringify(draft.manifest))).toBe(true);
+  });
+
   it('throws a clear error when the topic map parses but yields no usable pages', async () => {
     const fs = memoryFs({
       '_topic_maps/_topic_map.yml': `---

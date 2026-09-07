@@ -12,6 +12,8 @@ import { posix } from 'node:path';
 import yaml from 'js-yaml';
 import { buildAdocIncludeGraph } from '../../coverage/asciidoc-include-graph.js';
 import type { DocsManifest, DocsPageEntry } from '../../coverage/docs-manifest.js';
+import { operatorText } from '../../intake/config-error.js';
+import { describeIdProblem } from '../../intake/id-grammar.js';
 import { slug } from '../../primitives/slug.js';
 import type { DocsInitDraft, DocsInitFs } from './index.js';
 
@@ -133,7 +135,19 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
       continue;
     }
 
-    const pageId = uniquePageId(slug(chainWithFile.join('/')));
+    // Ask the question the sidecar parser is going to ask, at the point the id is made. The slug
+    // keeps only letters, digits, and hyphens, so the one way it fails the grammar is by coming
+    // out empty, which happens when no Dir or File segment has a letter or digit in it. Writing
+    // that page would produce a manifest usabl then refuses to read, so it is skipped with a note.
+    const candidate = slug(chainWithFile.join('/'));
+    const problem = describeIdProblem(candidate);
+    if (problem !== null) {
+      notes.push(
+        `Review: skipped topic source ${operatorText(assemblyFile)}; the pageId slugged from its path ${problem}`,
+      );
+      continue;
+    }
+    const pageId = uniquePageId(candidate);
     const graph = await buildAdocIncludeGraph(fs, assemblyFile);
     for (const gap of graph.unresolved) {
       notes.push(`Review: unresolved include in ${gap.from}: "${gap.target}" (${gap.reason}).`);

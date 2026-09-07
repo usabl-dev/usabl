@@ -126,6 +126,30 @@ describe('writeDocsInitDraft', () => {
     expect(result.written).toEqual([DOCS_MANIFEST_PATH]);
     expect(fs.store[DOCS_MANIFEST_PATH]).not.toBe('{"existing":true}');
   });
+
+  it('refuses to write a draft the sidecar parser would refuse, and says why without the id', async () => {
+    // The adapters check every id where it is made. This is the boundary behind them: a draft
+    // that reaches the write with an id the parser refuses is not written, so no future run can
+    // fail on a file init left behind. The hostile character is named by position and code point.
+    const { fs, draft } = await draftOf();
+    const page = draft.manifest.pages[0];
+    expect(page).toBeDefined();
+    if (page === undefined) {
+      return;
+    }
+    const hostile: DocsInitDraft = {
+      ...draft,
+      manifest: { ...draft.manifest, pages: [{ ...page, pageId: 'install\u2800guide' }] },
+    };
+    const result = await writeDocsInitDraft(fs, hostile, { force: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.written).toEqual([]);
+    expect(fs.store[DOCS_MANIFEST_PATH]).toBeUndefined();
+    expect(result.message).toContain('pages[0].pageId');
+    expect(result.message).toContain('at position 8: U+2800');
+    expect(result.message).not.toContain('\u2800');
+  });
 });
 
 describe('formatDocsInitReport', () => {

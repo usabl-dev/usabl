@@ -16,6 +16,8 @@
 import { posix } from 'node:path';
 import { buildAdocIncludeGraph } from '../../coverage/asciidoc-include-graph.js';
 import type { DocsManifest, DocsPageEntry } from '../../coverage/docs-manifest.js';
+import { operatorText } from '../../intake/config-error.js';
+import { describeIdProblem } from '../../intake/id-grammar.js';
 import { slug } from '../../primitives/slug.js';
 import type { DocsInitDraft, DocsInitFs } from './index.js';
 
@@ -84,7 +86,8 @@ function matchIncludeTarget(trimmed: string): string | null {
 }
 
 // The author-written block anchor, recognized in every form Pantheon uses. Returns the raw
-// anchor value, which is already a valid pageId. Returns null when no anchor is present.
+// anchor value; whether it is a valid pageId is decided by the id grammar where the page is
+// made, not here. Returns null when no anchor is present.
 function matchAnchor(line: string): string | null {
   if (!line.startsWith('[')) return null;
   const idQuoted = /^\[id=(?:"([^"]+)"|'([^']+)')/.exec(line);
@@ -177,11 +180,21 @@ export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraf
       }
 
       const anchor = findAnchorId(assemblyContent);
-      let pageId: string;
-      if (anchor !== null) {
-        pageId = uniquePageId(anchor);
-      } else {
-        pageId = uniquePageId(fileBaseSlug(assemblyFile));
+      const candidate = anchor ?? fileBaseSlug(assemblyFile);
+      // Ask the question the sidecar parser is going to ask, at the point the id is made. An
+      // anchor is authored text and can carry a raw space, a joining character, or a blank glyph,
+      // and a filename slug can come out empty, so writing either would produce a manifest usabl
+      // then refuses to read. Skipping the page with a note keeps the generator and the validator
+      // agreeing, and leaves the operator a page they can name themselves. The note names the
+      // position and code point of the refused character and never repeats the id.
+      const problem = describeIdProblem(candidate);
+      if (problem !== null) {
+        const origin = anchor !== null ? 'its anchor pageId' : 'the pageId guessed from its filename';
+        notes.push(`Review: skipped ${operatorText(assemblyFile)}; ${origin} ${problem}`);
+        continue;
+      }
+      const pageId = uniquePageId(candidate);
+      if (anchor === null) {
         notes.push(
           `Review: no anchor found in ${assemblyFile}. The pageId "${pageId}" was guessed from the filename. Confirm it before you commit this file.`,
         );

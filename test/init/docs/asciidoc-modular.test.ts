@@ -7,7 +7,8 @@
 import { describe, expect, it } from 'vitest';
 import { inferAsciidocModular } from '../../../src/init/docs/asciidoc-modular.js';
 import { parseDocsManifest } from '../../../src/coverage/docs-manifest.js';
-import type { DocsInitFs } from '../../../src/init/docs/index.js';
+import { computeDocsCoverage } from '../../../src/coverage/docs-planner.js';
+import { DOCS_MANIFEST_PATH, writeDocsInitDraft, type DocsInitFs } from '../../../src/init/docs/index.js';
 import { matchGlob } from '../../../src/primitives/match-glob.js';
 
 function memoryFs(files: Record<string, string>): DocsInitFs & { store: Record<string, string> } {
@@ -154,6 +155,88 @@ include::../modules/con_missing.adoc[leveloffset=+1]
     const draft = await inferAsciidocModular(fs);
     expect(draft.manifest.pages).toHaveLength(1);
     expect(draft.notes.some((n) => n.toLowerCase().includes('review') && n.includes('con_missing.adoc'))).toBe(true);
+    expect(await roundTrips(JSON.stringify(draft.manifest))).toBe(true);
+  });
+
+  it.each([
+    ['a bidi control', 'install\u202eguide', 'at position 8: U+202E', '\u202e'],
+    ['the empty braille pattern', 'install\u2800guide', 'at position 8: U+2800', '\u2800'],
+  ])(
+    'never writes a manifest the parser refuses: an anchor with %s',
+    async (_label, hostileAnchor, expectedPoint, rawCharacter) => {
+      // The whole path: infer from a guide whose assembly anchor carries the hostile character,
+      // write the draft, then read it back through the same parser and planner usabl runs with.
+      // The hostile page must be absent from what was written, the note must say why by position
+      // and code point and never by the id, and docs coverage must plan on the written file.
+      const fs = memoryFs({
+        'titles/aap/master.adoc': `= AAP
+
+include::../../assemblies/assembly_clean.adoc[leveloffset=+1]
+include::../../assemblies/assembly_hostile.adoc[leveloffset=+1]
+`,
+        'assemblies/assembly_clean.adoc': `[id="assembly_clean"]
+= Clean
+
+include::../modules/con_clean.adoc[leveloffset=+1]
+`,
+        'modules/con_clean.adoc': `= Clean concept
+`,
+        'assemblies/assembly_hostile.adoc': `[id="${hostileAnchor}"]
+= Hostile
+
+include::../modules/con_hostile.adoc[leveloffset=+1]
+`,
+        'modules/con_hostile.adoc': `= Hostile concept
+`,
+      });
+
+      const draft = await inferAsciidocModular(fs);
+      expect(draft.manifest.pages.map((page) => page.pageId)).toEqual(['assembly_clean']);
+
+      const note = draft.notes.find((entry) => entry.includes('skipped assemblies/assembly_hostile.adoc'));
+      expect(note).toBeDefined();
+      expect(note).toContain(expectedPoint);
+      expect(note).not.toContain(rawCharacter);
+      expect(note).not.toContain(hostileAnchor);
+
+      const result = await writeDocsInitDraft(fs, draft, { force: false });
+      expect(result.ok).toBe(true);
+      expect(fs.store[DOCS_MANIFEST_PATH]).not.toContain(rawCharacter);
+
+      const manifest = await parseDocsManifest(fs);
+      expect(manifest?.pages.map((page) => page.pageId)).toEqual(['assembly_clean']);
+
+      const coverage = computeDocsCoverage(manifest, ['modules/con_clean.adoc', 'modules/con_hostile.adoc']);
+      expect(coverage.nothingToCheck).toBe(false);
+      expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['assembly_clean']);
+      // The hostile page's module maps to no written page, so it is an honest gap, not a scan of
+      // a page that was never minted.
+      expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['modules/con_hostile.adoc', 'unresolved']]);
+    },
+  );
+
+  it('skips an assembly whose filename slugs to an empty pageId instead of writing a blank id', async () => {
+    // With no anchor the pageId is guessed from the filename, and a filename with no letter or
+    // digit slugs to nothing. A blank id is refused by the parser, so the page is skipped here.
+    const fs = memoryFs({
+      'titles/aap/master.adoc': `= AAP
+
+include::../../assemblies/assembly_ok.adoc[]
+include::../../assemblies/__.adoc[]
+`,
+      'assemblies/assembly_ok.adoc': `[id="assembly_ok"]
+= Ok
+`,
+      'assemblies/__.adoc': `= No anchor and no letters in the name
+`,
+    });
+
+    const draft = await inferAsciidocModular(fs);
+    expect(draft.manifest.pages.map((page) => page.pageId)).toEqual(['assembly_ok']);
+    const note = draft.notes.find((entry) => entry.includes('skipped assemblies/__.adoc'));
+    expect(note).toBeDefined();
+    expect(note).toContain('guessed from its filename');
+    expect(note).toContain('non-empty');
     expect(await roundTrips(JSON.stringify(draft.manifest))).toBe(true);
   });
 
