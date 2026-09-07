@@ -15,11 +15,9 @@ export interface ParsedRoutePath {
  * One route literal found in router source.
  *
  * `offset` is the index in the router source of the `path` literal that declared the route, so a
- * caller that has to name the route can report the declaration rather than the first place the
- * same text happens to appear. Comments are blanked before matching, so a commented-out route is
- * neither reported as a route nor mistaken for the declaration of a real one. What the offset does
- * not promise is that the declaration is live code in every other sense: a route inside a branch
- * that never runs is still a declaration here.
+ * caller that has to name the route can report the declaration itself. Searching the file for the
+ * path text instead would find the first occurrence anywhere, including a comment that mentions
+ * the same path, and would name the wrong line.
  */
 export interface ParsedRouteSite {
   path: string;
@@ -31,87 +29,6 @@ export interface ParsedRouteSite {
 export interface UnusableRoute {
   url: string;
   reason: string;
-}
-
-/**
- * Returns the index just past the string literal that starts at `start`.
- *
- * A backslash escapes the next character. An unterminated literal ends at the newline rather than
- * running to the end of the file, so one stray quote costs one line and not the whole source.
- */
-export function skipStringLiteral(raw: string, start: number): number {
-  const quote = raw[start];
-  let index = start + 1;
-  while (index < raw.length) {
-    const character = raw[index];
-    if (character === '\\') {
-      index += 2;
-      continue;
-    }
-    if (character === quote) {
-      return index + 1;
-    }
-    if (character === '\n' && quote !== '`') {
-      return index;
-    }
-    index += 1;
-  }
-  return raw.length;
-}
-
-/**
- * Returns the source with every comment replaced by spaces, the same length and the same newlines.
- *
- * A commented-out route is not a route. The parsers here match raw text, so without this a
- * commented declaration is found before the real one, and the duplicate rule then keeps the
- * comment and discards the route that actually exists. The replacement keeps every offset and
- * every line break where it was, so an offset taken from the blanked text names the same
- * character in the file.
- *
- * String literals are stepped over so a `//` inside a URL, or a `/*` inside any other string, does
- * not start a comment. A backslash escapes the next character, which is what keeps an escaped
- * slash in a regular expression literal from reading as a comment. The one case this does not
- * reach is a comment written inside a `${}` expression in a template literal, which is left alone.
- */
-export function blankComments(raw: string): string {
-  const out = raw.split('');
-  const blank = (from: number, to: number): void => {
-    for (let index = from; index < to && index < out.length; index += 1) {
-      if (out[index] !== '\n') {
-        out[index] = ' ';
-      }
-    }
-  };
-
-  let index = 0;
-  while (index < raw.length) {
-    const character = raw[index];
-    if (character === '\\') {
-      index += 2;
-      continue;
-    }
-    if (character === '/' && raw[index + 1] === '/') {
-      const newline = raw.indexOf('\n', index);
-      const end = newline < 0 ? raw.length : newline;
-      blank(index, end);
-      index = end;
-      continue;
-    }
-    if (character === '/' && raw[index + 1] === '*') {
-      const close = raw.indexOf('*/', index + 2);
-      const end = close < 0 ? raw.length : close + 2;
-      blank(index, end);
-      index = end;
-      continue;
-    }
-    if (character === "'" || character === '"' || character === '`') {
-      index = skipStringLiteral(raw, index);
-      continue;
-    }
-    index += 1;
-  }
-
-  return out.join('');
 }
 
 export function screenIdFromUrl(url: string): string {
@@ -136,9 +53,6 @@ export function deriveScreenId(url: string): { ok: true; screenId: string } | { 
 }
 
 export function parseRouterFallback(rawRouter: string): { routes: ParsedRoutePath[]; unusable: UnusableRoute[] } {
-  // A commented-out route is not a route, and scanning it would put a screen in the plan that the
-  // application never serves.
-  const source = blankComments(rawRouter);
   const attributeRe = /path=["'`](\/[^"'`]*)["'`]/g;
   const objectRe = /path:\s*["'`](\/[^"'`]*)["'`]/g;
   const urlsSeen = new Set<string>();
@@ -158,12 +72,12 @@ export function parseRouterFallback(rawRouter: string): { routes: ParsedRoutePat
     routes.push({ screenId: derived.screenId, url, entryFile: null });
   };
 
-  for (const match of source.matchAll(attributeRe)) {
+  for (const match of rawRouter.matchAll(attributeRe)) {
     const [, url] = match;
     if (typeof url === 'string') collect(url);
   }
 
-  for (const match of source.matchAll(objectRe)) {
+  for (const match of rawRouter.matchAll(objectRe)) {
     const [, url] = match;
     if (typeof url === 'string') collect(url);
   }
@@ -186,12 +100,7 @@ export function isRouterSource(raw: string): boolean {
 // attribution stays null and each route is a URL-only discovery. route-manifest's rule holds here
 // too: never invent entry-file attribution from router text.
 export function parseDataRouterRoutes(raw: string): ParsedRouteSite[] {
-  // Comments are blanked before anything is matched. A commented-out entry would otherwise be
-  // found first and kept by the duplicate rule, discarding the route that actually exists, and a
-  // stray parenthesis in a comment would move the end of the call argument. The blanked text is
-  // the same length with the same line breaks, so every offset below still points at the same
-  // character in the file.
-  const region = extractRouterCallArg(blankComments(raw));
+  const region = extractRouterCallArg(raw);
   if (region === null) {
     return [];
   }
