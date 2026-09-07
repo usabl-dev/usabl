@@ -2049,7 +2049,10 @@ the sample and no rule catches it, that rule goes to the top of the backlog.
 ### Rule selection rationale
 
 The eight PF rules were chosen because they represent composition mistakes that:
-- axe cannot detect (they require interaction or multi-element awareness).
+- Are outside what the axe-core provider reports. The rulepack is a separate provider,
+  and the focus rules need the component exercised. The one recorded comparison: a
+  standalone axe run reported zero violations on the broken fixture dialog while
+  `pf-focus-into-dialog` and `pf-modal-focus-return` failed.
 - Real screen-reader users encounter regularly in PatternFly apps.
 - Are demonstrable in a short demo (visible to judges, audible in the transcript).
 
