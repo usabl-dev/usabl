@@ -10,14 +10,15 @@ approach. Use in judge Q&A, demo rehearsal, and alliance conversations.
 
 **Acknowledge:** axe-core is one of our check layers - we build on it, not against it.
 
-**Redirect:** axe finds issues on a page snapshot. usabl adds what axe cannot do alone:
-keyboard interaction walk, PatternFly composition rules, deterministic screen-reader
-announcement and accessible-name checks, fix re-verification, and a Stop hook that blocks
-the AI's first stop on a blocking verdict unless a one-use bypass was issued. One finding from axe becomes a verified fix in the same
-session.
+**Redirect:** axe-core is one provider. usabl runs separate providers beside it: a
+keyboard interaction walk, PatternFly composition rules, and deterministic screen-reader
+announcement and accessible-name checks. It re-checks the fix, and a Stop hook blocks
+the AI's first stop on a blocking verdict unless a one-use bypass was issued. One finding
+becomes a re-checked fix in the same session.
 
-**Proof point:** Demo violation #2 (missing `aria-sort`) is invisible to axe. Violation
-#3 (modal focus return) requires the keyboard walk. axe alone passes on both.
+**Proof point:** The recorded test in the demo script: on the broken clusters dialog, a
+standalone axe-core run reported zero violations while usabl reported a regression with
+`pf-focus-into-dialog` and `pf-modal-focus-return`.
 
 ---
 
@@ -63,7 +64,7 @@ verdict, receipt, and surface model work with any rulepack. PatternFly is proof 
 pattern works. The engine generalizes - one roadmap sentence in the pitch, not a pivot.
 
 **Proof point:** axe-core layer is already design-system-agnostic. Keyboard walk is
-generic. Only the PF rulepack is PF-specific, and it's one provider among three.
+generic. Only the PF rulepack is PF-specific, and it's one provider among several.
 
 ---
 
@@ -72,12 +73,14 @@ generic. Only the PF rulepack is PF-specific, and it's one provider among three.
 **Acknowledge:** In an unguarded session, yes. Stop hooks are not sandboxed jails.
 
 **Redirect:** Two-tier enforcement: (1) the stop hook in configured assistant workflows
-catches the common case; (2) CI with branch protection is the backstop that covers
-every contributor regardless of tooling. The assistant cannot merge the PR without CI
-passing. We say "configured workflows" and "CI for everyone" before a judge asks.
+blocks the first stop on a blocking verdict unless a one-use bypass was issued; (2) CI
+with `usabl-required` as a required check is the backstop that covers every contributor
+regardless of tooling. On the normal merge path the PR cannot merge until that check
+passes; whether an administrator can bypass depends on the ruleset's bypass list. We say
+"configured workflows" and "CI for everyone" before a judge asks.
 
 **Proof point:** Skeptic demo - try to unmap, exempt, re-baseline. Guard holds locally
-(approval_required) and CI blocks the PR.
+(approval_required) and CI blocks the PR on the normal merge path.
 
 ---
 
@@ -136,12 +139,14 @@ next?
 triggered the block and verify it's real. (2) Waiver path exists for known issues
 that cannot be fixed this cycle. (3) When usabl cannot check a surface, it reports
 `not_covered` with a reason rather than a false pass or false fail, and if the engine
-itself crashes it fails open instead of fabricating a block. (4) The ratchet means the
+itself crashes it returns no verdict with the reason: the Stop hook discloses that and
+allows the stop, and CI blocks because only a pass passes. (4) The ratchet means the
 tool only gates new violations,
 so teams already trust the signal before it blocks anything they did not just introduce.
 
 **Proof point:** Error UX policy: a surface usabl cannot check becomes `not_covered`
-with a reason; an engine crash fails open, never a false red. Waiver ledger with expiry.
+with a reason; an engine crash returns no verdict with the reason, never a fabricated
+finding. Waiver ledger with expiry.
 Brownfield adoption model.
 
 ---
