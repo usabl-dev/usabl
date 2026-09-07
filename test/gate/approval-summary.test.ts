@@ -88,7 +88,7 @@ describe('approval_required keeps the accessibility disclosure', () => {
     const undiverged = gate({ ...shared, guardDivergedPaths: [] });
     const diverged = gate({ ...shared, guardDivergedPaths: DIVERGED });
 
-    expect(undiverged.summary).toBe('regression: 1 gating finding(s), 1 gap(s)');
+    expect(undiverged.summary).toBe('regression: 1 blocking finding(s), 1 gap(s)');
     expect(diverged.summary).toBe(
       `approval required: 1 guarded path(s) changed; accessibility ${undiverged.summary}`,
     );
@@ -104,7 +104,7 @@ describe('approval_required keeps the accessibility disclosure', () => {
 
     // Nothing else stands between this run and green once a human approves the policy change.
     expect(clean.summary).toBe(
-      'approval required: 1 guarded path(s) changed; accessibility verified: 0 gating finding(s)',
+      'approval required: 1 guarded path(s) changed; accessibility verified: nothing blocking',
     );
   });
 
@@ -132,7 +132,7 @@ describe('approval_required keeps the accessibility disclosure', () => {
       drafts: [d({ confidence: 'unverified' })],
     });
 
-    expect(out.summary).toContain('accessibility not_covered: 1 gating finding(s)');
+    expect(out.summary).toContain('accessibility not_covered: 1 blocking finding(s)');
     expect(out.summary).not.toContain('gap(s)');
   });
 

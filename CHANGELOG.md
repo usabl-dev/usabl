@@ -81,6 +81,18 @@
   backstop. `usabl doctor` reports the same state as drifted rather than wired,
   reading the same rule, so the two surfaces cannot disagree about one file.
   Neither the path nor any cookie value is printed.
+- The engine summary line counts only what blocks. It used to count every
+  deterministic finding that was neither waived nor fixed and call the total
+  gating, but that set holds carried debt, which does not gate. A verified run
+  carrying an accepted floor read `verified: 29 gating finding(s)` while the panel
+  directly under it said none of the 29 blocked anything, and the summary is the
+  line labelled as the gate's own sentence, so it was the one that got believed.
+  The line now reads `verified: nothing blocking, 29 recorded`. A run with barriers
+  reads `regression: 1 blocking finding(s), 29 recorded` where it used to say 30.
+  Recorded counts carried and waived findings, the same grouping the terminal report
+  and the inspector panel use, so the two numbers on one screen always agree. Gap
+  and unmapped-file clauses are unchanged, and a blocked run still always names its
+  cause on the line.
 - Recorded debt that usabl could not confirm no longer blocks. A finding usabl
   declines to judge is marked `unverified`, and until now any of them held the run
   at `not_covered`, even one already accepted on the evidence floor. A carried

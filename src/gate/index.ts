@@ -51,29 +51,60 @@ function accessibilityOutcome(input: GateInput): {
 
   const findings = buildFindings(input);
 
-  // Waived and fixed stay visible. They do not block and they do not mint verified.
-  const gating = findings.filter((f) => GATES(f.evidenceClass) && f.status !== 'waived' && f.status !== 'fixed');
-  const hasNewFail = gating.some((f) => f.confidence === 'fail' && f.status === 'new');
-  // Uncertainty blocks only when it is new, the same test the failing side uses. A carried
-  // unverified finding is on the evidence floor: the floor accepted that identity, and the
-  // gate has already decided a carried failure does not block. Blocking on carried uncertainty
-  // instead would hold every real application at not_covered forever, because a large UI always
-  // has some results the checker declines to judge, and no amount of work clears them.
-  //
-  // Growth at a floored identity is not lost by this. buildFindings tallies every draft that
-  // lands on an identity and marks the collapsed finding `new` when the tally is above the count
-  // the floor recorded, so a second barrier hiding behind one accepted entry comes back as new
-  // and blocks here. The recorded count is what protects that case, not the confidence test.
+  const blocking = findings.filter(BLOCKS);
+  const hasNewFail = blocking.some((f) => f.confidence === 'fail');
   const hasUnverified =
-    gating.some((f) => f.confidence === 'unverified' && f.status === 'new') ||
-    coverageIncomplete(input.coverage);
+    blocking.some((f) => f.confidence === 'unverified') || coverageIncomplete(input.coverage);
 
   const { verdict, exitCode } = decideAccessibilityVerdict({
     hasBlockingFailure: hasNewFail,
     hasUnverified,
   });
-  return { verdict, findings, exitCode, summary: verdictSummary(verdict, gating, input.coverage) };
+  return {
+    verdict,
+    findings,
+    exitCode,
+    summary: verdictSummary(verdict, blocking.length, findings.filter(RECORDED).length, input.coverage),
+  };
 }
+
+/**
+ * Whether a finding is a reason this run cannot be verified: deterministic evidence, new against
+ * the evidence floor, and either failing or unverified.
+ *
+ * Uncertainty is tested on status exactly as failure is. A carried unverified finding is on the
+ * evidence floor, and the floor accepted that identity whatever the confidence, so it does not
+ * block, the same way a carried failure does not. Blocking on carried uncertainty would hold
+ * every real application at not_covered forever, because a large UI always has some results the
+ * checker declines to judge and no amount of work clears them.
+ *
+ * Growth at a floored identity is not lost by that. buildFindings tallies every draft that lands
+ * on an identity and marks the collapsed finding `new` when the tally is above the count the
+ * floor recorded, so a second barrier hiding behind one accepted entry comes back as new and
+ * blocks here. The recorded count is what protects that case, not the confidence test.
+ *
+ * Waived and fixed need no test of their own. A status is one of new, carried, fixed and waived,
+ * so requiring `new` already excludes all three of the others.
+ *
+ * Written once and read by both the verdict and the summary, so the count the gate prints and the
+ * answer the gate reached cannot come from different sets. `isBlockingBarrier` in
+ * `src/output/disclosure.ts` holds the same rule for the surfaces, pinned against this one by a
+ * test that drives the gate.
+ */
+const BLOCKS = (f: Finding): boolean =>
+  GATES(f.evidenceClass) &&
+  f.status === 'new' &&
+  (f.confidence === 'fail' || f.confidence === 'unverified');
+
+/**
+ * Deterministic debt already accounted for: carried by the evidence floor, or covered by a live
+ * waiver. Visible on every surface, never blocking.
+ *
+ * Fixed is left out, matching the terminal report and the inspector panel. A finding the run
+ * proved gone is not debt the reader is still carrying.
+ */
+const RECORDED = (f: Finding): boolean =>
+  GATES(f.evidenceClass) && (f.status === 'carried' || f.status === 'waived');
 
 /** Prefer PatternFly why/fix when axe and pf fire on the same identity. */
 function mergeEvidence(winner: EvidenceFacts, loser: EvidenceFacts): EvidenceFacts {
@@ -187,22 +218,6 @@ export function findingKey(f: Finding): string {
 }
 
 /**
- * The one line an operator is most likely to read. It has to carry the cause of the verdict, not
- * only a finding count: a run blocked purely on unreached screens used to report
- * "not_covered: 0 gating finding(s)", which names a zero and no reason.
- *
- * The gap count is appended only when there is one. A clean run says nothing about coverage,
- * because inventing "0 gap(s)" on a whole run trains the reader to skip the clause on the runs
- * where it matters.
- *
- * Unseen coverage is reported as one number, not two. Unresolved files are not added to the gap
- * count: both coverage planners record an unmapped file in unresolvedFiles and disclose that same
- * file as a gap, so gaps already contains every unresolved file plus the surfaces and checks that
- * failed for other reasons. Adding the two counts would report one unmapped file as two problems.
- * The per-gap breakdown, including which gaps are unmapped files, is already rendered for every
- * gap by the PR comment and the overlay.
- */
-/**
  * The approval line, carrying the accessibility outcome it used to discard.
  *
  * The gate already ran the accessibility side before reaching this branch, and already carries its
@@ -231,23 +246,61 @@ function approvalSummary(
   return `${head}; accessibility ${accessibility.summary}`;
 }
 
+/**
+ * The one line an operator is most likely to read, and the only one a model is given on the stop
+ * hook and the self check. Every number in it has to mean what the verdict means.
+ *
+ * It used to count the deterministic findings that were neither waived nor fixed and call them
+ * gating. That set holds carried debt, which does not gate, so a verified run carrying an
+ * accepted floor read "verified: 29 gating finding(s)" while the panel under it said none of the
+ * 29 blocked anything. Two lines on one screen disagreed, and this one is labelled as the gate's
+ * own sentence, so it was the one that got believed. The count is now the blocking set, the same
+ * set the verdict was decided from, and accepted debt is named separately as recorded.
+ *
+ * "nothing blocking" rather than "0 blocking finding(s)". A zero is the answer on most runs, and
+ * a line that opens with one trains the reader to skip the number on the runs where it is not
+ * zero. It also cannot be misread as a verdict: the verdict word is already the first token, and
+ * it is the gate's own, so this clause only ever qualifies it.
+ *
+ * The cause of the verdict is always on the line. A blocked run names either a blocking finding
+ * or unseen coverage, so `not_covered: nothing blocking` with nothing after it cannot be built:
+ * not_covered with no blocking finding means coverage was incomplete, which adds a clause.
+ *
+ * The recorded count is appended only when there is debt, and the gap count only when there is a
+ * gap, for the same reason: inventing "0 recorded" or "0 gap(s)" on a whole run teaches the
+ * reader to skip the clause on the runs where it carries something.
+ *
+ * Recorded counts carried and waived findings, which is exactly what the terminal report and the
+ * inspector panel group under "recorded, not blocking", so the number here and the number there
+ * are the same number.
+ *
+ * Unseen coverage is reported as one number, not two. Unresolved files are not added to the gap
+ * count: both coverage planners record an unmapped file in unresolvedFiles and disclose that same
+ * file as a gap, so gaps already contains every unresolved file plus the surfaces and checks that
+ * failed for other reasons. Adding the two counts would report one unmapped file as two problems.
+ * The per-gap breakdown, including which gaps are unmapped files, is already rendered for every
+ * gap by the PR comment and the overlay.
+ */
 function verdictSummary(
   verdict: AccessibilityVerdict,
-  gating: Finding[],
+  blocking: number,
+  recorded: number,
   coverage: Coverage,
 ): string {
   const notEvaluated = notEvaluatedCounts(coverage);
-  const head = `${verdict}: ${gating.length} gating finding(s)`;
+  const clauses = [blocking === 0 ? 'nothing blocking' : `${blocking} blocking finding(s)`];
 
+  if (recorded > 0) {
+    clauses.push(`${recorded} recorded`);
+  }
   if (notEvaluated.gaps > 0) {
-    return `${head}, ${notEvaluated.gaps} gap(s)`;
+    clauses.push(`${notEvaluated.gaps} gap(s)`);
+  } else if (notEvaluated.unresolvedFiles > 0) {
+    // Unreachable while every unmapped file is also disclosed as a gap, which is what both
+    // planners do today. It is written out rather than assumed so that the guarantee this
+    // function owes the operator, that a blocked run always names its cause, does not rest on a
+    // rule enforced in another module.
+    clauses.push(`${notEvaluated.unresolvedFiles} unmapped file(s)`);
   }
-  // Unreachable while every unmapped file is also disclosed as a gap, which is what both planners
-  // do today. It is written out rather than assumed so that the guarantee this function owes the
-  // operator, that a blocked run always names its cause, does not rest on a rule enforced in
-  // another module.
-  if (notEvaluated.unresolvedFiles > 0) {
-    return `${head}, ${notEvaluated.unresolvedFiles} unmapped file(s)`;
-  }
-  return head;
+  return `${verdict}: ${clauses.join(', ')}`;
 }
