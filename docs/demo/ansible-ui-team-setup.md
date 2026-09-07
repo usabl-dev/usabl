@@ -226,17 +226,19 @@ Restart the dev server after adding the plugin.
 
 ### CI gate (blocking)
 
-`.github/workflows/usabl-gate.yml` runs on every PR with two jobs:
+`.github/workflows/usabl-gate.yml` runs on every PR, and again on every review event, with three jobs:
 
 | Job | Purpose |
 | --- | --- |
-| `gate-comment` | Checks out PR head, runs `usabl check --ci --trusted-ref origin/<base>`, posts a sticky PR comment with the Result. Runs only on `pull_request` events so fork head code never sees secrets. |
-| `usabl-policy` | The **required status check**. Reads only git objects from head, evaluates policy against the base branch. Never checks out PR head code. |
+| `gate-comment` | Checks out PR head, runs `usabl check --ci --trusted-ref origin/<base> --json`, posts a sticky PR comment, and uploads the Result as an artifact. Runs only on `pull_request` events, so fork head code never sees secrets. |
+| `usabl-policy` | Never runs head code. Checks out the trusted base, reads the head as git objects only, decides policy from CODEOWNERS and the trusted ref, and publishes the accessibility verdict read from the Result artifact. It is green whenever no guarded path diverged, which says nothing about accessibility, so do not make it the required check on its own. |
+| `usabl-required` | The **required status check**. It is the only job that sees both the accessibility verdict and the policy verdict, and it decides merge or block. It runs on every event (`always()`), so a skipped job can never read as satisfied. |
 
 The workflow is already pinned to a trusted usabl commit and `USABL_ENGINE_CHECKOUT_TOKEN` is set as
-a repo secret. Branch protection requires the `usabl-policy` check to pass before merge.
+a repo secret. Branch protection requires the `usabl-required` check to pass before merge. Do not
+require `gate-comment` (it cannot run on a review event) or `usabl-policy` alone.
 
-You can verify the branch rule is active:
+You can verify that the branch rule requires `usabl-required`:
 
 ```
 usabl install --branch-rule
@@ -256,7 +258,9 @@ or `REGRESSION`, `NOT COVERED`, `APPROVAL REQUIRED`, or `IDLE`.
 
 The comment includes:
 - **Conformance summary** - deterministic new/carried/waived/fixed counts, judged counts, unresolved
-  files, gaps, and whether the change is blocked.
+  files, gaps, and a `blocked` flag. That flag is true only when new deterministic failures block
+  the accessibility result; it is false for `not_covered` and `approval_required`, even though the
+  required `usabl-required` check still blocks the merge in those cases.
 - **Receipt** (verified only) - the comment displays `sourceTree`, `policyHash`, `runnerVersion`, and
   `mintedAt`. The receipt itself binds four values: the exact source tree, the policy hash, the engine
   version, and the scanner versions (axe-core, Playwright, Chromium); the comment does not display the
