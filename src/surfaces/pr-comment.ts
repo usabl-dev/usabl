@@ -107,6 +107,34 @@ function escapeMarkdown(text: string): string {
 const OPEN_BRACKET = escapeMarkdown('[');
 const CLOSE_BRACKET = escapeMarkdown(']');
 
+// What a value is called when it is not the type the contract says it is.
+const UNKNOWN_VALUE = 'unknown';
+
+// What a section says when the field it lists is not a list.
+//
+// Saying "none" there would be a claim about the run, and a document that did not carry a list
+// said nothing about the run. Walking it anyway throws part way through a document that is
+// already half assembled, and the reader gets no comment at all.
+const NOT_A_LIST = '- unreadable: this Result did not carry a list here';
+
+/**
+ * A count printed as a bare number, checked at the point of printing.
+ *
+ * Sealing by carrier holds for strings. It does not reach a number, and this surface reads a
+ * document rather than a Result it built: `usabl comment` parses standard input and checks the
+ * schema version, the accessibility exit code, and one forbidden accessibility verdict, then
+ * takes every other field on trust. A field typed as a number is therefore whatever the document
+ * said, and it does not even have to be a field. A list shaped `{"length": "@user"}` is never
+ * iterated by the coverage counts, so nothing throws and the text lands in a line as a number.
+ *
+ * A number is printed only when it really is a whole number, and named otherwise. A code span
+ * would seal it just as well, but a count is the one value a span makes harder to read, and a
+ * whole number cannot be markup, a link, or a mention, so the check is the better seal here.
+ */
+function wholeNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : UNKNOWN_VALUE;
+}
+
 // A code span, fenced long enough that nothing inside it can end the span early. Character
 // references are not interpreted inside a code span, so escaping is the wrong tool here: a value
 // carrying a backtick has to be fenced away instead, or the rest of the line is read as markup.
@@ -166,8 +194,15 @@ const HEADLINE: Record<Verdict, string> = {
   approval_required: 'APPROVAL REQUIRED',
 };
 
+// A verdict this unit has no headline for is named, never printed. The document decides the
+// verdict string, so the lookup can miss, and printing the miss put the word "undefined" where
+// the verdict belongs.
+function headlineFor(verdict: Verdict): string {
+  return HEADLINE[verdict] ?? 'UNRECOGNIZED VERDICT';
+}
+
 function projectHeadline(verdict: Verdict): string {
-  return `## usabl report: ${HEADLINE[verdict]}`;
+  return `## usabl report: ${headlineFor(verdict)}`;
 }
 
 // A Result with no verdict is one of two opposite facts, and the shared verdict line tells them
@@ -204,7 +239,7 @@ function renderAccessibilitySplit(result: Result): string[] {
     return [];
   }
   const accessibility =
-    result.accessibilityVerdict === null ? 'IDLE' : HEADLINE[result.accessibilityVerdict];
+    result.accessibilityVerdict === null ? 'IDLE' : headlineFor(result.accessibilityVerdict);
   return [
     '',
     `Policy changed. Accessibility on this run: **${accessibility}**. Merge still needs a CODEOWNERS user approval of this head from someone other than the pull request author.`,
@@ -228,12 +263,18 @@ function renderReceipt(result: Result): string[] {
 function renderConformance(result: Result): string[] {
   // This is a read-only three-bucket projection and never a score.
   const summary = computeConformance(result);
+  // Every count here is checked at the point of printing. The deterministic and judged counts are
+  // computed from the findings this surface already walked, so they are numbers by construction;
+  // the two not-evaluated counts are read straight off the lengths of two lists the document
+  // supplied and are the ones that were reachable. All of them go through the same check, because
+  // which counts are computed and which are read is not a property a reader of this line can see,
+  // and the next count added here should not have to know the difference.
   const lines = [
     '### Conformance summary',
     `- schemaVersion: ${inlineCode(result.schemaVersion)}`,
-    `- deterministic: new ${summary.deterministic.newFailures}, carried ${summary.deterministic.carried}, waived ${summary.deterministic.waived}, fixed ${summary.deterministic.fixed}`,
-    `- judged: model-judgment ${summary.judged.modelJudgment}, preview ${summary.judged.preview}`,
-    `- not evaluated: unresolved files ${summary.notEvaluated.unresolvedFiles}, gaps ${summary.notEvaluated.gaps}`,
+    `- deterministic: new ${wholeNumber(summary.deterministic.newFailures)}, carried ${wholeNumber(summary.deterministic.carried)}, waived ${wholeNumber(summary.deterministic.waived)}, fixed ${wholeNumber(summary.deterministic.fixed)}`,
+    `- judged: model-judgment ${wholeNumber(summary.judged.modelJudgment)}, preview ${wholeNumber(summary.judged.preview)}`,
+    `- not evaluated: unresolved files ${wholeNumber(summary.notEvaluated.unresolvedFiles)}, gaps ${wholeNumber(summary.notEvaluated.gaps)}`,
     `- blocked: ${summary.blocked ? 'yes' : 'no'}`,
   ];
   // The count is carried by the Result, so it is printed only once it is really a whole number.
@@ -241,7 +282,9 @@ function renderConformance(result: Result): string[] {
   // number cannot be a link, a mention, or markup of any kind.
   if (Number.isInteger(result.paidDownCount) && result.paidDownCount > 0) {
     const plural = result.paidDownCount === 1 ? 'entry' : 'entries';
-    lines.push(`- floor debt resolved: ${result.paidDownCount} ${plural} (run usabl floor prune to re-arm)`);
+    lines.push(
+      `- floor debt resolved: ${wholeNumber(result.paidDownCount)} ${plural} (run usabl floor prune to re-arm)`,
+    );
   }
   return lines;
 }
@@ -371,6 +414,9 @@ function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): str
 }
 
 function renderCoverageGaps(result: Result): string[] {
+  if (!Array.isArray(result.coverage.gaps)) {
+    return ['### Coverage gaps', NOT_A_LIST];
+  }
   if (result.coverage.gaps.length === 0) {
     return ['### Coverage gaps', '- none'];
   }
@@ -413,12 +459,22 @@ function renderAnnouncements(result: Result): string[] {
     '_Screen reader announcements captured on this run. This is current state, not a before/after comparison against a base run._',
   ];
 
-  for (const screen of result.screens) {
-    if (screen.stops.length === 0) {
+  // Both lists are taken as lists only when they really are lists. The document supplies them,
+  // and this section is where a length becomes a printed number and an index would become a list
+  // marker. A list that is not a list contributes nothing rather than throwing part way through
+  // an already assembled document.
+  const screens = Array.isArray(result.screens) ? result.screens : [];
+  for (const screen of screens) {
+    if (!Array.isArray(screen.stops)) {
+      lines.push(`#### ${inlineCode(neutralize(screen.screenId))}`, NOT_A_LIST);
+      continue;
+    }
+    const stops = screen.stops;
+    if (stops.length === 0) {
       continue;
     }
     lines.push(`#### ${inlineCode(neutralize(screen.screenId))}`);
-    const capped = screen.stops.slice(0, STOP_CAP);
+    const capped = stops.slice(0, STOP_CAP);
     capped.forEach((stop, position) => {
       // The marker counts the stops this list prints and is never built from the stop's own
       // index. An index is carried by the Result, and text where a marker belongs is not a
@@ -434,8 +490,10 @@ function renderAnnouncements(result: Result): string[] {
       ]);
       lines.push(...listItem(`${position + 1}.`, first!, rest));
     });
-    if (screen.stops.length > STOP_CAP) {
-      lines.push(`- showing first ${STOP_CAP} of ${screen.stops.length} stops`);
+    if (stops.length > STOP_CAP) {
+      // Both numbers are real: the cap is this file's own constant, and the total is the length
+      // of a list this function proved was a list.
+      lines.push(`- showing first ${wholeNumber(STOP_CAP)} of ${wholeNumber(stops.length)} stops`);
     }
   }
 

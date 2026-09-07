@@ -343,6 +343,19 @@
 
 ### Security
 
+- The pull request comment prints no number that is not a number. Sealing every
+  string it carries left the numbers unsealed, and a document supplying a list
+  as `{"length": "@user"}` put that text into the not-evaluated counts, because
+  those counts read a length that nothing ever iterates. Every value the comment
+  prints as a bare number is now checked where it is printed and named as
+  unknown when it is not a whole number: the deterministic and judged counts,
+  both not-evaluated counts, the floor pay-down count, the collapsed group
+  count, the counts in the show-all hint, and the stop cap line. A verdict with
+  no headline is named rather than printed as `undefined`, and a field typed as
+  a list that is not a list is reported as unreadable in its section rather than
+  walked or called none. `usabl comment` still does not validate the shape of
+  the document it reads, and the threat model says so: the seal bounds what a
+  hostile document can put on the page, it does not make the document true.
 - The pull request comment seals every value the Result carries, whoever wrote
   it, including a finding's severity, status, layer, and rule. Those were left
   as prose because the first-party providers author them, which holds only

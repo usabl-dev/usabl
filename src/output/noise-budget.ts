@@ -151,13 +151,17 @@ export interface ShowAllHintCounts {
 // exist. The overlay counts all findings and keeps the default.
 export function formatShowAllHint(counts: ShowAllHintCounts, noun = 'findings'): string {
   const { totalFindingCount, shownGroupCount, totalGroupCount } = counts;
+  // The comparisons read the values as they arrived; only what is printed goes through the check.
+  const total = countText(totalFindingCount);
+  const shown = countText(shownGroupCount);
+  const groups = countText(totalGroupCount);
   if (shownGroupCount < totalGroupCount) {
-    return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} ${noun} (${shownGroupCount} of ${totalGroupCount} rule groups shown).`;
+    return `${SHOW_ALL_JSON_HINT} for all ${total} ${noun} (${shown} of ${groups} rule groups shown).`;
   }
   if (totalFindingCount > shownGroupCount) {
-    return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} ${noun} (${totalGroupCount} rule groups; some rules repeat across elements).`;
+    return `${SHOW_ALL_JSON_HINT} for all ${total} ${noun} (${groups} rule groups; some rules repeat across elements).`;
   }
-  return `${SHOW_ALL_JSON_HINT} for all ${totalFindingCount} ${noun}.`;
+  return `${SHOW_ALL_JSON_HINT} for all ${total} ${noun}.`;
 }
 
 export function applyNoiseBudget(
@@ -258,10 +262,27 @@ export function applyNoiseBudgetPerSurface(
 }
 
 /**
+ * A count as text, or a word saying it was not one.
+ *
+ * The counts this unit prints are sizes of arrays it built, so they are numbers by construction.
+ * They are still checked before printing, because every surface prints them as bare numbers
+ * outside whatever seal that surface uses, and a printed number should be provably a number
+ * where it is printed rather than by tracing where it came from. A Result can be composed
+ * outside the engine or read from a document, so the difference between a computed count and a
+ * carried one is not something a reader of one of these lines can see.
+ */
+function countText(value: number): string {
+  return Number.isInteger(value) ? String(value) : 'unknown';
+}
+
+/**
  * The count suffix a collapsed headline ends with, so a headline says how many findings it
- * stands for. A count is a number this unit computed and is never text from anywhere else.
+ * stands for.
  */
 export function formatCollapsedGroupCount(group: CollapsedFindingGroup): string {
+  if (!Number.isInteger(group.count)) {
+    return ` (×${countText(group.count)})`;
+  }
   return group.count > 1 ? ` (×${group.count})` : '';
 }
 

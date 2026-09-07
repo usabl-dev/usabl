@@ -752,6 +752,128 @@ describe('pr comment page text is sealed in code spans', () => {
       expect(real).toContain('floor debt resolved: 2 entries');
     });
 
+    it('prints no number the document supplied in place of a count', () => {
+      // The seal is by carrier and it holds for strings. A number is not sealed, and this is the
+      // shape that reached one: a list the coverage counts never iterate, whose own length is
+      // text. Nothing throws, so the text used to land in the conformance line as a count.
+      const asLength = { length: payload } as unknown as string[];
+      const markdown = projectPrComment(
+        baseResult({
+          findings: [],
+          screens: [],
+          coverage: {
+            changedFiles: [],
+            affected: [],
+            unresolvedFiles: asLength,
+            gaps: [],
+            nothingToCheck: false,
+          },
+        }),
+      );
+
+      expect(markdown).toContain('- not evaluated: unresolved files unknown, gaps 0');
+      expect(markdown).not.toContain(payload);
+    });
+
+    it('prints every conformance count as a number or as a word, never as text', () => {
+      const markdown = projectPrComment(
+        baseResult({
+          findings: [],
+          screens: [],
+          coverage: {
+            changedFiles: [],
+            affected: [],
+            unresolvedFiles: { length: payload } as unknown as string[],
+            gaps: { length: payload } as unknown as Result['coverage']['gaps'],
+            nothingToCheck: false,
+          },
+        }),
+      );
+      const counts = markdown
+        .split('\n')
+        .filter((line) => line.startsWith('- deterministic:') || line.startsWith('- judged:') || line.startsWith('- not evaluated:'));
+
+      expect(counts).toHaveLength(3);
+      for (const line of counts) {
+        // Every value on these lines is a whole number or the word for one that is not.
+        for (const value of line.split(/[:,]/).slice(1)) {
+          expect(value.trim()).toMatch(/^(?:[a-z- ]+ )?(?:\d+|unknown)$/);
+        }
+      }
+      expect(markdown).not.toContain(payload);
+    });
+
+    it('prints no floor pay-down count the document supplied', () => {
+      const markdown = projectPrComment(
+        baseResult({
+          verdict: 'verified',
+          findings: [],
+          screens: [],
+          paidDownCount: { length: payload } as unknown as number,
+        }),
+      );
+
+      expect(markdown).not.toContain('floor debt resolved');
+      expect(markdown).not.toContain(payload);
+    });
+
+    it('reads a transcript only when it really is a list, so no marker or count comes from text', () => {
+      const markdown = projectPrComment(
+        baseResult({
+          findings: [],
+          screens: [
+            {
+              screenId: 'clusters',
+              url: 'https://app.local/clusters',
+              stops: { length: payload } as unknown as [],
+              drafts: [],
+              gaps: [],
+              applicability: [],
+              reachedSelectorPresent: null,
+            },
+          ],
+        }),
+      );
+
+      expect(markdown).toContain('### Announcements (current run)');
+      // Not "none": a document that did not carry a list said nothing about the run.
+      expect(markdown).toContain('- unreadable: this Result did not carry a list here');
+      expect(markdown).not.toContain(payload);
+    });
+
+    it('says a coverage gap list that is not a list is unreadable, rather than none or nothing', () => {
+      const markdown = projectPrComment(
+        baseResult({
+          findings: [],
+          screens: [],
+          coverage: {
+            changedFiles: [],
+            affected: [],
+            unresolvedFiles: [],
+            gaps: { length: payload } as unknown as Result['coverage']['gaps'],
+            nothingToCheck: false,
+          },
+        }),
+      );
+      // Only this section: the announcements section below it legitimately says none.
+      const from = markdown.indexOf('### Coverage gaps');
+      const section = markdown.slice(from, markdown.indexOf('###', from + 3));
+
+      expect(section).toContain('- unreadable: this Result did not carry a list here');
+      expect(section).not.toContain('- none');
+      expect(markdown).not.toContain(payload);
+    });
+
+    it('names a verdict it has no headline for rather than printing the miss', () => {
+      const markdown = projectPrComment(
+        baseResult({ verdict: payload as unknown as Result['verdict'], findings: [], screens: [] }),
+      );
+
+      expect(markdown.split('\n')[1]).toBe('## usabl report: UNRECOGNIZED VERDICT');
+      expect(markdown).not.toContain(payload);
+      expect(markdown).not.toContain('undefined');
+    });
+
     it('prints an exit code in the no-verdict heading only when it really is a whole number', () => {
       const markdown = projectPrComment(
         baseResult({

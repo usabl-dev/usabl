@@ -302,18 +302,48 @@ cannot survive a boundary where the author is whoever wrote the document, so the
 is by carrier: a value the Result carried is sealed, and only text usabl itself wrote is
 left as prose.
 
-What remains as prose is therefore engine constants and numbers this surface computed: the
+Sealing by carrier covers every string. It does not reach a number, and a number was the
+way through. `usabl comment` does not structurally validate the document it reads:
+`parseResultJson` checks the schema version, the accessibility exit code, and one forbidden
+accessibility verdict, and takes every other field on trust. A field typed as a number is
+therefore whatever the document said, and it does not even have to be a field. A list
+supplied as `{"length": "@user"}` is never iterated by the coverage counts, so nothing
+throws and that text was printed as a count, outside every span, where the post-render
+filters reached it.
+
+So the rule for numbers is the one already used for the exit code: every value this
+document prints as a bare number is checked where it is printed, and a value that is not a
+whole number is named as unknown rather than printed. That covers all four deterministic
+counts and both judged counts, both not-evaluated counts, the floor pay-down count, the
+collapsed group count, the counts in the show-all hint, and the stop cap line. It is
+applied to counts this surface computes as well as to counts it reads, because which is
+which is not visible to a reader of the line, and the next count added should not have to
+know the difference. A code span would seal a number just as well; a number is the one
+value a span makes harder to read, and a whole number cannot be markup, a link, or a
+mention, so the check is the better seal here.
+
+Two shapes are not numbers and not strings. A verdict this unit has no headline for is
+named as an unrecognized verdict rather than printed, which also removes the word
+"undefined" from the heading. A field typed as a list that is not a list is reported as
+unreadable in the section that would have listed it, rather than walked, which used to
+throw part way through a document already half assembled, and rather than reported as
+none, which would be a claim about a run the document never made.
+
+What remains as prose is therefore engine constants and numbers that have been checked: the
 report headline and the verdict words, the meaning sentences, the section headings, the
 labels on every framed and unframed line, the brackets around a headline's status and
-severity, the conformance counts, the collapsed group count, and the announcement list
-markers. The counts are computed here from the findings and the transcript, never taken
-from a field. Two values the Result carries are whole numbers rather than spans, because a
-span would make them harder to read and a whole number cannot be markup: the exit code in a
-no-verdict heading and the floor pay-down count are each printed only after a check that
-they really are integers, and are named as unknown or left out otherwise. The announcement
-list marker is the one place a code span is no use, because a list marker has to be literal
-digits to work at all, so the marker counts the stops this list prints and is never built
-from the stop index the Result carried.
+severity, and the counts above. The announcement list marker is the one place a code span
+is no use, because a list marker has to be literal digits to work at all, so the marker
+counts the stops this list prints, from the iteration itself, and is never built from the
+stop index the Result carried.
+
+**Not handled:** `usabl comment` still does not validate the shape of the document it is
+given. Sealing every string and checking every printed number bounds what a malformed or
+hostile document can put on the page, and it does not make the document trustworthy: the
+counts, the sections, and the verdict shown are only as true as the file that supplied
+them. Full structural validation of an externally supplied Result is not implemented. A
+consumer that pipes a Result from an untrusted source into `usabl comment` is reporting
+that source's claims, and the receipt, not the comment, is what proves a run happened.
 
 The stop hook and the self-check are held to the same rule by their own mechanism. They
 print plain text to a language model with no renderer involved, so the question there is
@@ -321,21 +351,27 @@ the untrusted frame rather than a code span, and every value the Result carries 
 it: the gate's summary, each finding's experience, fix, source, and screen id, and each
 coverage gap's ref and reason. What those two surfaces print outside the frame is the
 verdict word and its meaning, the next step, the labels, the counts, a group's status,
-severity, layer, and rule, and the list of guarded files that changed. The guarded paths
-are the one carried value there that is not written by a provider: they are the paths in
-this branch's own diff that the operator's policy guards. They are scrubbed like every
-other string, so they cannot forge a frame marker or carry a control sequence, and naming
-them outside the frame is what lets the model tell the user which file needs approval.
-Both surfaces run locally against the developer's own working tree, so a path in that list
-is a file that developer wrote. There is no document entry point into either surface: both
-project a Result built by `run()` in the same process, and the exported `evaluateStopDecision`
-is reached only by a caller running its own code on its own machine, which is not an
-attacker this model defends against. That is the residual assumption for those two
-surfaces, and it is narrower than the one this section used to make for the comment,
-because it does not depend on who wrote a provider. Two values that a Result could carry
-are no longer pasted into either line whatever their content: an unrecognized verdict is
-named with a fixed word rather than echoed, and an exit code that is not a whole number is
-named as unknown.
+severity, layer, and rule, and the list of guarded files that changed.
+
+Both surfaces project a Result built by `run()` in the same process. Their projectors,
+`evaluateStopDecision` and `projectSelfCheck`, are internal modules that the package does
+not export: the package root exports neither, and there is no subpath under which either
+can be imported. Verified against the packed and installed package rather than by reading
+the source. `Object.keys(await import('usabl'))` contains neither name, and every subpath
+form, `usabl/surfaces/stop-hook.js`, `usabl/dist/surfaces/stop-hook.js`, `usabl/stop-hook`,
+and `usabl/dist/index.js`, fails to resolve with `ERR_PACKAGE_PATH_NOT_EXPORTED`, because
+the `exports` map lists only the root, `./vite`, `./playwright`, `./docs`, and `./measure`.
+`projectPrComment` is not exported either; the comment is reached through the `usabl
+comment` command, which is why that command is the document boundary this section is about.
+
+Neither surface therefore has a document entry point for a consumer of this package. Inside
+this repository the modules can of course be imported and handed anything, and someone
+running arbitrary code in this repository is not an attacker this model defends against:
+they can edit the surfaces themselves. That is the residual assumption, and it is a
+statement about the supported package surface rather than about who wrote a provider. Two
+values that a Result could carry are no longer pasted into either line whatever their
+content: an unrecognized verdict is named with a fixed word rather than echoed, and an exit
+code that is not a whole number is named as unknown.
 
 **Not handled:** credential-dense hostile input costs more than it did. About three million
 characters of back-to-back credentials take roughly 0.7 s to redact, and roughly 1.5 s with
