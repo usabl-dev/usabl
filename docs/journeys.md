@@ -41,7 +41,7 @@ hook), `usabl install --claude-skill` (the on-demand `/usabl-check` skill), `usa
 **Rip-out moment:** The assistant hook is disabled after one false block.
 **Prevention:** Accurate findings on the demo set; `not_covered` only with a reason; the
 evidence floor keeps carried debt from blocking, so what gates is a new, unwaived
-violation, unconfirmed coverage, or a guarded policy edit. The
+violation above the floor, unconfirmed coverage, or a guarded policy edit. The
 `stop-hook` command always exits 0 and blocks through a stdout decision, so a wedged
 hook can never freeze the assistant through an exit code.
 
@@ -103,14 +103,14 @@ check.
 |---|---|---|---|
 | 1. Install | `usabl init` scaffolds policy, then `--overlay`, `--claude`, `--ci`, and `--branch-rule` wire one surface each. `usabl doctor` confirms what is wired. | Curious | "Another bot" |
 | 2. First run | `usabl check` reveals existing barriers; `usabl baseline` drafts the evidence floor to accept known debt as a reviewable diff | Cautious | The legacy debt pile is visible for the first time |
-| 3. Waivers | Known issues get entries in `.usabl-waivers.json`, each with an `expires` date; new, unwaived violations gate | Cautious optimism | Waiver ceremony feels heavy |
+| 3. Waivers | Known issues get entries in `.usabl-waivers.json`, each with an `expires` date; new, unwaived violations above the floor gate | Cautious optimism | Waiver ceremony feels heavy |
 | 4. Steady state | `usabl floor prune` re-arms the floor as barriers are fixed; waiver expiry burns down the rest; `usabl drift routes` catches route drift | Trust | Suspicion that policy was tampered with |
 
 **Who wires each surface:** Morgan and Alex (SME) agree; Riley is informed for release
 evidence.
 
 **Needs to feel safe:** Debt lives in the evidence floor and the waiver ledger; new,
-unwaived violations and unconfirmed coverage gate; CODEOWNERS covers the guarded policy
+unwaived violations above the floor and unconfirmed coverage gate; CODEOWNERS covers the guarded policy
 files, and editing them so they
 diverge from the trusted ref forces `approval_required`.
 
