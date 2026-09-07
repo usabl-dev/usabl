@@ -762,7 +762,8 @@ this PR. Coverage grows as the team works, not as a boil-the-ocean inventory.
 - Comment stripping is regex-based and imperfect.
 - Routes not parseable from the router source must be configured or stay unmapped.
 
-These are honest `not_covered` outcomes, not silent passes.
+Those four are honest `not_covered` outcomes, not silent passes. The next section is not, and has
+to be read differently.
 
 #### Limits of reading routes out of router source
 
@@ -770,16 +771,29 @@ Routes are recovered from router source with regular expressions, not with a par
 route manifest with no build step and no dependency on the application's toolchain, and the price
 is that some declarations are read wrongly and some are not read at all.
 
-Read this part differently from the list above. A route the parser never sees is not a
-`not_covered` outcome. The planner records a gap only for routes it knows about, so a route that
-was never recovered leaves no gap behind: a change to that screen's entry file, or to a
-wide-blast file, can read as fully checked while the screen is never scanned. These are the known
-cases.
+A route the parser never sees is not a `not_covered` outcome. The planner records a gap only for
+routes it knows about, so a route that was never recovered leaves no gap behind: a change to that
+screen's entry file, or to a wide-blast file, can read as fully checked while the screen is never
+scanned.
+
+**The mechanism.** These patterns match raw text. They do not know which characters are code,
+which are inside a string, and which are inside a comment. So a delimiter that appears anywhere
+in the text is treated as a delimiter: a `>` ends a JSX tag, a `)` closes the `create*Router(...)`
+call argument, and a quote opens or closes a path literal. One stray delimiter inside a string or
+a comment can therefore end a tag or a call argument early and drop the declarations after it.
+The reverse also holds: text that is not code, such as a commented-out route, is matched as
+though it were.
+
+The cases below are examples of that mechanism, not a complete list. Anything that puts a
+delimiter where the pattern does not expect one can produce another.
 
 - **A commented-out route is read as a route.** Commented text is matched like any other text. The
   route is added to the manifest, so usabl plans a scan of a screen the application does not
-  serve. When a commented-out declaration and a live one carry the same path, the first one in the
-  file wins, and a message that names a line names the commented line.
+  serve. When a commented-out declaration and a live one carry the same path, which one survives
+  depends on the path: the router fallback and the data-router reader keep the first match, so the
+  commented one wins and a message that names a line names the commented line; `usabl init`'s JSX
+  pass keys routes by path as it merges, so the last match replaces the earlier ones and the live
+  route wins there.
 - **A route whose `element` attribute is written before its `path` is not read at all.** The JSX
   pattern ends the tag at the first `/>`, which is the nested element's own self-close, so every
   attribute after the element is invisible and no path is found. Attribute order carries no
@@ -788,16 +802,26 @@ cases.
 - **A path written as an expression is not read.** Only a quoted literal is matched, so
   `path={ROUTES.home}` or `path={base + '/x'}` is skipped and that route is absent from the
   manifest.
-- **A comment inside a declaration can hide it.** In a JSX tag, a comment containing `>` ends the
-  attribute run early and the whole route is dropped. In a `create*Router(...)` call, a comment
-  containing an unmatched `)` closes the call argument early and every route after it is dropped.
+- **A `>` anywhere in a JSX attribute string drops the whole route.** It ends the attribute run
+  before the pattern reaches the tag's own close, and the tag stops matching. Both
+  `<Route title=">" path="/hidden" element={<Live />} />` and
+  `<Route path="/visible" title=">" element={<Live />} />` yield no routes. Putting the path first
+  does not help.
+- **A `)` anywhere inside the router call drops every route after it.** The call argument is found
+  by counting raw parentheses, so an unmatched `)` in a comment or in an ordinary string, such as
+  `{ path: '/first', label: 'a ) b' }`, closes the argument early and the entries that follow are
+  never seen.
+- **The first `create*Router(` in the file wins, wherever it is.** One written inside a string or
+  a template interpolation is taken as the router call, and the real one below it is never read.
 
-What an operator can do, in every one of these cases: write the routes into `usabl.routes.json`.
-An authored sidecar takes precedence over router-source discovery, so the manifest is then exactly
-what the file says and none of the above applies. `usabl init` drafts that sidecar from the same
-patterns, so read the draft against the router before merging it and add any route it missed. The
-other option is to write the declaration in a form the patterns do read: a quoted `path` literal,
-placed before the `element` attribute, outside any comment.
+What an operator can do. Write the routes into `usabl.routes.json`. An authored sidecar takes
+precedence over router-source discovery, so the manifest is exactly what that file says and none
+of this applies. That is the reliable answer, and it is the only one that holds against every case
+above. `usabl init` drafts the sidecar from these same patterns, so read the draft against the
+router before merging it and add any route it missed. Changing the router source can also work,
+by writing a quoted `path` literal outside any comment and keeping stray `>` and `)` characters
+out of the strings in and around the declaration, but that depends on the whole file rather than
+on the one route, so check the result instead of assuming it.
 
 ### Documentation coverage
 
@@ -1647,8 +1671,10 @@ marks, and cross-script confusables. It does not claim that an accepted id never
 visible right-to-left letters reorder the run they sit in without any control character, and
 they are accepted, because Hebrew and Arabic ids are real ids. It does not claim that every
 accepted character has a glyph in every font. Confusables across scripts are accepted, so a
-Latin `a` and a Cyrillic `a` are both valid and stay distinct ids; both screens are scanned,
-both appear in receipt coverage, and waiver matching is exact, so no screen is lost by it.
+Latin `a` and a Cyrillic `a` are both valid and stay distinct ids: the two never fold into one
+entry, each is scanned when a change affects it, and waiver matching is exact, so neither screen
+is hidden behind the other. What the grammar does not do here is stop a reader from mistaking one
+for the other.
 Unassigned code points are accepted, because rejecting them would make an id's validity depend
 on which Unicode version the running Node build carries.
 

@@ -233,9 +233,10 @@ describe('parseUsablConfig surface id', () => {
   });
 
   it('keeps cross-script confusables as distinct ids, which the grammar does not claim to stop', () => {
-    // Latin "a" and Cyrillic "a" look alike and are both accepted. Both screens are scanned and
-    // both appear in coverage, so no screen is lost. The comment and the docs say so rather than
-    // claiming a property the code does not deliver.
+    // Latin "a" and Cyrillic "a" look alike and are both accepted. They stay two surfaces rather
+    // than folding into one, so neither is hidden behind the other and each is scanned when a
+    // change affects it. The comment and the docs say that rather than claiming a property the
+    // code does not deliver.
     const config = parseUsablConfig(
       configJson({ surfaces: [surface('varia', '/a'), surface('vari\u0430', '/b')] }),
     );

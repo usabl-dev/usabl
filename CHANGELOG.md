@@ -104,8 +104,8 @@
   use, every code point Unicode marks default-ignorable, and the four assigned
   characters that render as blank. It requires Unicode NFC form, because two
   canonically equivalent spellings look identical and compare as different ids.
-  Everything a font draws is still accepted, including right-to-left letters and
-  a discovery-derived id such as `users-:id`. It is checked when a file is read:
+  Nothing outside those categories is refused, so right-to-left letters and a
+  discovery-derived id such as `users-:id` are still accepted. It is checked when a file is read:
   `surfaces[].id` in `usabl.config.json`, `screenId` in `usabl.routes.json`,
   `pageId` in `usabl.docs.json`, and requirement ids and the surface a
   requirement names. A config or sidecar holding such an id used to load and now

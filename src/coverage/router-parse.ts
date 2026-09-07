@@ -18,13 +18,18 @@ export interface ParsedRoutePath {
  * a caller that has to name the route reports the match rather than the first place the same text
  * happens to appear. That is the whole of the promise, and it is worth stating what it is not.
  *
- * These parsers match raw text and do not strip comments, so a commented-out route is matched like
- * any other. When a commented-out entry and a real one carry the same path, the first match wins
- * and the offset names the comment's line. A route is also missed outright when its `element`
- * attribute is written before its `path`, when its path is an expression rather than a quoted
- * literal, or when a comment inside the declaration holds a character the pattern stops at. The
- * limits and what to do about them are written up in the ground truth document, under the
- * documented limits of coverage and discovery.
+ * These patterns match raw text and know nothing about which characters are code, inside a string,
+ * or inside a comment, so a commented-out route is matched like any other. When a commented-out
+ * entry and a real one carry the same path, which one survives depends on how the caller collects
+ * them: `parseRouterFallback` and `parseDataRouterRoutes` keep the first match for a path, so the
+ * commented one wins and the offset names its line, while `usabl init` merges its JSX matches
+ * through `mergeParsedRoutes`, which keys them by path, so a later match replaces an earlier one
+ * and the live route wins there.
+ *
+ * A route is also missed outright in several ways, all of them the same mechanism: a stray
+ * delimiter inside a string or a comment ends a tag or a call argument early. The cases and what
+ * an operator can do about them are written up in the ground truth document, under the documented
+ * limits of coverage and discovery. They are examples, not a closed list.
  */
 export interface ParsedRouteSite {
   path: string;
@@ -119,8 +124,9 @@ export function parseDataRouterRoutes(raw: string): ParsedRouteSite[] {
       continue;
     }
     seen.add(routePath);
-    // The match starts at `path:`, so the offset points at the declaration in the file, not at
-    // some earlier line that happens to contain the same path text.
+    // The match starts at `path:`, so the offset points at the entry that was matched, not at some
+    // earlier line that happens to contain the same path text. Matched, not declared: a
+    // commented-out entry is matched too, and this reader keeps the first match for a path.
     routes.push({ path: routePath, component: null, offset: region.start + pathMatch.index });
   }
   return routes;
@@ -129,6 +135,12 @@ export function parseDataRouterRoutes(raw: string): ParsedRouteSite[] {
 // Returns the balanced-paren argument of the first create*Router(...) call and where it starts in
 // the source, or null. The start index is what lets a caller turn an offset inside the region back
 // into an offset in the whole file.
+//
+// First and raw, both worth saying plainly. First: a create*Router( written inside a string, a
+// template interpolation, or a comment is taken as the call, and a real one below it is never
+// read. Raw: the parentheses are counted as characters, so an unmatched ) in a comment or in an
+// ordinary string closes the argument early and every entry after it is lost. Both are listed
+// with the other discovery limits in the ground truth document.
 function extractRouterCallArg(raw: string): { text: string; start: number } | null {
   const marker = raw.match(/\bcreate(?:Browser|Hash|Memory)Router\s*\(/);
   if (marker?.index === undefined) {

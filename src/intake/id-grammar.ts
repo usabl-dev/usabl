@@ -72,9 +72,11 @@
 //
 // What this does NOT deliver, stated plainly so the rule is not read as more than it is. It does
 // not stop confusables across scripts, so Latin "a" and Cyrillic "a" are both accepted and remain
-// distinct ids. That is a deliberate limit: both are scanned, both appear in receipt coverage,
-// and waiver matching is exact, so no screen or requirement is lost by it. The claim here is
-// narrow: the grammar refuses what is listed above and accepts everything else.
+// distinct ids. That is a deliberate limit. What it costs is nothing structural: the two never
+// fold into one entry, each is scanned when a change affects it, and waiver matching is exact, so
+// neither screen or requirement is hidden behind the other. What it does not do is stop a reader
+// from mistaking one for the other. The claim here is narrow: the grammar refuses what is listed
+// above and accepts everything else.
 const DISALLOWED_ID_CHARACTER =
   /[\s\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Default_Ignorable_Code_Point}\u2800\u{13441}\u{13442}\u{16fe4}]/u;
 
