@@ -46,8 +46,8 @@ const STOP_CAP = 20;
 //
 // The emphasis and code characters have to be in this set, which is not obvious. They cannot
 // delete text that is not their own delimiter, but that is enough: a delimiter pair wrapped around
-// a piece of the marker vanishes and leaves the piece behind, so "PAGE *TEXT*" renders as
-// "PAGE TEXT". A backslash does the same thing on its own, since it hides before the punctuation
+// a piece of the marker vanishes and leaves the piece behind, so "UNTRUSTED *TEXT*" renders as
+// "UNTRUSTED TEXT". A backslash does the same thing on its own, since it hides before the punctuation
 // the marker already contains. Either one turns a string that is not the marker into the marker on
 // screen, which is why none of them can be left through.
 //

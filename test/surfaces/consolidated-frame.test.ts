@@ -1,7 +1,7 @@
 /**
  * Model-facing surfaces frame page-derived text once per message, not once per item.
  *
- * The reader is a language model with a limited context budget. Each frame costs 106 characters
+ * The reader is a language model with a limited context budget. Each frame costs 83 characters
  * of markers. A message with many coverage gaps used to spend a large fraction of its length on
  * repeated markers. #175 removed the forgeability that per-item framing existed to contain, so
  * one frame per message is now both safe and cheaper.
@@ -251,19 +251,19 @@ describe('model-facing surfaces use one frame per message', () => {
         expect(at).toBeLessThan(text.indexOf(END));
       });
 
-      it('saves about 106 chars per item beyond the first for a multi-gap case', () => {
+      it('saves about 83 chars per item beyond the first for a multi-gap case', () => {
         // The multi-gap result frames one experience, one fix, and four gaps: six items. One
         // frame instead of six drops five open-and-close pairs. Each pair plus its two newlines
-        // is 106 characters, so the whole run of markers a single frame no longer prints is
-        // 5 * 106.
+        // is 83 characters, so the whole run of markers a single frame no longer prints is
+        // 5 * 83.
         const text = surface.read(multiGapResult());
 
         // A frame is START + newline + body + newline + END. Two markers plus two newlines is
-        // the per-frame overhead: 106 characters.
+        // the per-frame overhead: 83 characters.
         const perFrame = START.length + END.length + 2;
-        expect(perFrame).toBe(106);
+        expect(perFrame).toBe(83);
 
-        // With five frames removed, the markers no longer printed total 5 * 106 characters. Prove
+        // With five frames removed, the markers no longer printed total 5 * 83 characters. Prove
         // the message no longer carries that many marker characters: one frame's worth remains.
         const markerChars = count(text, START) * START.length + count(text, END) * END.length;
         expect(markerChars).toBe(START.length + END.length);

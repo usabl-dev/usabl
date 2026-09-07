@@ -63,7 +63,7 @@ export type TextCap = keyof typeof TEXT_CAPS;
  * forty characters. Opening lines: about 130 for the verdict, 455 for the summary, 140 for the
  * next step. Five headlines at about 225 each and the hint: about 1,250. Per group inside the
  * frame: screen about 250, experience about 575, fix about 770, so about 8,000 for five. Five gap
- * entries at about 740: about 3,700. Frame markers 106. That sums to about 13,800; 15,000 leaves
+ * entries at about 740: about 3,700. Frame markers 83. That sums to about 13,800; 15,000 leaves
  * room for longer omission counts and labels.
  */
 export const AGENT_MESSAGE_BUDGET = 15_000;

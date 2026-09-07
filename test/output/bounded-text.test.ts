@@ -92,8 +92,8 @@ describe('assembleBoundedMessage', () => {
     const out = assembleBoundedMessage({ scaffold, keep: 3, pieces, frame: frameUntrustedBlock, budget: 1500 });
 
     expect(out.length).toBeLessThanOrEqual(1500);
-    expect(out.split('[BEGIN UNTRUSTED PAGE TEXT').length).toBe(2);
-    expect(out.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
+    expect(out.split('[BEGIN UNTRUSTED TEXT').length).toBe(2);
+    expect(out.split('[END UNTRUSTED TEXT]').length).toBe(2);
     expect(out).toContain('piece-0 ');
     expect(out).not.toContain('piece-19 ');
     // Every surviving piece is whole.
@@ -123,8 +123,8 @@ describe('assembleBoundedMessage', () => {
     const out = assembleBoundedMessage({ scaffold: longScaffold, keep: 3, pieces, keepPieces: 1, frame: frameUntrustedBlock, budget: 900 });
 
     expect(out.length).toBeLessThanOrEqual(900);
-    expect(out.split('[BEGIN UNTRUSTED PAGE TEXT').length).toBe(2);
-    expect(out.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
+    expect(out.split('[BEGIN UNTRUSTED TEXT').length).toBe(2);
+    expect(out.split('[END UNTRUSTED TEXT]').length).toBe(2);
     expect(out).toContain('engine summary: kept');
     expect(out).not.toContain('piece-0 ');
     expect(out).not.toContain('headline-29 ');

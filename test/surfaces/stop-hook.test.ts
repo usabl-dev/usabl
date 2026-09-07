@@ -147,7 +147,7 @@ describe('evaluateStopDecision', () => {
         expect(lines[0]!.endsWith('.')).toBe(true);
         expect(lines[1]!.startsWith('Next: ')).toBe(true);
         // The gate's summary is free text, so it opens the frame rather than sitting in the scaffold.
-        expect(lines[2]!.startsWith('[BEGIN UNTRUSTED PAGE TEXT')).toBe(true);
+        expect(lines[2]!.startsWith('[BEGIN UNTRUSTED TEXT')).toBe(true);
         expect(lines[3]).toBe(`engine summary: ${result.summary}`);
       });
     }
@@ -165,7 +165,7 @@ describe('evaluateStopDecision', () => {
       expect(lines[0]!.startsWith('REGRESSION (exit 1): NOT verified. ')).toBe(true);
       expect(lines[0]).toContain('continuation already active');
       expect(lines[1]!.startsWith('Next: ')).toBe(true);
-      expect(lines[2]!.startsWith('[BEGIN UNTRUSTED PAGE TEXT')).toBe(true);
+      expect(lines[2]!.startsWith('[BEGIN UNTRUSTED TEXT')).toBe(true);
       expect(lines[3]).toBe('engine summary: regression: 1 gating finding(s)');
     });
 
@@ -240,9 +240,9 @@ describe('evaluateStopDecision', () => {
       expect(decision.message).toContain('fix: FIX');
       expect(decision.message).toContain('http://127.0.0.1:5173/jobs: REASON');
       // The frame still opens once and closes once, after every shortened piece.
-      expect(decision.message.split('[BEGIN UNTRUSTED PAGE TEXT').length).toBe(2);
-      expect(decision.message.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
-      expect(decision.message.trim().endsWith('[END UNTRUSTED PAGE TEXT]')).toBe(true);
+      expect(decision.message.split('[BEGIN UNTRUSTED TEXT').length).toBe(2);
+      expect(decision.message.split('[END UNTRUSTED TEXT]').length).toBe(2);
+      expect(decision.message.trim().endsWith('[END UNTRUSTED TEXT]')).toBe(true);
       expect(decision.message.length).toBeLessThan(3_000);
     });
 
@@ -334,7 +334,7 @@ describe('evaluateStopDecision', () => {
       // Per-field caps alone keep the default case inside the budget: no line was dropped, so
       // every gap state and every shown group is still disclosed.
       expect(decision.message).not.toContain('shortened to fit');
-      expect(decision.message.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
+      expect(decision.message.split('[END UNTRUSTED TEXT]').length).toBe(2);
       for (const state of states) {
         expect(decision.message).toContain(`- [${state === 'mystery' ? 'unrecognized' : state}], and 1 more with this state: ref-${state}`);
       }
@@ -395,8 +395,8 @@ describe('evaluateStopDecision', () => {
 
         expect(decision.block).toBe(true);
         const lines = decision.message.split('\n');
-        const opens = decision.message.split('[BEGIN UNTRUSTED PAGE TEXT').length - 1;
-        const closes = decision.message.split('[END UNTRUSTED PAGE TEXT]').length - 1;
+        const opens = decision.message.split('[BEGIN UNTRUSTED TEXT').length - 1;
+        const closes = decision.message.split('[END UNTRUSTED TEXT]').length - 1;
         expect(decision.message.length).toBeLessThanOrEqual(AGENT_MESSAGE_BUDGET);
         expect(lines[0]!.startsWith('REGRESSION (exit 1): NOT verified. ')).toBe(true);
         expect(lines[1]!.startsWith('Next: ')).toBe(true);
@@ -514,7 +514,7 @@ describe('evaluateStopDecision', () => {
     );
 
     expect(decision.block).toBe(true);
-    expect(decision.message).toContain('UNTRUSTED PAGE TEXT');
+    expect(decision.message).toContain('UNTRUSTED TEXT');
     expect(decision.message).not.toContain('secretvalue');
   });
 

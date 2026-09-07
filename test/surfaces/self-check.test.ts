@@ -107,7 +107,7 @@ describe('projectSelfCheck', () => {
     expect(notes.length).toBe(2);
     expect(projected.message).toContain('experience: EXPERIENCE');
     expect(projected.message).toContain('fix: FIX');
-    expect(projected.message.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
+    expect(projected.message.split('[END UNTRUSTED TEXT]').length).toBe(2);
     expect(projected.message.length).toBeLessThan(2_000);
   });
 
@@ -157,7 +157,7 @@ describe('projectSelfCheck', () => {
     expect(projected.message).toContain('Barriers:');
     expect(projected.message.length).toBeLessThanOrEqual(SELF_CHECK_MESSAGE_BUDGET);
     expect(projected.message).not.toContain('shortened to fit');
-    expect(projected.message.split('[END UNTRUSTED PAGE TEXT]').length).toBe(2);
+    expect(projected.message.split('[END UNTRUSTED TEXT]').length).toBe(2);
     for (const state of states) {
       expect(projected.message).toContain(`- [${state === 'mystery' ? 'unrecognized' : state}], and 1 more with this state: ref-${state}`);
     }
@@ -178,8 +178,8 @@ describe('projectSelfCheck', () => {
       );
 
       const lines = projected.message.split('\n');
-      const opens = projected.message.split('[BEGIN UNTRUSTED PAGE TEXT').length - 1;
-      const closes = projected.message.split('[END UNTRUSTED PAGE TEXT]').length - 1;
+      const opens = projected.message.split('[BEGIN UNTRUSTED TEXT').length - 1;
+      const closes = projected.message.split('[END UNTRUSTED TEXT]').length - 1;
       expect(projected.message.length).toBeLessThanOrEqual(SELF_CHECK_MESSAGE_BUDGET);
       expect(lines[0]).toBe('usabl self-check: REGRESSION (exit 1)');
       expect(lines[1]).toBe('advisory: the stop hook is the gate.');
@@ -202,7 +202,7 @@ describe('projectSelfCheck', () => {
     expect(lines[1]).toBe('advisory: the stop hook is the gate.');
     expect(lines[2]).toBe('This change adds an accessibility barrier. It is blocked until fixed.');
     // The gate's summary is free text, so it opens the frame rather than sitting in the scaffold.
-    expect(lines[3]!.startsWith('[BEGIN UNTRUSTED PAGE TEXT')).toBe(true);
+    expect(lines[3]!.startsWith('[BEGIN UNTRUSTED TEXT')).toBe(true);
     expect(lines[4]).toBe('engine summary: regression: 1 gating finding(s)');
   });
 
@@ -233,8 +233,8 @@ describe('projectSelfCheck', () => {
       }),
     );
 
-    expect(projected.message).toContain('BEGIN UNTRUSTED PAGE TEXT');
-    expect(projected.message).toContain('END UNTRUSTED PAGE TEXT');
+    expect(projected.message).toContain('BEGIN UNTRUSTED TEXT');
+    expect(projected.message).toContain('END UNTRUSTED TEXT');
     expect(projected.message).not.toContain('SECRETPOISON');
   });
 });

@@ -1492,8 +1492,8 @@ describe('the overlay is itself accessible and read only', { timeout: 30_000 }, 
     const shadowText = await host.evaluate((el) => el.shadowRoot?.textContent ?? '');
     expect(shadowText).toContain('markup impact');
     expect(shadowText).toContain('<b>evil</b>');
-    expect(shadowText).not.toContain('BEGIN UNTRUSTED PAGE TEXT');
-    expect(shadowText).not.toContain('END UNTRUSTED PAGE TEXT');
+    expect(shadowText).not.toContain('BEGIN UNTRUSTED TEXT');
+    expect(shadowText).not.toContain('END UNTRUSTED TEXT');
     // No element was created from that text; it is all text nodes.
     expect(await page.locator(OVERLAY + ' img').count()).toBe(0);
 

@@ -31,8 +31,8 @@ const UNOPENED_REASON = 'page did not stop changing';
 const DENIED_REASON = 'denied capability: network';
 const SKIPPED_REASON = 'needs the page as loaded';
 
-const FRAME_OPEN = '[BEGIN UNTRUSTED PAGE TEXT';
-const FRAME_CLOSE = '[END UNTRUSTED PAGE TEXT]';
+const FRAME_OPEN = '[BEGIN UNTRUSTED TEXT';
+const FRAME_CLOSE = '[END UNTRUSTED TEXT]';
 
 /**
  * True when `needle` sits inside an open frame: the nearest marker before it opens one rather
@@ -279,8 +279,8 @@ describe('model-facing surfaces keep page-derived text inside a frame', () => {
           ),
         );
 
-        const opens = (text.match(/\[BEGIN UNTRUSTED PAGE TEXT/g) ?? []).length;
-        const closes = (text.match(/\[END UNTRUSTED PAGE TEXT\]/g) ?? []).length;
+        const opens = (text.match(/\[BEGIN UNTRUSTED TEXT/g) ?? []).length;
+        const closes = (text.match(/\[END UNTRUSTED TEXT\]/g) ?? []).length;
         expect(opens).toBe(1);
         expect(closes).toBe(1);
       });
@@ -298,7 +298,7 @@ describe('model-facing surfaces keep page-derived text inside a frame', () => {
         );
 
         // Exactly one real close survives, and the gap that follows the forged field is inside it.
-        expect((text.match(/\[END UNTRUSTED PAGE TEXT\]/g) ?? []).length).toBe(1);
+        expect((text.match(/\[END UNTRUSTED TEXT\]/g) ?? []).length).toBe(1);
         expect(insideFrame(text, UNOPENED_REASON)).toBe(true);
       });
     });
@@ -331,8 +331,8 @@ describe('the pull request comment seals page-derived finding text (a model may 
         ],
       }),
     );
-    const opens = (text.match(/\[BEGIN UNTRUSTED PAGE TEXT/g) ?? []).length;
-    const closes = (text.match(/\[END UNTRUSTED PAGE TEXT\]/g) ?? []).length;
+    const opens = (text.match(/\[BEGIN UNTRUSTED TEXT/g) ?? []).length;
+    const closes = (text.match(/\[END UNTRUSTED TEXT\]/g) ?? []).length;
     expect(opens).toBe(closes);
     expect(opens).toBeGreaterThan(0);
   });
@@ -387,7 +387,7 @@ describe('the stop hook stays short enough to belong in a model context', () => 
     // gap state. The message length is NOT bounded, because it grows with the length of any
     // single reason or fix, and one gap carrying a long provider error is enough to pass any
     // character ceiling anyone picks. A number here would look like a budget without being one,
-    // so there is no number. Each entry costs a fixed 106 characters of frame markers on top of
+    // so there is no number. Each entry costs a fixed 83 characters of frame markers on top of
     // whatever the page text runs to.
     const message = evaluateStopDecision(
       withGaps(
