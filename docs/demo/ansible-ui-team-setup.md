@@ -231,8 +231,8 @@ Restart the dev server after adding the plugin.
 | Job | Purpose |
 | --- | --- |
 | `gate-comment` | Checks out PR head, runs `usabl check --ci --trusted-ref origin/<base> --json`, posts a sticky PR comment, and uploads the Result as an artifact. Runs only on `pull_request` events, so fork head code never sees secrets. |
-| `usabl-policy` | Never runs head code. Checks out the trusted base, reads the head as git objects only, decides policy from CODEOWNERS and the trusted ref, and publishes the accessibility verdict read from the Result artifact. It is green whenever no guarded path diverged, which says nothing about accessibility, so do not make it the required check on its own. |
-| `usabl-required` | The **required status check**. It is the only job that sees both the accessibility verdict and the policy verdict, and it decides merge or block. It runs on every event (`always()`), so a skipped job can never read as satisfied. |
+| `usabl-policy` | Never runs head code. Checks out the trusted base, reads the head as git objects only, decides policy from CODEOWNERS and the trusted ref, and publishes the accessibility verdict read from the Result artifact. It is green when no guarded path diverged and the run produced a result, which says nothing about accessibility, so do not make it the required check on its own. A run with no verdict (exit 4) makes it red. |
+| `usabl-required` | The **required status check**. It is the only job that sees both the accessibility verdict and the policy verdict. When the ruleset requires it, a red status blocks the normal merge path, subject to the ruleset's bypass list. It runs on every event (`always()`), so a skipped job can never read as satisfied. |
 
 The workflow is already pinned to a trusted usabl commit and `USABL_ENGINE_CHECKOUT_TOKEN` is set as
 a repo secret. Branch protection requires the `usabl-required` check to pass before merge. Do not
@@ -276,16 +276,18 @@ HTML marker). You will never get comment spam.
 ### How CI verdicts map to the merge gate
 
 The three jobs read different things. `gate-comment` ends with `enforce accessibility`, so its color
-follows the accessibility result of the scan. `usabl-policy` depends only on the guarded paths: it is
-green whenever no guarded path diverged from the trusted ref, whatever the scan found. `usabl-required`
-reads both and is the only job that decides the merge.
+follows the accessibility result of the scan. `usabl-policy` depends on the guarded paths: it is
+green when no guarded path diverged from the trusted ref and the run produced a result, whatever the
+scan found; a run with no verdict (exit 4) makes it red. `usabl-required` reads both. It is the check to
+require, and when the ruleset requires it a red status blocks the normal merge path, subject to the
+ruleset's bypass list.
 
 | Verdict | `gate-comment` job | `usabl-policy` check | `usabl-required` check | Merge (normal path, `usabl-required` required) |
 | --- | --- | --- | --- | --- |
 | `verified` | Green, posts receipt | Green | Green | Allowed |
 | `regression` | Red, posts findings | Green (no guarded path changed) | Red | Blocked |
 | `not_covered` | Red, posts disclosure | Green (no guarded path changed) | Red | Blocked |
-| `approval_required` | Follows the accessibility sub-result: green when it is verified, red when it is regression or not covered; the comment names the changed policy | Red until a CODEOWNERS reviewer other than the author approves that exact head | Red until both are green | Blocked until CODEOWNERS approve |
+| `approval_required` | Follows the accessibility sub-result: green when it is verified or idle, red when it is regression, not covered, or no verdict; the comment reads "Policy changed" and shows the accessibility sub-result | Red until a CODEOWNERS reviewer other than the author approves that exact head; stays red when CODEOWNERS is missing or malformed at the trusted ref, or no rule covers a changed path | Red until both are green; an approval does not clear a red accessibility sub-result | Blocked until the policy check and the accessibility sub-result both pass |
 | no verdict (crash, exit 4) | Red | Red | Red | Blocked |
 | idle (no verdict) | Green, nothing to check | Green | Green | Allowed |
 
@@ -345,7 +347,7 @@ gh pr create --base devel --fill
 
 CI runs `usabl-gate`. Watch for:
 - The sticky bot comment with the verdict.
-- The `usabl-required` check (green or red) in the PR checks tab. It is the one that decides the merge.
+- The `usabl-required` check (green or red) in the PR checks tab. When the ruleset requires it, its status blocks or allows the normal merge path.
 
 ### 7. Interpret the result
 
