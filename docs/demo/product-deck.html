@@ -517,7 +517,7 @@
       <div class="card">
         <p class="kicker">Targeting</p>
         <h1 tabindex="-1">How usabl Knows What to Check</h1>
-        <p class="lede">usabl does not re-scan the whole app on every change. It reads the git diff and works out which screens each changed file can actually affect, then checks only those. A file it cannot trace to a screen is reported as not covered, never quietly passed.</p>
+        <p class="lede">usabl does not re-scan the whole app on every change. It reads the git diff, keeps the files that match the configured UI globs, and maps each of those to the screens it can affect, then checks only those. A changed UI file it cannot map to a screen is reported as not covered, never quietly passed; a changed file outside the UI globs is not checked, and the run is idle if nothing else changed.</p>
         <figure class="diagram">
           <svg viewBox="0 0 960 250" role="img" aria-label="Four mappings from a changed file to what gets checked. A changed screen file maps to that one screen. A changed shared component maps to every screen that imports it, by following the import graph. A changed app-shell file maps to every screen, called wide blast. A file that cannot be mapped becomes not covered, which fails closed.">
             <path class="flow-line" d="M300,42 H560" marker-end="url(#arrow)"></path>
@@ -629,7 +629,7 @@
         <div class="verdicts">
           <article class="verdict">
             <div><span class="stamp stamp-verified">verified</span><span class="cite">exit 0</span></div>
-            <p>No new gating barrier (deterministic and machine-checkable) was found on the touched surfaces, and no coverage gap was detected. Preview and model-judgment findings are shown but do not affect the verdict.</p>
+            <p>No new gating barrier (deterministic and machine-checkable) was found on the screens coverage mapped from the changed UI files, and no coverage gap was detected. Preview and model-judgment findings are shown but do not affect the verdict.</p>
           </article>
           <article class="verdict">
             <div><span class="stamp stamp-regression">regression</span><span class="cite">exit 1</span></div>
@@ -748,7 +748,7 @@
           </article>
           <article class="layer">
             <strong>Flow</strong>
-            Assert that after a sequence of interactions, tab, click, or key presses, a specific announcement reaches assistive technology through focus or a live region.
+            Assert that after a sequence of interactions, tab, click, or key presses, a specific announcement is observed in the browser's accessibility state or as a live-region change. usabl does not observe what assistive technology receives.
           </article>
           <article class="layer">
             <strong>Doc</strong>
@@ -853,7 +853,7 @@
       <div class="card">
         <p class="kicker">Workflow</p>
         <h1 tabindex="-1">Managing Legacy Codebases</h1>
-        <p class="lede">usabl is designed for brownfield adoption. Once a team has accepted an evidence floor, findings on that floor do not block; without a floor, every finding is new.</p>
+        <p class="lede">usabl is designed for brownfield adoption. Once a team has accepted an evidence floor, findings on that floor do not block; without a floor, every finding is new unless an active waiver covers it.</p>
         <div class="layers">
           <article class="layer">
             <strong>The Floor</strong>
@@ -861,7 +861,7 @@
           </article>
           <article class="layer">
             <strong>The Ratchet</strong>
-            The gate blocks on <em>new</em> deterministic failures, on detected coverage gaps, and on changed policy files, never on findings carried on the floor. As legacy issues are fixed, the floor is pruned, so a reintroduced barrier gates as new.
+            The gate blocks on <em>new</em> unwaived deterministic failures, on detected coverage gaps, on deterministic findings it could not confirm, and on changed policy files, never on findings carried on the floor or waived. As legacy issues are fixed, the floor is pruned, so a reintroduced barrier gates as new.
           </article>
           <article class="layer">
             <strong>Waivers</strong>
@@ -895,7 +895,7 @@
             <rect class="bar-new" x="700" y="30" width="14" height="14"></rect>
             <text class="legend-label" x="720" y="41">New barriers (blocked)</text>
           </svg>
-          <figcaption class="quiet">Known issues shrink as debt is paid down. A new machine-checkable barrier on a scanned screen blocks at every checkpoint.</figcaption>
+          <figcaption class="quiet">Known issues shrink as debt is paid down. A new, unwaived machine-checkable barrier on a scanned screen returns regression at every checkpoint.</figcaption>
         </figure>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#surfaces">Previous</a>
@@ -1044,7 +1044,7 @@ Blocked:        yes
         <p class="lede">Require usabl-required, not the other two. gate-comment cannot run on a review event, and usabl-policy passing says nothing about accessibility. Only usabl-required sees both verdicts.</p>
         <div class="layers">
           <article class="layer"><strong>always() is load-bearing</strong>GitHub counts a skipped required job as satisfied. An aggregate that could be skipped would be an open gate, so this job always runs and always reports a status.</article>
-          <article class="layer"><strong>Approvals flip the gate without re-scanning</strong>A CODEOWNERS approval fires a review event. The scan does not re-run. usabl-policy finds the completed scan for that exact commit and reads its Result artifact, so an approval flips the gate deterministically and no head code runs on the event that carries secrets.</article>
+          <article class="layer"><strong>Approvals flip the gate without re-scanning</strong>A CODEOWNERS approval fires a review event. The scan does not re-run. usabl-policy finds the completed scan for that exact commit and reads its Result artifact, so an approval clears the policy check deterministically when CODEOWNERS covers every changed path, the accessibility sub-result must pass on its own, and no head code runs on the event that carries secrets.</article>
           <article class="layer"><strong>One verdict path</strong>The accessibility verdict the gate wrote travels as data read from the Result, never inferred from a job's pass or fail; a missing or unparseable Result blocks. On a review re-run, where the scan job is skipped, that artifact is the only accessibility authority that exists.</article>
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
@@ -1077,7 +1077,7 @@ test('cluster list stays accessible', async ({ page }) => {
 });
 </pre>
         <div class="surfaces">
-          <article class="surface"><strong>Same providers, deeper reach</strong>Assertions run on post-interaction states, such as open menus, dialogs, and wizards, that a route-level scan never reaches.</article>
+          <article class="surface"><strong>Same providers, deeper reach</strong>Assertions run on any post-interaction state your test reaches, such as a wizard step or a filtered view. The route scan's probes open dialogs and menus on their own; states beyond those are yours to reach.</article>
           <article class="surface"><strong>One import</strong><code>checkPage(page)</code> from <code>usabl/playwright</code> adopts the page without closing it, then returns the findings and a page-level verdict.</article>
           <article class="surface"><strong>Not the gated command</strong>This check has no evidence floor and no waivers, so a barrier the gate has already accepted still reads as a regression here. Its verdict can differ from <code>usabl check</code>. A check that could not be confirmed is <code>not_covered</code>, never a quiet green.</article>
         </div>
@@ -1095,7 +1095,7 @@ test('cluster list stays accessible', async ({ page }) => {
       <div class="card">
         <p class="kicker">Integrations</p>
         <h1 tabindex="-1">Blocks an AI Agent's Stop on a Blocking Verdict</h1>
-        <p class="lede">When an AI coding agent tries to stop, a stop hook runs the same gate on the screens it touched. On a blocking verdict (regression, not covered, or approval required) it blocks that first stop attempt unless the user has issued a one-use bypass, and hands the agent the verdict, the reason, and the fix. Idle runs, runs with no verdict, and hook errors are disclosed and allowed. If the host reports that hook-triggered continuation is already active, usabl allows that stop attempt to prevent a recursive loop.</p>
+        <p class="lede">When an AI coding agent tries to stop, a stop hook runs the same gate on the screens coverage mapped from the changed UI files. On a blocking verdict (regression, not covered, or approval required) it blocks that first stop attempt unless the user has issued a one-use bypass, and hands the agent the verdict, the reason, and the fix. Idle runs, runs with no verdict, and hook errors are disclosed and allowed. If the host reports that hook-triggered continuation is already active, usabl allows that stop attempt to prevent a recursive loop.</p>
         <div class="surfaces">
           <article class="surface"><strong>Same engine</strong>The hook runs the same axe-core, keyboard-walk, and PatternFly engine as CI, against the local evidence floor and waivers. CI reads those files from the trusted base branch, so the two can differ when the local files differ from the base.</article>
           <article class="surface"><strong>Closes the agent loop</strong>Without it, an agent can ship an inaccessible change between human reviews. The hook puts the check at the moment of completion, where it is cheapest to fix.</article>
@@ -1232,7 +1232,7 @@ test('cluster list stays accessible', async ({ page }) => {
           </article>
           <article class="tile">
             <strong>Baseline First</strong>
-            Existing issues are recorded as a known baseline on day one. Only new problems block. Quality improves steadily instead of every change stalling behind a wall of pre-existing findings.
+            Existing issues are recorded as a known baseline on day one. Only new, unwaived problems block. Quality improves steadily instead of every change stalling behind a wall of pre-existing findings.
           </article>
           <article class="tile">
             <strong>Fits the Existing Pipeline</strong>
@@ -1388,7 +1388,7 @@ test('cluster list stays accessible', async ({ page }) => {
             <span class="tag tag-block">Blocks</span> Point the same engine at your built AsciiDoc docs, using the WCAG 2.2 A and AA rules it can check by machine. Findings map back to the source <code>.adoc</code> file.
           </article>
         </div>
-        <p class="lede"><span class="tag tag-approval">Approval</span> Policy and config files (the config, the evidence floor, the waiver ledger, the route manifest, and any guarded paths) are protected. A pull request that changes them stays <em>approval required</em> until a CODEOWNERS reviewer other than the author approves that exact commit on GitHub. <code>usabl bypass</code> affects only the next local Stop hook run; nothing local bypasses the pull request gate.</p>
+        <p class="lede"><span class="tag tag-approval">Approval</span> Policy and config files (the config, the evidence floor, the waiver ledger, the route manifest, and any guarded paths) are protected. A pull request that changes them stays <em>approval required</em> until a CODEOWNERS reviewer other than the author approves that exact commit on GitHub; a missing or malformed CODEOWNERS file or an unowned path keeps it there, and approval does not clear a red accessibility sub-result. <code>usabl bypass</code> affects only the next local Stop hook run; nothing local bypasses the pull request gate.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#receipts">Previous</a>
           <span class="pos">30 / 31</span>
@@ -1403,7 +1403,7 @@ test('cluster list stays accessible', async ({ page }) => {
         <p class="kicker">Summary</p>
         <h1 tabindex="-1">Continuous Accessibility Verification</h1>
         <p class="lede">usabl moves accessibility checking into the everyday workflow, the CLI, CI, and AI assistants, instead of a separate audit that happens later.</p>
-        <p class="lede">It records existing issues as a baseline, blocks only new ones, and points the same engine at both the application and its documentation. Teams can change the UI, and the docs, knowing that no new machine-checkable barrier reached the screens and pages it checked, and that every gap it detected was disclosed.</p>
+        <p class="lede">It records existing issues as a baseline, blocks only new, unwaived ones, and points the same engine at both the application and its documentation. Teams can change the UI, and the docs, knowing that no new machine-checkable barrier reached the screens and pages it checked, and that every gap it detected was disclosed.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#usage">Previous</a>
           <span class="pos">31 / 31</span>
