@@ -27,7 +27,7 @@ standalone axe-core run reported zero violations while usabl reported a regressi
 **Acknowledge:** This is the real adoption risk. Every quality gate dies if it blocks
 incorrectly.
 
-**Redirect:** Three defenses: (1) if usabl cannot identify which screens changed, it
+**Redirect:** Three defenses: (1) if usabl cannot map a changed UI file to a screen, it
 says `not_covered` with a reason - honest "I don't know" rather than a false pass or
 a false fail; (2) we measure false positive rate on a real PF surface before submission
 and report the number honestly; (3) the ratchet and waiver system lets teams manage
@@ -92,7 +92,8 @@ legacy code is useless.
 **Redirect:** Three mechanisms: (1) ratchet - only new violations block, existing debt
 is in the evidence floor; (2) waiver ledger - known debt tracked with expiry, not hidden;
 (3) brownfield adoption path - install, accept the floor for legacy surfaces, and the
-tool gates only new regressions from day one. Teams are not punished for history.
+tool gates only new, unwaived barriers on the screens it scans from day one. Teams are
+not punished for history.
 
 **Proof point:** Onboarding journey in personas: Morgan installs usabl, accepts the
 evidence floor on legacy surfaces, and ratchets from there. No legacy surface blocks
