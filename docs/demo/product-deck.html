@@ -629,11 +629,11 @@
         <div class="verdicts">
           <article class="verdict">
             <div><span class="stamp stamp-verified">verified</span><span class="cite">exit 0</span></div>
-            <p>No new gating barrier (deterministic and machine-checkable) was found on the touched surfaces, and coverage was complete. Preview and model-judgment findings are shown but do not affect the verdict.</p>
+            <p>No new gating barrier (deterministic and machine-checkable) was found on the touched surfaces, and no coverage gap was detected. Preview and model-judgment findings are shown but do not affect the verdict.</p>
           </article>
           <article class="verdict">
             <div><span class="stamp stamp-regression">regression</span><span class="cite">exit 1</span></div>
-            <p>A new machine-checkable barrier was introduced. The build or commit is blocked.</p>
+            <p>A new machine-checkable barrier was introduced. Exit 1; the Stop hook, the required CI check, or your own script turns that into a block.</p>
           </article>
           <article class="verdict">
             <div><span class="stamp stamp-uncovered">not covered</span><span class="cite">exit 3</span></div>
@@ -644,7 +644,7 @@
             <p>The change touches a baseline, waiver, or policy file, so it needs an explicit code-owner review before it can pass.</p>
           </article>
         </div>
-        <p class="quiet" style="margin-top:0.9rem">Two outcomes carry no verdict. An idle run, where no changed file maps to a covered screen, exits 0 with no receipt. A run that could not produce a verdict (a crash, an unreadable configuration file, or no affected screen rendering) exits 4 and prints the reason. Neither is a pass. usabl only claims verified when it checked something.</p>
+        <p class="quiet" style="margin-top:0.9rem">Two outcomes carry no verdict. An idle run, where no changed file touches the UI or a manifest docs page, exits 0 with no receipt; a UI file that maps to no screen is not covered, never idle. A run that could not produce a verdict (a crash, an unreadable configuration file, or no affected screen rendering) exits 4 and prints the reason. Neither is a pass. usabl only claims verified when it checked something.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#architecture">Previous</a>
           <span class="pos">7 / 31</span>
@@ -666,7 +666,7 @@
           </article>
           <article class="layer">
             <strong>Keyboard Walk</strong>
-            Dynamically tabs through the page, reading the accessibility tree to verify focus order and accessible names.
+            Dynamically tabs through the page, reading the accessibility tree at each stop. It reports unnamed interactive controls, stops whose tree node cannot be resolved, and walks cut short. It does not judge whether the focus order makes sense.
           </article>
           <article class="layer">
             <strong>PatternFly Rules</strong>
@@ -710,7 +710,7 @@
       <div class="card">
         <p class="kicker">Deep Dive</p>
         <h1 tabindex="-1">PatternFly Composition Rules</h1>
-        <p class="lede">A scan of a resting page checks markup, not behavior. In our recorded test, a standalone axe run on the broken fixture dialog reported zero violations while usabl reported the focus failures. Design system behavioral contracts such as these need the component exercised: a modal must return focus to its trigger, a menu must expose its expanded state, table row actions must have unique names. These are real accessibility failures users encounter, and checking them requires knowing how the component is supposed to behave, not only what its markup looks like.</p>
+        <p class="lede">A scan of a resting page checks markup; it does not exercise behavior. In our recorded test, a standalone axe run on the broken fixture dialog reported zero violations while usabl reported the focus failures. Design system contracts are checked in two ways. Focus behavior needs the component exercised: a modal must move focus in and return it to its trigger, so a probe opens the dialog and presses Escape. Others are static reads of the rendered page: a menu toggle must expose its expanded state, table row actions must have unique names. These are real accessibility failures users encounter, and each rule encodes how the component is supposed to behave.</p>
         <p class="quiet">Static rules inspect the DOM directly. Interaction probes exercise real component behavior in a live browser.</p>
         <table class="rules">
           <thead>
@@ -853,7 +853,7 @@
       <div class="card">
         <p class="kicker">Workflow</p>
         <h1 tabindex="-1">Managing Legacy Codebases</h1>
-        <p class="lede">usabl is designed for brownfield adoption. It does not block builds for pre-existing issues.</p>
+        <p class="lede">usabl is designed for brownfield adoption. Once a team has accepted an evidence floor, findings on that floor do not block; without a floor, every finding is new.</p>
         <div class="layers">
           <article class="layer">
             <strong>The Floor</strong>
@@ -861,7 +861,7 @@
           </article>
           <article class="layer">
             <strong>The Ratchet</strong>
-            The gate only blocks on <em>new</em> deterministic failures. As legacy issues are fixed, the floor is pruned, so a reintroduced barrier gates as new.
+            The gate blocks on <em>new</em> deterministic failures, on detected coverage gaps, and on changed policy files, never on findings carried on the floor. As legacy issues are fixed, the floor is pruned, so a reintroduced barrier gates as new.
           </article>
           <article class="layer">
             <strong>Waivers</strong>
@@ -946,9 +946,9 @@ Blocked:        yes
       <div class="card">
         <p class="kicker">CI / GitHub</p>
         <h1 tabindex="-1">The Pull Request Gate Is Three Jobs</h1>
-        <p class="lede">The gate is three GitHub jobs. Only one runs the pull request's own code, and only one decides the merge. That split is what makes the verdict trustworthy.</p>
+        <p class="lede">The gate is three GitHub jobs. Only one runs the pull request's own code, and only one carries the status the ruleset requires. That split is what makes the verdict trustworthy.</p>
         <figure class="diagram">
-          <svg viewBox="0 0 960 300" role="img" aria-label="The pull request gate is three jobs. A pull_request event runs gate-comment, which scans the head code and uploads a Result. A pull_request review event and gate-comment both feed usabl-policy, which reads the trusted base. gate-comment and usabl-policy both feed usabl-required, the required check that decides merge or block.">
+          <svg viewBox="0 0 960 300" role="img" aria-label="The pull request gate is three jobs. A pull_request event runs gate-comment, which scans the head code and uploads a Result. A pull_request review event and gate-comment both feed usabl-policy, which reads the trusted base. gate-comment and usabl-policy both feed usabl-required, the check to require, whose status blocks or allows the normal merge path.">
             <text class="axis-label" x="95" y="80" text-anchor="middle">pull_request</text>
             <text class="axis-label" x="95" y="222" text-anchor="middle">review event</text>
 
@@ -974,12 +974,12 @@ Blocked:        yes
             <text class="node-title" x="840" y="155" text-anchor="middle">merge</text>
             <text class="axis-label" x="360" y="152" text-anchor="middle">Result artifact</text>
           </svg>
-          <figcaption class="quiet">One job runs your code, one decides policy on the trusted base, and one aggregate decides the merge.</figcaption>
+          <figcaption class="quiet">One job runs your code, one decides policy on the trusted base, and one aggregate carries the status the ruleset requires.</figcaption>
         </figure>
         <div class="surfaces">
           <article class="surface"><strong>gate-comment</strong>Builds and runs the head code in a real browser, scans, posts the comment, and uploads the Result. Fenced to <code>pull_request</code> events, where fork code is denied secrets.</article>
           <article class="surface"><strong>usabl-policy</strong>Never runs head code. Checks out the trusted base, reads the head as git objects only, and decides policy from CODEOWNERS and the trusted ref. Publishes the accessibility verdict from the Result.</article>
-          <article class="surface"><strong>usabl-required</strong>The required status check. It is the only job that sees both the accessibility verdict and the policy verdict, and it decides merge or block.</article>
+          <article class="surface"><strong>usabl-required</strong>The required status check. It is the only job that sees both the accessibility verdict and the policy verdict. When the ruleset requires it, a red status blocks the normal merge path, subject to the ruleset's bypass list.</article>
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#in-practice">Previous</a>
@@ -1043,7 +1043,7 @@ Blocked:        yes
         <h1 tabindex="-1">The Check to Require, and Review Re-Runs</h1>
         <p class="lede">Require usabl-required, not the other two. gate-comment cannot run on a review event, and usabl-policy passing says nothing about accessibility. Only usabl-required sees both verdicts.</p>
         <div class="layers">
-          <article class="layer"><strong>always() is load-bearing</strong>GitHub counts a skipped required job as satisfied. An aggregate that could be skipped would be an open gate, so this job always runs and always decides.</article>
+          <article class="layer"><strong>always() is load-bearing</strong>GitHub counts a skipped required job as satisfied. An aggregate that could be skipped would be an open gate, so this job always runs and always reports a status.</article>
           <article class="layer"><strong>Approvals flip the gate without re-scanning</strong>A CODEOWNERS approval fires a review event. The scan does not re-run. usabl-policy finds the completed scan for that exact commit and reads its Result artifact, so an approval flips the gate deterministically and no head code runs on the event that carries secrets.</article>
           <article class="layer"><strong>One verdict path</strong>The accessibility verdict the gate wrote travels as data read from the Result, never inferred from a job's pass or fail; a missing or unparseable Result blocks. On a review re-run, where the scan job is skipped, that artifact is the only accessibility authority that exists.</article>
         </div>
@@ -1369,7 +1369,7 @@ test('cluster list stays accessible', async ({ page }) => {
           </article>
           <article class="surface">
             <strong>CI / pull request</strong>
-            <span class="tag tag-block">Blocks</span> A required status check gates merge and posts a findings comment on the pull request. Editing policy files adds the approval gate below.
+            <span class="tag tag-block">Blocks</span> When usabl-required is a required check, a red status blocks the normal merge path, subject to the ruleset's bypass list, and a findings comment is posted on the pull request. Editing policy files adds the approval gate below.
           </article>
           <article class="surface">
             <strong>Browser overlay</strong>
@@ -1403,7 +1403,7 @@ test('cluster list stays accessible', async ({ page }) => {
         <p class="kicker">Summary</p>
         <h1 tabindex="-1">Continuous Accessibility Verification</h1>
         <p class="lede">usabl moves accessibility checking into the everyday workflow, the CLI, CI, and AI assistants, instead of a separate audit that happens later.</p>
-        <p class="lede">It records existing issues as a baseline, blocks only new ones, and points the same engine at both the application and its documentation. Teams can change the UI, and the docs, knowing that no new machine-checkable barrier reached the screens and pages it checked, and that anything it could not check was reported.</p>
+        <p class="lede">It records existing issues as a baseline, blocks only new ones, and points the same engine at both the application and its documentation. Teams can change the UI, and the docs, knowing that no new machine-checkable barrier reached the screens and pages it checked, and that every gap it detected was disclosed.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#usage">Previous</a>
           <span class="pos">31 / 31</span>
