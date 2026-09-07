@@ -68,7 +68,8 @@ waivers, gate new violations from day one.
 
 **Pain:** Another noisy linter; false positives erode trust; unclear ROI.
 
-**usabl value:** Ratchet blocks only new violations; evidence floor for existing debt;
+**usabl value:** The ratchet blocks new, unwaived violations, coverage the run could not
+confirm, and guarded policy edits, never carried debt; evidence floor for existing debt;
 waiver ledger with expiry for accepted debt; policy changes require human approval.
 
 **Needs to feel safe:** Noise budget (see [ux-policy.md](./ux-policy.md)); waiver ledger;
