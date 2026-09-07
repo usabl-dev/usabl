@@ -71,13 +71,20 @@ function expectPositiveWholeNumber(value: unknown, label: string): number {
 // An empty reachedWhen would match nothing and mark every scan of the surface unseen, which is a
 // silent failure hiding as coverage loss. Refuse it at config load so the operator fixes it before
 // a run.
+//
+// What the selector should name cannot be checked here, and it matters. A matched reachedWhen is
+// read as the operator asserting this screen rendered, and it overrides the password-field rule
+// that would otherwise flag a sign-in page. It is policy, not proof: a selector aimed at a
+// persistent application shell, a header, a navigation, or a footer is present on a login wall
+// too, so it would pass the wrong page. The refusal message says so, because config load is the
+// last place an operator reads anything about this field.
 function parseReachedWhen(raw: unknown, index: number): string | undefined {
   if (raw === undefined) {
     return undefined;
   }
   const selector = expectString(raw, `surfaces[${index}].reachedWhen`);
   if (selector.trim().length === 0) {
-    throw configError`surfaces[${index}].reachedWhen must be a non-empty string`;
+    throw configError`surfaces[${index}].reachedWhen must be a non-empty CSS selector naming content only this screen has, such as its own table or heading. A shell, header, navigation, or footer selector matches a sign-in page too and would let a wrong page pass as this screen.`;
   }
   return selector;
 }

@@ -373,7 +373,9 @@ export function readyTimeoutMsFor(config: { readyTimeoutMs?: number }): number {
 // unauthorizedApiUrls reports the other thing worth knowing about the same traffic: which of the
 // page's own data requests came back 401. It rides this tracker rather than a second listener path
 // because both facts are read off the same request lifecycle, and a second set of handlers attached
-// somewhere else would be a second thing to keep in step with navigation and adoption.
+// somewhere else would be a second thing to keep in step with navigation and adoption. It is
+// cumulative for the life of the page, so a caller decides which window it means by choosing when
+// to read.
 export interface NetworkActivity {
   networkQuietFor(windowMs: number): boolean;
   unauthorizedApiUrls(): string[];
@@ -412,8 +414,11 @@ export function makeNetworkActivityTracker(
   // The last instant the count was zero. A page starts idle, so it begins now.
   let idleSince = now();
   // Every refused data request seen since this tracker was attached, in arrival order. The tracker
-  // is attached before navigation and the caller reads it once readiness settles, so what it holds
-  // at that moment is exactly the load window and nothing a provider caused later.
+  // is attached before navigation and never stops recording, so a read late in a scan includes
+  // traffic a provider click caused as well as traffic the load caused. That is deliberate: a
+  // request a provider triggered is still the application answering this session, and the check
+  // runner reads this twice for exactly that reason. What it cannot hold is a response that
+  // arrives after the last read, which is the one boundary nothing here can close.
   const unauthorized: string[] = [];
 
   const settled = (): void => {
