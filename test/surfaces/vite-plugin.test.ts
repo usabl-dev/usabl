@@ -56,6 +56,34 @@ describe('projectOverlay', () => {
     expect(JSON.stringify(overlay)).not.toContain('hunter2');
   });
 
+  it('copies the accessibility verdict and exit code through for an approval_required run', () => {
+    // The gate mints these. The overlay only repeats them, so a developer can see the barrier they
+    // can fix now while the policy approval is out of their hands.
+    const overlay = projectOverlay(
+      baseResult({
+        verdict: 'approval_required',
+        exitCode: 2,
+        dirtyGuardedPaths: ['usabl.config.json'],
+        accessibilityVerdict: 'regression',
+        accessibilityExitCode: 1,
+      }),
+    );
+
+    expect(overlay.accessibilityVerdict).toBe('regression');
+    expect(overlay.accessibilityExitCode).toBe(1);
+  });
+
+  it('projects null accessibility fields when the Result does not carry them', () => {
+    const legacy = baseResult({ verdict: 'approval_required', exitCode: 2 });
+    delete (legacy as { accessibilityVerdict?: unknown }).accessibilityVerdict;
+    delete (legacy as { accessibilityExitCode?: unknown }).accessibilityExitCode;
+
+    const overlay = projectOverlay(legacy);
+
+    expect(overlay.accessibilityVerdict).toBeNull();
+    expect(overlay.accessibilityExitCode).toBeNull();
+  });
+
   it('includes scrubbed finding details for badge lists', () => {
     const overlay = projectOverlay(
       baseResult({

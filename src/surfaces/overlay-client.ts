@@ -485,9 +485,8 @@ export const overlayClientSource = `(() => {
   //
   // A guarded file changing and an accessibility barrier can happen in the same run. The approval is
   // out of the developer's hands; the barrier is what they can fix now. So the two are stated apart.
-  // The projection this panel reads does not carry the separate accessibility verdict, so the line
-  // reports the findings this run listed, which it does carry, and points to usabl check for the
-  // verdict itself rather than inferring one.
+  // The accessibility verdict is the gate's, copied into the projection. It is repeated here, never
+  // derived from the findings list.
   function approvalLines(payload, split) {
     const paths = Array.isArray(payload.dirtyGuardedPaths)
       ? payload.dirtyGuardedPaths.map((path) => boundedText(path, MAX_SELECTOR_CHARS)).filter(Boolean)
@@ -503,7 +502,7 @@ export const overlayClientSource = `(() => {
       'A code owner other than the author approves it on the pull request. '
         + 'Nothing in this panel or on your machine can approve it.',
     );
-    lines.push(accessibilityLine(split));
+    lines.push(accessibilityLine(payload, split));
     lines.push(
       'If the change was unintended, revert the ' + (paths.length > 1 ? 'files' : 'file')
         + ' and this state clears.',
@@ -511,19 +510,42 @@ export const overlayClientSource = `(() => {
     return lines;
   }
 
-  function accessibilityLine(split) {
-    let found;
-    if (split.matched) {
-      found = 'This run found ' + countLabel(split.here.length, 'issue') + ' on this screen and '
-        + countLabel(split.elsewhereTotal, 'issue') + ' on other screens.';
+  // The accessibility verdict is never approval_required, so these three words cover every minted
+  // value. A null verdict with exit 0 is a run with nothing to check; null with any other code is a
+  // run that minted no verdict.
+  const ACCESSIBILITY_WORD = { verified: 'VERIFIED', regression: 'REGRESSION', not_covered: 'NOT COVERED' };
+
+  function accessibilityLine(payload, split) {
+    // Where the issues are, for the developer who can fix them now. Empty when there are none.
+    let where = '';
+    if (split.matched && (split.here.length > 0 || split.elsewhereTotal > 0)) {
+      where = countLabel(split.here.length, 'issue') + ' on this screen and '
+        + split.elsewhereTotal + ' on other screens';
     } else if (split.elsewhereTotal > 0) {
-      found = 'This run found ' + countLabel(split.elsewhereTotal, 'issue') + ' on '
-        + countLabel(split.elsewhere.length, 'other screen') + '.';
-    } else {
-      found = 'This run found no issues on the screens it checked.';
+      where = countLabel(split.elsewhereTotal, 'issue') + ' on '
+        + countLabel(split.elsewhere.length, 'other screen');
     }
-    return 'Accessibility is judged separately from the approval. ' + found
-      + ' Run usabl check for the accessibility verdict.';
+
+    // Absent, not null: an older projection that never carried the field. Say so and point at the
+    // command that prints the gate's own verdict, rather than infer one from the list.
+    if (!Object.hasOwn(payload, 'accessibilityVerdict')) {
+      return 'Accessibility is judged separately from the approval.'
+        + (where ? ' This run found ' + where + '.' : '')
+        + ' This panel did not receive the accessibility verdict. Run usabl check to see it.';
+    }
+
+    const verdict = payload.accessibilityVerdict;
+    const exit = payload.accessibilityExitCode;
+    const exitNote = typeof exit === 'number' ? ' (exit ' + exit + ')' : '';
+    let word;
+    if (verdict === null) {
+      word = exit === 0 ? 'nothing to check' : 'no verdict';
+    } else if (Object.hasOwn(ACCESSIBILITY_WORD, verdict)) {
+      word = ACCESSIBILITY_WORD[verdict];
+    } else {
+      word = 'unknown verdict ' + JSON.stringify(String(verdict));
+    }
+    return 'Accessibility for this run: ' + word + exitNote + (where ? ', ' + where : '') + '.';
   }
 
   // What the header says under the verdict: one plain line for most states, or a short list of

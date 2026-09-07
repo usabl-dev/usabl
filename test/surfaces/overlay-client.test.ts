@@ -1126,6 +1126,8 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
           summary: 'approval required: guarded policy changed',
           dirtyGuardedPaths: ['usabl.config.json', '.usabl/waivers.json'],
           exitCode: 2,
+          accessibilityVerdict: 'regression',
+          accessibilityExitCode: 1,
         }),
       ),
       { path: '/clusters' },
@@ -1136,7 +1138,7 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
     expect(lines).toEqual([
       'Guarded files changed: usabl.config.json, .usabl/waivers.json.',
       'A code owner other than the author approves it on the pull request. Nothing in this panel or on your machine can approve it.',
-      'Accessibility is judged separately from the approval. This run found 2 issues on this screen and 0 issues on other screens. Run usabl check for the accessibility verdict.',
+      'Accessibility for this run: REGRESSION (exit 1), 2 issues on this screen and 0 on other screens.',
       'If the change was unintended, revert the files and this state clears.',
     ]);
     expect(await panel.getByText('A person has to approve', { exact: false }).count()).toBe(0);
@@ -1158,6 +1160,8 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
           findings: [],
           dirtyGuardedPaths: ['usabl.config.json'],
           exitCode: 2,
+          accessibilityVerdict: 'verified',
+          accessibilityExitCode: 0,
         }),
       ),
       { path: '/clusters' },
@@ -1168,9 +1172,56 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
     expect(lines).toEqual([
       'Guarded file changed: usabl.config.json.',
       'A code owner other than the author approves it on the pull request. Nothing in this panel or on your machine can approve it.',
-      'Accessibility is judged separately from the approval. This run found 0 issues on this screen and 0 issues on other screens. Run usabl check for the accessibility verdict.',
+      'Accessibility for this run: VERIFIED (exit 0).',
       'If the change was unintended, revert the file and this state clears.',
     ]);
+
+    await page.context().close();
+  });
+
+  it('says the accessibility verdict is missing when the projection does not carry it', async () => {
+    // An older projection without the field. The panel must not infer a verdict from the list.
+    const legacy = projectOverlay(
+      result({
+        verdict: 'approval_required',
+        summary: 'approval required',
+        dirtyGuardedPaths: ['usabl.config.json'],
+        exitCode: 2,
+      }),
+    );
+    delete (legacy as { accessibilityVerdict?: unknown }).accessibilityVerdict;
+    delete (legacy as { accessibilityExitCode?: unknown }).accessibilityExitCode;
+    const page = await mount(legacy, { path: '/clusters' });
+    const panel = await openPanel(page);
+    const lines = await panel.locator('.banner-note').allTextContents();
+
+    expect(lines[2]).toBe(
+      'Accessibility is judged separately from the approval. This run found 2 issues on this screen and 0 on other screens. This panel did not receive the accessibility verdict. Run usabl check to see it.',
+    );
+    expect(lines.join(' ')).not.toContain('Accessibility for this run:');
+
+    await page.context().close();
+  });
+
+  it('names a null accessibility verdict honestly beside the approval', async () => {
+    // Exit 0 with a null accessibility verdict is a run with nothing to check.
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'approval_required',
+          summary: 'approval required',
+          findings: [],
+          dirtyGuardedPaths: ['usabl.config.json'],
+          exitCode: 2,
+          accessibilityVerdict: null,
+          accessibilityExitCode: 0,
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+    const lines = await panel.locator('.banner-note').allTextContents();
+    expect(lines[2]).toBe('Accessibility for this run: nothing to check (exit 0).');
 
     await page.context().close();
   });
