@@ -37,7 +37,7 @@ does not prove completeness, readiness to ship, or compliance.
 
 | What users get | What that means for them |
 |---|---|
-| **Change coverage with honest gaps** | Touched UI surfaces are mapped, exercised, and checked. A surface usabl cannot identify is reported as not_covered, never a false pass. |
+| **Change coverage with honest gaps** | Touched UI surfaces are mapped, exercised, and checked. A changed file usabl cannot map to a screen is reported as not_covered, and every gap it detects is disclosed. |
 | **Fix verification** | Problems are found and re-checked after the fix; the Stop hook blocks the assistant's first stop on a blocking verdict unless a one-use bypass was issued. |
 | **Screen-reader announcement checks** | Deterministically verifies the accessible names and announcement expectations screen reader users depend on, on the actual change. |
 | **Keyboard and interaction proof** | Tab order, focus, and interaction paths are walked, not just static markup rules. |
@@ -55,7 +55,7 @@ single product; this section does not claim what other tools do or do not ship.
 
 | Category | Examples | What they do well | What usabl is built to add |
 |---|---|---|---|
-| **Accessibility scanners** | axe, Lighthouse, Pa11y, WAVE | Fast issue lists on a page | Verify the fix, gate completion, cover the screens a change maps to and disclose the gaps |
+| **Accessibility scanners** | axe, Lighthouse, Pa11y, WAVE | Fast issue lists on a page | Verify the fix, block the assistant's first stop on a blocking verdict unless bypassed, cover the screens a change maps to and disclose the gaps |
 | **CI regression tools** | Chromatic, Pa11y CI, MFA11y | Block new violations vs baseline | Same ratchet idea, plus AI gate, keyboard walk, SR evidence, PF rules |
 | **AI accessibility assistants** | Deque axe MCP, a11y MCP wrappers | Scan and suggest fixes from the agent | Proof before "done"; the gate decides and the assistant only proposes |
 | **Agent enforcement hooks** | Community-Access/accessibility-agents, agent-gates | Block edits until review runs | Per-change deterministic proof loop, not one review per session |
@@ -139,8 +139,8 @@ the codebase evolves.
 ### Elevator
 
 > usabl proves that a UI change added no new machine-checkable accessibility barrier on
-> the screens it scanned, and says what it could not check, from the AI session to the
-> PR to CI.
+> the screens it scanned, and discloses every gap it detected, from the AI session to
+> the PR to CI.
 
 ### Vs scanners
 
@@ -155,8 +155,9 @@ the codebase evolves.
 ### Vs screen reader simulation tools
 
 > Tactual and Speakable preview announcements. usabl runs deterministic announcement
-> and accessible-name checks inside the full proof loop that gates your AI and your
-> merge.
+> and accessible-name checks inside the proof loop whose Stop hook blocks the assistant's
+> first stop on a blocking verdict unless a one-use bypass was issued, and whose required
+> check blocks the normal merge path.
 
 ### Innovation / contest angle
 
@@ -173,7 +174,7 @@ Priority order for pitches, demos, and one-pagers:
 1. **End-to-end proof loop** - find, fix, verify, gate
 2. **AI-native completion gate** - proof before "done"
 3. **Screen-reader announcement checks on the change** - accessible names and announcements on the PR
-4. **One engine, team enforcement** - same result everywhere, tamper-evident
+4. **One engine, team enforcement** - one engine behind every surface, tamper-evident
 
 ---
 
