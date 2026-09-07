@@ -101,8 +101,9 @@ on day one.
 
 **Acknowledge:** The CI/PR evidence surface looks similar from the reviewer's chair.
 
-**Redirect:** A PR bot comments after the code is written. usabl prevents the defect
-in the assistant loop before the PR exists, then the same verdict becomes PR evidence.
+**Redirect:** A PR bot comments after the code is written. usabl's Stop hook blocks the
+assistant's first stop on a blocking verdict before the PR exists, unless a one-use bypass
+was issued, and then the same verdict becomes PR evidence.
 Upstream prevention + downstream proof, same engine.
 
 **Proof point:** THE MOMENT happens inside the assistant session - the PR has no
