@@ -6,8 +6,17 @@
  * evidence floor, the receipt, and waiver matching all key on the id as written. A rule that
  * folded ids together for validation but not for lookup would refuse pairs that actually work
  * while passing pairs that actually collide. So the grammar, not the comparison, is what removes
- * ids that cannot be told apart on sight. Every id field uses this grammar so two fields in one
- * product cannot drift into two different rules about what an id may contain.
+ * ids that cannot be told apart on sight. Every id field on the command path uses this grammar so
+ * two fields in one product cannot drift into two different rules about what an id may contain.
+ *
+ * Where the grammar is checked, stated exactly. It governs every operator-authored and derived id
+ * on the `usabl` command path: surface ids, sidecar route screen ids, screen ids the router
+ * fallback derives, docs page ids, requirement ids and the surface a requirement names, and every
+ * id that app init and docs init derive. It is not checked again downstream. Ids already present
+ * in the evidence floor and in waiver files, and inputs passed directly to the exported library
+ * functions, are not re-validated; on the command path they were minted from or matched against
+ * ids that had already passed here at parse, and a library caller that builds those inputs itself
+ * bypasses that parse.
  *
  * The contract, stated exactly. The grammar refuses whitespace, control and format characters,
  * surrogates, private use, default-ignorable characters, and the known assigned blank glyphs, and

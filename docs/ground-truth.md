@@ -1617,13 +1617,24 @@ both appear in receipt coverage, and waiver matching is exact, so no screen is l
 Unassigned code points are accepted, because rejecting them would make an id's validity depend
 on which Unicode version the running Node build carries.
 
-The same grammar governs every id field: `usabl.routes.json` `screenId`, `usabl.docs.json`
-`pageId`, requirement ids, the surface a requirement names (section 13), and the screen id the
-router fallback derives from a route path in application source. An authored id that fails is
-refused at parse. A derived id that fails is never minted: `usabl init` skips that route with a
-note instead of writing a sidecar the parser would refuse, and at run time the router fallback
-sets the route aside and the planner records it as a `skipped` coverage gap whenever a wide-blast
-change would have queued it, so the gate reads it as not covered rather than as absent.
+The same grammar governs every operator-authored and derived id on the `usabl` command path:
+`surfaces[].id`, `usabl.routes.json` `screenId`, the screen id the router fallback derives from a
+route path in application source, `usabl.docs.json` `pageId`, requirement ids and the surface a
+requirement names (section 13), and every id that `usabl init` and `usabl init --docs` derive. An
+authored id that fails is refused at parse. A derived id that fails is never minted: `usabl init`
+skips that route, and `usabl init --docs` skips that page, with a note naming the position and
+code point instead of writing a sidecar the parser would refuse, and at run time the router
+fallback sets the route aside and the planner records it as a `skipped` coverage gap whenever a
+wide-blast change would have queued it, so the gate reads it as not covered rather than as absent.
+
+The boundary, stated exactly. Ids already present in the evidence floor (`.usabl-evidence.json`)
+and in waiver files (`.usabl-waivers.json`), and the inputs a caller passes directly to the
+exported library functions (`gate()` and `mintReceipt()` from the package entry), are not
+re-validated against the grammar. On the command path every id in those files was minted from, or
+matched against, an id that had already passed the grammar at parse, so the command path is
+covered end to end. A library caller that builds its own floor, waiver, or receipt input bypasses
+that parse, and nothing downstream checks the grammar again. Closing that boundary is listed
+under "After the freeze" at the end of this section.
 
 A blank or repeated id is refused when the config is read. Left in, it would collapse two
 screens into one entry: the second screen is dropped from the scan while its changed files
@@ -1695,6 +1706,14 @@ opens a browser.
 
 There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 (nothing to check) is an explicit informational allow. That is code, not a config dial.
+
+### After the freeze
+
+Work on this section that is known and deferred until after the freeze.
+
+- Re-validate floor screen ids, waiver surfaces, and receipt `checked` and applicability inputs
+  at the exported library boundary, so the id grammar holds for `gate()` and `mintReceipt()`
+  callers and not only for the `usabl` command path.
 
 ---
 
