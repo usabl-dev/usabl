@@ -692,6 +692,38 @@ export interface SharedBrowser {
   close(): Promise<void>;
 }
 
+/**
+ * Replace any browser error that quotes the storage state path with a fixed sentence.
+ *
+ * The path never reaches a message on any path usabl controls, but the browser is not usabl. If
+ * the session file is deleted or loses read permission between the pre-check and the moment a
+ * context is created, Playwright raises its own ENOENT or EACCES naming the file in full. The
+ * check runner turns a failed open into a coverage gap carrying that message, and that gap is
+ * rendered by the CLI, the overlay, and the pull request comment. A private path would then be
+ * published to a repository.
+ *
+ * Matching is on the exact path string this run was given, so nothing else is rewritten and an
+ * unrelated browser failure keeps its own diagnosis. The replacement says what happened and what
+ * to do, which is everything the operator needs and nothing they do not already know.
+ *
+ * Exported for tests, which drive it directly rather than trying to make a real browser race a
+ * file deletion.
+ */
+export function redactStorageStatePath(error: unknown, storageStatePath: string | undefined): unknown {
+  if (storageStatePath === undefined || storageStatePath.length === 0) {
+    return error;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (!message.includes(storageStatePath)) {
+    return error;
+  }
+  return new Error(
+    'the browser could not open a context with the configured session; the file named by ' +
+      'USABL_STORAGE_STATE was unreadable at scan time (the path is not printed here). Re-export ' +
+      'the session file, or unset USABL_STORAGE_STATE to scan signed out on purpose.',
+  );
+}
+
 export function makeSharedBrowser(
   ports: { launch?: () => Promise<LaunchedBrowser>; maxContextFailures?: number } = {},
 ): SharedBrowser {
@@ -772,7 +804,7 @@ export function makeSharedBrowser(
       if (!launched.isConnected() || contextFailures >= maxContextFailures) {
         await discard(launched);
       }
-      throw error;
+      throw redactStorageStatePath(error, options.storageStatePath);
     }
     contextFailures = 0;
 
@@ -798,7 +830,10 @@ export function makeSharedBrowser(
       if (!launched.isConnected()) {
         await discard(launched);
       }
-      throw error;
+      // Belt and braces. Nothing below newContext reads the storage state file, so no error here
+      // should carry the path, but this is the last point before the message becomes a coverage
+      // gap in a pull request comment and the cost of being wrong is a leaked private path.
+      throw redactStorageStatePath(error, options.storageStatePath);
     }
   };
 
