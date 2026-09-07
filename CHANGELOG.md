@@ -94,14 +94,47 @@
   from about 362 MiB to about 11 MiB. Text with removals scattered all the way
   through it still builds its result in pieces and costs several times its own
   size.
-- Every key of `noiseBudget.perSurface` is now checked against the same id
-  grammar as `surfaces[].id` when the config is read. A key is a screen id,
-  matched against one by exact comparison, so a key holding a space, an
-  invisible character, or a spelling that is not in Unicode NFC form could never
-  match a screen: the budget it set applied to nothing, and the operator saw the
-  default budget on that screen with no reason why. The refusal names the field
-  and the position of the key in the object, never the key itself, because a
-  refused character is invisible or reorders the text around it.
+- usabl now has one rule for what a screen or surface id may contain, and every
+  id field answers to it. Ids are compared exactly by the coverage planner, the
+  evidence floor, the receipt, and waiver matching, so two ids that render alike
+  while being spelled differently were two screens no reader could tell apart,
+  and one waiver could stand in for a requirement its author never saw. The rule
+  refuses an empty id, whitespace, control and format characters, which is where
+  the zero-width characters and the bidi overrides live, lone surrogates, private
+  use, every code point Unicode marks default-ignorable, and the four assigned
+  characters that render as blank. It requires Unicode NFC form, because two
+  canonically equivalent spellings look identical and compare as different ids.
+  Everything a font draws is still accepted, including right-to-left letters and
+  a discovery-derived id such as `users-:id`. It is checked when a file is read:
+  `surfaces[].id` in `usabl.config.json`, `screenId` in `usabl.routes.json`,
+  `pageId` in `usabl.docs.json`, and requirement ids and the surface a
+  requirement names. A config or sidecar holding such an id used to load and now
+  does not, and the message names the field and gives the position and code point
+  of the refused character. The character is never printed back, because it is
+  invisible or reorders the text around it. At run time a route in application
+  source whose derived id fails is set aside instead of scanned and reported as a
+  coverage gap, so the gate reads that screen as not covered rather than as
+  absent. Ids already written into `.usabl-evidence.json` and
+  `.usabl-waivers.json`, and inputs passed straight to the exported library
+  functions, are not re-checked.
+- `usabl init` and `usabl init --docs` now write nothing at all when any id they
+  would derive is one usabl would refuse to read, and exit 2 rather than 0. They
+  used to leave that route or page out and write the rest. A written sidecar
+  takes precedence over router fallback, and the planners queue every entry in
+  the sidecar or manifest on a wide-blast or shared-file change while recording
+  no gap for an entry that is not in it, so a draft written without that route or
+  page let such a change read as fully checked while that screen was never
+  scanned. The message names every unusable entry by where to look, the file and,
+  for a route, the line the route is declared on, with the position and code point
+  of the refused character, the reason when there is no single character to name,
+  and what to change. It never prints the id or the path it came from.
+- Every key of `noiseBudget.perSurface` is checked by that same rule when the
+  config is read. A key is a screen id, matched against one by exact comparison,
+  so a key holding a space, an invisible character, or a spelling that is not in
+  NFC form could never match a screen: the budget it set applied to nothing, and
+  the operator saw the default budget on that screen with no reason why. The
+  refusal names the field and the position of the key in the object, never the
+  key itself.
 
 ### Added
 
