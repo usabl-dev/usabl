@@ -51,6 +51,32 @@ export function operatorPath(path: string): string {
   return out;
 }
 
+// The longest a file path is printed in a message. A message that names two files interpolates
+// each as its own value, so a long first path can never push the second one past the cap and out
+// of the message, and a message that prefixes a path to a reason keeps the reason readable.
+const PATH_TEXT_LIMIT = 72;
+
+/**
+ * Prepares an operator-authored file path to be quoted in a message, bounded in length.
+ *
+ * Control characters become code point labels first, as in `operatorPath`, so a file name that
+ * carried a control sequence still reads as a different file from a clean one. A path longer
+ * than the limit is then shortened from the middle, keeping its start and its file name, with a
+ * visible marker where characters were removed. The rest of the scrubbing still applies through
+ * the caller.
+ */
+export function boundedOperatorPath(path: string): string {
+  const characters = [...operatorPath(path)];
+  if (characters.length <= PATH_TEXT_LIMIT) {
+    return characters.join('');
+  }
+  const marker = '...';
+  const keep = PATH_TEXT_LIMIT - marker.length;
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return `${characters.slice(0, head).join('')}${marker}${characters.slice(characters.length - tail).join('')}`;
+}
+
 /**
  * Builds a config error whose interpolated values are all scrubbed.
  *

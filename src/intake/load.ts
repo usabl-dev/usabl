@@ -5,7 +5,7 @@
  */
 import type { FsGlob, RequirementBundle, UsablConfig } from '../contracts/index.js';
 import { scrubString } from '../surfaces/scrub.js';
-import { operatorPath } from './config-error.js';
+import { boundedOperatorPath } from './config-error.js';
 import { normalize } from './normalize.js';
 import { findDuplicateRequirementId, type RequirementIdSite } from './requirement-ids.js';
 import type { ParseBundleResult } from './schema.js';
@@ -23,14 +23,16 @@ function stripTrailingSlashes(path: string): string {
  * the YAML parser, and both reach a terminal, so the whole sentence is scrubbed here. Scrubbing
  * text that a producer already scrubbed changes nothing, so a reason may arrive clean or not.
  * Control characters in the path are shown as code point labels first, so a file name that
- * carried a control sequence still reads as a different file from a clean one.
+ * carried a control sequence still reads as a different file from a clean one. The path is also
+ * bounded, the same way the locations inside a duplicate reason are, so a long path cannot bury
+ * the reason that follows it. The unbounded path is still returned in the `path` field.
  */
 function pathFailure(path: string, reason: string): LoadRequirementsResult {
   return {
     ok: false,
     verdict: 'approval_required',
     path,
-    reason: scrubString(`requirements path ${operatorPath(path)}: ${reason}`),
+    reason: scrubString(`requirements path ${boundedOperatorPath(path)}: ${reason}`),
   };
 }
 

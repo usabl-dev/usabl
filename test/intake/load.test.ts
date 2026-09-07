@@ -525,4 +525,49 @@ requirements:
     expect(rawControlBytes(result.reason)).toEqual([]);
     expect(result.reason).not.toContain('OWNED');
   });
+
+  it('bounds the whole duplicate reason when both paths are very long', async () => {
+    // The locations inside the duplicate reason were already bounded, but the loader prefixes the
+    // repeat path to the reason a second time, and an unbounded prefix would bury the sentence
+    // that says what to fix. Every path in the reason is now shortened from the middle, so the
+    // whole reason stays under a cap that does not grow with the path, while both file names and
+    // both positions stay visible.
+    //
+    // The cap is derived from the caps on the parts. Each path is at most 72 characters and
+    // appears three times (once as the prefix, twice inside the duplicate sentence), the id is
+    // at most 120 characters and appears twice, the two positions are short numbers, and the
+    // fixed sentence text is under 300 characters. That sums to under 800 for any input. The
+    // measured length here, with an ordinary id, is 541. The second assertion is the one that
+    // matters: the length does not move with the path, so doubling the path leaves it unchanged.
+    const REASON_LENGTH_CAP = 800;
+    const firstPath = `requirements/${'a'.repeat(300)}/first.yaml`;
+    const repeatPath = `requirements/${'b'.repeat(300)}/second.yaml`;
+    const longerFirstPath = `requirements/${'a'.repeat(600)}/first.yaml`;
+    const longerRepeatPath = `requirements/${'b'.repeat(600)}/second.yaml`;
+
+    async function reasonFor(first: string, repeat: string): Promise<string> {
+      const result = await loadRequirements(
+        scriptedFs([first, repeat], {
+          [first]: requirementYaml('same-id'),
+          [repeat]: requirementYaml('same-id'),
+        }),
+        testConfig({ requirements: 'requirements/' }),
+      );
+      expect(result.ok).toBe(false);
+      return result.ok ? '' : result.reason;
+    }
+
+    const reason = await reasonFor(firstPath, repeatPath);
+    expect(reason.length).toBeLessThan(REASON_LENGTH_CAP);
+    expect(reason).toContain('requirements path requirements/bbb');
+    expect(reason).toContain('bbb/second.yaml: duplicate requirement id "same-id"');
+    expect(reason).toContain('at requirements[0] in requirements/bbb');
+    expect(reason).toContain('bbb/second.yaml and already at requirements[0] in requirements/aaa');
+    expect(reason).toContain('aaa/first.yaml.');
+    expect(reason).toContain('...');
+    expect(reason).not.toContain('(truncated)');
+
+    const longerReason = await reasonFor(longerFirstPath, longerRepeatPath);
+    expect(longerReason.length).toBe(reason.length);
+  });
 });
