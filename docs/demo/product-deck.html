@@ -429,7 +429,7 @@
         <p class="kicker">Agenda</p>
         <h1 tabindex="-1">System Overview</h1>
         <ol class="agenda">
-          <li><b>01</b><span>The Verification Gap: Why standard scanners aren't enough for automated workflows.</span></li>
+          <li><b>01</b><span>The Verification Gap: Why a page scan alone is not enough for automated workflows.</span></li>
           <li><b>02</b><span>Core Architecture: Targeting, Providers, the Gate, and Verdicts.</span></li>
           <li><b>03</b><span>Check Layers: axe-core, Keyboard Walk, PatternFly rules, and design intake.</span></li>
           <li><b>04</b><span>Workflow Integration: CLI, CI, and Assistant hooks.</span></li>
@@ -710,7 +710,7 @@
       <div class="card">
         <p class="kicker">Deep Dive</p>
         <h1 tabindex="-1">PatternFly Composition Rules</h1>
-        <p class="lede">Generic scanners check DOM elements in isolation. They cannot verify design system behavioral contracts: a modal must return focus to its trigger, a menu must expose its expanded state, table row actions must have unique names. These are real accessibility failures users encounter, but they require understanding how the component is supposed to behave, not just what its markup looks like.</p>
+        <p class="lede">A scan of a resting page checks markup, not behavior. In our recorded test, a standalone axe run on the broken fixture dialog reported zero violations while usabl reported the focus failures. Design system behavioral contracts such as these need the component exercised: a modal must return focus to its trigger, a menu must expose its expanded state, table row actions must have unique names. These are real accessibility failures users encounter, and checking them requires knowing how the component is supposed to behave, not only what its markup looks like.</p>
         <p class="quiet">Static rules inspect the DOM directly. Interaction probes exercise real component behavior in a live browser.</p>
         <table class="rules">
           <thead>
