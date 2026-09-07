@@ -13,6 +13,7 @@ import {
   gapDetail,
   gapHeadline,
   guardedFilesHeadline,
+  isBlockingBarrier,
 } from '../output/disclosure.js';
 import {
   applyNoiseBudget,
@@ -122,9 +123,9 @@ export function projectSelfCheck(
   const keep = scaffold.length;
   const pieces: string[] = [`engine summary: ${boundField(safe.summary, 'summary')}`];
   const budget = resolveNoiseBudgetDefault(config);
-  // Gating (deterministic) findings only, as the stop hook does. Advisory findings never gate, so
-  // the assistant reading this snapshot to reach verified does not act on them here.
-  const gating = safe.findings.filter((finding) => finding.evidenceClass === 'deterministic');
+  // The same barriers the stop hook shows, by the gate's own blocking rule, so the snapshot an
+  // assistant reads on the way to verified names the same work the stop hook will ask for.
+  const gating = safe.findings.filter(isBlockingBarrier);
   const view = applyNoiseBudget(gating, budget, 'gating findings');
 
   // Each free-text field is bounded on its own before it is labelled and framed, so a huge page

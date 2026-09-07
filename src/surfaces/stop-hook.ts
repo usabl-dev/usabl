@@ -13,6 +13,7 @@ import {
   gapDetail,
   gapHeadline,
   guardedFilesHeadline,
+  isBlockingBarrier,
 } from '../output/disclosure.js';
 import {
   applyNoiseBudget,
@@ -38,10 +39,17 @@ const BLOCKING_VERDICTS: ReadonlySet<Verdict> = new Set(['regression', 'approval
  * What the model should do next for each blocking verdict.
  *
  * The reader is a model that just tried to stop. It needs the verdict, the reason, and one
- * concrete next step, in that order, before any detail. A regression is fixed by the model. A
- * coverage gap has one of four reasons, and the step names every one, because a model told only
- * about screens and files would leave a denied capability or a failed provider standing. Guarded
- * policy files are the one thing the model must not touch to clear a block, so that step says so.
+ * concrete next step, in that order, before any detail. A regression is fixed by the model.
+ *
+ * The coverage step tells the reader to resolve every reason listed under Not evaluated, and
+ * then names the reasons a run produces most often. That list is not exhaustive and must not be
+ * read as one: a gap is also recorded for a provider skipped after another provider changed the
+ * page, for an evidence floor too old to prove anything, and for a configuration usabl could not
+ * read, and more can be added. Naming the common ones is what keeps a model from stopping at
+ * screens and files; the instruction to resolve every reason listed is what covers the rest.
+ *
+ * Guarded policy files are the one thing the model must not touch to clear a block, so that step
+ * says so.
  */
 const NEXT_STEP: Record<string, string> = {
   regression: 'Next: fix each barrier below, then stop again so usabl can re-check the change.',
@@ -52,12 +60,33 @@ const NEXT_STEP: Record<string, string> = {
 };
 
 /**
- * The step when guarded files changed and the same run found a barrier. Both facts need the
- * model: the barrier is its to fix, and the policy change is the user's to hear about. Saying
- * only one would let the other pass unmentioned.
+ * The step when guarded files changed and the accessibility run did not pass either.
+ *
+ * Both facts need the model: the accessibility work is its to do, and the policy change is the
+ * user's to hear about. Saying only one would let the other pass unmentioned.
+ *
+ * Which one is chosen comes from `accessibilityVerdict`, the gate's own answer for the
+ * accessibility half of the run, and never from whether some finding exists. A run can carry a
+ * finding the gate marked fixed or waived and still be verified, and a run can be `not_covered`
+ * with an old finding attached; reading the findings would tell the model to fix a barrier the
+ * gate says is fixed in the first case and would drop the coverage instruction in the second.
  */
-const APPROVAL_REQUIRED_WITH_BARRIERS_STEP =
+const APPROVAL_REQUIRED_WITH_REGRESSION_STEP =
   'Next: fix each barrier below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.';
+
+const APPROVAL_REQUIRED_WITH_GAPS_STEP =
+  'Next: resolve every reason under Not evaluated below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.';
+
+/** The step for a guarded-file block, given what the gate said about accessibility. */
+function approvalRequiredStep(result: Result): string {
+  if (result.accessibilityVerdict === 'regression') {
+    return APPROVAL_REQUIRED_WITH_REGRESSION_STEP;
+  }
+  if (result.accessibilityVerdict === 'not_covered') {
+    return APPROVAL_REQUIRED_WITH_GAPS_STEP;
+  }
+  return NEXT_STEP['approval_required'] ?? '';
+}
 
 /**
  * The lines that follow the next step when guarded files changed: which files, how the state
@@ -171,14 +200,13 @@ function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
 function buildBlockMessage(result: Result, config?: UsablConfig): string {
   const scaffold = [verdictLine(result, 'NOT verified. ')];
   const budget = resolveNoiseBudgetDefault(config);
-  // Only gating (deterministic) findings are barriers this block is about. Advisory findings never
-  // gate, so listing one here would present it as a blocker it is not. They still surface elsewhere.
-  const gating = result.findings.filter((finding) => finding.evidenceClass === 'deterministic');
+  // The barriers this block is about are the ones the gate blocks on, by the gate's own rule.
+  const gating = result.findings.filter(isBlockingBarrier);
   const view = applyNoiseBudget(gating, budget, 'gating findings');
 
   const nextStep =
-    result.verdict === 'approval_required' && view.groups.length > 0
-      ? APPROVAL_REQUIRED_WITH_BARRIERS_STEP
+    result.verdict === 'approval_required'
+      ? approvalRequiredStep(result)
       : result.verdict === null
         ? undefined
         : NEXT_STEP[result.verdict];

@@ -577,6 +577,98 @@ describe('evaluateStopDecision', () => {
       expect(next.startsWith('Next: tell the user that guarded policy files changed')).toBe(true);
       expect(next).not.toContain('fix each barrier');
     });
+
+    describe('the combined step follows the gate, not the presence of a finding', () => {
+      // The gate blocks on deterministic findings that are neither waived nor fixed, and it
+      // writes the answer to accessibilityVerdict. Reading the findings instead told the
+      // assistant to fix a barrier the gate had already accounted for, and lost the coverage
+      // instruction when an old finding sat beside a real gap.
+      const barrier = (over: Partial<Result['findings'][number]>): Result['findings'][number] => ({
+        rule: 'button-name',
+        layer: 'axe',
+        severity: 'serious',
+        evidenceClass: 'deterministic',
+        screenId: 'clusters',
+        elementPath: 'button',
+        elementName: 'Save',
+        role: 'button',
+        whatUserExperiences: 'A button with no accessible name',
+        why: '',
+        fix: 'Add an accessible name',
+        evidence: {},
+        confidence: 'fail',
+        elementKey: 'k',
+        identityBasis: 'name',
+        status: 'new',
+        ...over,
+      });
+
+      it('asks for the fix and the telling when the accessibility half really regressed', () => {
+        const message = guarded({
+          accessibilityVerdict: 'regression',
+          accessibilityExitCode: 1,
+          findings: [barrier({})],
+        });
+        const next = message.split('\n')[1]!;
+
+        expect(next.startsWith('Next: fix each barrier below')).toBe(true);
+        expect(next).toContain('tell the user that guarded policy files changed');
+        expect(message).toContain('barrier: button-name');
+      });
+
+      it('does not ask for a fix when the only findings are waived', () => {
+        const message = guarded({
+          accessibilityVerdict: 'verified',
+          accessibilityExitCode: 0,
+          findings: [barrier({ status: 'waived' })],
+        });
+        const next = message.split('\n')[1]!;
+
+        expect(next.startsWith('Next: tell the user that guarded policy files changed')).toBe(true);
+        expect(next).not.toContain('fix each barrier');
+        // A waived finding is not a barrier, so it is not presented as one.
+        expect(message).not.toContain('barrier: button-name');
+        expect(message).not.toContain('Rule: button-name');
+      });
+
+      it('does not ask for a fix when the only findings are fixed', () => {
+        const message = guarded({
+          accessibilityVerdict: 'verified',
+          accessibilityExitCode: 0,
+          findings: [barrier({ status: 'fixed' })],
+        });
+        const next = message.split('\n')[1]!;
+
+        expect(next.startsWith('Next: tell the user that guarded policy files changed')).toBe(true);
+        expect(next).not.toContain('fix each barrier');
+        expect(message).not.toContain('barrier: button-name');
+      });
+
+      it('keeps the coverage instruction when the accessibility half is not covered', () => {
+        const message = guarded({
+          summary: 'approval required: 1 guarded path(s) changed; accessibility not_covered: 0 gating finding(s), 1 gap(s)',
+          accessibilityVerdict: 'not_covered',
+          accessibilityExitCode: 3,
+          findings: [barrier({ status: 'carried' })],
+          coverage: {
+            changedFiles: [],
+            affected: [],
+            unresolvedFiles: [],
+            gaps: [{ ref: 'provider:pf-rulepack', state: 'capability-denied', reason: 'provider pf-rulepack denied capability: network' }],
+            nothingToCheck: false,
+          },
+        });
+        const next = message.split('\n')[1]!;
+
+        expect(next.startsWith('Next: resolve every reason under Not evaluated below')).toBe(true);
+        expect(next).toContain('tell the user that guarded policy files changed');
+        expect(next).toContain('Do not edit those files to clear this block.');
+        // The gap the reader has to resolve is still disclosed with its reason.
+        expect(message).toContain('provider pf-rulepack denied capability: network');
+        // A carried finding still blocks, so it is still shown as a barrier.
+        expect(message).toContain('barrier: button-name');
+      });
+    });
   });
 
   it('directs a not covered block at every gap reason, not only screens and files', () => {

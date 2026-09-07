@@ -146,6 +146,26 @@ export function fixOrAbsence(finding: Finding): string {
 }
 
 /**
+ * Whether a finding is a barrier a surface should present as one.
+ *
+ * The same rule the gate blocks on: deterministic evidence that is neither waived nor fixed.
+ * Advisory evidence never gates, so showing it would present it as a blocker it is not, and a
+ * waived or fixed finding is one the gate has already accounted for, so telling a reader to fix
+ * it sends them after work the gate says is done. Both stay visible elsewhere; this decides only
+ * what a blocking surface calls a barrier.
+ *
+ * Shared so a surface cannot answer this differently from the gate. The gate is still the only
+ * verdict authority; this reads the status it already wrote.
+ */
+export function isBlockingBarrier(finding: Finding): boolean {
+  return (
+    finding.evidenceClass === 'deterministic' &&
+    finding.status !== 'waived' &&
+    finding.status !== 'fixed'
+  );
+}
+
+/**
  * What a blocked reader is owed when guarded policy files changed: how the state clears, and
  * the one lever a person has over the stop.
  *

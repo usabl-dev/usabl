@@ -278,6 +278,14 @@
   the page under test, and the frame also holds the engine's own summary, so
   that was false on its face. The overlay client matches the new strings, and
   the usabl-fix skill prose says what the frame holds.
+- The Stop hook chooses the APPROVAL REQUIRED next step from the accessibility
+  verdict the gate wrote, not from whether any finding is present, and both
+  model-facing surfaces select barriers with the gate's own blocking rule:
+  deterministic evidence that is neither waived nor fixed. A run carrying a
+  finding the gate marked fixed or waived was told to fix a barrier the gate
+  says is done, and a guarded-file run whose accessibility half was
+  `not_covered` lost the instruction to resolve the coverage gaps whenever an
+  old finding was attached. That case now keeps it.
 - APPROVAL REQUIRED on the Stop hook and the self-check names the guarded file
   or files that changed and says how the state clears: where a code owner is
   assigned to that path, a code owner other than the author approves it on the
@@ -290,9 +298,13 @@
   Stop hook's next step says both: fix the barrier, and tell the user about the
   policy change. The assistant is still told not to edit guarded files to clear
   the block.
-- The Stop hook's next step for NOT COVERED names every gap reason: an
-  unreachable screen, an unmapped file, a denied capability, and a failed
-  provider. It used to name only the first two.
+- The Stop hook's next step for NOT COVERED tells the reader to resolve every
+  reason listed under Not evaluated, and names the common ones: an unreachable
+  screen, an unmapped file, a denied capability, and a failed provider. It used
+  to name only the first two, so a denied capability could be left standing.
+  The named list is not exhaustive; a gap is also recorded for a provider
+  skipped after another provider changed the page, for an evidence floor too
+  old to prove anything, and for a configuration usabl could not read.
 - Inside the untrusted frame on the Stop hook and the self-check, each barrier
   opens with a `barrier: <rule>` line before its experience and fix, and the
   `Not evaluated:` label sits directly above the gap lines rather than outside
@@ -321,6 +333,21 @@
   to the item's content column, computed from the marker so `10.` stays
   aligned. The collapsed finding's rule line is a continuation of its item
   rather than a nested item, so the frame under it belongs to the right item.
+
+### Security
+
+- A screen id in the pull request comment can no longer reach GitHub's
+  post-render filters. The collapsed finding headline printed the id as prose,
+  outside both the code span and the untrusted frame. A screen id is not
+  usabl's own word: the router fallback derives it from a route literal in the
+  application source, so whoever writes the application chooses it. An id
+  shaped like a mention rendered as a notification to a person with access to
+  the repository, and other ids rendered as a mailto link and an issue link.
+  The headline is now built from the group's separate fields, with the screen
+  id and the rule in code spans, and the formatter that welded the id into a
+  headline string is gone so no surface can repeat the mistake. A coverage
+  gap's state label is sealed too, because a caller composing a Result outside
+  the engine can put any string there.
 
 ## 0.2.1 - 2026-09-01
 
