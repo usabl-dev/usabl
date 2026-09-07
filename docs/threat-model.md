@@ -276,12 +276,28 @@ value opening with three of them cannot open a fenced code block either. Tests c
 email address, a mention, an issue reference, a forty-hex commit id, backtick runs at every
 position, leading and trailing spaces, and empty values.
 
-Nothing page-derived remains outside a code span. The prose that is escaped rather than
-spanned, a rule, layer, and severity in a finding headline, a gap state, and the screen id
-in a collapsed headline, comes from a provider, the operator's configuration, or a route
-literal in the application source, none of which this threat model treats as hostile; a
-post-render filter on one of those would need a hostile provider or repository, which is
-out of scope here.
+A screen id is attacker-influenced text and is sealed as such. usabl's router fallback
+derives a screen id from a route literal in the application source, so whoever writes the
+application chooses it, and it is the same author whose page usabl treats as untrusted
+everywhere else. An earlier version of this section claimed no page-derived value remained
+outside a code span while the collapsed finding headline printed the id as prose. It did:
+an id spelled as a mention rendered as a real notification to a person with access to the
+repository, and other ids rendered as a mailto link and an issue link. The headline is now
+built from the group's separate fields, with the id in a code span, and the formatter that
+welded an id into a headline string has been removed so that no surface can print one
+unsealed by accident. Tests force the collapsed path with ids spelled as a mention, an
+address, an issue reference, and a commit id, and assert every occurrence sits inside a
+span.
+
+What is still printed as prose, outside every span: the verdict word and its meaning, the
+section headings, the receipt and conformance labels, the counts, a coverage gap's ref and
+reason labels, and a finding's status, severity, layer, and rule. The counts are numbers
+the engine computed. Status is usabl's own enum. Severity, layer, and rule are authored by
+the providers in the first-party stack, which is the residual assumption here and is
+recorded as such: a hostile third-party provider could put an autolinkable string in a rule
+name, and usabl's answer to a hostile provider is not to load one. A gap's state label is
+also an engine enum, but `Result` is exported and a caller can compose one outside the
+engine, so it is sealed anyway rather than trusted by argument.
 
 **Not handled:** credential-dense hostile input costs more than it did. About three million
 characters of back-to-back credentials take roughly 0.7 s to redact, and roughly 1.5 s with

@@ -5,7 +5,7 @@ import {
   applyNoiseBudgetPerSurface,
   collapseFindingsByRule,
   DEFAULT_NOISE_BUDGET,
-  formatCollapsedGroupHeadline,
+  formatCollapsedGroupCount,
   formatCollapsedGroupHeadlineWithoutScreen,
   formatShowAllHint,
   parseNoiseBudgetConfig,
@@ -134,13 +134,18 @@ describe('applyNoiseBudgetPerSurface', () => {
   });
 });
 
-describe('formatCollapsedGroupHeadline', () => {
+describe('formatCollapsedGroupCount', () => {
   it('includes a count suffix when a group has multiple findings', () => {
     const groups = collapseFindingsByRule([
       finding({ rule: 'color-contrast' }),
       finding({ rule: 'color-contrast', elementKey: 'k2' }),
     ]);
-    expect(formatCollapsedGroupHeadline(groups[0]!)).toContain('(×2)');
+    expect(formatCollapsedGroupCount(groups[0]!)).toBe(' (×2)');
+  });
+
+  it('is empty for a group standing for one finding', () => {
+    const groups = collapseFindingsByRule([finding({ rule: 'color-contrast' })]);
+    expect(formatCollapsedGroupCount(groups[0]!)).toBe('');
   });
 });
 

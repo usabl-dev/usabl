@@ -257,26 +257,30 @@ export function applyNoiseBudgetPerSurface(
   };
 }
 
-export function formatCollapsedGroupHeadline(group: CollapsedFindingGroup): string {
-  // Show status alongside severity so a reader can tell a new gating barrier from carried debt or a
-  // waived item at a glance, rather than judging a collapsed group by severity alone.
-  const countSuffix = group.count > 1 ? ` (×${group.count})` : '';
-  return `[${group.status} ${group.severity}] ${group.screenId}/${group.layer}/${group.rule}${countSuffix}`;
+/**
+ * The count suffix a collapsed headline ends with, so a headline says how many findings it
+ * stands for. A count is a number this unit computed and is never text from anywhere else.
+ */
+export function formatCollapsedGroupCount(group: CollapsedFindingGroup): string {
+  return group.count > 1 ? ` (×${group.count})` : '';
 }
 
 /**
- * The group headline without the screen id, for surfaces whose reader is a language model.
+ * The group headline without the screen id.
  *
- * Those surfaces print the headline as trusted scaffold outside the untrusted frame. A screen id
- * is not always usabl's own word: the router fallback derives it from a route literal in the
- * application, so a page can choose it. Status and severity are usabl's vocabulary, and layer
- * and rule are authored by the providers in the first-party stack, so they stay here; the screen
- * id goes inside the frame as data. The count is kept, so the headline still says how many
- * findings it stands for.
+ * There is deliberately no formatter here that welds the screen id into a headline string. A
+ * screen id is not usabl's own word: the router fallback derives it from a route literal in the
+ * application source, so whoever writes the application chooses it, and page text reaches usabl
+ * through the same routes. One did exist, and every caller that printed the string it returned
+ * printed that id as trusted text, which is exactly the mistake a formatter of that shape
+ * invites. A surface that wants the id in a headline now has to take it from the group and seal
+ * it itself, the way it seals any other value the application chose.
+ *
+ * Status and severity are usabl's vocabulary, and layer and rule are authored by the providers
+ * in the first-party stack, so they stay here.
  */
 export function formatCollapsedGroupHeadlineWithoutScreen(group: CollapsedFindingGroup): string {
-  const countSuffix = group.count > 1 ? ` (×${group.count})` : '';
-  return `[${group.status} ${group.severity}] ${group.layer}/${group.rule}${countSuffix}`;
+  return `[${group.status} ${group.severity}] ${group.layer}/${group.rule}${formatCollapsedGroupCount(group)}`;
 }
 
 export function parseNoiseBudgetConfig(raw: unknown): NoiseBudgetConfig | undefined {

@@ -17,7 +17,7 @@ import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence } from '../output/disclosure.js';
 import {
   applyNoiseBudget,
-  formatCollapsedGroupHeadline,
+  formatCollapsedGroupCount,
   resolveNoiseBudgetDefault,
   type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
@@ -301,17 +301,28 @@ function renderFindingGroup(title: string, findings: Finding[]): string[] {
   return [`### ${title}`, ...findings.flatMap((finding) => formatFinding(finding))];
 }
 
+// The headline is built from the group's fields rather than from one formatted string, so the
+// screen id can be sealed on its own. It is the only part of this line the application chooses:
+// the router fallback derives a screen id from a route literal, so an id can be written to read
+// as a mention, an address, an issue reference, or a commit id, and a post-render filter would
+// then turn it into a link or a notification. It gets the same code span the rule line gives it.
+// Status and severity are usabl's own vocabulary and the count is a number this surface
+// computed, so those stay as escaped prose.
 function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
   const finding = group.representative;
-  const headline = formatCollapsedGroupHeadline(group);
   const rule = neutralize(finding.rule);
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
+  // The prose around the spans is escaped as a whole, brackets included, so this line renders
+  // exactly as it did when the whole headline was one escaped string.
+  const status = escapeMarkdown(`[${group.status} ${severity}]`);
+  const count = escapeMarkdown(formatCollapsedGroupCount(group));
+  const headline = `${status} ${inlineCode(screenId)}/${inlineCode(`${layer}/${rule}`)}${count}`;
   // The rule line is a continuation of the item, not a nested item. A nested item would make
   // the framed lines after it lazy continuations of the nested paragraph, so they would render
   // inside the wrong item.
-  return listItem('-', escapeMarkdown(headline), [
+  return listItem('-', headline, [
     `rule: ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)} · ${escapeMarkdown(severity)}`,
     ...framedMarkdownLines(findingPieces(finding)),
   ]);
@@ -348,7 +359,10 @@ function renderCoverageGaps(result: Result): string[] {
         { label: 'ref', value: gap.ref },
         { label: 'reason', value: gap.reason },
       ]);
-      return listItem('-', `(${escapeMarkdown(neutralize(gap.state))})`, framed);
+      // A state is an engine enum and no page can choose one, but `Result` is exported and a
+      // caller can compose one outside the engine, so the label is any string at runtime. It
+      // costs one code span to keep that out of the renderer's and the filters' reach.
+      return listItem('-', `(${inlineCode(neutralize(gap.state))})`, framed);
     }),
   ];
 }

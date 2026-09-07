@@ -134,7 +134,7 @@ describe('projectPrComment', () => {
     // the finding-style frame; only the engine state stays as the plain label.
     const markdown = projectPrComment(baseResult({}));
 
-    expect(markdown).toContain('- (capability-denied)');
+    expect(markdown).toContain('- (`capability-denied`)');
     expect(markdown).toContain('ref: `provider:axe-core`');
     expect(markdown).toContain('reason: `static mode denied live`');
   });
@@ -578,6 +578,67 @@ describe('pr comment page text is sealed in code spans', () => {
     });
   });
 
+  describe('a screen id in a collapsed headline', () => {
+    // A screen id is not usabl's word. The router fallback derives it from a route literal in
+    // the application source, so whoever writes the application chooses it. Printed as prose it
+    // reached GitHub's post-render filters, which turned an id shaped like a mention into a
+    // notification to a real person with access to the repository, and other ids into a mailto
+    // link and an issue link. The headline is the only line that ever printed one unsealed.
+    //
+    // Nothing in this repository renders CommonMark or reaches a Markdown API, and nothing is
+    // added for a test, so these assertions are on the structure a renderer reads.
+    const hostile: ReadonlyArray<readonly [string, string]> = [
+      ['a mention', '@octocat)'],
+      ['an email address', 'owner@example.test'],
+      ['an issue reference', '#123'],
+      ['a commit id', '0123456789abcdef0123456789abcdef01234567'],
+      ['a bare address', 'https://example.test/path'],
+    ];
+
+    // Two findings on one rule, which is what forces the collapsed path.
+    const collapsedFor = (screenId: string): string =>
+      projectPrComment(
+        baseResult({
+          findings: [
+            baseFinding({ screenId, rule: 'color-contrast', elementKey: 'k1' }),
+            baseFinding({ screenId, rule: 'color-contrast', elementKey: 'k2' }),
+          ],
+          screens: [],
+          coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false },
+        }),
+      );
+
+    for (const [name, screenId] of hostile) {
+      it(`seals ${name} in a code span, in the headline as well as the rule line`, () => {
+        const markdown = collapsedFor(screenId);
+        const lines = markdown.split('\n');
+        const headline = lines.find((line) => line.startsWith('- &#91;new serious&#93;'));
+
+        expect(markdown).toContain('### Findings (collapsed by rule)');
+        expect(headline).toBeDefined();
+        // Every occurrence of the id anywhere in the comment sits inside a code span.
+        let at = markdown.indexOf(screenId);
+        expect(at).toBeGreaterThan(-1);
+        while (at !== -1) {
+          const before = markdown.lastIndexOf('`', at);
+          const after = markdown.indexOf('`', at + screenId.length);
+          expect(before, `no opening fence before "${screenId}"`).toBeGreaterThan(-1);
+          expect(after, `no closing fence after "${screenId}"`).toBeGreaterThan(-1);
+          // The fences are on the same line as the value, so the span is inline.
+          expect(markdown.slice(before, after)).not.toContain('\n');
+          at = markdown.indexOf(screenId, at + screenId.length);
+        }
+      });
+    }
+
+    it('keeps the count and the engine vocabulary outside the span', () => {
+      const markdown = collapsedFor('clusters');
+      const headline = markdown.split('\n').find((line) => line.startsWith('- &#91;new serious&#93;'));
+
+      expect(headline).toBe('- &#91;new serious&#93; `clusters`/`axe/color-contrast` (×2)');
+    });
+  });
+
   describe('list layout', () => {
     // CommonMark puts a continuation line inside a list item only when it is indented to the
     // item's content column, the marker plus one space: two for "- ", three for "1. ", four for
@@ -658,8 +719,9 @@ describe('pr comment page text is sealed in code spans', () => {
       const [, markdown] = fixtures[1]!;
 
       expect(markdown).not.toMatch(/^\s+- rule: /m);
-      // The headline is escaped prose, so its brackets are character references.
-      expect(markdown).toMatch(/^- &#91;new serious&#93; clusters\/axe\/rule-0\n  rule: `clusters` - `axe\/rule-0` · serious\n  \[BEGIN UNTRUSTED TEXT/m);
+      // The headline is escaped prose around sealed fields, so its brackets are character
+      // references and the screen id and rule are code spans.
+      expect(markdown).toMatch(/^- &#91;new serious&#93; `clusters`\/`axe\/rule-0`\n  rule: `clusters` - `axe\/rule-0` · serious\n  \[BEGIN UNTRUSTED TEXT/m);
     });
   });
 
