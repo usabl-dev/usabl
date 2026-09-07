@@ -88,7 +88,7 @@ both pass. Changing a guarded policy file yields `approval_required` until it is
 reviewed.
 
 **Rip-out moment:** The team ignores the bot comment.
-**Prevention:** High-signal comments (regressions and touched surfaces); a link to the
+**Prevention:** High-signal comments (regressions and the screens the change mapped to); a link to the
 receipt; the gate blocks a merge only once the team makes `usabl-required` a required
 check.
 
@@ -147,7 +147,7 @@ is labeled as a dev-time aid, not as evidence and not as James's approval.
 |---|---|---|
 | Assistant loop | False block, slow check | Accurate demo set; latency budget; re-checkable receipt |
 | Overlay | Clutter, flapping | Dedupe; single-flight; severity cap |
-| PR reviewer | Bot fatigue | Comment only on touched surfaces and regressions |
+| PR reviewer | Bot fatigue | Comment only on mapped screens and regressions |
 | Onboarding | Debt wall | Evidence floor; new-only gating; waivers with expiry |
 | James | Empty "fixed" | Verified verdict plus a receipt; human AT review still required |
 
