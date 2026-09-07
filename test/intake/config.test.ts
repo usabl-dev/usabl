@@ -485,6 +485,23 @@ describe('parseUsablConfig noiseBudget', () => {
     expect(message).toContain('noiseBudget.perSurface key 2');
   });
 
+  it('says what the key count counts, because a whole-number key is read before the rest', () => {
+    // The bad key is written first in the file, but a key that is a whole number is read back
+    // first, so the count says 2. The message states what it counts rather than implying an order
+    // in the file that it cannot promise.
+    let message = '';
+    try {
+      parseUsablConfig(
+        configJson({ noiseBudget: { perSurface: { 'user settings': 8, 42: 5 } } }),
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('noiseBudget.perSurface key 2');
+    expect(message).toContain('the order the keys are read back');
+    expect(message).toContain('not always the order they appear in the file');
+  });
+
   it('accepts perSurface keys the id grammar accepts, including a parameter route id', () => {
     const config = parseUsablConfig(
       configJson({ noiseBudget: { perSurface: { 'user-settings': 8, 'users-:id': 3 } } }),

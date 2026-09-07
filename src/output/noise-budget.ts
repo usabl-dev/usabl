@@ -308,12 +308,16 @@ export function parseNoiseBudgetConfig(raw: unknown): NoiseBudgetConfig | undefi
       // Every key here is a screen id, matched against one by exact comparison, so it answers to
       // the same grammar surfaces[].id does. A key the grammar refuses can never equal a screen
       // id, so the budget it sets would silently apply to nothing: the operator would see the
-      // default budget on that screen and no reason why. The key is named by its position in the
-      // object, never printed back, because a refused character is invisible or reorders the text
-      // around it.
+      // default budget on that screen and no reason why. The key is named by its position, never
+      // printed back, because a refused character is invisible or reorders the text around it.
+      //
+      // The position counts the keys in the order they are read back, which is the order they were
+      // written except that a key that is a whole number is read first. Reporting the position in
+      // the file would mean re-scanning the config text here, which the parser does not hold, so
+      // the message says what the number counts instead of implying a line order it cannot promise.
       const problem = describeIdProblem(screenId);
       if (problem !== null) {
-        throw configError`noiseBudget.perSurface key ${keyPosition} names a screen, and a key the id grammar refuses can never match one, so its budget would apply to nothing. The key ${problem}`;
+        throw configError`noiseBudget.perSurface key ${keyPosition} names a screen, and a key the id grammar refuses can never match one, so its budget would apply to nothing. The count is the order the keys are read back, which is not always the order they appear in the file. The key ${problem}`;
       }
       perSurface[screenId] = expectPositiveWholeNumber(value, `noiseBudget.perSurface.${screenId}`);
     }
