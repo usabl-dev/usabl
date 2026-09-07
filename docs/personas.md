@@ -42,8 +42,9 @@ work, not abstract audit items.
 
 **Pain:** Multi-release latency; teams do not hear what he hears until late.
 
-**usabl value:** Deterministic announcement and accessible-name checks surface broken
-or missing announcements early, so non-AT teammates see the barriers in the loop.
+**usabl value:** Deterministic announcement and accessible-name checks surface the broken
+or missing announcement expectations they can detect early, so non-AT teammates see
+those barriers in the loop.
 Verified fix loop shortens time-to-ship.
 
 **Success looks like:** Reports one barrier; team reproduces via harness; fix verified
