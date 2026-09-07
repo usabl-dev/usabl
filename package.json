@@ -57,7 +57,7 @@
     "check": "npm run typecheck && npm run test && npm run build && npm run test:package",
     "measure:fleet-insights": "vite-node scripts/measure-fleet-insights.ts",
     "measure:identity-stability": "vite-node scripts/measure-identity-stability.ts",
-    "docs:linkcheck": "node scripts/check-doc-links.mjs",
+    "docs:linkcheck": "node scripts/check-doc-links.mjs && node scripts/check-staged-links.mjs",
     "docs:a11y": "node scripts/check-docs-a11y.mjs",
     "docs:badges": "node scripts/check-readme-badges.mjs",
     "prepare": "bash scripts/install-git-hooks.sh"
