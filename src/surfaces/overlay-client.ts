@@ -215,6 +215,28 @@ export const overlayClientSource = `(() => {
     return path;
   }
 
+  // The whole location after the host: normalized pathname, then query, then hash. This is the key
+  // a coverage gap is matched on. A gap names one exact page, and "/report?view=b" is not the page
+  // "/report?view=a", nor is "/#/jobs" the page "/#/clusters" under a hash router. Comparing on the
+  // pathname alone collapsed all of those onto one screen and attributed the wrong gap to it. Host
+  // and port are still ignored, for the same reason pathnameOf ignores them.
+  function locationKeyOf(rawUrl) {
+    if (typeof rawUrl !== 'string' || rawUrl === '') {
+      return null;
+    }
+    let url;
+    try {
+      url = new URL(rawUrl, 'http://usabl.invalid');
+    } catch (_error) {
+      return null;
+    }
+    return normalizePath(url.pathname) + url.search + url.hash;
+  }
+
+  function liveLocationKey() {
+    return normalizePath(window.location.pathname) + window.location.search + window.location.hash;
+  }
+
   // Split findings into the screen the browser is on and every other scanned screen.
   //
   // The overlay is screen-aware: it guides the developer one screen at a time. It matches the live
@@ -222,17 +244,26 @@ export const overlayClientSource = `(() => {
   // "here" is a flat list of this screen's findings sorted worst first, each individually locatable.
   // "elsewhere" is a per-screen count plus a path to navigate to, and never the other screens'
   // individual findings.
-  function partitionByScreen(payload, currentPath) {
+  function partitionByScreen(payload, currentPath, currentLocation) {
     const affected = (payload && payload.coverage && Array.isArray(payload.coverage.affected))
       ? payload.coverage.affected
       : [];
     const findings = (payload && Array.isArray(payload.findings)) ? payload.findings : [];
     const normalizedCurrent = normalizePath(currentPath);
 
-    // Map each affected screenId to its normalized pathname, and find which one is current.
+    // Map each affected screenId to its normalized pathname, and find which one is current. The
+    // exact scan-time locations are kept too, so a gap that names another screen's page can be told
+    // apart from a gap that names no screen at all.
     let currentScreenId = null;
     const screenPath = new Map();
+    const screenIds = new Set();
+    const screenLocations = new Set();
     for (const screen of affected) {
+      screenIds.add(screen.screenId);
+      const location = locationKeyOf(screen.url);
+      if (location !== null) {
+        screenLocations.add(location);
+      }
       const path = pathnameOf(screen.url);
       if (path === null) {
         continue;
@@ -287,6 +318,8 @@ export const overlayClientSource = `(() => {
       (a, b) => a.worstRank - b.worstRank || b.count - a.count || a.screenId.localeCompare(b.screenId),
     );
 
+    const gaps = gapsForScreen(payload, currentScreenId, currentLocation, screenIds, screenLocations);
+
     return {
       matched: currentScreenId !== null,
       currentScreenId,
@@ -294,34 +327,50 @@ export const overlayClientSource = `(() => {
       here,
       elsewhere,
       elsewhereTotal,
-      gap: gapForScreen(payload, currentScreenId, normalizedCurrent),
+      gap: gaps.here,
+      unattributedGaps: gaps.unattributed,
     };
   }
 
-  // The coverage gap that concerns the screen the browser is on, or null.
+  // The coverage gap that concerns the screen the browser is on, and the number of gaps that this
+  // panel could not attribute to any screen.
   //
   // A screen can be in coverage.affected and still have no scan result: the browser was unavailable,
   // the route refused to load, a capability was denied. Listing "no findings" for that screen would
   // read as clean when nothing was checked. A gap names its subject as a surface id, a url, or a file
-  // path. A surface id is matched against the current screen id, and a url-shaped ref against the
-  // live pathname. A bare id is never resolved as a route and a file path is never read as a screen,
-  // because either would be a guess.
-  function gapForScreen(payload, currentScreenId, currentPath) {
+  // path, and the payload does not say which. So the match is exact or it is no match at all: a
+  // url-shaped ref must equal the whole live location (path, query, and hash), and a bare ref must
+  // equal the current screen id. A bare ref is never read as a route, a path segment is never read
+  // as an id, and a query or hash is never dropped, because each of those would attribute a gap to
+  // a page it does not name. A gap that matches neither this screen nor any other affected screen
+  // is counted, so the panel can say that it does not know where the gap belongs.
+  function gapsForScreen(payload, currentScreenId, currentLocation, screenIds, screenLocations) {
     const gaps = (payload && payload.coverage && Array.isArray(payload.coverage.gaps))
       ? payload.coverage.gaps
       : [];
+    let here = null;
+    let unattributed = 0;
     for (const gap of gaps) {
       if (!gap || typeof gap.ref !== 'string') {
         continue;
       }
-      if (currentScreenId !== null && gap.ref === currentScreenId) {
-        return gap;
+      const urlShaped = /^(https?:\\/\\/|\\/)/.test(gap.ref);
+      const location = urlShaped ? locationKeyOf(gap.ref) : null;
+      if (urlShaped) {
+        if (location !== null && location === currentLocation) {
+          if (here === null) here = gap;
+        } else if (location === null || !screenLocations.has(location)) {
+          unattributed += 1;
+        }
+        continue;
       }
-      if (/^(https?:\\/\\/|\\/)/.test(gap.ref) && pathnameOf(gap.ref) === currentPath) {
-        return gap;
+      if (currentScreenId !== null && gap.ref === currentScreenId) {
+        if (here === null) here = gap;
+      } else if (!screenIds.has(gap.ref)) {
+        unattributed += 1;
       }
     }
-    return null;
+    return { here, unattributed };
   }
 
   // A pathname is not automatically a safe href. "//evil.example/x" is a valid pathname and also a
@@ -357,6 +406,7 @@ export const overlayClientSource = `(() => {
       elsewhere: [],
       elsewhereTotal: 0,
       gap: null,
+      unattributedGaps: 0,
     };
   }
 
@@ -552,6 +602,22 @@ export const overlayClientSource = `(() => {
   // lines when one sentence cannot carry the facts. Every line either states a fact or states plainly
   // that usabl does not know.
   function explanationFor(payload, error, scanning, split) {
+    const explanation = stateExplanation(payload, error, scanning, split);
+    const lines = Array.isArray(explanation) ? explanation : [explanation];
+    // A gap the panel could not place. Attributing it to this screen would be a guess, and hiding it
+    // would let an unchecked page read as checked. So it is named as unplaced, in every loaded state.
+    if (!scanning && !error && payload && payload.loaded && split.unattributedGaps > 0) {
+      lines.push(unattributedGapLine(split.unattributedGaps));
+    }
+    return lines;
+  }
+
+  function unattributedGapLine(count) {
+    return 'usabl reported ' + (count === 1 ? 'a coverage gap' : count + ' coverage gaps')
+      + ' that this panel could not attribute to a screen; see the coverage gaps below.';
+  }
+
+  function stateExplanation(payload, error, scanning, split) {
     if (scanning) {
       return 'usabl is scanning the screens your change affects.';
     }
@@ -2596,8 +2662,7 @@ export const overlayClientSource = `(() => {
 
     // One paragraph per line. Most states are one sentence; approval is several facts, and each
     // gets its own paragraph so a screen reader pauses between them and a sighted reader can scan.
-    const explanation = explanationFor(payload, state.error, state.scanning, split);
-    const noteLines = Array.isArray(explanation) ? explanation : [explanation];
+    const noteLines = explanationFor(payload, state.error, state.scanning, split);
     const notes = noteLines.map((line) => make('p', 'banner-note', line));
 
     const screenLine = make('div', 'screen-line');
@@ -2771,7 +2836,7 @@ export const overlayClientSource = `(() => {
     const payload = state.payload || EMPTY_PAYLOAD;
     const split = (state.error || !state.payload)
       ? emptySplit(window.location.pathname)
-      : partitionByScreen(payload, window.location.pathname);
+      : partitionByScreen(payload, window.location.pathname, liveLocationKey());
     state.split = split;
     state.rows = [];
 

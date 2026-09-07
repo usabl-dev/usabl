@@ -1072,6 +1072,143 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
     await page.context().close();
   });
 
+  describe('a coverage gap is attributed to a screen only on an exact match', () => {
+    // The payload does not say whether a gap ref is a screen id, a url, or a file path, so the
+    // panel matches exactly or not at all. A gap it cannot place is named as unplaced, never
+    // pinned to the screen in front of the developer.
+    const UNPLACED =
+      'usabl reported a coverage gap that this panel could not attribute to a screen; see the coverage gaps below.';
+    const COULD_NOT_CHECK = 'usabl could not check this screen';
+
+    const reportViews = (gapRef: string): Result =>
+      result({
+        summary: 'regression: 1 gating finding',
+        coverage: {
+          changedFiles: ['src/report.tsx'],
+          affected: [
+            { screenId: 'report-a', url: 'http://127.0.0.1:5173/report?view=a', provenance: 'route-graph' },
+            { screenId: 'jobs', url: 'http://127.0.0.1:5173/jobs', provenance: 'route-graph' },
+          ],
+          unresolvedFiles: [],
+          gaps: [{ ref: gapRef, state: 'not-covered', reason: 'view B failed' }],
+          nothingToCheck: false,
+        },
+        findings: [finding({ screenId: 'jobs', whatUserExperiences: 'Jobs barrier.' })],
+      });
+
+    it('does not show a gap for ?view=b on ?view=a, and says it could not place it', async () => {
+      const page = await mount(projectOverlay(reportViews('/report?view=b')), { path: '/report?view=a' });
+      expect(await badgeLabel(page)).toBe(
+        'usabl: regression elsewhere, no issues on this screen. Open inspector.',
+      );
+
+      const panel = await openPanel(page);
+      const notes = await panel.locator('.banner-note').allTextContents();
+      expect(notes).toEqual([
+        'No findings on this screen, but other screens have findings and the gate is blocked.',
+        UNPLACED,
+      ]);
+      expect(await panel.getByText(COULD_NOT_CHECK, { exact: false }).count()).toBe(0);
+      // The gap is still listed where the sentence points.
+      expect(await panel.getByText('/report?view=b: view B failed').isVisible()).toBe(true);
+
+      await page.context().close();
+    });
+
+    it('shows the gap when the whole location matches, query included', async () => {
+      const page = await mount(projectOverlay(reportViews('/report?view=a')), { path: '/report?view=a' });
+      expect(await badgeLabel(page)).toBe(
+        'usabl: regression. usabl could not check this screen. Open inspector.',
+      );
+
+      const panel = await openPanel(page);
+      const notes = await panel.locator('.banner-note').allTextContents();
+      expect(notes).toEqual([
+        'usabl could not check this screen: view B failed. Nothing here is proven. See the coverage gaps below.',
+      ]);
+      expect(await panel.getByText('could not attribute', { exact: false }).count()).toBe(0);
+
+      await page.context().close();
+    });
+
+    it('tells hash-router pages apart instead of collapsing them onto one pathname', async () => {
+      const hashRouted = (gapRef: string): Result =>
+        result({
+          summary: 'regression: 1 gating finding',
+          coverage: {
+            changedFiles: ['src/app.tsx'],
+            affected: [
+              { screenId: 'clusters', url: 'http://127.0.0.1:5173/#/clusters', provenance: 'route-graph' },
+              { screenId: 'jobs', url: 'http://127.0.0.1:5173/#/jobs', provenance: 'route-graph' },
+            ],
+            unresolvedFiles: [],
+            gaps: [{ ref: gapRef, state: 'not-covered', reason: 'route did not load' }],
+            nothingToCheck: false,
+          },
+          findings: [finding({ screenId: 'jobs', whatUserExperiences: 'Jobs barrier.' })],
+        });
+
+      // A gap for /#/jobs belongs to jobs, another affected screen. On /#/clusters it is neither
+      // shown as this screen's gap nor called unplaced.
+      const other = await mount(projectOverlay(hashRouted('http://127.0.0.1:5173/#/jobs')), {
+        path: '/#/clusters',
+      });
+      expect(await badgeLabel(other)).toBe(
+        'usabl: regression elsewhere, no issues on this screen. Open inspector.',
+      );
+      const otherPanel = await openPanel(other);
+      expect(await otherPanel.locator('.banner-note').allTextContents()).toEqual([
+        'No findings on this screen, but other screens have findings and the gate is blocked.',
+      ]);
+      expect(await otherPanel.getByText(COULD_NOT_CHECK, { exact: false }).count()).toBe(0);
+      await other.context().close();
+
+      // A gap for /#/clusters on /#/clusters is this screen's gap.
+      const same = await mount(projectOverlay(hashRouted('http://127.0.0.1:5173/#/clusters')), {
+        path: '/#/clusters',
+      });
+      expect(await badgeLabel(same)).toBe(
+        'usabl: regression. usabl could not check this screen. Open inspector.',
+      );
+      const samePanel = await openPanel(same);
+      expect(await samePanel.locator('.banner-note').allTextContents()).toEqual([
+        'usabl could not check this screen: route did not load. Nothing here is proven. See the coverage gaps below.',
+      ]);
+      await same.context().close();
+    });
+
+    it('never reads a bare ref as a route, even when it equals a path segment', async () => {
+      const bare = result({
+        summary: 'regression: 1 gating finding',
+        coverage: {
+          changedFiles: ['src/report.tsx'],
+          affected: [
+            { screenId: 'report-screen', url: 'http://127.0.0.1:5173/report', provenance: 'route-graph' },
+            { screenId: 'jobs', url: 'http://127.0.0.1:5173/jobs', provenance: 'route-graph' },
+          ],
+          unresolvedFiles: [],
+          gaps: [{ ref: 'report', state: 'not-covered', reason: 'no route named report' }],
+          nothingToCheck: false,
+        },
+        findings: [finding({ screenId: 'jobs', whatUserExperiences: 'Jobs barrier.' })],
+      });
+      const page = await mount(projectOverlay(bare), { path: '/report' });
+      expect(await badgeLabel(page)).toBe(
+        'usabl: regression elsewhere, no issues on this screen. Open inspector.',
+      );
+
+      const panel = await openPanel(page);
+      expect(await panel.locator('.banner-note').allTextContents()).toEqual([
+        'No findings on this screen, but other screens have findings and the gate is blocked.',
+        UNPLACED,
+      ]);
+      expect(await panel.getByText(COULD_NOT_CHECK, { exact: false }).count()).toBe(0);
+      expect(await panel.getByText('report: no route named report').isVisible()).toBe(true);
+
+      await page.context().close();
+    });
+  });
+
   it('shows the engine reason as the one section when there is no verdict', async () => {
     const refused = result({
       verdict: null,
