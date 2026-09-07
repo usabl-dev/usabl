@@ -1718,13 +1718,15 @@ There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 
 Work on this section that is known and deferred until after the freeze.
 
-- Re-validate every identity a caller can pass directly to the exported library functions, so
-  the id grammar holds for `gate()` and `mintReceipt()` callers and not only for the `usabl`
-  command path. For `gate()` that is every identity-bearing field of `GateInput`:
+- Re-validate every screen or surface id field a caller can pass directly to the exported
+  library functions, so the id grammar holds for `gate()` and `mintReceipt()` callers and not
+  only for the `usabl` command path. For `gate()` those fields of `GateInput` are
   `coverage.affected[].screenId`, `drafts[].screenId`, `floor.entries[].screenId`,
-  `waivers[].surface`, and every member of `cleanlyScannedScreens`. For `mintReceipt()` it is
-  `surfaces`, `checked`, `notCovered`, and `applicability[].screenId`. None of these is checked
-  today on the library path.
+  `waivers[].surface`, and every member of `cleanlyScannedScreens`. For `mintReceipt()` they are
+  `checked` and `applicability[].screenId`. None of these is checked today on the library path.
+  The grammar governs screen and surface ids only. It does not govern rule ids, element keys,
+  waiver scopes, receipt `notCovered` entries (file references), or receipt `surfaces` (output
+  channels), and this item makes no claim about them.
 
 ---
 
