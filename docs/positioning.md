@@ -29,19 +29,20 @@ first stop on a blocking verdict unless a one-use bypass was issued.
 
 ## What users get
 
-usabl is an end-to-end accessibility proof system for AI-assisted UI work. Install it,
-point it at your dev server, and get a full check on every change - with fix
-verification before work is marked done and one clear answer across the whole workflow:
-CLI, AI assistant, browser overlay, CI, and docs.
+usabl checks each UI change for new deterministic, machine-checkable accessibility
+barriers on the screens it maps and scans, and discloses every gap it detects. Install
+it, point it at your dev server, and the same gate runs from the CLI, the AI assistant's
+Stop hook, and CI; the browser overlay shows the same local result without blocking. It
+does not prove completeness, readiness to ship, or compliance.
 
 | What users get | What that means for them |
 |---|---|
 | **Change coverage with honest gaps** | Touched UI surfaces are mapped, exercised, and checked. A surface usabl cannot identify is reported as not_covered, never a false pass. |
-| **Fix verification** | Problems are found and re-checked after the fix, before anyone calls the work finished. |
+| **Fix verification** | Problems are found and re-checked after the fix; the Stop hook blocks the assistant's first stop on a blocking verdict unless a one-use bypass was issued. |
 | **Screen-reader announcement checks** | Deterministically verifies the accessible names and announcement expectations screen reader users depend on, on the actual change. |
 | **Keyboard and interaction proof** | Tab order, focus, and interaction paths are walked, not just static markup rules. |
 | **Design-system intelligence** | PatternFly-specific composition rules on top of industry-standard checks. |
-| **One answer everywhere** | Same result in the terminal, in the AI session, in the browser, and on the PR. |
+| **One answer everywhere** | The terminal, the AI session, and the browser overlay show the same local Result. CI reads policy from the trusted base, so its result can differ when local policy files differ. |
 | **Team enforcement** | CI, stop hooks, and policy guardrails so accessibility proof is part of shipping. |
 | **Evidence artifacts** | Findings with fix guidance, plus a re-checkable evidence page (JSON or HTML) tied to the verified change. |
 
@@ -54,9 +55,9 @@ single product; this section does not claim what other tools do or do not ship.
 
 | Category | Examples | What they do well | What usabl is built to add |
 |---|---|---|---|
-| **Accessibility scanners** | axe, Lighthouse, Pa11y, WAVE | Fast issue lists on a page | Verify the fix, gate completion, cover the full change set |
+| **Accessibility scanners** | axe, Lighthouse, Pa11y, WAVE | Fast issue lists on a page | Verify the fix, gate completion, cover the screens a change maps to and disclose the gaps |
 | **CI regression tools** | Chromatic, Pa11y CI, MFA11y | Block new violations vs baseline | Same ratchet idea, plus AI gate, keyboard walk, SR evidence, PF rules |
-| **AI accessibility assistants** | Deque axe MCP, a11y MCP wrappers | Scan and suggest fixes from the agent | Proof before "done"; the assistant does not grade its own homework |
+| **AI accessibility assistants** | Deque axe MCP, a11y MCP wrappers | Scan and suggest fixes from the agent | Proof before "done"; the gate decides and the assistant only proposes |
 | **Agent enforcement hooks** | Community-Access/accessibility-agents, agent-gates | Block edits until review runs | Per-change deterministic proof loop, not one review per session |
 | **Screen reader simulation** | Tactual, Speakable, JAWS Inspect | Announcement preview and diff | Deterministic announcement and accessible-name checks wired into the gated loop: CI, fix verification, PF rules |
 | **Design-system lint** | FluentUI eslint plugin | Component-level static rules | Runtime interaction, keyboard walk, and proof engine; PatternFly-native |
@@ -87,7 +88,8 @@ The Stop hook blocks the AI's first stop on a blocking verdict unless a one-use 
 axe-core, PatternFly composition rules, a live keyboard walk, and deterministic
 screen-reader announcement checks on what changed.
 
-**Why it matters:** Teams stop shipping "probably fixed" UI.
+**Why it matters:** Teams get a re-checked answer on the screens they touched instead of
+a "probably fixed".
 
 ### 2. AI-native completion gate
 
@@ -111,12 +113,14 @@ not a separate QA pass weeks later.
 
 ### 4. One engine, team enforcement
 
-CLI, stop hook, overlay, CI comment, Playwright helper, and docs output all run the
-same engine and project the same verdict. Policy changes are tamper-evident. A verified
-result ties to the exact code state and can be re-checked by anyone.
+CLI, stop hook, overlay, CI comment, and docs output all run the same engine and read
+the gate's Result. The Playwright helper runs the same providers but returns a separate
+page-level result with no floor and no waivers, so its verdict can differ. Policy changes
+are tamper-evident. A verified result ties to the exact code state and can be re-checked
+by anyone.
 
-**Why it matters:** No tool sprawl, no conflicting scores, and standards stay
-enforceable as the codebase evolves.
+**Why it matters:** One engine behind every surface, and standards stay enforceable as
+the codebase evolves.
 
 ### Also part of the design (supporting, not headline)
 
@@ -126,7 +130,7 @@ enforceable as the codebase evolves.
   and returns one of four verdicts, or none, for the whole change, with any surface it cannot reach flagged
   as not_covered.
 - **Receipt-backed verified results** - each verified change carries a re-checkable
-  receipt: audit-ready proof for compliance conversations and release confidence.
+  receipt: evidence for compliance conversations. It does not claim compliance.
 
 ---
 
@@ -134,8 +138,9 @@ enforceable as the codebase evolves.
 
 ### Elevator
 
-> usabl makes every UI change complete accessibility proof before it ships, from the
-> AI session to the PR to CI.
+> usabl proves that a UI change added no new machine-checkable accessibility barrier on
+> the screens it scanned, and says what it could not check, from the AI session to the
+> PR to CI.
 
 ### Vs scanners
 
@@ -144,7 +149,8 @@ enforceable as the codebase evolves.
 
 ### Vs AI tools
 
-> Your AI can write the UI. usabl decides when it's actually usable.
+> Your AI can write the UI. usabl decides whether the change added a new machine-checkable
+> barrier on the screens it scanned.
 
 ### Vs screen reader simulation tools
 
