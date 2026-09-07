@@ -256,14 +256,32 @@ compatibility-normalizes usabl's output, and the fix then belongs in that consum
 it scrubs. Folding page text here would make usabl match text that no reader sees as a
 marker, and compatibility folding is lossy for legitimate content.
 
-**Not handled:** GitHub applies its own autolinks after the Markdown is rendered. Email
+**Handled:** GitHub applies its own autolinks after the Markdown is rendered. Email
 addresses, the `mailto:` and `xmpp:` forms, `@user` mentions, `#123` issue references, and
 commit SHAs are matched on decoded text, after character references have resolved, so a
-reference cannot stop them. Page text in a pull request comment can therefore still produce
-a clickable `mailto:` link, a notification to a user who has access to the repository, or a
+reference cannot stop them. Page text in a pull request comment could therefore produce a
+clickable `mailto:` link, a notification to a user who has access to the repository, or a
 link to a repository object. None of these can forge a verdict, close the untrusted-text
-frame, or leak engine data. The mitigation is to wrap page-derived text in code spans, which
-GitHub's post-render filters skip, and that is scheduled for the sealed-text visual work.
+frame, or leak engine data. Every page-derived value in the comment is now written as an
+inline code span under an engine-authored label, `experience: `, `why: `, `fix: `,
+`source: `, `candidates: `, `ref: `, `reason: `, `announced: `, and `engine summary: `,
+inside the untrusted frame, whose markers stay outside the spans. GitHub's post-render
+filters skip code spans, so nothing in the value becomes a link, a mention, or a
+notification. The span is fenced with one more backtick than the longest run inside the
+value, so the value cannot close it; a value that begins or ends with a space or a backtick
+is padded by one space on each side, which the renderer strips, so it comes back whole; an
+empty value is written as a span holding one space, because two bare backticks are not a
+span. Because every framed line starts with its label, no line starts with backticks, so a
+value opening with three of them cannot open a fenced code block either. Tests cover an
+email address, a mention, an issue reference, a forty-hex commit id, backtick runs at every
+position, leading and trailing spaces, and empty values.
+
+Nothing page-derived remains outside a code span. The prose that is escaped rather than
+spanned, a rule, layer, and severity in a finding headline, a gap state, and the screen id
+in a collapsed headline, comes from a provider, the operator's configuration, or a route
+literal in the application source, none of which this threat model treats as hostile; a
+post-render filter on one of those would need a hostile provider or repository, which is
+out of scope here.
 
 **Not handled:** credential-dense hostile input costs more than it did. About three million
 characters of back-to-back credentials take roughly 0.7 s to redact, and roughly 1.5 s with
@@ -274,10 +292,10 @@ field caps limit what reaches an agent.
 
 **Status:** [x] All three controls ship. The bidirectional controls are the full Unicode
 `Bidi_Control` set. Eleven splitters, every split position, the reordering payload, eight
-renderer forgeries, and nineteen block-markup and autolink forms are covered by tests. [ ]
-usabl does not report that a page attempted a forgery; it removes them silently. [ ]
-Compatibility-normalized markers are out of scope, as above. [ ] Post-render autolinks and
-credential-dense input cost are open, as above.
+renderer forgeries, and the block-markup and autolink forms are covered by tests. [x]
+Post-render autolinks are mitigated by the code spans, as above. [ ] usabl does not report
+that a page attempted a forgery; it removes them silently. [ ] Compatibility-normalized
+markers are out of scope, as above. [ ] Credential-dense input cost is open, as above.
 
 ---
 
