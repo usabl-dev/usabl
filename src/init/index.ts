@@ -13,6 +13,7 @@ import {
   mergeParsedRoutes,
   parseDataRouterRoutes,
   screenIdFromUrl,
+  type ParsedRouteSite,
 } from '../coverage/router-parse.js';
 import { validateId } from '../intake/id-grammar.js';
 import { APP_INIT_REFUSAL, unusableIdsError, type UnusableId } from './unusable-ids.js';
@@ -108,18 +109,22 @@ function isProvenRoutePath(path: string): boolean {
   return path.startsWith('/') && !path.startsWith('//') && !path.includes('@') && path !== '*';
 }
 
-function parseRouteTags(raw: string): Array<{ path: string; component: string | null }> {
-  const routes: Array<{ path: string; component: string | null }> = [];
+// The tag name the route regex below matches. The attribute group starts immediately after it,
+// which is what turns an offset inside the attributes into an offset in the file.
+const ROUTE_TAG_PREFIX = '<Route';
+
+function parseRouteTags(raw: string): ParsedRouteSite[] {
+  const routes: ParsedRouteSite[] = [];
   // Self-closing tags only. Opening <Route> parents are layouts; inferring
   // their children would require a nesting walk this draft does not claim.
   const tags = /<Route\b([^>]*?)\/>/g;
   for (const match of raw.matchAll(tags)) {
     const attrs = match[1];
-    if (typeof attrs !== 'string') {
+    if (typeof attrs !== 'string' || match.index === undefined) {
       continue;
     }
     const pathMatch = attrs.match(/\bpath\s*=\s*['"`]([^'"`]+)['"`]/);
-    if (pathMatch === null || pathMatch[1] === undefined) {
+    if (pathMatch === null || pathMatch[1] === undefined || pathMatch.index === undefined) {
       continue;
     }
     const path = pathMatch[1];
@@ -127,9 +132,20 @@ function parseRouteTags(raw: string): Array<{ path: string; component: string | 
       continue;
     }
     const elementMatch = attrs.match(/\belement\s*=\s*\{\s*<\s*([A-Za-z_$][\w$]*)/);
-    routes.push({ path, component: elementMatch?.[1] ?? null });
+    // Point at the path attribute, not at the start of the tag, so a tag spread over several
+    // lines is reported at the line that carries the path.
+    routes.push({
+      path,
+      component: elementMatch?.[1] ?? null,
+      offset: match.index + ROUTE_TAG_PREFIX.length + pathMatch.index,
+    });
   }
   return routes;
+}
+
+// One-based line number of a source offset, the way an editor numbers lines.
+function lineAtOffset(raw: string, offset: number): number {
+  return raw.slice(0, offset).split('\n').length;
 }
 
 async function resolveEntryFile(
@@ -242,14 +258,15 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
       // would let a change to a shared entry file or a wide-blast file look fully checked while
       // the route is never scanned. Every such route is collected so the whole draft can be
       // refused at once. The route is named by file and line, never by its path, because the
-      // path is what carries the refused character.
+      // path is what carries the refused character. The line comes from the offset the parser
+      // recorded for the path literal, so it is the line the route is declared on. Searching the
+      // file for the path text instead would find the first occurrence anywhere, including a
+      // comment that names the same path, and would send the operator to the wrong line.
       const screenId = screenIdFromUrl(route.path);
       const refusal = validateId(screenId);
       if (!refusal.ok) {
-        const at = routerRaw.indexOf(route.path);
-        const line = at < 0 ? null : routerRaw.slice(0, at).split('\n').length;
         unusable.push({
-          source: line === null ? routerFile : `${routerFile} line ${line}`,
+          source: `${routerFile} line ${lineAtOffset(routerRaw, route.offset)}`,
           origin: 'the screen id derived from the route path there',
           refusal,
         });

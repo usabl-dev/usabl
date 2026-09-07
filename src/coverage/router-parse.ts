@@ -11,6 +11,20 @@ export interface ParsedRoutePath {
   entryFile: null;
 }
 
+/**
+ * One route literal found in router source.
+ *
+ * `offset` is the index in the router source of the `path` literal that declared the route, so a
+ * caller that has to name the route can report the declaration itself. Searching the file for the
+ * path text instead would find the first occurrence anywhere, including a comment that mentions
+ * the same path, and would name the wrong line.
+ */
+export interface ParsedRouteSite {
+  path: string;
+  component: string | null;
+  offset: number;
+}
+
 /** A route whose path cannot be turned into a screen id, with the reason in config-message words. */
 export interface UnusableRoute {
   url: string;
@@ -85,28 +99,30 @@ export function isRouterSource(raw: string): boolean {
 // slicing to the next brace binds a nested child's element to its parent route, so entry-file
 // attribution stays null and each route is a URL-only discovery. route-manifest's rule holds here
 // too: never invent entry-file attribution from router text.
-export function parseDataRouterRoutes(
-  raw: string,
-): Array<{ path: string; component: string | null }> {
+export function parseDataRouterRoutes(raw: string): ParsedRouteSite[] {
   const region = extractRouterCallArg(raw);
   if (region === null) {
     return [];
   }
-  const routes: Array<{ path: string; component: string | null }> = [];
+  const routes: ParsedRouteSite[] = [];
   const seen = new Set<string>();
-  for (const pathMatch of region.matchAll(/path:\s*['"`](\/[^'"`]*)['"`]/g)) {
+  for (const pathMatch of region.text.matchAll(/path:\s*['"`](\/[^'"`]*)['"`]/g)) {
     const routePath = pathMatch[1];
-    if (typeof routePath !== 'string' || seen.has(routePath)) {
+    if (typeof routePath !== 'string' || pathMatch.index === undefined || seen.has(routePath)) {
       continue;
     }
     seen.add(routePath);
-    routes.push({ path: routePath, component: null });
+    // The match starts at `path:`, so the offset points at the declaration in the file, not at
+    // some earlier line that happens to contain the same path text.
+    routes.push({ path: routePath, component: null, offset: region.start + pathMatch.index });
   }
   return routes;
 }
 
-// Returns the balanced-paren argument of the first create*Router(...) call, or null.
-function extractRouterCallArg(raw: string): string | null {
+// Returns the balanced-paren argument of the first create*Router(...) call and where it starts in
+// the source, or null. The start index is what lets a caller turn an offset inside the region back
+// into an offset in the whole file.
+function extractRouterCallArg(raw: string): { text: string; start: number } | null {
   const marker = raw.match(/\bcreate(?:Browser|Hash|Memory)Router\s*\(/);
   if (marker?.index === undefined) {
     return null;
@@ -120,7 +136,7 @@ function extractRouterCallArg(raw: string): string | null {
     } else if (ch === ')') {
       depth -= 1;
       if (depth === 0) {
-        return raw.slice(start, i + 1);
+        return { text: raw.slice(start, i + 1), start };
       }
     }
   }
@@ -128,10 +144,10 @@ function extractRouterCallArg(raw: string): string | null {
 }
 
 export function mergeParsedRoutes(
-  jsxRoutes: Array<{ path: string; component: string | null }>,
-  dataRoutes: Array<{ path: string; component: string | null }>,
-): Array<{ path: string; component: string | null }> {
-  const byPath = new Map<string, { path: string; component: string | null }>();
+  jsxRoutes: readonly ParsedRouteSite[],
+  dataRoutes: readonly ParsedRouteSite[],
+): ParsedRouteSite[] {
+  const byPath = new Map<string, ParsedRouteSite>();
   for (const route of jsxRoutes) {
     byPath.set(route.path, route);
   }

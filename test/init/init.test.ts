@@ -310,6 +310,49 @@ describe('what init writes is what usabl accepts', () => {
     },
   );
 
+  // A comment on line 2 that names the same route path, with the real declaration on line 7.
+  const jsxRouterWithComment = `import { Route, Routes } from 'react-router-dom'
+// Example route: /only bad route
+import { Overview } from './pages/Overview'
+
+export function App() {
+  return (
+    <Routes><Route path="/only bad route" element={<Overview />} /></Routes>
+  )
+}
+`;
+
+  const dataRouterWithComment = `import { createBrowserRouter } from 'react-router-dom'
+// Example route: /only bad route
+import { Overview } from './pages/Overview'
+
+export const router =
+  createBrowserRouter([
+    { path: '/only bad route', element: <Overview /> },
+  ])
+`;
+
+  it.each([
+    ['a jsx route tag', jsxRouterWithComment],
+    ['a data router entry', dataRouterWithComment],
+  ])('names the line the route is declared on, not a comment that mentions the same path: %s', async (
+    _label,
+    routerSource,
+  ) => {
+    // The line comes from the offset the parser recorded for the path literal. A search of the
+    // file for the path text would have found the comment on line 2 first and sent the operator
+    // to a line that declares nothing.
+    const fs = memoryFs(fixtureFiles({ 'src/App.tsx': routerSource }));
+
+    const message = await refusalOf(fs);
+    expect(message).toContain('src/App.tsx line 7: the screen id derived from the route path there');
+    expect(message).not.toContain('src/App.tsx line 2');
+    expect(message).toContain('at position 5: U+0020');
+    expect(message).not.toContain('only bad route');
+    expect(fs.store['usabl.config.json']).toBeUndefined();
+    expect(fs.store['usabl.routes.json']).toBeUndefined();
+  });
+
   it('names every unusable route in one refusal, so one run shows the whole fix', async () => {
     const twoBad = router.replace(
       '<Route path="/clusters" element={<Clusters />} />',

@@ -60,54 +60,75 @@ describe('router-parse', () => {
   it('discovers data-router route urls without attributing a component', () => {
     // Component attribution is intentionally not done: slicing to the next brace binds a nested
     // child element to its parent route. Routes are discovered as URLs only (component null).
-    const routes = parseDataRouterRoutes(`
+    const source = `
       createBrowserRouter([
         { path: '/home', element: <Home /> },
         { path: '/about', element: <About /> },
       ])
-    `);
+    `;
+    const routes = parseDataRouterRoutes(source);
     expect(routes).toEqual([
-      { path: '/home', component: null },
-      { path: '/about', component: null },
+      { path: '/home', component: null, offset: source.indexOf("path: '/home'") },
+      { path: '/about', component: null, offset: source.indexOf("path: '/about'") },
     ]);
+  });
+
+  it('records where each route was declared, not where its path text first appears', () => {
+    // A comment that names a route path is the case an offset guards against. A caller that
+    // searched the file for the path text would report the comment line as the declaration.
+    const source = `
+      // Example route: /home
+      createBrowserRouter([{ path: '/home', element: <Home /> }])
+    `;
+    const routes = parseDataRouterRoutes(source);
+    expect(routes[0]?.offset).toBe(source.indexOf("path: '/home'"));
+    expect(source.slice(0, routes[0]?.offset).split('\n').length).toBe(3);
   });
 
   it('does not attribute a nested child element to its parent route', () => {
     // False-coverage guard. The old brace-slicer bound /parent to Child. Now no component is
     // attributed, so init cannot invent a wrong entry file for the parent route.
-    const routes = parseDataRouterRoutes(`
+    const source = `
       createBrowserRouter([
         { path: '/parent', children: [{ path: '/child', element: <Child /> }], element: <Parent /> },
       ])
-    `);
+    `;
+    const routes = parseDataRouterRoutes(source);
     expect(routes).toEqual([
-      { path: '/parent', component: null },
-      { path: '/child', component: null },
+      { path: '/parent', component: null, offset: source.indexOf("path: '/parent'") },
+      { path: '/child', component: null, offset: source.indexOf("path: '/child'") },
     ]);
   });
 
   it('discovers the root path', () => {
-    const routes = parseDataRouterRoutes(`createBrowserRouter([{ path: '/', element: <Root /> }])`);
-    expect(routes).toEqual([{ path: '/', component: null }]);
+    const source = `createBrowserRouter([{ path: '/', element: <Root /> }])`;
+    expect(parseDataRouterRoutes(source)).toEqual([
+      { path: '/', component: null, offset: source.indexOf("path: '/'") },
+    ]);
   });
 
   it('ignores path-like objects outside the create*Router call', () => {
     // A decoy object elsewhere in the module must not be read as a route.
-    const routes = parseDataRouterRoutes(`
+    const source = `
       const telemetry = { path: '/not-a-route', element: <Decoy /> };
       createBrowserRouter([{ path: '/home', element: <Home /> }]);
-    `);
-    expect(routes).toEqual([{ path: '/home', component: null }]);
+    `;
+    expect(parseDataRouterRoutes(source)).toEqual([
+      { path: '/home', component: null, offset: source.indexOf("path: '/home'") },
+    ]);
   });
 
   it('merges jsx and data routes without duplicating paths', () => {
     const merged = mergeParsedRoutes(
-      [{ path: '/', component: 'Overview' }],
-      [{ path: '/settings', component: 'Settings' }, { path: '/', component: null }],
+      [{ path: '/', component: 'Overview', offset: 10 }],
+      [
+        { path: '/settings', component: 'Settings', offset: 40 },
+        { path: '/', component: null, offset: 70 },
+      ],
     );
     expect(merged).toEqual([
-      { path: '/', component: 'Overview' },
-      { path: '/settings', component: 'Settings' },
+      { path: '/', component: 'Overview', offset: 10 },
+      { path: '/settings', component: 'Settings', offset: 40 },
     ]);
   });
 });
