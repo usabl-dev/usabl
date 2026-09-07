@@ -94,7 +94,7 @@ The specific things that are new, each against what exists today:
 1. It re-checks the fix as well as finding the problem. usabl compares the next run
    against the floor and reports what it no longer observes. It observes absence; it
    does not witness the fix.
-2. It reports what it did not check. It reports "we could not check this" as a real
+2. It discloses every gap it detected. It reports "we could not check this" as a real
    answer instead of quietly passing.
 3. A verified answer can be re-checked. A verified receipt is bound to the exact source
    tree, policy, runner version, and scanner versions, and re-verification compares those
@@ -1338,8 +1338,8 @@ final step that never exits 2; and a `usabl-policy` job (`needs: gate-comment`,
 only, fetches the head as git objects, runs `usabl enforce accessibility` over the
 downloaded Result to publish an `accessibility` job output, and runs `usabl enforce policy
 --trusted-ref`, never executing PR head code; and a `usabl-required` job
-(`needs: [gate-comment, usabl-policy]`, `if: always()`) that decides the merge from those
-two verdicts and runs no head code at all. The engine's own repo checks in the same three
+(`needs: [gate-comment, usabl-policy]`, `if: always()`) that sets the required status from
+those two verdicts and runs no head code at all. The engine's own repo checks in the same three
 jobs, with the same fences, artifact handoff, and policy isolation. One thing differs: a consuming repo
 has no engine, so the draft clones `usabl-dev/usabl` at a pinned commit using
 `USABL_ENGINE_CHECKOUT_TOKEN`, while in the engine repo the checked-out tree already is
