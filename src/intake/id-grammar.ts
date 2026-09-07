@@ -9,14 +9,16 @@
  * ids that cannot be told apart on sight. Every id field uses this grammar so two fields in one
  * product cannot drift into two different rules about what an id may contain.
  *
- * The contract, stated exactly. The grammar excludes whitespace, invisible characters, and explicit
- * formatting controls, and it requires one canonical spelling. It does not claim that an accepted
- * id never reorders text: visible right-to-left letters reorder the run they sit in without any
- * control character, and accepting them is a product choice, because Hebrew and Arabic ids are
- * real ids. It does not refuse a standalone combining mark, which attaches to whatever precedes
- * it and is still drawn. It does not stop cross-script confusables. The claim is only this: every
- * character in an accepted id is drawn as something, and two accepted ids that compare unequal are
- * spelled differently.
+ * The contract, stated exactly. The grammar refuses whitespace, control and format characters,
+ * surrogates, private use, default-ignorable characters, and the known assigned blank glyphs, and
+ * it requires one canonical spelling (NFC). It accepts everything else, including unassigned code
+ * points, standalone combining marks, visible right-to-left letters, and cross-script confusables.
+ * It does not claim that an accepted id never reorders text: right-to-left letters reorder the run
+ * they sit in without any control character, and accepting them is a product choice, because
+ * Hebrew and Arabic ids are real ids. It does not claim that every accepted character has a glyph
+ * in every font. What it does claim is this: two accepted ids that compare unequal are spelled
+ * differently, and no accepted character is one that Unicode defines as whitespace, a control, a
+ * format, or default-ignorable.
  *
  * This unit validates text and describes the failure. It must never rewrite an id, compare two
  * ids for a caller, or decide what happens when an id is refused.
@@ -59,7 +61,7 @@
 // not stop confusables across scripts, so Latin "a" and Cyrillic "a" are both accepted and remain
 // distinct ids. That is a deliberate limit: both are scanned, both appear in receipt coverage,
 // and waiver matching is exact, so no screen or requirement is lost by it. The claim here is
-// narrow, and it is only this: every character of an accepted id renders as something.
+// narrow: the grammar refuses what is listed above and accepts everything else.
 const DISALLOWED_ID_CHARACTER =
   /[\s\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Default_Ignorable_Code_Point}\u2800\u{13441}\u{13442}\u{16fe4}]/u;
 

@@ -1605,17 +1605,25 @@ discovery-derived id such as `users-:id` stays valid. A refused id is reported b
 the position and code point of the offending character, because printing an invisible character
 back would show nothing.
 
-The grammar does not claim more than it delivers. It excludes whitespace, invisible characters,
-and explicit formatting controls, and nothing else. It does not claim that an accepted id never
-reorders text: visible right-to-left letters reorder the run they sit in without any control
-character, and they are accepted, because Hebrew and Arabic ids are real ids. A standalone
-combining mark is accepted; it is drawn on whatever precedes it. Confusables across scripts are
-accepted, so a Latin `a` and a Cyrillic `a` are both valid and stay distinct ids; both screens
-are scanned, both appear in receipt coverage, and waiver matching is exact, so no screen is lost
-by it. Unassigned code points are accepted, because rejecting them would make an id's validity
-depend on which Unicode version the running Node build carries. The same grammar governs
-`usabl.routes.json` `screenId`, `usabl.docs.json` `pageId`, requirement ids, and the surface a
-requirement names (section 13), so the whole screen id space has one rule.
+The grammar does not claim more than it delivers. It refuses whitespace, control and format
+characters, surrogates, private use, default-ignorable characters, and the known assigned blank
+glyphs; it accepts everything else, including unassigned code points, standalone combining
+marks, and cross-script confusables. It does not claim that an accepted id never reorders text:
+visible right-to-left letters reorder the run they sit in without any control character, and
+they are accepted, because Hebrew and Arabic ids are real ids. It does not claim that every
+accepted character has a glyph in every font. Confusables across scripts are accepted, so a
+Latin `a` and a Cyrillic `a` are both valid and stay distinct ids; both screens are scanned,
+both appear in receipt coverage, and waiver matching is exact, so no screen is lost by it.
+Unassigned code points are accepted, because rejecting them would make an id's validity depend
+on which Unicode version the running Node build carries.
+
+The same grammar governs every id field: `usabl.routes.json` `screenId`, `usabl.docs.json`
+`pageId`, requirement ids, the surface a requirement names (section 13), and the screen id the
+router fallback derives from a route path in application source. An authored id that fails is
+refused at parse. A derived id that fails is never minted: `usabl init` skips that route with a
+note instead of writing a sidecar the parser would refuse, and at run time the router fallback
+sets the route aside and the planner records it as a `skipped` coverage gap whenever a wide-blast
+change would have queued it, so the gate reads it as not covered rather than as absent.
 
 A blank or repeated id is refused when the config is read. Left in, it would collapse two
 screens into one entry: the second screen is dropped from the scan while its changed files
