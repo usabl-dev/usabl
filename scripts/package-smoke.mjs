@@ -93,7 +93,20 @@ try {
   });
   assert.equal(commented.status, 0, failure('installed usabl comment', commented));
   assert.match(commented.stdout, /<!-- usabl-report -->/);
-  assert.match(commented.stdout, /## usabl report: IDLE/);
+  // An idle run is a run that had nothing to check, and this proves the installed command still
+  // says so and cannot be read as a pass. The heading now comes from the shared verdict line, so
+  // it opens with NO VERDICT and carries the exit code, and the body is the one sentence that
+  // states what idle means. The whole heading is matched, and so is that sentence, rather than a
+  // fragment: a fragment would keep passing if the heading lost the words that make it honest.
+  // The word verified must not appear at all, which is the property the old IDLE headline was
+  // there to hold, and there is no receipt line, because a receipt exists only for a verified run.
+  assert.match(commented.stdout, /^## usabl report: NO VERDICT: IDLE \(exit 0\)$/m);
+  assert.match(
+    commented.stdout,
+    /^No UI files changed, so there was nothing to check\. No pass, no fail\.$/m,
+  );
+  assert.doesNotMatch(commented.stdout, /verified/i);
+  assert.doesNotMatch(commented.stdout, /No receipt/);
 
   const refused = run(process.execPath, [cli, 'check', '--ci'], { cwd: consumer });
   assert.equal(refused.status, 2, failure('installed usabl CI refusal', refused));
