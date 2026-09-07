@@ -162,8 +162,8 @@ describe('assembleBoundedMessage', () => {
   });
 
   it('keeps the production budgets where the caps were sized', () => {
-    expect(AGENT_MESSAGE_BUDGET).toBe(15_000);
-    expect(SELF_CHECK_MESSAGE_BUDGET).toBe(19_000);
+    expect(AGENT_MESSAGE_BUDGET).toBe(16_500);
+    expect(SELF_CHECK_MESSAGE_BUDGET).toBe(20_000);
   });
 });
 

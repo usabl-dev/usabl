@@ -6,10 +6,13 @@
 import type { Result, UsablConfig } from '../contracts/index.js';
 import { SELF_CHECK_MESSAGE_BUDGET, assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import {
+  APPROVAL_REQUIRED_HOW_IT_CLEARS,
+  APPROVAL_REQUIRED_HUMAN_LEVER,
   discloseGaps,
   fixOrAbsence,
   gapDetail,
   gapHeadline,
+  guardedFilesHeadline,
 } from '../output/disclosure.js';
 import {
   applyNoiseBudget,
@@ -87,19 +90,35 @@ export function projectSelfCheck(
   const verdict = describeVerdict(safe);
 
   // The trusted engine scaffold stays outside the frame: the verdict line, the advisory line,
-  // the meaning, the Rule line, and the Not evaluated header, all engine constants. Every
-  // free-text piece goes inside one frame with a short inline label: the gate's summary first,
-  // because a summary can name a route-derived screen id or carry a raw error message and so is
-  // not always engine-only, then the source location, the experiences, the fixes, and the gap
-  // details. The frame label is being generalized to say untrusted text rather than page text,
-  // so engine free text sits there correctly. The pieces are bounded per field, the whole
-  // message is bounded by dropping whole pieces, never the summary, and the frame is rebuilt
-  // around what survives, so the single closing marker cannot be lost.
+  // the meaning, the guarded-file lines when policy files changed, and the Rule line, all
+  // engine text. Every free-text piece goes inside one frame with a short inline label: the
+  // gate's summary first, because a summary can name a route-derived screen id or carry a raw
+  // error message and so is not always engine-only, then for each barrier a "barrier:" line
+  // naming its rule, the source location, the experience, and the fix, and last the
+  // "Not evaluated:" label directly above the gap details, so a reader never meets that label
+  // and then reads about a button. The frame label says untrusted text, not page text, so
+  // engine free text sits there correctly. The pieces are bounded per field, the whole message
+  // is bounded by dropping whole pieces, never the summary, and the frame is rebuilt around what
+  // survives, so the single closing marker cannot be lost.
+  //
+  // No next step is printed here. This surface is advisory; the stop hook owns the decision and
+  // the instruction that goes with it.
   const scaffold = [
     `usabl self-check: ${formatVerdictWord(verdict)}`,
     'advisory: the stop hook is the gate.',
     verdict.meaning,
   ];
+  if (safe.verdict === 'approval_required') {
+    // Which files, how the state clears, and the one lever a person has: the same account the
+    // stop hook gives, so the assistant reads one story on both surfaces.
+    const paths = safe.dirtyGuardedPaths;
+    const named = paths.length === 0 ? 'none recorded' : boundField(paths.join(', '), 'candidates');
+    scaffold.push(
+      `${guardedFilesHeadline(paths.length)}: ${named}`,
+      APPROVAL_REQUIRED_HOW_IT_CLEARS,
+      APPROVAL_REQUIRED_HUMAN_LEVER,
+    );
+  }
   const keep = scaffold.length;
   const pieces: string[] = [`engine summary: ${boundField(safe.summary, 'summary')}`];
   const budget = resolveNoiseBudgetDefault(config);
@@ -115,6 +134,7 @@ export function projectSelfCheck(
     const ruleLabel =
       group.count > 1 ? `${group.rule} (×${group.count})` : group.rule;
     scaffold.push(`Rule: ${ruleLabel}`);
+    pieces.push(`barrier: ${group.rule}`);
     pushSourcePieces(pieces, group.representative, '');
     pieces.push(`experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`);
     pieces.push(`fix: ${boundField(fixOrAbsence(group.representative), 'fix')}`);
@@ -123,6 +143,7 @@ export function projectSelfCheck(
     for (const raw of view.groups) {
       const group = boundGroup(raw);
       scaffold.push(`- ${formatCollapsedGroupHeadlineWithoutScreen(group)}`);
+      pieces.push(`barrier: ${group.rule}`);
       pieces.push(`screen (${group.rule}): ${group.screenId}`);
       pushSourcePieces(pieces, group.representative, ` (${group.rule})`);
       pieces.push(
@@ -137,8 +158,7 @@ export function projectSelfCheck(
 
   const gapPieces = notEvaluatedPieces(safe);
   if (gapPieces.length > 0) {
-    scaffold.push('Not evaluated:');
-    pieces.push(...gapPieces);
+    pieces.push('Not evaluated:', ...gapPieces);
   }
 
   // This surface prints a source or candidates piece per group on top of what the stop hook

@@ -146,6 +146,27 @@ export function fixOrAbsence(finding: Finding): string {
 }
 
 /**
+ * What a blocked reader is owed when guarded policy files changed: how the state clears, and
+ * the one lever a person has over the stop.
+ *
+ * The same account the overlay gives a person, held here so the stop hook and the self-check
+ * cannot tell the assistant a different story. Nothing in it is a step the assistant can take.
+ * Approval happens on the pull request, from a code owner other than the author, and the only
+ * other way out is to revert the file. Neither happens on this machine.
+ */
+export const APPROVAL_REQUIRED_HOW_IT_CLEARS =
+  'Where a code owner is assigned to that path, a code owner other than the author approves it on the pull request; the policy check on the pull request says exactly what it needs. Nothing on this machine can approve it. If the change was unintended, revert the file and this state clears.';
+
+/** The one-shot escape a person can use. It lets the next stop through; it approves nothing. */
+export const APPROVAL_REQUIRED_HUMAN_LEVER =
+  'To let the assistant stop once without clearing this, a person can run usabl bypass.';
+
+/** The label for the guarded files that changed. The caller appends the paths, bounded. */
+export function guardedFilesHeadline(count: number): string {
+  return count === 1 ? 'Guarded file changed' : 'Guarded files changed';
+}
+
+/**
  * The one barrier a bounded surface names. New and carried findings are what the reader can act
  * on, so they come first; anything else is better than naming nothing.
  */

@@ -42,7 +42,9 @@ const VERDICT_MEANINGS: Record<string, string> = {
   verified: 'This change passed every accessibility check usabl ran. It can proceed.',
   regression: 'This change adds an accessibility barrier. It is blocked until fixed.',
   not_covered: 'usabl could not check all of this change, so it is blocked as unproven.',
-  approval_required: 'This change edits guarded policy files, so a reviewer must approve it.',
+  // Approval happens on the pull request and nowhere else. The surfaces that face a model say
+  // who approves it and how the state clears; this line only has room to say where.
+  approval_required: 'This change edits guarded policy files. It needs approval on the pull request.',
 };
 
 const IDLE_SYMBOL = '○'; // white circle: nothing happened

@@ -238,8 +238,10 @@
   neither can be read as a pass. Every meaning is carried in text; no state
   depends on colour.
 - The Stop hook message and the `/usabl-check` self-check open the same way: the
-  verdict word and exit code, what it means for the change, the gate summary,
-  then the next step. A block now tells the assistant what to do before it lists
+  verdict word and exit code, then what it means for the change. The Stop hook
+  then gives the next step; the self-check gives none, because it is advisory
+  and the Stop hook is the gate. The gate summary follows on both, inside the
+  untrusted frame. A block tells the assistant what to do before it lists
   barriers. A failed run reads `NO VERDICT: RUN FAILED (exit 4)` on both
   surfaces; the self-check used to label it `IDLE`.
 - Every free-text field a surface prints is bounded in length: a finding's
@@ -250,8 +252,8 @@
   `[shortened, N characters omitted]` so the cut is visible, and a page-supplied
   copy of that note is rewritten so only the engine can emit the real one.
   Verdict words, exit codes, and counts are never shortened. The whole message is
-  then held to a budget sized from those caps, 15,000 characters for the Stop
-  hook and 19,000 for the self-check, which also prints a source or candidates
+  then held to a budget sized from those caps, 16,500 characters for the Stop
+  hook and 20,000 for the self-check, which also prints a source or candidates
   line per group: whole lines are dropped from the end, never the verdict line,
   the summary, or the next step, and never inside the untrusted frame, with a
   closing note saying how many lines went. At the default noise budget nothing is
@@ -276,6 +278,26 @@
   the page under test, and the frame also holds the engine's own summary, so
   that was false on its face. The overlay client matches the new strings, and
   the usabl-fix skill prose says what the frame holds.
+- APPROVAL REQUIRED on the Stop hook and the self-check names the guarded file
+  or files that changed and says how the state clears: where a code owner is
+  assigned to that path, a code owner other than the author approves it on the
+  pull request, and the policy check on the pull request says exactly what it
+  needs; nothing on this machine can approve it; reverting an unintended change
+  clears it. One sentence names the lever a person has: `usabl bypass` lets the
+  assistant stop once without clearing the state. The meaning sentence on every
+  surface now says the change needs approval on the pull request, in place of
+  "a reviewer must approve it". When the same run also found a barrier, the
+  Stop hook's next step says both: fix the barrier, and tell the user about the
+  policy change. The assistant is still told not to edit guarded files to clear
+  the block.
+- The Stop hook's next step for NOT COVERED names every gap reason: an
+  unreachable screen, an unmapped file, a denied capability, and a failed
+  provider. It used to name only the first two.
+- Inside the untrusted frame on the Stop hook and the self-check, each barrier
+  opens with a `barrier: <rule>` line before its experience and fix, and the
+  `Not evaluated:` label sits directly above the gap lines rather than outside
+  the frame, so a reader never meets `Not evaluated:` and then reads about a
+  button. `Rule:` stays outside the frame.
 
 ## 0.2.1 - 2026-09-01
 

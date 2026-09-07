@@ -169,9 +169,12 @@ silent pass.
    (exit 3). An unhandled crash in `run()` fails open to exit 4 with `verdict: null`.
    Receipts carry no error field, because a receipt exists only for a `verified` run.
 2. **Message to the developer:** open with the state and the exit code, say what it means,
-   give the gate summary with the crash or gap reason, then the next step. A failed run
-   reads "NO VERDICT: RUN FAILED (exit 4)" and never names the word "verified" in any form,
-   so it cannot be skimmed as a pass. It then says to run again or check by hand.
+   give the next step, then the gate summary with the crash or gap reason. On the Stop hook
+   and in the pull request comment the summary sits inside the untrusted frame. The
+   self-check prints no next step: it is advisory, and the Stop hook is the gate. A failed
+   run reads "NO VERDICT: RUN FAILED (exit 4)" and never names the word "verified" in any
+   form, so it cannot be skimmed as a pass. It says to run again or check by hand, then
+   gives the reason.
 3. **Timeouts:** the shipped bounds are the keyboard-walk 15s wall-clock cap and the 50-tab
    transcript cap. A timed-out scan becomes a gap and lands on `not_covered`, which blocks.
    There is no timeout-as-warn mode and no configurable per-surface budget yet; usabl is on

@@ -58,23 +58,27 @@ export type TextCap = keyof typeof TEXT_CAPS;
  *
  * Sized from the caps so that at the default noise budget the message fits with every field
  * oversized and nothing is dropped; the bound exists for an operator-raised budget and for
- * anything not foreseen. The default worst case is five rule groups and five gap entries (four
- * states plus one unrecognized), every free-text field over its cap and carrying a note of about
- * forty characters. Opening lines: about 130 for the verdict, 455 for the summary, 140 for the
- * next step. Five headlines at about 225 each and the hint: about 1,250. Per group inside the
- * frame: screen about 250, experience about 575, fix about 770, so about 8,000 for five. Five gap
- * entries at about 740: about 3,700. Frame markers 83. That sums to about 13,800; 15,000 leaves
- * room for longer omission counts and labels.
+ * anything not foreseen. The default worst case is a guarded-file block that also found
+ * barriers: five rule groups and five gap entries (four states plus one unrecognized), every
+ * free-text field over its cap and carrying a note of about forty characters, and a long list of
+ * guarded paths. Opening lines: about 125 for the verdict, 170 for the next step, and about 950
+ * for the guarded-file lines (the label, the path list at the candidates cap with its note, and
+ * the two fixed sentences). Five headlines at about 225 each and the hint: about 1,200. Inside
+ * the frame: the summary about 455; per group a barrier label about 130, screen about 250,
+ * experience about 575, fix about 770, so about 8,600 for five; the Not evaluated label and five
+ * gap entries at about 740: about 3,700. Frame markers 83. That sums to about 15,300; 16,500
+ * leaves room for longer omission counts and labels. A regression block, which has no
+ * guarded-file lines and a shorter step, comes to about 14,100.
  */
-export const AGENT_MESSAGE_BUDGET = 15_000;
+export const AGENT_MESSAGE_BUDGET = 16_500;
 
 /**
- * The whole self-check message. The self-check prints everything the stop hook prints plus an
- * advisory line, a meaning line, and one source or candidates piece per group, which is about
- * 680 more per group at the candidates cap, so about 3,500 more at five groups. 19,000 keeps the
- * same margin as the stop hook.
+ * The whole self-check message. The self-check prints everything the stop hook prints, minus
+ * the next step, plus an advisory line, a meaning line, and one source or candidates piece per
+ * group, which is about 680 more per group at the candidates cap, so about 3,400 more at five
+ * groups: about 18,500 in the same worst case. 20,000 keeps the same margin as the stop hook.
  */
-export const SELF_CHECK_MESSAGE_BUDGET = 19_000;
+export const SELF_CHECK_MESSAGE_BUDGET = 20_000;
 
 // What a page-supplied copy of the note is replaced with, so only this unit can emit the real
 // one. Substitution rather than escaping, for the same reason the frame markers are substituted:

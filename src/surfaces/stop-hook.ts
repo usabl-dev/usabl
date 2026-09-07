@@ -6,10 +6,13 @@
 import type { Result, UsablConfig, Verdict } from '../contracts/index.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import {
+  APPROVAL_REQUIRED_HOW_IT_CLEARS,
+  APPROVAL_REQUIRED_HUMAN_LEVER,
   discloseGaps,
   fixOrAbsence,
   gapDetail,
   gapHeadline,
+  guardedFilesHeadline,
 } from '../output/disclosure.js';
 import {
   applyNoiseBudget,
@@ -36,16 +39,40 @@ const BLOCKING_VERDICTS: ReadonlySet<Verdict> = new Set(['regression', 'approval
  *
  * The reader is a model that just tried to stop. It needs the verdict, the reason, and one
  * concrete next step, in that order, before any detail. A regression is fixed by the model. A
- * coverage gap is usually infrastructure the model can reach or a file it can map. Guarded policy
- * files are the one thing the model must not touch to clear a block, so that step says so.
+ * coverage gap has one of four reasons, and the step names every one, because a model told only
+ * about screens and files would leave a denied capability or a failed provider standing. Guarded
+ * policy files are the one thing the model must not touch to clear a block, so that step says so.
  */
 const NEXT_STEP: Record<string, string> = {
   regression: 'Next: fix each barrier below, then stop again so usabl can re-check the change.',
   not_covered:
-    'Next: make every screen under Not evaluated reachable, or map each unmapped file to a screen, then stop again.',
+    'Next: resolve every reason under Not evaluated below: make each unreachable screen reachable, map each unmapped file to a screen, grant each denied capability, and fix each failed provider (both are gaps named provider:<id>). Then stop again.',
   approval_required:
-    'Next: tell the user that guarded policy files changed and a reviewer must approve them. Do not edit those files to clear this block.',
+    'Next: tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
 };
+
+/**
+ * The step when guarded files changed and the same run found a barrier. Both facts need the
+ * model: the barrier is its to fix, and the policy change is the user's to hear about. Saying
+ * only one would let the other pass unmentioned.
+ */
+const APPROVAL_REQUIRED_WITH_BARRIERS_STEP =
+  'Next: fix each barrier below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.';
+
+/**
+ * The lines that follow the next step when guarded files changed: which files, how the state
+ * clears, and the one lever a person has. All engine text, so it is scaffold; the joined path
+ * list is bounded because nothing else bounds it.
+ */
+function approvalLines(result: Result): string[] {
+  const paths = result.dirtyGuardedPaths;
+  const named = paths.length === 0 ? 'none recorded' : boundField(paths.join(', '), 'candidates');
+  return [
+    `${guardedFilesHeadline(paths.length)}: ${named}`,
+    APPROVAL_REQUIRED_HOW_IT_CLEARS,
+    APPROVAL_REQUIRED_HUMAN_LEVER,
+  ];
+}
 
 /**
  * The line every stop-hook message opens with: the verdict word and exit code, then what that
@@ -64,10 +91,10 @@ function verdictLine(result: Result, meaningPrefix: string): string {
  * application names the unseen screen ids, which the router fallback can derive from a route
  * literal in the application, and a crash summary carries a raw error message. Anything a page
  * can influence is data to a model reader, so the summary goes inside the frame under its own
- * label rather than beside the verdict line. The frame label is being generalized to say
- * untrusted text rather than page text, so engine free text sits there correctly. The piece is
- * bounded because a crash summary can be long; only the free text is cut, and the verdict word
- * and exit code come from the verdict line, never from the summary.
+ * label rather than beside the verdict line. The frame label says untrusted text, not page
+ * text, so engine free text sits there correctly. The piece is bounded because a crash summary
+ * can be long; only the free text is cut, and the verdict word and exit code come from the
+ * verdict line, never from the summary.
  */
 function summaryPiece(result: Result): string {
   return `engine summary: ${boundField(result.summary, 'summary')}`;
@@ -126,28 +153,45 @@ function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
  *
  * It opens with the verdict word and exit code, what the verdict means, and the next step, so a
  * model reads the decision before any detail. The trusted engine scaffold stays outside the
- * frame: those opening lines, the Rule or Barriers headline lines, the show-all hint, and the Not
- * evaluated header. Every free-text piece, the gate's summary first, then each finding
- * experience, each fix, and each gap detail, goes inside one frame, each with a short inline
- * label so the model can map evidence to cause. The noise budget bounds how many groups appear,
- * and the assembled block is never cut to length. Cutting could remove the single closing marker
- * and hand the model an unterminated block of untrusted text.
+ * frame: those opening lines, the guarded-file lines when policy files changed, the Rule or
+ * Barriers headline lines, and the show-all hint. Every free-text piece, the gate's summary
+ * first, then each finding experience, each fix, and each gap detail, goes inside one frame,
+ * each with a short inline label so the model can map evidence to cause.
+ *
+ * Inside the frame the pieces read in the order a reader needs them: each barrier opens with a
+ * "barrier:" line naming its rule, and the "Not evaluated:" label sits directly above the gap
+ * lines rather than outside the frame, so a reader never meets "Not evaluated:" and then reads
+ * about a button. Both labels are engine text; they are pieces only so they stay next to what
+ * they label.
+ *
+ * The noise budget bounds how many groups appear, and the assembled block is never cut to
+ * length. Cutting could remove the single closing marker and hand the model an unterminated
+ * block of untrusted text.
  */
 function buildBlockMessage(result: Result, config?: UsablConfig): string {
   const scaffold = [verdictLine(result, 'NOT verified. ')];
-  const nextStep = result.verdict === null ? undefined : NEXT_STEP[result.verdict];
-  if (nextStep !== undefined) {
-    scaffold.push(nextStep);
-  }
-  // The verdict line and the next step always survive the message bound, as does the summary
-  // piece that opens the frame.
-  const keep = scaffold.length;
-  const pieces: string[] = [summaryPiece(result)];
   const budget = resolveNoiseBudgetDefault(config);
   // Only gating (deterministic) findings are barriers this block is about. Advisory findings never
   // gate, so listing one here would present it as a blocker it is not. They still surface elsewhere.
   const gating = result.findings.filter((finding) => finding.evidenceClass === 'deterministic');
   const view = applyNoiseBudget(gating, budget, 'gating findings');
+
+  const nextStep =
+    result.verdict === 'approval_required' && view.groups.length > 0
+      ? APPROVAL_REQUIRED_WITH_BARRIERS_STEP
+      : result.verdict === null
+        ? undefined
+        : NEXT_STEP[result.verdict];
+  if (nextStep !== undefined) {
+    scaffold.push(nextStep);
+  }
+  if (result.verdict === 'approval_required') {
+    scaffold.push(...approvalLines(result));
+  }
+  // The verdict line, the next step, and the guarded-file lines always survive the message
+  // bound, as does the summary piece that opens the frame.
+  const keep = scaffold.length;
+  const pieces: string[] = [summaryPiece(result)];
 
   // Each free-text field is bounded on its own before it is labelled and framed, so a huge page
   // string shortens with a visible note and the counts around it stay whole.
@@ -156,6 +200,7 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
     const ruleLabel =
       group.count > 1 ? `${group.rule} (×${group.count})` : group.rule;
     scaffold.push(`Rule: ${ruleLabel}`);
+    pieces.push(`barrier: ${group.rule}`);
     pieces.push(`experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`);
     pieces.push(`fix: ${boundField(fixOrAbsence(group.representative), 'fix')}`);
   } else if (view.groups.length > 0) {
@@ -163,6 +208,7 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
     for (const raw of view.groups) {
       const group = boundGroup(raw);
       scaffold.push(`- ${formatCollapsedGroupHeadlineWithoutScreen(group)}`);
+      pieces.push(`barrier: ${group.rule}`);
       pieces.push(`screen (${group.rule}): ${group.screenId}`);
       pieces.push(
         `experience (${group.rule}): ${boundField(group.representative.whatUserExperiences, 'experience')}`,
@@ -176,8 +222,7 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
 
   const gapPieces = notEvaluatedPieces(result);
   if (gapPieces.length > 0) {
-    scaffold.push('Not evaluated:');
-    pieces.push(...gapPieces);
+    pieces.push('Not evaluated:', ...gapPieces);
   }
 
   // The whole message is bounded as well as each field. Whole pieces go first, then trailing
