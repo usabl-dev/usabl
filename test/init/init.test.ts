@@ -335,13 +335,15 @@ export const router =
   it.each([
     ['a jsx route tag', jsxRouterWithComment],
     ['a data router entry', dataRouterWithComment],
-  ])('names the line the route is declared on, not a comment that mentions the same path: %s', async (
+  ])('names the line of the matched route, not prose that mentions the same path: %s', async (
     _label,
     routerSource,
   ) => {
-    // The line comes from the offset the parser recorded for the path literal. A search of the
-    // file for the path text would have found the comment on line 2 first and sent the operator
-    // to a line that declares nothing.
+    // The line comes from the offset the parser recorded for the path literal it matched. A search
+    // of the file for the path text would have found the prose comment on line 2 first and sent
+    // the operator to a line that declares nothing. This does not make the parser comment-aware: a
+    // commented-out route written in route syntax is matched like any other, which is listed under
+    // the documented limits of coverage and discovery in the ground truth.
     const fs = memoryFs(fixtureFiles({ 'src/App.tsx': routerSource }));
 
     const message = await refusalOf(fs);
