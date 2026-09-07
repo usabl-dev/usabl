@@ -11,8 +11,9 @@
  *
  * Where the grammar is checked, stated exactly. It governs every operator-authored and derived id
  * on the `usabl` command path: surface ids, sidecar route screen ids, screen ids the router
- * fallback derives, docs page ids, requirement ids and the surface a requirement names, and every
- * id that app init and docs init derive. It is not checked again downstream. Ids already present
+ * fallback derives, docs page ids, requirement ids and the surface a requirement names, the keys
+ * of `noiseBudget.perSurface`, and every id that app init and docs init derive. It is not checked
+ * again downstream. Ids already present
  * in the evidence floor and in waiver files, and inputs passed directly to the exported library
  * functions, are not re-validated; on the command path they were minted from or matched against
  * ids that had already passed here at parse, and a library caller that builds those inputs itself

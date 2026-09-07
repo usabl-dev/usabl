@@ -436,4 +436,59 @@ describe('parseUsablConfig noiseBudget', () => {
       /noiseBudget\.default/,
     );
   });
+
+  function perSurfaceRefusal(key: string): string {
+    try {
+      parseUsablConfig(configJson({ noiseBudget: { perSurface: { [key]: 8 } } }));
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    return '';
+  }
+
+  // Every key is written with escapes so the refused character never sits in this source as text.
+  const zeroWidthSpace = '\u200B';
+  const combiningAcute = '\u0301';
+
+  it.each([
+    ['a space', 'user settings', 'contains a character that is not allowed, at position 5: U+0020'],
+    ['a zero width space', `clusters${zeroWidthSpace}`, 'at position 9: U+200B'],
+    ['a spelling that is not in NFC form', `cafe${combiningAcute}`, 'must be written in Unicode NFC form'],
+  ])('refuses a perSurface key the id grammar refuses: %s', (_label, key, expectedReason) => {
+    // A perSurface key is a screen id, compared exactly against one, so a key the grammar refuses
+    // can never match a screen. Accepting it would leave the operator with the default budget on
+    // that screen and no reason why. The message points at the field and the key position, and
+    // never prints the key back.
+    const message = perSurfaceRefusal(key);
+    expect(message).toContain('noiseBudget.perSurface key 1');
+    expect(message).toContain(expectedReason);
+    expect(message).toContain('can never match one');
+    expect(message).not.toContain(key);
+  });
+
+  it('never prints a refused perSurface key back, not even one character of it', () => {
+    // Every character the grammar refuses is invisible or reorders the text around it, so the
+    // message names it by position and code point instead.
+    expect(perSurfaceRefusal(`clusters${zeroWidthSpace}`)).not.toContain(zeroWidthSpace);
+    expect(perSurfaceRefusal('clusters\u202E')).not.toContain('\u202E');
+  });
+
+  it('names the position of the refused key, not the count of keys before it', () => {
+    let message = '';
+    try {
+      parseUsablConfig(
+        configJson({ noiseBudget: { perSurface: { clusters: 8, 'user settings': 8 } } }),
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('noiseBudget.perSurface key 2');
+  });
+
+  it('accepts perSurface keys the id grammar accepts, including a parameter route id', () => {
+    const config = parseUsablConfig(
+      configJson({ noiseBudget: { perSurface: { 'user-settings': 8, 'users-:id': 3 } } }),
+    );
+    expect(config.noiseBudget?.perSurface).toEqual({ 'user-settings': 8, 'users-:id': 3 });
+  });
 });

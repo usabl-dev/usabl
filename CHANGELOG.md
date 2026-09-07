@@ -94,6 +94,14 @@
   from about 362 MiB to about 11 MiB. Text with removals scattered all the way
   through it still builds its result in pieces and costs several times its own
   size.
+- Every key of `noiseBudget.perSurface` is now checked against the same id
+  grammar as `surfaces[].id` when the config is read. A key is a screen id,
+  matched against one by exact comparison, so a key holding a space, an
+  invisible character, or a spelling that is not in Unicode NFC form could never
+  match a screen: the budget it set applied to nothing, and the operator saw the
+  default budget on that screen with no reason why. The refusal names the field
+  and the position of the key in the object, never the key itself, because a
+  refused character is invisible or reorders the text around it.
 
 ### Added
 

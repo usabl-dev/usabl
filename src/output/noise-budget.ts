@@ -7,6 +7,7 @@
 import type { Finding, NoiseBudgetConfig, UsablConfig } from '../contracts/index.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { configError } from '../intake/config-error.js';
+import { describeIdProblem } from '../intake/id-grammar.js';
 
 export const DEFAULT_NOISE_BUDGET = 5;
 
@@ -301,7 +302,19 @@ export function parseNoiseBudgetConfig(raw: unknown): NoiseBudgetConfig | undefi
     // Null-prototype so a key like "__proto__" is stored as an own budget rather than mutating the
     // prototype chain, and reads stay own-property lookups.
     const perSurface: Record<string, number> = Object.create(null);
+    let keyPosition = 0;
     for (const [screenId, value] of Object.entries(perSurfaceRaw)) {
+      keyPosition += 1;
+      // Every key here is a screen id, matched against one by exact comparison, so it answers to
+      // the same grammar surfaces[].id does. A key the grammar refuses can never equal a screen
+      // id, so the budget it sets would silently apply to nothing: the operator would see the
+      // default budget on that screen and no reason why. The key is named by its position in the
+      // object, never printed back, because a refused character is invisible or reorders the text
+      // around it.
+      const problem = describeIdProblem(screenId);
+      if (problem !== null) {
+        throw configError`noiseBudget.perSurface key ${keyPosition} names a screen, and a key the id grammar refuses can never match one, so its budget would apply to nothing. The key ${problem}`;
+      }
       perSurface[screenId] = expectPositiveWholeNumber(value, `noiseBudget.perSurface.${screenId}`);
     }
     parsed.perSurface = perSurface;

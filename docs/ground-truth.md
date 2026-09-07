@@ -1620,7 +1620,8 @@ on which Unicode version the running Node build carries.
 The same grammar governs every operator-authored and derived id on the `usabl` command path:
 `surfaces[].id`, `usabl.routes.json` `screenId`, the screen id the router fallback derives from a
 route path in application source, `usabl.docs.json` `pageId`, requirement ids and the surface a
-requirement names (section 13), and every id that `usabl init` and `usabl init --docs` derive. An
+requirement names (section 13), the keys of `noiseBudget.perSurface`, which are screen ids matched
+against one by exact comparison, and every id that `usabl init` and `usabl init --docs` derive. An
 authored id that fails is refused at parse. A derived id that fails is never minted. At run time
 the router fallback sets such a route aside and the planner records it as a `skipped` coverage
 gap whenever a wide-blast change would have queued it, so the gate reads it as not covered
@@ -1724,6 +1725,9 @@ Work on this section that is known and deferred until after the freeze.
   `coverage.affected[].screenId`, `drafts[].screenId`, `floor.entries[].screenId`,
   `waivers[].surface`, and every member of `cleanlyScannedScreens`. For `mintReceipt()` they are
   `checked` and `applicability[].screenId`. None of these is checked today on the library path.
+  `mintReceipt()` also takes the whole `UsablConfig`, but that argument is the parsed config, so
+  `surfaces[].id` and the keys of `noiseBudget.perSurface` reach it already validated; both are
+  checked when the config is read and neither is part of this item.
   The grammar governs screen and surface ids only. It does not govern rule ids, element keys,
   waiver scopes, receipt `notCovered` entries (file references), or receipt `surfaces` (output
   channels), and this item makes no claim about them.
