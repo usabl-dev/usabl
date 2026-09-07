@@ -121,7 +121,7 @@ enters here.
 - **Audio:** narrator.
 - **VO:** "usabl is built to be the thing that ensures a11y is a top priority. On the surfaces a change touches,
   it returns one of four answers, or none when nothing was checked or the run could not decide. Only verified counts as
-  proof, and on a blocking verdict the assistant's first stop is blocked. The
+  proof, and on a blocking verdict the assistant's first stop is blocked unless a one-use bypass was issued. The
   assistant can propose the fix. The rules decide whether it passes."
 - **Text and graphics:** four chips, then "Don't ship until it's usabl."
 - **Transition:** cut into the demo.
@@ -136,8 +136,8 @@ enters here.
 **Runs:** about 95 seconds
 **Purpose:** Show the loop end to end. Break a dialog, let usabl explain it, watch the
 assistant get blocked when it tries to finish, apply the real fix, and mint a receipt.
-Close the scene on a defect a normal scanner cannot see. This is the headline. Give it
-room.
+Close the scene on a defect that a standalone axe run on the fixture did not report and usabl
+did (the recorded test in demo-script 3.4). This is the headline. Give it room.
 
 **Shot 3.1**, duration ~25s, running 1:08 to 1:33
 - **Picture:** The fixture app running clean in a browser, screen recorded. A code edit
@@ -177,7 +177,7 @@ room.
 - **Picture, part two:** A two-panel comparison. On the left, a standard accessibility
   scanner reports zero problems on the broken dialog. On the right, usabl reports a
   regression. Under it, a clip of Escape being pressed while focus lands nowhere.
-- **VO, part two:** "And this is a problem a normal scanner cannot see. A dialog that fails
+- **VO, part two:** "And this is a problem a standalone axe run did not report. A dialog that fails
   to send focus back when you press Escape is not a mistake in the markup. It only exists
   after a key is pressed. usabl opens the dialog, presses Escape, and checks where focus
   actually went."
@@ -336,7 +336,7 @@ the assistant that writes the code is the one that says it is done. It grades it
 from inside its own confidence. usabl is built to be the thing that disagrees. On the
 surfaces a change touches, it returns one of four answers, or none when nothing was checked
 or the run could not decide. Only verified counts as proof, and on a blocking verdict the assistant's first stop is
-blocked. The assistant can propose the fix. The rules decide whether it passes."
+blocked unless a one-use bypass was issued. The assistant can propose the fix. The rules decide whether it passes."
 
 Scene 3:
 "Here is the same kind of dialog inside a real dev loop. A change breaks it. On save, usabl
@@ -347,7 +347,7 @@ repeatable check can turn the light green. The assistant's own opinion is shown 
 developer, and it never counts as proof. Apply the real fix, and the verdict flips to
 verified. usabl mints a receipt. It records the exact code, the policy, the engine, and the
 exact scanner and browser that made the call, so anyone can re-check it later. And this is a
-problem a normal scanner cannot see. A dialog that fails to send focus back when you press
+problem a standalone axe run did not report. A dialog that fails to send focus back when you press
 Escape is not a mistake in the markup. It only exists after a key is pressed. usabl opens
 the dialog, presses Escape, and checks where focus actually went."
 
