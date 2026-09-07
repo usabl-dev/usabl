@@ -214,7 +214,7 @@ not by weakening the tool.
 |---|---|---|---|
 | **Install** | usabl on: CLI, stop hook, CI, overlay, docs output. One standard. | Morgan enables | Remove usabl |
 | **First run** | Check existing surfaces; accept evidence floor for known debt | Morgan + Alex agree | Re-run with updated floor |
-| **Waivers** | Known issues get waivers with owner and expiry. New violations block. | Code owner per waiver | Remove waiver (finding becomes regression again) |
+| **Waivers** | Known issues get waivers with owner and expiry. New, unwaived violations block. | Code owner per waiver | Remove waiver (finding becomes regression again) |
 | **Steady state** | Ratchet burns debt via waiver expiry. The fleet-insights view (measurement-only) shows the trend. Policy changes require `approval_required`. | Team | - |
 
 ### Key points
