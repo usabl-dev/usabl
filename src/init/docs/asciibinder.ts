@@ -12,10 +12,10 @@ import { posix } from 'node:path';
 import yaml from 'js-yaml';
 import { buildAdocIncludeGraph } from '../../coverage/asciidoc-include-graph.js';
 import type { DocsManifest, DocsPageEntry } from '../../coverage/docs-manifest.js';
-import { operatorText } from '../../intake/config-error.js';
 import { describeIdProblem } from '../../intake/id-grammar.js';
 import { slug } from '../../primitives/slug.js';
 import type { DocsInitDraft, DocsInitFs } from './index.js';
+import { unusablePagesError, type UnusablePage } from './unusable-pages.js';
 
 const TOPIC_MAP_PATH = '_topic_maps/_topic_map.yml';
 const DISTRO_MAP_PATH = '_distro_map.yml';
@@ -96,6 +96,7 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
   }
 
   const pages: DocsPageEntry[] = [];
+  const unusable: UnusablePage[] = [];
   const usedPageIds = new Set<string>();
 
   const uniquePageId = (candidate: string): string => {
@@ -138,13 +139,13 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
     // Ask the question the sidecar parser is going to ask, at the point the id is made. The slug
     // keeps only letters, digits, and hyphens, so the one way it fails the grammar is by coming
     // out empty, which happens when no Dir or File segment has a letter or digit in it. Writing
-    // that page would produce a manifest usabl then refuses to read, so it is skipped with a note.
+    // that page would produce a manifest usabl then refuses to read, and leaving it out would let
+    // a shared-file change look fully checked while the page is never scanned, so the page is
+    // collected and the whole draft is refused once every leaf has been seen.
     const candidate = slug(chainWithFile.join('/'));
     const problem = describeIdProblem(candidate);
     if (problem !== null) {
-      notes.push(
-        `Review: skipped topic source ${operatorText(assemblyFile)}; the pageId slugged from its path ${problem}`,
-      );
+      unusable.push({ file: assemblyFile, origin: 'the pageId slugged from its path', problem });
       continue;
     }
     const pageId = uniquePageId(candidate);
@@ -154,6 +155,12 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
     }
 
     pages.push({ pageId, url, assemblyFile, sources: graph.sources });
+  }
+
+  // Refuse before the empty check, because a map whose every leaf is unusable is empty for a
+  // reason the operator can fix, and that reason is the one to print.
+  if (unusable.length > 0) {
+    throw unusablePagesError(unusable);
   }
 
   if (pages.length === 0) {

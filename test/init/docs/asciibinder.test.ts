@@ -101,9 +101,10 @@ Words.
     expect(await roundTrips(JSON.stringify(draft.manifest))).toBe(true);
   });
 
-  it('skips a leaf whose path slugs to an empty pageId instead of writing a blank id', async () => {
+  it('refuses the draft when a leaf path slugs to an empty pageId rather than leave the page out', async () => {
     // A top-level topic with no Dir and a File made of underscores slugs to nothing. The parser
-    // refuses a blank pageId, so the adapter must skip the page rather than write one.
+    // refuses a blank pageId, and a manifest without the page would let a shared-file change
+    // read as fully checked while the page is never scanned, so the whole draft is refused.
     const fs = memoryFs({
       '_topic_maps/_topic_map.yml': `---
 Name: Loose
@@ -119,12 +120,11 @@ Topics:
 `,
     });
 
-    const draft = await inferAsciibinder(fs);
-    expect(draft.manifest.pages.map((page) => page.pageId)).toEqual(['fine']);
-    const note = draft.notes.find((entry) => entry.includes('skipped topic source __.adoc'));
-    expect(note).toBeDefined();
-    expect(note).toContain('non-empty');
-    expect(await roundTrips(JSON.stringify(draft.manifest))).toBe(true);
+    await expect(inferAsciibinder(fs)).rejects.toThrow(/refused to write usabl\.docs\.json/);
+    await expect(inferAsciibinder(fs)).rejects.toThrow(
+      /__\.adoc: the pageId slugged from its path must be a non-empty string/,
+    );
+    expect(fs.store['usabl.docs.json']).toBeUndefined();
   });
 
   it('throws a clear error when the topic map parses but yields no usable pages', async () => {

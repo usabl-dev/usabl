@@ -158,66 +158,90 @@ include::../modules/con_missing.adoc[leveloffset=+1]
     expect(await roundTrips(JSON.stringify(draft.manifest))).toBe(true);
   });
 
-  it.each([
-    ['a bidi control', 'install\u202eguide', 'at position 8: U+202E', '\u202e'],
-    ['the empty braille pattern', 'install\u2800guide', 'at position 8: U+2800', '\u2800'],
-  ])(
-    'never writes a manifest the parser refuses: an anchor with %s',
-    async (_label, hostileAnchor, expectedPoint, rawCharacter) => {
-      // The whole path: infer from a guide whose assembly anchor carries the hostile character,
-      // write the draft, then read it back through the same parser and planner usabl runs with.
-      // The hostile page must be absent from what was written, the note must say why by position
-      // and code point and never by the id, and docs coverage must plan on the written file.
-      const fs = memoryFs({
-        'titles/aap/master.adoc': `= AAP
+  // A guide with one clean assembly and one whose anchor is whatever the test supplies. The shared
+  // images directory exists so the draft's sharedGlobs match a real file.
+  function guideWithAnchor(anchor: string): Record<string, string> {
+    return {
+      'titles/aap/master.adoc': `= AAP
 
 include::../../assemblies/assembly_clean.adoc[leveloffset=+1]
-include::../../assemblies/assembly_hostile.adoc[leveloffset=+1]
+include::../../assemblies/assembly_other.adoc[leveloffset=+1]
 `,
-        'assemblies/assembly_clean.adoc': `[id="assembly_clean"]
+      'assemblies/assembly_clean.adoc': `[id="assembly_clean"]
 = Clean
 
 include::../modules/con_clean.adoc[leveloffset=+1]
 `,
-        'modules/con_clean.adoc': `= Clean concept
+      'modules/con_clean.adoc': `= Clean concept
 `,
-        'assemblies/assembly_hostile.adoc': `[id="${hostileAnchor}"]
-= Hostile
+      'assemblies/assembly_other.adoc': `[id="${anchor}"]
+= Other
 
-include::../modules/con_hostile.adoc[leveloffset=+1]
+include::../modules/con_other.adoc[leveloffset=+1]
 `,
-        'modules/con_hostile.adoc': `= Hostile concept
+      'modules/con_other.adoc': `= Other concept
 `,
-      });
+      'images/shared.png': 'png',
+    };
+  }
 
-      const draft = await inferAsciidocModular(fs);
-      expect(draft.manifest.pages.map((page) => page.pageId)).toEqual(['assembly_clean']);
+  it.each([
+    ['a bidi control', 'install\u202eguide', 'at position 8: U+202E', '\u202e'],
+    ['the empty braille pattern', 'install\u2800guide', 'at position 8: U+2800', '\u2800'],
+  ])(
+    'refuses the whole draft rather than write a manifest without the page: an anchor with %s',
+    async (_label, hostileAnchor, expectedPoint, rawCharacter) => {
+      // A page whose id is refused cannot be written, and it cannot be left out either: the docs
+      // planner queues every manifest page on a shared-file change and records no gap for a page
+      // that is not there, so a manifest missing this page would let an images change read as
+      // fully checked while the page is never scanned. The only honest draft is none. The refusal
+      // names the file, the position and code point, and the fix, and never the id.
+      const fs = memoryFs(guideWithAnchor(hostileAnchor));
 
-      const note = draft.notes.find((entry) => entry.includes('skipped assemblies/assembly_hostile.adoc'));
-      expect(note).toBeDefined();
-      expect(note).toContain(expectedPoint);
-      expect(note).not.toContain(rawCharacter);
-      expect(note).not.toContain(hostileAnchor);
+      let message = '';
+      try {
+        await inferAsciidocModular(fs);
+      } catch (error: unknown) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toContain('refused to write usabl.docs.json');
+      expect(message).toContain('assemblies/assembly_other.adoc: its anchor pageId');
+      expect(message).toContain(expectedPoint);
+      expect(message).toContain('rename the anchor');
+      expect(message).not.toContain(rawCharacter);
+      expect(message).not.toContain(hostileAnchor);
 
-      const result = await writeDocsInitDraft(fs, draft, { force: false });
+      // Nothing was written, so there is no docs surface at all: no manifest to plan a partial
+      // wide blast from, and nothing that claims the other page was checked.
+      expect(fs.store[DOCS_MANIFEST_PATH]).toBeUndefined();
+      expect(await parseDocsManifest(fs)).toBeNull();
+
+      // Once the anchor is fixed the same guide drafts, writes, reparses, and plans with both
+      // pages, and a shared-file change queues both of them.
+      const fixedFs = memoryFs(guideWithAnchor('install-guide'));
+      const draft = await inferAsciidocModular(fixedFs);
+      const result = await writeDocsInitDraft(fixedFs, draft, { force: false });
       expect(result.ok).toBe(true);
-      expect(fs.store[DOCS_MANIFEST_PATH]).not.toContain(rawCharacter);
 
-      const manifest = await parseDocsManifest(fs);
-      expect(manifest?.pages.map((page) => page.pageId)).toEqual(['assembly_clean']);
+      const manifest = await parseDocsManifest(fixedFs);
+      expect(manifest?.pages.map((page) => page.pageId)).toEqual(['assembly_clean', 'install-guide']);
+      expect(manifest?.sharedGlobs).toContain('images/**');
 
-      const coverage = computeDocsCoverage(manifest, ['modules/con_clean.adoc', 'modules/con_hostile.adoc']);
-      expect(coverage.nothingToCheck).toBe(false);
-      expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['assembly_clean']);
-      // The hostile page's module maps to no written page, so it is an honest gap, not a scan of
-      // a page that was never minted.
-      expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['modules/con_hostile.adoc', 'unresolved']]);
+      const direct = computeDocsCoverage(manifest, ['modules/con_other.adoc']);
+      expect(direct.affected.map((screen) => screen.screenId)).toEqual(['install-guide']);
+      expect(direct.gaps).toEqual([]);
+
+      const wideBlast = computeDocsCoverage(manifest, ['images/shared.png']);
+      expect(wideBlast.nothingToCheck).toBe(false);
+      expect(wideBlast.affected.map((screen) => screen.screenId).sort()).toEqual(['assembly_clean', 'install-guide']);
+      expect(wideBlast.gaps).toEqual([]);
     },
   );
 
-  it('skips an assembly whose filename slugs to an empty pageId instead of writing a blank id', async () => {
+  it('refuses the draft when an assembly without an anchor has a filename that slugs to nothing', async () => {
     // With no anchor the pageId is guessed from the filename, and a filename with no letter or
-    // digit slugs to nothing. A blank id is refused by the parser, so the page is skipped here.
+    // digit slugs to nothing. A blank id is refused by the parser, so the draft is refused here,
+    // and the fix names the file rather than an anchor.
     const fs = memoryFs({
       'titles/aap/master.adoc': `= AAP
 
@@ -231,13 +255,39 @@ include::../../assemblies/__.adoc[]
 `,
     });
 
-    const draft = await inferAsciidocModular(fs);
-    expect(draft.manifest.pages.map((page) => page.pageId)).toEqual(['assembly_ok']);
-    const note = draft.notes.find((entry) => entry.includes('skipped assemblies/__.adoc'));
-    expect(note).toBeDefined();
-    expect(note).toContain('guessed from its filename');
-    expect(note).toContain('non-empty');
-    expect(await roundTrips(JSON.stringify(draft.manifest))).toBe(true);
+    await expect(inferAsciidocModular(fs)).rejects.toThrow(
+      /assemblies\/__\.adoc: the pageId guessed from its filename must be a non-empty string/,
+    );
+    await expect(inferAsciidocModular(fs)).rejects.toThrow(/or the file when the id was guessed/);
+    expect(fs.store[DOCS_MANIFEST_PATH]).toBeUndefined();
+  });
+
+  it('names every unusable page in one refusal, so one run shows the whole fix', async () => {
+    const fs = memoryFs({
+      'titles/aap/master.adoc': `= AAP
+
+include::../../assemblies/assembly_a.adoc[]
+include::../../assemblies/assembly_b.adoc[]
+`,
+      'assemblies/assembly_a.adoc': `[id="a\u2800a"]
+= A
+`,
+      'assemblies/assembly_b.adoc': `[id="b\u200bb"]
+= B
+`,
+    });
+
+    let message = '';
+    try {
+      await inferAsciidocModular(fs);
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('2 pages have ids');
+    expect(message).toContain('assemblies/assembly_a.adoc: its anchor pageId');
+    expect(message).toContain('at position 2: U+2800');
+    expect(message).toContain('assemblies/assembly_b.adoc: its anchor pageId');
+    expect(message).toContain('at position 2: U+200B');
   });
 
   it('throws a clear error when no assembly resolves into a page', async () => {

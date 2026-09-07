@@ -1621,11 +1621,15 @@ The same grammar governs every operator-authored and derived id on the `usabl` c
 `surfaces[].id`, `usabl.routes.json` `screenId`, the screen id the router fallback derives from a
 route path in application source, `usabl.docs.json` `pageId`, requirement ids and the surface a
 requirement names (section 13), and every id that `usabl init` and `usabl init --docs` derive. An
-authored id that fails is refused at parse. A derived id that fails is never minted: `usabl init`
-skips that route, and `usabl init --docs` skips that page, with a note naming the position and
-code point instead of writing a sidecar the parser would refuse, and at run time the router
-fallback sets the route aside and the planner records it as a `skipped` coverage gap whenever a
-wide-blast change would have queued it, so the gate reads it as not covered rather than as absent.
+authored id that fails is refused at parse. A derived id that fails is never minted. `usabl init`
+skips that route with a note naming the position and code point instead of writing a sidecar the
+parser would refuse, and at run time the router fallback sets the route aside and the planner
+records it as a `skipped` coverage gap whenever a wide-blast change would have queued it, so the
+gate reads it as not covered rather than as absent. `usabl init --docs` refuses the whole draft
+instead: the docs planner queues every manifest page on a shared-file change and records no gap
+for a page that is not in the manifest, so a manifest written without the refused page would let
+a shared-file change read as fully checked while that page is never scanned. The refusal names
+every unusable page by file, with the position and code point and the fix, and writes nothing.
 
 The boundary, stated exactly. Ids already present in the evidence floor (`.usabl-evidence.json`)
 and in waiver files (`.usabl-waivers.json`), and the inputs a caller passes directly to the

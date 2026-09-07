@@ -16,10 +16,10 @@
 import { posix } from 'node:path';
 import { buildAdocIncludeGraph } from '../../coverage/asciidoc-include-graph.js';
 import type { DocsManifest, DocsPageEntry } from '../../coverage/docs-manifest.js';
-import { operatorText } from '../../intake/config-error.js';
 import { describeIdProblem } from '../../intake/id-grammar.js';
 import { slug } from '../../primitives/slug.js';
 import type { DocsInitDraft, DocsInitFs } from './index.js';
+import { unusablePagesError, type UnusablePage } from './unusable-pages.js';
 
 const PANTHEON_MASTER_GLOB = 'titles/*/master.adoc';
 const DEFAULT_BUILT_ROOT = 'build';
@@ -141,6 +141,7 @@ async function discoverSharedGlobs(fs: DocsInitFs): Promise<string[]> {
 export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraft> {
   const notes: string[] = [];
   const pages: DocsPageEntry[] = [];
+  const unusable: UnusablePage[] = [];
   const usedPageIds = new Set<string>();
 
   const uniquePageId = (candidate: string): string => {
@@ -184,13 +185,16 @@ export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraf
       // Ask the question the sidecar parser is going to ask, at the point the id is made. An
       // anchor is authored text and can carry a raw space, a joining character, or a blank glyph,
       // and a filename slug can come out empty, so writing either would produce a manifest usabl
-      // then refuses to read. Skipping the page with a note keeps the generator and the validator
-      // agreeing, and leaves the operator a page they can name themselves. The note names the
-      // position and code point of the refused character and never repeats the id.
+      // then refuses to read. The page is not skipped either: a manifest without it would let a
+      // shared-file change look fully checked while the page is never scanned. Every such page is
+      // collected so the whole draft can be refused at once, naming each one.
       const problem = describeIdProblem(candidate);
       if (problem !== null) {
-        const origin = anchor !== null ? 'its anchor pageId' : 'the pageId guessed from its filename';
-        notes.push(`Review: skipped ${operatorText(assemblyFile)}; ${origin} ${problem}`);
+        unusable.push({
+          file: assemblyFile,
+          origin: anchor !== null ? 'its anchor pageId' : 'the pageId guessed from its filename',
+          problem,
+        });
         continue;
       }
       const pageId = uniquePageId(candidate);
@@ -208,6 +212,12 @@ export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraf
       const url = `/${slug(titleDir)}/${fileBaseSlug(assemblyFile)}/index.html`;
       pages.push({ pageId, url, assemblyFile, sources: graph.sources });
     }
+  }
+
+  // Refuse before the empty check, because a guide whose every page is unusable is empty for a
+  // reason the operator can fix, and that reason is the one to print.
+  if (unusable.length > 0) {
+    throw unusablePagesError(unusable);
   }
 
   if (pages.length === 0) {
