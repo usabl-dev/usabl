@@ -27,13 +27,13 @@ things because it is hard to know everything.
 
 **What usabl is.** A proof engine for accessibility in product development workflows.
 It checks whether the screens mapped from the changed UI files have any machine-checkable
-accessibility barrier that is new against a reviewed evidence floor, before work can be
-called done. When it checked something, it gives one of four answers (a run that checked
-nothing, or that crashed, gives no verdict; see below):
+accessibility barrier that is new against a reviewed evidence floor and not covered by an
+active waiver, before work can be called done. When it checked something, it gives one of
+four answers (a run that checked nothing, or that crashed, gives no verdict; see below):
 
 | Verdict | Meaning |
 |---|---|
-| `verified` | No new distinguishable identity, and no count growth at a recorded one, under the reviewed floor, on the screens mapped from the changed UI files. |
+| `verified` | No new distinguishable identity, and no count growth at a recorded one, under the reviewed floor and outside active waivers, on the screens mapped from the changed UI files. |
 | `regression` | A new problem appeared. |
 | `not_covered` | Could not identify or exercise what the change touched. |
 | `approval_required` | Policy changed; the tool will not judge itself. |
