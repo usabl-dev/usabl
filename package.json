@@ -50,6 +50,7 @@
   "scripts": {
     "test": "vitest run",
     "test:integration": "USABL_INTEGRATION=1 vitest run test/deps/real.integration.test.ts test/deps/readiness.real.test.ts test/deps/menu-state.real.integration.test.ts test/surfaces/playwright-page-check.integration.test.ts",
+    "test:demo-integration": "vite-node scripts/run-demo-integration.ts --",
     "test:package": "node scripts/package-smoke.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
