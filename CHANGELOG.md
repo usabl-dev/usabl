@@ -99,10 +99,10 @@
   leaves the same absence as a fixed barrier. Both now read "floor entries not
   observed this run: N (if they were fixed, run usabl floor prune to re-arm)".
 - The floor-ahead notice is reported by the overlay, which showed nothing at all
-  before, and it now appears for a floor entry with no barriers left against it. A
-  fully paid-down entry still holds capacity for everything it recorded until a
-  prune, so it is the widest re-arm window there is and was the one case the notice
-  skipped.
+  before and which also hid it whenever the screen being viewed had no findings of
+  its own. It now appears for a floor entry whose barrier was not observed at all. An
+  entry like that still holds capacity for everything it recorded until a prune, so it
+  is the widest re-arm window there is and was the one case the notice skipped.
 
 - usabl now shows when the evidence floor is ahead of the application, and
   `usabl floor prune` re-arms it. The recorded barrier count only ever went up, through
@@ -110,9 +110,9 @@
   after one of several barriers at a collapsed identity was fixed, the floor kept
   claiming the old number, and a new barrier could arrive, take the freed slot, keep the
   tally at or under what was accepted, and be recorded as debt somebody had already
-  agreed to. Nothing said so. Every run that finds the floor ahead now says so on every
-  surface: the engine summary gains a `1 floor entry ahead of this run` clause, and the
-  terminal prints the screen, the rule, how many barriers the floor claims and how many
+  agreed to. Nothing said so. A run that observes the floor ahead now says so on the
+  engine summary, which gains a `1 floor entry ahead of this run` clause, and on the
+  terminal and the overlay, which print the screen, the rule, how many barriers the floor claims and how many
   are actually there, under the recorded group. It reports the two counts and does not
   guess why they differ, because a paid-down barrier and a table rendering fewer rows
   today look identical from here: if they were fixed, prune re-arms the floor; if the page
@@ -162,8 +162,8 @@
   identity still blocks, because the floor records how many it accepted and more
   than that comes back as new. Terminal output, the pull request comment, and the
   overlay now list carried uncertainty as recorded debt rather than as work to do.
-- The gate no longer reports green when several new barriers hide behind one
-  accepted floor entry. Barriers on different nodes can neutralize to the same
+- The gate no longer reports green when several barriers arrive behind one accepted
+  floor entry and raise its count. Barriers on different nodes can neutralize to the same
   name or structural identity and collapse into a single finding. The floor
   recorded a placeholder count of 1 for those entries and the gate compared
   counts only for identity-weak rules, so adding barriers at an accepted
@@ -546,12 +546,12 @@ It sets a marker so the next Stop hook skips verification once.
   does not run the gate and does not write waivers or evidence.
 - `usabl baseline` runs a full UI scan and drafts `.usabl-evidence.json` from
   deterministic findings as a reviewable working-tree diff.
-- `usabl floor prune` removes paid-down identities from
+- `usabl floor prune` removes identities it did not observe from
   `.usabl-evidence.json` after a full scan so reintroduced barriers gate as
   `new` instead of staying `carried`.
-- Resolved floor debt is reported as a paid-down count across the CLI summary,
-  the PR comment, and the overlay, each with a reminder to run
-  `usabl floor prune` to re-arm the floor. Reporting alone does not re-arm.
+- Floor entries whose barrier a run did not observe are counted across the CLI
+  summary, the PR comment, and the overlay, each offering `usabl floor prune` if
+  they were fixed. Reporting alone does not re-arm.
 - `usabl drift routes` reports drift between the route manifest and the
   application router. It reads only and mints no verdict.
 - `usabl install` writes adoption drafts and never enables anything on its own.

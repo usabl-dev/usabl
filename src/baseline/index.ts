@@ -154,7 +154,8 @@ function formatPartialReport(entryCount: number, coveredScreens: string[], skipp
   const lines = [
     `wrote ${entriesWord(entryCount)} to ${EVIDENCE_FLOOR_PATH} as a partial baseline.`,
     'draft only: review and merge this working-tree diff.',
-    'after merge, matching findings carry and extra findings still gate as new.',
+    // Same correction as the full report: "extra findings" promises more than the floor delivers.
+    'after merge, matching findings carry; a new identity, or more barriers at a recorded one, gates.',
     `covered ${coveredScreens.length} cleanly scanned screen${coveredScreens.length === 1 ? '' : 's'}: ${coveredScreens.join(', ')}.`,
   ];
   if (skippedScreens.length > 0) {

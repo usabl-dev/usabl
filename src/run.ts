@@ -253,9 +253,11 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
           })
         : null;
 
-    // Count previously floored barriers this run confirms are resolved. The gate already marks an
-    // identity `fixed` only when its screen was scanned cleanly and the barrier was not observed, so
-    // every `fixed` finding here is a confirmed pay-down. Counting the status directly keeps this on
+    // Count the floored barriers this run did not observe. The gate marks an identity `fixed` only
+    // when its screen was scanned cleanly and the barrier was not seen, so every `fixed` finding
+    // here is an observed absence. Whether it was fixed is not knowable from here, because a screen
+    // rendering fewer rows produces the same absence, and the surfaces word it that way. Counting
+    // the status directly keeps this on
     // the same single definition the gate used, rather than re-deriving the cleanly-scanned filter.
     const paidDownCount = gated.findings.filter((f) => f.status === 'fixed').length;
 

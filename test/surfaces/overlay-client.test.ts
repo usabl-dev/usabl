@@ -985,9 +985,11 @@ describe('overlay states', { timeout: 30_000 }, () => {
     );
     const withDebtPanel = await openPanel(withDebt);
     expect(
-      await withDebtPanel.getByText(/4 previously accepted findings.*cleanly scanned/i).isVisible(),
+      await withDebtPanel.getByText(/4 floor entries recorded a barrier this run did not observe/i).isVisible(),
     ).toBe(true);
-    expect(await withDebtPanel.getByText(/usabl floor prune.*re-arm/i).isVisible()).toBe(true);
+    expect(await withDebtPanel.getByText(/If they were fixed, run usabl floor prune to re-arm/i).isVisible()).toBe(true);
+    // The cause claim this branch removed from every other surface must not survive here.
+    expect(await withDebtPanel.getByText(/previously accepted|debt resolved/i).count()).toBe(0);
     await withDebt.context().close();
 
     const clean = await mount(
@@ -3383,6 +3385,38 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
       return group ? group.querySelectorAll('.severity, .status, .finding-button').length : -1;
     });
     expect(pills).toBe(0);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  it('shows the floor notice on a screen that has no findings of its own', async () => {
+    // The notice is about the floor file, not about this screen. It used to be built after an
+    // early return taken whenever the current screen was clean, so one Result showed it on a
+    // screen with findings and hid it on a screen without, and whether a developer learned the
+    // floor had drifted depended on which page they were standing on.
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'verified',
+          summary: 'verified: nothing blocking, 1 floor entry ahead of this run',
+          findings: [],
+          exitCode: 0,
+          floorHeadroom: [
+            { screenId: 'overview', rule: 'pf-icon-button-name', recorded: 15, observed: 3 },
+          ],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    // The screen really is clean, and the notice is there anyway.
+    expect(await panel.getByText('No accessibility findings on this screen.', { exact: true }).isVisible()).toBe(true);
+    expect(await panel.getByText('Floor ahead of this run', { exact: false }).first().isVisible()).toBe(true);
+    expect(await panel.getByText('floor records 15, this run saw 3', { exact: true }).isVisible()).toBe(true);
 
     const axe = await new AxeBuilder({ page }).analyze();
     expect(axe.violations).toEqual([]);

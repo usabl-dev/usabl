@@ -2610,8 +2610,16 @@ export const overlayClientSource = `(() => {
     heading.appendChild(make('span', 'section-count', countLabel(split.here.length, 'finding') + ' total'));
     section.appendChild(heading);
 
+    // The floor notice is about the floor file, not about this screen, so it is rendered before the
+    // early return below. Without that, the same Result showed the notice while a developer stood
+    // on a screen with findings and hid it the moment they moved to a clean one, which made the
+    // disclosure depend on where the reader happened to be standing.
     if (!split.here.length) {
       section.appendChild(make('p', 'empty', 'No accessibility findings on this screen.'));
+      const onlyHeadroom = renderFloorHeadroom(payload);
+      if (onlyHeadroom) {
+        section.appendChild(onlyHeadroom);
+      }
       return section;
     }
 
@@ -2873,13 +2881,17 @@ export const overlayClientSource = `(() => {
       return null;
     }
     const section = make('section', 'section');
-    section.appendChild(make('h3', '', 'Floor debt resolved'));
+    // Says what was counted, not why. Absence on a cleanly scanned screen is what a fixed barrier
+    // looks like and equally what a table rendering no rows looks like, so the prune sentence is
+    // offered as a condition. The terminal and the pull request comment carry the same wording.
+    section.appendChild(make('h3', '', 'Floor entries not observed this run'));
     section.appendChild(
       make(
         'p',
         'notice',
-        count + ' previously accepted ' + (count === 1 ? 'finding' : 'findings')
-          + ' no longer present on cleanly scanned screens. Run usabl floor prune to remove them and re-arm the gate.',
+        count + ' floor ' + (count === 1 ? 'entry' : 'entries')
+          + ' recorded a barrier this run did not observe on a cleanly scanned screen.'
+          + ' If they were fixed, run usabl floor prune to re-arm the floor.',
       ),
     );
     return section;

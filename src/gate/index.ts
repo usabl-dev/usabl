@@ -15,6 +15,7 @@ import type { AccessibilityExitCode, AccessibilityVerdict, Coverage, CoverageGap
 import { coverageIncomplete, decideAccessibilityVerdict, notEvaluatedCounts } from '../coverage/completeness.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { computeIdentity, identityKey } from '../primitives/identity.js';
+import { canonicalize } from '../primitives/canonical.js';
 
 const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
 
@@ -218,6 +219,30 @@ const CLASS_RANK: Record<Draft['evidenceClass'], number> = {
  * design system and read better than the generic axe wording. Then element path and layer, which
  * decide nothing about the verdict and exist only so the same inputs always render the same way.
  */
+const SEVERITY_RANK: Record<Finding['severity'], number> = {
+  critical: 0,
+  serious: 1,
+  moderate: 2,
+  minor: 3,
+};
+
+/**
+ * Everything about a draft that two drafts at one identity can still differ on once class, layer,
+ * element path and severity have tied. Canonical, so the key does not depend on the order a
+ * provider happened to build the evidence object in.
+ */
+function tieBreakKey(f: Finding): string {
+  return canonicalize([
+    f.confidence,
+    f.role,
+    f.elementName,
+    f.whatUserExperiences,
+    f.why,
+    f.fix,
+    f.evidence,
+  ]);
+}
+
 function byPreference(a: Finding, b: Finding): number {
   const byClass = CLASS_RANK[a.evidenceClass] - CLASS_RANK[b.evidenceClass];
   if (byClass !== 0) return byClass;
@@ -225,7 +250,17 @@ function byPreference(a: Finding, b: Finding): number {
   if (byLayer !== 0) return byLayer;
   const byPath = a.elementPath.localeCompare(b.elementPath);
   if (byPath !== 0) return byPath;
-  return a.layer.localeCompare(b.layer);
+  const byLayerName = a.layer.localeCompare(b.layer);
+  if (byLayerName !== 0) return byLayerName;
+  // Worst severity wins the presentation. A reader who sees one row standing for several barriers
+  // should see the most serious of them, not whichever the scanner happened to report first.
+  const bySeverity = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
+  if (bySeverity !== 0) return bySeverity;
+  // The last resort, and the one that makes the order total. Without it two drafts that tie on
+  // every field above but differ in prose, evidence or confidence still collapsed to whichever
+  // arrived first, so the finding BYTES moved with arrival order even where the verdict did not.
+  // Only drafts identical on every field compared here can tie now, and those are interchangeable.
+  return tieBreakKey(a).localeCompare(tieBreakKey(b));
 }
 
 /**

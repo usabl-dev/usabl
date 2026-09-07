@@ -233,10 +233,11 @@ export interface Result {
   // Never approval_required and never exit 2. Crash runs use exitCode 4 and leave these as null / 4.
   accessibilityVerdict: AccessibilityVerdict | null;
   accessibilityExitCode: AccessibilityExitCode;
-  // Count of previously accepted floor barriers that this run confirms are resolved on
-  // cleanly scanned screens. These are the entries a floor prune would remove. run() does
-  // not modify the floor; pruning does. This is projection only; the gate never consumes
-  // it and it never influences a verdict.
+  // Count of floor entries whose barrier this run did not observe on a cleanly scanned screen.
+  // Not a count of fixes: absence is what a paid-down barrier looks like and equally what a table
+  // rendering no rows looks like, and nothing here can tell the two apart. These are the entries a
+  // floor prune would remove. run() does not modify the floor; pruning does. This is projection
+  // only; the gate never consumes it and it never influences a verdict.
   paidDownCount: number;
   // Floored identities where the floor records more barriers than this run observed, so the floor
   // is ahead of the application. Why is not knowable from here: barriers may have been fixed, or

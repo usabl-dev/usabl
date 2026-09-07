@@ -26,8 +26,8 @@ and waits releases for fixes. Priya builds the UI with great intentions but miss
 things because it is hard to know everything.
 
 **What usabl is.** A proof engine for accessibility in product development workflows.
-It checks whether touched surfaces have any new machine-checkable accessibility
-barriers before work can be called done. It gives one of four clear answers:
+It checks whether touched surfaces have any machine-checkable accessibility barrier
+that is new against a reviewed evidence floor, before work can be called done. It gives one of four clear answers:
 
 | Verdict | Meaning |
 |---|---|
@@ -83,16 +83,17 @@ or a separate command; it is the same `usabl check` run over a second set of sca
 
 The core new idea: almost every accessibility tool, including the new AI ones, scans
 and gives advice a human may or may not read. usabl's gate decides, and the stop hook
-can stop the AI from calling work done until no new machine-checkable barrier remains
-on the touched surfaces. The overlay and the advisory lane still show findings without
+can stop an assistant from calling work done while a machine-checkable barrier that is
+new against the reviewed floor stands on a touched surface. The overlay and the advisory lane still show findings without
 blocking. That is display, not a second decision-maker.
 
 The specific things that are new, each against what exists today:
 
-1. It verifies the fix, not just finds the problem. The field's own reviews say most
-   tools find issues and almost none confirm the fix actually worked. usabl closes
-   that gap.
-2. It proves it checked everything. It reports "we could not check this" as a real
+1. It re-checks the fix, not just finds the problem. The field's own reviews say most
+   tools find issues and almost none re-check that the finding is gone. usabl compares
+   the next run against the floor and reports what it no longer observes. It observes
+   absence; it does not witness the fix.
+2. It reports what it did not check. It reports "we could not check this" as a real
    answer instead of quietly passing. Reporting unknown as unknown is rare.
 3. Its answers can be re-checked. Every result is tied to the exact code and can be
    recomputed by anyone.
@@ -453,8 +454,9 @@ export interface Result {
   exitCode: 0 | 1 | 2 | 3 | 4 | 5;
   accessibilityVerdict: AccessibilityVerdict | null;
   accessibilityExitCode: AccessibilityExitCode;
-  paidDownCount: number;          // floor entries this run confirms resolved on cleanly
-                                  // scanned screens; projection only, never gates
+  paidDownCount: number;          // floor entries whose barrier this run did not observe on
+                                  // a cleanly scanned screen; not a count of fixes;
+                                  // projection only, never gates
 }
 
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
@@ -1050,7 +1052,9 @@ Every basis can collapse several barriers onto one key, not just `count`. Two di
 the same neutralized path share a structural key; two controls with the same accessible
 name share a name key. So the floor records the observed barrier count for every entry and
 the gate compares it for every basis: more than the floor accepted is `new`, equal or fewer
-is `carried`. Fewer is progress and never a regression.
+is `carried`. Fewer is never a regression. It is also not proof of progress: the same reading
+comes from a page rendering fewer rows, which is why the surfaces report both counts and let
+the operator say which happened.
 
 Contest layer ids are stable (`axe`, `pf`, `walk`) so dedup and identity do not churn.
 The field stays `string` so a later provider can add a layer without a gate change.
@@ -1080,9 +1084,9 @@ The count comparison runs in both directions, and both are gate decisions:
   accepted is `new`, which gates: `regression` for a definite failure, `not_covered` for one
   usabl could not confirm. A brand new identity is `new` the same way.
 - **Below the recorded count** is not a regression. The findings present stay `carried` and the
-  verdict does not move. The run discloses the difference on every surface: the summary line gains
-  a `N floor entries ahead of this run` clause, and the terminal prints the screen, the rule and
-  both numbers under the recorded group. This is disclosure, not a coverage gap, because a gap
+  verdict does not move. The run discloses the difference on the summary line, which gains a
+  `N floor entries ahead of this run` clause, and on the terminal and the overlay, which both
+  print the screen, the rule and both numbers under the recorded group. This is disclosure, not a coverage gap, because a gap
   makes a run `not_covered` by definition.
 
   The disclosure states the observation and never the cause. usabl counted two numbers and cannot
@@ -1117,8 +1121,10 @@ size. Two things shrink it, and neither is a better count rule. **Strong element
 identity that keys each barrier separately never collapses and needs no count, so a name-basis or
 count-basis identity is weaker here than a structural one, and a structural one is weaker than a
 key that survives per element. **Prompt pruning**: headroom only exists between a pay-down and a
-re-arm, so the window is as short as the operator makes it, which is why every run that has one
-says so and names the command.
+re-arm, so the window is as short as the operator makes it, which is why a run that observes one
+says so and names the command. Headroom is not only left behind by a pay-down: a page that renders
+fewer rows than the floor recorded opens the same window, and usabl reports it the same way
+because it cannot tell the two apart.
 
 The file carries a `version`. Version 1 wrote a placeholder count of 1 for every name and
 structural entry, so those counts are not observations and the gate must not compare them.
@@ -1289,8 +1295,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. Surface the meaning explicitly as
-  "verified: no new machine-checkable barriers on touched surfaces," with advisory
-  findings shown adjacent when present.
+  "verified: no new barrier blocks this change," with advisory findings shown adjacent
+  when present. Not "no barriers": a verified run routinely carries barriers the floor
+  recorded.
 - `regression`: block.
 - `approval_required`: block.
 - `not_covered`: default block. Recalibrate after week-2 real-repo measurement
@@ -1465,8 +1472,9 @@ screens on Monday.
    hand-written map entry.
 5. First check of that page: likely a pile of existing findings. A code owner accepts
    the evidence floor (and maybe a few waivers). That is one `approval_required` commit.
-6. Next PR on that page: full default stack. New problems block. Old ones are visible
-   debt that burns down when fixed or when a waiver expires.
+6. Next PR on that page: full default stack. A problem at an identity the floor does not
+   hold, or above the count it recorded there, blocks. Recorded ones stay visible debt, and
+   the floor comes down through `usabl floor prune` and waiver expiry.
 
 Coverage grows as the team works. It does not require Design to declare epic scope.
 
