@@ -3,8 +3,9 @@
  * It must never throw, never mint a verdict, and never drop a failed screen on the floor.
  * Transcript collection runs before providers because interaction probes can mutate focus order.
  *
- * A screen the browser was redirected away from is disclosed as a coverage gap and measured no
- * further. See providers/redirected.ts for the rule and what it can and cannot see.
+ * A screen this run did not reach signed in is disclosed as a coverage gap and measured no
+ * further. See providers/redirected.ts for the three rules, when each fires, and what they can
+ * and cannot see.
  */
 import type {
   Capability,
@@ -30,6 +31,13 @@ export interface CheckRunnerDeps {
   allowedCapabilities: Capability[];
   stepRunner: StepRunner;
   transcriptTabCap?: number;
+  // Whether the operator configured a storage state for this run, which is the only assertion that
+  // this scan is signed in. Two of the three not-reached rules are claims about a session that was
+  // asserted and did not work, so they say nothing without it. Absent means no session was
+  // configured, which is the honest reading for a caller that never had one: a signed-out scan
+  // legitimately meets 401s and login forms, and firing on those would turn every deliberate
+  // signed-out run into a coverage gap. The composition root sets it for every gating surface.
+  sessionConfigured?: boolean;
 }
 
 const DEFAULT_TRANSCRIPT_TAB_CAP = 50;
@@ -104,10 +112,13 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       try {
         await page.gotoReady();
 
-        // Where the browser actually landed, read before anything on this page is exercised.
-        // Providers click and press keys, and a click can navigate, so a later read could not
-        // tell an application's own redirect from a move usabl made itself.
-        const redirected = redirectedAwayGap(screen.id, await observeLanding(page, screen.url));
+        // Whether this is the requested screen, signed in. Read before anything on the page is
+        // exercised: providers click and press keys, a click can navigate and can fire its own
+        // requests, so a later read could not tell what the application did on load from what
+        // usabl did to it afterwards. Reading here is also what bounds the refused-request record
+        // to the load window.
+        const landing = await observeLanding(page, screen.url, deps.sessionConfigured === true);
+        const redirected = redirectedAwayGap(screen.id, landing);
         if (redirected !== null) {
           // Not this screen. The walk and the providers are skipped rather than run and thrown
           // away: a keyboard order and a rule result from a sign-in page are not weak evidence

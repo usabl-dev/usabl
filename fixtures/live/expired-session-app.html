@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Users</title>
+  </head>
+  <body>
+    <div id="root">
+      <p>Loading</p>
+    </div>
+    <script>
+      // What a single page application does when its session has expired: it asks for its own data,
+      // the server refuses, and the address never changes. The login form arrives later, so a scan
+      // that settles during this window sees no password field either. The refused requests are the
+      // only signal present from the first moment.
+      (async () => {
+        // The endpoint prefix comes from the query so one fixture can play both a server that
+        // refuses as unauthenticated and one that answers authenticated but forbidden.
+        const prefix = new URLSearchParams(location.search).get('api') || '/api/v2';
+        for (const name of ['me', 'config', 'organizations']) {
+          try {
+            await fetch(prefix + '/' + name);
+          } catch (error) {
+            // A refused request is the point; a transport failure is not worth stopping for.
+          }
+        }
+        const root = document.getElementById('root');
+        if (root) {
+          root.innerHTML = '<h1>Users</h1><p>Nothing to show.</p>';
+        }
+      })();
+    </script>
+  </body>
+</html>

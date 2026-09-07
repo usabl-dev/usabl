@@ -21,6 +21,13 @@ interface FixtureServer {
   // Answers 302 to /labelledby.html, an ordinary redirect that still lands on a real screen.
   redirectToScreenUrl: string;
   reachedScreenUrl: string;
+  // Stays at its own address and fires three fetches the server answers 401, which is what the
+  // real application does with a dead session.
+  expiredSessionUrl: string;
+  // Stays at its own address and mounts a login form inside an open shadow root.
+  shadowSignInUrl: string;
+  // The same page against endpoints that answer 403, which is authenticated and not permitted.
+  forbiddenApiUrl: string;
   close: () => Promise<void>;
 }
 
@@ -35,6 +42,8 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/never-settles.html': await readFixture('never-settles.html'),
     '/hanging-request.html': await readFixture('hanging-request.html'),
     '/sign-in.html': await readFixture('sign-in.html'),
+    '/expired-session-app.html': await readFixture('expired-session-app.html'),
+    '/shadow-sign-in.html': await readFixture('shadow-sign-in.html'),
   };
 
   const server = createServer((req, res) => {
@@ -49,6 +58,21 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     if (reqUrl.pathname === '/gated') {
       res.writeHead(302, { location: '/sign-in.html?next=%2Fgated' });
       res.end();
+      return;
+    }
+    // The page's own data endpoints. /api/v2/* refuses as unauthenticated, which is what a server
+    // does for a request carrying a dead session. /api/ok/* answers normally, so a healthy load
+    // can be measured against the same fixture.
+    if (reqUrl.pathname.startsWith('/api/v2/')) {
+      res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' });
+      res.end('{"detail":"Authentication credentials were not provided."}');
+      return;
+    }
+    // Authenticated and not permitted. A signed-in scan can legitimately meet this, so it must
+    // never be read as a dead session.
+    if (reqUrl.pathname.startsWith('/api/forbidden/')) {
+      res.writeHead(403, { 'content-type': 'application/json; charset=utf-8' });
+      res.end('{"detail":"You do not have permission."}');
       return;
     }
     // An ordinary redirect that still ends on the screen that was asked for.
@@ -101,6 +125,9 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     gatedUrl: `http://127.0.0.1:${address.port}/gated`,
     redirectToScreenUrl: `http://127.0.0.1:${address.port}/redirect-to-screen`,
     reachedScreenUrl: `http://127.0.0.1:${address.port}/labelledby.html`,
+    expiredSessionUrl: `http://127.0.0.1:${address.port}/expired-session-app.html`,
+    shadowSignInUrl: `http://127.0.0.1:${address.port}/shadow-sign-in.html`,
+    forbiddenApiUrl: `http://127.0.0.1:${address.port}/expired-session-app.html?api=/api/forbidden`,
     close: async () =>
       new Promise<void>((resolve, reject) => {
         // The hang route leaves a socket open, and server.close() waits for it forever.
@@ -113,6 +140,33 @@ async function makeFixtureServer(): Promise<FixtureServer> {
           resolve();
         });
       }),
+  };
+}
+
+/** A provider that reports one barrier on whatever page it is given, so a scan that must report
+ * nothing can be told apart from a scan that had nothing to report. */
+function alwaysFiringProvider(screenId: string): Provider {
+  return {
+    id: 'always-fires',
+    layer: 'test',
+    capabilities: ['live'],
+    run: async () => [
+      {
+        rule: 'page-has-heading-one',
+        layer: 'test',
+        severity: 'moderate' as const,
+        evidenceClass: 'deterministic' as const,
+        screenId,
+        elementPath: 'html',
+        elementName: null,
+        role: null,
+        whatUserExperiences: 'placeholder',
+        why: 'placeholder',
+        fix: 'placeholder',
+        evidence: {},
+        confidence: 'fail' as const,
+      },
+    ],
   };
 }
 
@@ -232,32 +286,141 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     }
   });
 
+  it('records the page data requests a real server refused as unauthenticated', async () => {
+    // The primary signal, through a real Chromium against a real 401. The fixture never leaves its
+    // own address and mounts nothing that looks like a login form, so the refused requests are the
+    // only thing there is to see.
+    const page = await driver.open(fixture.expiredSessionUrl);
+    try {
+      await page.gotoReady();
+      const refused = await page.unauthorizedApiRequests();
+      expect(refused).toHaveLength(3);
+      expect(refused.some((url) => url.endsWith('/api/v2/me'))).toBe(true);
+      // The address never changed, which is exactly why a URL comparison cannot catch this.
+      expect(await page.currentUrl()).toBe(fixture.expiredSessionUrl);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('records nothing for a healthy load, and nothing for a real 403', async () => {
+    // 403 means the request was authenticated and the identity is not allowed to have the thing.
+    // A signed-in scan can legitimately meet it, so reading it as a dead session would turn a
+    // correct run into a coverage gap.
+    const healthy = await driver.open(fixture.reachedScreenUrl);
+    try {
+      await healthy.gotoReady();
+      expect(await healthy.unauthorizedApiRequests()).toEqual([]);
+    } finally {
+      await healthy.close();
+    }
+
+    const forbidden = await driver.open(fixture.forbiddenApiUrl);
+    try {
+      await forbidden.gotoReady();
+      expect(await forbidden.unauthorizedApiRequests()).toEqual([]);
+    } finally {
+      await forbidden.close();
+    }
+
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [],
+      config: testConfig({
+        surfaces: [{ id: 'forbidden-screen', url: fixture.forbiddenApiUrl, files: [] }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+    const scan = await runner.scan({ id: 'forbidden-screen', url: fixture.forbiddenApiUrl });
+    expect(scan.gaps).toEqual([]);
+    // Three real page opens and a scan, each carrying its own navigation and settle. The default
+    // per-test budget in this suite is not built for that, so this one states its own.
+  }, 30_000);
+
+  it('refuses to measure a screen whose own data requests came back 401', async () => {
+    const barrierOnEveryPage = alwaysFiringProvider('expired-session-screen');
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [barrierOnEveryPage],
+      config: testConfig({
+        surfaces: [{ id: 'expired-session-screen', url: fixture.expiredSessionUrl, files: [] }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+
+    const scan = await runner.scan({ id: 'expired-session-screen', url: fixture.expiredSessionUrl });
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: fixture.expiredSessionUrl, state: 'not-covered' });
+    expect(scan.gaps[0]?.reason).toContain('401');
+    expect(scan.gaps[0]?.reason).toContain('/api/v2/me');
+    expect(scan.drafts).toEqual([]);
+    expect(scan.stops).toEqual([]);
+    expect(scan.applicability).toEqual([]);
+  });
+
+  it('scans the same page normally when no session was configured', async () => {
+    // A signed-out scan meets 401s as a matter of course, and nobody asserted otherwise, so the
+    // refused-request rule stays silent and the screen is measured.
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [],
+      config: testConfig({
+        surfaces: [{ id: 'expired-session-screen', url: fixture.expiredSessionUrl, files: [] }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: false,
+    });
+
+    const scan = await runner.scan({ id: 'expired-session-screen', url: fixture.expiredSessionUrl });
+
+    expect(scan.gaps).toEqual([]);
+  });
+
+  it('sees a password field inside an open shadow root at the requested address', async () => {
+    // The widened secondary signal. The URL never changed and document.querySelectorAll finds
+    // nothing, so only a locator that pierces shadow roots can catch this.
+    const page = await driver.open(fixture.shadowSignInUrl);
+    try {
+      await page.gotoReady();
+      expect(await page.queryAll('input[type="password"]')).toEqual([]);
+      expect(await page.countEverywhere('input[type="password"]')).toBe(1);
+    } finally {
+      await page.close();
+    }
+
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [],
+      config: testConfig({
+        surfaces: [{ id: 'shadow-screen', url: fixture.shadowSignInUrl, files: [] }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+
+    const scan = await runner.scan({ id: 'shadow-screen', url: fixture.shadowSignInUrl });
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('asks for a password');
+    expect(scan.drafts).toEqual([]);
+  });
+
   it('refuses to measure a screen a real redirect sent to a sign-in page', async () => {
     // The whole failure, end to end and with nothing faked: the server answers the screen request
     // with a 302 to its sign-in page, Chromium follows it, and the scan must report a coverage gap
     // instead of filing the sign-in page's barriers under this screen id.
-    const barrierOnEveryPage: Provider = {
-      id: 'always-fires',
-      layer: 'test',
-      capabilities: ['live'],
-      run: async () => [
-        {
-          rule: 'page-has-heading-one',
-          layer: 'test',
-          severity: 'moderate' as const,
-          evidenceClass: 'deterministic' as const,
-          screenId: 'gated-screen',
-          elementPath: 'html',
-          elementName: null,
-          role: null,
-          whatUserExperiences: 'placeholder',
-          why: 'placeholder',
-          fix: 'placeholder',
-          evidence: {},
-          confidence: 'fail' as const,
-        },
-      ],
-    };
+    const barrierOnEveryPage = alwaysFiringProvider('gated-screen');
     const runner = makeCheckRunner({
       browser: driver,
       providers: [barrierOnEveryPage],

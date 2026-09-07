@@ -49,6 +49,10 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     // page that never navigated. Consumers must make no redirect claim from it. Fakes handed a
     // URL by browser.open report that URL instead.
     currentUrl: async () => '',
+    // A fake page issues no requests, so it saw no refused one. Not a claim that a session worked.
+    unauthorizedApiRequests: async () => [],
+    // A fake page has no DOM to search, so nothing matches anywhere.
+    countEverywhere: async () => 0,
     focusBody: async () => {},
     tab: async () => {},
     press: async () => {},

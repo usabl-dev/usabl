@@ -353,6 +353,17 @@ export interface Page {
   // it measured a different page. Read it after the screen has loaded and before anything on the
   // page is exercised, because providers click and press keys and a click can navigate.
   currentUrl(): Promise<string>;
+  // URLs of the page's own data requests (fetch and XHR) that came back 401 between navigation and
+  // the moment this is read. A single page application that stays at the requested address and
+  // swaps in a login form leaves no trace in the URL and may not have rendered the form yet, but
+  // its data requests are refused immediately, so this is the one signal that is both decisive and
+  // free of a timing race. 401 only: 403 means authenticated and not permitted. Empty means no
+  // refused request was seen, which is not proof the session worked.
+  unauthorizedApiRequests(): Promise<string[]>;
+  // How many elements match a selector anywhere in the page: every frame, and inside open shadow
+  // roots. document.querySelectorAll sees neither, so a login form in an iframe or a web component
+  // is invisible to queryAll. This makes no claim about where the matches are, only how many.
+  countEverywhere(selector: string): Promise<number>;
   focusBody(): Promise<void>;
   tab(): Promise<void>;
   press(key: string): Promise<void>;
