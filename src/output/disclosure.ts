@@ -146,23 +146,36 @@ export function fixOrAbsence(finding: Finding): string {
 }
 
 /**
- * Whether a finding is a barrier a surface should present as one.
+ * Whether a finding is one of the reasons the gate cannot call this run verified.
  *
- * The same rule the gate blocks on: deterministic evidence that is neither waived nor fixed.
- * Advisory evidence never gates, so showing it would present it as a blocker it is not, and a
- * waived or fixed finding is one the gate has already accounted for, so telling a reader to fix
- * it sends them after work the gate says is done. Both stay visible elsewhere; this decides only
- * what a blocking surface calls a barrier.
+ * The gate keeps two facts about its gating findings, and either one stops a verified run: a new
+ * failing finding, which makes the run a regression, and a finding it could not verify, which
+ * makes the run unproven. This is the union of those two, so a surface lists a finding as a
+ * barrier exactly when the gate is not verified because of it.
  *
- * Shared so a surface cannot answer this differently from the gate. The gate is still the only
- * verdict authority; this reads the status it already wrote.
+ * What that excludes is the point. Advisory evidence never gates. A waived or fixed finding is
+ * one the gate has already accounted for. A carried failing finding is accepted debt: it is in
+ * the evidence floor, the gate lets a run carrying it pass as verified, and calling it a barrier
+ * tells a reader to go and fix something that is not blocking anything. Carried debt still
+ * belongs on surfaces that report the state of a change; it does not belong under an instruction
+ * to fix it.
+ *
+ * A finding usabl could not verify is included whatever its status, because the gate's own
+ * unverified test does not look at status either: an unproven finding leaves the run unproven.
+ *
+ * Shared so a surface cannot answer this differently from the gate, and pinned by a test that
+ * drives the gate with its own inputs and checks that a run with no such finding, and complete
+ * coverage, is exactly a verified run. The gate remains the only verdict authority; this reads
+ * the status and confidence it already wrote.
  */
 export function isBlockingBarrier(finding: Finding): boolean {
-  return (
-    finding.evidenceClass === 'deterministic' &&
-    finding.status !== 'waived' &&
-    finding.status !== 'fixed'
-  );
+  if (finding.evidenceClass !== 'deterministic') {
+    return false;
+  }
+  if (finding.status === 'waived' || finding.status === 'fixed') {
+    return false;
+  }
+  return finding.confidence === 'unverified' || finding.status === 'new';
 }
 
 /**
