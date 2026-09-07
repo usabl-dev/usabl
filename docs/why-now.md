@@ -54,7 +54,9 @@ claim compliance.
 
 - **Finding:** Developers using AI assistants often skip accessibility prompts, omit
   manual steps (labels, alt text), and **cannot verify compliance** after generation.
-- **Quote use:** "Inability to verify compliance" is the gap usabl closes mechanically.
+- **Quote use:** "Inability to verify compliance" is the gap usabl narrows: it verifies by
+  machine that a change added no new detectable barrier on the screens it scanned. It
+  does not verify compliance.
 
 **Source:** [CodeA11y, CHI 2025 (arXiv:2502.10884)](https://arxiv.org/abs/2502.10884)
 
@@ -62,8 +64,8 @@ claim compliance.
 
 - **Finding:** Tooling **overwhelmingly focuses on detecting** accessibility violations
   rather than repairing them; LLM repair without verification still risks unproven fixes.
-- **Quote use:** Detection is solved; **verified repair in the dev loop** is the open
-  problem.
+- **Quote use:** Detection tooling is mature; **verified repair in the dev loop** is the
+  open problem.
 
 **Source:** [A11YRepair (arXiv:2606.21926)](https://arxiv.org/abs/2606.21926)
 
