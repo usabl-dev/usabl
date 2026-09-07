@@ -9,10 +9,12 @@ import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
 import { operatorText } from '../intake/config-error.js';
 import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
 import {
+  blankComments,
   isRouterSource,
   mergeParsedRoutes,
   parseDataRouterRoutes,
   screenIdFromUrl,
+  skipStringLiteral,
   type ParsedRouteSite,
 } from '../coverage/router-parse.js';
 import { validateId } from '../intake/id-grammar.js';
@@ -109,21 +111,104 @@ function isProvenRoutePath(path: string): boolean {
   return path.startsWith('/') && !path.startsWith('//') && !path.includes('@') && path !== '*';
 }
 
-// The tag name the route regex below matches. The attribute group starts immediately after it,
-// which is what turns an offset inside the attributes into an offset in the file.
-const ROUTE_TAG_PREFIX = '<Route';
+/** One `<Route ...>` tag, read out of the source by the scanner below. */
+interface RouteTag {
+  // The attribute text as written, from just after `<Route` to the closing angle bracket. Used to
+  // read the element expression, which lives inside braces.
+  attrs: string;
+  // The same text with everything inside a `{...}` expression replaced by spaces. Attribute
+  // matching runs on this, so an attribute belonging to a nested element cannot be read as this
+  // route's own. Same length as `attrs`, so an index into one is an index into the other.
+  ownAttrs: string;
+  // Where `attrs` starts in the source.
+  offset: number;
+  // Whether the tag closed with `/>`. An opening `<Route>` is a layout parent; attributing its
+  // children would need a nesting walk this draft does not claim.
+  selfClosing: boolean;
+}
+
+/**
+ * Reads one `<Route` tag's attributes, starting just after the tag name.
+ *
+ * The tag ends at the angle bracket that closes it, found by stepping over `{...}` expressions and
+ * string literals rather than by stopping at the first `/>`. Stopping at the first one ends the tag
+ * at a nested `element={<Page />}`, which hides every attribute written after it: a route whose
+ * `element` comes before its `path` is then dropped with no path found and no refusal raised, even
+ * though attribute order carries no meaning in JSX. Returns null when the tag never closes.
+ */
+function readRouteTag(raw: string, start: number): Omit<RouteTag, 'offset'> | null {
+  const mask = (text: string): string => text.replace(/[^\n]/g, ' ');
+  let ownAttrs = '';
+  let depth = 0;
+  let index = start;
+  while (index < raw.length) {
+    const character = raw[index] as string;
+    if (character === '>' && depth === 0) {
+      const attrs = raw.slice(start, index);
+      return { attrs, ownAttrs, selfClosing: /\/\s*$/.test(attrs) };
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      const end = skipStringLiteral(raw, index);
+      const text = raw.slice(index, end);
+      ownAttrs += depth === 0 ? text : mask(text);
+      index = end;
+      continue;
+    }
+    if (character === '{') {
+      depth += 1;
+      ownAttrs += ' ';
+      index += 1;
+      continue;
+    }
+    if (character === '}') {
+      depth -= 1;
+      if (depth < 0) {
+        return null;
+      }
+      ownAttrs += ' ';
+      index += 1;
+      continue;
+    }
+    if (character === '<' && depth === 0) {
+      // The next element opened before this tag closed, so the source is not what it looked like.
+      // Reading on would attribute that element's attributes to this route.
+      return null;
+    }
+    ownAttrs += depth === 0 ? character : mask(character);
+    index += 1;
+  }
+  return null;
+}
+
+function scanRouteTags(raw: string): RouteTag[] {
+  const tags: RouteTag[] = [];
+  for (const match of raw.matchAll(/<Route\b/g)) {
+    if (match.index === undefined) {
+      continue;
+    }
+    const offset = match.index + match[0].length;
+    const tag = readRouteTag(raw, offset);
+    if (tag !== null) {
+      tags.push({ ...tag, offset });
+    }
+  }
+  return tags;
+}
 
 function parseRouteTags(raw: string): ParsedRouteSite[] {
   const routes: ParsedRouteSite[] = [];
-  // Self-closing tags only. Opening <Route> parents are layouts; inferring
-  // their children would require a nesting walk this draft does not claim.
-  const tags = /<Route\b([^>]*?)\/>/g;
-  for (const match of raw.matchAll(tags)) {
-    const attrs = match[1];
-    if (typeof attrs !== 'string' || match.index === undefined) {
+  // Comments are blanked first, so a commented-out route is not read as a declaration. The blanked
+  // text is the same length with the same line breaks, so the offsets below still name the same
+  // characters in the file.
+  const source = blankComments(raw);
+  for (const tag of scanRouteTags(source)) {
+    if (!tag.selfClosing) {
       continue;
     }
-    const pathMatch = attrs.match(/\bpath\s*=\s*['"`]([^'"`]+)['"`]/);
+    // Matched against the masked text, so `element={<Link path="/nested" />}` cannot supply this
+    // route's path. An index or layout route has no path attribute and is simply not a screen with
+    // a URL, so it is passed over rather than refused.
+    const pathMatch = tag.ownAttrs.match(/\bpath\s*=\s*['"`]([^'"`]+)['"`]/);
     if (pathMatch === null || pathMatch[1] === undefined || pathMatch.index === undefined) {
       continue;
     }
@@ -131,13 +216,13 @@ function parseRouteTags(raw: string): ParsedRouteSite[] {
     if (path === '*') {
       continue;
     }
-    const elementMatch = attrs.match(/\belement\s*=\s*\{\s*<\s*([A-Za-z_$][\w$]*)/);
+    const elementMatch = tag.attrs.match(/\belement\s*=\s*\{\s*<\s*([A-Za-z_$][\w$]*)/);
     // Point at the path attribute, not at the start of the tag, so a tag spread over several
     // lines is reported at the line that carries the path.
     routes.push({
       path,
       component: elementMatch?.[1] ?? null,
-      offset: match.index + ROUTE_TAG_PREFIX.length + pathMatch.index,
+      offset: tag.offset + pathMatch.index,
     });
   }
   return routes;
