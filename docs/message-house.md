@@ -11,7 +11,8 @@ Expanded messaging in [positioning.md](./positioning.md). Competitive positionin
 
 ## Core promise (all audiences)
 
-**usabl makes every UI change complete accessibility proof before it ships.**
+**usabl proves that a UI change added no new machine-checkable accessibility barrier on
+the screens it scanned, and says what it could not check.**
 
 Supporting: *usable by default.* / *Don't ship until it's usabl.*
 
@@ -30,7 +31,7 @@ promise; differentiator #1 message explains how we keep it.
 | **Judge (business)** | Catches accessibility regressions before VPAT evidence and customer escalations - without claiming compliance. |
 | **Judge (accessibility expert)** | Mechanical layers handle the repeatable checks; your expertise stays on judgment calls, with repro scripts attached. |
 | **Priya (engineer)** | Real-time findings with fix guidance, and the Stop hook blocks the assistant's first stop on a blocking verdict unless a one-use bypass was issued. |
-| **James (AT user)** | Broken announcements and unnamed controls are caught before merge, and fixes are verified in the same workflow that introduced them. |
+| **James (AT user)** | Unnamed controls and broken announcement expectations that the checks can detect are reported before merge, and fixes are re-checked in the same workflow that introduced them. |
 | **Morgan (eng lead)** | Install it, gate from day one - ratchet blocks only new debt, with a waiver ledger for the rest. |
 | **Alex (a11y SME)** | Fewer repeated audits; escalations arrive with evidence, not "please test the whole page." |
 | **Riley (compliance)** | A re-checkable receipt on each verified change for evidence packs; the tool states human review is still required. |
