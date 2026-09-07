@@ -197,14 +197,190 @@ describe('formatSummary', () => {
       }),
     );
     const lines = out.split('\n');
-    const barriers = lines.indexOf('  barriers:');
+    const barriers = lines.indexOf('  barriers that block this run: 1 finding(s)');
     expect(barriers).toBeGreaterThan(1);
     expect(lines[barriers + 1]).toBe('    [new] clusters · axe/button-name (serious): A button with no accessible name');
     expect(lines[barriers + 2]).toBe('        fix: Add aria-label');
   });
 
   it('prints no barrier header when there is no gating finding', () => {
-    expect(formatSummary(baseResult({}))).not.toContain('barriers:');
+    expect(formatSummary(baseResult({}))).not.toContain('barriers');
+  });
+
+  /**
+   * The evidence floor is the promise this surface used to break.
+   *
+   * Existing debt is recorded, it does not gate, and only a new barrier blocks. The terminal
+   * filtered findings to new-or-carried, printed them all under a heading that read "barriers:",
+   * and gave every one of them a "fix:" line. So a verified run carrying floor debt printed the
+   * word VERIFIED and then a list of barriers to fix, which is the opposite of what the gate had
+   * just decided. A waived finding was invisible here, which is its own kind of wrong.
+   *
+   * The rule these tests hold: what blocks is listed as work, under a heading that says it blocks;
+   * what the gate already accepted is listed as recorded, under a heading that says it does not
+   * block; and the work is never below the debt.
+   */
+  describe('barriers and recorded debt are listed apart', () => {
+    const BLOCKING_HEADING = '  barriers that block this run:';
+    const RECORDED_HEADING = '  recorded, not blocking:';
+    const RECORDED_NOTE = '    usabl already recorded these. They do not block this run.';
+
+    const withStatus = (
+      over: Partial<Result['findings'][number]>,
+    ): Result['findings'][number] => ({
+      rule: 'color-contrast',
+      layer: 'axe',
+      severity: 'serious',
+      evidenceClass: 'deterministic',
+      screenId: 'clusters',
+      elementPath: 'button',
+      elementName: 'Save',
+      role: 'button',
+      whatUserExperiences: 'Low contrast text',
+      why: '',
+      fix: 'Raise contrast to 4.5:1',
+      evidence: {},
+      confidence: 'fail',
+      elementKey: 'k',
+      identityBasis: 'name',
+      status: 'carried',
+      ...over,
+    });
+
+    const verifiedWithCarried = baseResult({
+      verdict: 'verified',
+      exitCode: 0,
+      summary: 'verified: 0 gating finding(s)',
+      findings: [withStatus({ status: 'carried' })],
+    });
+
+    const verifiedWithWaived = baseResult({
+      verdict: 'verified',
+      exitCode: 0,
+      summary: 'verified: 0 gating finding(s)',
+      findings: [withStatus({ status: 'waived', rule: 'link-name', fix: 'Name the link' })],
+    });
+
+    const regressionWithBoth = baseResult({
+      verdict: 'regression',
+      exitCode: 1,
+      summary: 'regression: 1 gating finding(s)',
+      findings: [
+        withStatus({ status: 'carried', rule: 'color-contrast' }),
+        withStatus({
+          status: 'new',
+          rule: 'button-name',
+          whatUserExperiences: 'A button with no accessible name',
+          fix: 'Add aria-label',
+        }),
+      ],
+    });
+
+    const notCoveredWithCarried = baseResult({
+      verdict: 'not_covered',
+      exitCode: 3,
+      summary: 'not_covered: 0 gating finding(s), 1 gap(s)',
+      findings: [withStatus({ status: 'carried' })],
+      coverage: {
+        changedFiles: [],
+        affected: [],
+        unresolvedFiles: [],
+        gaps: [{ ref: 'http://127.0.0.1:5173/jobs', state: 'not-covered', reason: 'never opened' }],
+        nothingToCheck: false,
+      },
+    });
+
+    it('lists carried debt on a verified run as recorded, never as a barrier', () => {
+      const out = formatSummary(verifiedWithCarried);
+      const lines = out.split('\n');
+
+      expect(out).toContain('VERIFIED');
+      expect(lines).toContain(`${RECORDED_HEADING} 1 finding(s)`);
+      expect(lines).toContain(RECORDED_NOTE);
+      expect(out).not.toContain(BLOCKING_HEADING);
+      // The finding itself is still listed, with everything a reader needs to act on it.
+      expect(lines).toContain('    [carried] clusters · axe/color-contrast (serious): Low contrast text');
+    });
+
+    it('lists a waived finding on a verified run as recorded, and keeps its fix', () => {
+      const out = formatSummary(verifiedWithWaived);
+      const lines = out.split('\n');
+
+      expect(lines).toContain(`${RECORDED_HEADING} 1 finding(s)`);
+      expect(out).not.toContain(BLOCKING_HEADING);
+      // The fix survives, because a developer may choose to pay the debt down. It is not phrased
+      // as an instruction to do it now.
+      expect(lines).toContain('        fix when you choose to: Name the link');
+    });
+
+    it('never tells a reader to fix anything under a verified verdict', () => {
+      for (const result of [verifiedWithCarried, verifiedWithWaived]) {
+        const out = formatSummary(result);
+        expect(out).toContain('VERIFIED');
+        // "fix:" is the label this surface puts on work. Under a verified verdict there is none,
+        // so the only fix wording left is the one that says the choice is the reader's.
+        expect(out).not.toMatch(/^ *fix: /m);
+        expect(out).not.toContain('barriers');
+      }
+    });
+
+    it('puts new barriers above carried debt on a regression, and marks the debt as not blocking', () => {
+      const lines = formatSummary(regressionWithBoth).split('\n');
+      const blocking = lines.indexOf(`${BLOCKING_HEADING} 1 finding(s)`);
+      const recorded = lines.indexOf(`${RECORDED_HEADING} 1 finding(s)`);
+
+      expect(blocking).toBeGreaterThan(1);
+      // The work comes first. A reader with something to fix never scrolls past debt to find it.
+      expect(recorded).toBeGreaterThan(blocking);
+      expect(lines[blocking + 1]).toBe(
+        '    [new] clusters · axe/button-name (serious): A button with no accessible name',
+      );
+      expect(lines[blocking + 2]).toBe('        fix: Add aria-label');
+      expect(lines[recorded + 1]).toBe(RECORDED_NOTE);
+      expect(lines[recorded + 2]).toBe(
+        '    [carried] clusters · axe/color-contrast (serious): Low contrast text',
+      );
+      expect(lines[recorded + 3]).toBe('        fix when you choose to: Raise contrast to 4.5:1');
+    });
+
+    it('keeps carried debt out of the barrier list on a not-covered run', () => {
+      const out = formatSummary(notCoveredWithCarried);
+      const lines = out.split('\n');
+
+      expect(out).toContain('NOT COVERED');
+      // The run is unproven because of a gap, not because of the debt it carries.
+      expect(out).not.toContain(BLOCKING_HEADING);
+      expect(lines).toContain(`${RECORDED_HEADING} 1 finding(s)`);
+      expect(out).toContain('not evaluated: 1 gap(s)');
+    });
+
+    it('calls a finding usabl could not verify a barrier even when it is carried', () => {
+      // The gate cannot call a run verified while a finding is unverified, whatever its status, so
+      // this one is work. The shared predicate is what decides that, and this pins the surface to it.
+      const out = formatSummary(
+        baseResult({
+          verdict: 'not_covered',
+          exitCode: 3,
+          summary: 'not_covered: 1 gating finding(s)',
+          findings: [withStatus({ status: 'carried', confidence: 'unverified' })],
+        }),
+      );
+
+      expect(out).toContain(`${BLOCKING_HEADING} 1 finding(s)`);
+      expect(out).not.toContain(RECORDED_HEADING);
+    });
+
+    it('keeps every heading and note it authors inside 80 columns', () => {
+      for (const result of [verifiedWithCarried, regressionWithBoth, notCoveredWithCarried]) {
+        const authored = formatSummary(result)
+          .split('\n')
+          .filter((line) => line.startsWith('  barriers') || line.startsWith('  recorded') || line === RECORDED_NOTE);
+        expect(authored.length).toBeGreaterThan(0);
+        for (const line of authored) {
+          expect(line.length).toBeLessThanOrEqual(80);
+        }
+      }
+    });
   });
 
   describe('length bound on each field', () => {
