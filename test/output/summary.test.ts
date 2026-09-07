@@ -405,7 +405,7 @@ describe('formatSummary', () => {
       expect(lines).toContain('  floor ahead of this run: 1 entry');
       // The note states the observation and offers the action without asserting a cause: the same
       // two numbers are produced by twelve fixed barriers and by a table rendering nine fewer rows.
-      expect(lines).toContain('    Fewer barriers are present at these identities than the floor records.');
+      expect(lines).toContain('    This run observed fewer deterministic barriers at these identities than the floor records.');
       expect(lines).toContain('    If they were fixed, run usabl floor prune to re-arm the floor.');
       expect(lines).toContain('    If the page shows less content today, nothing needs to change.');
       expect(out).not.toContain('Barriers were fixed here');
@@ -645,7 +645,7 @@ describe('formatSummary', () => {
     expect(out).toContain('accessibility exit code: 3');
   });
 
-  it('shows the floor pay-down count when greater than zero', () => {
+  it('reports the floor entries it did not observe, without calling them resolved', () => {
     const out = formatSummary(
       baseResult({
         verdict: 'verified',
@@ -654,7 +654,10 @@ describe('formatSummary', () => {
         floorHeadroom: [],
       }),
     );
-    expect(out).toContain('floor debt resolved: 3');
+    // "resolved" asserts a cause the engine cannot observe: a table rendering no rows leaves
+    // the same absence behind as a fixed barrier.
+    expect(out).toContain('floor entries not observed this run: 3 (if they were fixed, run usabl floor prune to re-arm)');
+    expect(out).not.toContain('floor debt resolved');
     expect(out).toContain('run usabl floor prune to re-arm');
   });
 

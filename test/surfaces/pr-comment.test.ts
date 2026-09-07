@@ -277,7 +277,7 @@ describe('projectPrComment', () => {
     expect(codeownersMentions.length).toBe(1);
   });
 
-  it('shows the floor pay-down count when greater than zero', () => {
+  it('reports the floor entries it did not observe, without calling them resolved', () => {
     const markdown = projectPrComment(
       baseResult({
         verdict: 'verified',
@@ -288,8 +288,10 @@ describe('projectPrComment', () => {
       }),
     );
 
-    expect(markdown).toContain('floor debt resolved: 2 entries');
-    expect(markdown).toContain('run usabl floor prune to re-arm');
+    // "resolved" asserts a cause. A table rendering no rows produces the same absence, so the
+    // line reports the observation and offers the fix reading as a condition.
+    expect(markdown).toContain('floor entries not observed this run: 2 (if they were fixed, run usabl floor prune to re-arm)');
+    expect(markdown).not.toContain('floor debt resolved');
   });
 
   it('omits the floor pay-down notice when the count is zero', () => {
@@ -750,9 +752,9 @@ describe('pr comment page text is sealed in code spans', () => {
       );
       const real = projectPrComment(baseResult({ verdict: 'verified', findings: [], paidDownCount: 2 }));
 
-      expect(hostile).not.toContain('floor debt resolved');
+      expect(hostile).not.toContain('floor entries not observed this run');
       expect(hostile).not.toContain(payload);
-      expect(real).toContain('floor debt resolved: 2 entries');
+      expect(real).toContain('floor entries not observed this run: 2');
     });
 
     it('prints no number the document supplied in place of a count', () => {
@@ -817,7 +819,7 @@ describe('pr comment page text is sealed in code spans', () => {
         }),
       );
 
-      expect(markdown).not.toContain('floor debt resolved');
+      expect(markdown).not.toContain('floor entries not observed this run');
       expect(markdown).not.toContain(payload);
     });
 

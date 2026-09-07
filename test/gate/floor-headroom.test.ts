@@ -134,15 +134,33 @@ describe('stale floor headroom', () => {
     expect(out.floorHeadroom).toEqual([]);
   });
 
-  it('says nothing when a floored identity is fully paid down', () => {
-    // Every barrier at the identity is gone, so it is reported `fixed` as before and there is no
-    // headroom notice: nothing is standing there for a new barrier to hide among this run.
+  it('reports the widest headroom of all: a floored identity observed at zero', () => {
+    // The identity is gone from a screen that scanned cleanly, so it is reported `fixed` as
+    // before. The floor entry still holds capacity for both barriers until a prune removes it,
+    // which is the whole re-arm window, so it is the largest headroom there is and not the
+    // absence of headroom. Omitting it hid the widest case.
     const out = gate({ ...base, floor: dialogFloor(2), drafts: [] });
 
     expect(out.findings).toHaveLength(1);
     expect(out.findings[0]!.status).toBe('fixed');
-    expect(out.floorHeadroom).toEqual([]);
     expect(out.accessibilityVerdict).toBe('verified');
+    expect(out.floorHeadroom).toEqual([
+      { screenId: 'clusters', rule: 'pf-focus-into-dialog', recorded: 2, observed: 0 },
+    ]);
+  });
+
+  it('claims no headroom for a floored identity on a screen it did not cleanly scan', () => {
+    // Absence on an unscanned screen is not an observation, so there is nothing to report and no
+    // `fixed` claim either. Silence is not evidence in both directions.
+    const out = gate({
+      ...base,
+      cleanlyScannedScreens: new Set<string>(),
+      floor: dialogFloor(2),
+      drafts: [],
+    });
+
+    expect(out.findings).toEqual([]);
+    expect(out.floorHeadroom).toEqual([]);
   });
 
   it('still blocks when more barriers land on a floored identity than were accepted', () => {

@@ -119,7 +119,9 @@ function formatSuccessReport(entryCount: number): string {
   return [
     `wrote ${entriesWord(entryCount)} to ${EVIDENCE_FLOOR_PATH}.`,
     'draft only: review and merge this working-tree diff.',
-    'after merge, matching findings carry and extra findings still gate as new.',
+    // "extra findings" would promise more than the floor can deliver. What gates is a finding at
+    // an identity the floor does not hold, or a count above what it recorded there.
+    'after merge, matching findings carry; a new identity, or more barriers at a recorded one, gates.',
   ].join('\n');
 }
 

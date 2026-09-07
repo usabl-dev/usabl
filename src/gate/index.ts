@@ -3,8 +3,9 @@
  * Providers return Drafts. Overlays, CLI, and CI project the Result. They never mint one.
  *
  * Only `evidenceClass === 'deterministic'` participates in the verdict.
- * Preview and model-judgment findings stay on the Result for humans; they cannot
- * produce `verified` or a receipt.
+ * Preview and model-judgment findings stay on the Result for humans. They cannot move the verdict
+ * in either direction, so they neither block a run nor stand in the way of one: a verified run
+ * with a receipt can and does carry them.
  *
  * Idle (`verdict: null`, exit 0) means nothing UI-touching changed.
  * `not_covered` means there was something to prove and we could not.
@@ -207,16 +208,62 @@ const CLASS_RANK: Record<Draft['evidenceClass'], number> = {
   preview: 3,
 };
 
-/** Prefer deterministic evidence, then the PatternFly why/fix when axe and pf fire together. */
-function preferLayer(a: Finding, b: Finding): Finding {
-  const rankA = CLASS_RANK[a.evidenceClass];
-  const rankB = CLASS_RANK[b.evidenceClass];
-  const winner =
-    rankA !== rankB
-      ? (rankA < rankB ? a : b)
-      : a.layer === 'pf' ? a : b.layer === 'pf' ? b : a;
-  const loser = winner === a ? b : a;
-  return { ...winner, evidence: mergeEvidence(winner.evidence, loser.evidence) };
+/**
+ * A total order over the drafts collapsed onto one identity, used to pick the one that represents
+ * them. Total, not pairwise: every comparison ends in a decision that does not depend on the order
+ * the drafts arrived in, because the last tie-break is the draft's own text.
+ *
+ * Class first, because only deterministic evidence gates and a surviving preview draft would
+ * quietly disarm a barrier. Then the PatternFly layer, whose why and fix are written for the
+ * design system and read better than the generic axe wording. Then element path and layer, which
+ * decide nothing about the verdict and exist only so the same inputs always render the same way.
+ */
+function byPreference(a: Finding, b: Finding): number {
+  const byClass = CLASS_RANK[a.evidenceClass] - CLASS_RANK[b.evidenceClass];
+  if (byClass !== 0) return byClass;
+  const byLayer = Number(b.layer === 'pf') - Number(a.layer === 'pf');
+  if (byLayer !== 0) return byLayer;
+  const byPath = a.elementPath.localeCompare(b.elementPath);
+  if (byPath !== 0) return byPath;
+  return a.layer.localeCompare(b.layer);
+}
+
+/**
+ * The confidence the collapsed finding carries, aggregated across the drafts it stands for rather
+ * than inherited from whichever one won the presentation tie-break.
+ *
+ * `fail` dominates `unverified`. That is the verdict priority the engine already documents: a
+ * blocking failure outranks missing coverage, because a real barrier is the actionable answer and
+ * answering not_covered first would bury it. A definite barrier and an unconfirmed one at the same
+ * identity means there is a definite barrier there.
+ *
+ * Aggregating here is what makes the verdict order independent. The representative's confidence is
+ * a verdict input, so while it was inherited, one `fail` draft and one `unverified` draft at one
+ * identity produced `regression` in one arrival order and `not_covered` in the other. Only drafts
+ * of the winner's own class are aggregated, so advisory evidence can never raise the confidence of
+ * a deterministic finding.
+ */
+function aggregateConfidence(group: Finding[], evidenceClass: Draft['evidenceClass']): Draft['confidence'] {
+  const sameClass = group.filter((f) => f.evidenceClass === evidenceClass);
+  return sameClass.some((f) => f.confidence === 'fail') ? 'fail' : 'unverified';
+}
+
+/**
+ * One finding standing for every draft that landed on one identity.
+ *
+ * The evidence of the drafts that did not win is folded in behind the winner's, so a PatternFly
+ * why and fix does not erase the axe observation that identified the same control. Folding runs in
+ * sorted order for the same reason the winner is chosen by a total order: the merged evidence must
+ * not depend on arrival order either.
+ */
+function collapse(group: Finding[]): Finding {
+  const sorted = [...group].sort(byPreference);
+  const winner = sorted[0]!;
+  let evidence = winner.evidence;
+  for (const loser of sorted.slice(1)) {
+    evidence = mergeEvidence(evidence, loser.evidence);
+  }
+  return { ...winner, evidence, confidence: aggregateConfidence(group, winner.evidenceClass) };
 }
 
 /** Expired waivers are inert. Fixed findings are never rewritten to waived. */
@@ -255,16 +302,19 @@ function differential(input: GateInput): Differential {
   // `usabl baseline` wrote the floor counts from. Counting every class here compared this run's
   // mixed tally against a deterministic-only floor, so one preview draft sharing an identity with
   // a deterministic one read as growth and reported a barrier that was not there.
-  const byIdentity = new Map<string, Finding>();
+  const groups = new Map<string, Finding[]>();
   const countByGroup = new Map<string, number>();
   for (const f of raw) {
     const key = identityKey(f);
     if (GATES(f.evidenceClass)) {
       countByGroup.set(key, (countByGroup.get(key) ?? 0) + 1);
     }
-    const existing = byIdentity.get(key);
-    byIdentity.set(key, existing ? preferLayer(existing, f) : f);
+    const group = groups.get(key);
+    if (group) group.push(f);
+    else groups.set(key, [f]);
   }
+  const byIdentity = new Map<string, Finding>();
+  for (const [key, group] of groups) byIdentity.set(key, collapse(group));
 
   const floorByKey = new Map<string, FloorEntry>();
   for (const e of input.floor.entries) floorByKey.set(identityKey(e), e);
@@ -329,6 +379,14 @@ function differential(input: GateInput): Differential {
   for (const [key, e] of floorByKey) {
     if (byIdentity.has(key)) continue;
     if (!input.cleanlyScannedScreens.has(e.screenId)) continue;
+    // Absent is the largest headroom there is, not the absence of headroom. The entry still holds
+    // capacity for every barrier it recorded until a prune removes it, so a barrier arriving here
+    // before that lands at a tally at or under the accepted count and is marked carried, which is
+    // the exact window this disclosure exists for. Reporting it only when at least one barrier
+    // survived would have hidden the widest case.
+    if (countsAreObserved(e.identityBasis) && e.count > 0) {
+      staleIdentities.push({ screenId: e.screenId, rule: e.rule, recorded: e.count, observed: 0 });
+    }
     findings.push({
       rule: e.rule, layer: e.layer, severity: 'minor', evidenceClass: 'deterministic',
       screenId: e.screenId, elementPath: '', elementName: null, role: null,

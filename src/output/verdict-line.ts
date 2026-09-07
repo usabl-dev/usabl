@@ -39,7 +39,11 @@ const VERDICT_SYMBOLS: Record<string, string> = {
 };
 
 const VERDICT_MEANINGS: Record<string, string> = {
-  verified: 'This change passed every accessibility check usabl ran. It can proceed.',
+  // Not "passed every check". A verified run routinely carries recorded debt, and on the
+  // application this was measured against it carried twenty definite failures the floor had
+  // accepted. Verified means no NEW barrier blocks the change, which is what the gate decided and
+  // what the overlay's own lead sentence already said.
+  verified: 'No new barrier blocks this change. It can proceed.',
   regression: 'This change adds an accessibility barrier. It is blocked until fixed.',
   not_covered: 'usabl could not check all of this change, so it is blocked as unproven.',
   // Approval happens on the pull request and nowhere else. The surfaces that face a model say

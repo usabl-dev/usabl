@@ -3337,6 +3337,74 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
     await page.context().close();
   });
 
+  it('shows the floor entries this run is ahead of, under the recorded group, as plain text', async () => {
+    // The overlay is one of the surfaces the engine claims shows this. It said nothing at all
+    // until now, so the claim was false and an operator working in the browser never learned the
+    // floor had drifted ahead of the application.
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'verified',
+          summary: 'verified: nothing blocking, 1 recorded, 1 floor entry ahead of this run',
+          findings: [carried],
+          exitCode: 0,
+          floorHeadroom: [
+            { screenId: 'overview', rule: 'pf-icon-button-name', recorded: 15, observed: 3 },
+          ],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    // Under the recorded group, never above it, and never mistaken for a barrier.
+    expect(await groupHeadings(page)).toEqual(['Recorded, not blocking', 'Floor ahead of this run']);
+    expect(await panel.getByText('Fix this screen', { exact: false }).count()).toBe(0);
+
+    // The same three sentences the terminal prints, word for word, and neither asserts a cause.
+    for (const note of [
+      'This run observed fewer deterministic barriers at these identities than the floor records.',
+      'If they were fixed, run usabl floor prune to re-arm the floor.',
+      'If the page shows less content today, nothing needs to change.',
+    ]) {
+      expect(await panel.getByText(note, { exact: true }).isVisible()).toBe(true);
+    }
+
+    // The observation itself: the screen, the rule, and both counts.
+    expect(await panel.getByText('overview - pf-icon-button-name', { exact: true }).isVisible()).toBe(true);
+    expect(await panel.getByText('floor records 15, this run saw 3', { exact: true }).isVisible()).toBe(true);
+
+    // Text only. It carries no severity pill and no status pill, so nothing about it reads as a
+    // finding, and no meaning rests on colour.
+    const pills = await page.locator(OVERLAY).evaluate((host) => {
+      const root = (host as HTMLElement).shadowRoot;
+      const groups = Array.from(root?.querySelectorAll('.current-screen .finding-group') ?? []);
+      const group = groups.find((g) => (g.querySelector('h4')?.textContent ?? '') === 'Floor ahead of this run');
+      return group ? group.querySelectorAll('.severity, .status, .finding-button').length : -1;
+    });
+    expect(pills).toBe(0);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  it('says nothing about the floor when it is level with the run', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({ verdict: 'verified', summary: 'verified: nothing blocking, 1 recorded', findings: [carried], exitCode: 0 }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(await groupHeadings(page)).toEqual(['Recorded, not blocking']);
+    expect(await panel.getByText('Floor ahead of this run', { exact: false }).count()).toBe(0);
+
+    await page.context().close();
+  });
+
   it('treats a waived finding on a verified run the same way it treats carried debt', async () => {
     const page = await mount(
       projectOverlay(

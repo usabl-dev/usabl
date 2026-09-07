@@ -281,9 +281,12 @@ function renderConformance(result: Result): string[] {
   // A count is the one kind of carried value a code span would make harder to read, and a whole
   // number cannot be a link, a mention, or markup of any kind.
   if (Number.isInteger(result.paidDownCount) && result.paidDownCount > 0) {
-    const plural = result.paidDownCount === 1 ? 'entry' : 'entries';
     lines.push(
-      `- floor debt resolved: ${wholeNumber(result.paidDownCount)} ${plural} (run usabl floor prune to re-arm)`,
+      // An observation, not a conclusion: absence on a cleanly scanned screen is what a fixed
+      // barrier looks like and also what a table rendering no rows looks like. The label carries
+      // the noun, so the count needs no separate plural word.
+      `- floor entries not observed this run: ${wholeNumber(result.paidDownCount)}` +
+      ' (if they were fixed, run usabl floor prune to re-arm)',
     );
   }
   return lines;

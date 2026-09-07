@@ -31,7 +31,7 @@ barriers before work can be called done. It gives one of four clear answers:
 
 | Verdict | Meaning |
 |---|---|
-| `verified` | No new machine-checkable barriers on touched surfaces. |
+| `verified` | No new distinguishable identity, and no count growth at a recorded one, under the reviewed floor. |
 | `regression` | A new problem appeared. |
 | `not_covered` | Could not identify or exercise what the change touched. |
 | `approval_required` | Policy changed; the tool will not judge itself. |
@@ -1020,8 +1020,9 @@ their own.
    evidence floor already accepted is `carried` and does not gate, whether it fails or
    could not be confirmed. Blocking on carried uncertainty would hold every large
    application at `not_covered` forever, because any real UI has some results a checker
-   declines to judge and no work clears them. What protects against several barriers
-   hiding behind one accepted entry is the recorded count, not the confidence: the floor
+   declines to judge and no work clears them. What stands between several barriers and one
+   accepted entry is the recorded count, not the confidence, and it is a partial guard: see
+   the residual section under Evidence floor. The floor
    stores how many barriers it accepted at an identity, and more than that comes back as
    `new` and blocks.
 
@@ -1040,8 +1041,10 @@ Priority:
 
 Identity-weak rules are an allow-list of "this element has no accessible name" checks
 (`button-name` from axe, `pf-icon-button-name`). You cannot honestly key an unnamed
-element by name. A count increase is a regression. Named rules still catch a swap
-(one fixed, one newly broken, count unchanged).
+element by name. A count increase is a regression. A named rule catches a swap that a
+count cannot, but only when the two barriers key differently; one fixed and one newly broken
+at the SAME collapsed identity leaves the count unchanged and is not caught. See the residual
+section under Evidence floor.
 
 Every basis can collapse several barriers onto one key, not just `count`. Two dialogs at
 the same neutralized path share a structural key; two controls with the same accessible

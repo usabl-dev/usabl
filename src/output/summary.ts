@@ -87,7 +87,7 @@ const HEADROOM_HEADING = 'floor ahead of this run';
 // mean twelve barriers went away or may mean the page has less content today. Both readings are
 // given, and the operator is the only one who knows which applies.
 const HEADROOM_NOTE = [
-  'Fewer barriers are present at these identities than the floor records.',
+  'This run observed fewer deterministic barriers at these identities than the floor records.',
   'If they were fixed, run usabl floor prune to re-arm the floor.',
   'If the page shows less content today, nothing needs to change.',
 ];
@@ -244,7 +244,12 @@ export function formatSummary(result: Result): string {
     lines.push(`  accessibility exit code: ${result.accessibilityExitCode}`);
   }
   if (result.paidDownCount > 0) {
-    lines.push(`  floor debt resolved: ${result.paidDownCount} (run usabl floor prune to re-arm)`);
+    // An observation, not a conclusion. These identities were not seen on a screen that scanned
+    // cleanly, which a fixed barrier produces and so does a table rendering no rows today.
+    lines.push(
+      `  floor entries not observed this run: ${result.paidDownCount}` +
+      ' (if they were fixed, run usabl floor prune to re-arm)',
+    );
   }
   if (result.receipt) {
     lines.push(`  receipt: sourceTree ${result.receipt.sourceTree} @ ${result.receipt.mintedAt}`);

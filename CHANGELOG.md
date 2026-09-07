@@ -81,6 +81,29 @@
   backstop. `usabl doctor` reports the same state as drifted rather than wired,
   reading the same rule, so the two surfaces cannot disagree about one file.
   Neither the path nor any cookie value is printed.
+- Two deterministic findings at one identity, one a definite failure and one usabl
+  could not confirm, no longer give a different verdict depending on which the
+  scanner reported first. The collapsed finding kept the confidence of whichever
+  draft won a tie-break, so the same page produced `regression` in one order and
+  `not_covered` in the other. Confidence is now aggregated across the drafts at an
+  identity before one is chosen to represent them, and a definite failure wins,
+  matching the verdict order usabl already documents.
+- `verified` no longer claims more than it proved. The line read "This change passed
+  every accessibility check usabl ran", which is false on any application carrying
+  recorded debt: the one this was measured on is verified while carrying twenty
+  definite failures the floor accepted. It now reads "No new barrier blocks this
+  change. It can proceed."
+- The floor entries a run did not observe are reported as that, rather than as
+  resolved. The terminal and the pull request comment said "floor debt resolved: N",
+  which asserts a cause the engine cannot see, because a table rendering no rows
+  leaves the same absence as a fixed barrier. Both now read "floor entries not
+  observed this run: N (if they were fixed, run usabl floor prune to re-arm)".
+- The floor-ahead notice is reported by the overlay, which showed nothing at all
+  before, and it now appears for a floor entry with no barriers left against it. A
+  fully paid-down entry still holds capacity for everything it recorded until a
+  prune, so it is the widest re-arm window there is and was the one case the notice
+  skipped.
+
 - usabl now shows when the evidence floor is ahead of the application, and
   `usabl floor prune` re-arms it. The recorded barrier count only ever went up, through
   `usabl baseline`, because prune removed whole entries and never lowered a count. So

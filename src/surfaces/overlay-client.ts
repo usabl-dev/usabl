@@ -96,6 +96,16 @@ export const overlayClientSource = `(() => {
   // the same two names in lower case.
   const BLOCKING_HEADING = 'Barriers that block this run';
   const RECORDED_HEADING = 'Recorded, not blocking';
+  const HEADROOM_HEADING = 'Floor ahead of this run';
+  // The same three lines the terminal prints, word for word, so the two surfaces cannot drift.
+  // They state what was counted and offer both readings of it: usabl cannot tell a paid-down
+  // barrier from a page rendering fewer rows today, so it names the command for one case and says
+  // the other needs nothing.
+  const HEADROOM_NOTE = [
+    'This run observed fewer deterministic barriers at these identities than the floor records.',
+    'If they were fixed, run usabl floor prune to re-arm the floor.',
+    'If the page shows less content today, nothing needs to change.',
+  ];
 
   // Bounds on the work one render is allowed to do. A Result is engine-authored but its finding text
   // is page-derived, so a hostile or simply enormous page can hand us megabyte strings and thousands
@@ -1340,6 +1350,18 @@ export const overlayClientSource = `(() => {
         display: grid;
       }
 
+      /* Two plain lines of text per entry. No pill, no severity colour, no control: nothing here
+         is a finding and nothing here is actionable in the panel, so it reads as a note. */
+      .headroom-item {
+        display: grid;
+        gap: 2px;
+        padding: 8px 11px;
+        border: 1px solid var(--rule);
+        border-radius: 7px;
+        font-size: 0.75rem;
+        line-height: 1.45;
+      }
+
       .finding-button {
         display: flex;
         align-items: center;
@@ -2500,6 +2522,49 @@ export const overlayClientSource = `(() => {
     return { group, list };
   }
 
+  /**
+   * The floor entries this run counted fewer barriers at than the floor records.
+   *
+   * Text only. Nothing here is a finding, nothing is a barrier, and nothing changes the verdict, so
+   * it carries no severity, no status pill and no colour: the heading and the sentences are the
+   * whole meaning, which is the same rule every other group on this panel follows.
+   *
+   * Every entry is listed, not only the current screen's, because each line names its own screen
+   * and because the floor is one file an operator re-arms in one command. That also matches the
+   * terminal, which prints the same three lines and the same per-entry counts.
+   *
+   * Absent, not empty, on an older projection that never carried the field: nothing is rendered
+   * rather than a heading over an empty list claiming the floor is level.
+   */
+  function renderFloorHeadroom(payload) {
+    if (!Object.hasOwn(payload, 'floorHeadroom')) {
+      return null;
+    }
+    const entries = Array.isArray(payload.floorHeadroom) ? payload.floorHeadroom : [];
+    if (entries.length === 0) {
+      return null;
+    }
+    const group = make('div', 'finding-group');
+    const heading = make('div', 'group-heading');
+    heading.appendChild(make('h4', '', HEADROOM_HEADING));
+    heading.appendChild(make('span', 'section-count', entries.length === 1 ? '1 entry' : entries.length + ' entries'));
+    group.appendChild(heading);
+    for (const note of HEADROOM_NOTE) {
+      group.appendChild(make('p', 'group-note', note));
+    }
+    const list = make('ul', 'finding-list');
+    for (const entry of entries) {
+      const item = make('li', 'headroom-item');
+      item.appendChild(make('span', '', String(entry.screenId) + ' - ' + String(entry.rule)));
+      item.appendChild(
+        make('span', '', 'floor records ' + String(entry.recorded) + ', this run saw ' + String(entry.observed)),
+      );
+      list.appendChild(item);
+    }
+    group.appendChild(list);
+    return group;
+  }
+
   // The current-screen section: every finding on this screen, one row each. This is where the
   // developer works, so nothing is grouped away and nothing is hidden behind a budget.
   //
@@ -2569,6 +2634,10 @@ export const overlayClientSource = `(() => {
       );
       recordedList = built.list;
       scroll.appendChild(built.group);
+    }
+    const headroom = renderFloorHeadroom(payload);
+    if (headroom) {
+      scroll.appendChild(headroom);
     }
     // Rows are built a page at a time.
     //
