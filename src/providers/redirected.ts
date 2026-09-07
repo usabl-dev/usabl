@@ -24,23 +24,29 @@
  * signed-out scan into a coverage gap.
  *
  * Rule A, refused data requests. Fires when a storage state is configured AND at least one of the
- *   page's own fetch or XHR requests to the application's own origin answered 401 at any point
+ *   page's own fetch or XHR requests to the application's own hostname answered 401 at any point
  *   during the scan. Nothing overrides it.
  *
- *   Same origin as `appBaseUrl`, not any origin. An optional widget, an analytics beacon, or a
+ *   The application's hostname, not any host. An optional widget, an analytics beacon, or a
  *   third-party service whose own credentials are stale can answer 401 while the application
  *   session is perfectly good, and discarding a whole screen every run over that is not a cost
  *   worth paying. A refusal from the application's own API is the application saying it does not
- *   accept this session.
+ *   accept this session. See refusalsFromAppHost for the match and why an unreadable appBaseUrl
+ *   counts everything.
  *
- *   Checked twice: once when readiness settles, and again after the walk and the providers have
- *   run. It is NOT free of a timing race on the first read alone. Readiness needs four equal DOM
- *   counts 500 ms apart plus 500 ms of network quiet, so a stable shell settles in about 1.5 s,
- *   and an application that sends its identity request later than that has sent nothing yet when
- *   the first read happens. Measured with the real adapter: a page fetching its identity endpoint
- *   at three seconds recorded nothing at the first read and the 401 during the walk window. The
- *   second read is what closes that. A 401 that arrives at any point in the scan means the screen
- *   was not reached signed in, and everything collected from it is discarded.
+ *   Checked twice: once when readiness settles, and again after the walk, the providers, the
+ *   source attachment, and the reachability measurement have all run. It is NOT free of a timing
+ *   race. Readiness needs four equal DOM counts 500 ms apart plus 500 ms of network quiet, so a
+ *   stable shell settles in about 1.5 s, and an application that sends its identity request later
+ *   than that has sent nothing yet when the first read happens. Measured with the real adapter: a
+ *   page fetching its identity endpoint at three seconds recorded nothing at the first read and
+ *   the 401 during the walk window. The second read closes that window, and it deliberately
+ *   includes traffic the providers caused, because a request a provider click triggered is still
+ *   the application answering this session.
+ *
+ *   One boundary remains, and it cannot be closed from here: a 401 that arrives after the second
+ *   read is not seen. That read is the last observation of the page before it is closed, so a
+ *   response still in flight at that moment is never recorded.
  *
  *   401 only. 403 means authenticated and not permitted, which is a state a correctly signed-in
  *   scan can legitimately meet.
@@ -57,10 +63,14 @@
  *   case the override exists for: a real signed-in screen that really does contain a password
  *   field, which would otherwise be discarded on every run with no way to say so.
  *
- *   The override does not extend to Rule A. A reachedWhen aimed at a persistent application shell,
- *   a header, a nav, or a footer, matches on a login wall too, so the assertion is weaker than it
- *   looks. A same-origin 401 with a configured session is the application itself saying the
- *   session was refused, which is stronger evidence than any selector.
+ *   reachedWhen is operator-supplied policy, not independent proof. A selector that matches a
+ *   persistent application shell, a header, a navigation, or a footer is present on a login wall
+ *   too, and it will let Rule B pass the wrong page. To be worth anything it has to name content
+ *   only this screen has: that screen's own table, its own heading, its own empty state.
+ *
+ *   The override does not extend to Rule A, for the same reason. A same-host 401 with a configured
+ *   session is the application itself saying the session was refused, which is stronger evidence
+ *   than any selector an operator wrote.
  *
  * Rule C, redirected to a login page. Fires whether or not a storage state is configured, when the
  *   address the browser ended on differs from the one requested AND a password field is present.
@@ -76,10 +86,11 @@
  *
  * FALSE POSITIVES, which this can produce.
  *
- * Rule A fires on a refused same-origin request even when the application session is fine, such as
+ * Rule A fires on a refused same-host request even when the application session is fine, such as
  * an optional feature on the application's own API that this identity is not entitled to and whose
- * server answers 401 rather than 403. Rule B fires on a signed-in screen that really does contain
- * a password field and declares no reachedWhen. Rule C fires on a screen reached at a different
+ * server answers 401 rather than 403, and it fires on every page-initiated 401 when appBaseUrl
+ * cannot be parsed. Rule B fires on a signed-in screen that really does contain a password field
+ * and declares no reachedWhen. Rule C fires on a screen reached at a different
  * path or fragment than the one configured that also shows a password field, which in practice is
  * a stale configured URL. In all three the cost is a coverage gap, so the run reports not_covered
  * rather than a verdict, and the fix is to correct the surface URL or to declare a reachedWhen
@@ -92,7 +103,10 @@
  * consent screen. An authentication wall that answers 200 to everything and renders a branded
  * landing page is not caught either. A login page served at the very address that was requested,
  * with no session configured, cannot be told from the screen itself. A sign-in wall whose API
- * lives on a different origin than appBaseUrl is not caught by Rule A. The body-only detector in
+ * lives on an unrelated hostname is not caught by Rule A, and neither is a 401 that arrives after
+ * the second read. Rule B passes a wrong page whenever the surface declares a reachedWhen selector
+ * that a login wall also matches, which any shell, header, navigation, or footer selector does.
+ * The body-only detector in
  * coverage/unseen.ts catches the subset of these that render nothing focusable; the rest stay open.
  * A miss leaves the behaviour that was there before, so it never manufactures a new false green,
  * and the reachedWhen selector on a surface is the operator's positive assertion for a screen where
@@ -116,7 +130,7 @@ const PASSWORD_INPUT_SELECTOR = 'input[type="password"]';
 export interface LandingObservation {
   /** The address the scan asked for, from operator config. */
   requestedUrl: string;
-  /** The origin of `appBaseUrl`, which is what Rule A counts a refused request against. */
+  /** `appBaseUrl`, whose hostname is what Rule A counts a refused request against. */
   appBaseUrl: string;
   /** The address the browser reported. Null when the page could not answer, so no claim is made. */
   landedUrl: string | null;
@@ -203,25 +217,50 @@ export async function readRefusedRequests(page: Page): Promise<string[]> {
 }
 
 /**
- * Which refused requests came from the application's own origin.
+ * Which refused requests came from the application itself.
  *
- * Exported so the rule that leans on it can be held without a browser. An `appBaseUrl` that will
- * not parse means no origin to compare against, so nothing counts: that errs toward not firing,
- * which is the safe direction for a rule that discards a screen.
+ * The match is on hostname, not origin. An origin comparison is too narrow in three ways that all
+ * happen in practice, and each one was measured flowing through a real run to a verified receipt
+ * with a paid-down entry:
+ *
+ *   - a different port, because a scan target and its API can sit on different ports of one host;
+ *   - a different scheme, because a page served over https can call an http endpoint, or the
+ *     reverse in a lab;
+ *   - an API subdomain, because `api.example.com` serving `example.com` is the ordinary shape.
+ *
+ * So a refused request counts when its hostname equals the `appBaseUrl` hostname, or ends with a
+ * dot followed by it. Scheme and port are ignored. `api.example.com` counts for `example.com`;
+ * `notexample.com` does not, because the dot is required.
+ *
+ * When `appBaseUrl` does not parse there is no hostname to compare against, and then EVERY
+ * page-initiated 401 counts. That is the opposite of the earlier behaviour and it is deliberate.
+ * This product fails toward disclosure: a base URL usabl cannot read is a configuration usabl
+ * cannot reason about, and reporting not_covered on such a run is the honest outcome, where
+ * counting nothing would quietly hand back a verdict. A refused address that will not parse counts
+ * for the same reason: it is still a request the page made and the server refused.
+ *
+ * Exported so the rule that leans on it can be held without a browser.
  */
-export function refusalsFromAppOrigin(urls: readonly string[], appBaseUrl: string): string[] {
-  let appOrigin: string;
+export function refusalsFromAppHost(urls: readonly string[], appBaseUrl: string): string[] {
+  let appHost: string;
   try {
-    appOrigin = new URL(appBaseUrl).origin;
+    appHost = new URL(appBaseUrl).hostname;
   } catch {
-    return [];
+    return [...urls];
+  }
+  if (appHost.length === 0) {
+    return [...urls];
   }
   return urls.filter((url) => {
+    let host: string;
     try {
-      return new URL(url).origin === appOrigin;
+      // URL lowercases a hostname and encodes a unicode one as punycode, so both sides of this
+      // comparison are already in one form and no case folding of our own is needed.
+      host = new URL(url).hostname;
     } catch {
-      return false;
+      return true;
     }
+    return host === appHost || host.endsWith(`.${appHost}`);
   });
 }
 
@@ -275,25 +314,30 @@ export function sanitizeUrlForDisplay(raw: string): string {
 }
 
 /**
- * A refused request address as it is safe to print: scheme, host, port, and at most the first two
- * path segments, and only while those segments read as fixed path words.
+ * A refused request address, shortened before it is printed.
  *
  * sanitizeUrlForDisplay is not enough here. It keeps the whole path, and a path is a place
  * applications put opaque values: a password reset is `/reset/<token>`, an invitation is
  * `/invite/<token>`, a signed download is `/files/<signature>/name`. The endpoint an operator needs
  * to recognise is the front of the path, so the rest is dropped rather than published.
  *
- * Two segments is the ceiling, because `/api/v2` and `/auth/token` need both to be recognisable.
- * The ceiling alone is not enough: in `/reset/<token>` the token IS the second segment, so a
- * segment is kept only while it looks like a route word rather than an identifier. A route word is
- * short, starts with a letter, and is lowercase; `api`, `v2`, `reset`, `me`, and `well-known` all
- * pass. An upper-case token, a UUID, a numeric id, and a base64 blob all fail, and everything from
- * the first failure on is dropped. The rule is mechanical rather than clever, and it errs toward
- * printing less, which is the safe direction for text that reaches a pull request comment.
+ * Exactly what this discloses, so a reader can judge the risk rather than trust a summary:
  *
- * This bounds exposure; it does not eliminate it. An application that puts a secret in the FIRST
- * path segment, in lower case and under the length cap, would still have it printed. Nothing that
- * prints any part of a path can promise otherwise.
+ *   - the scheme;
+ *   - the complete hostname, as punycode when it was written in unicode;
+ *   - the numeric port, when the address carries one that is not the scheme default;
+ *   - either of the FIRST TWO path segments, and only while a segment starts with an ASCII letter,
+ *     is at most 24 characters, and contains nothing but lowercase ASCII letters, digits, dot,
+ *     underscore, and hyphen. Everything from the first segment that fails those tests is dropped,
+ *     and a dropped tail is marked with an ellipsis.
+ *
+ * Removed in every case: the userinfo, the query string, and the fragment. A unicode path segment
+ * fails the character test and is cut.
+ *
+ * The consequence a reader has to take on board: a secret that is short, lowercase, and sitting in
+ * either of the first two path segments WILL be printed. `/reset/<token>` is cut because a token is
+ * normally mixed case or long, not because the position is protected. Nothing that prints any part
+ * of a path can promise otherwise, and this bounds exposure rather than removing it.
  */
 const ROUTE_WORD = /^[a-z][a-z0-9._-]*$/;
 const ROUTE_WORD_MAX_LENGTH = 24;
@@ -372,9 +416,10 @@ export function redirectedAwayGap(screenId: string, observation: LandingObservat
   const requested = sanitizeUrlForDisplay(observation.requestedUrl);
 
   // Rule A: the application's own data requests were refused as unauthenticated. Nothing
-  // overrides this, including a matched reachedWhen: a selector aimed at a persistent shell
-  // matches on a login wall too, and the application refusing the session is stronger evidence.
-  const refused = refusalsFromAppOrigin(observation.unauthorizedApiUrls, observation.appBaseUrl);
+  // overrides this, including a matched reachedWhen: reachedWhen is operator-supplied policy
+  // rather than independent proof, and a selector aimed at a persistent shell is present on a
+  // login wall too. The application refusing the session is the stronger evidence.
+  const refused = refusalsFromAppHost(observation.unauthorizedApiUrls, observation.appBaseUrl);
   if (observation.sessionConfigured && refused.length > 0) {
     const example = sanitizeRefusedUrlForDisplay(refused[0] as string);
     const count = refused.length;

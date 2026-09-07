@@ -106,7 +106,10 @@ function pageWith(spec: PageSpec = {}): Page {
  * Fake git and filesystem, real check runner, fake browser standing on a chosen page. The rules
  * under test are the real ones, so this run exercises the same code the CLI does.
  */
-function depsFor(spec: PageSpec, options: { sessionConfigured: boolean; providers?: Provider[] }): Deps {
+function depsFor(
+  spec: PageSpec,
+  options: { sessionConfigured: boolean; providers?: Provider[]; config?: UsablConfig },
+): Deps {
   const base = makeFakeDeps({
     files: POLICY_FILES,
     headContents: POLICY_FILES,
@@ -118,7 +121,7 @@ function depsFor(spec: PageSpec, options: { sessionConfigured: boolean; provider
     checkRunner: makeCheckRunner({
       browser: { open: async () => pageWith(spec), close: async () => {} },
       providers: options.providers ?? [noisyProvider],
-      config,
+      config: options.config ?? config,
       allowedCapabilities: ['live'],
       stepRunner: makeStepRunner(),
       transcriptTabCap: 3,
@@ -226,6 +229,42 @@ describe('a screen this run did not reach signed in', () => {
     expect(r.paidDownCount).toBe(0);
     expect(r.verdict).toBe('not_covered');
     expect(r.receipt).toBeNull();
+  });
+
+  it('is a gap for a 401 on another port, another scheme, or an API subdomain', async () => {
+    // Each of these reached a verified receipt with a paid-down entry while the match was on
+    // origin. A scan target and its API on different ports of one host, a page over https calling
+    // an http endpoint, and api.example.com serving example.com are all ordinary shapes.
+    for (const refused of [
+      'http://app.test:8443/api/v2/me',
+      'https://app.test/api/v2/me',
+      'https://api.app.test/v2/me',
+    ]) {
+      const r = await run(depsFor({ unauthorized: [refused] }, { sessionConfigured: true }), config);
+
+      expect(r.coverage.gaps.filter((gap) => gap.reason.includes('401'))).toHaveLength(1);
+      expect(r.verdict).toBe('not_covered');
+      expect(r.receipt).toBeNull();
+      expect(r.paidDownCount).toBe(0);
+    }
+  });
+
+  it('is a gap for every 401 when appBaseUrl cannot be read', async () => {
+    // Failing toward disclosure. A base URL usabl cannot parse is a configuration it cannot
+    // reason about, so not_covered is the honest outcome rather than a quiet verdict.
+    const unreadableBase: UsablConfig = { ...config, appBaseUrl: 'not a url' };
+    const r = await run(
+      depsFor(
+        { unauthorized: ['https://telemetry.vendor.example/collect'] },
+        { sessionConfigured: true, config: unreadableBase },
+      ),
+      unreadableBase,
+    );
+
+    expect(r.coverage.gaps.filter((gap) => gap.reason.includes('401'))).toHaveLength(1);
+    expect(r.verdict).toBe('not_covered');
+    expect(r.receipt).toBeNull();
+    expect(r.paidDownCount).toBe(0);
   });
 
   it('ignores a third-party 401 and still confirms the pay-down', async () => {

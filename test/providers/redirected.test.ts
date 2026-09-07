@@ -24,7 +24,7 @@ import {
   observeLanding,
   readRefusedRequests,
   redirectedAwayGap,
-  refusalsFromAppOrigin,
+  refusalsFromAppHost,
   sanitizeRefusedUrlForDisplay,
   sanitizeUrlForDisplay,
   type LandingObservation,
@@ -176,7 +176,7 @@ describe('rule A: the page\'s own data requests were refused as unauthenticated'
     expect(redirectedAwayGap(SCREEN.id, observation({ unauthorizedApiUrls: [] }))).toBeNull();
   });
 
-  it('counts only refusals from the application\'s own origin', () => {
+  it('counts only refusals from the application\'s own hostname', () => {
     // One incidental 401 from an optional widget, an analytics beacon, or a third-party service
     // whose own credentials are stale must not discard a whole screen on every run.
     expect(
@@ -230,21 +230,67 @@ describe('rule A: the page\'s own data requests were refused as unauthenticated'
     expect(gap?.reason).not.toContain('OPAQUE_TOKEN');
   });
 
-  it('refusalsFromAppOrigin keeps same-origin addresses and nothing else', () => {
-    const urls = [
-      'http://app.test/api/v2/me',
-      'http://app.test:80/api/v2/config',
-      'https://app.test/api/v2/secure',
-      'http://other.test/api/v2/me',
-      'not a url',
+  it('matches the application hostname across ports, schemes, and subdomains', () => {
+    // An origin comparison was too narrow in three ways that all happen in practice, and each one
+    // was measured flowing through a real run to a verified receipt with a paid-down entry.
+    const base = 'http://example.com';
+    const counted = [
+      'http://example.com/api/me',
+      'http://example.com:8443/api/me',
+      'https://example.com/api/me',
+      'https://api.example.com/v2/me',
+      'https://auth.internal.example.com/token',
+      'http://EXAMPLE.COM/api/me',
     ];
-    expect(refusalsFromAppOrigin(urls, 'http://app.test')).toEqual([
-      'http://app.test/api/v2/me',
-      'http://app.test:80/api/v2/config',
-    ]);
-    // An appBaseUrl that will not parse gives no origin to compare against, so nothing counts.
-    // That errs toward not firing, which is the safe direction for a rule that discards a screen.
-    expect(refusalsFromAppOrigin(urls, 'not a url')).toEqual([]);
+    expect(refusalsFromAppHost(counted, base)).toEqual(counted);
+  });
+
+  it('still ignores an unrelated third-party host, and a host that only looks like a suffix', () => {
+    // The dot is required, so notexample.com is not example.com.
+    const ignored = [
+      'https://telemetry.vendor.example/collect',
+      'https://notexample.com/api/me',
+      'https://example.com.evil.test/api/me',
+    ];
+    expect(refusalsFromAppHost(ignored, 'http://example.com')).toEqual([]);
+  });
+
+  it('counts every refusal when appBaseUrl cannot be parsed', () => {
+    // The opposite of the earlier behaviour and deliberate. A base URL usabl cannot read is a
+    // configuration it cannot reason about, and this product fails toward disclosure: not_covered
+    // on a misconfigured base is honest, where counting nothing hands back a verdict.
+    const urls = ['https://telemetry.vendor.example/collect', 'http://app.test/api/me'];
+    expect(refusalsFromAppHost(urls, 'not a url')).toEqual(urls);
+    expect(refusalsFromAppHost(urls, '')).toEqual(urls);
+  });
+
+  it('counts a refused address that will not parse, for the same reason', () => {
+    // It is still a request the page made and the server refused.
+    expect(refusalsFromAppHost(['not a url'], 'http://example.com')).toEqual(['not a url']);
+  });
+
+  it('through the rule: a different port, a different scheme, and an API subdomain all fire', () => {
+    for (const refused of [
+      'http://app.test:8443/api/v2/me',
+      'https://app.test/api/v2/me',
+      'https://api.app.test/v2/me',
+    ]) {
+      expect(
+        redirectedAwayGap(SCREEN.id, observation({ unauthorizedApiUrls: [refused] })),
+      ).not.toBeNull();
+    }
+  });
+
+  it('through the rule: an unreadable appBaseUrl makes every refusal count', () => {
+    expect(
+      redirectedAwayGap(
+        SCREEN.id,
+        observation({
+          appBaseUrl: 'not a url',
+          unauthorizedApiUrls: ['https://telemetry.vendor.example/collect'],
+        }),
+      ),
+    ).not.toBeNull();
   });
 
   it('sanitizeRefusedUrlForDisplay keeps at most two route words and marks the cut', () => {
