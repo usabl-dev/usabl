@@ -106,8 +106,8 @@ on day one.
 
 **Redirect:** A PR bot comments after the code is written. usabl's Stop hook blocks the
 assistant's first stop on a blocking verdict before the PR exists, unless a one-use bypass
-was issued, and then the same verdict becomes PR evidence.
-Upstream prevention + downstream proof, same engine.
+was issued, and then CI runs the same engine against trusted-base policy and posts its
+own verdict as PR evidence. Upstream prevention + downstream proof, same engine.
 
 **Proof point:** THE MOMENT happens inside the assistant session - the PR has no
 regression to comment on because it was caught and fixed before commit.
@@ -137,14 +137,14 @@ next?
 
 **Redirect:** (1) Findings include full evidence - the developer can see exactly what
 triggered the block and verify it's real. (2) Waiver path exists for known issues
-that cannot be fixed this cycle. (3) When usabl cannot check a surface, it reports
-`not_covered` with a reason rather than a false pass or false fail, and if the engine
+that cannot be fixed this cycle. (3) When usabl detects a gap in what it could check, it
+reports `not_covered` with a reason instead of a pass, and if the engine
 itself crashes it returns no verdict with the reason: the Stop hook discloses that and
 allows the stop, and CI blocks because only a pass passes. (4) The ratchet means the
 tool only gates new violations,
 so teams already trust the signal before it blocks anything they did not just introduce.
 
-**Proof point:** Error UX policy: a surface usabl cannot check becomes `not_covered`
+**Proof point:** Error UX policy: a detected coverage gap becomes `not_covered`
 with a reason; an engine crash returns no verdict with the reason, never a fabricated
 finding. Waiver ledger with expiry.
 Brownfield adoption model.
