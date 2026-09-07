@@ -15,23 +15,30 @@
   same URL, so neither the address nor a password field is reliable on its own.
   Three rules now stand against it, each producing a not-covered coverage gap.
   Rule A: with a storage state configured, one of the page's own fetch or XHR
-  requests to the origin of `appBaseUrl` came back 401 at any point during the
-  scan. It is checked when readiness settles and again after the walk and the
-  providers, because a stable shell settles in about 1.5 seconds and an
-  application slower than that has sent nothing yet at the first read. Only
-  same-origin refusals count, so a third-party service with its own stale
-  credentials cannot fire it, and 401 only, since 403 means authenticated and not
-  permitted. Rule B: with a storage state configured, a password input anywhere in
+  requests to the application's own hostname came back 401 at any point during the
+  scan. It is checked when readiness settles and again at the end of the scan,
+  because a stable shell settles in about 1.5 seconds and an application slower
+  than that has sent nothing yet at the first read. A refusal counts when its
+  hostname equals the `appBaseUrl` hostname or ends with a dot followed by it, on
+  any scheme and any port, so an API subdomain counts and a third-party service
+  with its own stale credentials does not; when `appBaseUrl` cannot be parsed every
+  page-initiated 401 counts, because a base URL usabl cannot read is a
+  configuration it cannot reason about. 401 only, since 403 means authenticated and
+  not permitted. Rule B: with a storage state configured, a password input anywhere in
   the page, in any frame or inside an open shadow root. Rule C: the browser ended
   on a different address than the one requested and that page asks for a password,
   which applies with or without a configured session. A gapped screen contributes
   no findings, records no keyboard walk, and cannot mark any floor entry resolved,
   so a run whose screens were all like that reports `not_covered`, never
   `verified`. A `reachedWhen` selector that matches overrides Rule B, which is what
-  keeps a genuine change-password screen scannable; it does not override Rule A,
-  because a selector aimed at a persistent shell matches on a login wall too. The
-  two session rules need a configured storage state because only that asserts the
-  run is signed in. What is still not caught is written out in the ground truth.
+  keeps a genuine change-password screen scannable; it does not override Rule A.
+  `reachedWhen` is operator-supplied policy, not proof: a selector aimed at a shell,
+  header, navigation, or footer matches a sign-in page too and would let a wrong
+  page pass, so it has to name content only that screen has. The config loader now
+  says so when it refuses an empty value. The two session rules need a configured
+  storage state because only that asserts the run is signed in. What is still not
+  caught is written out in the ground truth, including a 401 that arrives after the
+  last read of the page.
 - usabl no longer reports content its own scan created as a barrier. The keyboard
   walk could focus a control whose tooltip opened, `focusBody()` blurred it, and
   the providers ran while the element was still in the DOM through its fade out.
@@ -47,7 +54,9 @@
   first, authorization codes and return addresses in the second, and a live OAuth
   implicit-flow access token in the third. A refused request keeps only the front
   of its path, at most two segments and only while they read as route words, so a
-  `/reset/<token>` endpoint is printed as `/reset/...`. Gap `ref` keeps the
+  `/reset/<token>` endpoint is printed as `/reset/...`. The ground truth states
+  exactly what that discloses, including that a short lowercase secret in either of
+  the first two segments would print. Gap `ref` keeps the
   operator's own configured surface URL, which is what the overlay matches a gap to
   a screen by; the ground truth records that a credential written into a surface
   URL in committed config is echoed verbatim by every surface.
