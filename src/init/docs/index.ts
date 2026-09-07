@@ -6,8 +6,15 @@
  * for anything guessed rather than measured, and it refuses to overwrite an existing
  * sidecar without an explicit force. It must never mint a verdict or read the file it
  * just wrote in the same run. A wrong mapping is worse than a gap.
+ *
+ * The adapter contract is that a draft round-trips through the sidecar parser. That is held
+ * here as well as in the adapters: the exact bytes about to be written are parsed in memory
+ * first, and a draft the parser would refuse is never written. Parsing before the write is
+ * what keeps this unit from reading the file it wrote.
  */
-import type { DocsManifest } from '../../coverage/docs-manifest.js';
+import type { FsGlob } from '../../contracts/index.js';
+import { parseDocsManifest, type DocsManifest } from '../../coverage/docs-manifest.js';
+import { scrubString } from '../../surfaces/scrub.js';
 import { inferAsciidocModular } from './asciidoc-modular.js';
 import { inferAsciibinder } from './asciibinder.js';
 
@@ -68,7 +75,27 @@ export async function writeDocsInitDraft(
     };
   }
 
-  await fs.writeFile(DOCS_MANIFEST_PATH, `${JSON.stringify(draft.manifest, null, 2)}\n`);
+  const contents = `${JSON.stringify(draft.manifest, null, 2)}\n`;
+  const inMemory: FsGlob = {
+    readFile: async (path) => (path === DOCS_MANIFEST_PATH ? contents : null),
+    glob: async () => [],
+  };
+  try {
+    await parseDocsManifest(inMemory);
+  } catch (error: unknown) {
+    // The parser's own message already names the field and, for a refused id, the position and
+    // code point without the id. It is scrubbed again here because the whole line reaches a
+    // terminal, and scrubbing clean text changes nothing.
+    const reason = scrubString(error instanceof Error ? error.message : String(error));
+    return {
+      ok: false,
+      written: [],
+      refused: [],
+      message: `Refusing to write ${DOCS_MANIFEST_PATH}: usabl would not be able to read it. ${reason}`,
+    };
+  }
+
+  await fs.writeFile(DOCS_MANIFEST_PATH, contents);
   return {
     ok: true,
     written: [DOCS_MANIFEST_PATH],

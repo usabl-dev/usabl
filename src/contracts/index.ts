@@ -407,7 +407,9 @@ export interface Deps {
 export interface NoiseBudgetConfig {
   // Default maximum finding groups shown on bounded surfaces. Absent means 5.
   default?: number;
-  // Per-screen overrides for calibration on large PatternFly surfaces.
+  // Per-screen overrides for calibration on large PatternFly surfaces. Each key is a screen id,
+  // matched against one by exact comparison, so every key is checked against the shared id
+  // grammar when the config is read.
   perSurface?: Record<string, number>;
 }
 

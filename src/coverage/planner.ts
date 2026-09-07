@@ -175,6 +175,18 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
       });
     }
     wideBlastAttributedAnyScreen = affectedByScreen.size > affectedCountBeforeWideBlast;
+    // The router fallback can find a route whose path yields no valid screen id. Wide blast would
+    // have queued that route, so leaving it out in silence would report the blast as covered
+    // while one discovered screen was never opened. It is written down as a gap instead, with
+    // the position and code point of the refused character and never the id itself, and the
+    // gate reads it as not covered. The route url is the ref, as a file path is for other gaps.
+    for (const route of manifest.unusable ?? []) {
+      gaps.push({
+        ref: route.url,
+        state: 'skipped',
+        reason: `${route.reason} Name this route in usabl.routes.json with a visible screen id, or change the route path.`,
+      });
+    }
   }
 
   const attributedRoutes = manifest.routes.filter(

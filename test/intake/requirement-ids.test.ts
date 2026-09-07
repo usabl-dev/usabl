@@ -1,0 +1,227 @@
+import { describe, expect, it } from 'vitest';
+import { parseBundle } from '../../src/intake/schema.js';
+import { findDuplicateRequirementId } from '../../src/intake/requirement-ids.js';
+
+function bundleWithId(id: string): unknown {
+  return {
+    version: 1,
+    requirements: [
+      {
+        id,
+        kind: 'content',
+        surface: 'home',
+        description: 'Primary heading should be present',
+        assertion: { type: 'content', selector: 'h1', expectedText: 'Welcome' },
+        approved: true,
+      },
+    ],
+  };
+}
+
+function bundleWithSurface(surface: string): unknown {
+  return {
+    version: 1,
+    requirements: [
+      {
+        id: 'account-name',
+        kind: 'content',
+        surface,
+        description: 'Primary heading should be present',
+        assertion: { type: 'content', selector: 'h1', expectedText: 'Welcome' },
+        approved: true,
+      },
+    ],
+  };
+}
+
+function reasonFor(id: string): string {
+  const result = parseBundle(bundleWithId(id));
+  expect(result).toMatchObject({ ok: false, verdict: 'approval_required' });
+  if (result.ok) {
+    throw new Error('expected the bundle to be refused');
+  }
+  return result.reason;
+}
+
+// Every entry is a character that leaves two different ids looking like one on screen.
+// Escape sequences rather than literals, so each case stays readable.
+const rejected: Array<[string, string, string]> = [
+  ['a leading space', ' account-name', 'U+0020'],
+  ['a trailing space', 'account-name ', 'U+0020'],
+  ['an inner space', 'account name', 'U+0020'],
+  ['a tab', 'account\tname', 'U+0009'],
+  ['a newline', 'account\nname', 'U+000A'],
+  ['a non-breaking space', 'account\u00a0name', 'U+00A0'],
+  ['a null byte', 'account\u0000name', 'U+0000'],
+  ['an escape byte', 'account\u001b[2Jname', 'U+001B'],
+  ['a soft hyphen', 'account\u00adname', 'U+00AD'],
+  ['a zero-width space', 'account\u200bname', 'U+200B'],
+  ['a zero-width joiner', 'account\u200dname', 'U+200D'],
+  ['a right-to-left override', 'account\u202ename', 'U+202E'],
+  ['a line separator', 'account\u2028name', 'U+2028'],
+  ['a word joiner', 'account\u2060name', 'U+2060'],
+  ['a byte order mark', 'account\ufeffname', 'U+FEFF'],
+  ['an ideographic space', 'account\u3000name', 'U+3000'],
+  ['a variation selector', 'account\ufe0fname', 'U+FE0F'],
+  ['a Hangul filler', 'account\u3164name', 'U+3164'],
+  ['a blank braille cell', 'account\u2800name', 'U+2800'],
+  ['an Egyptian hieroglyph full blank', 'account\u{13441}name', 'U+13441'],
+  ['an Egyptian hieroglyph half blank', 'account\u{13442}name', 'U+13442'],
+  ['a Khitan small script filler', 'account\u{16fe4}name', 'U+16FE4'],
+  ['a private-use code point', 'account\ue000name', 'U+E000'],
+  ['a lone surrogate', 'account\ud800name', 'U+D800'],
+];
+
+describe('requirement id grammar', () => {
+  for (const [label, id, point] of rejected) {
+    it(`rejects a requirement id containing ${label} and names the code point`, () => {
+      const reason = reasonFor(id);
+      expect(reason).toContain('requirements[0].id');
+      expect(reason).toContain(point);
+    });
+  }
+
+  it('names the position of the offending character, counting from one', () => {
+    expect(reasonFor('account\u200bname')).toContain('at position 8');
+  });
+
+  it('accepts an unassigned code point, because what is unassigned depends on the Node build', () => {
+    // U+0378 is reserved and not default-ignorable. Refusing it would make the same requirement
+    // file valid under one Unicode version and refused under another.
+    expect(/\p{Cn}/u.test('\u0378')).toBe(true);
+    expect(parseBundle(bundleWithId('account\u0378name')).ok).toBe(true);
+  });
+
+  it('rejects a requirement id that is not in Unicode NFC form', () => {
+    // "e" followed by a combining acute prints the same as the single character e-acute.
+    // The engine would tell the two ids apart. The person approving a waiver would not.
+    expect(reasonFor('cafe\u0301-heading')).toContain('NFC');
+  });
+
+  it('accepts the same id written in NFC form', () => {
+    expect(parseBundle(bundleWithId('caf\u00e9-heading')).ok).toBe(true);
+  });
+
+  it('accepts ordinary ids, including non-Latin ones', () => {
+    for (const id of [
+      'account-name',
+      'account.name',
+      'account_name:v2',
+      'Konto-Name',
+      'アカウント-1',
+    ]) {
+      expect(parseBundle(bundleWithId(id)).ok).toBe(true);
+    }
+  });
+
+  it('reports an empty id once, through the grammar', () => {
+    const reason = reasonFor('');
+    expect(reason).toContain('requirements[0].id: must be a non-empty string');
+    expect(reason.split('requirements[0].id').length - 1).toBe(1);
+  });
+
+  it('refuses a surface reference that hides a character, by position and code point', () => {
+    // The surface is the other half of the waiver key, so it follows the same grammar as the id.
+    const result = parseBundle(bundleWithSurface('clus\u200bters'));
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('requirements[0].surface');
+    expect(result.reason).toContain('at position 5: U+200B');
+    expect(result.reason).not.toContain('\u200b');
+  });
+
+  it('refuses an empty surface reference', () => {
+    const result = parseBundle(bundleWithSurface(''));
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('requirements[0].surface: must be a non-empty string');
+  });
+
+  it('accepts an ordinary surface reference', () => {
+    expect(parseBundle(bundleWithSurface('clusters')).ok).toBe(true);
+  });
+
+  it('does not echo a rejected id or a terminal escape sequence it carries', () => {
+    const reason = reasonFor('boom\u001b[2Jclear');
+    expect(reason).not.toContain('\u001b');
+    expect(reason).not.toContain('boom');
+    expect(reason).not.toContain('clear');
+  });
+});
+
+describe('findDuplicateRequirementId', () => {
+  it('returns null when every id is distinct', () => {
+    expect(
+      findDuplicateRequirementId([
+        { id: 'a', path: 'requirements/a.yaml', index: 0 },
+        { id: 'b', path: 'requirements/b.yaml', index: 0 },
+      ]),
+    ).toBeNull();
+  });
+
+  it('names both files and both positions when the repeat is in another file', () => {
+    const duplicate = findDuplicateRequirementId([
+      { id: 'account-name', path: 'requirements/email.yaml', index: 2 },
+      { id: 'account-name', path: 'requirements/name.yaml', index: 0 },
+    ]);
+    expect(duplicate).not.toBeNull();
+    expect(duplicate?.path).toBe('requirements/name.yaml');
+    expect(duplicate?.reason).toContain('account-name');
+    expect(duplicate?.reason).toContain(
+      'declared at requirements[0] in requirements/name.yaml and already at requirements[2] in requirements/email.yaml',
+    );
+  });
+
+  it('names both positions when the repeat is in the same file', () => {
+    const duplicate = findDuplicateRequirementId([
+      { id: 'other', path: 'requirements/both.yaml', index: 0 },
+      { id: 'account-name', path: 'requirements/both.yaml', index: 1 },
+      { id: 'account-name', path: 'requirements/both.yaml', index: 3 },
+    ]);
+    expect(duplicate?.reason).toContain(
+      'declared at requirements[1] and again at requirements[3] in requirements/both.yaml',
+    );
+  });
+
+  it('compares exactly and does not fold a cross-script confusable into a repeat', () => {
+    expect(
+      findDuplicateRequirementId([
+        { id: 'varia', path: 'requirements/a.yaml', index: 0 },
+        { id: 'vari\u0430', path: 'requirements/b.yaml', index: 0 },
+      ]),
+    ).toBeNull();
+  });
+
+  it('shows a control character in a file path as a code point label so the two files stay distinct', () => {
+    // The scrubber would remove the whole control sequence and print "b.yaml", the same as a clean
+    // file. The label keeps the name distinguishable and leaves the sequence inert.
+    const duplicate = findDuplicateRequirementId([
+      { id: 'account-name', path: 'requirements/b.yaml', index: 0 },
+      { id: 'account-name', path: 'requirements/\u001b]0;OWNED\u0007b.yaml', index: 0 },
+    ]);
+    expect(duplicate?.reason).not.toContain('\u001b');
+    expect(duplicate?.reason).not.toContain('\u0007');
+    expect(duplicate?.reason).toContain('requirements/<U+001B>]0;OWNED<U+0007>b.yaml');
+    expect(duplicate?.reason).toContain('already at requirements[0] in requirements/b.yaml');
+  });
+
+  it('names both locations even when both paths are very long', () => {
+    // Each interpolated value is capped on its own, so a long first path must not push the second
+    // location out of the message. Paths are shortened from the middle with a visible marker.
+    const firstPath = `requirements/${'a'.repeat(300)}/first.yaml`;
+    const repeatPath = `requirements/${'b'.repeat(300)}/second.yaml`;
+    const duplicate = findDuplicateRequirementId([
+      { id: 'same', path: firstPath, index: 34 },
+      { id: 'same', path: repeatPath, index: 7 },
+    ]);
+    expect(duplicate?.reason).toContain('at requirements[7] in requirements/bbb');
+    expect(duplicate?.reason).toContain('bbb/second.yaml and already at requirements[34] in requirements/aaa');
+    expect(duplicate?.reason).toContain('aaa/first.yaml.');
+    expect(duplicate?.reason).toContain('...');
+    expect(duplicate?.reason).not.toContain('(truncated)');
+  });
+});

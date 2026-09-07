@@ -762,7 +762,66 @@ this PR. Coverage grows as the team works, not as a boil-the-ocean inventory.
 - Comment stripping is regex-based and imperfect.
 - Routes not parseable from the router source must be configured or stay unmapped.
 
-These are honest `not_covered` outcomes, not silent passes.
+Those four are honest `not_covered` outcomes, not silent passes. The next section is not, and has
+to be read differently.
+
+#### Limits of reading routes out of router source
+
+Routes are recovered from router source with regular expressions, not with a parser. That buys a
+route manifest with no build step and no dependency on the application's toolchain, and the price
+is that some declarations are read wrongly and some are not read at all.
+
+A route the parser never sees is not a `not_covered` outcome. The planner records a gap only for
+routes it knows about, so a route that was never recovered leaves no gap behind: a change to that
+screen's entry file, or to a wide-blast file, can read as fully checked while the screen is never
+scanned.
+
+**The mechanism.** These patterns match raw text. They do not know which characters are code,
+which are inside a string, and which are inside a comment. So a delimiter that appears anywhere
+in the text is treated as a delimiter: a `>` ends a JSX tag, a `)` closes the `create*Router(...)`
+call argument, and a quote opens or closes a path literal. One stray delimiter inside a string or
+a comment can therefore end a tag or a call argument early and drop the declarations after it.
+The reverse also holds: text that is not code, such as a commented-out route, is matched as
+though it were.
+
+The cases below are examples of that mechanism, not a complete list. Anything that puts a
+delimiter where the pattern does not expect one can produce another.
+
+- **A commented-out route is read as a route.** Commented text is matched like any other text. The
+  route is added to the manifest, so usabl plans a scan of a screen the application does not
+  serve. When a commented-out declaration and a live one carry the same path, which one survives
+  depends on the path: the router fallback and the data-router reader keep the first match, so the
+  commented one wins and a message that names a line names the commented line; `usabl init`'s JSX
+  pass keys routes by path as it merges, so the last match replaces the earlier ones and the live
+  route wins there.
+- **A route whose `element` attribute is written before its `path` is not read at all.** The JSX
+  pattern ends the tag at the first `/>`, which is the nested element's own self-close, so every
+  attribute after the element is invisible and no path is found. Attribute order carries no
+  meaning in JSX, so this is ordinary source. A file that writes every route this way yields no
+  routes and no complaint.
+- **A path written as an expression is not read.** Only a quoted literal is matched, so
+  `path={ROUTES.home}` or `path={base + '/x'}` is skipped and that route is absent from the
+  manifest.
+- **A `>` anywhere in a JSX attribute string drops the whole route.** It ends the attribute run
+  before the pattern reaches the tag's own close, and the tag stops matching. Both
+  `<Route title=">" path="/hidden" element={<Live />} />` and
+  `<Route path="/visible" title=">" element={<Live />} />` yield no routes. Putting the path first
+  does not help.
+- **A `)` anywhere inside the router call drops every route after it.** The call argument is found
+  by counting raw parentheses, so an unmatched `)` in a comment or in an ordinary string, such as
+  `{ path: '/first', label: 'a ) b' }`, closes the argument early and the entries that follow are
+  never seen.
+- **The first `create*Router(` in the file wins, wherever it is.** One written inside a string or
+  a template interpolation is taken as the router call, and the real one below it is never read.
+
+What an operator can do. Write the routes into `usabl.routes.json`. An authored sidecar takes
+precedence over router-source discovery, so the manifest is exactly what that file says and none
+of this applies. That is the reliable answer, and it is the only one that holds against every case
+above. `usabl init` drafts the sidecar from these same patterns, so read the draft against the
+router before merging it and add any route it missed. Changing the router source can also work,
+by writing a quoted `path` literal outside any comment and keeping stray `>` and `)` characters
+out of the strings in and around the declaration, but that depends on the whole file rather than
+on the one route, so check the result instead of assuming it.
 
 ### Documentation coverage
 
@@ -1274,6 +1333,18 @@ hard and repeatable). `mapRequirementsToProviders` emits deterministic drafts wi
 id `intake:<id>` for content and flow requirements; there is no code path in v0.2.0 that
 marks an intake draft as model-judgment.
 
+### Requirement ids are waiver identities
+
+A requirement id becomes the rule `intake:<id>`, and a waiver matches on that rule plus the
+surface. Two requirements that share an id therefore share a rule, and one waiver would cover
+a requirement its author never saw. The loader refuses a repeated id across every requirement
+file at once, since each file can be valid on its own, and names both files and both list
+positions. A requirement id, and the surface it names, follow the same character grammar as a
+surface id (section 22). A refused character is reported by position and code point, never
+printed back. Either failure is `approval_required`, returned from the loader rather than
+thrown, and every reason the loader returns is scrubbed before it leaves, including the YAML
+parser's own message and the file path, because both can carry file bytes.
+
 ---
 
 ## 14. Reports (accessible docs output)
@@ -1581,20 +1652,65 @@ self-check.
 }
 ```
 
-Each `surfaces[].id` is the key coverage is tracked under. It must be a non-empty string, it
-must be unique across the list, it must not contain whitespace or any invisible or control
-character, and it must be written in Unicode NFC form. Ids are compared exactly, which is the
-comparison the planner, the floor, and the receipt already make, so the grammar is what keeps
-two ids from looking alike rather than the comparison folding them together. Everything a font
-draws is still allowed, so a discovery-derived id such as `users-:id` stays valid. A refused id
-is reported by index, with the position and code point of the offending character, because
-printing an invisible character back would show nothing.
+Each `surfaces[].id` is the key coverage is tracked under. It must be unique across the list
+and it must satisfy the one id grammar the product has, which is stated here exactly. The
+grammar excludes the empty string, whitespace, invisible characters (control characters, format
+characters, lone surrogates, private use, every `Default_Ignorable_Code_Point`, and the assigned
+characters that render as blank: U+2800, U+13441, U+13442, and U+16FE4), and it requires
+Unicode NFC form. Ids are compared exactly, which is the comparison the planner, the floor, and
+the receipt already make, so the grammar is what keeps two ids from looking alike rather than
+the comparison folding them together. Everything else a font draws is allowed, so a
+discovery-derived id such as `users-:id` stays valid. A refused id is reported by index, with
+the position and code point of the offending character, because printing an invisible character
+back would show nothing.
 
-The grammar does not claim more than it delivers. It does not stop confusables across scripts,
-so a Latin `a` and a Cyrillic `a` are both accepted and stay distinct ids. That is deliberate:
-both screens are scanned, both appear in receipt coverage, and waiver matching is exact, so no
-screen is lost by it. Unassigned code points are accepted too, because rejecting them would
-make an id's validity depend on which Unicode version the running Node build carries.
+The grammar does not claim more than it delivers. It refuses whitespace, control and format
+characters, surrogates, private use, default-ignorable characters, and the known assigned blank
+glyphs; it accepts everything else, including unassigned code points, standalone combining
+marks, and cross-script confusables. It does not claim that an accepted id never reorders text:
+visible right-to-left letters reorder the run they sit in without any control character, and
+they are accepted, because Hebrew and Arabic ids are real ids. It does not claim that every
+accepted character has a glyph in every font. Confusables across scripts are accepted, so a
+Latin `a` and a Cyrillic `a` are both valid and stay distinct ids: the two never fold into one
+entry, each is scanned when a change affects it, and waiver matching is exact, so neither screen
+is hidden behind the other. What the grammar does not do here is stop a reader from mistaking one
+for the other.
+Unassigned code points are accepted, because rejecting them would make an id's validity depend
+on which Unicode version the running Node build carries.
+
+The same grammar governs every operator-authored and derived id on the `usabl` command path:
+`surfaces[].id`, `usabl.routes.json` `screenId`, the screen id the router fallback derives from a
+route path in application source, `usabl.docs.json` `pageId`, requirement ids and the surface a
+requirement names (section 13), the keys of `noiseBudget.perSurface`, which are screen ids matched
+against one by exact comparison, and every id that `usabl init` and `usabl init --docs` derive. An
+authored id that fails is refused at parse. A derived id that fails is never minted. At run time
+the router fallback sets such a route aside and the planner records it as a `skipped` coverage
+gap whenever a wide-blast change would have queued it, so the gate reads it as not covered
+rather than as absent. `usabl init` and `usabl init --docs` refuse the whole draft: a written
+sidecar takes precedence over router fallback, the planners queue every route or page in the
+sidecar or manifest on a wide-blast or shared-file change, and neither records a gap for an
+entry that is not there, so a draft written without the refused route or page would let such a
+change read as fully checked while that screen is never scanned. The refusal names every
+unusable route or page by file (and line, for a route), with the position and code point when a
+character was refused and the grammar reason otherwise (an empty id, or one not in NFC form,
+which must be normalized), and the fix, never the id or the path it came from, and writes
+nothing.
+
+What that covers, and what it does not. The grammar holds for every id these commands actually
+derive, and the line in a route refusal is the line of the match the parser made. It says nothing
+about a route the parser never recovered from the router source: no id is derived for it, so
+nothing refuses it, and it is simply absent from the draft. Router source is matched by pattern,
+not parsed, and the cases it reads wrongly or not at all are listed under the documented limits in
+section 8.
+
+The boundary, stated exactly. Ids already present in the evidence floor (`.usabl-evidence.json`)
+and in waiver files (`.usabl-waivers.json`), and the inputs a caller passes directly to the
+exported library functions (`gate()` and `mintReceipt()` from the package entry), are not
+re-validated against the grammar. On the command path every id in those files was minted from, or
+matched against, an id that had already passed the grammar at parse, so the command path is
+covered end to end. A library caller that builds its own floor, waiver, or receipt input bypasses
+that parse, and nothing downstream checks the grammar again. Closing that boundary is listed
+under "After the freeze" at the end of this section.
 
 A blank or repeated id is refused when the config is read. Left in, it would collapse two
 screens into one entry: the second screen is dropped from the scan while its changed files
@@ -1666,6 +1782,26 @@ opens a browser.
 
 There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 (nothing to check) is an explicit informational allow. That is code, not a config dial.
+
+### After the freeze
+
+Work on this section that is known and deferred until after the freeze.
+
+- Re-validate every screen or surface id field a caller can pass directly to the exported
+  library functions, so the id grammar holds for `gate()` and `mintReceipt()` callers and not
+  only for the `usabl` command path. For `gate()` those fields of `GateInput` are
+  `coverage.affected[].screenId`, `drafts[].screenId`, `floor.entries[].screenId`,
+  `waivers[].surface`, and every member of `cleanlyScannedScreens`. For `mintReceipt()` they are
+  `checked`, `applicability[].screenId`, and the id fields of the `UsablConfig` it is handed:
+  `surfaces[].id` and the keys of `noiseBudget.perSurface`. `mintReceipt()` is exported from the
+  package entry and takes any structurally valid `UsablConfig`; it never calls `parseUsablConfig`,
+  so a library caller can hand it ids the grammar would refuse. On the `usabl` command path the
+  config is parsed before it reaches the receipt, so those two fields arrive validated there, but
+  that is a property of the path, not of the function, and it is the function this item is about.
+  None of these is checked today on the library path.
+  The grammar governs screen and surface ids only. It does not govern rule ids, element keys,
+  waiver scopes, receipt `notCovered` entries (file references), or receipt `surfaces` (output
+  channels), and this item makes no claim about them.
 
 ---
 

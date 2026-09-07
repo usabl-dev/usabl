@@ -8,6 +8,7 @@
  */
 import type { FsGlob } from '../contracts/index.js';
 import { configError } from '../intake/config-error.js';
+import { describeIdProblem } from '../intake/id-grammar.js';
 
 export interface DocsPageEntry {
   pageId: string;
@@ -42,6 +43,18 @@ function expectNonEmptyString(value: unknown, field: string): string {
     throw configError`usabl.docs.json ${field} must be a non-empty string`;
   }
   return str;
+}
+
+function expectPageId(value: unknown, field: string): string {
+  const id = expectString(value, field);
+  // pageId is the scan identity for a docs page and shares the screen id space with surfaces and
+  // routes, so it follows the same grammar. The message names the position and code point of a
+  // refused character and never repeats the id.
+  const problem = describeIdProblem(id);
+  if (problem !== null) {
+    throw configError`usabl.docs.json ${field} ${problem}`;
+  }
+  return id;
 }
 
 function expectDocsPathUrl(value: unknown, field: string): string {
@@ -136,7 +149,7 @@ function parseSidecar(raw: string): DocsManifest {
       throw configError`usabl.docs.json pages[${index}] must be an object`;
     }
     return {
-      pageId: expectNonEmptyString(entry['pageId'], `pages[${index}].pageId`),
+      pageId: expectPageId(entry['pageId'], `pages[${index}].pageId`),
       url: expectDocsPathUrl(entry['url'], `pages[${index}].url`),
       assemblyFile: expectSafeRelativePath(entry['assemblyFile'], `pages[${index}].assemblyFile`),
       sources: expectSafeRelativePathArray(entry['sources'], `pages[${index}].sources`),

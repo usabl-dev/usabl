@@ -101,6 +101,32 @@ Words.
     expect(await roundTrips(JSON.stringify(draft.manifest))).toBe(true);
   });
 
+  it('refuses the draft when a leaf path slugs to an empty pageId rather than leave the page out', async () => {
+    // A top-level topic with no Dir and a File made of underscores slugs to nothing. The parser
+    // refuses a blank pageId, and a manifest without the page would let a shared-file change
+    // read as fully checked while the page is never scanned, so the whole draft is refused.
+    const fs = memoryFs({
+      '_topic_maps/_topic_map.yml': `---
+Name: Loose
+Topics:
+  - Name: Blank
+    File: __
+  - Name: Fine
+    File: fine
+`,
+      '__.adoc': `= Blank name
+`,
+      'fine.adoc': `= Fine
+`,
+    });
+
+    await expect(inferAsciibinder(fs)).rejects.toThrow(/refused to write usabl\.docs\.json/);
+    await expect(inferAsciibinder(fs)).rejects.toThrow(
+      /__\.adoc: the pageId slugged from its path must be a non-empty string/,
+    );
+    expect(fs.store['usabl.docs.json']).toBeUndefined();
+  });
+
   it('throws a clear error when the topic map parses but yields no usable pages', async () => {
     const fs = memoryFs({
       '_topic_maps/_topic_map.yml': `---

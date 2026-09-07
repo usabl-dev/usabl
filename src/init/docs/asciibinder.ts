@@ -12,7 +12,9 @@ import { posix } from 'node:path';
 import yaml from 'js-yaml';
 import { buildAdocIncludeGraph } from '../../coverage/asciidoc-include-graph.js';
 import type { DocsManifest, DocsPageEntry } from '../../coverage/docs-manifest.js';
+import { validateId } from '../../intake/id-grammar.js';
 import { slug } from '../../primitives/slug.js';
+import { DOCS_INIT_REFUSAL, unusableIdsError, type UnusableId } from '../unusable-ids.js';
 import type { DocsInitDraft, DocsInitFs } from './index.js';
 
 const TOPIC_MAP_PATH = '_topic_maps/_topic_map.yml';
@@ -94,6 +96,7 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
   }
 
   const pages: DocsPageEntry[] = [];
+  const unusable: UnusableId[] = [];
   const usedPageIds = new Set<string>();
 
   const uniquePageId = (candidate: string): string => {
@@ -133,13 +136,31 @@ export async function inferAsciibinder(fs: DocsInitFs): Promise<DocsInitDraft> {
       continue;
     }
 
-    const pageId = uniquePageId(slug(chainWithFile.join('/')));
+    // Ask the question the sidecar parser is going to ask, at the point the id is made. The slug
+    // keeps only letters, digits, and hyphens, so the one way it fails the grammar is by coming
+    // out empty, which happens when no Dir or File segment has a letter or digit in it. Writing
+    // that page would produce a manifest usabl then refuses to read, and leaving it out would let
+    // a shared-file change look fully checked while the page is never scanned, so the page is
+    // collected and the whole draft is refused once every leaf has been seen.
+    const candidate = slug(chainWithFile.join('/'));
+    const refusal = validateId(candidate);
+    if (!refusal.ok) {
+      unusable.push({ source: assemblyFile, origin: 'the pageId slugged from its path', refusal });
+      continue;
+    }
+    const pageId = uniquePageId(candidate);
     const graph = await buildAdocIncludeGraph(fs, assemblyFile);
     for (const gap of graph.unresolved) {
       notes.push(`Review: unresolved include in ${gap.from}: "${gap.target}" (${gap.reason}).`);
     }
 
     pages.push({ pageId, url, assemblyFile, sources: graph.sources });
+  }
+
+  // Refuse before the empty check, because a map whose every leaf is unusable is empty for a
+  // reason the operator can fix, and that reason is the one to print.
+  if (unusable.length > 0) {
+    throw unusableIdsError(DOCS_INIT_REFUSAL, unusable);
   }
 
   if (pages.length === 0) {

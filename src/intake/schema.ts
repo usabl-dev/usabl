@@ -14,6 +14,7 @@ import type {
   Requirement,
   RequirementBundle,
 } from '../contracts/index.js';
+import { describeRequirementIdProblem } from './requirement-ids.js';
 
 export type ParseBundleResult =
   | { ok: true; bundle: RequirementBundle }
@@ -60,9 +61,9 @@ const assertionSchema = z.discriminatedUnion('type', [
 
 const requirementSchema = z
   .object({
-    id: z.string().min(1, 'id is required'),
+    id: z.string(),
     kind: z.enum(['content', 'flow', 'doc']),
-    surface: z.string().min(1, 'surface is required'),
+    surface: z.string(),
     description: z.string().min(1, 'description is required'),
     assertion: assertionSchema,
     owner: z.string().min(1, 'owner must not be empty').optional(),
@@ -70,6 +71,22 @@ const requirementSchema = z
   })
   .strict()
   .superRefine((requirement, ctx) => {
+    // The id becomes the rule a waiver matches on, and the surface is the other half of the waiver
+    // key and the screen the requirement is checked on. Both have to be readable as identities
+    // before anything else looks at them, so both go through the shared id grammar, which also
+    // refuses the empty string. This runs per requirement because it is a shape rule for one
+    // field. Uniqueness needs the whole directory and is checked by the loader.
+    for (const field of ['id', 'surface'] as const) {
+      const problem = describeRequirementIdProblem(requirement[field]);
+      if (problem !== null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: problem,
+        });
+      }
+    }
+
     if (requirement.kind !== requirement.assertion.type) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

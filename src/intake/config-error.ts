@@ -33,6 +33,51 @@ export function operatorText(value: unknown): string {
 }
 
 /**
+ * Prepares an operator-authored file path to be quoted in a message.
+ *
+ * The scrubber removes a whole terminal control sequence, payload included, so a file named
+ * "ok<ESC>]0;title<BEL>.yaml" would print as "ok.yaml" and read as the same file as a clean one.
+ * Each control character is first replaced by its visible code point label, which is plain
+ * ASCII, so the sequence is inert and the two names stay distinguishable. The rest of the
+ * scrubbing still applies through the caller.
+ */
+export function operatorPath(path: string): string {
+  let out = '';
+  for (const character of path) {
+    const code = character.codePointAt(0) ?? 0;
+    const isControl = code < 0x20 || (code >= 0x7f && code <= 0x9f);
+    out += isControl ? `<U+${code.toString(16).toUpperCase().padStart(4, '0')}>` : character;
+  }
+  return out;
+}
+
+// The longest a file path is printed in a message. A message that names two files interpolates
+// each as its own value, so a long first path can never push the second one past the cap and out
+// of the message, and a message that prefixes a path to a reason keeps the reason readable.
+const PATH_TEXT_LIMIT = 72;
+
+/**
+ * Prepares an operator-authored file path to be quoted in a message, bounded in length.
+ *
+ * Control characters become code point labels first, as in `operatorPath`, so a file name that
+ * carried a control sequence still reads as a different file from a clean one. A path longer
+ * than the limit is then shortened from the middle, keeping its start and its file name, with a
+ * visible marker where characters were removed. The rest of the scrubbing still applies through
+ * the caller.
+ */
+export function boundedOperatorPath(path: string): string {
+  const characters = [...operatorPath(path)];
+  if (characters.length <= PATH_TEXT_LIMIT) {
+    return characters.join('');
+  }
+  const marker = '...';
+  const keep = PATH_TEXT_LIMIT - marker.length;
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return `${characters.slice(0, head).join('')}${marker}${characters.slice(characters.length - tail).join('')}`;
+}
+
+/**
  * Builds a config error whose interpolated values are all scrubbed.
  *
  * Use it for every message that quotes anything read out of a config or manifest file, including

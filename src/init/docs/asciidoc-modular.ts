@@ -16,7 +16,9 @@
 import { posix } from 'node:path';
 import { buildAdocIncludeGraph } from '../../coverage/asciidoc-include-graph.js';
 import type { DocsManifest, DocsPageEntry } from '../../coverage/docs-manifest.js';
+import { validateId } from '../../intake/id-grammar.js';
 import { slug } from '../../primitives/slug.js';
+import { DOCS_INIT_REFUSAL, unusableIdsError, type UnusableId } from '../unusable-ids.js';
 import type { DocsInitDraft, DocsInitFs } from './index.js';
 
 const PANTHEON_MASTER_GLOB = 'titles/*/master.adoc';
@@ -84,7 +86,8 @@ function matchIncludeTarget(trimmed: string): string | null {
 }
 
 // The author-written block anchor, recognized in every form Pantheon uses. Returns the raw
-// anchor value, which is already a valid pageId. Returns null when no anchor is present.
+// anchor value; whether it is a valid pageId is decided by the id grammar where the page is
+// made, not here. Returns null when no anchor is present.
 function matchAnchor(line: string): string | null {
   if (!line.startsWith('[')) return null;
   const idQuoted = /^\[id=(?:"([^"]+)"|'([^']+)')/.exec(line);
@@ -138,6 +141,7 @@ async function discoverSharedGlobs(fs: DocsInitFs): Promise<string[]> {
 export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraft> {
   const notes: string[] = [];
   const pages: DocsPageEntry[] = [];
+  const unusable: UnusableId[] = [];
   const usedPageIds = new Set<string>();
 
   const uniquePageId = (candidate: string): string => {
@@ -177,11 +181,24 @@ export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraf
       }
 
       const anchor = findAnchorId(assemblyContent);
-      let pageId: string;
-      if (anchor !== null) {
-        pageId = uniquePageId(anchor);
-      } else {
-        pageId = uniquePageId(fileBaseSlug(assemblyFile));
+      const candidate = anchor ?? fileBaseSlug(assemblyFile);
+      // Ask the question the sidecar parser is going to ask, at the point the id is made. An
+      // anchor is authored text and can carry a raw space, a joining character, or a blank glyph,
+      // and a filename slug can come out empty, so writing either would produce a manifest usabl
+      // then refuses to read. The page is not skipped either: a manifest without it would let a
+      // shared-file change look fully checked while the page is never scanned. Every such page is
+      // collected so the whole draft can be refused at once, naming each one.
+      const refusal = validateId(candidate);
+      if (!refusal.ok) {
+        unusable.push({
+          source: assemblyFile,
+          origin: anchor !== null ? 'its anchor pageId' : 'the pageId guessed from its filename',
+          refusal,
+        });
+        continue;
+      }
+      const pageId = uniquePageId(candidate);
+      if (anchor === null) {
         notes.push(
           `Review: no anchor found in ${assemblyFile}. The pageId "${pageId}" was guessed from the filename. Confirm it before you commit this file.`,
         );
@@ -195,6 +212,12 @@ export async function inferAsciidocModular(fs: DocsInitFs): Promise<DocsInitDraf
       const url = `/${slug(titleDir)}/${fileBaseSlug(assemblyFile)}/index.html`;
       pages.push({ pageId, url, assemblyFile, sources: graph.sources });
     }
+  }
+
+  // Refuse before the empty check, because a guide whose every page is unusable is empty for a
+  // reason the operator can fix, and that reason is the one to print.
+  if (unusable.length > 0) {
+    throw unusableIdsError(DOCS_INIT_REFUSAL, unusable);
   }
 
   if (pages.length === 0) {

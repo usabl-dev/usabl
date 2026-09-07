@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FsGlob } from '../../src/contracts/index.js';
 import { loadRequirements } from '../../src/intake/load.js';
 import { buildGuardedSet } from '../../src/trust/guard.js';
+import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
 import { testConfig } from '../helpers.js';
 
 function scriptedFs(paths: string[], files: Record<string, string | null>): FsGlob {
@@ -250,5 +251,323 @@ requirements:
   it('adds requirements path to the guarded policy set', () => {
     const guardedSet = buildGuardedSet(testConfig({ requirements: 'requirements/' }));
     expect(guardedSet).toContain('requirements/');
+  });
+
+  function requirementFile(id: string, selector: string): string {
+    return `
+version: 1
+requirements:
+  - id: ${id}
+    kind: content
+    surface: clusters
+    description: account text
+    assertion:
+      type: content
+      selector: ${selector}
+      expectedText: Account name
+    approved: true
+`;
+  }
+
+  it('fails closed when two files in the bundle declare the same requirement id', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/name.yaml', 'requirements/email.yaml'], {
+        'requirements/email.yaml': requirementFile('account-name', 'p.email'),
+        'requirements/name.yaml': requirementFile('account-name', 'h1'),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      verdict: 'approval_required',
+      path: 'requirements/name.yaml',
+    });
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('account-name');
+    expect(result.reason).toContain(
+      'declared at requirements[0] in requirements/name.yaml and already at requirements[0] in requirements/email.yaml',
+    );
+  });
+
+  it('fails closed when one file declares the same requirement id twice', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/both.yaml'], {
+        'requirements/both.yaml': `
+version: 1
+requirements:
+  - id: account-name
+    kind: content
+    surface: clusters
+    description: account name heading
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Account name
+    approved: true
+  - id: account-name
+    kind: content
+    surface: clusters
+    description: account email label
+    assertion:
+      type: content
+      selector: p.email
+      expectedText: Account name
+    approved: true
+`,
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      verdict: 'approval_required',
+      path: 'requirements/both.yaml',
+    });
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('account-name');
+    expect(result.reason).toContain(
+      'declared at requirements[0] and again at requirements[1] in requirements/both.yaml',
+    );
+  });
+
+  it('accepts distinct requirement ids across files', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/name.yaml', 'requirements/email.yaml'], {
+        'requirements/email.yaml': requirementFile('account-email', 'p.email'),
+        'requirements/name.yaml': requirementFile('account-name', 'h1'),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses a requirement id that hides a character, by position and code point', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/a.yaml'], {
+        'requirements/a.yaml': requirementFile('"account\\u2800name"', 'h1'),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result).toMatchObject({ ok: false, verdict: 'approval_required', path: 'requirements/a.yaml' });
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).toContain('requirements[0].id');
+    expect(result.reason).toContain('at position 8');
+    expect(result.reason).toContain('U+2800');
+    expect(result.reason).not.toContain('\u2800');
+  });
+
+  it('does not echo a terminal escape sequence carried by a rejected id', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/a.yaml'], {
+        'requirements/a.yaml': `
+version: 1
+requirements:
+  - id: "boom\\u001b[2Jclear"
+    kind: content
+    surface: clusters
+    description: first
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Account name
+    approved: true
+`,
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).not.toContain('\u001b');
+    expect(result.reason).toContain('U+001B');
+  });
+});
+
+describe('loadRequirements scrubs every reason it returns', () => {
+  // The reason reaches a terminal and, through the stop hook, a model. Every string that can
+  // carry file bytes or a file name goes through the same scrubber, so these assert the outcome
+  // on the real loader rather than on any one producer.
+  const ESC = '\u001b';
+  const BEL = '\u0007';
+
+  function rawControlBytes(text: string): string[] {
+    return [...text].filter((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code < 0x20 && character !== '\n';
+    });
+  }
+
+  function requirementYaml(id: string): string {
+    return `
+version: 1
+requirements:
+  - id: ${id}
+    kind: content
+    surface: clusters
+    description: account text
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Account name
+    approved: true
+`;
+  }
+
+  it('strips a literal escape byte that breaks YAML parsing before any id is checked', async () => {
+    // A raw ESC inside a double-quoted YAML scalar is a parse error, and the parser quotes the
+    // offending source line in its message. That line must not reach the reason as written.
+    const result = await loadRequirements(
+      scriptedFs(['requirements/a.yaml'], {
+        'requirements/a.yaml': requirementYaml(`"ok${ESC}]0;OWNED${BEL}tail"`),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(rawControlBytes(result.reason)).toEqual([]);
+    expect(result.reason).not.toContain('OWNED');
+  });
+
+  it('strips a forged frame marker carried by a YAML source line', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/a.yaml'], {
+        'requirements/a.yaml': requirementYaml(`"${UNTRUSTED_FRAME_END}${ESC}"`),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(rawControlBytes(result.reason)).toEqual([]);
+    expect(result.reason).not.toContain(UNTRUSTED_FRAME_END);
+  });
+
+  it('strips an escape sequence carried by a file path in the duplicate reason', async () => {
+    const hostilePath = `requirements/ok${ESC}]0;OWNED${BEL}.yaml`;
+    const result = await loadRequirements(
+      scriptedFs(['requirements/ok.yaml', hostilePath], {
+        'requirements/ok.yaml': requirementYaml('same-id'),
+        [hostilePath]: requirementYaml('same-id'),
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    // The loader sorts paths, and the escape byte sorts before the dot, so the hostile path is the
+    // first declaration and the clean one is the repeat. The reason names both, and the control
+    // characters in the hostile name print as code point labels so it still reads as a different
+    // file from the clean one.
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(rawControlBytes(result.reason)).toEqual([]);
+    expect(result.reason).toContain('same-id');
+    expect(result.reason).toContain('at requirements[0] in requirements/ok.yaml');
+    expect(result.reason).toContain('already at requirements[0] in requirements/ok<U+001B>]0;OWNED<U+0007>.yaml');
+  });
+
+  it('strips an escape sequence carried by a file path in a read failure', async () => {
+    const hostilePath = `requirements/${ESC}[2J.yaml`;
+    const result = await loadRequirements(
+      scriptedFs([hostilePath], {}),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(rawControlBytes(result.reason)).toEqual([]);
+    expect(result.reason).toContain('requirements path requirements/<U+001B>[2J.yaml:');
+  });
+
+  it('strips an unrecognised key name that the schema quotes back', async () => {
+    const result = await loadRequirements(
+      scriptedFs(['requirements/a.yaml'], {
+        'requirements/a.yaml': `
+version: 1
+requirements:
+  - id: account-name
+    kind: content
+    surface: clusters
+    description: account text
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Account name
+    approved: true
+    "x\\u001b]0;OWNED\\u0007": 1
+`,
+      }),
+      testConfig({ requirements: 'requirements/' }),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(rawControlBytes(result.reason)).toEqual([]);
+    expect(result.reason).not.toContain('OWNED');
+  });
+
+  it('bounds the whole duplicate reason when both paths are very long', async () => {
+    // The locations inside the duplicate reason were already bounded, but the loader prefixes the
+    // repeat path to the reason a second time, and an unbounded prefix would bury the sentence
+    // that says what to fix. Every path in the reason is now shortened from the middle, so the
+    // whole reason stays under a cap that does not grow with the path, while both file names and
+    // both positions stay visible.
+    //
+    // The cap is derived from the caps on the parts. Each path is at most 72 characters and
+    // appears three times (once as the prefix, twice inside the duplicate sentence), the id is
+    // at most 120 characters and appears twice, the two positions are short numbers, and the
+    // fixed sentence text is under 300 characters. That sums to under 800 for any input. The
+    // measured length here, with an ordinary id, is 541. The second assertion is the one that
+    // matters: the length does not move with the path, so doubling the path leaves it unchanged.
+    const REASON_LENGTH_CAP = 800;
+    const firstPath = `requirements/${'a'.repeat(300)}/first.yaml`;
+    const repeatPath = `requirements/${'b'.repeat(300)}/second.yaml`;
+    const longerFirstPath = `requirements/${'a'.repeat(600)}/first.yaml`;
+    const longerRepeatPath = `requirements/${'b'.repeat(600)}/second.yaml`;
+
+    async function reasonFor(first: string, repeat: string): Promise<string> {
+      const result = await loadRequirements(
+        scriptedFs([first, repeat], {
+          [first]: requirementYaml('same-id'),
+          [repeat]: requirementYaml('same-id'),
+        }),
+        testConfig({ requirements: 'requirements/' }),
+      );
+      expect(result.ok).toBe(false);
+      return result.ok ? '' : result.reason;
+    }
+
+    const reason = await reasonFor(firstPath, repeatPath);
+    expect(reason.length).toBeLessThan(REASON_LENGTH_CAP);
+    expect(reason).toContain('requirements path requirements/bbb');
+    expect(reason).toContain('bbb/second.yaml: duplicate requirement id "same-id"');
+    expect(reason).toContain('at requirements[0] in requirements/bbb');
+    expect(reason).toContain('bbb/second.yaml and already at requirements[0] in requirements/aaa');
+    expect(reason).toContain('aaa/first.yaml.');
+    expect(reason).toContain('...');
+    expect(reason).not.toContain('(truncated)');
+
+    const longerReason = await reasonFor(longerFirstPath, longerRepeatPath);
+    expect(longerReason.length).toBe(reason.length);
   });
 });

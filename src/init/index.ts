@@ -6,7 +6,6 @@
  */
 import { posix } from 'node:path';
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
-import { describeSurfaceIdProblem } from '../intake/surface-ids.js';
 import { operatorText } from '../intake/config-error.js';
 import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
 import {
@@ -14,7 +13,10 @@ import {
   mergeParsedRoutes,
   parseDataRouterRoutes,
   screenIdFromUrl,
+  type ParsedRouteSite,
 } from '../coverage/router-parse.js';
+import { validateId } from '../intake/id-grammar.js';
+import { APP_INIT_REFUSAL, unusableIdsError, type UnusableId } from './unusable-ids.js';
 
 // Init writes only these two drafts. Waivers stay human-authored judgment.
 const POLICY_FILES = ['usabl.config.json', 'usabl.routes.json'] as const;
@@ -107,18 +109,22 @@ function isProvenRoutePath(path: string): boolean {
   return path.startsWith('/') && !path.startsWith('//') && !path.includes('@') && path !== '*';
 }
 
-function parseRouteTags(raw: string): Array<{ path: string; component: string | null }> {
-  const routes: Array<{ path: string; component: string | null }> = [];
+// The tag name the route regex below matches. The attribute group starts immediately after it,
+// which is what turns an offset inside the attributes into an offset in the file.
+const ROUTE_TAG_PREFIX = '<Route';
+
+function parseRouteTags(raw: string): ParsedRouteSite[] {
+  const routes: ParsedRouteSite[] = [];
   // Self-closing tags only. Opening <Route> parents are layouts; inferring
   // their children would require a nesting walk this draft does not claim.
   const tags = /<Route\b([^>]*?)\/>/g;
   for (const match of raw.matchAll(tags)) {
     const attrs = match[1];
-    if (typeof attrs !== 'string') {
+    if (typeof attrs !== 'string' || match.index === undefined) {
       continue;
     }
     const pathMatch = attrs.match(/\bpath\s*=\s*['"`]([^'"`]+)['"`]/);
-    if (pathMatch === null || pathMatch[1] === undefined) {
+    if (pathMatch === null || pathMatch[1] === undefined || pathMatch.index === undefined) {
       continue;
     }
     const path = pathMatch[1];
@@ -126,9 +132,20 @@ function parseRouteTags(raw: string): Array<{ path: string; component: string | 
       continue;
     }
     const elementMatch = attrs.match(/\belement\s*=\s*\{\s*<\s*([A-Za-z_$][\w$]*)/);
-    routes.push({ path, component: elementMatch?.[1] ?? null });
+    // Point at the path attribute, not at the start of the tag, so a tag spread over several
+    // lines is reported at the line that carries the path.
+    routes.push({
+      path,
+      component: elementMatch?.[1] ?? null,
+      offset: match.index + ROUTE_TAG_PREFIX.length + pathMatch.index,
+    });
   }
   return routes;
+}
+
+// One-based line number of a source offset, the way an editor numbers lines.
+function lineAtOffset(raw: string, offset: number): number {
+  return raw.slice(0, offset).split('\n').length;
 }
 
 async function resolveEntryFile(
@@ -211,6 +228,7 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
   }
 
   const routes: RouteEntry[] = [];
+  const unusable: UnusableId[] = [];
   if (routerRaw !== null) {
     const imports = parseLocalImports(routerRaw);
     const parsed = mergeParsedRoutes(parseRouteTags(routerRaw), parseDataRouterRoutes(routerRaw));
@@ -232,6 +250,29 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
           entryFile = await resolveEntryFile(fs, routerFile, specifier);
         }
       }
+      // Ask the question the parser is going to ask, at the point the id is made. A route path
+      // can hold a raw space, a joining character, or a blank glyph, and the derived id would
+      // carry it, so writing that route would produce a sidecar usabl then refuses to read. The
+      // route is not skipped either: a written sidecar takes precedence over router fallback and
+      // the planner records no gap for a route that is not in it, so a sidecar without this route
+      // would let a change to a shared entry file or a wide-blast file look fully checked while
+      // the route is never scanned. Every such route is collected so the whole draft can be
+      // refused at once. The route is named by file and line, never by its path, because the
+      // path is what carries the refused character. The line comes from the offset the parser
+      // recorded for the path literal it matched, so it is the line of that match and not the
+      // first place the same text appears in the file. The parser does not strip comments, so a
+      // commented-out route is matched like any other and the line can name a commented
+      // declaration. The operator still gets the file and a line to open.
+      const screenId = screenIdFromUrl(route.path);
+      const refusal = validateId(screenId);
+      if (!refusal.ok) {
+        unusable.push({
+          source: `${routerFile} line ${lineAtOffset(routerRaw, route.offset)}`,
+          origin: 'the screen id derived from the route path there',
+          refusal,
+        });
+        continue;
+      }
       // Missing attribution stays null. Guessing an entry file would hide a
       // coverage gap behind a mapping we cannot prove.
       if (entryFile !== null) {
@@ -240,7 +281,7 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
         notes.push(`Review: ${route.path} has no proven entry file.`);
       }
       routes.push({
-        screenId: screenIdFromUrl(route.path),
+        screenId,
         url: route.path,
         entryFile,
       });
@@ -249,6 +290,11 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
     if (routerRaw.includes('path="*"') || routerRaw.includes("path='*'")) {
       notes.push('Review: skipped catch-all route path="*".');
     }
+  }
+
+  // Refuse once every route has been seen, so one run shows the whole fix.
+  if (unusable.length > 0) {
+    throw unusableIdsError(APP_INIT_REFUSAL, unusable);
   }
 
   const srcTsx = await fs.glob(['src/**/*.tsx']);
@@ -278,17 +324,8 @@ export async function inferInit(fs: InitFs): Promise<InitDraft> {
       notes.push(`Review: skipped surface URL for ${operatorText(route.url)}; it leaves ${origin}.`);
       continue;
     }
-    // Ask the question the parser is going to ask. A route path can hold a raw space or a joining
-    // character, and screenIdFromUrl carries it straight into the id, so writing that surface would
-    // produce a config usabl then refuses to read. Skipping it with a note keeps the generator and
-    // the validator agreeing, and leaves the operator a route they can name themselves.
-    const idProblem = describeSurfaceIdProblem(route.screenId);
-    if (idProblem !== null) {
-      notes.push(
-        `Review: skipped surface for route ${operatorText(route.url)}; its screen id ${idProblem}`,
-      );
-      continue;
-    }
+    // Every route here already passed the id grammar when its id was derived above, so a surface
+    // taken from it is one the parser will accept.
     surfaces.push({
       id: route.screenId,
       url,

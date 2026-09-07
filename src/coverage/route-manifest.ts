@@ -5,8 +5,9 @@
  * It must never invent entry-file attribution from router text.
  */
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
-import { parseRouterFallback } from './router-parse.js';
+import { parseRouterFallback, type UnusableRoute } from './router-parse.js';
 import { configError } from '../intake/config-error.js';
+import { describeIdProblem } from '../intake/id-grammar.js';
 
 export interface RouteEntry {
   screenId: string;
@@ -23,6 +24,11 @@ export interface RouteManifest {
   // readable at all, which is also what the trust overlay produces when it suppresses a diverged
   // manifest and no router file can be read.
   source: 'sidecar' | 'router' | 'none';
+  // Routes the router fallback found but could not name, because the id derived from the path
+  // fails the id grammar. Only the fallback produces these: an authored sidecar refuses such an
+  // id at parse, and init never writes one. The planner reports each as a gap when wide blast
+  // would otherwise have queued it, so a route that cannot be scanned is not silently absent.
+  unusable?: UnusableRoute[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -44,6 +50,18 @@ function expectRoutePathUrl(value: unknown, field: string): string {
     throw configError`usabl.routes.json ${field} must start with "/" and must not contain "@"`;
   }
   return url;
+}
+
+function expectScreenId(value: unknown, field: string): string {
+  const id = expectString(value, field);
+  // screenId is the planner's scan identity and keys the floor, findings, waivers, and the
+  // receipt, so it follows the same grammar as every other id. The message names the position
+  // and code point of a refused character and never repeats the id.
+  const problem = describeIdProblem(id);
+  if (problem !== null) {
+    throw configError`usabl.routes.json ${field} ${problem}`;
+  }
+  return id;
 }
 
 function expectEntryFile(value: unknown): string | null {
@@ -72,7 +90,7 @@ function parseSidecar(raw: string): RouteManifest {
         throw configError`usabl.routes.json routes[${index}] must be an object`;
       }
       return {
-        screenId: expectString(entry['screenId'], `routes[${index}].screenId`),
+        screenId: expectScreenId(entry['screenId'], `routes[${index}].screenId`),
         url: expectRoutePathUrl(entry['url'], `routes[${index}].url`),
         entryFile: expectEntryFile(entry['entryFile']),
       };

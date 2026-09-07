@@ -311,7 +311,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         await writeFile(path, contents, 'utf8');
       },
     };
-    const draft = await inferInit(initFs);
+    let draft;
+    try {
+      // Init throws when a derived screen id is one the parser would refuse. A draft without
+      // that route would hide it from coverage, so the refusal surfaces as an error and nothing
+      // is written, the same way docs init refuses.
+      draft = await inferInit(initFs);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`usabl: ${message}\n`);
+      return 2;
+    }
     const result = await writeInitDrafts(initFs, draft, { force: opts.force });
     process.stdout.write(formatInitReport(draft, result));
     return result.ok ? 0 : 2;

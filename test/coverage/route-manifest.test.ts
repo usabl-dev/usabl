@@ -30,6 +30,35 @@ describe('parseRouteManifest', () => {
     );
   });
 
+  it('refuses a sidecar screenId that carries a bidi control, by position and code point', async () => {
+    // screenId keys the floor, findings, waivers, and the receipt, so it follows the shared id
+    // grammar. The message names where the character is and never repeats the id.
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'clusters\u202e', url: '/clusters', entryFile: 'src/Clusters.tsx' }],
+      }),
+    });
+
+    await expect(parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] })).rejects.toThrow(
+      /routes\[0\]\.screenId contains a character that is not allowed, at position 9: U\+202E/,
+    );
+    await expect(parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] })).rejects.not.toThrow(
+      /\u202e/,
+    );
+  });
+
+  it('refuses an empty sidecar screenId', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: '', url: '/clusters', entryFile: 'src/Clusters.tsx' }],
+      }),
+    });
+
+    await expect(parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] })).rejects.toThrow(
+      /routes\[0\]\.screenId must be a non-empty string/,
+    );
+  });
+
   it('accepts sidecar routes when each screenId is unique', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({
