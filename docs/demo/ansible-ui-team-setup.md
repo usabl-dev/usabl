@@ -67,7 +67,7 @@ First time on the evidence floor? Run `usabl baseline` before you treat failures
 
 ## Wire your editor
 
-The fork already ships Claude Code and Cursor integration files. When you clone, the hooks and
+The demo repository already ships Claude Code and Cursor integration files. When you clone, the hooks and
 commands are ready. If they are missing or you need to regenerate them, run the install commands
 below from the ansible-ui clone.
 
@@ -125,7 +125,7 @@ Look for `stop-hook`, `claude usabl-check skill`, and `cursor stop hook + assist
 ## Test ansible-ui as a brownfield app
 
 ansible-ui is a real, login-gated monorepo. usabl treats it as **brownfield**: existing accessibility
-debt is expected until you baseline it. The gate then blocks a **new**, unwaived barrier on the screens mapped from the changed UI files, coverage it could not confirm, and an edit to a guarded policy file.
+debt is expected until you baseline it. The gate then blocks a **new**, unwaived barrier above the floor on the screens mapped from the changed UI files, coverage it could not confirm, and an edit to a guarded policy file. A barrier that lands in headroom the floor still records counts as carried until `usabl floor prune` re-arms the floor, and usabl discloses that headroom on every run where it exists.
 
 ### What to expect on first run
 
@@ -135,16 +135,28 @@ debt is expected until you baseline it. The gate then blocks a **new**, unwaived
 | `not_covered` | A changed file mapped to no screen, or Chromium/session/tunnel missing. |
 | `approval required` | You edited guarded policy (`usabl.config.json`, routes, evidence). |
 
-Do **not** run `usabl init` on ansible-ui. The fork already ships `usabl.config.json` and
+Do **not** run `usabl init` on ansible-ui. The demo repository already ships `usabl.config.json` and
 `usabl.routes.json`.
 
 ### Brownfield loop (recommended order)
 
-**1. Baseline the floor** (already done - Ed committed `.usabl-evidence.json` to the fork)
+**1. Baseline the floor** (not done yet: the demo repository has no `.usabl-evidence.json`)
 
-The baseline records existing accessibility debt so it does not block your PRs. Carried debt no
-longer gates; only **new** barriers do. You do not need to run `usabl baseline` unless the floor is
-missing or you are resetting it.
+The baseline records existing accessibility debt so it does not block your PRs. On this application
+a plain `usabl baseline` refuses: the three mapped screens sit against whole-front-end UI globs, so
+the run reports 1,669 unresolved files, and the refusal itself names `--partial`. Run
+`usabl baseline --partial` instead. It writes a version 2 partial floor over only the cleanly scanned
+screens (78 entries measured on the last run) and marks the file as partial, so a reader knows what
+it covers. Review and commit that floor through a normal PR. After it lands, carried debt no longer
+gates; a **new**, unwaived barrier above the floor still does, and so do unconfirmed coverage and
+guarded policy edits.
+
+Because ansible-ui is login-gated, declare a `reachedWhen` selector on each surface in
+`usabl.config.json`, naming content only that screen has (its own heading or table, never the shell,
+header, or navigation). A screen usabl cannot reach signed in is a coverage gap, never scored: a
+refused same-host request at either of its two reads, a password field anywhere on the page, or a
+redirect to a sign-in page marks the screen as not reached. `reachedWhen` is your assertion, not a
+proof usabl can check.
 
 **2. Map fixes before you chase axe noise**
 
@@ -173,7 +185,7 @@ the surfaces that file maps to.
 
 **4. Pay down debt**
 
-When you fix a floored finding, run a full scan and prune paid-down identities:
+When you fix a floored finding, run a full scan and prune the floor. `usabl floor prune` removes the identities the scan no longer observes and lowers the count on identities it observed fewer of:
 
 ```
 USABL_STORAGE_STATE=./.usabl-session.json usabl check
@@ -328,7 +340,7 @@ type `/usabl-check`. In Cursor, ask the agent to run the command above.
 USABL_STORAGE_STATE=./.usabl-session.json usabl check
 ```
 
-This is the real gate. `verified` means the fix worked. `regression` means new barriers remain.
+This is the real gate. `verified` means no new barrier above the reviewed floor blocks the change: usabl observed that the barrier is no longer present, it did not witness the fix. `regression` means a new barrier remains.
 Fix them before pushing.
 
 ### 5. Commit and push
