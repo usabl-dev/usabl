@@ -365,7 +365,7 @@
       <div class="body">
         <p class="eyebrow">The short answer</p>
         <h1 id="hero-title">usabl checks an accessibility change against the code that made it, and discloses every gap it detected.</h1>
-        <p class="lede">It finds the affected screens, collects machine-checkable accessibility evidence, makes one gate-owned decision, and shows that same result wherever the team works.</p>
+        <p class="lede">It finds the affected screens, collects machine-checkable accessibility evidence, makes one gate-owned decision, and shows that result in the terminal, the overlay, the stop hook, and the pull request. CI runs the engine again against trusted-base policy, and the Playwright page check can differ.</p>
         <p>It is built for a specific risk. A developer or AI assistant can change interface code, run a scanner, and still call the work done after the scanner skipped a screen or after the code changed again. usabl keeps those gaps visible.</p>
         <p class="boundary"><strong>The claim:</strong> a verified result means no new deterministic accessibility barrier was found in the affected screens and checks that ran. It does not mean the whole product is accessible. It does not replace testing by disabled people or an accessibility expert.</p>
         <div class="actions">
@@ -415,11 +415,11 @@
           </article>
           <article class="card">
             <h3>PatternFly rules</h3>
-            <p>Checks interaction behavior that depends on PatternFly components, such as focus entering and returning from a dialog.</p>
+            <p>Checks PatternFly composition rules: static reads of the rendered page, such as a menu toggle's expanded state, and probes of interaction behavior, such as focus entering and returning from a dialog.</p>
           </article>
           <article class="card">
             <h3>Keyboard walk</h3>
-            <p>Moves through interactive controls and records focus order, accessible names, roles, states, and navigation gaps.</p>
+            <p>Presses Tab through the page, reading the accessibility tree at each stop, and reports interactive controls with no accessible name, stops whose tree node cannot be resolved, and walks cut short by the time budget or the tab cap.</p>
           </article>
         </div>
         <p class="rule"><strong>Authority rule:</strong> every draft carries one of four evidence classes: deterministic, preview, model-judgment, and human-confirmed. Only deterministic evidence can affect the v0.2.1 gate. Preview, model-judgment, and human-confirmed observations may be shown for review, but they cannot create a verified result or receipt.</p>
@@ -442,7 +442,7 @@
             <li><strong>5. Otherwise</strong> Report verified.</li>
           </ol>
           <div class="verdicts" role="list">
-            <div class="verdict" role="listitem"><strong class="verified">Verified, exit 0</strong><p>No new deterministic accessibility barrier was found in the complete affected coverage.</p></div>
+            <div class="verdict" role="listitem"><strong class="verified">Verified, exit 0</strong><p>No new unwaived deterministic accessibility barrier was found on the screens coverage mapped from the changed UI files, and no coverage gap or unconfirmed deterministic finding was detected.</p></div>
             <div class="verdict" role="listitem"><strong class="regression">Regression, exit 1</strong><p>A deterministic check found a new accessibility barrier compared with the accepted floor.</p></div>
             <div class="verdict" role="listitem"><strong class="not-covered">Not covered, exit 3</strong><p>Required accessibility coverage or evidence could not be completed.</p></div>
             <div class="verdict" role="listitem"><strong class="approval">Approval required, exit 2</strong><p>Trusted policy, evidence, or gate code changed and must not approve itself.</p></div>
