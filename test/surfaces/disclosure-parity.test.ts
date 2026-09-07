@@ -16,11 +16,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { CoverageGap, Finding, Result } from '../../src/contracts/index.js';
-import { NO_FIX_RECORDED, discloseGaps } from '../../src/output/disclosure.js';
+import { NO_FIX_RECORDED, discloseGaps, isBlockingBarrier } from '../../src/output/disclosure.js';
 import { projectCli } from '../../src/surfaces/cli.js';
 import { evaluateStopDecision } from '../../src/surfaces/stop-hook.js';
 import { projectSelfCheck } from '../../src/surfaces/self-check.js';
 import { projectPrComment } from '../../src/surfaces/pr-comment.js';
+import { overlayClientSource } from '../../src/surfaces/overlay-client.js';
 import { projectOverlay } from '../../src/surfaces/vite-plugin.js';
 
 // Distinctive substrings, so an assertion cannot pass on incidental text.
@@ -599,5 +600,41 @@ describe('a clean run does not invent coverage language', () => {
 
     expect(projectCli(clean).text).not.toContain('gap');
     expect(projectSelfCheck(clean).message).not.toContain('gap');
+  });
+});
+
+/**
+ * One lifecycle rule, not four.
+ *
+ * "Does this finding block" is the gate's answer, and every surface has to give the same one. The
+ * terminal used to answer it with its own filter, new-or-carried, and the browser panel did not
+ * ask the question at all. Both then called accepted debt a barrier and told a developer to fix it.
+ *
+ * The terminal and the pull request comment import the shared predicate. The panel runs in a page,
+ * so it cannot import anything, and the same source is carried into its client text instead. These
+ * assertions hold that wiring: the client must use the predicate as it is written, and it must not
+ * grow a second copy of the rule beside it.
+ */
+describe('the overlay client answers "does it block" with the shared predicate', () => {
+  it('carries the predicate source itself, rather than a second copy of the rule', () => {
+    expect(overlayClientSource).toContain(`const isBlockingBarrier = ${isBlockingBarrier.toString()}`);
+  });
+
+  it('names the predicate exactly once, so nothing shadows it later in the client', () => {
+    const declarations = overlayClientSource.match(/(?:function|const|let|var) isBlockingBarrier\b/g) ?? [];
+    // Two: the const the client binds, and the name the function expression carries.
+    expect(declarations.length).toBe(2);
+  });
+
+  it('reads only fields the overlay projection carries', () => {
+    // The predicate is handed a projected finding, not a Result finding. A field the projection
+    // drops would read as undefined in the browser and quietly move a barrier into the recorded
+    // list, so the fields it reads are pinned here against the projection's own output.
+    const projected = projectOverlay(blockedResult()).findings[0]!;
+
+    expect(projected.evidenceClass).toBeDefined();
+    expect(projected.status).toBeDefined();
+    expect(projected.confidence).toBeDefined();
+    expect(isBlockingBarrier(projected as unknown as Finding)).toBe(true);
   });
 });

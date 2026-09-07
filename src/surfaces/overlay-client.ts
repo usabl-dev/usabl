@@ -3,6 +3,7 @@
  * This unit renders read-only status from server projections.
  * It must never influence gate outcomes or trust page text as HTML.
  */
+import { isBlockingBarrier } from '../output/disclosure.js';
 import { UNTRUSTED_FRAME_END, UNTRUSTED_FRAME_START } from './scrub.js';
 
 export const overlayClientSource = `(() => {
@@ -33,6 +34,17 @@ export const overlayClientSource = `(() => {
   // marker wording changed, and would show a user raw markers instead of the page text.
   const UNTRUSTED_START = ${JSON.stringify(UNTRUSTED_FRAME_START)};
   const UNTRUSTED_END = ${JSON.stringify(UNTRUSTED_FRAME_END)};
+
+  // The one definition of "does this finding block", carried into the browser as its own source.
+  //
+  // The panel has to answer this to tell work apart from accepted debt, and the answer belongs to
+  // the gate. Hand-writing the rule again here would make a second lifecycle rule that can drift
+  // from the gate's, which is the exact defect this split exists to remove: the panel used to
+  // partition findings without looking at status at all, so it offered "How to fix it" for debt
+  // the gate had already accepted. The predicate reads three fields the overlay projection
+  // carries, evidenceClass, status, and confidence, and closes over nothing, so its own source is
+  // the whole of it.
+  const isBlockingBarrier = ${isBlockingBarrier.toString()};
 
   // Captured at module load, before any page script has had a chance to replace them. The overlay
   // runs in the page's own realm, so it can never be made tamper proof, but the cheapest lever is a
@@ -77,6 +89,13 @@ export const overlayClientSource = `(() => {
 
   const MISSING_ELEMENT_TEXT =
     'This was flagged here at the last scan; it is not on the page right now.';
+
+  // The two headings the findings on a screen are listed under, and the words the header uses when
+  // it refers to them. One name each, written once, so the sentence in the header and the heading
+  // in the list can never say different things about the same finding. The terminal summary prints
+  // the same two names in lower case.
+  const BLOCKING_HEADING = 'Barriers that block this run';
+  const RECORDED_HEADING = 'Recorded, not blocking';
 
   // Bounds on the work one render is allowed to do. A Result is engine-authored but its finding text
   // is page-derived, so a hostile or simply enormous page can hand us megabyte strings and thousands
@@ -241,9 +260,15 @@ export const overlayClientSource = `(() => {
   //
   // The overlay is screen-aware: it guides the developer one screen at a time. It matches the live
   // pathname to a scanned screen through coverage.affected, then partitions findings by screenId.
-  // "here" is a flat list of this screen's findings sorted worst first, each individually locatable.
-  // "elsewhere" is a per-screen count plus a path to navigate to, and never the other screens'
-  // individual findings.
+  // "here" is a flat list of this screen's findings, each individually locatable. "elsewhere" is a
+  // per-screen count plus a path to navigate to, and never the other screens' individual findings.
+  //
+  // Within a screen the findings are split again, by whether the gate is not verified because of
+  // them. hereBlocking is work. hereRecorded is what the gate already accepted: carried floor debt,
+  // a waiver, a finding the run proved gone, and advisory evidence, none of which stops this run.
+  // The two are kept apart from here down so no surface can put recorded debt where a barrier
+  // belongs, and blocking findings always come first in "here" so the combined list can never lead
+  // with something that is not blocking.
   function partitionByScreen(payload, currentPath, currentLocation) {
     const affected = (payload && payload.coverage && Array.isArray(payload.coverage.affected))
       ? payload.coverage.affected
@@ -276,16 +301,26 @@ export const overlayClientSource = `(() => {
       }
     }
 
-    const here = [];
+    const hereBlocking = [];
+    const hereRecorded = [];
     const elsewhereCounts = new Map();
     for (const finding of findings) {
       if (currentScreenId !== null && finding.screenId === currentScreenId) {
-        here.push(finding);
+        (isBlockingBarrier(finding) ? hereBlocking : hereRecorded).push(finding);
         continue;
       }
       const entry = elsewhereCounts.get(finding.screenId)
-        || { screenId: finding.screenId, count: 0, worstRank: UNRATED_RANK, worstSeverity: 'unrated' };
+        || {
+          screenId: finding.screenId,
+          count: 0,
+          blockingCount: 0,
+          worstRank: UNRATED_RANK,
+          worstSeverity: 'unrated',
+        };
       entry.count += 1;
+      if (isBlockingBarrier(finding)) {
+        entry.blockingCount += 1;
+      }
       const rank = severityRank(finding.severity);
       if (rank < entry.worstRank) {
         entry.worstRank = rank;
@@ -294,21 +329,27 @@ export const overlayClientSource = `(() => {
       elsewhereCounts.set(finding.screenId, entry);
     }
 
-    // Worst first, so the row a developer should read first is the row they see first. Array sort is
-    // stable, so findings of equal severity keep the order the engine gave them.
-    here.sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
+    // Worst first within each group, so the row a developer should read first is the row they see
+    // first. Array sort is stable, so findings of equal severity keep the order the engine gave them.
+    const bySeverity = (a, b) => severityRank(a.severity) - severityRank(b.severity);
+    hereBlocking.sort(bySeverity);
+    hereRecorded.sort(bySeverity);
+    const here = hereBlocking.concat(hereRecorded);
 
     const elsewhere = [];
     let elsewhereTotal = 0;
+    let elsewhereBlockingTotal = 0;
     for (const entry of elsewhereCounts.values()) {
       // Prefer the scan-time pathname for this screen when we have one, so the navigating link is a
       // real route. When a finding names a screen that is not in coverage.affected, we have no path
       // and omit the link rather than guess a route that may not exist.
       const path = screenPath.get(entry.screenId) || null;
       elsewhereTotal += entry.count;
+      elsewhereBlockingTotal += entry.blockingCount;
       elsewhere.push({
         screenId: entry.screenId,
         count: entry.count,
+        blockingCount: entry.blockingCount,
         worstRank: entry.worstRank,
         worstSeverity: entry.worstSeverity,
         path,
@@ -325,8 +366,11 @@ export const overlayClientSource = `(() => {
       currentScreenId,
       currentPath: normalizedCurrent,
       here,
+      hereBlocking,
+      hereRecorded,
       elsewhere,
       elsewhereTotal,
+      elsewhereBlockingTotal,
       gap: gaps.here,
       unattributedGaps: gaps.unattributed,
     };
@@ -403,8 +447,11 @@ export const overlayClientSource = `(() => {
       currentScreenId: null,
       currentPath: normalizePath(currentPath),
       here: [],
+      hereBlocking: [],
+      hereRecorded: [],
       elsewhere: [],
       elsewhereTotal: 0,
+      elsewhereBlockingTotal: 0,
       gap: null,
       unattributedGaps: 0,
     };
@@ -422,14 +469,26 @@ export const overlayClientSource = `(() => {
     ]);
   }
 
-  function keyedFindings(findings) {
+  // Keys are minted across both groups at once, so a finding in the recorded list can never take a
+  // key that a barrier already holds and steal its highlight.
+  function keyedFindings(blocking, recorded) {
     const seen = new Map();
     const rows = [];
-    for (const finding of findings) {
+    const add = (finding, isBlocking) => {
       const base = rowKeyFor(finding);
       const seenCount = seen.get(base) || 0;
       seen.set(base, seenCount + 1);
-      rows.push({ finding, key: seenCount === 0 ? base : base + '#' + seenCount });
+      rows.push({
+        finding,
+        blocking: isBlocking,
+        key: seenCount === 0 ? base : base + '#' + seenCount,
+      });
+    };
+    for (const finding of blocking) {
+      add(finding, true);
+    }
+    for (const finding of recorded) {
+      add(finding, false);
     }
     return rows;
   }
@@ -571,13 +630,18 @@ export const overlayClientSource = `(() => {
 
   function accessibilityLine(payload, split) {
     // Where the issues are, for the developer who can fix them now. Empty when there are none.
+    //
+    // Blocking findings only. A run can carry accepted debt and still be verified, and counting
+    // that debt here told a developer they had issues to deal with on a run that holds nothing
+    // against them. The debt is still listed below, under its own heading, which says what it is.
     let where = '';
-    if (split.matched && (split.here.length > 0 || split.elsewhereTotal > 0)) {
-      where = countLabel(split.here.length, 'issue') + ' on this screen and '
-        + split.elsewhereTotal + ' on other screens';
-    } else if (split.elsewhereTotal > 0) {
-      where = countLabel(split.elsewhereTotal, 'issue') + ' on '
-        + countLabel(split.elsewhere.length, 'other screen');
+    if (split.matched && (split.hereBlocking.length > 0 || split.elsewhereBlockingTotal > 0)) {
+      where = countLabel(split.hereBlocking.length, 'issue') + ' on this screen and '
+        + split.elsewhereBlockingTotal + ' on other screens';
+    } else if (split.elsewhereBlockingTotal > 0) {
+      const screens = split.elsewhere.filter((entry) => entry.blockingCount > 0).length;
+      where = countLabel(split.elsewhereBlockingTotal, 'issue') + ' on '
+        + countLabel(screens, 'other screen');
     }
 
     // Absent, not null: an older projection that never carried the field. Say so and point at the
@@ -659,20 +723,54 @@ export const overlayClientSource = `(() => {
         : unaffectedLine(payload, split);
     }
     if (verdict.key === 'verified') {
-      // A verified Result can still carry waived and already-fixed findings. Saying "no findings"
-      // beside a list of them contradicts the list, so name the gating lane instead.
-      const base = split.here.length > 0 || split.elsewhereTotal > 0
-        ? 'No new gating findings. The findings listed are accepted, waived, or already fixed.'
-        : 'No findings on any screen usabl checked.';
-      return payload.receipt ? base + ' The receipt below records what that covered.' : base;
+      // A verified run can still carry findings: floor debt it accepted, a waiver, something it
+      // proved gone, advisory evidence. None of that blocks, so the lead sentence says nothing
+      // blocks and never sends the developer to fix a screen. Saying "no findings" beside a list
+      // of them would contradict the list, so the list is named on its own line instead.
+      const nothingBlocks = 'Nothing blocks this run.';
+      const lead = payload.receipt
+        ? nothingBlocks + ' The receipt below records what that covered.'
+        : nothingBlocks;
+      if (split.here.length === 0 && split.elsewhereTotal === 0) {
+        const nothingFound = 'No findings on any screen usabl checked.';
+        return payload.receipt
+          ? nothingFound + ' The receipt below records what that covered.'
+          : nothingFound;
+      }
+      if (split.hereRecorded.length === 0) {
+        return [lead, 'usabl listed findings on other screens. None of them block this run.'];
+      }
+      return [lead, recordedNote(split)];
     }
     // Blocking verdict from here down.
-    if (split.here.length === 0) {
-      return split.elsewhereTotal > 0
-        ? 'No findings on this screen, but other screens have findings and the gate is blocked.'
-        : 'No findings on this screen, and usabl still reports ' + verdict.word.toLowerCase() + '.';
+    if (split.hereBlocking.length > 0) {
+      const found = 'usabl found ' + countLabel(split.hereBlocking.length, 'accessibility barrier')
+        + ' on this screen. Fix ' + (split.hereBlocking.length === 1 ? 'it' : 'them') + ' first.';
+      return split.hereRecorded.length > 0 ? [found, recordedNote(split)] : found;
     }
-    return 'usabl found ' + countLabel(split.here.length, 'accessibility barrier') + ' on this screen.';
+    if (split.hereRecorded.length > 0) {
+      // Findings are listed here, but not one of them is why the run is blocked. Calling them
+      // barriers would send the developer to fix accepted debt, which is the thing the evidence
+      // floor exists to stop.
+      const lead = split.elsewhereBlockingTotal > 0
+        ? 'No barriers on this screen. Other screens have barriers and the gate is blocked.'
+        : 'No barriers on this screen, and usabl still reports ' + verdict.word.toLowerCase() + '.';
+      return [lead, recordedNote(split)];
+    }
+    return split.elsewhereTotal > 0
+      ? 'No findings on this screen, but other screens have findings and the gate is blocked.'
+      : 'No findings on this screen, and usabl still reports ' + verdict.word.toLowerCase() + '.';
+  }
+
+  // The one sentence that says what the recorded findings on this screen are. Written wherever the
+  // header names a list that holds them, so a reader never has to open the list to learn that the
+  // things in it do not block.
+  function recordedNote(split) {
+    const one = split.hereRecorded.length === 1;
+    return countLabel(split.hereRecorded.length, 'finding') + ' on this screen '
+      + (one ? 'is' : 'are') + ' recorded already and ' + (one ? 'does' : 'do')
+      + ' not block this run. ' + (one ? 'It is' : 'They are') + ' listed under '
+      + RECORDED_HEADING + '.';
   }
 
   // What the collapsed badge says.
@@ -695,13 +793,25 @@ export const overlayClientSource = `(() => {
 
     const word = verdict.word.toLowerCase();
     if (!isSettledClean(verdict.key)) {
-      if (split.matched && split.here.length > 0) {
+      if (split.matched && split.hereBlocking.length > 0) {
         return {
           key: verdict.key,
           symbol: '✕',
-          count: split.here.length,
-          label: 'usabl: ' + word + ', ' + countLabel(split.here.length, 'issue')
+          count: split.hereBlocking.length,
+          label: 'usabl: ' + word + ', ' + countLabel(split.hereBlocking.length, 'issue')
             + ' on this screen. Open inspector.',
+        };
+      }
+      // Findings are listed on this screen, but none of them is why the run is blocked. The count
+      // is left off the badge on purpose: a number beside the blocked glyph reads as work waiting,
+      // and this is not work waiting. The label says both facts instead.
+      if (split.matched && !split.gap && split.hereRecorded.length > 0) {
+        return {
+          key: verdict.key,
+          symbol: '!',
+          count: null,
+          label: 'usabl: ' + word + ' elsewhere. No barriers on this screen, '
+            + countLabel(split.hereRecorded.length, 'recorded finding') + '. Open inspector.',
         };
       }
       if (split.matched && split.gap) {
@@ -739,14 +849,14 @@ export const overlayClientSource = `(() => {
       };
     }
     if (split.here.length > 0) {
-      // Verified with waived or already-fixed findings on this screen. They are listed, so the count
-      // has to appear, but calling them issues would contradict the verdict beside them.
+      // Verified with carried, waived, or already-fixed findings on this screen. They are listed, so
+      // the count has to appear, but calling them issues would contradict the verdict beside them.
       return {
         key: 'clear',
         symbol: '✓',
         count: split.here.length,
-        label: 'usabl: ' + word + ', ' + countLabel(split.here.length, 'non-gating finding')
-          + ' on this screen. Open inspector.',
+        label: 'usabl: ' + word + ', ' + countLabel(split.here.length, 'recorded finding')
+          + ' on this screen, none blocking. Open inspector.',
       };
     }
     return {
@@ -1189,6 +1299,28 @@ export const overlayClientSource = `(() => {
         white-space: nowrap;
       }
 
+      /* One group of rows: a heading that names what the rows are, an optional line under it, then
+         the rows. The two groups are told apart by their headings and by the words in them, never
+         by a colour or by their order alone. The spacing only keeps them from running together. */
+      .finding-group + .finding-group {
+        margin-top: 14px;
+      }
+
+      .group-heading {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 6px;
+      }
+
+      .group-note {
+        margin-bottom: 8px;
+        color: var(--graphite);
+        font-size: 0.75rem;
+        line-height: 1.45;
+      }
+
       /* The list scrolls inside its own bounded box, so a screen with forty findings never pushes
          the coverage footer off the bottom of the window. No hard cap on how many rows exist. */
       .finding-scroll {
@@ -1409,14 +1541,31 @@ export const overlayClientSource = `(() => {
         overflow-wrap: anywhere;
       }
 
+      /* Neutral, because this counts barriers and recorded debt together. Only the blocking chip
+         beside it carries the alarm, and it says the number in words as well. */
       .elsewhere-count {
         display: inline-flex;
         padding: 1px 7px;
         border-radius: 999px;
-        background: var(--red-light);
-        color: var(--red-ink);
+        background: var(--mute);
+        color: var(--mute-ink);
         font-size: 0.6875rem;
         font-weight: 700;
+      }
+
+      .elsewhere-blocking {
+        display: inline-flex;
+        padding: 1px 7px;
+        border-radius: 999px;
+        background: var(--mute);
+        color: var(--mute-ink);
+        font-size: 0.6875rem;
+        font-weight: 700;
+      }
+
+      .elsewhere-blocking[data-blocking="yes"] {
+        background: var(--red-light);
+        color: var(--red-ink);
       }
 
       .elsewhere-worst {
@@ -2237,7 +2386,13 @@ export const overlayClientSource = `(() => {
     const detail = row.detail;
 
     appendDetailBlock(detail, 'Why this matters', finding.why);
-    appendDetailBlock(detail, 'How to fix it', finding.fix);
+    // The fix is kept for a recorded finding, because a developer may choose to pay the debt down,
+    // and it is not phrased as an instruction, because nothing here is asking them to.
+    appendDetailBlock(
+      detail,
+      row.blocking ? 'How to fix it' : 'How to fix it when you choose to',
+      finding.fix,
+    );
 
     const elementBlock = make('div', 'detail-block');
     elementBlock.appendChild(make('h4', '', 'Element'));
@@ -2315,15 +2470,48 @@ export const overlayClientSource = `(() => {
 
     item.appendChild(button);
     item.appendChild(detail);
-    return { item, button, detail, key: entry.key, finding, workspaceRoot, filled: false };
+    return {
+      item,
+      button,
+      detail,
+      key: entry.key,
+      finding,
+      blocking: entry.blocking,
+      workspaceRoot,
+      filled: false,
+    };
   }
 
-  // The current-screen section: every finding on this screen, worst first, one row each. This is
-  // where the developer works, so nothing is grouped away and nothing is hidden behind a budget.
+  // One group of rows under a heading that says what the rows are: work, or debt already recorded.
+  //
+  // The heading is a real heading element, and the count beside it is text. Nothing about the
+  // difference between the two groups is carried by colour or by position alone.
+  function renderFindingGroup(title, count, note) {
+    const group = make('div', 'finding-group');
+    const heading = make('div', 'group-heading');
+    heading.appendChild(make('h4', '', title));
+    heading.appendChild(make('span', 'section-count', countLabel(count, 'finding')));
+    group.appendChild(heading);
+    if (note) {
+      group.appendChild(make('p', 'group-note', note));
+    }
+    const list = make('ul', 'finding-list');
+    group.appendChild(list);
+    return { group, list };
+  }
+
+  // The current-screen section: every finding on this screen, one row each. This is where the
+  // developer works, so nothing is grouped away and nothing is hidden behind a budget.
+  //
+  // Two lists, never one. A barrier is a reason this run is not verified, and a recorded finding is
+  // one the gate already accepted: carried floor debt, a waiver, something proved gone, advisory
+  // evidence. Listing them together under one heading that said "Issues" told a developer to go and
+  // fix debt that blocks nothing, which is the opposite of what the evidence floor promises. The
+  // barriers come first, always, so the work is never below the debt.
   function renderCurrentScreen(payload, split) {
     const section = make('section', 'section current-screen');
     const heading = make('div', 'section-heading');
-    heading.appendChild(make('h3', '', 'Issues on this screen'));
+    heading.appendChild(make('h3', '', 'Findings on this screen'));
 
     if (split.gap) {
       // In scope but not checked. An empty list here must not read as a clean screen.
@@ -2354,7 +2542,7 @@ export const overlayClientSource = `(() => {
       return section;
     }
 
-    heading.appendChild(make('span', 'section-count', countLabel(split.here.length, 'issue') + ' total'));
+    heading.appendChild(make('span', 'section-count', countLabel(split.here.length, 'finding') + ' total'));
     section.appendChild(heading);
 
     if (!split.here.length) {
@@ -2363,8 +2551,25 @@ export const overlayClientSource = `(() => {
     }
 
     const scroll = make('div', 'finding-scroll');
-    const list = make('ul', 'finding-list');
-    const entries = keyedFindings(split.here);
+    const entries = keyedFindings(split.hereBlocking, split.hereRecorded);
+    // Each group is built whenever it has findings, and its heading always carries the true count
+    // for that group, whether or not the paging below has built its rows yet.
+    let blockingList = null;
+    let recordedList = null;
+    if (split.hereBlocking.length > 0) {
+      const built = renderFindingGroup(BLOCKING_HEADING, split.hereBlocking.length, '');
+      blockingList = built.list;
+      scroll.appendChild(built.group);
+    }
+    if (split.hereRecorded.length > 0) {
+      const built = renderFindingGroup(
+        RECORDED_HEADING,
+        split.hereRecorded.length,
+        'usabl already recorded these. They do not block this run. Fix them when you choose to.',
+      );
+      recordedList = built.list;
+      scroll.appendChild(built.group);
+    }
     // Rows are built a page at a time.
     //
     // Not a scrolling window that recycles rows: recycling removes the row a keyboard user is
@@ -2380,9 +2585,12 @@ export const overlayClientSource = `(() => {
       const start = state.rows.length;
       const end = Math.min(start + ROW_PAGE_SIZE, entries.length);
       for (let index = start; index < end; index += 1) {
-        const row = renderFindingRow(entries[index], index, payload.workspaceRoot, entries.length);
+        const entry = entries[index];
+        const row = renderFindingRow(entry, index, payload.workspaceRoot, entries.length);
         state.rows.push(row);
-        list.appendChild(row.item);
+        // Blocking entries come first in the list, so a page that spans the boundary fills the end
+        // of the barrier list and then the start of the recorded one, in that order.
+        (entry.blocking ? blockingList : recordedList).appendChild(row.item);
       }
       const left = entries.length - state.rows.length;
       if (left <= 0) {
@@ -2415,7 +2623,6 @@ export const overlayClientSource = `(() => {
     });
 
     appendPage();
-    scroll.appendChild(list);
     section.appendChild(scroll);
     if (entries.length > ROW_PAGE_SIZE) {
       section.appendChild(remaining);
@@ -2424,15 +2631,26 @@ export const overlayClientSource = `(() => {
     return section;
   }
 
-  // The lead sentence of the elsewhere guide depends on whether there is anything to do here first.
+  // The lead sentence of the elsewhere guide depends on whether there is anything to do here first,
+  // and on whether anything blocks at all.
+  //
   // "Fix this screen first" on a screen with nothing to fix sent developers looking for findings
-  // that did not exist, so a clean or unchecked screen points at the worst screen instead.
-  function elsewhereLead(split) {
-    if (split.here.length > 0) {
+  // that did not exist, so a clean or unchecked screen points at the worst screen instead. On a
+  // verified run it must not send them anywhere: nothing blocks, and the findings on the other
+  // screens are debt the gate has already accepted. Telling a developer to go and work on a run
+  // that holds nothing against them is the same defect one screen over.
+  function elsewhereLead(payload, split) {
+    if (isSettledClean(verdictFor(payload, false, false).key)) {
+      return 'These screens also have findings usabl recorded. None of them block this run.';
+    }
+    if (split.hereBlocking.length > 0) {
       return 'Fix this screen first, then move on. These screens also have findings.';
     }
     if (!split.matched || split.gap) {
       return 'usabl did not check this screen. Start with the screen that has the worst findings.';
+    }
+    if (split.hereRecorded.length > 0) {
+      return 'Nothing on this screen blocks this run. Start with the screen that has the worst findings.';
     }
     return 'Nothing was found on this screen. Start with the screen that has the worst findings.';
   }
@@ -2440,16 +2658,18 @@ export const overlayClientSource = `(() => {
   // The elsewhere guide: one entry per other scanned screen that has findings, worst screen first,
   // with a count and a real navigating link. It never lists the findings of other screens. The
   // intent is fix this screen, then go there, or go straight there when this screen has nothing.
-  function renderElsewhere(split) {
+  function renderElsewhere(payload, split) {
     if (!split.elsewhere.length) {
       return null;
     }
     const section = make('section', 'section elsewhere');
     const heading = make('div', 'section-heading');
     heading.appendChild(make('h3', '', 'On other screens'));
-    heading.appendChild(make('span', 'section-count', countLabel(split.elsewhereTotal, 'issue')));
+    // "finding", not "issue": this count holds barriers and recorded debt together, and only the
+    // per-screen rows below can say which is which.
+    heading.appendChild(make('span', 'section-count', countLabel(split.elsewhereTotal, 'finding')));
     section.appendChild(heading);
-    section.appendChild(make('p', 'elsewhere-lead', elsewhereLead(split)));
+    section.appendChild(make('p', 'elsewhere-lead', elsewhereLead(payload, split)));
 
     const list = make('ul', 'elsewhere-list');
     for (const entry of split.elsewhere) {
@@ -2457,6 +2677,16 @@ export const overlayClientSource = `(() => {
       const info = make('div', 'elsewhere-info');
       info.appendChild(make('span', 'elsewhere-name', entry.screenId));
       info.appendChild(make('span', 'elsewhere-count', countLabel(entry.count, 'finding')));
+      // How many of that screen's findings are work. A row that says only "3 findings" reads as
+      // three things to fix even when the gate accepted all three, so the row says which it is.
+      const blockingChip = make(
+        'span',
+        'elsewhere-blocking',
+        entry.blockingCount > 0 ? entry.blockingCount + ' blocking' : 'none blocking',
+      );
+      // The colour repeats what the words already say. It never carries the meaning on its own.
+      blockingChip.dataset.blocking = entry.blockingCount > 0 ? 'yes' : 'no';
+      info.appendChild(blockingChip);
       // Naming the worst severity explains the order of this list rather than leaving it a mystery.
       info.appendChild(make('span', 'elsewhere-worst', 'worst: ' + entry.worstSeverity));
       if (entry.path) {
@@ -2813,7 +3043,7 @@ export const overlayClientSource = `(() => {
     // be read.
     const children = tamper ? [tamper] : [];
     children.push(renderCurrentScreen(payload, split));
-    const elsewhere = renderElsewhere(split);
+    const elsewhere = renderElsewhere(payload, split);
     if (elsewhere) children.push(elsewhere);
     const receipt = renderReceipt(payload.receipt);
     if (receipt) children.push(receipt);

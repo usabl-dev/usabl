@@ -287,7 +287,7 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
       'Moderate',
       'Minor',
     ]);
-    expect(await panel.getByText('5 issues total').isVisible()).toBe(true);
+    expect(await panel.getByText('5 findings total').isVisible()).toBe(true);
 
     await page.context().close();
   });
@@ -1340,7 +1340,7 @@ describe('the panel tells a developer what to do next', { timeout: 40_000 }, () 
     expect(await panel.getByText('Nothing on this screen is proven.', { exact: true }).isVisible()).toBe(true);
 
     // The empty sections that used to bury the reason are gone.
-    expect(await panel.getByRole('heading', { name: 'Issues on this screen' }).count()).toBe(0);
+    expect(await panel.getByRole('heading', { name: 'Findings on this screen' }).count()).toBe(0);
     expect(await panel.getByRole('heading', { name: 'Coverage' }).count()).toBe(0);
     expect(await panel.locator('.screen-line').count()).toBe(0);
     expect(await panel.locator('.panel-body > .section').count()).toBe(1);
@@ -1844,7 +1844,7 @@ describe('the overlay never shows green for a run that is not green', { timeout:
     await page.context().close();
   });
 
-  it('calls a verified run carrying accepted debt non-gating, not clean', async () => {
+  it('calls a verified run carrying accepted debt recorded, not clean', async () => {
     const withDebt = result({
       verdict: 'verified',
       summary: 'verified: 0 gating findings',
@@ -1856,13 +1856,17 @@ describe('the overlay never shows green for a run that is not green', { timeout:
     // The count is still shown, because the finding is listed. Calling it an issue would contradict
     // the verified verdict printed beside it.
     expect(await badgeLabel(page)).toBe(
-      'usabl: verified, 1 non-gating finding on this screen. Open inspector.',
+      'usabl: verified, 1 recorded finding on this screen, none blocking. Open inspector.',
     );
     const panel = await openPanel(page);
     expect(await bannerWord(page)).toBe('✓Verified');
+    expect(await panel.getByText('Nothing blocks this run.', { exact: true }).isVisible()).toBe(true);
     expect(
       await panel
-        .getByText('No new gating findings. The findings listed are accepted, waived, or already fixed.')
+        .getByText(
+          '1 finding on this screen is recorded already and does not block this run. It is listed under Recorded, not blocking.',
+          { exact: true },
+        )
         .isVisible(),
     ).toBe(true);
     await page.context().close();
@@ -2406,7 +2410,7 @@ describe('the overlay announces state changes and stays visible on any host', { 
     // The announcement is the verdict word plus the header's own lines, so it says what a sighted
     // reader sees and nothing else.
     await expect.poll(async () => verdictStatus.textContent(), { timeout: 10_000 }).toBe(
-      'usabl: Regression. usabl found 2 accessibility barriers on this screen.',
+      'usabl: Regression. usabl found 2 accessibility barriers on this screen. Fix them first.',
     );
 
     const panel = await openPanel(page);
@@ -2415,7 +2419,7 @@ describe('the overlay announces state changes and stays visible on any host', { 
     await panel.getByRole('button', { name: 'Collapse the usabl inspector' }).click();
     await host.getByRole('button', { name: /Open inspector/i }).click();
     expect(await verdictStatus.textContent()).toBe(
-      'usabl: Regression. usabl found 2 accessibility barriers on this screen.',
+      'usabl: Regression. usabl found 2 accessibility barriers on this screen. Fix them first.',
     );
 
     await panel.getByRole('button', { name: 'Check again' }).click();
@@ -2621,7 +2625,7 @@ describe('the overlay announces state changes and stays visible on any host', { 
     // And it actually carries the announcement while collapsed.
     const verdictStatus = host.locator('.visually-hidden[role="status"]');
     await expect.poll(async () => verdictStatus.textContent(), { timeout: 10_000 }).toBe(
-      'usabl: Regression. usabl found 2 accessibility barriers on this screen.',
+      'usabl: Regression. usabl found 2 accessibility barriers on this screen. Fix them first.',
     );
 
     await page.context().close();
@@ -2711,7 +2715,7 @@ describe('the overlay bounds its own work', { timeout: 60_000 }, () => {
     // Bounded in the DOM.
     expect(await panel.locator('.finding-button').count()).toBe(40);
     // Truthful in what it reports. Bounding what is BUILT never changes what is COUNTED.
-    expect(await panel.getByText('500 issues total').isVisible()).toBe(true);
+    expect(await panel.getByText('500 findings total').isVisible()).toBe(true);
     expect(await panel.getByText('Showing 40 of 500 findings on this screen.').isVisible()).toBe(true);
     expect(await panel.locator('.screen-counts').textContent()).toBe('500 here · 0 on other screens');
 
@@ -2793,7 +2797,7 @@ describe('the overlay bounds its own work', { timeout: 60_000 }, () => {
       .locator(OVERLAY)
       .evaluate((host) => (host as HTMLElement).shadowRoot?.querySelectorAll('*').length ?? 0);
 
-    expect(await panel.getByText('3000 issues total').isVisible()).toBe(true);
+    expect(await panel.getByText('3000 findings total').isVisible()).toBe(true);
     // Forty rows with no detail bodies built, so a few hundred nodes, not sixty thousand.
     expect(shadowNodes).toBeLessThan(1500);
     expect(nodes).toBeLessThan(2000);
@@ -3230,3 +3234,282 @@ describe('the overlay moves out of the way of the element it points at', { timeo
 async function context0(page: Page): Promise<void> {
   await page.context().close();
 }
+
+/**
+ * The evidence floor's promise, held against the surface a developer watches while they work.
+ *
+ * Existing debt is recorded, it does not gate, and only a new barrier blocks. The panel used to
+ * partition findings without reading their lifecycle status at all, so a verified run carrying
+ * floor debt drew a list headed "Issues on this screen", offered "How to fix it" under every row,
+ * and led with "Fix this screen first, then move on." Every one of those sentences contradicts the
+ * verdict printed above it.
+ *
+ * These tests render the real client in a browser and read what a person would see: the lead
+ * sentence, the headings, the fix wording, and the order the two groups appear in.
+ */
+describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, () => {
+  const carried = finding({
+    status: 'carried',
+    rule: 'color-contrast',
+    whatUserExperiences: 'Carried contrast debt.',
+    fix: 'Raise contrast to 4.5:1.',
+    elementKey: 'clusters|color-contrast|name:view-cluster-details',
+  });
+
+  const waived = finding({
+    status: 'waived',
+    rule: 'link-name',
+    whatUserExperiences: 'Waived link name.',
+    fix: 'Give the link an accessible name.',
+    elementKey: 'clusters|link-name|name:docs',
+  });
+
+  /** Every heading in the current-screen section, in the order a reader meets them. */
+  async function groupHeadings(page: Page): Promise<string[]> {
+    return page.locator(OVERLAY).evaluate((host) => {
+      const root = (host as HTMLElement).shadowRoot;
+      if (!root) return [];
+      return Array.from(root.querySelectorAll('.current-screen .group-heading h4')).map(
+        (heading) => heading.textContent ?? '',
+      );
+    });
+  }
+
+  /** The rows under one group heading, in order, by their visible title. */
+  async function rowTitlesUnder(page: Page, heading: string): Promise<string[]> {
+    return page.locator(OVERLAY).evaluate((host, wanted) => {
+      const root = (host as HTMLElement).shadowRoot;
+      if (!root) return [];
+      const groups = Array.from(root.querySelectorAll('.current-screen .finding-group'));
+      const group = groups.find(
+        (candidate) => (candidate.querySelector('h4')?.textContent ?? '') === wanted,
+      );
+      if (!group) return [];
+      return Array.from(group.querySelectorAll('.finding-title')).map(
+        (title) => title.textContent ?? '',
+      );
+    }, heading);
+  }
+
+  it('leads a verified run carrying floor debt with nothing blocking, and never says to fix a screen', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'verified',
+          summary: 'verified: 0 gating findings',
+          findings: [carried],
+          exitCode: 0,
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    // The lead sentence reflects the verdict the gate reached, not the length of the list below it.
+    expect(await panel.getByText('Nothing blocks this run.', { exact: true }).isVisible()).toBe(true);
+    expect(await panel.getByText('Fix this screen', { exact: false }).count()).toBe(0);
+    expect(await panel.getByText('Fix them first', { exact: false }).count()).toBe(0);
+    expect(await panel.getByText('Start with the screen', { exact: false }).count()).toBe(0);
+
+    // The debt sits under its own heading, which says what it is, and no barrier heading exists.
+    expect(await groupHeadings(page)).toEqual(['Recorded, not blocking']);
+    expect(await rowTitlesUnder(page, 'Recorded, not blocking')).toEqual(['Carried contrast debt.']);
+    expect(
+      await panel
+        .getByText('usabl already recorded these. They do not block this run. Fix them when you choose to.', {
+          exact: true,
+        })
+        .isVisible(),
+    ).toBe(true);
+
+    // The fix is still there for a developer who chooses to pay it down, worded as a choice.
+    await panel.getByRole('button', { name: /Carried contrast debt/ }).click();
+    expect(
+      await panel.getByRole('heading', { name: 'How to fix it when you choose to' }).isVisible(),
+    ).toBe(true);
+    expect(await panel.getByRole('heading', { name: 'How to fix it', exact: true }).count()).toBe(0);
+    expect(await panel.getByText('Raise contrast to 4.5:1.').isVisible()).toBe(true);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  it('treats a waived finding on a verified run the same way it treats carried debt', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'verified',
+          summary: 'verified: 0 gating findings',
+          findings: [waived],
+          exitCode: 0,
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    expect(await panel.getByText('Nothing blocks this run.', { exact: true }).isVisible()).toBe(true);
+    expect(await panel.getByText('Fix this screen', { exact: false }).count()).toBe(0);
+    expect(await groupHeadings(page)).toEqual(['Recorded, not blocking']);
+    expect(await rowTitlesUnder(page, 'Recorded, not blocking')).toEqual(['Waived link name.']);
+
+    await panel.getByRole('button', { name: /Waived link name/ }).click();
+    expect(
+      await panel.getByRole('heading', { name: 'How to fix it when you choose to' }).isVisible(),
+    ).toBe(true);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  it('puts the new barrier first on a regression and marks the rest as not blocking', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          summary: 'regression: 1 gating finding',
+          findings: [
+            carried,
+            waived,
+            finding({ whatUserExperiences: 'New focus barrier.', fix: 'Move focus into the dialog.' }),
+          ],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+
+    // The instruction is about the barrier, and the recorded findings are named as not blocking.
+    expect(
+      await panel
+        .getByText('usabl found 1 accessibility barrier on this screen. Fix it first.', { exact: true })
+        .isVisible(),
+    ).toBe(true);
+    expect(
+      await panel
+        .getByText(
+          '2 findings on this screen are recorded already and do not block this run. They are listed under Recorded, not blocking.',
+          { exact: true },
+        )
+        .isVisible(),
+    ).toBe(true);
+
+    // Work above debt, never the other way round.
+    expect(await groupHeadings(page)).toEqual(['Barriers that block this run', 'Recorded, not blocking']);
+    expect(await rowTitlesUnder(page, 'Barriers that block this run')).toEqual(['New focus barrier.']);
+    expect(await rowTitlesUnder(page, 'Recorded, not blocking')).toEqual([
+      'Carried contrast debt.',
+      'Waived link name.',
+    ]);
+
+    // The badge counts what blocks, not what is listed.
+    expect(await badgeLabel(page)).toBe('usabl: regression, 1 issue on this screen. Open inspector.');
+
+    // The barrier keeps the plain fix heading; the debt keeps the one that says it is a choice.
+    await panel.getByRole('button', { name: /New focus barrier/ }).click();
+    expect(await panel.getByRole('heading', { name: 'How to fix it', exact: true }).isVisible()).toBe(true);
+    await panel.getByRole('button', { name: /Carried contrast debt/ }).click();
+    expect(
+      await panel.getByRole('heading', { name: 'How to fix it when you choose to' }).isVisible(),
+    ).toBe(true);
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  it('does not send a developer to another screen on a verified run', async () => {
+    // Debt on this screen and debt on another. Nothing blocks, so the guide to other screens says
+    // what is there and stops. "Start with the worst screen" would be work usabl is not asking for.
+    const page = await mount(
+      projectOverlay(
+        result({
+          verdict: 'verified',
+          summary: 'verified: 0 gating findings',
+          exitCode: 0,
+          coverage: {
+            changedFiles: ['src/app.tsx'],
+            affected: [
+              { screenId: 'clusters', url: 'http://127.0.0.1:5173/clusters', provenance: 'route-graph' },
+              { screenId: 'jobs', url: 'http://127.0.0.1:5173/jobs', provenance: 'route-graph' },
+            ],
+            unresolvedFiles: [],
+            gaps: [],
+            nothingToCheck: false,
+          },
+          findings: [carried, finding({ ...carried, screenId: 'jobs' })],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+    const elsewhere = panel.locator('.elsewhere');
+
+    expect(
+      await elsewhere
+        .getByText('These screens also have findings usabl recorded. None of them block this run.', {
+          exact: true,
+        })
+        .isVisible(),
+    ).toBe(true);
+    expect(await panel.getByText('Start with the screen', { exact: false }).count()).toBe(0);
+    expect(await panel.getByText('Fix this screen', { exact: false }).count()).toBe(0);
+    // The other screen's row says how many of its findings block, in words.
+    expect(await elsewhere.locator('.elsewhere-blocking').first().textContent()).toBe('none blocking');
+
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations).toEqual([]);
+
+    await page.context().close();
+  });
+
+  it('carries the difference between the two groups in text, never in colour alone', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          summary: 'regression: 1 gating finding',
+          findings: [carried, finding({ whatUserExperiences: 'New focus barrier.' })],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    await openPanel(page);
+
+    // Strip every colour the panel sets and the two groups still read as different things: the
+    // headings, the note, and the row severities are all words.
+    const readable = await page.locator(OVERLAY).evaluate((host) => {
+      const root = (host as HTMLElement).shadowRoot;
+      if (!root) return { headings: [] as string[], severities: [] as string[], note: '' };
+      return {
+        headings: Array.from(root.querySelectorAll('.current-screen .group-heading h4')).map(
+          (heading) => heading.textContent ?? '',
+        ),
+        severities: Array.from(root.querySelectorAll('.current-screen .severity-word')).map(
+          (word) => word.textContent ?? '',
+        ),
+        note: root.querySelector('.current-screen .group-note')?.textContent ?? '',
+      };
+    });
+
+    expect(readable.headings).toEqual(['Barriers that block this run', 'Recorded, not blocking']);
+    expect(readable.severities).toEqual(['Serious', 'Serious']);
+    expect(readable.note).toContain('do not block this run');
+    // The coloured dot beside each severity word is hidden from assistive technology, so the word
+    // is the only thing carrying severity.
+    expect(
+      await page
+        .locator(OVERLAY)
+        .evaluate((host) =>
+          Array.from((host as HTMLElement).shadowRoot?.querySelectorAll('.severity-dot') ?? []).every(
+            (dot) => dot.getAttribute('aria-hidden') === 'true',
+          ),
+        ),
+    ).toBe(true);
+
+    await page.context().close();
+  });
+});
