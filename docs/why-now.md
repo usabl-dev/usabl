@@ -56,7 +56,7 @@ claim compliance.
 - **Finding:** Developers using AI assistants often skip accessibility prompts, omit
   manual steps (labels, alt text), and **cannot verify compliance** after generation.
 - **Quote use:** "Inability to verify compliance" is the gap usabl narrows: it verifies by
-  machine that a change added no new detectable barrier on the screens it scanned. It
+  machine that a change added no new unwaived detectable barrier on the screens it scanned. It
   does not verify compliance.
 
 **Source:** [CodeA11y, CHI 2025 (arXiv:2502.10884)](https://arxiv.org/abs/2502.10884)
