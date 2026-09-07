@@ -364,7 +364,7 @@
       <div class="number" aria-hidden="true">01</div>
       <div class="body">
         <p class="eyebrow">The short answer</p>
-        <h1 id="hero-title">usabl checks an accessibility change against the code that made it, and says what it could not check.</h1>
+        <h1 id="hero-title">usabl checks an accessibility change against the code that made it, and discloses every gap it detected.</h1>
         <p class="lede">It finds the affected screens, collects machine-checkable accessibility evidence, makes one gate-owned decision, and shows that same result wherever the team works.</p>
         <p>It is built for a specific risk. A developer or AI assistant can change interface code, run a scanner, and still call the work done after the scanner skipped a screen or after the code changed again. usabl keeps those gaps visible.</p>
         <p class="boundary"><strong>The claim:</strong> a verified result means no new deterministic accessibility barrier was found in the affected screens and checks that ran. It does not mean the whole product is accessible. It does not replace testing by disabled people or an accessibility expert.</p>
@@ -398,7 +398,7 @@
             <p>An interface file changed, but usabl could not map or check all required work. The gate returns <code>not_covered</code> and exit code 3.</p>
           </article>
         </div>
-        <p class="rule"><strong>Coverage rule:</strong> usabl checks every affected screen or says what it could not check. It does not sample a few screens and call the accessibility change verified. It proves it scanned the address it was configured or discovered to scan, and it records which files map to which screen. It cannot prove that the address showed the screen a reader expects: a redirect, a signed-out state, or a feature flag can change what an address renders. An optional <code>reachedWhen</code> selector adds partial evidence that the expected element was present.</p>
+        <p class="rule"><strong>Coverage rule:</strong> usabl checks every affected screen and discloses every gap it detected. It does not sample a few screens and call the accessibility change verified. It proves it scanned the address it was configured or discovered to scan, and it records which files map to which screen. It cannot prove that the address showed the screen a reader expects: a redirect, a signed-out state, or a feature flag can change what an address renders. An optional <code>reachedWhen</code> selector adds partial evidence that the expected element was present.</p>
       </div>
     </section>
 
