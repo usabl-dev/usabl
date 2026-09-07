@@ -637,7 +637,7 @@
           </article>
           <article class="verdict">
             <div><span class="stamp stamp-uncovered">not covered</span><span class="cite">exit 3</span></div>
-            <p>A changed file could not be mapped to a scannable page, so the check could not vouch for it. usabl fails closed rather than passing silently.</p>
+            <p>The check could not vouch for what it was asked to cover: a changed UI file mapped to no scannable page, a provider could not run on a screen, or a deterministic finding could not be confirmed. usabl fails closed rather than passing silently.</p>
           </article>
           <article class="verdict">
             <div><span class="stamp stamp-approval">approval required</span><span class="cite">exit 2</span></div>
@@ -895,7 +895,7 @@
             <rect class="bar-new" x="700" y="30" width="14" height="14"></rect>
             <text class="legend-label" x="720" y="41">New barriers (blocked)</text>
           </svg>
-          <figcaption class="quiet">Known issues shrink as debt is paid down. A new, unwaived machine-checkable barrier on a scanned screen returns regression at every checkpoint.</figcaption>
+          <figcaption class="quiet">Known issues shrink as debt is paid down. A new, unwaived machine-checkable barrier on a scanned screen makes the accessibility result a regression at every checkpoint. If the same change also edits a guarded policy file, the overall verdict is approval required and that accessibility result stays red inside it.</figcaption>
         </figure>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#surfaces">Previous</a>
@@ -1115,9 +1115,9 @@ test('cluster list stays accessible', async ({ page }) => {
         <h1 tabindex="-1">Findings on the Live App, While You Build</h1>
         <p class="lede">A Vite plugin adds an advisory inspector to the running application. It projects the Result the gate produced for the local working tree and never mints a verdict. It is read only and never gates.</p>
         <div class="surfaces">
-          <article class="surface"><strong>Locate on the page</strong>Each finding highlights the affected element on the live app, so a barrier is a place you can see rather than a selector to decode.</article>
+          <article class="surface"><strong>Locate on the page</strong>A finding highlights the affected element on the live app whenever the inspector can still resolve it there, so a barrier is a place you can see rather than a selector to decode. When the element cannot be resolved, because the selector no longer matches, the element has been removed, or the match is the inspector's own container, it says so and names the selector instead of claiming a locate that did not happen.</article>
           <article class="surface"><strong>Jump to source</strong>When the app is built with the usabl dev transform, a finding links to the file and line that rendered the element.</article>
-          <article class="surface"><strong>Advisory, and why</strong>The inspector runs inside the tested page's own JavaScript, so the page can interfere with what it shows. Page text is rendered as text, never as HTML. The terminal command, CI, and the stop hook decide; the overlay only shows.</article>
+          <article class="surface"><strong>Advisory, and why</strong>The inspector runs inside the tested page's own JavaScript, so the page can interfere with what it shows. Page text is rendered as text, never as HTML. The gate computes the verdict; the terminal command, CI, and the stop hook enforce it; the overlay only shows it and never blocks.</article>
         </div>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#stop-hook">Previous</a>
@@ -1232,7 +1232,7 @@ test('cluster list stays accessible', async ({ page }) => {
           </article>
           <article class="tile">
             <strong>Baseline First</strong>
-            Existing issues are recorded as a known baseline on day one. Only new, unwaived problems block. Quality improves steadily instead of every change stalling behind a wall of pre-existing findings.
+            Existing issues are recorded as a known baseline on day one. A new, unwaived problem blocks; so does coverage the run could not confirm, and so does an edit to a guarded policy file, which needs a code owner. Quality improves steadily instead of every change stalling behind a wall of pre-existing findings.
           </article>
           <article class="tile">
             <strong>Fits the Existing Pipeline</strong>
@@ -1403,7 +1403,7 @@ test('cluster list stays accessible', async ({ page }) => {
         <p class="kicker">Summary</p>
         <h1 tabindex="-1">Continuous Accessibility Verification</h1>
         <p class="lede">usabl moves accessibility checking into the everyday workflow, the CLI, CI, and AI assistants, instead of a separate audit that happens later.</p>
-        <p class="lede">It records existing issues as a baseline, blocks only new, unwaived ones, and points the same engine at both the application and its documentation. Teams can change the UI, and the docs, knowing that no new machine-checkable barrier reached the screens and pages it checked, and that every gap it detected was disclosed.</p>
+        <p class="lede">It records existing issues as a baseline and points the same engine at both the application and its documentation. It blocks a new, unwaived barrier, coverage it could not confirm, and an edit to a guarded policy file. Teams can change the UI, and the docs, knowing that no new unwaived machine-checkable barrier reached the screens and pages it checked, and that every gap it detected was disclosed.</p>
         <nav class="slidenav" aria-label="Slide navigation">
           <a class="nav-link" href="#usage">Previous</a>
           <span class="pos">31 / 31</span>
