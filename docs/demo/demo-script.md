@@ -61,8 +61,8 @@ PICTURE: the product map fills the screen. The three columns light left to right
 once when "DECIDE ONCE" lights. The dark "rules guard themselves" band underlines at the end.
 
 VO: "This is the whole product on one screen. Three steps. It collects evidence on the real running
-page, including barriers a static scanner never sees, like focus trapped in a dialog after you press
-a key. It decides once: one gate, one of four verdicts or none, one exit code, and on a verified run a receipt anyone can re-check. Then
+page, including barriers that only appear after a key press, like focus trapped in a dialog; in our
+recorded test a standalone axe run reported none of them. It decides once: one gate, one of four verdicts or none, one exit code, and on a verified run a receipt anyone can re-check. Then
 it shows that verdict everywhere the developer already works, the command line, the pull request, and
 the AI assistant. The assistant can write the code. It cannot certify its own work; the gate decides.
 None of this is complicated, and that is the point."
@@ -80,9 +80,11 @@ them plainly; the demo shows each one on the surfaces usabl is configured for.
 1. Accessibility as a verdict rather than a report. usabl returns one of four deterministic
    verdicts with an exit code when something was checked, and a re-checkable receipt on a verified
    run. It is a gate, like a test, rather than a document someone has to interpret.
-2. It sees what scanners cannot. A dialog that traps focus, an Escape that does not return focus, a
-   menu that does not announce its state: these only exist after a key is pressed. usabl drives the
-   interaction and checks the real focus and announcements. A static scanner reports zero.
+2. It checks behavior after a key press. A dialog that traps focus, an Escape that does not return
+   focus, a menu that does not announce its state: these only exist after a key is pressed. usabl
+   drives the interaction and checks the real focus and announcements. In our recorded test (3.4), a
+   standalone axe run on the broken fixture dialog reported zero violations while usabl reported the
+   focus failures.
 3. It is enforced on AI, and the AI handoff marks page text as data. As assistants write more of
    our UI, the writer is grading its own work. usabl's Stop hook blocks an assistant's first attempt
    to stop on a blocking verdict unless the user has issued a one-use bypass; idle, no verdict, and
@@ -101,7 +103,8 @@ them plainly; the demo shows each one on the surfaces usabl is configured for.
 
 One-line version for the top of the pitch: on configured React and PatternFly surfaces, usabl turns
 machine-checkable accessibility evidence into an enforced result, enforced continuously and even on
-AI, that catches barriers a static scanner cannot see and reports known coverage gaps instead of
+AI, that catches behavioral barriers a resting-page scan does not exercise (shown against a
+standalone axe run in 3.4) and reports known coverage gaps instead of
 calling them verified.
 
 ## Innovation inventory (everything we built, big and small)
@@ -119,7 +122,7 @@ The verdict model
   not re-scan. The engine has no model in the verdict path, which is what makes the receipt mean
   something.
 
-Sees what a static scanner cannot
+Checks behavior a resting-page scan does not exercise
 - A keyboard walk over the real tab order, checking accessible names as a user would reach them.
 - Interaction probes that open a dialog and press Escape, then check where focus actually went.
   A trapped dialog or a menu that never announces its state only exists after a key is pressed.
@@ -309,12 +312,12 @@ TWO-PR CONTRAST (available): usabl-app PR #38 (the break) is BLOCKED red, and PR
 `/usabl-fix` skill, a change that touches no UI) passes green. Showing them side by side makes the
 point in one frame: usabl blocks a real barrier and lets ordinary work through, no wall, no friction.
 
-### 3.4 The proof a linter cannot see (keep from storyboard 3.3, folds into the day)
+### 3.4 The barrier the standalone axe run did not report (keep from storyboard 3.3, folds into the day)
 
-PICTURE: two panels. A standard scanner reports zero problems on the broken dialog. usabl
+PICTURE: two panels. A standalone axe run reports zero problems on the broken dialog. usabl
 reports a regression. A clip of Escape pressed while focus lands nowhere.
 
-VO: "And this is a problem a normal scanner cannot see. A dialog that fails to send focus back
+VO: "And this is a problem a standalone axe run did not report. A dialog that fails to send focus back
 when you press Escape is not a mistake in the markup. It only exists after a key is pressed.
 usabl opens the dialog, presses Escape, and checks where focus actually went."
 
@@ -323,8 +326,8 @@ standalone reports 0 violations, and specifically no finding about focus into th
 return. usabl on the same screen reports a regression with pf-focus-into-dialog and
 pf-modal-focus-return. The contrast is uncontaminated: the clusters page's broken barriers are purely
 behavioral (focus does not move into the dialog on open, focus is not restored on close), which a
-static scanner cannot detect, while usabl opens the dialog, presses Escape, and checks where focus
-actually went. The on-screen panel is honest: "standard scanner: 0" next to "usabl: regression."
+the standalone axe run did not detect, while usabl opens the dialog, presses Escape, and checks where
+focus actually went. The on-screen panel is honest: "standalone axe: 0" next to "usabl: regression."
 
 ### 3.5 The pull request (keep from storyboard scene 4)
 
