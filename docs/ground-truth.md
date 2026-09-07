@@ -823,6 +823,60 @@ by writing a quoted `path` literal outside any comment and keeping stray `>` and
 out of the strings in and around the declaration, but that depends on the whole file rather than
 on the one route, so check the result instead of assuming it.
 
+#### Limits of detecting that a screen was not reached signed in
+
+A scan of a login-gated application can be handed the application's sign-in experience instead of
+the screen it asked for, and score it as that screen. Measured on a real application with an
+expired session: usabl filed the sign-in page's barriers under the requested screen ids, disclosed
+nothing, and reported all twenty-nine barriers on the committed evidence floor as resolved. The
+run was red only because that page carried barriers of its own; a clean one would have returned
+verified, with a receipt, and a claim that the accepted debt was gone.
+
+Two layers now stand against that, and neither closes the hole completely.
+
+**Before the browser opens.** When `USABL_STORAGE_STATE` names a file in which every cookie
+carries an expiry, every one of those is already past, and no origin holds local storage, there is
+nothing left in it that could authenticate. The run stops with no verdict (exit 4). The bar is
+deliberately "nothing here could possibly work" rather than "probably dead": one session cookie,
+one undated cookie, or one local storage entry means the file cannot be judged and is not refused.
+A missed dead session is caught below; a false refusal has no backstop.
+
+**At scan time.** Three rules, each producing a `not-covered` coverage gap on that screen. A
+gapped screen contributes no findings, records no keyboard walk, and is excluded from the
+cleanly-scanned set the gate is given, so no floored barrier on it can be reported as resolved.
+
+- The page's own `fetch` or XHR requests answered 401 during load, and a storage state was
+  configured. This is the primary signal: it is present before anything renders, so it cannot be
+  raced by render timing, and it needs nothing from the address or the DOM. 401 only; 403 means
+  authenticated and not permitted, which a correct signed-in scan can legitimately meet.
+- A password input exists anywhere in the page, in any frame or inside an open shadow root, and a
+  storage state was configured. The address is not consulted, because the application that
+  produced this defect never changes it.
+- The browser ended on a different address than the one requested and that page carries a password
+  input. This one applies whether or not a storage state was configured, because a redirect to a
+  sign-in page is the wrong page either way.
+
+The two session rules require a configured storage state because only that is an assertion that
+the run is signed in. Without it a 401 and a login form are ordinary things for a signed-out
+visitor to meet, and firing on them would turn every deliberate signed-out scan into a gap.
+
+**What is still not caught.** A server-rendered sign-in page that makes no API calls and carries
+no password input: a passkey prompt, a magic-link page, an email-first identity provider, or a
+consent screen. An authentication wall that answers 200 to every request and renders a branded
+landing page. A sign-in page served at the very address that was requested, with no storage state
+configured. The body-only detector catches the subset of these that render nothing focusable; the
+rest stay open. The hole is narrower, not closed.
+
+A miss leaves exactly the behaviour that was there before, so none of this manufactures a new
+false green of its own. Each rule can also fire on a screen that was genuinely reached: a refused
+third-party request, a change-password form, a stale configured URL. The cost of that is a
+coverage gap, so the run reports `not_covered` rather than a verdict it should not have minted.
+
+What an operator can do. Declare `reachedWhen` on the surface. It is a CSS selector that must
+match in the rendered DOM, it is the operator's own positive assertion that this screen loaded,
+and it is the answer for a screen where these heuristics are not enough. Its absence is what makes
+them the last line.
+
 ### Documentation coverage
 
 When a `usabl.docs.json` manifest is present, coverage extends to documentation the same
@@ -1224,9 +1278,9 @@ reports ten surfaces: config, authenticated session, route manifest, evidence fl
 waivers, overlay, stop-hook, usabl-check skill, ci, and branch-rule, each with a state
 such as wired, missing, drifted, or unknown. The session surface reads the
 `USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file:
-unset is missing, a readable JSON file whose cookies have not all expired is wired, and a
-path that names no file, names a file that is not JSON, or names a state in which every
-cookie carrying an expiry is past it is drifted. Doctor reads the same expiry rule
+unset is missing, a readable JSON file that still holds something which could authenticate
+is wired, and a path that names no file, names a file that is not JSON, or names a state
+holding nothing that could authenticate is drifted. Doctor reads the same expiry rule
 `usabl check` refuses on, so the two surfaces cannot disagree about one file. Doctor
 reports whether a session is set and never prints the path or the file contents. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
 engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the pin

@@ -4,31 +4,53 @@
 
 ### Fixed
 
-- A screen the browser was redirected away from is no longer scored as that
-  screen. On a login-gated application whose scan session had expired, every
-  screen request answered with the application's own sign-in page. usabl scanned
-  that page under the requested screen ids, disclosed nothing, and reported all
-  twenty-nine barriers on the committed evidence floor as paid down. The verdict
-  came back red only because that sign-in page carried barriers of its own; a
+- A screen a run did not reach signed in is no longer scored as that screen. On a
+  login-gated application whose scan session had expired, usabl filed the sign-in
+  page's barriers under the requested screen ids, disclosed nothing, and reported
+  all twenty-nine barriers on the committed evidence floor as paid down. The
+  verdict came back red only because that page carried barriers of its own; a
   clean one would have produced `verified`, with a receipt, and a claim that the
-  accepted debt was gone. A scan now compares the address the browser ended on
-  against the one requested, and when they differ and the page carries a password
-  input, that screen becomes a coverage gap naming where the browser landed. It
-  contributes no findings, records no keyboard walk, and cannot mark any floor
-  entry resolved. A run whose screens were all redirected reports `not_covered`,
-  never `verified`. Both conditions must hold, so an ordinary redirect that still
-  lands on the intended screen is scanned normally, and a sign-in screen an
-  operator listed on purpose is measured like any other.
+  accepted debt was gone. Three rules now stand against that, each producing a
+  not-covered coverage gap on the screen. First: the page's own fetch or XHR
+  requests came back 401 during load, with a storage state configured. That is the
+  primary signal, because it is there before anything renders and needs nothing
+  from the address or the DOM; 401 only, since 403 means authenticated and not
+  permitted. Second: a password input anywhere in the page, in any frame or inside
+  an open shadow root, with a storage state configured. Third: the browser ended on
+  a different address than the one requested and that page asks for a password,
+  which applies with or without a configured session. A gapped screen contributes
+  no findings, records no keyboard walk, and cannot mark any floor entry resolved,
+  so a run whose screens were all like that reports `not_covered`, never
+  `verified`. The two session rules need a configured storage state because only
+  that asserts the run is signed in; without it a 401 and a login form are ordinary
+  things for a signed-out visitor to meet. What is still not caught is written out
+  in the ground truth: a sign-in page with no API traffic and no password field, and
+  an authentication wall that answers 200 to everything. A `reachedWhen` selector on
+  the surface remains the operator's positive assertion for those.
+- Addresses in a coverage gap reason no longer carry credentials. The sign-in
+  userinfo, the query string, and the fragment are all removed from both the
+  requested and the landing address, because HTTP basic credentials live in the
+  first, authorization codes and return addresses in the second, and a live OAuth
+  implicit-flow access token in the third. Gap `ref` keeps the operator's own
+  configured surface URL, which is what the overlay matches a gap to a screen by.
+- A browser error that quotes the storage state path no longer reaches a report. If
+  the session file is deleted or loses read permission between the pre-check and
+  the moment a context is created, Playwright raises its own error naming the file
+  in full, and a failed open becomes a coverage gap rendered by the CLI, the
+  overlay, and the pull request comment. Any browser error whose message contains
+  this run's storage state path is now replaced with a fixed sentence that says
+  what happened and what to do. Unrelated failures keep their own diagnosis.
 - A storage state whose session has expired stops the run before a browser opens.
   `USABL_STORAGE_STATE` is read at composition, and a state in which every cookie
-  carrying an expiry is already past it cannot authenticate anything. The run
-  refuses with a message that says the session has expired and to mint a new one,
-  and returns no verdict. `usabl doctor` reports the same state as drifted rather
-  than wired, reading the same rule, so the two surfaces cannot disagree about one
-  file. Neither the path nor any cookie value is printed. Cookie dates are all this
-  check can see; a token in local storage carries no expiry, so the scan-time
-  redirect check above is what covers the rest.
-
+  carries an expiry, every one of those is past, and no origin holds local storage
+  cannot authenticate anything. The run refuses with a message that says the session
+  has expired and to mint a new one, and returns no verdict. The bar is "nothing
+  here could possibly work", not "probably dead": one session cookie, one undated
+  cookie, or one local storage entry means the file cannot be judged and is not
+  refused, because a missed dead session is caught at scan time and a false refusal
+  has no backstop. `usabl doctor` reports the same state as drifted rather than
+  wired, reading the same rule, so the two surfaces cannot disagree about one file.
+  Neither the path nor any cookie value is printed.
 - The gate no longer reports green when several new barriers hide behind one
   accepted floor entry. Barriers on different nodes can neutralize to the same
   name or structural identity and collapse into a single finding. The floor
