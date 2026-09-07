@@ -195,7 +195,7 @@
     <tr><td><span class="verdict v-idle">idle</span></td><td>Your change did not touch any UI. Nothing to check.</td><td>Work proceeds (this is not a verdict).</td></tr>
   </table>
 
-  <p><strong>The core idea:</strong> usabl makes a pass/fail decision, and its Stop hook blocks an AI coding assistant's first stop on a blocking verdict unless a one-use bypass was issued. The AI can suggest fixes, but it cannot mark its own homework.</p>
+  <p><strong>The core idea:</strong> usabl makes a pass/fail decision, and its Stop hook blocks an AI coding assistant's first stop on a blocking verdict unless a one-use bypass was issued. The AI can suggest fixes, but only the gate decides, and a pull request that changes usabl's own policy files stays approval required until a CODEOWNERS reviewer other than the author approves it.</p>
 
   <div class="panel">
     <h3 style="margin-top:0">How it works</h3>
@@ -270,7 +270,7 @@
     <tr><td><strong>Transcript diff</strong></td><td>Shows the before/after of what a screen reader would announce, so you can hear the difference a code change makes.</td><td class="effort m">M</td><td>Never</td></tr>
     <tr><td><strong>CI / PR comment</strong></td><td>Runs in CI, reads policy from a protected branch (not the PR), posts the verdict as a sticky comment. Sanitizes all page-derived text before including it.</td><td class="effort m">M</td><td>Never</td></tr>
     <tr><td><strong>Browser overlay</strong></td><td>A Vite plugin that shows findings in the browser while you develop. Does not interfere with usabl's own checks (detects and skips itself).</td><td class="effort m">M</td><td>Never (protected from cut)</td></tr>
-    <tr><td><strong>Reports</strong></td><td>Generates three accessibility artifacts: alt-text manifest, announcement snippets, keyboard paths. Tied to the receipt so they cannot be faked.</td><td class="effort m">M</td><td>Never (protected from cut)</td></tr>
+    <tr><td><strong>Reports</strong></td><td>Generates three accessibility artifacts: alt-text manifest, announcement snippets, keyboard paths. Each artifact is bound to the receipt of the run that produced it; a surface the run did not verify carries no evidence reference, so unverified state cannot present itself as proof.</td><td class="effort m">M</td><td>Never (protected from cut)</td></tr>
     <tr><td><strong>Documentation checking</strong></td><td>A second target surface (shipped v0.2.1): the same engine scans the product's rendered documentation pages, turned on by a <code>usabl.docs.json</code> manifest. Findings map back to AsciiDoc source; one verdict, or none, spans app and docs.</td><td class="effort m">M</td><td>Never</td></tr>
     <tr><td><strong>Mid-task self-check</strong></td><td>The AI can run <code>usabl check</code> mid-task to see how it is doing, before the final verdict. Advisory only - does not block.</td><td class="effort s">S</td><td>Never</td></tr>
     <tr><td><strong>Design intake</strong></td><td>Lets designers declare intent in YAML (e.g. "this image must say X"). The tool checks those assertions alongside the automatic rules.</td><td class="effort m">M</td><td>Never (in scope per settled decisions)</td></tr>
@@ -395,15 +395,15 @@
     </tr>
     <tr>
       <td><strong>Can the repo block merges, and what if it cannot</strong></td>
-      <td>Our repo is private on GitHub Free. GitHub Free does not let you require a status check to pass before merging. So right now, usabl's CI verdict can post a comment saying "this PR has a regression," but nothing actually prevents someone from clicking Merge anyway.
-        <br><br>This matters because the product story is about stopping bad code from shipping. If we cannot demonstrate an actual block, we have to explain the gap.
-        <br><br><strong>Options:</strong>
+      <td>Resolved. The main-branch ruleset on this repository requires the <code>usabl-required</code> status check. A pull request whose accessibility verdict blocks cannot be merged through the normal merge path. Whether an administrator can bypass depends on the ruleset's bypass list. CI also posts the verdict as a sticky comment, but the comment does not decide the gate.
+        <br><br>This matters because the product story is about stopping bad code from shipping, and a required check is the only place a merge is actually blocked.
+        <br><br><strong>Which check to require:</strong>
         <ul style="margin:6px 0 0">
-          <li><strong>Make the repo public now (already Apache-2.0).</strong> Public repos on Free get required checks, CODEOWNERS, and branch protection. Also makes the contest submission obvious. Risk: code visible before it is polished.</li>
-          <li><strong>Stay private, accept comment-only for now.</strong> CI still runs, still posts the verdict. Demo shows the comment and explains "one toggle away from blocking on a public or Team repo." No cost, no exposure.</li>
-          <li><strong>Pay for GitHub Team.</strong> Required checks on private repos. Real money for a contest. Probably overkill.</li>
+          <li><strong><code>usabl-required</code>.</strong> It always runs and always decides. On a pull request it reads the scan result; on a review re-run, where the scan is skipped, it reads the accessibility verdict from the stored Result artifact. A missing or unparseable artifact blocks, and so does any accessibility result other than pass.</li>
+          <li><strong>Not <code>gate-comment</code>.</strong> That job is fenced to <code>pull_request</code>, so it cannot be required on a review event.</li>
+          <li><strong>Not <code>usabl-policy</code>.</strong> It returns success whenever no guarded path diverged, so on its own it can be green while the scan is red.</li>
         </ul>
-        <strong>Recommendation:</strong> Stay private during build. Go public when ready for submission. Gets required checks for the demo, aligns with the open-source positioning, costs nothing.
+        <strong>Status:</strong> In place on this repository. Any other repository that adopts usabl must make the same check required through branch protection or a ruleset, or CI reports without blocking.
       </td>
     </tr>
     <tr>
