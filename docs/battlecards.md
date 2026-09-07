@@ -22,7 +22,8 @@ that blocks an assistant's first stop on a blocking verdict unless a one-use byp
 **Complementary?** Yes - Deque's remediate guidance and usabl's proof gate can coexist.
 axe-core is one of our check layers.
 
-**One-liner:** "They advise from the chat. We verify the fix and gate completion."
+**One-liner:** "They advise from the chat. We re-check the fix and block the assistant's
+first stop on a blocking verdict unless a one-use bypass was issued."
 
 ---
 
@@ -38,7 +39,7 @@ walk + PF rules; the gate decides and the AI only proposes.
 while our gate holds the verdict. Different architectural bets (LLM review vs
 deterministic proof).
 
-**One-liner:** "They review once per session. usabl runs its gate on every change and reports what it could not check."
+**One-liner:** "They review once per session. usabl runs its gate on every change and discloses every gap it detected."
 
 ---
 
@@ -87,7 +88,8 @@ evidence the developer and the AI already saw.
 **Complementary?** Yes - Lighthouse and WAVE remain useful for ad-hoc audits and
 broader page health. usabl adds a change-level gate with a receipt on verified runs.
 
-**One-liner:** "They report after the fact. We complete the check before done."
+**One-liner:** "They report after the fact. We run the check before the assistant's first
+stop, and block that stop on a blocking verdict unless a one-use bypass was issued."
 
 ---
 
@@ -128,7 +130,8 @@ the receipt."
 **What they do well:** Own the components and the official guidance.
 
 **What usabl adds:** Encode their guidance in an extensible rulepack inside
-a proof engine that gates AI completion - alliance, not rivalry.
+a proof engine whose Stop hook blocks an assistant's first stop on a blocking verdict
+unless a one-use bypass was issued - alliance, not rivalry.
 
 **One-liner:** "They build accessible components. We check that each change composes
 them without a new machine-checkable barrier on the screens we scan."
