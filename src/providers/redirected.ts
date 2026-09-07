@@ -24,20 +24,49 @@
  * signed-out scan into a coverage gap.
  *
  * Rule A, refused data requests. Fires when a storage state is configured AND at least one of the
- *   page's own fetch or XHR requests answered 401 between navigation and readiness settling. This
- *   is the primary signal: it is present from the first moment of load, so no render timing can
- *   hide it, and it needs nothing from the address or the DOM. 401 only. 403 means authenticated
- *   and not permitted, which is a state a correctly signed-in scan can legitimately meet.
+ *   page's own fetch or XHR requests to the application's own origin answered 401 at any point
+ *   during the scan. Nothing overrides it.
+ *
+ *   Same origin as `appBaseUrl`, not any origin. An optional widget, an analytics beacon, or a
+ *   third-party service whose own credentials are stale can answer 401 while the application
+ *   session is perfectly good, and discarding a whole screen every run over that is not a cost
+ *   worth paying. A refusal from the application's own API is the application saying it does not
+ *   accept this session.
+ *
+ *   Checked twice: once when readiness settles, and again after the walk and the providers have
+ *   run. It is NOT free of a timing race on the first read alone. Readiness needs four equal DOM
+ *   counts 500 ms apart plus 500 ms of network quiet, so a stable shell settles in about 1.5 s,
+ *   and an application that sends its identity request later than that has sent nothing yet when
+ *   the first read happens. Measured with the real adapter: a page fetching its identity endpoint
+ *   at three seconds recorded nothing at the first read and the 401 during the walk window. The
+ *   second read is what closes that. A 401 that arrives at any point in the scan means the screen
+ *   was not reached signed in, and everything collected from it is discarded.
+ *
+ *   401 only. 403 means authenticated and not permitted, which is a state a correctly signed-in
+ *   scan can legitimately meet.
  *
  * Rule B, a password field anywhere. Fires when a storage state is configured AND at least one
  *   password input exists anywhere in the page: any frame, and inside open shadow roots. The
  *   address is not consulted, because the application that produced this defect never changes it.
  *   A signed-in session has no business being shown a password field.
  *
+ *   Overridden by reachedWhen. When the surface declares a reachedWhen selector and that selector
+ *   is present at the time of the check, this rule does not fire. The operator has made a positive
+ *   assertion that this screen rendered, and that outranks a heuristic that it did not. A
+ *   change-password screen, or a settings page with a re-authentication prompt, is exactly the
+ *   case the override exists for: a real signed-in screen that really does contain a password
+ *   field, which would otherwise be discarded on every run with no way to say so.
+ *
+ *   The override does not extend to Rule A. A reachedWhen aimed at a persistent application shell,
+ *   a header, a nav, or a footer, matches on a login wall too, so the assertion is weaker than it
+ *   looks. A same-origin 401 with a configured session is the application itself saying the
+ *   session was refused, which is stronger evidence than any selector.
+ *
  * Rule C, redirected to a login page. Fires whether or not a storage state is configured, when the
  *   address the browser ended on differs from the one requested AND a password field is present.
  *   With no session configured this is still the wrong page: usabl was asked to measure one screen
- *   and measured another. With a session configured Rule B already covers it.
+ *   and measured another. With a session configured Rule B already covers it, so in practice this
+ *   is the signed-out rule.
  *
  * Address comparison for Rule C normalizes scheme case, host case, default port, and one trailing
  * slash on the path. The query string is ignored, because a login redirect usually adds a return
@@ -47,13 +76,14 @@
  *
  * FALSE POSITIVES, which this can produce.
  *
- * Rule A fires on any refused fetch or XHR, including one to a third party whose own credentials
- * are stale while the application session is fine. Rule B fires on a signed-in screen that really
- * does contain a password field, such as a change-password form or a re-authentication prompt on a
- * settings page. Rule C fires on a screen reached at a different path or fragment than the one
- * configured that also shows a password field, which in practice is a stale configured URL. In all
- * three the cost is a coverage gap, so the run reports not_covered rather than a verdict, and the
- * fix is to correct the surface URL or to declare a reachedWhen selector for that screen.
+ * Rule A fires on a refused same-origin request even when the application session is fine, such as
+ * an optional feature on the application's own API that this identity is not entitled to and whose
+ * server answers 401 rather than 403. Rule B fires on a signed-in screen that really does contain
+ * a password field and declares no reachedWhen. Rule C fires on a screen reached at a different
+ * path or fragment than the one configured that also shows a password field, which in practice is
+ * a stale configured URL. In all three the cost is a coverage gap, so the run reports not_covered
+ * rather than a verdict, and the fix is to correct the surface URL or to declare a reachedWhen
+ * selector for that screen.
  *
  * FALSE NEGATIVES, which matter more and are real.
  *
@@ -61,7 +91,8 @@
  * by any rule here: a passkey prompt, a magic-link page, an email-first identity provider, or a
  * consent screen. An authentication wall that answers 200 to everything and renders a branded
  * landing page is not caught either. A login page served at the very address that was requested,
- * with no session configured, cannot be told from the screen itself. The body-only detector in
+ * with no session configured, cannot be told from the screen itself. A sign-in wall whose API
+ * lives on a different origin than appBaseUrl is not caught by Rule A. The body-only detector in
  * coverage/unseen.ts catches the subset of these that render nothing focusable; the rest stay open.
  * A miss leaves the behaviour that was there before, so it never manufactures a new false green,
  * and the reachedWhen selector on a surface is the operator's positive assertion for a screen where
@@ -71,6 +102,7 @@
  */
 import type { CoverageGap, Page } from '../contracts/index.js';
 import { STORAGE_STATE_ENV_VAR } from '../deps/session.js';
+import { measureReachability } from './reachability.js';
 
 /**
  * A password input is the strongest generic sign-in signal a page can carry. It is one element
@@ -84,17 +116,30 @@ const PASSWORD_INPUT_SELECTOR = 'input[type="password"]';
 export interface LandingObservation {
   /** The address the scan asked for, from operator config. */
   requestedUrl: string;
+  /** The origin of `appBaseUrl`, which is what Rule A counts a refused request against. */
+  appBaseUrl: string;
   /** The address the browser reported. Null when the page could not answer, so no claim is made. */
   landedUrl: string | null;
   /** Whether a password input was anywhere in the page. False when the probe could not run. */
   passwordFieldPresent: boolean;
-  /** URLs of the page's own fetch or XHR requests that answered 401 during load. */
+  /** URLs of the page's own fetch or XHR requests that answered 401, unfiltered. */
   unauthorizedApiUrls: string[];
   /**
    * Whether the operator configured a storage state for this run. Rules A and B are claims about
    * a session that was asserted and did not work, so without the assertion they say nothing.
    */
   sessionConfigured: boolean;
+  /**
+   * The operator's positive assertion that this screen rendered, measured at the time of the
+   * check: null when the surface declared no reachedWhen selector, true when it declared one and
+   * it matched, false when it declared one and nothing matched. Only true overrides Rule B.
+   *
+   * Measured here as well as after the providers run, because the two answer different questions.
+   * The later measurement is the one recorded on the scan for the unseen detector. This one has to
+   * be taken before the walk, because the walk and the providers are the thing this decides
+   * whether to run at all.
+   */
+  reachedSelectorPresent: boolean | null;
 }
 
 /**
@@ -107,8 +152,12 @@ export interface LandingObservation {
  */
 export async function observeLanding(
   page: Page,
-  requestedUrl: string,
-  sessionConfigured: boolean,
+  options: {
+    requestedUrl: string;
+    appBaseUrl: string;
+    sessionConfigured: boolean;
+    reachedWhen: string | undefined;
+  },
 ): Promise<LandingObservation> {
   let landedUrl: string | null = null;
   try {
@@ -123,14 +172,57 @@ export async function observeLanding(
   } catch {
     passwordFieldPresent = false;
   }
-  let unauthorizedApiUrls: string[] = [];
+  return {
+    requestedUrl: options.requestedUrl,
+    appBaseUrl: options.appBaseUrl,
+    landedUrl,
+    passwordFieldPresent,
+    unauthorizedApiUrls: await readRefusedRequests(page),
+    sessionConfigured: options.sessionConfigured,
+    reachedSelectorPresent: await measureReachability(page, options.reachedWhen),
+  };
+}
+
+/**
+ * Re-read the refused-request record on its own.
+ *
+ * Rule A is checked again once the walk and the providers have finished, because readiness settles
+ * about 1.5 seconds after a stable shell appears and an application that sends its identity
+ * request later than that has sent nothing yet at the first read. Only this record is re-read: the
+ * address and the password count are deliberately left at their load-time values, because a
+ * provider click can navigate the page and press keys, so a late DOM read could not tell what the
+ * application did from what usabl did to it.
+ */
+export async function readRefusedRequests(page: Page): Promise<string[]> {
   try {
     const refused = await page.unauthorizedApiRequests();
-    unauthorizedApiUrls = Array.isArray(refused) ? refused.filter((url) => typeof url === 'string') : [];
+    return Array.isArray(refused) ? refused.filter((url) => typeof url === 'string') : [];
   } catch {
-    unauthorizedApiUrls = [];
+    return [];
   }
-  return { requestedUrl, landedUrl, passwordFieldPresent, unauthorizedApiUrls, sessionConfigured };
+}
+
+/**
+ * Which refused requests came from the application's own origin.
+ *
+ * Exported so the rule that leans on it can be held without a browser. An `appBaseUrl` that will
+ * not parse means no origin to compare against, so nothing counts: that errs toward not firing,
+ * which is the safe direction for a rule that discards a screen.
+ */
+export function refusalsFromAppOrigin(urls: readonly string[], appBaseUrl: string): string[] {
+  let appOrigin: string;
+  try {
+    appOrigin = new URL(appBaseUrl).origin;
+  } catch {
+    return [];
+  }
+  return urls.filter((url) => {
+    try {
+      return new URL(url).origin === appOrigin;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
@@ -182,6 +274,60 @@ export function sanitizeUrlForDisplay(raw: string): string {
   return parsed.toString();
 }
 
+/**
+ * A refused request address as it is safe to print: scheme, host, port, and at most the first two
+ * path segments, and only while those segments read as fixed path words.
+ *
+ * sanitizeUrlForDisplay is not enough here. It keeps the whole path, and a path is a place
+ * applications put opaque values: a password reset is `/reset/<token>`, an invitation is
+ * `/invite/<token>`, a signed download is `/files/<signature>/name`. The endpoint an operator needs
+ * to recognise is the front of the path, so the rest is dropped rather than published.
+ *
+ * Two segments is the ceiling, because `/api/v2` and `/auth/token` need both to be recognisable.
+ * The ceiling alone is not enough: in `/reset/<token>` the token IS the second segment, so a
+ * segment is kept only while it looks like a route word rather than an identifier. A route word is
+ * short, starts with a letter, and is lowercase; `api`, `v2`, `reset`, `me`, and `well-known` all
+ * pass. An upper-case token, a UUID, a numeric id, and a base64 blob all fail, and everything from
+ * the first failure on is dropped. The rule is mechanical rather than clever, and it errs toward
+ * printing less, which is the safe direction for text that reaches a pull request comment.
+ *
+ * This bounds exposure; it does not eliminate it. An application that puts a secret in the FIRST
+ * path segment, in lower case and under the length cap, would still have it printed. Nothing that
+ * prints any part of a path can promise otherwise.
+ */
+const ROUTE_WORD = /^[a-z][a-z0-9._-]*$/;
+const ROUTE_WORD_MAX_LENGTH = 24;
+const KEPT_PATH_SEGMENTS = 2;
+
+function isRouteWord(segment: string): boolean {
+  return segment.length <= ROUTE_WORD_MAX_LENGTH && ROUTE_WORD.test(segment);
+}
+
+export function sanitizeRefusedUrlForDisplay(raw: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return 'an address usabl could not parse';
+  }
+  parsed.username = '';
+  parsed.password = '';
+  parsed.search = '';
+  parsed.hash = '';
+  const segments = parsed.pathname.split('/').filter((segment) => segment.length > 0);
+  const kept: string[] = [];
+  for (const segment of segments.slice(0, KEPT_PATH_SEGMENTS)) {
+    if (!isRouteWord(segment)) {
+      break;
+    }
+    kept.push(segment);
+  }
+  // A path that was cut says so, so nobody reads the short form as the whole endpoint.
+  const cut = segments.length > kept.length;
+  parsed.pathname = `/${kept.join('/')}${cut ? (kept.length === 0 ? '...' : '/...') : ''}`;
+  return parsed.toString();
+}
+
 function gapFor(requestedUrl: string, reason: string): CoverageGap {
   return {
     // The configured surface URL, verbatim. The overlay attributes a gap to a screen by matching
@@ -225,24 +371,33 @@ function notMeasured(screenId: string): string {
 export function redirectedAwayGap(screenId: string, observation: LandingObservation): CoverageGap | null {
   const requested = sanitizeUrlForDisplay(observation.requestedUrl);
 
-  // Rule A: the page's own data requests were refused as unauthenticated.
-  const refused = observation.unauthorizedApiUrls;
+  // Rule A: the application's own data requests were refused as unauthenticated. Nothing
+  // overrides this, including a matched reachedWhen: a selector aimed at a persistent shell
+  // matches on a login wall too, and the application refusing the session is stronger evidence.
+  const refused = refusalsFromAppOrigin(observation.unauthorizedApiUrls, observation.appBaseUrl);
   if (observation.sessionConfigured && refused.length > 0) {
-    const example = sanitizeUrlForDisplay(refused[0] as string);
+    const example = sanitizeRefusedUrlForDisplay(refused[0] as string);
     const count = refused.length;
     return gapFor(
       observation.requestedUrl,
-      `usabl asked for ${requested} with a configured session, and ${count} of the page's own data ` +
-        `request${count === 1 ? '' : 's'} came back 401, meaning the server did not accept the ` +
-        `session as authenticated. One of them was ${example}. Whatever rendered is what a refused ` +
-        `visitor sees, not this screen, so ${notMeasured(screenId)} Addresses are shown without ` +
-        'their sign-in credentials, query string, or fragment, because any of the three can carry ' +
-        `a token. ${SESSION_ADVICE}`,
+      `usabl asked for ${requested} with a configured session, and ${count} of the application's ` +
+        `own data request${count === 1 ? '' : 's'} came back 401, meaning the server did not accept ` +
+        `the session as authenticated. One of them was ${example}. Whatever rendered is what a ` +
+        `refused visitor sees, not this screen, so ${notMeasured(screenId)} Addresses are shown ` +
+        'without their sign-in credentials, query string, or fragment, and a refused request keeps ' +
+        'only the front of its path, because any of those can carry a token. ' +
+        `${SESSION_ADVICE}`,
     );
   }
 
-  // Rule B: a password field anywhere, with a session asserted.
-  if (observation.sessionConfigured && observation.passwordFieldPresent) {
+  // Rule B: a password field anywhere, with a session asserted and no positive assertion from the
+  // operator that this screen rendered. A matched reachedWhen outranks the heuristic, which is
+  // what makes a genuine change-password or re-authenticate screen scannable.
+  if (
+    observation.sessionConfigured &&
+    observation.passwordFieldPresent &&
+    observation.reachedSelectorPresent !== true
+  ) {
     return gapFor(
       observation.requestedUrl,
       `usabl asked for ${requested} with a configured session and the page it got asks for a ` +

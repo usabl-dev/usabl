@@ -78,13 +78,24 @@ interface PageSpec {
   landedUrl?: string;
   hasPassword?: boolean;
   unauthorized?: string[];
+  // Refusals that have not arrived at the first read and appear on the next one, which is what a
+  // slow application's identity request does.
+  lateUnauthorized?: string[];
 }
 
 function pageWith(spec: PageSpec = {}): Page {
+  let reads = 0;
   return makeFakePage({
     currentUrl: async () => spec.landedUrl ?? SCREEN_URL,
-    countEverywhere: async () => (spec.hasPassword === true ? 1 : 0),
-    unauthorizedApiRequests: async () => spec.unauthorized ?? [],
+    // Selector-aware, because the check runner asks this for the password probe and again for the
+    // scanner-artifact settle. Answering both the same way would make every case pay that budget.
+    countEverywhere: async (selector: string) =>
+      selector.includes('password') && spec.hasPassword === true ? 1 : 0,
+    unauthorizedApiRequests: async () => {
+      reads += 1;
+      const early = spec.unauthorized ?? [];
+      return reads === 1 ? early : [...early, ...(spec.lateUnauthorized ?? [])];
+    },
     // A real focusable stop, so the body-only unseen detector has nothing to say. Without it every
     // case here would be unseen for that separate reason and would prove nothing about sessions.
     activePath: async () => 'html > body > main > button#save',
@@ -130,7 +141,9 @@ describe('a screen this run did not reach signed in', () => {
     expect(gaps).toHaveLength(1);
     expect(gaps[0]?.ref).toBe(SCREEN_URL);
     expect(gaps[0]?.state).toBe('not-covered');
-    expect(gaps[0]?.reason).toContain('http://app.test/api/v2/me');
+    // Shortened to the front of the path, because a path segment can carry a token.
+    expect(gaps[0]?.reason).toContain('http://app.test/api/v2/...');
+    expect(gaps[0]?.reason).not.toContain('/api/v2/me');
 
     // The sign-in page's own barrier is not reported as a barrier on the users screen.
     expect(r.findings.filter((f) => f.status === 'new')).toEqual([]);
@@ -197,6 +210,33 @@ describe('a screen this run did not reach signed in', () => {
     const fixed = r.findings.filter((f) => f.status === 'fixed');
     expect(fixed).toHaveLength(1);
     expect(fixed[0]?.screenId).toBe('users');
+    expect(r.paidDownCount).toBe(1);
+  });
+
+  it('is a gap when the only 401 arrives during the walk, after readiness settled', async () => {
+    // The timing window: readiness settles about 1.5 seconds after a stable shell appears, so an
+    // application whose identity request is slower than that had sent nothing at the first read.
+    const r = await run(
+      depsFor({ landedUrl: SCREEN_URL, lateUnauthorized: ['http://app.test/api/v2/me'] }, { sessionConfigured: true }),
+      config,
+    );
+
+    expect(r.coverage.gaps.filter((gap) => gap.reason.includes('401'))).toHaveLength(1);
+    expect(r.findings.filter((f) => f.status === 'fixed')).toEqual([]);
+    expect(r.paidDownCount).toBe(0);
+    expect(r.verdict).toBe('not_covered');
+    expect(r.receipt).toBeNull();
+  });
+
+  it('ignores a third-party 401 and still confirms the pay-down', async () => {
+    // One incidental refusal from an optional or third-party service must not discard a screen
+    // and must not stop a real pay-down being confirmed.
+    const r = await run(
+      depsFor({ unauthorized: ['https://telemetry.vendor.example/collect'] }, { sessionConfigured: true }),
+      config,
+    );
+
+    expect(r.coverage.gaps).toEqual([]);
     expect(r.paidDownCount).toBe(1);
   });
 

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Provider } from '../../src/contracts/index.js';
 import { buildDeps } from '../../src/deps/build.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
+import { axeProvider } from '../../src/providers/axe/index.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import { testConfig } from '../helpers.js';
@@ -28,6 +29,11 @@ interface FixtureServer {
   shadowSignInUrl: string;
   // The same page against endpoints that answer 403, which is authenticated and not permitted.
   forbiddenApiUrl: string;
+  // Sends its identity request three seconds after load, well after readiness settles, so the 401
+  // is not in the record at the first read and only appears during the walk.
+  lateUnauthorizedUrl: string;
+  // Focusing its first control mounts a tooltip that fades out over a few hundred milliseconds.
+  tooltipOnFocusUrl: string;
   close: () => Promise<void>;
 }
 
@@ -44,6 +50,8 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/sign-in.html': await readFixture('sign-in.html'),
     '/expired-session-app.html': await readFixture('expired-session-app.html'),
     '/shadow-sign-in.html': await readFixture('shadow-sign-in.html'),
+    '/late-unauthorized.html': await readFixture('late-unauthorized.html'),
+    '/tooltip-on-focus.html': await readFixture('tooltip-on-focus.html'),
   };
 
   const server = createServer((req, res) => {
@@ -128,6 +136,8 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     expiredSessionUrl: `http://127.0.0.1:${address.port}/expired-session-app.html`,
     shadowSignInUrl: `http://127.0.0.1:${address.port}/shadow-sign-in.html`,
     forbiddenApiUrl: `http://127.0.0.1:${address.port}/expired-session-app.html?api=/api/forbidden`,
+    lateUnauthorizedUrl: `http://127.0.0.1:${address.port}/late-unauthorized.html`,
+    tooltipOnFocusUrl: `http://127.0.0.1:${address.port}/tooltip-on-focus.html`,
     close: async () =>
       new Promise<void>((resolve, reject) => {
         // The hang route leaves a socket open, and server.close() waits for it forever.
@@ -327,6 +337,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       browser: driver,
       providers: [],
       config: testConfig({
+        appBaseUrl: fixture.url,
         surfaces: [{ id: 'forbidden-screen', url: fixture.forbiddenApiUrl, files: [] }],
       }),
       allowedCapabilities: ['live'],
@@ -346,6 +357,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       browser: driver,
       providers: [barrierOnEveryPage],
       config: testConfig({
+        appBaseUrl: fixture.url,
         surfaces: [{ id: 'expired-session-screen', url: fixture.expiredSessionUrl, files: [] }],
       }),
       allowedCapabilities: ['live'],
@@ -359,7 +371,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     expect(scan.gaps).toHaveLength(1);
     expect(scan.gaps[0]).toMatchObject({ ref: fixture.expiredSessionUrl, state: 'not-covered' });
     expect(scan.gaps[0]?.reason).toContain('401');
-    expect(scan.gaps[0]?.reason).toContain('/api/v2/me');
+    expect(scan.gaps[0]?.reason).toContain('/api/v2/...');
     expect(scan.drafts).toEqual([]);
     expect(scan.stops).toEqual([]);
     expect(scan.applicability).toEqual([]);
@@ -372,6 +384,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       browser: driver,
       providers: [],
       config: testConfig({
+        appBaseUrl: fixture.url,
         surfaces: [{ id: 'expired-session-screen', url: fixture.expiredSessionUrl, files: [] }],
       }),
       allowedCapabilities: ['live'],
@@ -384,6 +397,83 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
 
     expect(scan.gaps).toEqual([]);
   });
+
+  it('catches a 401 that only arrives after readiness, during the walk', async () => {
+    // The timing window, through a real Chromium and a real 401. Readiness needs four equal DOM
+    // counts 500 ms apart plus 500 ms of network quiet, so this stable shell settles in about
+    // 1.5 s and the fixture's identity request at three seconds has not been sent yet. The first
+    // read of the record is empty; the second, after the walk and the providers, is not.
+    const page = await driver.open(fixture.lateUnauthorizedUrl);
+    try {
+      await page.gotoReady();
+      expect(await page.unauthorizedApiRequests()).toEqual([]);
+    } finally {
+      await page.close();
+    }
+
+    // A provider that takes a couple of seconds, which is what a real stack does: axe alone runs
+    // for seconds on a large screen. It puts the second read of the refused-request record well
+    // after the fixture's identity request, which is the situation being reproduced.
+    const slowProvider: Provider = {
+      id: 'slow',
+      layer: 'test',
+      capabilities: ['live'],
+      run: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        return [];
+      },
+    };
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [alwaysFiringProvider('late-screen'), slowProvider],
+      config: testConfig({
+        appBaseUrl: fixture.url,
+        surfaces: [{ id: 'late-screen', url: fixture.lateUnauthorizedUrl, files: [] }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+      sessionConfigured: true,
+    });
+
+    const scan = await runner.scan({ id: 'late-screen', url: fixture.lateUnauthorizedUrl });
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('401');
+    // Everything the walk and the providers collected before the refusal showed up is discarded.
+    expect(scan.drafts).toEqual([]);
+    expect(scan.stops).toEqual([]);
+    expect(scan.applicability).toEqual([]);
+  }, 30_000);
+
+  it('does not report a tooltip its own walk opened as a barrier', async () => {
+    // The false positive this closes. The walk focuses the control, the tooltip mounts outside any
+    // landmark, focusBody blurs it, and the element lingers through its fade out. axe reported it
+    // as a NEW region violation on an unchanged page about one run in five. Content the scanner
+    // caused is not the page, so the providers wait for it to go.
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [axeProvider],
+      config: testConfig({
+        appBaseUrl: fixture.url,
+        surfaces: [{ id: 'tooltip-screen', url: fixture.tooltipOnFocusUrl, files: [] }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 5,
+    });
+
+    // Repeated, because the defect was intermittent: about one run in five before the wait.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const scan = await runner.scan({ id: 'tooltip-screen', url: fixture.tooltipOnFocusUrl });
+      // Nothing about the tooltip node itself, and no orphan-content violation, which is the
+      // shape axe reported it in on the real application.
+      expect(scan.drafts.filter((draft) => draft.elementPath === '#tip')).toEqual([]);
+      expect(scan.drafts.filter((draft) => draft.rule === 'region')).toEqual([]);
+      // The whole page is clean, so any draft at all would be the scanner reporting on itself.
+      expect(scan.drafts).toEqual([]);
+    }
+  }, 60_000);
 
   it('sees a password field inside an open shadow root at the requested address', async () => {
     // The widened secondary signal. The URL never changed and document.querySelectorAll finds

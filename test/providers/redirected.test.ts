@@ -22,7 +22,10 @@ import { makeFakeDeps, makeFakePage } from '../../src/deps/fakes.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import {
   observeLanding,
+  readRefusedRequests,
   redirectedAwayGap,
+  refusalsFromAppOrigin,
+  sanitizeRefusedUrlForDisplay,
   sanitizeUrlForDisplay,
   type LandingObservation,
 } from '../../src/providers/redirected.js';
@@ -30,14 +33,17 @@ import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import { testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'users', url: 'http://app.test/users' };
+const APP_BASE_URL = 'http://app.test';
 
 function observation(over: Partial<LandingObservation> = {}): LandingObservation {
   return {
     requestedUrl: SCREEN.url,
+    appBaseUrl: APP_BASE_URL,
     landedUrl: SCREEN.url,
     passwordFieldPresent: false,
     unauthorizedApiUrls: [],
     sessionConfigured: true,
+    reachedSelectorPresent: null,
     ...over,
   };
 }
@@ -46,13 +52,31 @@ interface PageSpec {
   landedUrl?: string;
   passwordFields?: number;
   unauthorized?: string[];
+  // Refusals that have not arrived yet at the first read and appear on the next one, which is what
+  // a slow application's identity request does.
+  lateUnauthorized?: string[];
+  // What queryAll answers, which is how reachedWhen is measured.
+  reachedWhenMatches?: boolean;
+  // How many scanner-opened overlays are in the page. Non-zero makes the settle wait spend its
+  // whole budget, so it stays zero unless a test is about that wait.
+  scannerArtifacts?: number;
 }
 
 function pageWith(spec: PageSpec = {}): Page {
+  let reads = 0;
   return makeFakePage({
     currentUrl: async () => spec.landedUrl ?? SCREEN.url,
-    countEverywhere: async () => spec.passwordFields ?? 0,
-    unauthorizedApiRequests: async () => spec.unauthorized ?? [],
+    // Selector-aware, because the check runner asks this for two unrelated things: the password
+    // probe and the scanner-artifact settle. A fake that answered both the same way would make
+    // every password test also spend the settle budget.
+    countEverywhere: async (selector: string) =>
+      selector.includes('password') ? spec.passwordFields ?? 0 : spec.scannerArtifacts ?? 0,
+    queryAll: async () => (spec.reachedWhenMatches === true ? [{ selector: '#app-shell' }] : []),
+    unauthorizedApiRequests: async () => {
+      reads += 1;
+      const early = spec.unauthorized ?? [];
+      return reads === 1 ? early : [...early, ...(spec.lateUnauthorized ?? [])];
+    },
     // A real focusable stop, so the separate body-only unseen detector has nothing to say about
     // any screen these tests scan.
     activePath: async () => 'html > body > main > button#save',
@@ -86,13 +110,28 @@ const loudProvider: Provider = {
 
 function runnerFor(
   page: Page,
-  options: { sessionConfigured: boolean; screen?: { id: string; url: string }; providers?: Provider[] },
+  options: {
+    sessionConfigured: boolean;
+    screen?: { id: string; url: string };
+    providers?: Provider[];
+    reachedWhen?: string;
+  },
 ) {
   const screen = options.screen ?? SCREEN;
   return makeCheckRunner({
     browser: { open: async () => page, close: async () => {} },
     providers: options.providers ?? [loudProvider],
-    config: testConfig({ surfaces: [{ id: screen.id, url: screen.url, files: [] }] }),
+    config: testConfig({
+      appBaseUrl: APP_BASE_URL,
+      surfaces: [
+        {
+          id: screen.id,
+          url: screen.url,
+          files: [],
+          ...(options.reachedWhen === undefined ? {} : { reachedWhen: options.reachedWhen }),
+        },
+      ],
+    }),
     allowedCapabilities: ['live'],
     stepRunner: makeStepRunner(),
     transcriptTabCap: 3,
@@ -119,8 +158,8 @@ describe('rule A: the page\'s own data requests were refused as unauthenticated'
     expect(gap).not.toBeNull();
     expect(gap?.state).toBe('not-covered');
     expect(gap?.reason).toContain('401');
-    expect(gap?.reason).toContain('3 of the page');
-    expect(gap?.reason).toContain('http://app.test/api/v2/me');
+    expect(gap?.reason).toContain("3 of the application's own data requests");
+    expect(gap?.reason).toContain('http://app.test/api/v2/...');
     expect(gap?.reason).toContain('did not measure users');
   });
 
@@ -135,6 +174,95 @@ describe('rule A: the page\'s own data requests were refused as unauthenticated'
 
   it('does not fire when nothing was refused', () => {
     expect(redirectedAwayGap(SCREEN.id, observation({ unauthorizedApiUrls: [] }))).toBeNull();
+  });
+
+  it('counts only refusals from the application\'s own origin', () => {
+    // One incidental 401 from an optional widget, an analytics beacon, or a third-party service
+    // whose own credentials are stale must not discard a whole screen on every run.
+    expect(
+      redirectedAwayGap(
+        SCREEN.id,
+        observation({
+          unauthorizedApiUrls: [
+            'https://telemetry.vendor.example/collect',
+            'https://cdn.other.example/api/config',
+          ],
+        }),
+      ),
+    ).toBeNull();
+    // A same-origin refusal beside the third-party ones still fires, and the count is the
+    // same-origin count, not the raw one.
+    const gap = redirectedAwayGap(
+      SCREEN.id,
+      observation({
+        unauthorizedApiUrls: [
+          'https://telemetry.vendor.example/collect',
+          'http://app.test/api/v2/me',
+        ],
+      }),
+    );
+    expect(gap?.reason).toContain('1 of the application');
+    expect(gap?.reason).not.toContain('telemetry.vendor.example');
+  });
+
+  it('is not overridden by a matched reachedWhen selector', () => {
+    // A reachedWhen aimed at a persistent shell, a header, a nav, or a footer, matches on a login
+    // wall too. The application refusing the session is the stronger evidence, so this stands.
+    expect(
+      redirectedAwayGap(
+        SCREEN.id,
+        observation({
+          unauthorizedApiUrls: ['http://app.test/api/v2/me'],
+          reachedSelectorPresent: true,
+        }),
+      ),
+    ).not.toBeNull();
+  });
+
+  it('shortens a refused address to its first two path segments', () => {
+    // A path is where applications put opaque values: /reset/<token>, /invite/<token>. The
+    // endpoint an operator needs to recognise is the front of the path.
+    const gap = redirectedAwayGap(
+      SCREEN.id,
+      observation({ unauthorizedApiUrls: ['http://app.test/reset/OPAQUE_TOKEN'] }),
+    );
+    expect(gap?.reason).toContain('http://app.test/reset/...');
+    expect(gap?.reason).not.toContain('OPAQUE_TOKEN');
+  });
+
+  it('refusalsFromAppOrigin keeps same-origin addresses and nothing else', () => {
+    const urls = [
+      'http://app.test/api/v2/me',
+      'http://app.test:80/api/v2/config',
+      'https://app.test/api/v2/secure',
+      'http://other.test/api/v2/me',
+      'not a url',
+    ];
+    expect(refusalsFromAppOrigin(urls, 'http://app.test')).toEqual([
+      'http://app.test/api/v2/me',
+      'http://app.test:80/api/v2/config',
+    ]);
+    // An appBaseUrl that will not parse gives no origin to compare against, so nothing counts.
+    // That errs toward not firing, which is the safe direction for a rule that discards a screen.
+    expect(refusalsFromAppOrigin(urls, 'not a url')).toEqual([]);
+  });
+
+  it('sanitizeRefusedUrlForDisplay keeps at most two route words and marks the cut', () => {
+    // Two segments is the ceiling, and a segment is kept only while it reads as a route word.
+    // In /reset/<token> the token IS the second segment, so the ceiling alone would print it.
+    expect(sanitizeRefusedUrlForDisplay('http://app.test/reset/OPAQUE_TOKEN')).toBe('http://app.test/reset/...');
+    expect(sanitizeRefusedUrlForDisplay('http://app.test/api/v2/users/42')).toBe('http://app.test/api/v2/...');
+    expect(sanitizeRefusedUrlForDisplay('http://app.test/api/v2')).toBe('http://app.test/api/v2');
+    expect(sanitizeRefusedUrlForDisplay('https://u:p@app.test/me?t=T#f')).toBe('https://app.test/me');
+    expect(sanitizeRefusedUrlForDisplay('http://app.test/')).toBe('http://app.test/');
+    // A UUID, a numeric id, and a base64 blob are all identifiers, not route words.
+    expect(sanitizeRefusedUrlForDisplay('http://app.test/9f1c2b3e-4d5a-6b7c-8d9e-0f1a2b3c4d5e/me')).toBe(
+      'http://app.test/...',
+    );
+    expect(sanitizeRefusedUrlForDisplay('http://app.test/users/9f1c2b3e4d5a6b7c8d9e0f1a')).toBe(
+      'http://app.test/users/...',
+    );
+    expect(sanitizeRefusedUrlForDisplay('nope')).toBe('an address usabl could not parse');
   });
 });
 
@@ -158,6 +286,28 @@ describe('rule B: a password field anywhere, with a session configured', () => {
         observation({ sessionConfigured: false, landedUrl: SCREEN.url, passwordFieldPresent: true }),
       ),
     ).toBeNull();
+  });
+
+  it('is overridden by a matched reachedWhen, which is what makes change-password scannable', () => {
+    // A genuine signed-in screen that really does contain a password field. The operator has
+    // asserted this screen rendered, and that outranks a heuristic that it did not. Without the
+    // override the screen is discarded on every run with no way to say otherwise.
+    expect(
+      redirectedAwayGap(
+        'change-password',
+        observation({ passwordFieldPresent: true, reachedSelectorPresent: true }),
+      ),
+    ).toBeNull();
+  });
+
+  it('still fires when a declared reachedWhen selector matched nothing', () => {
+    // Declared and absent is the opposite of an assertion that the screen rendered.
+    expect(
+      redirectedAwayGap(
+        SCREEN.id,
+        observation({ passwordFieldPresent: true, reachedSelectorPresent: false }),
+      ),
+    ).not.toBeNull();
   });
 });
 
@@ -192,10 +342,12 @@ describe('rule C: redirected to a page that asks for a password', () => {
     expect(
       redirectedAwayGap('sign-in', {
         requestedUrl: 'http://app.test/login',
+        appBaseUrl: APP_BASE_URL,
         landedUrl: 'http://app.test/login',
         passwordFieldPresent: true,
         unauthorizedApiUrls: [],
         sessionConfigured: false,
+        reachedSelectorPresent: null,
       }),
     ).toBeNull();
   });
@@ -228,10 +380,12 @@ describe('rule C: redirected to a page that asks for a password', () => {
     expect(
       redirectedAwayGap('users', {
         requestedUrl: 'http://app.test/#/users',
+        appBaseUrl: APP_BASE_URL,
         landedUrl: 'http://app.test/#/login',
         passwordFieldPresent: true,
         unauthorizedApiUrls: [],
         sessionConfigured: false,
+        reachedSelectorPresent: null,
       }),
     ).not.toBeNull();
   });
@@ -272,10 +426,12 @@ describe('no address in a gap reason ever carries a credential', () => {
   it('strips userinfo, query, and fragment from both addresses under rule C', () => {
     const gap = redirectedAwayGap(SCREEN.id, {
       requestedUrl: dirtyRequested,
+      appBaseUrl: APP_BASE_URL,
       landedUrl: dirtyLanding,
       passwordFieldPresent: true,
       unauthorizedApiUrls: [],
       sessionConfigured: false,
+      reachedSelectorPresent: null,
     });
     expect(gap?.reason).toContain('http://app.test/users');
     expect(gap?.reason).toContain('https://sso.example.com/authorize');
@@ -285,10 +441,12 @@ describe('no address in a gap reason ever carries a credential', () => {
   it('strips userinfo, query, and fragment from the requested address and the refused one under rule A', () => {
     const gap = redirectedAwayGap(SCREEN.id, {
       requestedUrl: dirtyRequested,
+      appBaseUrl: 'https://app.test',
       landedUrl: dirtyRequested,
       passwordFieldPresent: false,
       unauthorizedApiUrls: ['https://svc:s3cr3t-basic@app.test/api/me?token=SUPERSECRETTOKEN#x=SUPERSECRETCODE'],
       sessionConfigured: true,
+      reachedSelectorPresent: null,
     });
     expect(gap?.reason).toContain('https://app.test/api/me');
     expectNoSecrets(gap?.reason);
@@ -297,10 +455,12 @@ describe('no address in a gap reason ever carries a credential', () => {
   it('strips userinfo, query, and fragment from the requested address under rule B', () => {
     const gap = redirectedAwayGap(SCREEN.id, {
       requestedUrl: dirtyRequested,
+      appBaseUrl: APP_BASE_URL,
       landedUrl: dirtyRequested,
       passwordFieldPresent: true,
       unauthorizedApiUrls: [],
       sessionConfigured: true,
+      reachedSelectorPresent: null,
     });
     expect(gap?.reason).toContain('http://app.test/users');
     expectNoSecrets(gap?.reason);
@@ -312,10 +472,12 @@ describe('no address in a gap reason ever carries a credential', () => {
     // rewritten ref would silently orphan the gap. The reason above is where the safe form goes.
     const gap = redirectedAwayGap(SCREEN.id, {
       requestedUrl: dirtyRequested,
+      appBaseUrl: APP_BASE_URL,
       landedUrl: dirtyLanding,
       passwordFieldPresent: true,
       unauthorizedApiUrls: [],
       sessionConfigured: false,
+      reachedSelectorPresent: null,
     });
     expect(gap?.ref).toBe(dirtyRequested);
   });
@@ -328,19 +490,26 @@ describe('no address in a gap reason ever carries a credential', () => {
 });
 
 describe('observeLanding: reading the facts off a live page', () => {
-  it('reads the address, the password count, and the refused requests', async () => {
+  const observeOptions = { requestedUrl: SCREEN.url, appBaseUrl: APP_BASE_URL, sessionConfigured: true };
+
+  it('reads the address, the password count, the refused requests, and the reachedWhen selector', async () => {
     await expect(
       observeLanding(
-        pageWith({ landedUrl: 'http://app.test/login', passwordFields: 1, unauthorized: ['http://app.test/api/me'] }),
-        SCREEN.url,
-        true,
+        pageWith({
+          landedUrl: 'http://app.test/login',
+          passwordFields: 1,
+          unauthorized: ['http://app.test/api/me'],
+        }),
+        { ...observeOptions, reachedWhen: undefined },
       ),
     ).resolves.toEqual({
       requestedUrl: SCREEN.url,
+      appBaseUrl: APP_BASE_URL,
       landedUrl: 'http://app.test/login',
       passwordFieldPresent: true,
       unauthorizedApiUrls: ['http://app.test/api/me'],
       sessionConfigured: true,
+      reachedSelectorPresent: null,
     });
   });
 
@@ -356,18 +525,38 @@ describe('observeLanding: reading the facts off a live page', () => {
         throw new Error('no record');
       },
     });
-    await expect(observeLanding(broken, SCREEN.url, true)).resolves.toEqual({
+    await expect(observeLanding(broken, { ...observeOptions, reachedWhen: undefined })).resolves.toEqual({
       requestedUrl: SCREEN.url,
+      appBaseUrl: APP_BASE_URL,
       landedUrl: null,
       passwordFieldPresent: false,
       unauthorizedApiUrls: [],
       sessionConfigured: true,
+      reachedSelectorPresent: null,
     });
   });
 
   it('reads an empty address as no claim', async () => {
     const blank = await makeFakeDeps().browser.open('');
-    await expect(observeLanding(blank, SCREEN.url, true)).resolves.toMatchObject({ landedUrl: null });
+    await expect(
+      observeLanding(blank, { ...observeOptions, reachedWhen: undefined }),
+    ).resolves.toMatchObject({ landedUrl: null });
+  });
+});
+
+describe('readRefusedRequests: the second look', () => {
+  it('returns the record as it stands now', async () => {
+    const page = pageWith({ unauthorized: ['http://app.test/api/v2/me'] });
+    await expect(readRefusedRequests(page)).resolves.toEqual(['http://app.test/api/v2/me']);
+  });
+
+  it('reads a failing record as no claim', async () => {
+    const page = makeFakePage({
+      unauthorizedApiRequests: async () => {
+        throw new Error('no record');
+      },
+    });
+    await expect(readRefusedRequests(page)).resolves.toEqual([]);
   });
 });
 
@@ -418,6 +607,56 @@ describe('the check runner refuses to measure a screen it did not reach signed i
     expect(scan.gaps).toEqual([]);
     expect(scan.drafts).toHaveLength(1);
     expect(scan.stops.length).toBeGreaterThan(0);
+  });
+
+  it('discloses a 401 that only arrives during the walk, and discards what was collected', async () => {
+    // The timing window. Readiness settles about 1.5 seconds after a stable shell appears, so an
+    // application that sends its identity request later than that has sent nothing at the first
+    // read. Proven with the real adapter at three seconds. The second read closes it.
+    const scan = await runnerFor(pageWith({ lateUnauthorized: ['http://app.test/api/v2/me'] }), {
+      sessionConfigured: true,
+    }).scan(SCREEN);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('401');
+    // Everything the walk and the providers collected before the refusal showed up is discarded,
+    // exactly as it would be had the refusal been there on load.
+    expect(scan.drafts).toEqual([]);
+    expect(scan.stops).toEqual([]);
+    expect(scan.applicability).toEqual([]);
+    expect(scan.reachedSelectorPresent).toBeNull();
+  });
+
+  it('scans a genuine signed-in screen with a password field when reachedWhen matches', async () => {
+    // A change-password screen. Rule B would discard it on every run; the operator's positive
+    // assertion that the screen rendered outranks the heuristic.
+    const scan = await runnerFor(pageWith({ passwordFields: 1, reachedWhenMatches: true }), {
+      sessionConfigured: true,
+      reachedWhen: '#app-shell',
+    }).scan(SCREEN);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.drafts).toHaveLength(1);
+    expect(scan.reachedSelectorPresent).toBe(true);
+  });
+
+  it('still refuses a 401 screen when reachedWhen matches, because the shell matches on a login wall too', async () => {
+    const scan = await runnerFor(
+      pageWith({ unauthorized: ['http://app.test/api/v2/me'], reachedWhenMatches: true }),
+      { sessionConfigured: true, reachedWhen: '#app-shell' },
+    ).scan(SCREEN);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('401');
+  });
+
+  it('ignores a third-party 401 and scans the screen', async () => {
+    const scan = await runnerFor(pageWith({ unauthorized: ['https://telemetry.vendor.example/collect'] }), {
+      sessionConfigured: true,
+    }).scan(SCREEN);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.drafts).toHaveLength(1);
   });
 
   it('defaults to no configured session when the caller does not say', async () => {

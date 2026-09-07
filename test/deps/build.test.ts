@@ -219,7 +219,10 @@ describe("buildDeps", () => {
 
     try {
       vi.stubEnv("USABL_STORAGE_STATE", storageStatePath);
-      const withSession = await buildDeps(testConfig(), { browserFor });
+      // The refused request has to be same-origin with appBaseUrl, because a third-party 401
+      // deliberately does not fire the rule.
+      const config = testConfig({ appBaseUrl: "http://app.test" });
+      const withSession = await buildDeps(config, { browserFor });
       const gated = await withSession.checkRunner.scan({
         id: "clusters",
         url: "http://app.test/users",
@@ -229,7 +232,7 @@ describe("buildDeps", () => {
       expect(gated.drafts).toEqual([]);
 
       vi.unstubAllEnvs();
-      const withoutSession = await buildDeps(testConfig(), { browserFor });
+      const withoutSession = await buildDeps(config, { browserFor });
       const ungated = await withoutSession.checkRunner.scan({
         id: "clusters",
         url: "http://app.test/users",

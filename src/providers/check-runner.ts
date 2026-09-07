@@ -21,7 +21,8 @@ import type {
 } from '../contracts/index.js';
 import { attachDomSourceToDrafts } from './dom-source.js';
 import { measureReachability } from './reachability.js';
-import { observeLanding, redirectedAwayGap } from './redirected.js';
+import { observeLanding, readRefusedRequests, redirectedAwayGap } from './redirected.js';
+import { waitForScannerArtifactsToClear } from './scanner-artifacts.js';
 import { runProviders } from './index.js';
 
 export interface CheckRunnerDeps {
@@ -63,6 +64,31 @@ function failedScan(screen: { id: string; url: string }, reason: string): Screen
     applicability: [],
     reachedSelectorPresent: null,
     reachedWhenSelector: null,
+  };
+}
+
+/**
+ * A screen this run did not reach signed in. Its transcript, its drafts, and its applicability are
+ * all measurements of a page that is not the requested screen, so none of them is carried, and no
+ * reachability claim is made because the assertion describes a screen that was not shown.
+ *
+ * One shape for both the early check and the late one, so a refusal that arrives during the walk
+ * cannot be disclosed differently from one that was there on load.
+ */
+function notReachedScan(
+  screen: { id: string; url: string },
+  gap: CoverageGap,
+  reachedWhen: string | undefined,
+): ScreenScan {
+  return {
+    screenId: screen.id,
+    url: screen.url,
+    stops: [],
+    drafts: [],
+    gaps: [gap],
+    applicability: [],
+    reachedSelectorPresent: null,
+    reachedWhenSelector: reachedWhen ?? null,
   };
 }
 
@@ -112,29 +138,24 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       try {
         await page.gotoReady();
 
-        // Whether this is the requested screen, signed in. Read before anything on the page is
-        // exercised: providers click and press keys, a click can navigate and can fire its own
-        // requests, so a later read could not tell what the application did on load from what
-        // usabl did to it afterwards. Reading here is also what bounds the refused-request record
-        // to the load window.
-        const landing = await observeLanding(page, screen.url, deps.sessionConfigured === true);
-        const redirected = redirectedAwayGap(screen.id, landing);
-        if (redirected !== null) {
+        // Whether this is the requested screen, signed in. The address and the password count are
+        // read here and only here: providers click and press keys, a click can navigate, so a
+        // later DOM read could not tell what the application did on load from what usabl did to
+        // it afterwards.
+        const landing = await observeLanding(page, {
+          requestedUrl: screen.url,
+          appBaseUrl: deps.config.appBaseUrl,
+          sessionConfigured: deps.sessionConfigured === true,
+          ...(reachedWhen === undefined ? { reachedWhen: undefined } : { reachedWhen }),
+        });
+        const notReached = redirectedAwayGap(screen.id, landing);
+        if (notReached !== null) {
           // Not this screen. The walk and the providers are skipped rather than run and thrown
           // away: a keyboard order and a rule result from a sign-in page are not weak evidence
           // about the requested screen, they are evidence about a different page, and collecting
           // them at all invites a later change to keep them. Nothing is claimed about
           // reachability either, because this page is not the one the assertion describes.
-          result = {
-            screenId: screen.id,
-            url: screen.url,
-            stops: [],
-            drafts: [],
-            gaps: [redirected],
-            applicability: [],
-            reachedSelectorPresent: null,
-            reachedWhenSelector: reachedWhen ?? null,
-          };
+          result = notReachedScan(screen, notReached, reachedWhen);
         } else {
           await page.armAnnouncementCapture();
 
@@ -142,6 +163,10 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           const stops = trimCycle(transcript);
 
           await page.focusBody();
+          // The walk can have opened a tooltip or a popover, and blurring it starts a fade out
+          // that leaves the element in the DOM for a few hundred milliseconds. Content the scanner
+          // itself caused is not the page, so the providers wait for it to go.
+          await waitForScannerArtifactsToClear(page);
           const providerResult = await runProviders(
             deps.providers,
             { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
@@ -154,16 +179,30 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // collected scans and cannot query the page.
           const reachedSelectorPresent = await measureReachability(page, reachedWhen);
 
-          result = {
-            screenId: screen.id,
-            url: screen.url,
-            stops,
-            drafts,
-            gaps: providerResult.gaps,
-            applicability: providerResult.applicability,
-            reachedSelectorPresent,
-            reachedWhenSelector: reachedWhen ?? null,
-          };
+          // Rule A again, on the record as it stands now. Readiness settles about 1.5 seconds
+          // after a stable shell appears, so an application that sends its identity request later
+          // than that had sent nothing at the first read. A refusal that arrived at any point in
+          // the scan means the screen was not reached signed in, and everything collected from it
+          // goes with it. Only the refused-request record is re-read; the address and the password
+          // count keep their load-time values for the reason given above.
+          const lateRefusal = redirectedAwayGap(screen.id, {
+            ...landing,
+            unauthorizedApiUrls: await readRefusedRequests(page),
+          });
+          if (lateRefusal !== null) {
+            result = notReachedScan(screen, lateRefusal, reachedWhen);
+          } else {
+            result = {
+              screenId: screen.id,
+              url: screen.url,
+              stops,
+              drafts,
+              gaps: providerResult.gaps,
+              applicability: providerResult.applicability,
+              reachedSelectorPresent,
+              reachedWhenSelector: reachedWhen ?? null,
+            };
+          }
         }
       } catch (err) {
         result = failedScan(screen, `scan failed: ${errorMessage(err)}`);
