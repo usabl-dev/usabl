@@ -74,6 +74,12 @@ export interface OverlayProjection {
   } | null;
   dirtyGuardedPaths: string[];
   paidDownCount: number;
+  // The accessibility outcome with the policy divergence set aside, copied from the gate-owned
+  // Result and never computed here. An approval_required run can also carry a real barrier, and the
+  // overlay states the two apart so a developer can fix the barrier while the approval is pending.
+  // Both are null when the Result did not carry them, so an older Result cannot be misread.
+  accessibilityVerdict: Result['accessibilityVerdict'];
+  accessibilityExitCode: Result['accessibilityExitCode'] | null;
 }
 
 type IncomingHeaders = Record<string, string | string[] | undefined>;
@@ -408,6 +414,8 @@ export function projectOverlay(
           },
     dirtyGuardedPaths: safe.dirtyGuardedPaths,
     paidDownCount: safe.paidDownCount,
+    accessibilityVerdict: safe.accessibilityVerdict ?? null,
+    accessibilityExitCode: safe.accessibilityExitCode ?? null,
   };
 }
 
