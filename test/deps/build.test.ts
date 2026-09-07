@@ -133,6 +133,52 @@ describe("buildDeps", () => {
     }
   });
 
+  it("refuses to build Deps from an expired session, and opens no browser", async () => {
+    // The dead-session refusal, held at the seam every operator surface funnels through. The
+    // point is not only that it throws: it throws before anything constructs a browser driver,
+    // so no Chromium starts and no page is opened against the application's sign-in wall. The
+    // CLI turns this throw into exit 4 with the message and no verdict.
+    const sessionDir = await mkdtemp(join(tmpdir(), "usabl-session-expired-"));
+    const storageStatePath = join(sessionDir, "storage-state.json");
+    const expiredSeconds = Math.floor(Date.now() / 1000) - 86_400;
+    await writeFile(
+      storageStatePath,
+      JSON.stringify({
+        cookies: [
+          {
+            name: "session",
+            value: "stale-value",
+            domain: "app.test",
+            path: "/",
+            expires: expiredSeconds,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax",
+          },
+        ],
+        origins: [],
+      }),
+      "utf8",
+    );
+    const launchSpy = vi.spyOn(chromium, "launch");
+    const browserFor = vi.fn(() => {
+      throw new Error("a browser driver must never be built for a dead session");
+    });
+    vi.stubEnv("USABL_STORAGE_STATE", storageStatePath);
+
+    try {
+      await expect(buildDeps(testConfig(), { browserFor })).rejects.toThrow(
+        /session has expired/,
+      );
+      expect(browserFor).not.toHaveBeenCalled();
+      expect(launchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      launchSpy.mockRestore();
+      await rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   it("accepts storageStatePath and keeps browser launch lazy", async () => {
     const launchSpy = vi.spyOn(chromium, "launch");
     const storageStatePath = "/tmp/fleet-insights-session.json";

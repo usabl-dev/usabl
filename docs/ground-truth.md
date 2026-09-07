@@ -1224,9 +1224,11 @@ reports ten surfaces: config, authenticated session, route manifest, evidence fl
 waivers, overlay, stop-hook, usabl-check skill, ci, and branch-rule, each with a state
 such as wired, missing, drifted, or unknown. The session surface reads the
 `USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file:
-unset is missing, a readable JSON file is wired, and a path that names no file or names a
-file that is not JSON is drifted. Doctor reports whether a session is set and never prints
-the path or the file contents. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
+unset is missing, a readable JSON file whose cookies have not all expired is wired, and a
+path that names no file, names a file that is not JSON, or names a state in which every
+cookie carrying an expiry is past it is drifted. Doctor reads the same expiry rule
+`usabl check` refuses on, so the two surfaces cannot disagree about one file. Doctor
+reports whether a session is set and never prints the path or the file contents. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
 engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the pin
 sentinel), or `drifted` (any other shape). Doctor never mints a verdict or a receipt.
 

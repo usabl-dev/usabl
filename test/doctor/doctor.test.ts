@@ -451,6 +451,55 @@ describe('authenticated session surface', () => {
     expect(stateOf(reports, 'session')).toBe('unknown');
   });
 
+  it('reports a session whose cookies have all expired as drifted, never wired', async () => {
+    // Doctor and "usabl check" read the same rule about the same file, so they cannot disagree.
+    // Reporting this as wired while the next run stops on it is the contradiction an operator
+    // would meet mid-demo, with no idea which surface to believe.
+    const nowMs = Date.UTC(2026, 8, 7, 12, 0, 0);
+    const expiredFile = JSON.stringify({
+      cookies: [
+        { name: 'session', value: 'stale-value', domain: 'app.test', path: '/', expires: nowMs / 1000 - 60 },
+      ],
+      origins: [],
+    });
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({ [SESSION_PATH]: expiredFile }),
+        gh: GH_UNAVAILABLE,
+        configPath: 'usabl.config.json',
+        env: WIRED_SESSION,
+        now: () => nowMs,
+      }),
+    );
+    expect(stateOf(reports, 'session')).toBe('drifted');
+    const step = byId(reports, 'session').nextStep;
+    expect(step).toContain('expired');
+    expect(step).toContain('Mint a new session');
+    expect(step).not.toContain(SESSION_PATH);
+    expect(step).not.toContain('stale-value');
+  });
+
+  it('reports a session with one cookie still in date as wired', async () => {
+    const nowMs = Date.UTC(2026, 8, 7, 12, 0, 0);
+    const liveFile = JSON.stringify({
+      cookies: [
+        { name: 'old', value: 'v', domain: 'app.test', path: '/', expires: nowMs / 1000 - 60 },
+        { name: 'session', value: 'v', domain: 'app.test', path: '/', expires: nowMs / 1000 + 3_600 },
+      ],
+      origins: [],
+    });
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs({ [SESSION_PATH]: liveFile }),
+        gh: GH_UNAVAILABLE,
+        configPath: 'usabl.config.json',
+        env: WIRED_SESSION,
+        now: () => nowMs,
+      }),
+    );
+    expect(stateOf(reports, 'session')).toBe('wired');
+  });
+
   it('never prints the storage state path or its contents', async () => {
     // The path can name a private location and the file holds live session tokens. Doctor
     // says whether a session is set, never what it is. This holds in every state, including
