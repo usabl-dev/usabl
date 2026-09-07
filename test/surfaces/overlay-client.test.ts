@@ -2771,11 +2771,21 @@ describe('the overlay bounds its own work', { timeout: 60_000 }, () => {
   });
 
   it('keeps a large result under control in nodes and in time', async () => {
-    const started = Date.now();
-    const page = await mount(projectOverlay(result({ findings: manyFindings(3000, 1000) })), {
-      path: '/clusters',
-    });
+    // The result is held until the browser, the page and the open panel are all up, and the clock
+    // only starts when it is released. What this bounds is the overlay's work on a huge result, not
+    // how long a loaded machine takes to start Chromium and load a page, which used to be most of
+    // the measured span and pushed it past the budget under load for no reason to do with the
+    // overlay.
+    const huge = projectOverlay(result({ findings: manyFindings(3000, 1000) }));
+    const hugeResult = deferred();
+    const page = await mount(huge, { path: '/clusters', holdResults: [hugeResult.promise] });
     const panel = await openPanel(page);
+
+    const started = Date.now();
+    hugeResult.release();
+    await expect
+      .poll(async () => panel.locator('.finding-button').count(), { timeout: 20_000 })
+      .toBe(40);
     const elapsed = Date.now() - started;
 
     const nodes = await page.evaluate(() => document.querySelectorAll('*').length);
