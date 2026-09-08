@@ -12,9 +12,10 @@ approach. Use in judge Q&A, demo rehearsal, and alliance conversations.
 
 **Redirect:** axe-core is one provider. usabl runs separate providers beside it: a
 keyboard interaction walk, PatternFly composition rules, and deterministic screen-reader
-announcement and accessible-name checks. It re-checks the fix, and a Stop hook blocks
+announcement and accessible-name checks. It re-checks the change and reports whether the
+barrier is still observed, and a Stop hook blocks
 the AI's first stop on a blocking verdict unless a one-use bypass was issued. One finding
-becomes a re-checked fix in the same session.
+becomes a re-checked change in the same session.
 
 **Proof point:** The recorded test in the demo script: on the broken clusters dialog, a
 standalone axe-core run reported zero violations while usabl reported a regression with
