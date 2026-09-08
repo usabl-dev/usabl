@@ -79,6 +79,7 @@ function makePorts(overrides: {
     ports: {
       fs,
       tmpDir: () => '/tmp',
+      cwd: () => '/repo/one',
       stdoutWrite: async (text: string) => {
         stdout.push(text);
       },
