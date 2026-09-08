@@ -262,10 +262,10 @@ pay off the cold open on the same screen working. Close on the tagline.
 - **Audio:** narrator.
 - **VO:** "It is built to scale. The rules target the design system, so a second product
   costs no new rules. A team can turn it on without fixing everything first, because
-  today's barriers go on a baseline and a new one above that floor blocks unless it is waived. And every known barrier gets
+  today's barriers go on a baseline and a new one above that floor blocks unless it is waived. And every waiver gets
   an owner and a date."
 - **Text and graphics:** card one, "one rulepack, every product on the design system."
-  Card two, "adopt without fixing everything first." Card three, "every known barrier gets
+  Card two, "adopt without fixing everything first." Card three, "every waiver gets
   an owner and a date."
 - **Transition:** cut to the bookend.
 - **Intent:** Answer "does this work across many products," briefly.
@@ -370,7 +370,7 @@ closing the tickets. That is the same rule the product runs on. The thing doing 
 does not get to certify the work. We built that into usabl, and we held ourselves to it
 while we built it. It is built to scale. The rules target the design system, so a second
 product costs no new rules. A team can turn it on without fixing everything first, because
-today's barriers go on a baseline and a new one above that floor blocks unless it is waived. And every known barrier gets an
+today's barriers go on a baseline and a new one above that floor blocks unless it is waived. And every waiver gets an
 owner and a date. Which brings us back to where we started. The same screen, the same
 dialog. This time, when the change was made, something in the pipeline was finally required
 to disagree. And so this time, it works."
