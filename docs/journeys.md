@@ -132,7 +132,8 @@ and `usabl floor prune` show progress rather than shame.
 | 4. Shipped | Same release or the next | Validated | A regression in a following release |
 
 **Rip-out moment:** James stops reporting and works around barriers in private.
-**Prevention:** A `verified` verdict on the fix, backed by a re-checkable receipt.
+**Prevention:** A `verified` verdict on the re-checked change, backed by a re-checkable
+receipt: the barrier is no longer observed above the floor.
 Deterministic evidence is what gates; human assistive-technology review by Alex (SME) is
 still required, and usabl states that plainly rather than claiming to speak for James. A
 spoken-output preview module exists in the codebase but is dormant: it is not in the run
