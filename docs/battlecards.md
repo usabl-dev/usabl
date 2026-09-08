@@ -15,7 +15,7 @@ this repository). User-facing positioning: [positioning.md](./positioning.md).
 **What they do well:** Drop into Claude Code, Cursor, or Copilot today; familiar axe
 findings; Deque adds remediate guidance and training content.
 
-**What we add:** The full proof loop - fix re-verification, keyboard walk,
+**What we add:** The full proof loop - a re-check after each fix, keyboard walk,
 deterministic screen-reader announcement checks, differential ratchet, and a stop gate
 that blocks an assistant's first stop on a blocking verdict unless a one-use bypass was issued.
 
@@ -49,7 +49,7 @@ deterministic proof).
 Tactual and Speakable add diff and CI-friendly workflows.
 
 **What we add:** Deterministic announcement and accessible-name checks embedded in the
-assistant and PR proof loop, with fix verification, PatternFly rules, and team
+assistant and PR proof loop, with a re-check after each fix, PatternFly rules, and team
 enforcement on one Result.
 
 **Complementary?** Yes - Tactual or Speakable could be adopted as a provider behind the
@@ -82,8 +82,9 @@ is written, for new machine-checkable barriers, and report the gaps."
 
 **What they do well:** Broad reach, executive visibility, familiar audit reports.
 
-**What we add:** Start at creation, verify fixes, and ratchet regressions with the same
-evidence the developer and the AI already saw.
+**What we add:** Start at creation, re-check after each fix (usabl reports whether the
+barrier is still observed; it does not witness the repair), and ratchet regressions with
+the same evidence the developer and the AI already saw.
 
 **Complementary?** Yes - Lighthouse and WAVE remain useful for ad-hoc audits and
 broader page health. usabl adds a change-level gate with a receipt on verified runs.
@@ -120,8 +121,8 @@ Stop hook and CI. No subscription, no vendor lock.
 **Complementary?** No - different philosophical bets. Jeikin is closed-source SaaS;
 usabl is open and local-first.
 
-**One-liner:** "They verify fixes in a dashboard. We verify in the dev loop and ship
-the receipt."
+**One-liner:** "They verify fixes in a dashboard. We re-check in the dev loop, report
+whether the barrier is still observed, and ship the receipt."
 
 ---
 
