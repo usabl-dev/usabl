@@ -388,6 +388,10 @@ Commit the `.usabl-evidence.json` diff alongside the fix PR so the floor ratchet
 
 ---
 
+## Filming or presenting
+
+For a live demo, `start-demo.sh` brings everything up in order (tunnel, lab readiness, dev server with the scanner session, browser warm-up, session), `mint-session.sh` refreshes the scanner session before each filmed scan, and `filming-checklist.md` walks the four surfaces state by state and lists the known limits in one breath each. Lab details go in `WORKDIR/demo.env`, which is never committed.
+
 ## All surfaces at a glance
 
 | Surface | Command | Blocking? | When it runs |
