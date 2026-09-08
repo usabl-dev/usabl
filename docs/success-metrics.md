@@ -91,7 +91,7 @@ If below expectation, widen probe set or rulepack before submission.
 
 ---
 
-## 4. Time to accessible (found issue -> verified fix)
+## 4. Time to accessible (found issue -> re-check that no longer observes it)
 
 **Definition:** Elapsed time from first harness finding on a touched surface to
 `verified` verdict after fix, in the assistant loop or overlay loop.
@@ -166,5 +166,5 @@ npx usabl check               # targets come from usabl.config.json; no URL argu
 | Time to first finding (real PF surface) | | | |
 | Verified-verdict rate (real surface) | | | |
 | False positive rate (real surface) | | | |
-| Demo: finding -> verified fix | | | |
+| Demo: finding -> re-check that no longer observes it | | | |
 | Regressions blocked (demo / fleet) | | | |
