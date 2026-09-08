@@ -336,7 +336,7 @@
       <div class="body">
         <p class="eyebrow">The short answer</p>
         <h1 id="hero-title">One pipeline. One decision-maker.</h1>
-        <p class="lede">The engine is about 83 source files and more than 11,000 lines of TypeScript in <code>src/</code>. A separate test folder mirrors it, with another 14,000 lines and more than 600 automated tests. Every source file has one of three jobs: collect evidence, make the one decision, or show that decision to people.</p>
+        <p class="lede">The engine is about 121 source files and more than 25,000 lines of TypeScript in <code>src/</code>. A separate test folder mirrors it, with about 44,000 lines and more than 1,900 automated tests. Every source file has one of three jobs: collect evidence, make the one decision, or show that decision to people.</p>
         <p>This page explains the code in the order it runs. One tip before you start: every file begins with a short comment. The comment says what the file does and what it must never do. The most common "must never" is: never decide the final answer. Only one module can do that. It is called the gate.</p>
         <p class="boundary"><strong>The main design rule:</strong> checks produce evidence. The gate turns the evidence into one final answer, called the verdict. All other code only displays the verdict. If any other code produces its own answer, that is a bug, even when the answer happens to be correct.</p>
         <figure class="diagram">
@@ -368,7 +368,7 @@
             <text x="289" y="112" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-style="italic" fill="#596579">drafts + gaps</text>
             <rect x="362" y="109" width="186" height="80" rx="7" fill="#2457e6"></rect>
             <text x="455" y="145" text-anchor="middle" font-family="Inter, sans-serif" font-size="17" font-weight="800" fill="#fff">The gate</text>
-            <text x="455" y="167" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" fill="#dbe4ff">one verdict, exit code</text>
+            <text x="455" y="167" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" fill="#dbe4ff">verdict or none, exit code</text>
             <line x1="548" y1="149" x2="646" y2="149" stroke="#8a93a3" stroke-width="2" marker-end="url(#arch-head)"></line>
             <text x="597" y="140" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-style="italic" fill="#596579">verdict</text>
             <rect x="650" y="60" width="240" height="178" rx="7" fill="#f7f5ef" stroke="#cbd1da" stroke-width="1.5"></rect>
@@ -401,7 +401,7 @@
         <h2 id="core-title">Three files form the core. Everything else connects to them.</h2>
         <p class="lede"><code>src/contracts/index.ts</code> defines the shared data shapes. <code>src/deps/</code> holds all code that touches the outside world. <code>src/run.ts</code> controls the order of the steps.</p>
         <ol class="flow">
-          <li><strong>Check the policy files</strong><span>The guard compares the tool's own policy files with a trusted copy in git. If any differ, the run stops here and asks for human approval.</span></li>
+          <li><strong>Check the policy files</strong><span>The guard compares the tool's own policy files with a trusted copy in git. If any differ, the verdict becomes "approval required". Affected screens still scan, so the accessibility findings are kept for the reviewer.</span></li>
           <li><strong>Read changed files</strong><span><code>run()</code> gets the list of changed files from the caller, or asks git for local changes.</span></li>
           <li><strong>Plan coverage</strong><span>The planner finds which screens the changed files affect. "Coverage" means: the set of screens the tool must check.</span></li>
           <li><strong>Scan the screens</strong><span>The check runner opens each affected screen in a browser and runs every check.</span></li>
@@ -410,11 +410,11 @@
         <div class="two-col">
           <article class="list-card">
             <h3>One interface for the outside world</h3>
-            <p><code>contracts/index.ts</code> defines <code>Deps</code>: file access, git access, the browser, and the clock, all in one object. <code>run()</code> receives this object as an argument. No other code opens files or starts a browser on its own. Because of this one rule, the whole engine can run inside a test.</p>
+            <p><code>contracts/index.ts</code> defines <code>Deps</code>: file access, git access, the browser, and the clock, all in one object. <code>run()</code> receives this object as an argument. Inside the engine, no other code opens files or starts a browser; the command-line and stop-hook entry points do read and write their own files before and after they call <code>run()</code>. Because of this one rule, the whole engine can run inside a test.</p>
           </article>
           <article class="list-card">
             <h3>A real version and a test version</h3>
-            <p><code>deps/real.ts</code> uses a real browser (Playwright with Chromium). It reads element names from the browser's accessibility tree. That tree is the same data a screen reader uses, so the engine sees what a screen reader user gets. <code>deps/fakes.ts</code> is a copy that works only in memory; the tests use it. If a test calls a fake method that was not set up, the fake throws an error. This makes hidden test mistakes visible instead of letting them pass.</p>
+            <p><code>deps/real.ts</code> uses a real browser (Playwright with Chromium). It reads element names from the browser's accessibility tree. That tree is Chromium's accessibility tree, read in part through the DevTools protocol; it is the data a screen reader starts from, but the engine does not observe what a screen reader says. <code>deps/fakes.ts</code> is a copy that works only in memory; the tests use it. If a test calls a fake method that was not set up, the fake throws an error. This makes hidden test mistakes visible instead of letting them pass.</p>
           </article>
         </div>
         <p class="rule"><strong>Core rule:</strong> <code>run()</code> only controls the order of steps. It never decides the verdict. If the engine crashes, the result is exit code 4, no verdict, and a clear error message. A crash can never produce "verified".</p>
@@ -451,7 +451,7 @@
             <p>If an interface file changed and no screen could be found for it, the planner writes a gap with a reason. The gate then returns "not covered". Nothing is dropped in silence.</p>
           </article>
         </div>
-        <p class="rule"><strong>Coverage rule:</strong> no sampling. The tool checks every affected screen, or it states clearly what it could not check.</p>
+        <p class="rule"><strong>Coverage rule:</strong> no sampling. The tool checks every affected screen, and it states clearly every gap it detected.</p>
       </div>
     </section>
 
@@ -461,13 +461,13 @@
         <div class="body">
           <p class="eyebrow">src/trust/, src/intake/</p>
           <h2 id="trust-title">The trust code expects that anyone can edit any file.</h2>
-          <p class="lede">The engine runs in a workspace where an AI assistant edits files. The assistant can also edit the engine's own policy files: the config, the route list, the accepted-findings list, and the waiver list. The trust layer makes sure a policy change can never approve itself. This check runs before everything else, so a broken or damaged policy file blocks the run instead of crashing it.</p>
+          <p class="lede">The engine runs in a workspace where an AI assistant edits files. The assistant can also edit the engine's own policy files: the config, the route list, the accepted-findings list, and the waiver list. The trust layer makes sure a policy change can never approve itself. The command first loads the configuration and builds the outside-world dependencies, and <code>run()</code> reads the changed file list; the guard is the first step after that, before coverage, before any browser opens. A guarded policy file that differs from its trusted copy turns the verdict into approval required. A working-tree config that cannot be read at all stops the command with exit code 4 and no verdict.</p>
           <ol class="precedence">
             <li><strong>1. Config first</strong> Compare the bytes of <code>usabl.config.json</code> with the trusted copy in git before using anything written inside it.</li>
             <li><strong>2. Verified bytes only</strong> The list of guarded files comes from the checked config bytes, never from data already in memory.</li>
             <li><strong>3. Expand folders</strong> A guarded folder becomes a list of its files, both committed files and new files. A new file cannot hide inside a guarded folder.</li>
             <li><strong>4. Compare every file</strong> Every guarded file is compared byte by byte with the trusted copy in git.</li>
-            <li><strong>5. Any change blocks</strong> If even one guarded file differs, the verdict is "approval required". A person must review it. No scan runs.</li>
+            <li><strong>5. Any change blocks</strong> If even one guarded file differs, the verdict is "approval required". A person must review it. The affected screens still scan, and the floor and waivers are read from the trusted copy, or treated as empty when there is none.</li>
           </ol>
           <div class="two-col">
             <article class="list-card">
@@ -501,17 +501,17 @@
           </article>
           <article class="card">
             <h3>keyboard-walk/</h3>
-            <p>Presses the Tab key through the screen and records every stop: the name, role, and state of each element. It stops when the cycle repeats. It reports interactive controls that have no name. When data is missing from the accessibility tree, the draft says "unverified". It never guesses.</p>
+            <p>Presses the Tab key through the screen and reads the accessibility tree at each stop. It stops when the focus order cycles or hands focus to the page body; if the time budget or the tab cap runs out first, it reports the walk as cut short and unverified. It reports interactive controls that have no name. When data is missing from the accessibility tree, the draft says "unverified". It never guesses.</p>
           </article>
         </div>
         <div class="two-col">
           <article class="list-card">
             <h3>Voicing: built and exported, not yet wired in</h3>
-            <p>The voicing lane is built and exported from the library, but v0.2.1 does not import it into the run path, so it does not affect the gate yet. It has two parts. <code>voicing/structural.ts</code> checks facts: did an announcement happen at the required moment, yes or no. Those drafts are deterministic, which means repeatable and machine-checked. <code>voicing/voicing.ts</code> compares the words of the announcement. Word matching is weaker evidence, so those drafts would be marked "preview" by default. A human can promote a word rule to a blocking rule in config, and the code never promotes itself. The lane and its calibration land in v0.3.0.</p>
+            <p>The voicing lane is built and exported from the library, but v0.2.1 does not import it into the run path, so it does not affect the gate yet. It has two parts. <code>voicing/structural.ts</code> checks facts: did an announcement happen at the required moment, yes or no. Those drafts are deterministic, which means repeatable and machine-checked. <code>voicing/voicing.ts</code> compares the words of the announcement. Word matching is weaker evidence, so those drafts would be marked "preview" by default. A human can promote a word rule to a blocking rule in config, and the code never promotes itself. The lane and its calibration are planned for v0.3.0.</p>
           </article>
           <article class="list-card">
             <h3>How announcements are captured</h3>
-            <p>The real browser driver installs a small observer script before the page loads. When the page writes into a live region, which is the area a screen reader announces out loud, the observer records a token. The checks compare these tokens with the written requirements. This is how the tool catches a toast message that appears on screen but is never announced to a screen reader user.</p>
+            <p>The real browser driver installs a small observer script before the page loads. When the page writes into a live region, which is the area a screen reader announces out loud, the observer records a token. Authored flow requirements compare these tokens with the announcement they expect, and the keyboard walk records them in its transcript. This is how an authored requirement catches a toast message that appears on screen but never reaches a live region.</p>
           </article>
         </div>
         <p class="rule"><strong>Evidence rule:</strong> every draft carries one of four evidence classes: "deterministic", "preview", "model-judgment", and "human-confirmed". Only "deterministic" drafts can change the verdict. "Preview", "model-judgment", and "human-confirmed" drafts are shown to people, but they can never create "verified" or a receipt.</p>
@@ -522,16 +522,16 @@
       <div class="number" aria-hidden="true">06</div>
       <div class="body">
         <p class="eyebrow">src/gate/, src/primitives/identity.ts, src/evidence/</p>
-        <h2 id="gate-title">The gate turns drafts into findings, and findings into one verdict.</h2>
+        <h2 id="gate-title">The gate turns drafts into findings, and findings into one verdict, or none.</h2>
         <p class="lede">This is the only module that makes the decision. It receives everything as input: the coverage, the guard result, the drafts, the accepted-findings list, the waivers, and the clock. It performs no input or output of its own.</p>
         <div class="two-col">
           <article class="list-card">
             <h3>Identity: same problem, one finding</h3>
-            <p><code>primitives/identity.ts</code> builds a key for each finding. It prefers the element's accessible name, because a name survives layout changes. Without a name it uses the element's role and position. As a last resort it counts occurrences. The key ignores which provider found the problem, so when axe and a PatternFly rule report the same defect, they merge into one finding.</p>
+            <p><code>primitives/identity.ts</code> builds a key for each finding. It prefers the element's accessible name, because a name survives layout changes. Without a name it uses the element's role and position. As a last resort it counts occurrences. The key ignores which provider found the problem but includes the rule id, so two reports merge only when they carry the same rule on the same element; an axe finding and a PatternFly finding with different rule ids on one control stay two findings.</p>
           </article>
           <article class="list-card">
             <h3>Status: compare with the accepted list</h3>
-            <p>The evidence floor is the list of findings the team has already accepted. A finding on the list is "carried" and does not block. A finding not on the list is "new" and blocks. A listed finding that no longer appears becomes "fixed": still shown, never blocking. Waivers are written exceptions with a validated expiry date. Together this lets a team block new problems without claiming old problems are gone.</p>
+            <p>The evidence floor is the list of findings the team has already accepted. A finding on the list is "carried" and does not block. A finding not on the list is "new". Unless an active waiver covers it, a deterministic one the checks confirmed returns regression, and a deterministic one they could not confirm returns "not covered"; preview and model-judgment findings are shown but never decide the verdict. A listed finding that no longer appears becomes "fixed": still shown, never blocking. Waivers are written exceptions with a validated expiry date. Together this lets a team block new problems without claiming old problems are gone.</p>
           </article>
         </div>
         <div class="two-col">
@@ -553,17 +553,17 @@
       <div class="body">
         <p class="eyebrow">src/cli.ts and src/surfaces/</p>
         <h2 id="surfaces-title">Surfaces only show or enforce the result.</h2>
-        <p class="lede">A surface is a place where people or tools see the result: the command line, the browser, the AI stop hook, the pull request. Every surface reads the same <code>Result</code> object. No surface computes findings again on its own.</p>
+        <p class="lede">A surface is a place where people or tools see the result: the command line, the browser, the AI stop hook, the pull request. The command line, the overlay, the stop hook, and the pull request comment read the <code>Result</code> the gate produced for their run; CI runs the engine again against trusted-base policy. The Playwright <code>checkPage()</code> helper runs the providers on one live page and returns a separate page-level result with no floor and no waivers.</p>
         <div class="surface-table" tabindex="0" role="region" aria-label="Surface modules and their jobs">
           <table>
             <thead><tr><th scope="col">Files</th><th scope="col">Surface</th><th scope="col">What the code does</th></tr></thead>
             <tbody>
               <tr><th scope="row"><code>cli.ts</code>, <code>cli-bin.ts</code>, <code>surfaces/cli.ts</code></th><td>Command line</td><td>Reads the command flags, calls <code>run()</code>, prints text or JSON, and exits with the Result's exit code. The installed command has its own build entry file, so the build tool cannot accidentally turn it into an empty program.</td></tr>
-              <tr><th scope="row"><code>surfaces/stop-hook.ts</code>, <code>stop-hook-runner.ts</code>, <code>stop-hook-bin.ts</code>, <code>receipt-store.ts</code></th><td>AI stop hook</td><td>Connects to Claude Code. It blocks by printing a JSON message, not by exit codes, because that is how the hook protocol works. If a valid receipt already matches the current code, the stop is allowed without a new scan. The hook blocks only once per stop, so the assistant cannot get trapped in a loop. A one-time bypass file exists for the human operator.</td></tr>
+              <tr><th scope="row"><code>surfaces/stop-hook.ts</code>, <code>stop-hook-runner.ts</code>, <code>stop-hook-bin.ts</code>, <code>receipt-store.ts</code></th><td>AI stop hook</td><td>Connects to Claude Code. It blocks by printing a JSON message, not by exit codes, because that is how the hook protocol works. If a valid receipt already matches the current code, the stop is allowed without a new scan. It blocks the first stop attempt on a blocking verdict. If the host reports that hook-triggered continuation is already active, it allows that stop attempt to prevent a recursive loop. A one-time bypass file exists for the human operator, and idle, no-verdict, and hook-error runs are disclosed and allowed.</td></tr>
               <tr><th scope="row"><code>surfaces/vite-plugin.ts</code>, <code>overlay-client.ts</code></th><td>Browser inspector</td><td><code>vite-plugin.ts</code> serves the inspector inside the running app. <code>overlay-client.ts</code>, the largest file in <code>src/</code>, draws the panel, refreshes when code changes, and can point to a finding on the page. It advises only. It can never fail a build or a process.</td></tr>
               <tr><th scope="row"><code>surfaces/pr-comment.ts</code></th><td>Pull request</td><td>Renders the Result as one pull request comment. A hidden marker lets CI update the same comment instead of adding a new one each time. Enforcement comes from the exit code in CI, not from the comment text.</td></tr>
               <tr><th scope="row"><code>surfaces/docs.ts</code>, <code>surfaces/docs-html.ts</code></th><td>Documentation</td><td><code>docs.ts</code> projects a run's design-intake and transcript artifacts: an image text list, announcement examples, and keyboard paths. <code>usabl docs</code> prints them as JSON; <code>usabl docs --html</code>, rendered by <code>docs-html.ts</code>, writes one self-contained, accessible HTML page. It is a generator, not a gate: it always exits 0 and makes no verdict. On the page an artifact reads as verified only when it is bound to a minted receipt and its entries carry evidence; a bound artifact whose entries carry no evidence is labelled an expectation, and anything unbound is labelled an observation.</td></tr>
-              <tr><th scope="row"><code>surfaces/playwright-helper.ts</code></th><td>Test helper</td><td>Lets a Playwright test suite assert on an existing Result inside the tests a team already runs.</td></tr>
+              <tr><th scope="row"><code>surfaces/playwright-helper.ts</code></th><td>Test helper</td><td>Lets a Playwright test suite assert on an existing Result, and offers <code>checkPage()</code>, which runs the providers on one live page and returns a separate page-level result with no floor and no waivers.</td></tr>
               <tr><th scope="row"><code>surfaces/scrub.ts</code>, <code>primitives/neutralize.ts</code></th><td>Output safety</td><td>Text taken from a web page is untrusted. It can contain hidden control characters, or text that tries to give instructions to an AI. <code>neutralize.ts</code> removes control bytes before terminal output. <code>scrub.ts</code> marks page text as untrusted before it enters an AI conversation.</td></tr>
               <tr><th scope="row"><code>surfaces/self-check.ts</code></th><td>Mid-task check</td><td>A read-only status view that an AI assistant can request in the middle of a task. It reports. It never blocks.</td></tr>
             </tbody>
@@ -584,7 +584,7 @@
           </div>
           <figcaption>Captured text from two real <code>usabl docs --html</code> runs on the demo app: each panel shows the page overview line above one artifact's status banner. Same page, same artifacts. When no receipt is minted, every card falls back from "Verified" to "Not verified" on its own. The generator never shows a card as proof unless a receipt backs it.</figcaption>
         </figure>
-        <p class="rule"><strong>Consistency rule:</strong> if two surfaces ever disagree, the bug is in the display code, not in the decision. Start debugging from the <code>Result</code> object and work outward.</p>
+        <p class="rule"><strong>Consistency rule:</strong> if two surfaces showing the same <code>Result</code> ever disagree, the bug is in the display code, not in the decision. A local run and a CI run can differ, because CI reads policy from the trusted base, and the Playwright page check has no floor and no waivers. Start debugging from the <code>Result</code> object and work outward.</p>
       </div>
     </section>
 
@@ -633,7 +633,7 @@
             <article class="owner">
               <h3>1. Engine core</h3>
               <p class="owns"><code>contracts/</code> · <code>run.ts</code> · <code>gate/</code> · <code>primitives/</code> · <code>index.ts</code></p>
-              <p>Owns the one verdict, the order the pipeline runs in, the shared data shapes every other module imports, and the small pure helpers. This is where the product's honesty guarantee lives. Own this and you own the rule that only the gate decides.</p>
+              <p>Owns the one verdict, the order the pipeline runs in, the shared data shapes every other module imports, and the small pure helpers. This is where the product's honesty rule lives. Own this and you own the rule that only the gate decides.</p>
             </article>
             <article class="owner">
               <h3>2. Scan and providers</h3>
@@ -643,7 +643,7 @@
             <article class="owner">
               <h3>3. Coverage and discovery</h3>
               <p class="owns"><code>coverage/</code> (planner, route-manifest, import-graph)</p>
-              <p>Owns the question of which screens a change touches. When it cannot connect a changed file to a screen, it records a gap. That gap is what makes the gate answer "not covered" instead of guessing.</p>
+              <p>Owns the question of which screens the changed UI files map to. When it cannot connect a changed file to a screen, it records a gap. That gap is what makes the gate answer "not covered" instead of guessing.</p>
             </article>
             <article class="owner">
               <h3>4. Trust and receipts</h3>
@@ -668,7 +668,7 @@
             <article class="owner">
               <h3>8. Hook and overlay runtime</h3>
               <p class="owns"><code>stop-hook*.ts</code> · <code>vite-plugin.ts</code> · <code>overlay-client.ts</code> · <code>playwright-helper.ts</code></p>
-              <p>Owns the live entry points that actually call <code>run()</code>: the AI stop hook, which is the headline surface, the in-browser overlay, and the Playwright test seam. All of them fail open, so a stuck hook discloses rather than blocks by accident.</p>
+              <p>Owns the live entry points: the AI stop hook, which is the headline surface, and the in-browser overlay both call <code>run()</code>; the Playwright <code>checkPage()</code> seam runs the providers directly on one page and returns a separate page-level result. The hook and the overlay fail open, so a stuck hook discloses rather than blocks by accident; a Playwright assertion fails the test.</p>
             </article>
             <article class="owner dormant">
               <h3>Dormant lanes (built, not wired)</h3>

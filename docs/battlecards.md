@@ -15,14 +15,15 @@ this repository). User-facing positioning: [positioning.md](./positioning.md).
 **What they do well:** Drop into Claude Code, Cursor, or Copilot today; familiar axe
 findings; Deque adds remediate guidance and training content.
 
-**What we add:** The full proof loop - fix re-verification, keyboard walk,
+**What we add:** The full proof loop - a re-check after each fix, keyboard walk,
 deterministic screen-reader announcement checks, differential ratchet, and a stop gate
-that blocks "done" until proof passes on the change.
+that blocks an assistant's first stop on a blocking verdict unless a one-use bypass was issued.
 
 **Complementary?** Yes - Deque's remediate guidance and usabl's proof gate can coexist.
 axe-core is one of our check layers.
 
-**One-liner:** "They advise from the chat. We verify the fix and gate completion."
+**One-liner:** "They advise from the chat. We re-check the change, report whether the barrier is still observed, and block the assistant's
+first stop on a blocking verdict unless a one-use bypass was issued."
 
 ---
 
@@ -32,13 +33,13 @@ axe-core is one of our check layers.
 credibility, edit locks until an accessibility lead agent runs.
 
 **What we add:** Per-change deterministic verdicts from Playwright + axe + keyboard
-walk + PF rules - the AI never grades its own homework.
+walk + PF rules; the gate decides and the AI only proposes.
 
 **Complementary?** Potentially - their specialist prompts could inform fix suggestions
 while our gate holds the verdict. Different architectural bets (LLM review vs
 deterministic proof).
 
-**One-liner:** "They review once per session. We prove every change."
+**One-liner:** "They review once per session. usabl runs its gate on every change and discloses every gap it detected."
 
 ---
 
@@ -48,13 +49,14 @@ deterministic proof).
 Tactual and Speakable add diff and CI-friendly workflows.
 
 **What we add:** Deterministic announcement and accessible-name checks embedded in the
-assistant and PR proof loop, with fix verification, PatternFly rules, and team
+assistant and PR proof loop, with a re-check after each fix, PatternFly rules, and team
 enforcement on one Result.
 
 **Complementary?** Yes - Tactual or Speakable could be adopted as a provider behind the
 usabl gate for richer phrasing validation. Guidepup is a candidate too.
 
-**One-liner:** "They let you hear the UI. We prove the change is ready to ship."
+**One-liner:** "They let you hear the UI. We prove the change added no new unwaived
+machine-checkable barrier above the reviewed floor on the screens we scanned."
 
 ---
 
@@ -67,11 +69,12 @@ enterprises with budget and procurement process.
 before enterprise process, on the engineer's machine and in the PR.
 
 **Complementary?** Different audience and lifecycle stage. Enterprise tools govern
-programs; usabl prevents regressions at creation. They can coexist - usabl reduces
-the findings enterprise dashboards eventually report.
+programs; usabl blocks new machine-checkable regressions above the reviewed floor at creation on the screens it
+scans. They can coexist; a barrier blocked at creation never reaches an enterprise
+dashboard.
 
-**One-liner:** "They govern the program. We prove each change in the workflow where it's
-written."
+**One-liner:** "They govern the program. We check each change, in the workflow where it
+is written, for new machine-checkable barriers, and report the gaps."
 
 ---
 
@@ -79,13 +82,15 @@ written."
 
 **What they do well:** Broad reach, executive visibility, familiar audit reports.
 
-**What we add:** Start at creation, verify fixes, and ratchet regressions with the same
-evidence the developer and the AI already saw.
+**What we add:** Start at creation, re-check after each fix (usabl reports whether the
+barrier is still observed; it does not witness the repair), and ratchet regressions with
+the same evidence the developer and the AI already saw.
 
 **Complementary?** Yes - Lighthouse and WAVE remain useful for ad-hoc audits and
-broader page health. usabl covers the change-level proof they don't.
+broader page health. usabl adds a change-level gate with a receipt on verified runs.
 
-**One-liner:** "They report after the fact. We complete the check before done."
+**One-liner:** "They report after the fact. We run the check before the assistant's first
+stop, and block that stop on a blocking verdict unless a one-use bypass was issued."
 
 ---
 
@@ -96,10 +101,11 @@ broader page health. usabl covers the change-level proof they don't.
 **What we add:** Prevent upstream in the assistant loop and produce the same PR
 evidence bundle from a stronger verdict source.
 
-**Complementary?** Partially - if a team already has a PR bot, usabl's CI leg replaces
-it with a stronger signal. The upstream prevention in the assistant loop is additive.
+**Complementary?** Partially - if a team already has a PR bot, usabl's CI leg can run
+beside it; usabl's verdict is read from the Result, never from a comment. The upstream
+prevention in the assistant loop is additive.
 
-**One-liner:** "They comment on the PR. We stop the defect before the PR."
+**One-liner:** "They comment on the PR. usabl blocks the assistant's first stop on a blocking verdict, before the PR exists, unless a one-use bypass was issued."
 
 ---
 
@@ -109,14 +115,14 @@ it with a stronger signal. The upstream prevention in the assistant loop is addi
 buying an enforcement story.
 
 **What we add:** Full multi-layer proof (keyboard walk, PF rules, deterministic
-screen-reader announcement checks), OSS, PatternFly-native, integrated with MCP-capable
-assistants and CI. No subscription, no vendor lock.
+screen-reader announcement checks), OSS, PatternFly-native, integrated with the assistant
+Stop hook and CI. No subscription, no vendor lock.
 
 **Complementary?** No - different philosophical bets. Jeikin is closed-source SaaS;
 usabl is open and local-first.
 
-**One-liner:** "They verify fixes in a dashboard. We verify in the dev loop and ship
-the receipt."
+**One-liner:** "They verify fixes in a dashboard. We re-check in the dev loop, report
+whether the barrier is still observed, and ship the receipt."
 
 ---
 
@@ -124,8 +130,10 @@ the receipt."
 
 **What they do well:** Own the components and the official guidance.
 
-**What we do that they do not:** Encode their guidance in an extensible rulepack inside
-a proof engine that gates AI completion - alliance, not rivalry.
+**What usabl adds:** Encode their guidance in an extensible rulepack inside
+a proof engine whose Stop hook blocks an assistant's first stop on a blocking verdict
+unless a one-use bypass was issued - alliance, not rivalry.
 
-**One-liner:** "They build accessible components. We prove teams compose them
-correctly."
+**One-liner:** "They build accessible components. We check that each change composes
+them without a new unwaived machine-checkable barrier above the reviewed floor on the
+screens we scan."

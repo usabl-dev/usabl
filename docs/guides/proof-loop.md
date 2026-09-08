@@ -12,8 +12,8 @@ The runbook guides the team through:
 
 1. Experiencing several accessibility barriers in teaching previews.
 2. Changing the tracked source to the broken state.
-3. Reading the single Regression Result (eight findings across the Deployments and
-   Clusters screens), with findings grouped by screen, in the browser inspector.
+3. Reading the single Regression Result, with findings grouped by screen across the
+   Deployments and Clusters screens, in the advisory browser inspector.
 4. Running the assistant's `/usabl-check` self-check.
 5. Seeing the Claude Stop hook block completion.
 6. Seeing the pull request check and sticky comment report Regression.

@@ -19,19 +19,21 @@ this document and the source disagree, the source is authoritative.
 it's usabl."
 
 **Problem.** AI tools now write a large share of UI screens, and they often build
-things a screen reader cannot use. Today's tools point out problems, but they do
-not confirm a fix actually worked, and nothing stops the AI from calling work "done"
+things a screen reader cannot use. A scanner on its own points out problems; it does
+not confirm a fix worked, and on its own it does not stop the AI from calling work "done"
 when a screen reader still cannot use it. Meanwhile, James uses a screen reader daily
 and waits releases for fixes. Priya builds the UI with great intentions but misses
 things because it is hard to know everything.
 
 **What usabl is.** A proof engine for accessibility in product development workflows.
-It checks whether touched surfaces have any machine-checkable accessibility barrier
-that is new against a reviewed evidence floor, before work can be called done. It gives one of four clear answers:
+It checks whether the screens mapped from the changed UI files have any machine-checkable
+accessibility barrier that is new against a reviewed evidence floor and not covered by an
+active waiver, before work can be called done. When it checked something, it gives one of
+four answers (a run that checked nothing, or that crashed, gives no verdict; see below):
 
 | Verdict | Meaning |
 |---|---|
-| `verified` | No new distinguishable identity, and no count growth at a recorded one, under the reviewed floor. |
+| `verified` | No new distinguishable identity, and no count growth at a recorded one, under the reviewed floor and outside active waivers, on the screens mapped from the changed UI files. |
 | `regression` | A new problem appeared. |
 | `not_covered` | Could not identify or exercise what the change touched. |
 | `approval_required` | Policy changed; the tool will not judge itself. |
@@ -51,8 +53,8 @@ the null itself.
 
 **The gate always decides. Surfaces choose whether to enforce.** Overlay and the
 advisory lane display the Result without blocking. The stop hook enforces. CI
-enforces only when the check is a required status (branch protection). On GitHub
-Free private that requirement cannot be set yet; CI still runs and comments.
+enforces only when the `usabl-required` check is a required status (branch protection or
+a ruleset). On this repository it is required by the main-branch ruleset.
 
 **One check, several places it shows up.** The same engine runs behind all of these.
 Every surface is a thin wrapper over one CLI entry point that returns `Result`.
@@ -60,9 +62,9 @@ Every surface is a thin wrapper over one CLI entry point that returns `Result`.
 | Surface | Value (why it exists) |
 |---|---|
 | **CLI** | Run the full engine on demand: baseline a brownfield app, debug locally, CI invokes this, and the agent mid-task self-check (`usabl check` via Bash). Scanner-shaped entry, proof-engine semantics. |
-| **Stop hook** | Block the AI from calling work done without proof. The headline. |
+| **Stop hook** | Block the AI's first stop on a blocking verdict unless a one-use bypass was issued. The headline. |
 | **Overlay** | Show findings while hand-coding in the browser. Advises only. |
-| **CI / PR comment** | Team-visible gate on merge. Tamper-proof policy read. |
+| **CI / PR comment** | Team-visible gate on merge. Policy read from the trusted base ref. |
 | **Mid-task self-check** | Let the agent check itself while context is warm, before Stop. **CLI is sufficient** (Bash); MCP is an optional transport for discoverability (section 11.5). Stop still decides. |
 | **Reports** | Publish approved accessibility artifacts (alt-text manifests, snippets, keyboard paths) bound to verified evidence. Command: `usabl docs`. |
 | **Playwright helper** | Same check inside tests teams already run. |
@@ -73,7 +75,7 @@ loop is solid if discoverability matters.
 
 **One engine, two target surfaces.** The table above is about *where the engine runs*.
 On the other axis, *what it checks*, usabl covers two surfaces with the same engine and
-one verdict: the application UI (sections 7-8) and, since v0.2.1, the product's own
+one verdict, or none: the application UI (sections 7-8) and, since v0.2.1, the product's own
 documentation pages (sections 3, 7.6, 8). Documentation checking is not a second product
 or a separate command; it is the same `usabl check` run over a second set of scan targets.
 
@@ -81,30 +83,29 @@ or a separate command; it is the same `usabl check` run over a second set of sca
 
 ## 2. What is new
 
-The core new idea: almost every accessibility tool, including the new AI ones, scans
-and gives advice a human may or may not read. usabl's gate decides, and the stop hook
-can stop an assistant from calling work done while a machine-checkable barrier that is
-new against the reviewed floor stands on a touched surface. The overlay and the advisory lane still show findings without
+The core idea: a scanner gives advice a human may or may not read. usabl's gate decides,
+and the stop hook blocks the AI's first stop on a blocking verdict unless a one-use bypass
+was issued, so a machine-checkable barrier that is new against the reviewed floor on the
+mapped screens is not called done in silence. The overlay and the advisory lane still show findings without
 blocking. That is display, not a second decision-maker.
 
 The specific things that are new, each against what exists today:
 
-1. It re-checks the fix, not just finds the problem. The field's own reviews say most
-   tools find issues and almost none re-check that the finding is gone. usabl compares
-   the next run against the floor and reports what it no longer observes. It observes
-   absence; it does not witness the fix.
-2. It reports what it did not check. It reports "we could not check this" as a real
-   answer instead of quietly passing. Reporting unknown as unknown is rare.
-3. Its answers can be re-checked. Every result is tied to the exact code and can be
-   recomputed by anyone.
+1. It re-checks the change as well as finding the problem. usabl compares the next run
+   against the floor and reports what it no longer observes. It observes absence; it
+   does not witness the fix.
+2. It discloses every gap it detected. It reports "we could not check this" as a real
+   answer instead of quietly passing.
+3. A verified answer can be re-checked. A verified receipt is bound to the exact source
+   tree, policy, runner version, and scanner versions, and re-verification compares those
+   bindings against the current tree without a re-scan.
 4. It shows what a screen reader would actually say, on the change. Simulating
    screen-reader output is a gap the field names itself, and surfacing that
    announcement as re-checkable evidence on a code change is new. The preview is
    current-run today; an automated before/after diff against a base run is a planned
    follow-up, not a v0.2.0 claim.
-5. It has rules for our design system. There is a tool like this for one design system
-   (Microsoft built one for FluentUI) and none for PatternFly. usabl fills an empty
-   slot.
+5. It has rules for our design system. usabl ships composition rules for PatternFly,
+   the design system our products use.
 6. The rules cannot be silently weakened. Locally, policy edits are tamper-evident and
    leave a reviewable commit trail (`approval_required`). In CI with trusted-ref reads
    and required checks, policy tampering is blocked before merge.
@@ -112,10 +113,11 @@ The specific things that are new, each against what exists today:
 What is honestly not new: general scanning exists, and blocking only new problems
 against a baseline exists. The CLI can be invoked like a scanner on an existing
 codebase (`usabl check`), but that is adoption plumbing, not the product claim. A
-scanner reports findings; usabl decides a verdict, diffs against a floor, and can
-stop work from being called done. The new part is putting all of that into one loop
-that gates an AI on evidence you can re-check and that is grounded in what a screen
-reader actually hears. That combination does not exist today.
+scanner reports findings; usabl decides a verdict, diffs against a floor, and its Stop
+hook blocks the first stop on a blocking verdict (unless a one-use bypass was issued or the
+host reports that continuation is already active). The design goal is putting all of
+that into one loop that gates an AI on evidence you can re-check and that is grounded in
+what a screen reader actually hears.
 
 ---
 
@@ -127,8 +129,8 @@ reader actually hears. That combination does not exist today.
 - Three scan layers behind one provider interface: axe-core, PatternFly rulepack,
   pattern-aware keyboard walk.
 - Surfaces: CLI, stop hook, overlay, CI/PR comment, Playwright helper, mid-task
-  self-check (CLI; MCP wrapper optional). CI, overlay, hooks, and MCP all call the
-  same CLI core.
+  self-check (CLI). CI, overlay, and hooks all call the same engine core; no MCP
+  surface is built.
 - Reports (accessible docs output): generate alt-text manifests, announcement snippets,
   and keyboard paths, bound to the receipt.
 - Evidence labels on every Draft (`evidenceClass`). During the contest everything is
@@ -148,7 +150,7 @@ discoverability in Claude Code matters more than protecting hero-loop time (sect
 usabl checks two target surfaces, not one: the application UI and the product's own
 documentation pages. This shipped in v0.2.1, after the contest scope above was written,
 and it reuses the same engine rather than adding a second product. One `usabl check`
-run scans both surfaces and returns one verdict; there is no separate docs command and
+run scans both surfaces and returns one verdict, or none; there is no separate docs command and
 no `--docs` check flag.
 
 - Activation: a `usabl.docs.json` manifest. Absent means no docs surface; present means
@@ -701,7 +703,7 @@ calibration land in v0.3.0.
 The same providers run over product documentation pages when a scan target carries
 `profile: 'docs'` (`ProfileName = 'app' | 'docs'`; absent means `app`, and each
 provider reads `ctx.profile ?? 'app'`). The profile is threaded per scan target, so a
-single run scans app screens and doc pages together and the gate returns one verdict
+single run scans app screens and doc pages together and the gate returns one verdict, or none,
 across both. There is no separate docs engine and no separate command.
 
 Per-provider behavior on a docs page:
@@ -1160,7 +1162,7 @@ tamper-proof: an agent with shell access can edit and commit anything. The guard
 catches the change and refuses to issue a trusted verdict, but it cannot prevent the
 edit.
 
-### CI (tamper-proof)
+### CI (trusted-ref policy read)
 
 CI requires `--trusted-ref` (a forge-supplied base revision). Config, evidence,
 waivers, and rules are read via `git show <ref>:<path>` from the trusted base, never
@@ -1214,11 +1216,10 @@ Scope and limits, stated plainly so the proof is not oversold:
 
 ### CODEOWNERS + branch protection
 
-Every guarded path and the CI workflow require code-owner review before merge, once
-branch protection exists. Admins can bypass in an emergency (`enforce_admins: false`).
-This is the single highest-value security item **when it can be turned on**. A GitHub
-Free private repo cannot enable it; until Team or public, CI still runs and comments
-but cannot be a required check.
+Every guarded path and the CI workflow require code-owner review before merge under
+branch protection. Whether admins can bypass depends on the ruleset's bypass list.
+This is the single highest-value security item. On this repository the `usabl-required`
+check is required by the main-branch ruleset.
 
 ---
 
@@ -1253,7 +1254,8 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   wrote, and it refuses to overwrite existing files unless `--force` is given (`--force`
   is init-only draft overwrite, not a gate bypass).
 - Integration wiring: `usabl install <target>` wires exactly one integration surface per
-  run. The targets are `--overlay`, `--claude`, `--ci`, and `--branch-rule`; zero or more
+  run. The targets are `--overlay`, `--claude`, `--claude-skill`, `--cursor`, `--ci`,
+  `--docs-ci`, and `--branch-rule`; zero or more
   than one refuses with exit 2. `init` scaffolds policy; `install` wires integrations; they
   are different commands (see section 12).
 - Baseline drafts: `usabl baseline` runs a full UI scan and writes `.usabl-evidence.json`
@@ -1289,15 +1291,16 @@ as a working-tree diff for review and merge.
 
 Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
-- Unconfigured repo: loud fail-open. The stop hook discloses "NOT verified - stop hook error: ..." and allows, never a silent allow.
+- Unconfigured repo or unreadable input: loud fail-open. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. A run that started and failed prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
 - Nothing to check (no UI files in the diff): allow with explicit "nothing to check"
   message. Not `not_covered`.
 - Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
-  surface was scanned. Never mint on a sample. Surface the meaning explicitly as
-  "verified: no new barrier blocks this change," with advisory findings shown adjacent
-  when present. Not "no barriers": a verified run routinely carries barriers the floor
-  recorded.
+  surface was scanned. Never mint on a sample. The meaning line on every surface is
+  "No new barrier blocks this change. It can proceed." and the stop hook allows with
+  "VERIFIED (exit 0): the gate verified this change. Receipt sourceTree <hash>. You may
+  stop.", with advisory findings shown adjacent when present. Not "no barriers": a
+  verified run routinely carries barriers the floor recorded.
 - `regression`: block.
 - `approval_required`: block.
 - `not_covered`: default block. Recalibrate after week-2 real-repo measurement
@@ -1313,15 +1316,22 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
 On save, the overlay client requests a scan from the same engine as the stop hook
 (single-flight per repo so hook and overlay do not storm browsers). It renders
-`Result`. It never constructs a Verdict and never blocks the page. Oracle-preserving:
+`Result`. It never constructs a Verdict and never blocks the page. It is advisory: the
+client runs inside the tested page's own JavaScript realm, so the page can interfere with
+what the overlay shows; the gate computes the verdict and the CLI and CI enforce it. Oracle-preserving:
 mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
 
-### 11.4 CI/PR comment (tamper-proof)
+### 11.4 CI/PR comment (trusted-ref policy read)
 
 Reads policy from the protected branch (or the trusted ref), never the working tree.
-Refuses to run without a base ref. The comment leads with the receipt, groups findings
-as new/known/unverified, shows the current-run announcement preview, and applies a
-noise budget. All page-derived text passes through `neutralize()`. Sticky comment
+Refuses to run without a base ref. The comment leads with the headline
+(`## usabl report: <VERDICT>`), then on approval required the policy split line, then the
+receipt (`_No receipt: run was not verified._` when none), then `### Conformance summary`
+(whose `deterministic:` entry splits new into failing and unconfirmed when any is new),
+then the finding sections `### New barriers`, `### Known (carried)`, and
+`### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the gating lane
+when the noise budget collapses it, then `### Coverage gaps` and
+`### Announcements (current run)`. All page-derived text passes through `neutralize()`. Sticky comment
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
 
@@ -1335,8 +1345,8 @@ final step that never exits 2; and a `usabl-policy` job (`needs: gate-comment`,
 only, fetches the head as git objects, runs `usabl enforce accessibility` over the
 downloaded Result to publish an `accessibility` job output, and runs `usabl enforce policy
 --trusted-ref`, never executing PR head code; and a `usabl-required` job
-(`needs: [gate-comment, usabl-policy]`, `if: always()`) that decides the merge from those
-two verdicts and runs no head code at all. The engine's own repo checks in the same three
+(`needs: [gate-comment, usabl-policy]`, `if: always()`) that sets the required status from
+those two verdicts and runs no head code at all. The engine's own repo checks in the same three
 jobs, with the same fences, artifact handoff, and policy isolation. One thing differs: a consuming repo
 has no engine, so the draft clones `usabl-dev/usabl` at a pinned commit using
 `USABL_ENGINE_CHECKOUT_TOKEN`, while in the engine repo the checked-out tree already is
@@ -1403,7 +1413,7 @@ can integrate the same gate:
 | Assistant | Integration shape | What we ship |
 |---|---|---|
 | **Claude Code** | Stop hook → `usabl check`; mid-task via Bash (contest) or MCP wrapper (optional) | Contest |
-| **Cursor** | Hook on agent completion or pre-commit; mid-task via Bash or MCP | Seam documented |
+| **Cursor** | `usabl install --cursor` writes the stop hook (`hooks.json` plus an adapter script) that loops the agent through Cursor's `followup_message` protocol, the `/usabl-check` command for advisory mid-task scans, and a UI-scoped rule | Shipped |
 | **GitHub Copilot** | Extension calls CLI on save or on "agent done" if/when that event exists | Seam documented |
 | **Any MCP host** | Optional on-demand tool; gate stays at task-complete lifecycle event | MCP wrapper if contest scope includes it |
 
@@ -1474,21 +1484,24 @@ screens on Monday.
    the evidence floor (and maybe a few waivers). That is one `approval_required` commit.
 6. Next PR on that page: full default stack. A problem at an identity the floor does not
    hold, or above the count it recorded there, blocks. Recorded ones stay visible debt, and
-   the floor comes down through `usabl floor prune` and waiver expiry.
+   the floor comes down only through `usabl floor prune`; a waiver becomes inert on its
+   expiry date and never edits the floor.
 
 Coverage grows as the team works. It does not require Design to declare epic scope.
 
 ### Ratchet
 
 Same full check every time. Existing findings are the floor. New findings are
-regressions. The floor only shrinks (via fixes or tightened accept) and never silently
-grows.
+regressions. The floor changes only when `usabl floor prune` writes a new one after a
+clean scan observed fewer barriers, or when `usabl baseline` re-drafts it under review. A
+source fix alone does not shrink it, and it never silently grows.
 
 ### Waivers
 
 One finding, owned, expiring. Not "this page is advisory." Required fields: rule,
-surface, scope, owner, reason, approvedBy, created, expires. An expired waiver covers
-nothing; the finding becomes a regression again. Debt burns down by default.
+surface, scope, owner, reason, approvedBy, created, expires. An expired waiver is inert:
+the finding is then carried if the evidence floor holds its identity, and blocks only if
+it is new against the floor.
 
 ### What adoption is NOT
 
@@ -1634,7 +1647,7 @@ Findings with `evidenceClass: 'model-judgment'` are surfaced but never block.
 ### How they appear
 
 - **Overlay:** shown in a separate "Advisory" section, visually distinct.
-- **PR comment:** grouped under "Model suggestions (not blocking)" below the verdict.
+- **PR comment:** grouped under `### Advisory (non-gating)` below the gating sections.
 - **CLI:** printed after the verdict with a label.
 - **Gate:** explicitly excluded from verdict computation.
 
@@ -1661,8 +1674,8 @@ not blocking).
 
 ### Must ship
 
-1. CODEOWNERS on every guarded path and the workflow. Branch protection / required
-   checks when the host allows them (not on GitHub Free private).
+1. CODEOWNERS on every guarded path and the workflow. Branch protection or a ruleset
+   that requires the `usabl-required` check (in place on this repository).
 2. Config-guards-itself (integrity check before reading contents).
 3. CI reads policy from trusted ref, refuses without base ref.
 4. Receipt binding (four bindings, receipt store excluded from version control).
@@ -1814,7 +1827,9 @@ self-check.
   screen reader. It is labeled as a preview everywhere.
 - CDP does not serialize aria-sort; that one fact is read from the DOM attribute. The
   exception is documented at the read site and disclosed in the demo.
-- Local enforcement is tamper-evident, not tamper-proof. CI is the tamper-proof tier.
+- Local enforcement is tamper-evident, not tamper-proof. CI reads policy from the trusted
+  base ref, so a pull request cannot change the policy it is judged against; the head code
+  it scans is still the pull request's own.
 - Discovery misses bundler aliases, computed imports, and unparseable routes. Those
   are honest `not_covered`, never silent passes.
 - Identity-weak rules (missing accessible name) use count-based identity because you
@@ -2044,7 +2059,10 @@ the sample and no rule catches it, that rule goes to the top of the backlog.
 ### Rule selection rationale
 
 The eight PF rules were chosen because they represent composition mistakes that:
-- axe cannot detect (they require interaction or multi-element awareness).
+- Are outside what the axe-core provider reports. The rulepack is a separate provider,
+  and the focus rules need the component exercised. The one recorded comparison: a
+  standalone axe run reported zero violations on the broken fixture dialog while
+  `pf-focus-into-dialog` and `pf-modal-focus-return` failed.
 - Real screen-reader users encounter regularly in PatternFly apps.
 - Are demonstrable in a short demo (visible to judges, audible in the transcript).
 
@@ -2129,7 +2147,7 @@ Either way, keep `not_covered` loud, visible, and tracked in PR comment and over
 |---|---|---|
 | Time to first finding (new repo) | Adoption friction | Under 5 minutes |
 | Violations prevented per PR | Value delivered | Track, report whatever it is |
-| Fix verification time (block to verified) | The "verify the fix" claim | Under 2 minutes for one screen |
+| Re-check time (block to verified) | The "re-check after the fix" claim | Under 2 minutes for one screen |
 | False positive rate (clean screen findings) | Trust | Zero on clean PatternFly markup |
 | Rule coverage vs real bugs | Rule quality | Track against the sample (section 23) |
 
@@ -2272,7 +2290,7 @@ Credibility preflight before recording:
 | Evidence labels | On every Draft from day 1. Contest = all deterministic. |
 | Design intake in scope | Schema + YAML normalize in contest. Figma/CSV ingest is a seam. |
 | Reports in scope | Generate the three artifacts, bound to receipt. |
-| Documentation checking | Shipped in v0.2.1. Same engine, `profile: 'docs'`, activated by a `usabl.docs.json` manifest. One verdict across app and docs. |
+| Documentation checking | Shipped in v0.2.1. Same engine, `profile: 'docs'`, activated by a `usabl.docs.json` manifest. One verdict, or none, across app and docs. |
 
 ### Still to decide
 
@@ -2281,7 +2299,7 @@ Credibility preflight before recording:
 | The demo PatternFly app and the hero bug | Ed + Nitin | Before NVDA hero recording |
 | Real PatternFly repo for smoke pass | Ed | Week 2 |
 | Verified-verdict-rate target to state on stage | Vishali + Ed | After measurement |
-| CI host for branch protection (private repo needs Team plan) | Ed | Week 2 |
+| CI host for branch protection (done: the main-branch ruleset requires `usabl-required`) | Ed | Week 2 |
 | Real bug sample for rule validation | Nitin + Vishali | Week 1 |
 | MCP wrapper vs Bash-only mid-task check | Ed | After hero loop works; before demo polish |
 

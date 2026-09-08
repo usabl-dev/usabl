@@ -61,6 +61,7 @@
     "docs:linkcheck": "node scripts/check-doc-links.mjs && node scripts/check-staged-links.mjs",
     "docs:a11y": "node scripts/check-docs-a11y.mjs",
     "docs:badges": "node scripts/check-readme-badges.mjs",
+    "render:product-map": "node scripts/render-product-map.mjs",
     "prepare": "bash scripts/install-git-hooks.sh"
   },
   "devDependencies": {

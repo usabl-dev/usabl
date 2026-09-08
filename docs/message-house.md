@@ -11,12 +11,15 @@ Expanded messaging in [positioning.md](./positioning.md). Competitive positionin
 
 ## Core promise (all audiences)
 
-**usabl makes every UI change complete accessibility proof before it ships.**
+**usabl proves that a UI change added no new unwaived machine-checkable accessibility
+barrier above the reviewed floor on the screens it scanned, and discloses every gap it
+detected.**
 
 Supporting: *usable by default.* / *Don't ship until it's usabl.*
 
 **Lead order for pitch:** Open with the tagline (outcome, emotional), then explain with
-the mechanism ("AI suggests, rules decide, done waits for proof"). Tagline sets the
+the mechanism ("AI suggests, rules decide, the first stop on a blocking verdict waits
+unless a one-use bypass was issued"). Tagline sets the
 promise; differentiator #1 message explains how we keep it.
 
 ---
@@ -25,13 +28,13 @@ promise; differentiator #1 message explains how we keep it.
 
 | Audience | One line |
 |---|---|
-| **Judge (general)** | The first open proof engine that stops AI from calling inaccessible UI done, with a receipt you can re-check when the change verifies. |
+| **Judge (general)** | An open proof engine whose Stop hook blocks an AI's first stop on a blocking verdict, with a receipt you can re-check when the change verifies. |
 | **Judge (technical)** | Deterministic Playwright + axe + keyboard walk + PatternFly rules; AI proposes fixes, the gate decides pass/fail. |
 | **Judge (business)** | Catches accessibility regressions before VPAT evidence and customer escalations - without claiming compliance. |
 | **Judge (accessibility expert)** | Mechanical layers handle the repeatable checks; your expertise stays on judgment calls, with repro scripts attached. |
-| **Priya (engineer)** | Real-time findings with fix guidance, and the assistant cannot say done until the harness verifies the change. |
-| **James (AT user)** | Broken announcements and unnamed controls are caught before merge, and fixes are verified in the same workflow that introduced them. |
-| **Morgan (eng lead)** | Install it, gate from day one - ratchet blocks only new debt, with a waiver ledger for the rest. |
+| **Priya (engineer)** | Real-time findings with fix guidance, and the Stop hook blocks the assistant's first stop on a blocking verdict unless a one-use bypass was issued. |
+| **James (AT user)** | Unnamed controls and broken announcement expectations that the checks can detect are reported before merge, and the change is re-checked in the same workflow that introduced them, reporting whether the barrier is still observed. |
+| **Morgan (eng lead)** | Install it, gate from day one - the ratchet blocks new debt above the reviewed floor, unconfirmed coverage, and edits to policy files, with a waiver ledger for the rest. |
 | **Alex (a11y SME)** | Fewer repeated audits; escalations arrive with evidence, not "please test the whole page." |
 | **Riley (compliance)** | A re-checkable receipt on each verified change for evidence packs; the tool states human review is still required. |
 | **PatternFly / upstream** | An open rulepack that encodes your guidance inside the proof loop teams already run. Proposed upstream, co-maintained. |
@@ -43,7 +46,7 @@ promise; differentiator #1 message explains how we keep it.
 
 | Rank | Differentiator | Message |
 |---|---|---|
-| 1 | Verified-fix assistant loop | "AI suggests. Rules decide. Done waits for proof." |
+| 1 | Re-check assistant loop | "AI suggests. Rules decide. The first stop on a blocking verdict waits, unless a one-use bypass was issued." |
 | 2 | Screen-reader announcement checks in loop | "Catch broken announcements before merge, in the PR and in the session." |
 | 3 | CI ratchet + PR evidence | "Same proof at scale: block new debt, ship the receipt." |
 
@@ -66,8 +69,9 @@ Teaching artifact supports #3; not a fourth pillar.
 
 ## Prior-art sentence (required slide)
 
-> What is new is not another scanner: it is an assistant-time accessibility loop where
-> AI proposes fixes, PatternFly composition rules and rendered checks verify them, and
+> The design goal is an assistant-time accessibility loop, rather than another scanner, where
+> AI proposes fixes, PatternFly composition rules and rendered checks re-check them and
+> report whether the barrier is still observed, and
 > the same evidence ratchets in PRs without claiming compliance.
 
 ---

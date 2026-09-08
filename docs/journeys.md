@@ -26,7 +26,7 @@ hook), `usabl install --claude-skill` (the on-demand `/usabl-check` skill), `usa
 | 2. Build | Assistant edits files; `usabl check --self-check` runs mid-task as an advisory pass | Flow | Check latency breaks flow if it runs long |
 | 3. Stop | On the Stop event the hook runs `npx usabl stop-hook`; a blocking verdict (regression, approval_required, or not_covered) makes it emit a block decision | Surprise, then curiosity | "Why blocked?" if the message is unclear |
 | 4. Findings | Findings print one line each, with a what, why, and fix | Clarity | Finding fatigue if noisy |
-| 5. Fix and re-verify | Assistant fixes; the hook runs `check` again | Relief | A false positive costs trust |
+| 5. Fix and re-check | Assistant fixes; the hook runs `check` again and reports whether the barrier is still observed | Relief | A false positive costs trust |
 | 6. Done allowed | `verified` verdict; a receipt is minted and stored so the next stop can re-check fast without a browser | Confidence | None |
 
 **Friction audit:**
@@ -40,7 +40,8 @@ hook), `usabl install --claude-skill` (the on-demand `/usabl-check` skill), `usa
 
 **Rip-out moment:** The assistant hook is disabled after one false block.
 **Prevention:** Accurate findings on the demo set; `not_covered` only with a reason; the
-evidence floor keeps carried debt from blocking so only new violations gate. The
+evidence floor keeps carried debt from blocking, so what gates is a new, unwaived
+violation above the floor, unconfirmed coverage, or a guarded policy edit. The
 `stop-hook` command always exits 0 and blocks through a stdout decision, so a wedged
 hook can never freeze the assistant through an exit code.
 
@@ -88,7 +89,7 @@ both pass. Changing a guarded policy file yields `approval_required` until it is
 reviewed.
 
 **Rip-out moment:** The team ignores the bot comment.
-**Prevention:** High-signal comments (regressions and touched surfaces); a link to the
+**Prevention:** High-signal comments (regressions and the screens the change mapped to); a link to the
 receipt; the gate blocks a merge only once the team makes `usabl-required` a required
 check.
 
@@ -100,16 +101,17 @@ check.
 
 | Stage | What happens | Emotion | Friction risk |
 |---|---|---|---|
-| 1. Install | `usabl init` scaffolds policy, then `--overlay`, `--claude`, `--ci`, and `--branch-rule` wire one surface each. `usabl doctor` confirms what is wired. | Curious | "Another bot" |
+| 1. Install | `usabl init` scaffolds policy, then `--overlay`, `--claude`, `--claude-skill`, `--cursor`, `--ci`, `--docs-ci`, and `--branch-rule` wire one surface each. `usabl doctor` confirms what is wired. | Curious | "Another bot" |
 | 2. First run | `usabl check` reveals existing barriers; `usabl baseline` drafts the evidence floor to accept known debt as a reviewable diff | Cautious | The legacy debt pile is visible for the first time |
-| 3. Waivers | Known issues get entries in `.usabl-waivers.json`, each with an `expires` date; new violations gate | Cautious optimism | Waiver ceremony feels heavy |
-| 4. Steady state | `usabl floor prune` re-arms the floor as barriers are fixed; waiver expiry burns down the rest; `usabl drift routes` catches route drift | Trust | Suspicion that policy was tampered with |
+| 3. Waivers | Known issues get entries in `.usabl-waivers.json`, each with an `expires` date; new, unwaived violations above the floor gate | Cautious optimism | Waiver ceremony feels heavy |
+| 4. Steady state | `usabl floor prune` lowers the floor to what a clean scan observed; waivers expire on their dates and become inert; `usabl drift routes` catches route drift | Trust | Suspicion that policy was tampered with |
 
 **Who wires each surface:** Morgan and Alex (SME) agree; Riley is informed for release
 evidence.
 
-**Needs to feel safe:** Debt lives in the evidence floor and the waiver ledger; only new
-violations gate; CODEOWNERS covers the guarded policy files, and editing them so they
+**Needs to feel safe:** Debt lives in the evidence floor and the waiver ledger; new,
+unwaived violations above the floor and unconfirmed coverage gate; CODEOWNERS covers the guarded policy
+files, and editing them so they
 diverge from the trusted ref forces `approval_required`.
 
 **Rip-out moment:** The tool is turned off after one bad Monday.
@@ -126,11 +128,12 @@ and `usabl floor prune` show progress rather than shame.
 |---|---|---|---|
 | 1. Barrier | Hits a broken flow in the build or in dogfooding | Frustration | None |
 | 2. Report | Files an issue with a repro | Hopeful | No repro attached |
-| 3. Fix verified | The team runs the loop; the deterministic providers (axe, the PatternFly rulepack, the keyboard walk) confirm the fix, and a `verified` receipt backs it | Relief | "Fixed" with no proof |
+| 3. Fix re-checked | The team runs the loop; the deterministic providers (axe, the PatternFly rulepack, the keyboard walk) no longer observe the barrier, and a `verified` receipt records that run. usabl does not witness the repair | Relief | "Fixed" with no proof |
 | 4. Shipped | Same release or the next | Validated | A regression in a following release |
 
 **Rip-out moment:** James stops reporting and works around barriers in private.
-**Prevention:** A `verified` verdict on the fix, backed by a re-checkable receipt.
+**Prevention:** A `verified` verdict on the re-checked change, backed by a re-checkable
+receipt: the barrier is no longer observed above the floor.
 Deterministic evidence is what gates; human assistive-technology review by Alex (SME) is
 still required, and usabl states that plainly rather than claiming to speak for James. A
 spoken-output preview module exists in the codebase but is dormant: it is not in the run
@@ -147,7 +150,7 @@ is labeled as a dev-time aid, not as evidence and not as James's approval.
 |---|---|---|
 | Assistant loop | False block, slow check | Accurate demo set; latency budget; re-checkable receipt |
 | Overlay | Clutter, flapping | Dedupe; single-flight; severity cap |
-| PR reviewer | Bot fatigue | Comment only on touched surfaces and regressions |
+| PR reviewer | Bot fatigue | Comment only on mapped screens and regressions |
 | Onboarding | Debt wall | Evidence floor; new-only gating; waivers with expiry |
 | James | Empty "fixed" | Verified verdict plus a receipt; human AT review still required |
 

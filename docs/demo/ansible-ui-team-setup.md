@@ -67,7 +67,7 @@ First time on the evidence floor? Run `usabl baseline` before you treat failures
 
 ## Wire your editor
 
-The fork already ships Claude Code and Cursor integration files. When you clone, the hooks and
+The demo repository already ships Claude Code and Cursor integration files. When you clone, the hooks and
 commands are ready. If they are missing or you need to regenerate them, run the install commands
 below from the ansible-ui clone.
 
@@ -81,8 +81,8 @@ usabl install --claude
 usabl install --claude-skill
 ```
 
-- `--claude` wires the **Stop hook** (`.claude/settings.json`) so Claude cannot finish while the gate
-  is red.
+- `--claude` wires the **Stop hook** (`.claude/settings.json`) so the assistant's first attempt to
+  finish on a blocking verdict is blocked unless a one-use `usabl bypass` was issued.
 - `--claude-skill` writes the **`/usabl-check` skill** for advisory mid-task scans.
 
 Mid-task: type `/usabl-check` or ask Claude to run `npx usabl check --self-check`.
@@ -103,8 +103,9 @@ This writes four files:
 - `.cursor/commands/usabl-check.md` - the `/usabl-check` slash command
 - `.cursor/rules/usabl-accessibility.mdc` - a rule reminding the agent to self-check after UI edits
 
-The stop hook uses Cursor's `followup_message` protocol to loop the agent until the gate is green
-(up to 3 times). Set `USABL_STORAGE_STATE=./.usabl-session.json` in your shell profile or prefix it
+The stop hook uses Cursor's `followup_message` protocol: on a blocking verdict it sends the agent one
+follow-up with the disclosed result and reason, and when Cursor reports that the loop is already active (`loop_count`
+above 0) it allows the stop to prevent a recursive loop. Set `USABL_STORAGE_STATE=./.usabl-session.json` in your shell profile or prefix it
 when you open Cursor.
 
 Mid-task: type `/usabl-check` or ask the agent to run `npx usabl check --self-check`. That command
@@ -124,7 +125,7 @@ Look for `stop-hook`, `claude usabl-check skill`, and `cursor stop hook + assist
 ## Test ansible-ui as a brownfield app
 
 ansible-ui is a real, login-gated monorepo. usabl treats it as **brownfield**: existing accessibility
-debt is expected until you baseline it. The gate then blocks only **new** barriers on touched surfaces.
+debt is expected until you baseline it. The gate then blocks a **new**, unwaived barrier above the floor on the screens mapped from the changed UI files, coverage it could not confirm, and an edit to a guarded policy file. A barrier that lands in headroom the floor still records counts as carried until `usabl floor prune` re-arms the floor, and usabl discloses that headroom on every run where it exists.
 
 ### What to expect on first run
 
@@ -134,16 +135,32 @@ debt is expected until you baseline it. The gate then blocks only **new** barrie
 | `not_covered` | A changed file mapped to no screen, or Chromium/session/tunnel missing. |
 | `approval required` | You edited guarded policy (`usabl.config.json`, routes, evidence). |
 
-Do **not** run `usabl init` on ansible-ui. The fork already ships `usabl.config.json` and
+Do **not** run `usabl init` on ansible-ui. The demo repository already ships `usabl.config.json` and
 `usabl.routes.json`.
 
 ### Brownfield loop (recommended order)
 
-**1. Baseline the floor** (already done - Ed committed `.usabl-evidence.json` to the fork)
+**1. Baseline the floor** (not done yet: the demo repository has no `.usabl-evidence.json`)
 
-The baseline records existing accessibility debt so it does not block your PRs. Carried debt no
-longer gates; only **new** barriers do. You do not need to run `usabl baseline` unless the floor is
-missing or you are resetting it.
+The baseline records existing accessibility debt so it does not block your PRs. On this application
+a plain `usabl baseline` refuses: the three mapped screens sit against whole-front-end UI globs, so
+the run that measured it reported 1,669 unresolved files, and the refusal itself names `--partial`.
+Run `usabl baseline --partial` instead. It writes a version 2 partial floor over only the cleanly
+scanned screens (78 entries on the run that measured it; your numbers will differ) and marks the
+file as partial, so a reader knows what it covers. Review and commit that floor through a normal PR. After it lands, carried debt no longer
+gates; a **new**, unwaived barrier above the floor still does, and so do unconfirmed coverage and
+guarded policy edits.
+
+Because ansible-ui is login-gated, declare a `reachedWhen` selector on each surface in
+`usabl.config.json`, naming content only that screen has (its own heading or table, never the shell,
+header, or navigation). A screen usabl cannot reach signed in is a coverage gap, never scored.
+Three rules decide that, in order. Rule A: a session is configured and one of the application's
+own same-host data requests came back 401 at either of the two reads; nothing overrides it, not
+even a matched `reachedWhen`. Rule B: a session is configured and the page has a password field
+anywhere; a present `reachedWhen` match overrides it, which is what makes a real change-password
+screen scannable. Rule C: the browser landed on a different address and that page has a password
+field, with or without a session; a redirect alone does not fire it. `reachedWhen` is your
+assertion, not a proof usabl can check.
 
 **2. Map fixes before you chase axe noise**
 
@@ -172,7 +189,7 @@ the surfaces that file maps to.
 
 **4. Pay down debt**
 
-When you fix a floored finding, run a full scan and prune paid-down identities:
+When you fix a floored finding, run a full scan and prune the floor. `usabl floor prune` removes the identities the scan no longer observes and lowers the count on identities it observed fewer of:
 
 ```
 USABL_STORAGE_STATE=./.usabl-session.json usabl check
@@ -225,17 +242,19 @@ Restart the dev server after adding the plugin.
 
 ### CI gate (blocking)
 
-`.github/workflows/usabl-gate.yml` runs on every PR with two jobs:
+`.github/workflows/usabl-gate.yml` runs on every PR, and again on every review event, with three jobs:
 
 | Job | Purpose |
 | --- | --- |
-| `gate-comment` | Checks out PR head, runs `usabl check --ci --trusted-ref origin/<base>`, posts a sticky PR comment with the Result. Runs only on `pull_request` events so fork head code never sees secrets. |
-| `usabl-policy` | The **required status check**. Reads only git objects from head, evaluates policy against the base branch. Never checks out PR head code. |
+| `gate-comment` | Checks out PR head, runs `usabl check --ci --trusted-ref origin/<base> --json`, posts a sticky PR comment, and uploads the Result as an artifact. Runs only on `pull_request` events, so fork head code never sees secrets. |
+| `usabl-policy` | Never runs head code. Checks out the trusted base, reads the head as git objects only, decides policy from CODEOWNERS and the trusted ref, and publishes the accessibility verdict read from the Result artifact. It is green when no guarded path diverged and the run produced a result, which says nothing about accessibility, so do not make it the required check on its own. A run with no verdict (exit 4) makes it red. |
+| `usabl-required` | The **required status check**. It is the only job that sees both the accessibility verdict and the policy verdict. When the ruleset requires it, a red status blocks the normal merge path, subject to the ruleset's bypass list. It runs on every event (`always()`), so a skipped job can never read as satisfied. |
 
 The workflow is already pinned to a trusted usabl commit and `USABL_ENGINE_CHECKOUT_TOKEN` is set as
-a repo secret. Branch protection requires the `usabl-policy` check to pass before merge.
+a repo secret. Branch protection requires the `usabl-required` check to pass before merge. Do not
+require `gate-comment` (it cannot run on a review event) or `usabl-policy` alone.
 
-You can verify the branch rule is active:
+You can verify that the branch rule requires `usabl-required`:
 
 ```
 usabl install --branch-rule
@@ -251,16 +270,23 @@ Every PR gets a sticky bot comment that starts with:
 ## usabl report: VERIFIED
 ```
 
-or `REGRESSION`, `NOT COVERED`, `APPROVAL REQUIRED`, or `IDLE`.
+or `REGRESSION`, `NOT COVERED`, or `APPROVAL REQUIRED`. A run with no verdict starts with
+`## usabl report: NO VERDICT: IDLE (exit 0)` or, for a crash, `## usabl report: NO VERDICT: RUN FAILED (exit 4)`.
 
 The comment includes:
 - **Conformance summary** - deterministic new/carried/waived/fixed counts, judged counts, unresolved
-  files, gaps, and whether the change is blocked.
-- **Receipt** (verified only) - `sourceTree`, `policyHash`, `runnerVersion`, `mintedAt`. This receipt
-  is bound to the exact code, policy, and engine. Change any of them and it stops verifying.
-- **Findings** - each new or carried finding with rule, impact, surface, and page-derived help text
-  (neutralized for terminal safety).
-- **Model suggestions** - grouped under "Model suggestions (not blocking)" when present. These are
+  files, gaps, and a `blocked` flag. That flag is `yes` whenever the run's exit code is not 0, so
+  `regression`, `not_covered`, and `approval_required` all print `blocked: yes`; only `verified`
+  prints `blocked: no`.
+- **Receipt** (verified only) - the comment displays `sourceTree`, `policyHash`, `runnerVersion`, and
+  `mintedAt`. The receipt itself binds four values: the exact source tree, the policy hash, the engine
+  version, and the scanner versions (axe-core, Playwright, Chromium); the comment does not display the
+  scanner versions. Change any of the four and the receipt stops verifying.
+- **Findings** - under `### New barriers` and `### Known (carried)`, each with severity, screen,
+  rule, and the page-derived experience, why, and fix text inside the untrusted frame. When the
+  gating lane exceeds the noise budget, the comment collapses it by rule under
+  `### Findings (collapsed by rule)` and names the total.
+- **Advisory findings** - grouped under `### Advisory (non-gating)` when present. These are
   advisory and never decide a verdict.
 
 The `gate-comment` job updates the same comment on each push (it finds the existing one by a hidden
@@ -268,15 +294,26 @@ HTML marker). You will never get comment spam.
 
 ### How CI verdicts map to the merge gate
 
-| Verdict | `gate-comment` job | `usabl-policy` check | Merge |
-| --- | --- | --- | --- |
-| `verified` | Green, posts receipt | Green | Allowed |
-| `regression` | Red, posts findings | Red | Blocked (if required) |
-| `not_covered` | Red, posts disclosure | Red | Blocked |
-| `approval_required` | Red, names changed policy | Red | Blocked until CODEOWNERS approve |
+The three jobs read different things. `gate-comment` ends with `enforce accessibility`, so its color
+follows the accessibility result of the scan. `usabl-policy` depends on the guarded paths: it is
+green when no guarded path diverged from the trusted ref and the run produced a result, whatever the
+scan found; a run with no verdict (exit 4) makes it red. `usabl-required` reads both. It is the check to
+require, and when the ruleset requires it a red status blocks the normal merge path, subject to the
+ruleset's bypass list.
 
-The `usabl-policy` check is the one you make required in branch protection. `gate-comment` posts the
-readable result but is not required by itself.
+| Verdict | `gate-comment` job | `usabl-policy` check | `usabl-required` check | Merge (normal path, `usabl-required` required) |
+| --- | --- | --- | --- | --- |
+| `verified` | Green, posts receipt | Green | Green | Allowed |
+| `regression` | Red, posts findings | Green (no guarded path changed) | Red | Blocked |
+| `not_covered` | Red, posts disclosure | Green (no guarded path changed) | Red | Blocked |
+| `approval_required` | Follows the accessibility sub-result: green when it is verified or idle, red when it is regression, not covered, or no verdict; the comment reads "Policy changed" and shows the accessibility sub-result | Red until a CODEOWNERS reviewer other than the author approves that exact head; stays red when CODEOWNERS is missing or malformed at the trusted ref, or no rule covers a changed path | Red until both are green; an approval does not clear a red accessibility sub-result | Blocked until the policy check and the accessibility sub-result both pass |
+| no verdict (crash, exit 4) | Red | Red | Red | Blocked |
+| idle (no verdict) | Green, nothing to check | Green | Green | Allowed |
+
+The `usabl-required` check is the one you make required in branch protection. `gate-comment` posts the
+readable result and cannot run on a review event; `usabl-policy` alone can be green while the scan is
+red. Neither is the required check by itself. Whether an administrator can bypass the required check
+depends on the ruleset's bypass list.
 
 ---
 
@@ -310,7 +347,7 @@ type `/usabl-check`. In Cursor, ask the agent to run the command above.
 USABL_STORAGE_STATE=./.usabl-session.json usabl check
 ```
 
-This is the real gate. `verified` means the fix worked. `regression` means new barriers remain.
+This is the real gate. `verified` means no new barrier above the reviewed floor blocks the change. It does not mean the barrier is gone: a verified run can still carry it on the floor or under a waiver, and usabl does not witness a fix. `regression` means a new barrier remains.
 Fix them before pushing.
 
 ### 5. Commit and push
@@ -329,7 +366,7 @@ gh pr create --base devel --fill
 
 CI runs `usabl-gate`. Watch for:
 - The sticky bot comment with the verdict.
-- The `usabl-policy` check (green or red) in the PR checks tab.
+- The `usabl-required` check (green or red) in the PR checks tab. When the ruleset requires it, its status blocks or allows the normal merge path.
 
 ### 7. Interpret the result
 
@@ -361,10 +398,10 @@ Commit the `.usabl-evidence.json` diff alongside the fix PR so the floor ratchet
 | Stop hook (Cursor) | `npx usabl stop-hook --cursor` | Yes (followup_message loop) | Agent completes a turn |
 | Vite overlay | `usabl install --overlay` | No (advisory badge) | Dev server is running |
 | PR comment | `usabl comment` (via CI) | No (informational) | Every PR push |
-| CI gate | `usabl-policy` (via CI) | Yes (required check) | Every PR push + review |
+| CI gate | `usabl-required` (via CI) | Yes (required check, normal merge path) | Every PR push + review |
 | Doctor | `usabl doctor` | No (read-only report) | You run it to diagnose setup |
 | Baseline | `usabl baseline` | No (drafts evidence floor) | Once, at brownfield adoption |
-| Floor prune | `usabl floor prune` | No (removes paid debt) | After fixing a floored finding |
+| Floor prune | `usabl floor prune` | No (lowers the floor to what a clean scan observed) | After fixing a floored finding |
 
 ---
 

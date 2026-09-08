@@ -80,7 +80,7 @@ weeks later. End on the person. The narrator does not speak until scene 2.
 **Working title:** Nobody was required to disagree
 **Runs:** about 40 seconds
 **Purpose:** Name the time gap and the pipeline. Introduce the twist that the writer
-is also the grader (they need usabl to solve this problem and prevent this from happening). Introduce usabl, the four possible verdicts, and the product promise. The narrator
+is also the grader (they need usabl to solve this problem and prevent this from happening). Introduce usabl, the four verdicts and the no-verdict case, and the product promise. The narrator
 enters here.
 
 **Shot 2.1**, duration ~12s, running 0:28 to 0:40
@@ -119,8 +119,9 @@ enters here.
 - **Picture:** The four verdict chips appear: verified, regression, not covered, approval
   required. The verified chip is highlighted. The tagline lands at the end.
 - **Audio:** narrator.
-- **VO:** "usabl is built to be the thing that ensures a11y is a top priority. On the surfaces a change touches,
-  it returns one of four answers. Only verified lets an assistant call the work done. The
+- **VO:** "usabl is built to be the thing that ensures a11y is a top priority. On the screens mapped from a change's UI files,
+  it returns one of four answers, or none when nothing was checked or the run could not decide. Only verified counts as
+  proof, and on a blocking verdict the assistant's first stop is blocked unless a one-use bypass was issued. The
   assistant can propose the fix. The rules decide whether it passes."
 - **Text and graphics:** four chips, then "Don't ship until it's usabl."
 - **Transition:** cut into the demo.
@@ -135,8 +136,8 @@ enters here.
 **Runs:** about 95 seconds
 **Purpose:** Show the loop end to end. Break a dialog, let usabl explain it, watch the
 assistant get blocked when it tries to finish, apply the real fix, and mint a receipt.
-Close the scene on a defect a normal scanner cannot see. This is the headline. Give it
-room.
+Close the scene on a defect that a standalone axe run on the fixture did not report and usabl
+did (the recorded test in demo-script 3.4). This is the headline. Give it room.
 
 **Shot 3.1**, duration ~25s, running 1:08 to 1:33
 - **Picture:** The fixture app running clean in a browser, screen recorded. A code edit
@@ -173,19 +174,20 @@ room.
 - **VO, part one:** "Apply the real fix, and the verdict flips to verified. usabl mints a
   receipt. It records the exact code, the policy, the engine, and the exact scanner and
   browser that made the call, so anyone can re-check it later."
-- **Picture, part two:** A two-panel comparison. On the left, a standard accessibility
-  scanner reports zero problems on the broken dialog. On the right, usabl reports a
+- **Picture, part two:** A two-panel comparison. On the left, a standalone axe-core run
+  reports zero violations on the broken dialog. On the right, usabl reports a
   regression. Under it, a clip of Escape being pressed while focus lands nowhere.
-- **VO, part two:** "And this is a problem a normal scanner cannot see. A dialog that fails
+- **VO, part two:** "And this is a problem a standalone axe run did not report. A dialog that fails
   to send focus back when you press Escape is not a mistake in the markup. It only exists
   after a key is pressed. usabl opens the dialog, presses Escape, and checks where focus
   actually went."
 - **Audio:** narrator.
-- **Text and graphics:** left panel labeled "standard scanner: 0 issues," right panel
+- **Text and graphics:** left panel labeled "standalone axe: 0 violations," right panel
   labeled "usabl: regression."
 - **Transition:** cut to scene 4.
-- **Intent:** Prove the receipt is re-checkable and that usabl catches what static tools
-  miss.
+- **Intent:** Prove the receipt is re-checkable and show the recorded contrast: a
+  standalone axe run reported zero violations on the broken dialog while usabl reported
+  `pf-focus-into-dialog` and `pf-modal-focus-return`.
 
 ---
 
@@ -218,7 +220,7 @@ See the claim guardrails at the end before changing it.
   checked inside your own change and hide what you touched."
 - **Text and graphics:** "policy read from the protected branch."
 - **Transition:** cut to scene 5.
-- **Intent:** Show the tamper-proof read without depicting an approval clearing the gate.
+- **Intent:** Show the trusted-ref policy read without depicting an approval clearing the gate.
 
 ---
 
@@ -260,10 +262,10 @@ pay off the cold open on the same screen working. Close on the tagline.
 - **Audio:** narrator.
 - **VO:** "It is built to scale. The rules target the design system, so a second product
   costs no new rules. A team can turn it on without fixing everything first, because
-  today's barriers go on a baseline and only new ones block. And every known barrier gets
+  today's barriers go on a baseline and a new one above that floor blocks unless it is waived. And every waiver gets
   an owner and a date."
 - **Text and graphics:** card one, "one rulepack, every product on the design system."
-  Card two, "adopt without fixing everything first." Card three, "every known barrier gets
+  Card two, "adopt without fixing everything first." Card three, "every waiver gets
   an owner and a date."
 - **Transition:** cut to the bookend.
 - **Intent:** Answer "does this work across many products," briefly.
@@ -292,8 +294,8 @@ Assets the edit needs, called out early so they can be captured in time.
   possible, so the bookend reads as the same session resolved.
 - A recorded run of the product demo for scene 3: the break, the overlay, the blocked stop
   hook, the real fix, and the receipt mint. Capture the git diff of the break on screen.
-- A recorded two-panel comparison for shot 3.3: a standard scanner reporting zero problems
-  on the broken dialog next to usabl reporting a regression, plus a clip of the Escape
+- A recorded two-panel comparison for shot 3.3: a standalone axe-core run reporting zero
+  violations on the broken dialog next to usabl reporting a regression, plus a clip of the Escape
   keypress and focus going nowhere.
 - Screen capture of one real issue for shot 5.1.
 - Motion graphics: the pipeline timeline (scene 2), the four verdict chips, the receipt
@@ -333,8 +335,9 @@ Every step was a chance to catch it. Every step let it through. None of those st
 ever required to disagree. Accessibility was the one thing no gate was holding. And now
 the assistant that writes the code is the one that says it is done. It grades its own work,
 from inside its own confidence. usabl is built to be the thing that disagrees. On the
-surfaces a change touches, it returns one of four answers. Only verified lets an assistant
-call the work done. The assistant can propose the fix. The rules decide whether it passes."
+screens mapped from a change's UI files, it returns one of four answers, or none when nothing was checked
+or the run could not decide. Only verified counts as proof, and on a blocking verdict the assistant's first stop is
+blocked unless a one-use bypass was issued. The assistant can propose the fix. The rules decide whether it passes."
 
 Scene 3:
 "Here is the same kind of dialog inside a real dev loop. A change breaks it. On save, usabl
@@ -345,7 +348,7 @@ repeatable check can turn the light green. The assistant's own opinion is shown 
 developer, and it never counts as proof. Apply the real fix, and the verdict flips to
 verified. usabl mints a receipt. It records the exact code, the policy, the engine, and the
 exact scanner and browser that made the call, so anyone can re-check it later. And this is a
-problem a normal scanner cannot see. A dialog that fails to send focus back when you press
+problem a standalone axe run did not report. A dialog that fails to send focus back when you press
 Escape is not a mistake in the markup. It only exists after a key is pressed. usabl opens
 the dialog, presses Escape, and checks where focus actually went."
 
@@ -367,7 +370,7 @@ closing the tickets. That is the same rule the product runs on. The thing doing 
 does not get to certify the work. We built that into usabl, and we held ourselves to it
 while we built it. It is built to scale. The rules target the design system, so a second
 product costs no new rules. A team can turn it on without fixing everything first, because
-today's barriers go on a baseline and only new ones block. And every known barrier gets an
+today's barriers go on a baseline and a new one above that floor blocks unless it is waived. And every waiver gets an
 owner and a date. Which brings us back to where we started. The same screen, the same
 dialog. This time, when the change was made, something in the pipeline was finally required
 to disagree. And so this time, it works."

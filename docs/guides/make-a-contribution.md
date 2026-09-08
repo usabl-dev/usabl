@@ -120,8 +120,10 @@ route no review at all.
 Two commands draft and maintain that evidence floor. `usabl baseline` runs a
 full scan and drafts the accepted accessibility floor in `.usabl-evidence.json`
 as a reviewable working-tree diff. `usabl floor prune` re-arms the floor after a
-full scan by removing paid-down identities, so a reintroduced barrier gates as
-new instead of staying carried. Both write drafts and neither mints a verdict.
+full scan by removing an entry whose identity was not observed on a cleanly scanned
+screen and lowering the count where fewer were observed, so a reintroduced barrier
+gates as new instead of staying carried; it cannot tell a repair from a page rendering
+fewer rows. Both write drafts and neither mints a verdict.
 
 - The accessibility check reports what the gate would have decided without
   the policy diff. It never uses exit 2.

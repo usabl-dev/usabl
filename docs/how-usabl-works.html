@@ -364,10 +364,10 @@
       <div class="number" aria-hidden="true">01</div>
       <div class="body">
         <p class="eyebrow">The short answer</p>
-        <h1 id="hero-title">usabl proves an accessibility change against the code that made it.</h1>
-        <p class="lede">It finds the affected screens, collects machine-checkable accessibility evidence, makes one gate-owned decision, and shows that same result wherever the team works.</p>
+        <h1 id="hero-title">usabl checks an accessibility change against the code that made it, and discloses every gap it detected.</h1>
+        <p class="lede">It finds the affected screens, collects machine-checkable accessibility evidence, makes one gate-owned decision, and shows that result in the terminal, the overlay, the stop hook, and the pull request. CI runs the engine again against trusted-base policy, and the Playwright page check can differ.</p>
         <p>It is built for a specific risk. A developer or AI assistant can change interface code, run a scanner, and still call the work done after the scanner skipped a screen or after the code changed again. usabl keeps those gaps visible.</p>
-        <p class="boundary"><strong>The claim:</strong> a verified result means no new deterministic accessibility barrier was found in the affected screens and checks that ran. It does not mean the whole product is accessible. It does not replace testing by disabled people or an accessibility expert.</p>
+        <p class="boundary"><strong>The claim:</strong> a verified result means no new unwaived deterministic accessibility barrier above the reviewed evidence floor was found in the affected screens and checks that ran. One residual is open by design: a barrier that lands in headroom the floor still records counts as carried until <code>usabl floor prune</code> re-arms the floor, and usabl discloses that headroom on every run where it exists. It does not mean the whole product is accessible. It does not replace testing by disabled people or an accessibility expert.</p>
         <div class="actions">
           <a class="action primary" href="https://github.com/usabl-dev/usabl/blob/main/docs/guides/proof-loop.md">Run the accessibility proof</a>
           <a class="action" href="team-orientation.html">Return to team orientation</a>
@@ -391,14 +391,14 @@
         <div class="two-col">
           <article class="list-card">
             <h3>Idle</h3>
-            <p>No configured interface file changed. usabl reports “nothing to check,” returns exit code 0, and issues no verdict.</p>
+            <p>No configured interface file or documentation page changed. usabl reports “nothing to check,” returns exit code 0, and issues no verdict. Nothing was measured, so idle is not a pass.</p>
           </article>
           <article class="list-card">
             <h3>Not covered</h3>
             <p>An interface file changed, but usabl could not map or check all required work. The gate returns <code>not_covered</code> and exit code 3.</p>
           </article>
         </div>
-        <p class="rule"><strong>Coverage rule:</strong> usabl checks every affected screen or says what it could not check. It does not sample a few screens and call the accessibility change verified.</p>
+        <p class="rule"><strong>Coverage rule:</strong> usabl checks every affected screen and discloses every gap it detected. It does not sample a few screens and call the accessibility change verified. It proves it scanned the address it was configured or discovered to scan, and it records which files map to which screen. It cannot prove that the address showed the screen a reader expects: a redirect, a signed-out state, or a feature flag can change what an address renders. An optional <code>reachedWhen</code> selector adds partial evidence that the expected element was present.</p>
       </div>
     </section>
 
@@ -415,11 +415,11 @@
           </article>
           <article class="card">
             <h3>PatternFly rules</h3>
-            <p>Checks interaction behavior that depends on PatternFly components, such as focus entering and returning from a dialog.</p>
+            <p>Checks PatternFly composition rules: static reads of the rendered page, such as a menu toggle's expanded state, and probes of interaction behavior, such as focus entering and returning from a dialog.</p>
           </article>
           <article class="card">
             <h3>Keyboard walk</h3>
-            <p>Moves through interactive controls and records focus order, accessible names, roles, states, and navigation gaps.</p>
+            <p>Presses Tab through the page, reading the accessibility tree at each stop, and reports interactive controls with no accessible name, stops whose tree node cannot be resolved, and walks cut short by the time budget or the tab cap.</p>
           </article>
         </div>
         <p class="rule"><strong>Authority rule:</strong> every draft carries one of four evidence classes: deterministic, preview, model-judgment, and human-confirmed. Only deterministic evidence can affect the v0.2.1 gate. Preview, model-judgment, and human-confirmed observations may be shown for review, but they cannot create a verified result or receipt.</p>
@@ -433,7 +433,7 @@
           <p class="eyebrow">One verdict authority</p>
           <h2 id="decision-title">The gate makes the accessibility decision once.</h2>
           <p class="lede">The gate compares deterministic evidence with the accepted accessibility floor. The floor records existing findings so a team can block new barriers without pretending the old barriers are fixed.</p>
-          <p>Two commands manage this floor as reviewable drafts, and neither mints a verdict: <code>usabl baseline</code> drafts the accepted accessibility floor from a full scan, and <code>usabl floor prune</code> maintains it by removing paid-down identities and lowering the recorded count where fewer barriers remain, so a reintroduced barrier gates as new. A run that finds the floor claiming more barriers than are present says so and names this command.</p>
+          <p>Two commands manage this floor as reviewable drafts, and neither mints a verdict: <code>usabl baseline</code> drafts the accepted accessibility floor from a full scan, and <code>usabl floor prune</code> maintains it by removing an entry whose identity was not observed on a cleanly scanned screen and lowering the count where fewer were observed, so a reintroduced barrier gates as new. It cannot tell a repaired barrier from a page rendering fewer rows. A run that finds the floor claiming more barriers than are present says so and names this command.</p>
           <ol class="precedence">
             <li><strong>1. Policy changed?</strong> Require human approval.</li>
             <li><strong>2. No interface change?</strong> Report Idle.</li>
@@ -442,12 +442,12 @@
             <li><strong>5. Otherwise</strong> Report verified.</li>
           </ol>
           <div class="verdicts" role="list">
-            <div class="verdict" role="listitem"><strong class="verified">Verified, exit 0</strong><p>No new deterministic accessibility barrier was found in the complete affected coverage.</p></div>
+            <div class="verdict" role="listitem"><strong class="verified">Verified, exit 0</strong><p>No new unwaived deterministic accessibility barrier above the reviewed floor was found on the screens coverage mapped from the changed UI files, no new deterministic finding was left unconfirmed, and no coverage gap was detected. Every surface states it as “No new barrier blocks this change. It can proceed.”</p></div>
             <div class="verdict" role="listitem"><strong class="regression">Regression, exit 1</strong><p>A deterministic check found a new accessibility barrier compared with the accepted floor.</p></div>
             <div class="verdict" role="listitem"><strong class="not-covered">Not covered, exit 3</strong><p>Required accessibility coverage or evidence could not be completed.</p></div>
             <div class="verdict" role="listitem"><strong class="approval">Approval required, exit 2</strong><p>Trusted policy, evidence, or gate code changed and must not approve itself.</p></div>
           </div>
-          <p class="idle-note"><strong>Errors are not a fifth verdict.</strong> An unhandled error returns no verdict, exit code 4, and an explicit “NOT verified” message. Local assistant handling discloses the error instead of presenting it as proof.</p>
+          <p class="idle-note"><strong>Errors are not a fifth verdict.</strong> An unhandled error returns no verdict, exit code 4, and the line “NO VERDICT: RUN FAILED (exit 4)”. The stop hook allows that stop and says usabl proved nothing about the change; the pull request comment prints the same line.</p>
         </div>
       </section>
     </div>
@@ -457,7 +457,7 @@
       <div class="body">
         <p class="eyebrow">Trust and receipts</p>
         <h2 id="trust-title">The result stays tied to its evidence.</h2>
-        <p class="lede">A verified result can mint a receipt. The receipt lets usabl check whether the proof still matches the current code and policy.</p>
+        <p class="lede">A verified result mints a receipt. If minting fails, the run returns no verdict instead of verified. The receipt lets usabl check whether the proof still matches the current code and policy.</p>
         <div class="receipt" role="group" aria-label="Fields in a verified receipt">
           <div class="receipt-head"><strong>Verified receipt</strong><span>Only the gate can mint it</span></div>
           <dl class="receipt-grid">
@@ -495,13 +495,13 @@
             <thead><tr><th scope="col">Surface</th><th scope="col">When to use it</th><th scope="col">What it does</th><th scope="col">Enforcement</th></tr></thead>
             <tbody>
               <tr><th scope="row">Command line</th><td>While developing or debugging</td><td><code>npx usabl check</code> prints the result and returns its exit code. JSON output is available for automation.</td><td>Direct exit code</td></tr>
-              <tr><th scope="row">App overlay</th><td>While the Vite app is running</td><td>Shows the current verdict and findings after a refresh. It hides in automated browser sessions and with <code>?usabl=off</code>.</td><td>Advisory only</td></tr>
-              <tr><th scope="row">AI stop hook</th><td>When an assistant tries to finish</td><td>Blocks a regression, missing coverage, or trusted-policy change. A continuation is allowed once so the assistant does not enter a stop loop.</td><td>Blocks assistant completion</td></tr>
+              <tr><th scope="row">App overlay</th><td>While the Vite app is running</td><td>Shows the gate's current verdict and findings after a refresh. It runs inside the tested page's own JavaScript, so the page can interfere with what it shows. It hides in automated browser sessions and with <code>?usabl=off</code>.</td><td>Advisory only</td></tr>
+              <tr><th scope="row">AI stop hook</th><td>When an assistant tries to finish</td><td>Blocks the first stop attempt on a regression, missing coverage, or trusted-policy change, unless a one-use bypass was issued. If the host reports that hook-triggered continuation is already active, usabl allows that stop attempt to prevent a recursive loop. Idle runs, runs with no verdict, and hook errors are disclosed and allowed.</td><td>Blocks the first stop on a blocking verdict, unless bypassed</td></tr>
               <tr><th scope="row">Pull request and CI</th><td>Before merge</td><td>Runs against trusted base policy, posts or updates one report, and returns the gate exit code to the check.</td><td>Repository check</td></tr>
             </tbody>
           </table>
         </div>
-        <p class="rule"><strong>Consistency rule:</strong> when two surfaces disagree, that is a product defect. The gate-owned <code>Result</code> object is the source to inspect.</p>
+        <p class="rule"><strong>Consistency rule:</strong> when two surfaces show the same <code>Result</code> differently, that is a product defect. The gate-owned <code>Result</code> object is the source to inspect. A local run and a CI run can differ, because CI reads policy from the trusted base. The Playwright page check has no floor and no waivers, so its result can differ from the gated command by design.</p>
       </div>
     </section>
 

@@ -10,14 +10,16 @@ approach. Use in judge Q&A, demo rehearsal, and alliance conversations.
 
 **Acknowledge:** axe-core is one of our check layers - we build on it, not against it.
 
-**Redirect:** axe finds issues on a page snapshot. usabl adds what axe cannot do alone:
-keyboard interaction walk, PatternFly composition rules, deterministic screen-reader
-announcement and accessible-name checks, fix re-verification, and a gate that stops the
-AI from calling work done. One finding from axe becomes a verified fix in the same
-session.
+**Redirect:** axe-core is one provider. usabl runs separate providers beside it: a
+keyboard interaction walk, PatternFly composition rules, and deterministic screen-reader
+announcement and accessible-name checks. It re-checks the change and reports whether the
+barrier is still observed, and a Stop hook blocks
+the AI's first stop on a blocking verdict unless a one-use bypass was issued. One finding
+becomes a re-checked change in the same session.
 
-**Proof point:** Demo violation #2 (missing `aria-sort`) is invisible to axe. Violation
-#3 (modal focus return) requires the keyboard walk. axe alone passes on both.
+**Proof point:** The recorded test in the demo script: on the broken clusters dialog, a
+standalone axe-core run reported zero violations while usabl reported a regression with
+`pf-focus-into-dialog` and `pf-modal-focus-return`.
 
 ---
 
@@ -26,7 +28,7 @@ session.
 **Acknowledge:** This is the real adoption risk. Every quality gate dies if it blocks
 incorrectly.
 
-**Redirect:** Three defenses: (1) if usabl cannot identify which screens changed, it
+**Redirect:** Three defenses: (1) if usabl cannot map a changed UI file to a screen, it
 says `not_covered` with a reason - honest "I don't know" rather than a false pass or
 a false fail; (2) we measure false positive rate on a real PF surface before submission
 and report the number honestly; (3) the ratchet and waiver system lets teams manage
@@ -63,7 +65,7 @@ verdict, receipt, and surface model work with any rulepack. PatternFly is proof 
 pattern works. The engine generalizes - one roadmap sentence in the pitch, not a pivot.
 
 **Proof point:** axe-core layer is already design-system-agnostic. Keyboard walk is
-generic. Only the PF rulepack is PF-specific, and it's one provider among three.
+generic. Only the PF rulepack is PF-specific, and it's one provider among several.
 
 ---
 
@@ -72,12 +74,14 @@ generic. Only the PF rulepack is PF-specific, and it's one provider among three.
 **Acknowledge:** In an unguarded session, yes. Stop hooks are not sandboxed jails.
 
 **Redirect:** Two-tier enforcement: (1) the stop hook in configured assistant workflows
-catches the common case; (2) CI with branch protection is the backstop that covers
-every contributor regardless of tooling. The assistant cannot merge the PR without CI
-passing. We say "configured workflows" and "CI for everyone" before a judge asks.
+blocks the first stop on a blocking verdict unless a one-use bypass was issued; (2) CI
+with `usabl-required` as a required check is the backstop that covers every contributor
+regardless of tooling. On the normal merge path the PR cannot merge until that check
+passes; whether an administrator can bypass depends on the ruleset's bypass list. We say
+"configured workflows" and "CI for everyone" before a judge asks.
 
 **Proof point:** Skeptic demo - try to unmap, exempt, re-baseline. Guard holds locally
-(approval_required) and CI blocks the PR.
+(approval_required) and CI blocks the PR on the normal merge path.
 
 ---
 
@@ -86,10 +90,14 @@ passing. We say "configured workflows" and "CI for everyone" before a judge asks
 **Acknowledge:** Real repos are not green on day one. A tool that blocks everything on
 legacy code is useless.
 
-**Redirect:** Three mechanisms: (1) ratchet - only new violations block, existing debt
-is in the evidence floor; (2) waiver ledger - known debt tracked with expiry, not hidden;
-(3) brownfield adoption path - install, accept the floor for legacy surfaces, and the
-tool gates only new regressions from day one. Teams are not punished for history.
+**Redirect:** Three mechanisms: (1) ratchet - carried debt does not block, it sits in the
+evidence floor; (2) waiver ledger - known debt tracked with expiry, not hidden;
+(3) brownfield adoption path - install, accept the floor for legacy surfaces, and from day
+one the tool blocks a new, unwaived barrier above the floor on the screens it scans, coverage
+it could not confirm, and an edit to a guarded policy file. Teams are not punished for
+history. One residual, disclosed in the ground truth: a barrier that lands in headroom the
+floor still records counts as carried until `usabl floor prune` re-arms the floor, and usabl
+reports that headroom on every run where it exists.
 
 **Proof point:** Onboarding journey in personas: Morgan installs usabl, accepts the
 evidence floor on legacy surfaces, and ratchets from there. No legacy surface blocks
@@ -101,9 +109,10 @@ on day one.
 
 **Acknowledge:** The CI/PR evidence surface looks similar from the reviewer's chair.
 
-**Redirect:** A PR bot comments after the code is written. usabl prevents the defect
-in the assistant loop before the PR exists, then the same verdict becomes PR evidence.
-Upstream prevention + downstream proof, same engine.
+**Redirect:** A PR bot comments after the code is written. usabl's Stop hook blocks the
+assistant's first stop on a blocking verdict before the PR exists, unless a one-use bypass
+was issued, and then CI runs the same engine against trusted-base policy and posts its
+own verdict as PR evidence. Upstream prevention + downstream proof, same engine.
 
 **Proof point:** THE MOMENT happens inside the assistant session - the PR has no
 regression to comment on because it was caught and fixed before commit.
@@ -133,14 +142,16 @@ next?
 
 **Redirect:** (1) Findings include full evidence - the developer can see exactly what
 triggered the block and verify it's real. (2) Waiver path exists for known issues
-that cannot be fixed this cycle. (3) When usabl cannot check a surface, it reports
-`not_covered` with a reason rather than a false pass or false fail, and if the engine
-itself crashes it fails open instead of fabricating a block. (4) The ratchet means the
+that cannot be fixed this cycle. (3) When usabl detects a gap in what it could check, it
+reports `not_covered` with a reason instead of a pass, and if the engine
+itself crashes it returns no verdict with the reason: the Stop hook discloses that and
+allows the stop, and CI blocks because only a pass passes. (4) The ratchet means the
 tool only gates new violations,
 so teams already trust the signal before it blocks anything they did not just introduce.
 
-**Proof point:** Error UX policy: a surface usabl cannot check becomes `not_covered`
-with a reason; an engine crash fails open, never a false red. Waiver ledger with expiry.
+**Proof point:** Error UX policy: a detected coverage gap becomes `not_covered`
+with a reason; an engine crash returns no verdict with the reason, never a fabricated
+finding. Waiver ledger with expiry.
 Brownfield adoption model.
 
 ---

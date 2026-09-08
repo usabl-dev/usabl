@@ -107,6 +107,8 @@
   .callout .label { font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em; display: block; margin-bottom: 4px; }
   .callout.warn .label { color: #96590a; }
   .callout.risk .label { color: var(--block); }
+  .historical { border-left: 6px solid var(--block); padding-left: 22px; margin-top: 22px; }
+  .historical > .hist-label { font-weight: 700; color: var(--block); text-transform: uppercase; letter-spacing: .06em; font-size: 12.5px; }
   .callout.rec .label { color: var(--accent); }
 
   .chip { display: inline-block; background: var(--chip); color: #46505f; border-radius: 20px; padding: 2px 11px; font-size: 12.5px; font-weight: 600; margin: 0 4px 4px 0; }
@@ -172,26 +174,34 @@
 
 <div class="wrap">
 
+<div class="callout risk" role="note" aria-label="Historical document notice">
+  <span class="label">Historical briefing, superseded (note added 2026-09-06)</span>
+  <p>This scope-lock briefing was written during the contest build and is kept for history. Nothing below this notice is a current description of usabl. Where the text differs from the code, the code wins. The current, code-checked descriptions are the <a href="../../README.md">README</a> and <a href="../how-usabl-works.html">How usabl works</a>. Do not quote this page for what usabl does today. The body below is marked as historical text; a few sentences were edited on 2026-09-06, but no statement below should be relied on for current behavior.</p>
+</div>
+
+<section class="historical" aria-label="Historical text, superseded">
+<p class="hist-label">Historical text, superseded. Written during the contest build; not a current description.</p>
+
 <section id="summary">
   <h2><span class="num">1</span>What usabl does</h2>
-  <p>When someone changes a UI, or edits a page of the product's own documentation, usabl checks whether that change introduced a new accessibility problem - the kind a machine can catch without human judgment. It returns one of four answers:</p>
+  <p>When someone changes a UI, or edits a page of the product's own documentation, usabl checks whether that change introduced a new accessibility problem - the kind a machine can catch without human judgment. When it checked something, it returns one of four answers. A crash, or every affected screen failing to render, returns no verdict and exit 4:</p>
 
   <table class="bordered">
     <tr><th>Answer</th><th>Plain meaning</th><th>What happens</th></tr>
     <tr><td><span class="verdict v-good">verified</span></td><td>The screens you touched have no new machine-detectable barriers.</td><td>Work proceeds.</td></tr>
     <tr><td><span class="verdict v-block">regression</span></td><td>You introduced a new problem.</td><td>Blocked until fixed.</td></tr>
-    <tr><td><span class="verdict v-block">not_covered</span></td><td>usabl could not figure out which screens your change affects, so it cannot vouch for anything.</td><td>Blocked by default (configurable).</td></tr>
+    <tr><td><span class="verdict v-block">not_covered</span></td><td>usabl could not figure out which screens your change affects, so it cannot vouch for anything.</td><td>Blocked. There is no mode that changes this.</td></tr>
     <tr><td><span class="verdict v-block">approval_required</span></td><td>You changed usabl's own policy files. It refuses to judge changes to itself.</td><td>Blocked until a human approves.</td></tr>
     <tr><td><span class="verdict v-idle">idle</span></td><td>Your change did not touch any UI. Nothing to check.</td><td>Work proceeds (this is not a verdict).</td></tr>
   </table>
 
-  <p><strong>The core idea:</strong> Existing tools find problems and list them. usabl goes further - it makes a pass/fail decision and can stop an AI coding assistant from calling work "done" until the new barriers are gone. The AI can suggest fixes, but it cannot mark its own homework.</p>
+  <p><strong>The core idea:</strong> usabl makes a pass/fail decision, and its Stop hook blocks an AI coding assistant's first stop on a blocking verdict unless a one-use bypass was issued. The AI can suggest fixes, but only the gate decides, and a pull request that changes usabl's own policy files stays approval required until a CODEOWNERS reviewer other than the author approves it.</p>
 
   <div class="panel">
     <h3 style="margin-top:0">How it works</h3>
     <p style="margin-bottom:6px">There is one engine that does the actual work: figure out which screens changed, run the checks, decide the verdict. The CLI (<code>usabl check</code>) is the main way to call it. Every other surface calls the same engine underneath - they just trigger it from different places:</p>
     <ul style="margin:6px 0 0">
-      <li><strong>Stop hook</strong> - blocks the AI assistant from finishing</li>
+      <li><strong>Stop hook</strong> - blocks the AI assistant's first stop on a blocking verdict unless a one-use bypass was issued</li>
       <li><strong>Browser overlay</strong> - shows findings while you develop</li>
       <li><strong>CI comment</strong> - posts the verdict on a pull request</li>
       <li><strong>Mid-task self-check</strong> - the AI checks its own progress partway through</li>
@@ -202,9 +212,9 @@
   </div>
 
   <h3>Two surfaces, one engine: app and documentation</h3>
-  <p>usabl checks two target surfaces, not one. The application UI is the original surface. Since v0.2.1 the same engine also checks the product's own published documentation, the user guides and install docs. Those pages carry the same accessibility barriers as the app and almost never get tested.</p>
+  <p>usabl checks two target surfaces, not one. The application UI is the original surface. Since v0.2.1 the same engine also checks the product's own published documentation, the user guides and install docs. Those pages can carry the same accessibility barriers as the app and are often not tested.</p>
   <div class="panel">
-    <p style="margin-top:0;margin-bottom:6px">Documentation checking is not a second product or a separate command. One <code>usabl check</code> run scans both surfaces and returns one verdict. It works like this:</p>
+    <p style="margin-top:0;margin-bottom:6px">Documentation checking is not a second product or a separate command. One <code>usabl check</code> run scans both surfaces and returns one verdict, or none. It works like this:</p>
     <ul style="margin:6px 0 0">
       <li><strong>Turned on by a manifest.</strong> A <code>usabl.docs.json</code> file lists the doc pages to check. No manifest, no docs surface.</li>
       <li><strong>Same checks, doc-appropriate.</strong> axe-core runs against the WCAG 2.2 AA rule set and a docs rule catches broken heading order. The PatternFly rules are skipped, since product docs are not PatternFly.</li>
@@ -247,12 +257,12 @@
     <tr><th>Piece</th><th>What it is</th><th>Effort</th><th>Cut order</th></tr>
     <tr><td><strong>Shared data shapes</strong></td><td>The TypeScript types everyone builds against: <code>Draft</code>, <code>Finding</code>, <code>Result</code>, <code>Coverage</code>, <code>Receipt</code>, identity fields, evidence labels. Frozen day 1.</td><td class="effort s">S</td><td>Never</td></tr>
     <tr><td><strong>Verdict engine (gate)</strong></td><td>Takes findings in, applies filters (only deterministic evidence counts), deduplicates, compares against the previous run, handles waivers, and decides the verdict.</td><td class="effort l">L</td><td>Never</td></tr>
-    <tr><td><strong>Integrity guard</strong></td><td>Config watches itself. If someone edits policy files, the tool knows. Also: session pinning and receipt binding (three hashes).</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>Integrity guard</strong></td><td>Config watches itself. If someone edits policy files, the tool knows. Also: session pinning and receipt binding (four values: source tree, policy hash, engine version, scanner versions).</td><td class="effort m">M</td><td>Never</td></tr>
     <tr><td><strong>Coverage + discovery</strong></td><td>Figures out which screens a code change touches by reading the route manifest and import graph. If it cannot figure it out, the verdict is <code>not_covered</code>.</td><td class="effort m">M</td><td>Never</td></tr>
     <tr><td><strong>CLI</strong></td><td>The single command everything else calls: <code>usabl check</code>.</td><td class="effort m">M</td><td>Never</td></tr>
-    <tr><td><strong>Stop hook</strong></td><td>Blocks the AI assistant from finishing until usabl says clean. Must respond in under 20ms when a receipt already exists. Has a one-time escape so the AI is not stuck forever.</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>Stop hook</strong></td><td>Blocks the AI assistant's first stop on a blocking verdict. Must respond in under 20ms when a receipt already exists. Has a one-time escape so the AI is not stuck forever.</td><td class="effort m">M</td><td>Never</td></tr>
     <tr><td><strong>axe-core provider</strong></td><td>Wraps the axe-core library, runs it against each screen, translates results into usabl's format. Adds PatternFly-specific guidance notes.</td><td class="effort m">M</td><td>Never</td></tr>
-    <tr><td><strong>PF rulepack (rules 1-5)</strong></td><td>Five interaction rules that catch PatternFly composition mistakes axe cannot see: toast-live-region, modal-focus-return, focus-into-dialog, kebab-expanded-state, icon-button-name. These carry the demo.</td><td class="effort l">L</td><td>Never</td></tr>
+    <tr><td><strong>PF rulepack (rules 1-5)</strong></td><td>Five interaction rules for PatternFly composition mistakes, run as a provider separate from axe-core: toast-live-region, modal-focus-return, focus-into-dialog, kebab-expanded-state, icon-button-name. These carry the demo. In the recorded test, a standalone axe run reported zero violations on the broken fixture dialog while focus-into-dialog and modal-focus-return failed.</td><td class="effort l">L</td><td>Never</td></tr>
     <tr><td><strong>PF rulepack (rule 6)</strong></td><td>pf-table-header-assoc (structural)</td><td class="effort s">S</td><td>Cut 3rd. Also: validate against real bug sample before building.</td></tr>
     <tr><td><strong>PF rulepack (rule 7)</strong></td><td>pf-row-action-name-unique (structural)</td><td class="effort s">S</td><td>Cut 2nd. Same: validate first.</td></tr>
     <tr><td><strong>PF rulepack (rule 8)</strong></td><td>pf-toolbar-labeled-when-repeated (structural)</td><td class="effort s">S</td><td>Cut 1st. Same: validate first.</td></tr>
@@ -260,8 +270,8 @@
     <tr><td><strong>Transcript diff</strong></td><td>Shows the before/after of what a screen reader would announce, so you can hear the difference a code change makes.</td><td class="effort m">M</td><td>Never</td></tr>
     <tr><td><strong>CI / PR comment</strong></td><td>Runs in CI, reads policy from a protected branch (not the PR), posts the verdict as a sticky comment. Sanitizes all page-derived text before including it.</td><td class="effort m">M</td><td>Never</td></tr>
     <tr><td><strong>Browser overlay</strong></td><td>A Vite plugin that shows findings in the browser while you develop. Does not interfere with usabl's own checks (detects and skips itself).</td><td class="effort m">M</td><td>Never (protected from cut)</td></tr>
-    <tr><td><strong>Reports</strong></td><td>Generates three accessibility artifacts: alt-text manifest, announcement snippets, keyboard paths. Tied to the receipt so they cannot be faked.</td><td class="effort m">M</td><td>Never (protected from cut)</td></tr>
-    <tr><td><strong>Documentation checking</strong></td><td>A second target surface (shipped v0.2.1): the same engine scans the product's rendered documentation pages, turned on by a <code>usabl.docs.json</code> manifest. Findings map back to AsciiDoc source; one verdict spans app and docs.</td><td class="effort m">M</td><td>Never</td></tr>
+    <tr><td><strong>Reports</strong></td><td>Generates three accessibility artifacts: alt-text manifest, announcement snippets, keyboard paths. When a run minted a receipt, each artifact is bound to it. Without a receipt, artifacts are observations. A surface the run did not verify carries no evidence reference, so unverified state cannot present itself as proof.</td><td class="effort m">M</td><td>Never (protected from cut)</td></tr>
+    <tr><td><strong>Documentation checking</strong></td><td>A second target surface (shipped v0.2.1): the same engine scans the product's rendered documentation pages, turned on by a <code>usabl.docs.json</code> manifest. Findings map back to AsciiDoc source; one verdict, or none, spans app and docs.</td><td class="effort m">M</td><td>Never</td></tr>
     <tr><td><strong>Mid-task self-check</strong></td><td>The AI can run <code>usabl check</code> mid-task to see how it is doing, before the final verdict. Advisory only - does not block.</td><td class="effort s">S</td><td>Never</td></tr>
     <tr><td><strong>Design intake</strong></td><td>Lets designers declare intent in YAML (e.g. "this image must say X"). The tool checks those assertions alongside the automatic rules.</td><td class="effort m">M</td><td>Never (in scope per settled decisions)</td></tr>
     <tr><td><strong>Fixture app + oracle</strong></td><td>A small demo app with 4 routes, a clean mode and a broken mode. The broken mode has exactly the right number of planted bugs to match the rules. This is the test harness.</td><td class="effort m">M</td><td>Never</td></tr>
@@ -283,7 +293,7 @@
     <tr><td>Figma / CSV ingest</td><td>Design intake from Figma files or spreadsheets instead of hand-authored YAML.</td><td>The normalize interface accepts pluggable input. No Figma or CSV reader.</td></tr>
     <tr><td>Storybook addon</td><td>Run checks per-story without needing a full app router.</td><td>Nothing. Route-based discovery is the contest path.</td></tr>
     <tr><td>Other AI assistants</td><td>Same gate on Cursor, Copilot, or any future assistant.</td><td>The adapter interface is documented. Claude Code is the demo.</td></tr>
-    <tr><td>Cryptographic receipt signing</td><td>CI identity on receipts via OIDC. Proves which CI run produced the verdict.</td><td>Receipt binding via three hashes, but no cryptographic signature.</td></tr>
+    <tr><td>Cryptographic receipt signing</td><td>CI identity on receipts via OIDC. Proves which CI run produced the verdict.</td><td>Receipt binding via four values, but no cryptographic signature.</td></tr>
     <tr><td>Runtime route dump</td><td>Reads the full route list from the running app. Fixes most <code>not_covered</code> cases.</td><td>Static parser only. Pull this in if measurement shows <code>not_covered</code> is too high.</td></tr>
     <tr><td>Page capabilities</td><td>Future providers for text resize, target size, reflow, etc.</td><td>Interfaces exist. No contest provider uses them (except stretch goals).</td></tr>
     <tr><td>Advisory-lane providers</td><td>Softer checks that use AI judgment: plain language, alt-text quality, link purpose.</td><td>The label (<code>model-judgment</code>) and the gate filter ship. No provider is built.</td></tr>
@@ -385,15 +395,15 @@
     </tr>
     <tr>
       <td><strong>Can the repo block merges, and what if it cannot</strong></td>
-      <td>Our repo is private on GitHub Free. GitHub Free does not let you require a status check to pass before merging. So right now, usabl's CI verdict can post a comment saying "this PR has a regression," but nothing actually prevents someone from clicking Merge anyway.
-        <br><br>This matters because the product story is about stopping bad code from shipping. If we cannot demonstrate an actual block, we have to explain the gap.
-        <br><br><strong>Options:</strong>
+      <td>Resolved. The main-branch ruleset on this repository requires the <code>usabl-required</code> status check. A pull request whose accessibility verdict blocks cannot be merged through the normal merge path. Whether an administrator can bypass depends on the ruleset's bypass list. CI also posts the verdict as a sticky comment, but the comment does not decide the gate.
+        <br><br>This matters because the product story is about stopping bad code from shipping, and a required check is the only place a merge is actually blocked.
+        <br><br><strong>Which check to require:</strong>
         <ul style="margin:6px 0 0">
-          <li><strong>Make the repo public now (already Apache-2.0).</strong> Public repos on Free get required checks, CODEOWNERS, and branch protection. Also makes the contest submission obvious. Risk: code visible before it is polished.</li>
-          <li><strong>Stay private, accept comment-only for now.</strong> CI still runs, still posts the verdict. Demo shows the comment and explains "one toggle away from blocking on a public or Team repo." No cost, no exposure.</li>
-          <li><strong>Pay for GitHub Team.</strong> Required checks on private repos. Real money for a contest. Probably overkill.</li>
+          <li><strong><code>usabl-required</code>.</strong> It always runs and always decides. On a pull request it reads the scan result; on a review re-run, where the scan is skipped, it reads the accessibility verdict from the stored Result artifact. A missing or unparseable artifact blocks, and so does any accessibility result other than pass.</li>
+          <li><strong>Not <code>gate-comment</code>.</strong> That job is fenced to <code>pull_request</code>, so it cannot be required on a review event.</li>
+          <li><strong>Not <code>usabl-policy</code>.</strong> It returns success whenever no guarded path diverged, so on its own it can be green while the scan is red.</li>
         </ul>
-        <strong>Recommendation:</strong> Stay private during build. Go public when ready for submission. Gets required checks for the demo, aligns with the open-source positioning, costs nothing.
+        <strong>Status:</strong> In place on this repository. Any other repository that adopts usabl must make the same check required through branch protection or a ruleset, or CI reports without blocking.
       </td>
     </tr>
     <tr>
@@ -552,6 +562,7 @@
       Cut rules 8, 7, 6 first. Then MCP. Then stretch goals. Never cut: the verdict engine, the receipt, the integrity guard, CODEOWNERS, the four verdicts, the transcript diff, the hero loop, the overlay, Reports, and the CLI self-check.
     </li>
   </ol>
+</section>
 </section>
 
 <footer>
