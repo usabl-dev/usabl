@@ -433,7 +433,7 @@
           <p class="eyebrow">One verdict authority</p>
           <h2 id="decision-title">The gate makes the accessibility decision once.</h2>
           <p class="lede">The gate compares deterministic evidence with the accepted accessibility floor. The floor records existing findings so a team can block new barriers without pretending the old barriers are fixed.</p>
-          <p>Two commands manage this floor as reviewable drafts, and neither mints a verdict: <code>usabl baseline</code> drafts the accepted accessibility floor from a full scan, and <code>usabl floor prune</code> maintains it by removing paid-down identities and lowering the recorded count where fewer barriers remain, so a reintroduced barrier gates as new. A run that finds the floor claiming more barriers than are present says so and names this command.</p>
+          <p>Two commands manage this floor as reviewable drafts, and neither mints a verdict: <code>usabl baseline</code> drafts the accepted accessibility floor from a full scan, and <code>usabl floor prune</code> maintains it by removing an entry whose identity was not observed on a cleanly scanned screen and lowering the count where fewer were observed, so a reintroduced barrier gates as new. It cannot tell a repaired barrier from a page rendering fewer rows. A run that finds the floor claiming more barriers than are present says so and names this command.</p>
           <ol class="precedence">
             <li><strong>1. Policy changed?</strong> Require human approval.</li>
             <li><strong>2. No interface change?</strong> Report Idle.</li>
