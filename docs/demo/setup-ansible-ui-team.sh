@@ -141,6 +141,8 @@ install_deps() {
   (cd "${USABL_DIR}" && npm ci && npm run build && npm link)
   export PATH="$(npm prefix -g)/bin:${PATH}"
   command -v usabl >/dev/null 2>&1 || die "usabl not on PATH after npm link; run: export PATH=\"\$(npm prefix -g)/bin:\$PATH\""
+  info "linking usabl into ansible-ui so the dev server can import usabl/vite"
+  (cd "${ANSIBLE_UI_DIR}" && npm link --no-save "${USABL_DIR}")
   info "installing Playwright chromium for usabl"
   (cd "${ANSIBLE_UI_DIR}" && npx playwright install chromium)
 }

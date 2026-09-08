@@ -166,6 +166,7 @@ describe('Stop hook blocks corrupt guarded policy', () => {
         unlink: async () => {},
       },
       tmpDir: () => '/tmp',
+      cwd: () => '/repo/one',
       stdoutWrite: async (text) => {
         stdout.push(text);
       },

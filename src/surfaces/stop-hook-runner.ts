@@ -14,6 +14,7 @@
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
 import { buildDeps } from '../deps/build.js';
 import { verifyReceipt } from '../evidence/receipt.js';
@@ -35,6 +36,7 @@ export interface StopHookRunnerFs extends ReceiptFs {
 export interface StopHookRunnerPorts {
   fs: StopHookRunnerFs;
   tmpDir: () => string;
+  cwd: () => string;
   stdoutWrite: (text: string) => Promise<void> | void;
   stderrWrite: (text: string) => Promise<void> | void;
   loadConfig: () => Promise<UsablConfig>;
@@ -64,8 +66,22 @@ function isSessionPins(value: unknown): value is SessionPins {
   return Object.values(value).every((entry) => typeof entry === 'string');
 }
 
-function sessionPinPath(tmpDirPath: string, sessionId: string): string {
-  return join(tmpDirPath, `usabl-pins-${sessionId}.json`);
+/**
+ * Pin file location for one session in one repository.
+ *
+ * The key includes the repository because the hook runs in the session's current working
+ * directory, and that directory moves when the assistant changes directories. A session
+ * that stops in a demo app and then in a second app would otherwise compare the second
+ * app's guarded digests against pins written from the first, and report guarded policy
+ * drift that never happened. The repository key is the first 16 hex characters of the
+ * SHA-256 of the resolved working directory. Config is loaded from that directory, so it
+ * is the repository root by construction.
+ *
+ * Pure: it derives a path and touches no filesystem.
+ */
+export function sessionPinPath(tmpDirPath: string, sessionId: string, cwd: string): string {
+  const repoKey = createHash('sha256').update(resolve(cwd)).digest('hex').slice(0, 16);
+  return join(tmpDirPath, `usabl-pins-${sessionId}-${repoKey}.json`);
 }
 
 function parseSessionId(raw: string | null): { sessionId: string | null; warning: string | null } {
@@ -207,6 +223,7 @@ export function makeStopHookRunnerPorts(): StopHookRunnerPorts {
   return {
     fs: defaultFs(),
     tmpDir: () => tmpdir(),
+    cwd: () => process.cwd(),
     stdoutWrite: async (text: string) => {
       process.stdout.write(text);
     },
@@ -274,7 +291,7 @@ export async function runStopHook(
       await writeStderr(ports, parsedSession.warning);
     }
     if (parsedSession.sessionId !== null) {
-      const pinsPath = sessionPinPath(ports.tmpDir(), parsedSession.sessionId);
+      const pinsPath = sessionPinPath(ports.tmpDir(), parsedSession.sessionId, ports.cwd());
       if (!isWithinDir(ports.tmpDir(), pinsPath)) {
         await writeStderr(ports, `NOT verified - ignored unsafe session_id: ${JSON.stringify(parsedSession.sessionId)}.`);
       } else {

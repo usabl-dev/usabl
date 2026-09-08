@@ -15,8 +15,12 @@ ENGINE="${USABL_ENGINE:-${WORKDIR}/usabl}"
 SESSION="${WORKDIR}/aui-session-live.json"
 DEMO_DIR="${ENGINE}/docs/demo"
 
+# Export everything demo.env sets: open-aap-tunnel.sh and mint-session.sh run as child processes
+# and read these values from their environment, so a plain source is not enough.
+set -a
 # shellcheck disable=SC1091
 [ -f "${WORKDIR}/demo.env" ] && . "${WORKDIR}/demo.env"
+set +a
 
 say() { printf '==> %s\n' "$*"; }
 

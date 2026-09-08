@@ -1180,8 +1180,10 @@ load-bearing: integrity check before reading contents.
 
 ### Session pinning
 
-At session start, record sha256 pins of every guarded path keyed by session id, stored
-outside the repo in the OS temp dir. The stop hook checks pins mid-session to catch a
+At session start, record sha256 pins of every guarded path keyed by session id and
+repository, stored outside the repo in the OS temp dir. The repository key is derived
+from the resolved working directory the hook runs in, so pins recorded in one repository
+are never compared against another. The stop hook checks pins mid-session to catch a
 committed tamper that git-status-clean cannot see.
 
 ### Receipt binding
