@@ -173,7 +173,7 @@ the codebase evolves.
 
 Priority order for pitches, demos, and one-pagers:
 
-1. **End-to-end proof loop** - find, fix, verify, gate
+1. **End-to-end proof loop** - find, fix, re-check the change, gate
 2. **AI-native completion gate** - proof before "done"
 3. **Screen-reader announcement checks on the change** - accessible names and announcements on the PR
 4. **One engine, team enforcement** - one engine behind every surface, tamper-evident
