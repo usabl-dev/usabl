@@ -1254,7 +1254,8 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   wrote, and it refuses to overwrite existing files unless `--force` is given (`--force`
   is init-only draft overwrite, not a gate bypass).
 - Integration wiring: `usabl install <target>` wires exactly one integration surface per
-  run. The targets are `--overlay`, `--claude`, `--ci`, and `--branch-rule`; zero or more
+  run. The targets are `--overlay`, `--claude`, `--claude-skill`, `--cursor`, `--ci`,
+  `--docs-ci`, and `--branch-rule`; zero or more
   than one refuses with exit 2. `init` scaffolds policy; `install` wires integrations; they
   are different commands (see section 12).
 - Baseline drafts: `usabl baseline` runs a full UI scan and writes `.usabl-evidence.json`
@@ -1290,15 +1291,16 @@ as a working-tree diff for review and merge.
 
 Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
-- Unconfigured repo: loud fail-open. The stop hook discloses "NOT verified - stop hook error: ..." and allows, never a silent allow.
+- Unconfigured repo or unreadable input: loud fail-open. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. A run that started and failed prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
 - Nothing to check (no UI files in the diff): allow with explicit "nothing to check"
   message. Not `not_covered`.
 - Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
-  surface was scanned. Never mint on a sample. Surface the meaning explicitly as
-  "verified: no new barrier blocks this change," with advisory findings shown adjacent
-  when present. Not "no barriers": a verified run routinely carries barriers the floor
-  recorded.
+  surface was scanned. Never mint on a sample. The meaning line on every surface is
+  "No new barrier blocks this change. It can proceed." and the stop hook allows with
+  "VERIFIED (exit 0): the gate verified this change. Receipt sourceTree <hash>. You may
+  stop.", with advisory findings shown adjacent when present. Not "no barriers": a
+  verified run routinely carries barriers the floor recorded.
 - `regression`: block.
 - `approval_required`: block.
 - `not_covered`: default block. Recalibrate after week-2 real-repo measurement
@@ -1322,9 +1324,14 @@ mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
 ### 11.4 CI/PR comment (trusted-ref policy read)
 
 Reads policy from the protected branch (or the trusted ref), never the working tree.
-Refuses to run without a base ref. The comment leads with the receipt, groups findings
-as new/known/unverified, shows the current-run announcement preview, and applies a
-noise budget. All page-derived text passes through `neutralize()`. Sticky comment
+Refuses to run without a base ref. The comment leads with the headline
+(`## usabl report: <VERDICT>`), then on approval required the policy split line, then the
+receipt (`_No receipt: run was not verified._` when none), then `### Conformance summary`
+(whose `deterministic:` entry splits new into failing and unconfirmed when any is new),
+then the finding sections `### New barriers`, `### Known (carried)`, and
+`### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the gating lane
+when the noise budget collapses it, then `### Coverage gaps` and
+`### Announcements (current run)`. All page-derived text passes through `neutralize()`. Sticky comment
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
 
@@ -1406,7 +1413,7 @@ can integrate the same gate:
 | Assistant | Integration shape | What we ship |
 |---|---|---|
 | **Claude Code** | Stop hook → `usabl check`; mid-task via Bash (contest) or MCP wrapper (optional) | Contest |
-| **Cursor** | Hook on agent completion or pre-commit; mid-task via Bash or MCP | Seam documented |
+| **Cursor** | `usabl install --cursor` writes the stop hook (`hooks.json` plus an adapter script) that loops the agent through Cursor's `followup_message` protocol, the `/usabl-check` command for advisory mid-task scans, and a UI-scoped rule | Shipped |
 | **GitHub Copilot** | Extension calls CLI on save or on "agent done" if/when that event exists | Seam documented |
 | **Any MCP host** | Optional on-demand tool; gate stays at task-complete lifecycle event | MCP wrapper if contest scope includes it |
 
@@ -1490,8 +1497,9 @@ grows.
 ### Waivers
 
 One finding, owned, expiring. Not "this page is advisory." Required fields: rule,
-surface, scope, owner, reason, approvedBy, created, expires. An expired waiver covers
-nothing; the finding becomes a regression again. Debt burns down by default.
+surface, scope, owner, reason, approvedBy, created, expires. An expired waiver is inert:
+the finding is then carried if the evidence floor holds its identity, and blocks only if
+it is new against the floor.
 
 ### What adoption is NOT
 
@@ -1637,7 +1645,7 @@ Findings with `evidenceClass: 'model-judgment'` are surfaced but never block.
 ### How they appear
 
 - **Overlay:** shown in a separate "Advisory" section, visually distinct.
-- **PR comment:** grouped under "Model suggestions (not blocking)" below the verdict.
+- **PR comment:** grouped under `### Advisory (non-gating)` below the gating sections.
 - **CLI:** printed after the verdict with a label.
 - **Gate:** explicitly excluded from verdict computation.
 
@@ -2137,7 +2145,7 @@ Either way, keep `not_covered` loud, visible, and tracked in PR comment and over
 |---|---|---|
 | Time to first finding (new repo) | Adoption friction | Under 5 minutes |
 | Violations prevented per PR | Value delivered | Track, report whatever it is |
-| Fix verification time (block to verified) | The "verify the fix" claim | Under 2 minutes for one screen |
+| Re-check time (block to verified) | The "re-check after the fix" claim | Under 2 minutes for one screen |
 | False positive rate (clean screen findings) | Trust | Zero on clean PatternFly markup |
 | Rule coverage vs real bugs | Rule quality | Track against the sample (section 23) |
 
