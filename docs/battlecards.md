@@ -22,7 +22,7 @@ that blocks an assistant's first stop on a blocking verdict unless a one-use byp
 **Complementary?** Yes - Deque's remediate guidance and usabl's proof gate can coexist.
 axe-core is one of our check layers.
 
-**One-liner:** "They advise from the chat. We re-check the fix and block the assistant's
+**One-liner:** "They advise from the chat. We re-check the change, report whether the barrier is still observed, and block the assistant's
 first stop on a blocking verdict unless a one-use bypass was issued."
 
 ---
