@@ -184,8 +184,8 @@ silent pass.
    There is no timeout-as-warn mode and no configurable per-surface budget yet; usabl is on
    or off.
 4. **Overlay failure:** if the harness cannot connect to the dev server, the overlay shows
-   a single-line banner, for example "Cannot reach [url] - check not running." No phantom
-   findings.
+   a single-line status, "usabl could not load a result, so it can say nothing about this
+   screen. Check the dev server log." No phantom findings.
 5. **Partial results:** if some screens scan and others gap, the scanned findings are still
    surfaced. With no new failure, a gap holds the verdict at `not_covered` (incomplete proof).
    With a new deterministic failure, the failure outranks the gap and the verdict is
@@ -214,8 +214,8 @@ not by weakening the tool.
 |---|---|---|---|
 | **Install** | usabl on: CLI, stop hook, CI, overlay, docs output. One standard. | Morgan enables | Remove usabl |
 | **First run** | Check existing surfaces; accept evidence floor for known debt | Morgan + Alex agree | Re-run with updated floor |
-| **Waivers** | Known issues get waivers with owner and expiry. New, unwaived violations block. | Code owner per waiver | Remove waiver (finding becomes regression again) |
-| **Steady state** | Ratchet burns debt via waiver expiry. The fleet-insights view (measurement-only) shows the trend. Policy changes require `approval_required`. | Team | - |
+| **Waivers** | Known issues get waivers with owner and expiry. New, unwaived violations block. | Code owner per waiver | Remove waiver (the finding blocks again only if it is new against the floor) |
+| **Steady state** | The floor comes down through `usabl floor prune`; waivers expire on their dates and become inert. The fleet-insights view (measurement-only) shows the trend. Policy changes require `approval_required`. | Team | - |
 
 ### Key points
 
@@ -226,7 +226,8 @@ not by weakening the tool.
   model-judgment producer, so nothing currently surfaces as advisory-only. Every provider
   that runs emits deterministic evidence, and deterministic findings gate.
 - **Waivers are the debt path.** One finding, one owner, one expiry. Not "this page
-  is advisory." An expired waiver covers nothing; the finding becomes a regression again.
+  is advisory." An expired waiver is inert; the finding is then carried if the floor holds
+  its identity and blocks only if it is new against the floor.
 - **Config changes are guarded.** Changing policy triggers `approval_required` - the
   tool's own guard prevents silent weakening.
 - **Coverage grows as the team works.** It does not require Design to declare epic scope.
