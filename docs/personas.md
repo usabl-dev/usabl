@@ -28,7 +28,7 @@ she has no way to hear what changed.
 clear findings with fix guidance. The Stop hook blocks the first stop on a blocking verdict
 unless a one-use bypass was issued.
 
-**Success looks like:** First finding in minutes; fix verified in the same session; PR
+**Success looks like:** First finding in minutes; a re-check in the same session no longer observes the barrier; PR
 evidence bundle ready for review.
 
 ---
@@ -45,10 +45,11 @@ work, not abstract audit items.
 **usabl value:** Deterministic announcement and accessible-name checks surface the broken
 or missing announcement expectations they can detect early, so non-AT teammates see
 those barriers in the loop.
-Verified fix loop shortens time-to-ship.
+The re-check loop shortens time-to-ship: usabl reports when the barrier is no longer
+observed, and does not witness the repair.
 
-**Success looks like:** Reports one barrier; team reproduces via harness; fix verified
-and shipped in days, not quarters.
+**Success looks like:** Reports one barrier; team reproduces via harness; the re-check
+no longer observes it and the change ships in days, not quarters.
 
 **Voice rule:** We never speak for James. usabl's announcement checks are deterministic
 expectations, not a recording of what he hears; any claim about real screen-reader
@@ -112,7 +113,7 @@ tool; human review remains stated.
 
 **Goal:** See a real problem, a real solution, and honest scope in three minutes.
 
-**usabl value:** THE MOMENT (blocked done -> verified fix); real NVDA bookend; proof
+**usabl value:** THE MOMENT (blocked done -> a re-check that no longer observes the barrier); real NVDA bookend; proof
 slide; self-check story (deck failed our own product).
 
 **Survives if:** Demo is live or filmed; claims match artifacts; limitation slide reads
