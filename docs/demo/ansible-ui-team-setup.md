@@ -73,19 +73,22 @@ below from the ansible-ui clone.
 
 ### Claude Code
 
-Already wired in the fork. If missing, run:
+The fork ships the two skills, `/usabl-check` and `/usabl-fix`, under `.claude/skills/`. The Stop
+hook lives in `.claude/settings.json`, which the fork's `.gitignore` excludes, so run this once after
+you clone:
 
 ```
 cd ~/usabl-team/ansible-ui
 usabl install --claude
-usabl install --claude-skill
 ```
 
 - `--claude` wires the **Stop hook** (`.claude/settings.json`) so the assistant's first attempt to
   finish on a blocking verdict is blocked unless a one-use `usabl bypass` was issued.
-- `--claude-skill` writes the **`/usabl-check` skill** for advisory mid-task scans.
+- `usabl install --claude-skill` regenerates the **`/usabl-check`** and **`/usabl-fix`** skills if
+  they are missing. It refuses to overwrite a skill file that differs from the canonical one.
 
-Mid-task: type `/usabl-check` or ask Claude to run `npx usabl check --self-check`.
+Mid-task: type `/usabl-check` or ask Claude to run `npx usabl check --self-check`. Both resolve
+`usabl` through the link the setup script creates in the clone's `node_modules`.
 
 ### Cursor
 
@@ -140,16 +143,20 @@ Do **not** run `usabl init` on ansible-ui. The demo repository already ships `us
 
 ### Brownfield loop (recommended order)
 
-**1. Baseline the floor** (not done yet: the demo repository has no `.usabl-evidence.json`)
+**1. Baseline the floor** (done: the demo repository ships `.usabl-evidence.json`)
 
-The baseline records existing accessibility debt so it does not block your PRs. On this application
-a plain `usabl baseline` refuses: the three mapped screens sit against whole-front-end UI globs, so
-the run that measured it reported 1,669 unresolved files, and the refusal itself names `--partial`.
-Run `usabl baseline --partial` instead. It writes a version 2 partial floor over only the cleanly
-scanned screens (78 entries on the run that measured it; your numbers will differ) and marks the
-file as partial, so a reader knows what it covers. Review and commit that floor through a normal PR. After it lands, carried debt no longer
-gates; a **new**, unwaived barrier above the floor still does, and so do unconfirmed coverage and
-guarded policy edits.
+The baseline records existing accessibility debt so it does not block your PRs. The demo repository
+already carries one: a version 2 partial floor over the three mapped screens (overview,
+organizations, users), 78 entries, with its scope field set to partial so a reader knows what it
+covers. Carried debt therefore does not gate. A **new**, unwaived barrier above the floor still
+does, and so do unconfirmed coverage and guarded policy edits. Your first clean-tree scan should
+report verified with the recorded findings listed as not blocking.
+
+If you ever need to rebuild it: a plain `usabl baseline` refuses on this application, because the
+three mapped screens sit against whole-front-end UI globs (the run that measured it reported 1,669
+unresolved files, and the refusal itself names `--partial`). Run `usabl baseline --partial`, which
+writes the floor over only the cleanly scanned screens, then review and commit it through a normal
+PR.
 
 Because ansible-ui is login-gated, declare a `reachedWhen` selector on each surface in
 `usabl.config.json`, naming content only that screen has (its own heading or table, never the shell,
@@ -230,15 +237,23 @@ looking at.
 The overlay is an advisory badge inside the running dev server. It shows findings live while you code
 but never changes exit codes. Hide it with `?usabl=off` in the URL.
 
-If it is missing, the two lines to add by hand are:
+It is wired in `platform/vite.config.ts` of the fork and imports the plugin from `usabl/vite`, so the
+engine must be resolvable from the clone's `node_modules`. The setup script creates that link; by
+hand it is `npm link --no-save ../usabl` from the ansible-ui clone. Without the link the dev server
+fails to load its config.
+
+The plugin is spread with `enforce` cleared and placed after the React plugin:
 
 ```ts
-import { usablVitePluginFromConfig } from 'usabl/vite'
-// then inside defineConfig plugins array:
-usablVitePluginFromConfig({ cwd: import.meta.dirname }),
+import { usablVitePluginFromConfig } from 'usabl/vite';
+// inside the plugins array, after react():
+{ ...usablVitePluginFromConfig({ cwd: path.resolve(import.meta.dirname, '..') }), enforce: undefined },
 ```
 
-Restart the dev server after adding the plugin.
+The plugin's source-line injector runs before React by default and breaks JSX elements that carry
+generic type arguments, which this application has. Running it after React disables the injector.
+The overlay does not depend on it. Restart the dev server after any change to this file; a running
+server's config reload can fail on the bare import even when a fresh start succeeds.
 
 ### CI gate (blocking)
 
@@ -452,6 +467,12 @@ cd usabl && npm ci && npm run build && npm link
 `npm link` puts the `usabl` command on your PATH. If the shell cannot find it:
 ```
 export PATH="$(npm prefix -g)/bin:$PATH"
+```
+
+Link the engine into the ansible-ui clone as well, so the dev server can import `usabl/vite` and
+`npx usabl` resolves without the registry:
+```
+cd ansible-ui && npm link --no-save ../usabl
 ```
 
 Install the headless browser usabl uses (from the ansible-ui clone):
