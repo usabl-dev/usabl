@@ -70,7 +70,8 @@ Teaching artifact supports #3; not a fourth pillar.
 ## Prior-art sentence (required slide)
 
 > The design goal is an assistant-time accessibility loop, rather than another scanner, where
-> AI proposes fixes, PatternFly composition rules and rendered checks verify them, and
+> AI proposes fixes, PatternFly composition rules and rendered checks re-check them and
+> report whether the barrier is still observed, and
 > the same evidence ratchets in PRs without claiming compliance.
 
 ---
