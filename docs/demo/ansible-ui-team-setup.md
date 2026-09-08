@@ -144,19 +144,23 @@ Do **not** run `usabl init` on ansible-ui. The demo repository already ships `us
 
 The baseline records existing accessibility debt so it does not block your PRs. On this application
 a plain `usabl baseline` refuses: the three mapped screens sit against whole-front-end UI globs, so
-the run reports 1,669 unresolved files, and the refusal itself names `--partial`. Run
-`usabl baseline --partial` instead. It writes a version 2 partial floor over only the cleanly scanned
-screens (78 entries measured on the last run) and marks the file as partial, so a reader knows what
-it covers. Review and commit that floor through a normal PR. After it lands, carried debt no longer
+the run that measured it reported 1,669 unresolved files, and the refusal itself names `--partial`.
+Run `usabl baseline --partial` instead. It writes a version 2 partial floor over only the cleanly
+scanned screens (78 entries on the run that measured it; your numbers will differ) and marks the
+file as partial, so a reader knows what it covers. Review and commit that floor through a normal PR. After it lands, carried debt no longer
 gates; a **new**, unwaived barrier above the floor still does, and so do unconfirmed coverage and
 guarded policy edits.
 
 Because ansible-ui is login-gated, declare a `reachedWhen` selector on each surface in
 `usabl.config.json`, naming content only that screen has (its own heading or table, never the shell,
-header, or navigation). A screen usabl cannot reach signed in is a coverage gap, never scored: a
-refused same-host request at either of its two reads, a password field anywhere on the page, or a
-redirect to a sign-in page marks the screen as not reached. `reachedWhen` is your assertion, not a
-proof usabl can check.
+header, or navigation). A screen usabl cannot reach signed in is a coverage gap, never scored.
+Three rules decide that, in order. Rule A: a session is configured and one of the application's
+own same-host data requests came back 401 at either of the two reads; nothing overrides it, not
+even a matched `reachedWhen`. Rule B: a session is configured and the page has a password field
+anywhere; a present `reachedWhen` match overrides it, which is what makes a real change-password
+screen scannable. Rule C: the browser landed on a different address and that page has a password
+field, with or without a session; a redirect alone does not fire it. `reachedWhen` is your
+assertion, not a proof usabl can check.
 
 **2. Map fixes before you chase axe noise**
 
@@ -266,7 +270,8 @@ Every PR gets a sticky bot comment that starts with:
 ## usabl report: VERIFIED
 ```
 
-or `REGRESSION`, `NOT COVERED`, `APPROVAL REQUIRED`, or `IDLE`.
+or `REGRESSION`, `NOT COVERED`, or `APPROVAL REQUIRED`. A run with no verdict starts with
+`## usabl report: NO VERDICT: IDLE (exit 0)` or, for a crash, `## usabl report: NO VERDICT: RUN FAILED (exit 4)`.
 
 The comment includes:
 - **Conformance summary** - deterministic new/carried/waived/fixed counts, judged counts, unresolved
@@ -277,9 +282,11 @@ The comment includes:
   `mintedAt`. The receipt itself binds four values: the exact source tree, the policy hash, the engine
   version, and the scanner versions (axe-core, Playwright, Chromium); the comment does not display the
   scanner versions. Change any of the four and the receipt stops verifying.
-- **Findings** - each new or carried finding with rule, impact, surface, and page-derived help text
-  (neutralized for terminal safety).
-- **Model suggestions** - grouped under "Model suggestions (not blocking)" when present. These are
+- **Findings** - under `### New barriers` and `### Known (carried)`, each with severity, screen,
+  rule, and the page-derived experience, why, and fix text inside the untrusted frame. When the
+  gating lane exceeds the noise budget, the comment collapses it by rule under
+  `### Findings (collapsed by rule)` and names the total.
+- **Advisory findings** - grouped under `### Advisory (non-gating)` when present. These are
   advisory and never decide a verdict.
 
 The `gate-comment` job updates the same comment on each push (it finds the existing one by a hidden
@@ -394,7 +401,7 @@ Commit the `.usabl-evidence.json` diff alongside the fix PR so the floor ratchet
 | CI gate | `usabl-required` (via CI) | Yes (required check, normal merge path) | Every PR push + review |
 | Doctor | `usabl doctor` | No (read-only report) | You run it to diagnose setup |
 | Baseline | `usabl baseline` | No (drafts evidence floor) | Once, at brownfield adoption |
-| Floor prune | `usabl floor prune` | No (removes paid debt) | After fixing a floored finding |
+| Floor prune | `usabl floor prune` | No (lowers the floor to what a clean scan observed) | After fixing a floored finding |
 
 ---
 
