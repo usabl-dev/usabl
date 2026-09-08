@@ -275,9 +275,9 @@ or `REGRESSION`, `NOT COVERED`, or `APPROVAL REQUIRED`. A run with no verdict st
 
 The comment includes:
 - **Conformance summary** - deterministic new/carried/waived/fixed counts, judged counts, unresolved
-  files, gaps, and a `blocked` flag. That flag is true only when new deterministic failures block
-  the accessibility result; it is false for `not_covered` and `approval_required`, even though the
-  required `usabl-required` check still blocks the merge in those cases.
+  files, gaps, and a `blocked` flag. That flag is `yes` whenever the run's exit code is not 0, so
+  `regression`, `not_covered`, and `approval_required` all print `blocked: yes`; only `verified`
+  prints `blocked: no`.
 - **Receipt** (verified only) - the comment displays `sourceTree`, `policyHash`, `runnerVersion`, and
   `mintedAt`. The receipt itself binds four values: the exact source tree, the policy hash, the engine
   version, and the scanner versions (axe-core, Playwright, Chromium); the comment does not display the
@@ -347,7 +347,7 @@ type `/usabl-check`. In Cursor, ask the agent to run the command above.
 USABL_STORAGE_STATE=./.usabl-session.json usabl check
 ```
 
-This is the real gate. `verified` means no new barrier above the reviewed floor blocks the change: usabl observed that the barrier is no longer present, it did not witness the fix. `regression` means a new barrier remains.
+This is the real gate. `verified` means no new barrier above the reviewed floor blocks the change. It does not mean the barrier is gone: a verified run can still carry it on the floor or under a waiver, and usabl does not witness a fix. `regression` means a new barrier remains.
 Fix them before pushing.
 
 ### 5. Commit and push
