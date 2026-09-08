@@ -91,7 +91,7 @@ blocking. That is display, not a second decision-maker.
 
 The specific things that are new, each against what exists today:
 
-1. It re-checks the fix as well as finding the problem. usabl compares the next run
+1. It re-checks the change as well as finding the problem. usabl compares the next run
    against the floor and reports what it no longer observes. It observes absence; it
    does not witness the fix.
 2. It discloses every gap it detected. It reports "we could not check this" as a real
@@ -129,8 +129,8 @@ what a screen reader actually hears.
 - Three scan layers behind one provider interface: axe-core, PatternFly rulepack,
   pattern-aware keyboard walk.
 - Surfaces: CLI, stop hook, overlay, CI/PR comment, Playwright helper, mid-task
-  self-check (CLI; MCP wrapper optional). CI, overlay, hooks, and MCP all call the
-  same CLI core.
+  self-check (CLI). CI, overlay, and hooks all call the same engine core; no MCP
+  surface is built.
 - Reports (accessible docs output): generate alt-text manifests, announcement snippets,
   and keyboard paths, bound to the receipt.
 - Evidence labels on every Draft (`evidenceClass`). During the contest everything is
@@ -1484,15 +1484,17 @@ screens on Monday.
    the evidence floor (and maybe a few waivers). That is one `approval_required` commit.
 6. Next PR on that page: full default stack. A problem at an identity the floor does not
    hold, or above the count it recorded there, blocks. Recorded ones stay visible debt, and
-   the floor comes down through `usabl floor prune` and waiver expiry.
+   the floor comes down only through `usabl floor prune`; a waiver becomes inert on its
+   expiry date and never edits the floor.
 
 Coverage grows as the team works. It does not require Design to declare epic scope.
 
 ### Ratchet
 
 Same full check every time. Existing findings are the floor. New findings are
-regressions. The floor only shrinks (via fixes or tightened accept) and never silently
-grows.
+regressions. The floor changes only when `usabl floor prune` writes a new one after a
+clean scan observed fewer barriers, or when `usabl baseline` re-drafts it under review. A
+source fix alone does not shrink it, and it never silently grows.
 
 ### Waivers
 
