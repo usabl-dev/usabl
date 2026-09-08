@@ -9,7 +9,7 @@ adoption arc a person actually types is:
 
 ```
 usabl init            scaffold policy drafts (usabl.config.json + usabl.routes.json)
-usabl install <one>   wire one integration surface at a time (--overlay | --claude | --ci | --branch-rule)
+usabl install <one>   wire one integration surface at a time (--overlay | --claude | --claude-skill | --cursor | --ci | --docs-ci | --branch-rule)
 usabl baseline        draft the accepted accessibility floor (.usabl-evidence.json)
 usabl doctor          read-only health check across every wired surface
 usabl check           run the local gate (this is the default command)
