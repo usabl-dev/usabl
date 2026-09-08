@@ -79,7 +79,8 @@ each stage matters; this section is what a team actually types, in order.
 10. (human, optional) Add waivers to `.usabl-waivers.json` for findings that need a
     temporary exception. Each waiver is fully typed and names `rule`, `surface`,
     `scope`, `reason`, `owner`, `approvedBy`, `created`, and `expires` (both timestamps
-    ISO-8601 UTC). Expired waivers cover nothing, so the finding gates again on its own.
+    ISO-8601 UTC). An expired waiver is inert: the finding is then carried if the evidence
+    floor holds its identity, and blocks only if it is new against the floor.
 
 ### Phase 4: install the surfaces (human, one draft per run)
 
@@ -227,6 +228,8 @@ pin the engine and turn on branch protection.
 | **Dev-server overlay** | `usabl install --overlay` | Wires the advisory Vite plugin into `vite.config.ts`. Writes a draft when no config exists, no-ops when already wired, and refuses to clobber a hand-tuned config. | Advisory findings badge while coding |
 | **Assistant hook** | `usabl install --claude` | Wires a Stop hook running `npx usabl stop-hook` into `.claude/settings.json`. | Blocks the first stop on a blocking verdict unless a one-use bypass was issued |
 | **Assistant skill** | `usabl install --claude-skill` | Writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`, running the advisory `npx usabl check --self-check`. Writes a draft when absent, no-ops when it matches, and refuses to clobber a differing file. | The assistant can self-check mid-task without leaving the editor |
+| **Cursor hook** | `usabl install --cursor` | Writes `.cursor/hooks.json` with an adapter script, the `/usabl-check` command, and a UI-scoped rule, each as a whole-file draft that refuses to clobber a differing file. | Blocks the agent's stop through Cursor's `followup_message` protocol, up to a loop limit |
+| **Docs gate** | `usabl install --docs-ci` | Writes the docs gate workflow draft, which builds and serves the rendered documentation instead of the app dev server. | The same gate on the published docs pages |
 | **Branch rule** | `usabl install --branch-rule` | Read-only verification through a `gh` GET that branch `main` requires the `usabl-required` status check. Writes nothing. | Confirms the gate is actually enforced |
 | **Playwright test** | `usabl/playwright` export | `assertUsablVerdict(result, allowed)` reads a gated Result, checks its verdict against the list you allow, and returns that answer as a `passed` flag with the verdict, the exit code, a summary line, and a scrubbed copy of the Result. Your test asserts on what it returns; the helper itself throws nothing and mints no verdict. | Reuse a check verdict in tests you already run |
 
@@ -239,7 +242,9 @@ verdict.
 - The overlay and CI drafts need review before they take effect, so there is a small
   setup step per surface
 - CI can gate on legacy debt if you skip `usabl baseline`
-- The assistant hook is Claude-specific today; only the Claude Code Stop hook is wired
+- Assistant hooks ship for two assistants: the Stop hook target above, and `--cursor`, which
+  writes a stop hook, a `/usabl-check` command, and a rule for Cursor. Other assistants are
+  not wired
 
 **Mitigation:** `usabl init` infers routes and surfaces from the app router, so mapping
 starts from real code rather than a blank file. `usabl baseline` sets the floor so the
@@ -267,8 +272,10 @@ assistant loop.
 - The waiver ledger `.usabl-waivers.json` for known debt. Each waiver is fully typed
   and carries an `expires` field (validated ISO-8601 UTC), so a waiver ages out on a
   date rather than lingering forever
-- `usabl floor prune` to re-arm the floor. It removes paid-down entries only from
-  screens that scanned cleanly with no gaps, so fixing a barrier tightens the gate
+- `usabl floor prune` to re-arm the floor. On screens that scanned cleanly with no gaps, it
+  removes an entry whose identity was not observed and lowers the count where fewer were
+  observed. It cannot tell a repaired barrier from a page rendering fewer rows, so run it
+  when you know why the count dropped
 - `usabl drift routes` to catch the route manifest drifting from the app router
 - Team documentation on what the verdicts mean and who can change policy
 
@@ -283,8 +290,9 @@ unwaived violation above the floor, coverage the run could not confirm, or a gua
 policy file (`usabl.config.json`, `usabl.routes.json`, `.usabl-evidence.json`,
 `.usabl-waivers.json`) so it diverges from the trusted ref forces an
 `approval_required` verdict, so acceptance bytes cannot be self-approved in the same
-change. Waiver expiry burns debt down on a schedule, and `usabl floor prune` records
-each paid-down barrier.
+change. A waiver becomes inert on its expiry date, after which the finding is carried if
+the floor holds it and blocks only if it is new; `usabl floor prune` lowers the floor to
+what a clean scan observed.
 
 **Note on fleet reporting:** A measurement-only fleet-insights module is built and
 published behind the `./measure` package export, but it is dormant. It is not part of
@@ -292,7 +300,7 @@ the run or gate path and does not affect any verdict. Treat cross-repo fleet rep
 as a future capability, not a current one.
 
 **Success signal:** Multiple repos gating; the false-positive rate stays stable; debt
-burns down through waiver expiry and floor prune.
+comes down through `usabl floor prune`, and waivers expire on their dates.
 
 ---
 
