@@ -22,7 +22,8 @@ market-landscape research (August 2026, maintained outside this repository).
 
 Tagline: *usable by default.* Supporting line: *Don't ship until it's usabl.*
 
-usabl runs a proof loop on every change and verifies fixes. Its Stop hook blocks the
+usabl runs a proof loop on every change and re-checks after a fix, reporting whether the
+barrier is still observed; it does not witness the repair. Its Stop hook blocks the
 first stop on a blocking verdict unless a one-use bypass was issued.
 
 ---
@@ -38,7 +39,7 @@ does not prove completeness, readiness to ship, or compliance.
 | What users get | What that means for them |
 |---|---|
 | **Change coverage with honest gaps** | Changed UI files are mapped to screens, and those screens are exercised and checked. A changed file usabl cannot map to a screen is reported as not_covered, and every gap it detects is disclosed. |
-| **Fix verification** | Problems are found and re-checked after the fix; the Stop hook blocks the assistant's first stop on a blocking verdict unless a one-use bypass was issued. |
+| **Fix re-check** | Problems are found and re-checked after the fix, and usabl reports whether the barrier is still observed (it does not witness the repair); the Stop hook blocks the assistant's first stop on a blocking verdict unless a one-use bypass was issued. |
 | **Screen-reader announcement checks** | Deterministically verifies the accessible names and announcement expectations screen reader users depend on, on the actual change. |
 | **Keyboard and interaction proof** | Tab order, focus, and interaction paths are walked, not just static markup rules. |
 | **Design-system intelligence** | PatternFly-specific composition rules on top of industry-standard checks. |
@@ -55,11 +56,11 @@ single product; this section does not claim what other tools do or do not ship.
 
 | Category | Examples | What they do well | What usabl is built to add |
 |---|---|---|---|
-| **Accessibility scanners** | axe, Lighthouse, Pa11y, WAVE | Fast issue lists on a page | Verify the fix, block the assistant's first stop on a blocking verdict unless bypassed, cover the screens a change maps to and disclose the gaps |
+| **Accessibility scanners** | axe, Lighthouse, Pa11y, WAVE | Fast issue lists on a page | Re-check after the fix and report whether the barrier is still observed, block the assistant's first stop on a blocking verdict unless bypassed, cover the screens a change maps to and disclose the gaps |
 | **CI regression tools** | Chromatic, Pa11y CI, MFA11y | Block new violations vs baseline | Same ratchet idea, plus AI gate, keyboard walk, SR evidence, PF rules |
 | **AI accessibility assistants** | Deque axe MCP, a11y MCP wrappers | Scan and suggest fixes from the agent | Proof before "done"; the gate decides and the assistant only proposes |
 | **Agent enforcement hooks** | Community-Access/accessibility-agents, agent-gates | Block edits until review runs | Per-change deterministic proof loop, not one review per session |
-| **Screen reader simulation** | Tactual, Speakable, JAWS Inspect | Announcement preview and diff | Deterministic announcement and accessible-name checks wired into the gated loop: CI, fix verification, PF rules |
+| **Screen reader simulation** | Tactual, Speakable, JAWS Inspect | Announcement preview and diff | Deterministic announcement and accessible-name checks wired into the gated loop: CI, the re-check after a fix, PF rules |
 | **Design-system lint** | FluentUI eslint plugin | Component-level static rules | Runtime interaction, keyboard walk, and proof engine; PatternFly-native |
 | **Commercial verification** | Jeikin, Evinced | Enterprise dashboards and flows | Open, integrated loop from AI session to merge |
 
@@ -83,7 +84,7 @@ Four pillars, ranked. Each is a design goal of the product, stated without claim
 
 ### 1. End-to-end proof loop
 
-usabl is built to close the loop: scan -> fix -> re-verify -> gate -> ship.
+usabl is built to close the loop: scan -> fix -> re-check -> gate -> ship.
 The Stop hook blocks the AI's first stop on a blocking verdict unless a one-use bypass was issued. One pass combines
 axe-core, PatternFly composition rules, a live keyboard walk, and deterministic
 screen-reader announcement checks on what changed.
@@ -144,7 +145,8 @@ the codebase evolves.
 
 ### Vs scanners
 
-> usabl checks the screens mapped from a change's UI files, verifies the fix, and blocks the first
+> usabl checks the screens mapped from a change's UI files, re-checks after the fix and reports
+> whether the barrier is still observed, and blocks the first
 > stop on a blocking verdict unless a one-use bypass was issued.
 
 ### Vs AI tools
