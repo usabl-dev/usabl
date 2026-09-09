@@ -370,6 +370,11 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
     const panel = await openPanel(page);
     await panel.getByRole('button', { name: /Focus stays behind the dialog/i }).click();
 
+    // Expanding a row already highlights its element, so the action flips to "Unhighlight".
+    expect(await page.locator(HIGHLIGHT).count()).toBe(1);
+    await panel.getByRole('button', { name: 'Unhighlight' }).click();
+    expect(await page.locator(HIGHLIGHT).count()).toBe(0);
+    // Toggling back on returns the label to "Highlight it" and re-outlines the element.
     await panel.getByRole('button', { name: 'Highlight it' }).click();
     expect(await page.locator(HIGHLIGHT).count()).toBe(1);
 
@@ -2996,7 +3001,6 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(overlapsBefore).toBe(true);
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Highlight it' }).click();
 
     // The panel moved off the bottom-right corner.
     await expect.poll(async () => dockCorner(page)).not.toBe('bottom-right');
@@ -3027,7 +3031,6 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(await dockCorner(page)).toBe('bottom-right');
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Highlight it' }).click();
     // Frames, not milliseconds: any move the panel made would be made on one of these.
     await passFrames(page, 15);
 
@@ -3125,7 +3128,6 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(await panelOverlapsTarget(page)).toBe(true);
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Highlight it' }).click();
 
     await expect.poll(async () => dockCorner(page)).toMatch(/-right$/);
     expect(await panelOverlapsTarget(page)).toBe(false);
@@ -3149,7 +3151,6 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     const panel = host.getByRole('region', { name: 'usabl accessibility inspector' });
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Highlight it' }).click();
     // Frames, not milliseconds: the dodge is decided on a frame, so frames are what to wait for.
     await passFrames(page, 15);
 

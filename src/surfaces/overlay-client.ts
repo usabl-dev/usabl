@@ -2129,6 +2129,7 @@ export const overlayClientSource = `(() => {
       state.marker = null;
     }
     releaseBorrowedTabindex();
+    syncHighlightToggle();
   }
 
   function setLocateStatus(text, selector) {
@@ -2277,6 +2278,7 @@ export const overlayClientSource = `(() => {
       window.removeEventListener('resize', position);
     };
     state.highlightKey = key;
+    syncHighlightToggle();
     setLocateStatus(
       dodgeOutcome === 'blocked' ? highlightedText + ' ' + DODGE_BLOCKED_TEXT : highlightedText,
       '',
@@ -2350,6 +2352,22 @@ export const overlayClientSource = `(() => {
       }
     }
     return null;
+  }
+
+  // The one detail action whose label depends on live state. Highlighting is a toggle: when the
+  // open row's element is already outlined the action becomes "Unhighlight", otherwise "Highlight
+  // it". Both functions that move state.highlightKey call this, so every path (expand, close,
+  // screen switch, the button itself) keeps the visible label honest.
+  function syncHighlightToggle() {
+    if (state.expandedKey == null) {
+      return;
+    }
+    const row = rowByKey(state.expandedKey);
+    if (!row || !row.highlightButton) {
+      return;
+    }
+    row.highlightButton.textContent =
+      state.highlightKey === row.key ? 'Unhighlight' : 'Highlight it';
   }
 
   // One activation does three things at once: it locates the element on the page, it opens this
@@ -2432,7 +2450,14 @@ export const overlayClientSource = `(() => {
     const actions = make('div', 'detail-actions');
     const showAgain = make('button', 'detail-action', 'Highlight it');
     showAgain.type = 'button';
-    showAgain.addEventListener('click', () => highlightFinding(finding, row.key));
+    showAgain.addEventListener('click', () => {
+      if (state.highlightKey === row.key) {
+        clearHighlight();
+      } else {
+        highlightFinding(finding, row.key);
+      }
+    });
+    row.highlightButton = showAgain;
     actions.appendChild(showAgain);
 
     const focusButton = make('button', 'detail-action', 'Move focus to it');
