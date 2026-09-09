@@ -2362,6 +2362,12 @@ export const overlayClientSource = `(() => {
       + '. Press Escape to return to the usabl panel.';
     if (state.host && !dodgeNow) {
       afterScrollSettles(target, () => {
+        // This runs after the smooth scroll settles, which can be after the user has already pressed
+        // Escape to return to the panel. Only re-assert the dodge status while focus is still on the
+        // element; otherwise this late write would clobber "Keyboard focus returned to the usabl panel."
+        if (document.activeElement !== target) {
+          return;
+        }
         if (state.host && dodgePanelAwayFrom(state.host, target) === 'blocked') {
           setLocateStatus(movedText + ' ' + DODGE_BLOCKED_TEXT, '');
         }
@@ -2369,15 +2375,18 @@ export const overlayClientSource = `(() => {
     }
     try {
       // An element that is not already in the tab order (tabIndex < 0: a non-focusable node, or one
-      // the page parked at -1) needs a temporary tabindex of -1 so we can focus it. An element that is
-      // already focusable and tabbable is left exactly as it is, so a keyboard user can Shift+Tab back
-      // onto it after wandering off and use Escape again. We record the exact node and the exact value
-      // it had, and put that back later, rather than marking it and sweeping the document afterwards.
+      // the page parked at -1) gets a temporary tabindex of 0 rather than -1. Both let us focus it by
+      // script, but only 0 puts it into the sequential tab order, so a keyboard user who Tabs away can
+      // Shift+Tab back onto it and press Escape to return here. A borrowed -1 would be a dead end: the
+      // browser skips it on Tab, the element never regains focus, and the Escape shortcut never fires.
+      // An element that is already focusable and tabbable is left exactly as it is. We record the exact
+      // node and the exact value it had, and put that back later, rather than marking it and sweeping
+      // the document afterwards.
       if (target.tabIndex < 0) {
         releaseBorrowedTabindex();
         const previous = target.hasAttribute('tabindex') ? target.getAttribute('tabindex') : null;
         state.borrowedTabindex = { node: target, previous };
-        target.setAttribute('tabindex', '-1');
+        target.setAttribute('tabindex', '0');
       }
       target.focus({ preventScroll: true });
     } catch (_error) {

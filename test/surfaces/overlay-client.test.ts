@@ -402,7 +402,9 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
     await panel.getByRole('button', { name: 'Move focus to it' }).click();
 
     expect(await page.evaluate(() => document.activeElement?.id)).toBe('plain-target');
-    expect(await page.locator('#plain-target').getAttribute('tabindex')).toBe('-1');
+    // The borrow is tabindex 0, not -1: the element must join the tab order so a keyboard user can
+    // Shift+Tab back onto it. A -1 borrow would focus it once but then drop it out of Tab for good.
+    expect(await page.locator('#plain-target').getAttribute('tabindex')).toBe('0');
 
     // Closing the row removes the tabindex again, so the page's own tab order is unchanged.
     await row.click();
@@ -454,24 +456,36 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
     await page.context().close();
   });
 
-  it('keeps Escape working after you tab off a focusable element and shift-tab back', async () => {
-    const page = await mount(projectOverlay(result({ findings: [finding()] })), { path: '/clusters' });
+  it('keeps Escape working after you really Tab off a non-focusable element and Shift+Tab back', async () => {
+    // The demo's flagged element is a plain <div> the page never made focusable, so usabl borrows a
+    // tabindex to move focus to it. This exercises real Tab/Shift+Tab keys (not .focus()/.blur(),
+    // which ignore the tab order) to prove the borrow actually puts the element back in reach: with a
+    // -1 borrow the browser skips it on Tab, it never regains focus, and Escape can never fire.
+    const page = await mount(
+      projectOverlay(
+        result({
+          findings: [finding({ elementPath: '#plain-target', elementName: 'Plain paragraph' })],
+        }),
+      ),
+      { path: '/clusters' },
+    );
     const host = page.locator(OVERLAY);
     const panel = await openPanel(page);
     await panel.getByRole('button', { name: /Focus stays behind the dialog/i }).click();
     await panel.getByRole('button', { name: 'Move focus to it' }).click();
 
-    // A native button is already focusable, so no tabindex is borrowed: it stays in the tab order and
-    // a keyboard user can Shift+Tab back onto it later.
-    expect(await page.evaluate(() => document.activeElement?.id)).toBe('cluster-details');
-    expect(await page.locator('#cluster-details').getAttribute('tabindex')).toBeNull();
+    // Focus landed on the borrowed element and it joined the tab order (tabindex 0, not -1).
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('plain-target');
+    expect(await page.locator('#plain-target').getAttribute('tabindex')).toBe('0');
 
-    // Wander off the element the way Tab would, then return to it the way Shift+Tab would.
-    await page.evaluate(() => (document.getElementById('cluster-details') as HTMLElement).blur());
-    expect(await page.evaluate(() => document.activeElement?.id ?? '')).not.toBe('cluster-details');
-    await page.evaluate(() => (document.getElementById('cluster-details') as HTMLElement).focus());
+    // Wander off with a real Shift+Tab (to the previous focusable, #close-dialog), then a real Tab
+    // back. The return only reaches #plain-target if the borrow genuinely made it tabbable.
+    await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('close-dialog');
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('plain-target');
 
-    // Escape still returns focus to the panel: the shortcut was never torn down when focus left.
+    // Now Escape, parked back on the element, returns focus to the panel.
     await page.keyboard.press('Escape');
     const returned = await page.evaluate((sel) => {
       const inspector = document.querySelector(sel);
@@ -482,6 +496,8 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
     expect(await host.locator('.locate-status').textContent()).toContain(
       'Keyboard focus returned to the usabl panel.',
     );
+    // The borrow is handed back once the shortcut fires, leaving the page's tab order as it was.
+    expect(await page.locator('#plain-target').getAttribute('tabindex')).toBeNull();
 
     await page.context().close();
   });
