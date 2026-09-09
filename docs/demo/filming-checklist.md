@@ -60,6 +60,7 @@ The noise budget shows five of eight rule groups and points at the rest. That is
 
 ## Known limits, one breath each
 
+- Always use `localhost:4100`, never `127.0.0.1:4100`. The minted session's cookies are scoped to the host name it was minted against, and a browser treats those two as different hosts even though both reach the same server. On `127.0.0.1` the application serves normally, the session signs nothing in, and the screen shows the sign-in form while `/api/gateway/v1/me/` answers 401.
 - A barrier that lands in headroom the floor still records is counted as carried until `usabl floor prune` re-arms the floor; the tool says when that state exists.
 - A verified run can carry recorded failures; verified means no new barrier blocks the change, not that the screen is clean.
 - The engine observes that a barrier is no longer present; it does not witness the fix.
