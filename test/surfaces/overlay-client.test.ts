@@ -454,6 +454,38 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
     await page.context().close();
   });
 
+  it('keeps Escape working after you tab off a focusable element and shift-tab back', async () => {
+    const page = await mount(projectOverlay(result({ findings: [finding()] })), { path: '/clusters' });
+    const host = page.locator(OVERLAY);
+    const panel = await openPanel(page);
+    await panel.getByRole('button', { name: /Focus stays behind the dialog/i }).click();
+    await panel.getByRole('button', { name: 'Move focus to it' }).click();
+
+    // A native button is already focusable, so no tabindex is borrowed: it stays in the tab order and
+    // a keyboard user can Shift+Tab back onto it later.
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('cluster-details');
+    expect(await page.locator('#cluster-details').getAttribute('tabindex')).toBeNull();
+
+    // Wander off the element the way Tab would, then return to it the way Shift+Tab would.
+    await page.evaluate(() => (document.getElementById('cluster-details') as HTMLElement).blur());
+    expect(await page.evaluate(() => document.activeElement?.id ?? '')).not.toBe('cluster-details');
+    await page.evaluate(() => (document.getElementById('cluster-details') as HTMLElement).focus());
+
+    // Escape still returns focus to the panel: the shortcut was never torn down when focus left.
+    await page.keyboard.press('Escape');
+    const returned = await page.evaluate((sel) => {
+      const inspector = document.querySelector(sel);
+      const active = inspector?.shadowRoot?.activeElement as HTMLElement | null;
+      return active?.textContent ?? '';
+    }, OVERLAY);
+    expect(returned).toBe('Move focus to it');
+    expect(await host.locator('.locate-status').textContent()).toContain(
+      'Keyboard focus returned to the usabl panel.',
+    );
+
+    await page.context().close();
+  });
+
   it('reports a stale selector honestly, expands the row, and changes nothing on the page', async () => {
     const page = await mount(
       projectOverlay(result({ findings: [finding({ elementPath: '#gone-since-scan' })] })),
@@ -3108,6 +3140,52 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(axe.violations).toEqual([]);
 
     await context0(page);
+  });
+
+  it('collapses with the caret to the bottom, keeping the side the panel is on', async () => {
+    // Docked top-right, the caret drops the panel to bottom-right: a collapsed badge belongs at the
+    // bottom, never the top, and it keeps the right side because the dock moves left and right.
+    const right = await mountWithTarget({
+      targetCss: 'left: 20px; top: 80px;',
+      reducedMotion: true,
+      dockSeed: 'top-right',
+    });
+    expect(await dockCorner(right)).toBe('top-right');
+    await right
+      .locator(OVERLAY)
+      .getByRole('button', { name: 'Collapse the usabl inspector' })
+      .click();
+    expect(await dockCorner(right)).toBe('bottom-right');
+    // The drop is persisted, so reopening from the badge opens at the bottom too.
+    expect(await right.evaluate(() => localStorage.getItem('usabl.overlay.dock'))).toBe('bottom-right');
+    await context0(right);
+
+    // Docked top-left, it drops to bottom-left, keeping the left side.
+    const left = await mountWithTarget({
+      targetCss: 'left: 20px; top: 80px;',
+      reducedMotion: true,
+      dockSeed: 'top-left',
+    });
+    expect(await dockCorner(left)).toBe('top-left');
+    await left
+      .locator(OVERLAY)
+      .getByRole('button', { name: 'Collapse the usabl inspector' })
+      .click();
+    expect(await dockCorner(left)).toBe('bottom-left');
+    await context0(left);
+
+    // Already at the bottom, the caret leaves the corner exactly where it is.
+    const bottom = await mountWithTarget({
+      targetCss: 'left: 20px; top: 80px;',
+      reducedMotion: true,
+      dockSeed: 'bottom-left',
+    });
+    await bottom
+      .locator(OVERLAY)
+      .getByRole('button', { name: 'Collapse the usabl inspector' })
+      .click();
+    expect(await dockCorner(bottom)).toBe('bottom-left');
+    await context0(bottom);
   });
 
   // Wait until the overlay has asked for its nth smooth scroll, then let that scroll reach the

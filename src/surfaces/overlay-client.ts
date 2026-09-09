@@ -2130,11 +2130,13 @@ export const overlayClientSource = `(() => {
     }
   }
 
-  // Arm the return-to-panel shortcut for one focus visit. While focus sits on the flagged element,
-  // Escape sends it back to the control that moved it (the "Move focus to it" button) and is kept
-  // away from the app underneath, so an app that also closes on Escape does not fire. The listener
-  // lives on the element itself, so Tabbing off it (blur) disarms the shortcut and Escape goes back
-  // to meaning whatever the page says it means.
+  // Arm the return-to-panel shortcut. While focus sits on the flagged element, Escape sends it back
+  // to the control that moved it (the "Move focus to it" button) and is kept away from the app
+  // underneath, so an app that also closes on Escape does not fire. The listener lives on the element
+  // itself, so a keydown reaches it only while it has focus: Tabbing off it makes Escape mean whatever
+  // the page says, and Shift+Tabbing back onto it makes the shortcut work again, with no re-arming on
+  // our part. It is torn down only when focus moves to another finding, the row closes, or the panel
+  // closes, which is what releaseFocusReturn is called for on each of those paths.
   function armFocusReturn(target, returnTo) {
     releaseFocusReturn();
     const onKeydown = (event) => {
@@ -2154,14 +2156,9 @@ export const overlayClientSource = `(() => {
       }
       setLocateStatus('Keyboard focus returned to the usabl panel.', '');
     };
-    const onBlur = () => {
-      releaseFocusReturn();
-    };
     target.addEventListener('keydown', onKeydown, true);
-    target.addEventListener('blur', onBlur);
     state.focusReturn = () => {
       target.removeEventListener('keydown', onKeydown, true);
-      target.removeEventListener('blur', onBlur);
     };
   }
 
@@ -2371,12 +2368,15 @@ export const overlayClientSource = `(() => {
       });
     }
     try {
-      // Some flagged elements are not focusable. A temporary tabindex of -1 lets us focus them
-      // without adding them to the page's tab order. We record the exact node and the exact value it
-      // had, and put that back later, rather than marking it and sweeping the document afterwards.
-      if (!target.hasAttribute('tabindex')) {
+      // An element that is not already in the tab order (tabIndex < 0: a non-focusable node, or one
+      // the page parked at -1) needs a temporary tabindex of -1 so we can focus it. An element that is
+      // already focusable and tabbable is left exactly as it is, so a keyboard user can Shift+Tab back
+      // onto it after wandering off and use Escape again. We record the exact node and the exact value
+      // it had, and put that back later, rather than marking it and sweeping the document afterwards.
+      if (target.tabIndex < 0) {
         releaseBorrowedTabindex();
-        state.borrowedTabindex = { node: target, previous: null };
+        const previous = target.hasAttribute('tabindex') ? target.getAttribute('tabindex') : null;
+        state.borrowedTabindex = { node: target, previous };
         target.setAttribute('tabindex', '-1');
       }
       target.focus({ preventScroll: true });
@@ -3038,7 +3038,18 @@ export const overlayClientSource = `(() => {
     const collapseGlyph = make('span', '', '▼');
     collapseGlyph.setAttribute('aria-hidden', 'true');
     collapse.appendChild(collapseGlyph);
-    collapse.addEventListener('click', () => setOpen(host, false, true));
+    collapse.addEventListener('click', () => {
+      // The down arrow always collapses to the bottom, keeping the side the panel is on: a left dock
+      // drops to bottom-left, a right dock to bottom-right. A collapsed badge belongs at the bottom,
+      // never the top, so a top dock is flipped down before the panel collapses.
+      const dock = normalizeDock(state.dock);
+      if (dock === 'top-left') {
+        setDock(host, 'bottom-left');
+      } else if (dock === 'top-right') {
+        setDock(host, 'bottom-right');
+      }
+      setOpen(host, false, true);
+    });
     controls.appendChild(collapse);
     bar.appendChild(controls);
 
