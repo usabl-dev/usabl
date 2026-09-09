@@ -1,8 +1,11 @@
 # Film script: `/usabl-check` + stop hook on ansible-ui-demo (Claude Code)
 
-One take, about 8 to 12 minutes. You type the prompts; the agent does the code. The contrast
-finding on **Automation Hub** is the hero fix. The stop hook needs a **new** regression, so the
-script injects one on the users screen first, then you fix both. This is the Claude Code twin of
+One take, about 3 to 4 minutes. You type the prompts; the agent does the code. This is a
+**single-barrier** demo: the script injects one **new** regression (a decorative image with no
+alternative text) on the users screen, the stop hook blocks the finish, and the agent adds the
+missing `alt` to clear it. The recorded **Automation Hub** contrast debt is shown in the overlay
+but not fixed on camera: it is recorded floor debt, it never gates, and fixing it edits a global
+chrome file mapped to no surface, which would open a coverage gap. This is the Claude Code twin of
 `film-cursor-aap-loop.md`; the beats match, only the wiring differs.
 
 Paths on this machine:
@@ -120,7 +123,9 @@ Paths on this machine:
 4. Expand the **color-contrast** finding on **Automation Hub** (`#platform-hub`).
 5. Click **Move focus to it** so the red outline lands on the Hub nav subtitle. Optional keyboard
    beat: Tab a few times, Shift+Tab back onto it, then press Escape to return to the panel.
-6. Optional one-liner: "Recorded debt does not block, but the inspector still shows what to fix."
+6. One-liner: "This is recorded debt. It does not block, so we are not fixing it today, but the
+   inspector still surfaces it." This sets up the contrast as debt you deliberately leave alone,
+   not the thing you fix on camera.
 
 ### Beat 2 - Inject a regression (~30s)
 
@@ -147,22 +152,25 @@ In Claude Code, type exactly:
 The skill runs `npx usabl check --self-check`. Narrate:
 
 - Verdict should be **REGRESSION** (exit 1 in the payload, but the self-check stays advisory).
-- The Hub contrast finding should still appear.
-- The new **image-alt** finding on the users screen should appear.
+- One blocking finding: the new **image-alt** barrier on the users screen.
+- 29 recorded, not blocking (the Hub contrast debt is in there, carried, not gating).
+- No coverage gap.
 
-### Beat 4 - Ask for the fix (~3 min)
+### Beat 4 - Ask for the fix (~90s)
 
 Type the `/usabl-fix` skill, or paste (or paraphrase) this prompt:
 
 ```
-Fix the accessibility barriers usabl flagged on this change: the Automation Hub nav subtitle
-contrast in framework/PageNavigation/PageNavigation.tsx, and the decorative image on the users
-page in platform/access/users/components/PlatformUsersList.tsx. Use PatternFly subtle text
-color for the subtitle instead of opacity. Re-run usabl check when done.
+usabl flagged a blocking accessibility barrier on this change: the decorative image with no
+alternative text on the users page in platform/access/users/components/PlatformUsersList.tsx.
+Mark it decorative with an empty alt so screen readers skip it. Re-run usabl check when done.
 ```
 
-Either way, let the agent edit source. Do **not** run `npm run demo:film:repair` yourself on
-camera unless the agent is stuck. The point is the agent applies the real fix.
+Scope the ask to the **image only**. Do not ask the agent to fix the nav contrast: it is recorded
+floor debt (non-blocking), and fixing it edits a framework file mapped to no surface, which opens a
+coverage gap and derails the take. Either way, let the agent edit source. Do **not** run
+`npm run demo:film:repair` yourself on camera unless the agent is stuck; that script removes the
+image barrier for recovery and leaves the nav at floor. The point is the agent applies the real fix.
 
 ### Beat 5 - Stop hook blocks (~60s)
 
@@ -180,16 +188,14 @@ If it allows the stop instead:
 
 Narrate: "The assistant cannot certify its own work. The gate blocks the first stop."
 
-### Beat 6 - Finish the repair (~2 min)
+### Beat 6 - Finish the repair (~60s)
 
-If the agent only fixed one barrier, prompt:
+The agent adds the empty `alt` and re-runs the check. Type `/usabl-check` again to confirm.
+Expect **VERIFIED**, exit 0, nothing blocking, 29 recorded, and **no coverage gap**. Let the agent
+stop; the Stop hook should now **allow** the finish.
 
-```
-usabl still reports a regression. Fix the remaining blocking finding and run usabl check again.
-```
-
-When both are fixed, type `/usabl-check` again. Expect **VERIFIED**, nothing blocking. Let the
-agent stop; the Stop hook should now **allow** the finish.
+If the check still reports a gap naming `PageNavigation.tsx`, the agent also touched the nav
+contrast. Ask it to revert the nav change and keep only the `alt` fix, then re-check.
 
 To show the finish deliberately without another fix loop, `usabl bypass` lets the next stop through
 once (it prints "BYPASS set for the next stop only"). Use it only to demonstrate the escape hatch,
@@ -205,8 +211,11 @@ USABL_STORAGE_STATE=/home/eparenti/work/repos/innovation-days-2026/aui-session-l
 
 ### Beat 7 - Overlay after fix (~30s)
 
-Reload `http://localhost:4100/access/users`. The Hub contrast finding should be gone from the
-live scan (recorded count drops). Highlight on Hub should no longer show a contrast failure.
+Reload `http://localhost:4100/access/users`. The header returns to **Verified**, 29 recorded, and
+the injected image no longer flags an image-alt barrier. The Automation Hub contrast finding is
+still present as recorded debt: the point is that the blocking regression the agent introduced is
+gone, while the pre-existing debt the team chose not to fix today is still tracked, not silently
+dropped.
 
 ---
 
@@ -236,14 +245,20 @@ you want it on `devel`. The film scripts and the `.claude` wiring are safe to ke
 | `/usabl-check` or `/usabl-fix` missing | `usabl install --claude-skill`; the skills live in `.claude/skills/` |
 | Scan takes forever | Do not edit `vite.config.ts`; cut away during the 90s scan |
 | Agent fixed via npm script | Cut that take; prompt it to edit source instead |
+| `not_covered` naming `PageNavigation.tsx` | Agent also fixed the nav contrast. Ask it to revert that and keep only the `alt` fix; the contrast is debt you leave alone |
 
 ## What changed in source (for your notes)
 
-**Contrast fix** (`framework/PageNavigation/PageNavigation.tsx`):
+**Film break** (`PlatformUsersList.tsx`): 1x1 decorative `<img>` with no `alt` (the new regression
+the stop hook blocks). The agent's fix is an empty `alt=""` marking it decorative.
 
-- Before: `opacity: 0.5` on nav subtitles (fails WCAG AA on Hub, AWX, EDA).
-- After: `color: var(--pf-t--global--text--color--subtle)` (matches other screens in this repo).
+**Coverage mapping** (`usabl.config.json`, committed on `devel`): the `users` surface `files` list
+includes `platform/access/users/components/PlatformUsersList.tsx`, so the agent's fix on that
+component is attributed to the users surface and the run reaches VERIFIED. Without this mapping the
+fix returns NOT COVERED and the agent cannot clear the gate, which is what derailed earlier takes.
 
-**Film break** (`PlatformUsersList.tsx`): 1x1 decorative `<img>` with no `alt` (new regression).
+**Nav contrast** (`framework/PageNavigation/PageNavigation.tsx`): left at `opacity: 0.5` (the
+recorded floor debt). Not fixed on camera. Fixing it would edit this framework file, which is
+mapped to no surface, and open a fresh `not_covered` gap.
 </content>
 </invoke>
