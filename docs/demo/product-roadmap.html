@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="description" content="usabl product roadmap: near-term hardening, verifier evidence, and long-term product vision.">
+  <title>usabl: Product Roadmap</title>
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --surface: #141414;
+      --card-bg: #1a1a1a;
+      --card-border: #333333;
+      --text-primary: #f0f0f0;
+      --text-secondary: #b0b0b0;
+      --text-tertiary: #808080;
+      --accent: #6cb4f0;
+      --fill-secondary: rgba(255,255,255,0.14);
+      --fill-tertiary: rgba(255,255,255,0.08);
+      --red: #ff7b90;
+      --orange: #f09080;
+      --yellow: #f5c878;
+      --blue: #8ec0f0;
+      --green: #50c878;
+      --purple: #a898ff;
+      --cyan: #90b8d8;
+      --pink: #c8a0c0;
+      --callout-info-bg: rgba(110,180,240,0.12);
+      --callout-info-border: rgba(110,180,240,0.35);
+      --callout-warn-bg: rgba(245,200,120,0.12);
+      --callout-warn-border: rgba(245,200,120,0.35);
+      --stat-danger: #ff7b90;
+      --stat-warning: #f5c878;
+      --stat-info: #8ec0f0;
+      --stat-success: #50c878;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 16px;
+      line-height: 1.55;
+      padding: 48px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    .root { max-width: 1200px; margin: 0 auto; }
+
+    /* Typography */
+    h1 { font-size: 30px; font-weight: 600; line-height: 36px; }
+    h2 { font-size: 22px; font-weight: 600; line-height: 28px; }
+    h3 { font-size: 18px; font-weight: 600; line-height: 24px; }
+    .text-sm { font-size: 14px; line-height: 20px; }
+    .text-secondary { color: var(--text-secondary); }
+    .text-tertiary { color: var(--text-tertiary); }
+    .text-semibold { font-weight: 600; }
+
+    /* Layout */
+    .stack { display: flex; flex-direction: column; }
+    .row { display: flex; flex-direction: row; align-items: center; }
+    .grid { display: grid; }
+    .gap-2 { gap: 2px; }
+    .gap-4 { gap: 4px; }
+    .gap-6 { gap: 6px; }
+    .gap-8 { gap: 8px; }
+    .gap-12 { gap: 12px; }
+    .gap-16 { gap: 16px; }
+    .gap-24 { gap: 24px; }
+    .spacer { flex: 1; }
+
+    /* Divider */
+    .divider { height: 1px; background: var(--card-border); }
+
+    /* Card */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+      border-bottom: 1px solid var(--card-border);
+      min-height: 28px;
+    }
+    .card-body { padding: 12px; }
+
+    /* Pill */
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--card-border);
+      background: transparent;
+      color: var(--text-secondary);
+      transition: background 0.15s, color 0.15s;
+      user-select: none;
+    }
+    .pill:hover { background: var(--fill-secondary); }
+    .pill.active {
+      background: var(--fill-secondary);
+      color: var(--text-primary);
+      border-color: var(--text-tertiary);
+    }
+    .pill-sm {
+      font-size: 11px;
+      padding: 1px 8px;
+      border: none;
+      cursor: default;
+    }
+    .pill-sm.active { background: var(--fill-secondary); }
+
+    /* Stat */
+    .stat { text-align: center; }
+    .stat-value { font-size: 28px; font-weight: 700; line-height: 1.1; }
+    .stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+    /* Issue row */
+    .issue-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 3px 0;
+    }
+    .tag-dot {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      border-radius: 5px;
+      flex-shrink: 0;
+    }
+    .dot-security { background: var(--red); }
+    .dot-bug { background: var(--orange); }
+    .dot-performance { background: var(--yellow); }
+    .dot-enhancement { background: var(--blue); }
+    .dot-human { background: var(--green); }
+    .issue-num { color: var(--text-tertiary); font-size: 12px; min-width: 36px; font-weight: 500; }
+    .issue-title {
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      color: var(--text-primary);
+    }
+
+    /* Callout */
+    .callout {
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 12px;
+      margin-top: 8px;
+    }
+    .callout-info { background: var(--callout-info-bg); border: 1px solid var(--callout-info-border); }
+    .callout-warn { background: var(--callout-warn-bg); border: 1px solid var(--callout-warn-border); }
+    .callout-title { font-weight: 600; margin-bottom: 2px; }
+
+    /* Vision box */
+    .vision-box {
+      padding: 20px;
+      border-radius: 8px;
+      background: rgba(89,156,231,0.09);
+      border: 1px solid rgba(89,156,231,0.25);
+    }
+    .vision-box .vb-title { font-weight: 600; color: var(--accent); margin-bottom: 8px; }
+
+    /* Charts - SVG inline */
+    .chart-container { display: flex; align-items: center; gap: 12px; }
+    .legend-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 4px;
+    }
+
+    /* Colored pill backgrounds */
+    .pill-red { background: rgba(255,123,144,0.25); color: var(--red); border: none; font-weight: 600; }
+    .pill-orange { background: rgba(240,144,128,0.25); color: var(--orange); border: none; font-weight: 600; }
+    .pill-yellow { background: rgba(245,200,120,0.25); color: var(--yellow); border: none; font-weight: 600; }
+    .pill-blue { background: rgba(142,192,240,0.25); color: var(--blue); border: none; font-weight: 600; }
+
+    /* Slide toggle */
+    .slide-content { display: none; }
+    .slide-content.visible { display: block; }
+
+    @media (max-width: 700px) {
+      .grid { grid-template-columns: 1fr !important; }
+      body { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+<div class="root stack gap-24">
+
+  <!-- Header -->
+  <div class="stack gap-4">
+    <div class="row gap-12">
+      <h1>usabl product roadmap</h1>
+      <div class="spacer"></div>
+      <span class="text-sm text-tertiary">35 open issues across 3 milestones</span>
+    </div>
+    <p class="text-secondary">Don't ship until it's usabl.</p>
+  </div>
+
+  <!-- Summary strip -->
+  <div class="grid gap-16" style="grid-template-columns: 1fr 1fr 1fr">
+
+    <!-- Donut + legend -->
+    <div class="row gap-12">
+      <svg width="100" height="100" viewBox="0 0 100 100" role="img" aria-label="Issues by milestone: v0.2.x 10, v0.3.0 23, Product 5">
+        <!-- Donut: total 38 segments proportional -->
+        <!-- v0.2.x: 10/38 = 94.7deg, v0.3.0: 23/38 = 217.9deg, Product: 5/38 = 47.4deg -->
+        <circle cx="50" cy="50" r="38" fill="none" stroke="#333333" stroke-width="14"/>
+        <!-- v0.2.x (green) - starts at top (-90deg) -->
+        <circle cx="50" cy="50" r="38" fill="none" stroke="#50c878" stroke-width="14"
+          stroke-dasharray="62.8 176.0" stroke-dashoffset="59.7" transform="rotate(-90 50 50)"/>
+        <!-- v0.3.0 (blue) -->
+        <circle cx="50" cy="50" r="38" fill="none" stroke="#8ec0f0" stroke-width="14"
+          stroke-dasharray="144.5 94.3" stroke-dashoffset="-3.1" transform="rotate(-90 50 50)"/>
+        <!-- Product (gray) -->
+        <circle cx="50" cy="50" r="38" fill="none" stroke="#808080" stroke-width="14"
+          stroke-dasharray="31.4 207.4" stroke-dashoffset="-147.6" transform="rotate(-90 50 50)"/>
+        <!-- Center text -->
+        <text x="50" y="46" text-anchor="middle" fill="#f0f0f0" font-size="18" font-weight="700">38</text>
+        <text x="50" y="60" text-anchor="middle" fill="#808080" font-size="9">Total</text>
+      </svg>
+      <div class="stack gap-2">
+        <span class="text-sm text-semibold">Issues by milestone</span>
+        <div class="row gap-6"><span class="legend-dot" style="background:var(--green)"></span><span class="text-sm text-secondary">v0.2.x: 10</span></div>
+        <div class="row gap-6"><span class="legend-dot" style="background:var(--blue)"></span><span class="text-sm text-secondary">v0.3.0: 23</span></div>
+        <div class="row gap-6"><span class="legend-dot" style="background:var(--text-tertiary)"></span><span class="text-sm text-secondary">Product: 5</span></div>
+      </div>
+    </div>
+
+    <!-- Bar chart -->
+    <div>
+      <svg width="100%" height="140" viewBox="0 0 300 140" role="img" aria-label="Stacked bar chart: issue types by milestone. Security: 1 v0.2.x, 8 v0.3.0. Bugs: 3 v0.2.x, 8 v0.3.0. Performance: 1 v0.2.x, 3 v0.3.0. Enhancements: 3 v0.2.x, 5 v0.3.0. Human: 2 v0.2.x, 0 v0.3.0.">
+        <!-- Y axis labels - scale: 0 at y=100, 15 at y=10, each unit = 6px -->
+        <text x="18" y="14" fill="#808080" font-size="9" text-anchor="end">15</text>
+        <text x="18" y="44" fill="#808080" font-size="9" text-anchor="end">10</text>
+        <text x="18" y="74" fill="#808080" font-size="9" text-anchor="end">5</text>
+        <text x="18" y="104" fill="#808080" font-size="9" text-anchor="end">0</text>
+        <!-- Grid lines -->
+        <line x1="24" y1="10" x2="290" y2="10" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+        <line x1="24" y1="40" x2="290" y2="40" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+        <line x1="24" y1="70" x2="290" y2="70" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+        <line x1="24" y1="100" x2="290" y2="100" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+
+        <!-- Security: v0.2.x=1, v0.3.0=8 (stacked: green bottom, blue top) -->
+        <rect x="34" y="94" width="32" height="6" rx="2" fill="#50c878"/>
+        <rect x="34" y="46" width="32" height="48" rx="2" fill="#8ec0f0"/>
+        <!-- Bugs: v0.2.x=3, v0.3.0=8 -->
+        <rect x="88" y="82" width="32" height="18" rx="2" fill="#50c878"/>
+        <rect x="88" y="34" width="32" height="48" rx="2" fill="#8ec0f0"/>
+        <!-- Performance: v0.2.x=1, v0.3.0=3 -->
+        <rect x="142" y="94" width="32" height="6" rx="2" fill="#50c878"/>
+        <rect x="142" y="76" width="32" height="18" rx="2" fill="#8ec0f0"/>
+        <!-- Enhancements: v0.2.x=3, v0.3.0=5 -->
+        <rect x="196" y="82" width="32" height="18" rx="2" fill="#50c878"/>
+        <rect x="196" y="52" width="32" height="30" rx="2" fill="#8ec0f0"/>
+        <!-- Human: v0.2.x=2, v0.3.0=0 -->
+        <rect x="250" y="88" width="32" height="12" rx="2" fill="#50c878"/>
+
+        <!-- X labels -->
+        <text x="50" y="116" fill="#808080" font-size="8" text-anchor="middle">Security</text>
+        <text x="104" y="116" fill="#808080" font-size="8" text-anchor="middle">Bugs</text>
+        <text x="158" y="116" fill="#808080" font-size="8" text-anchor="middle">Perf</text>
+        <text x="212" y="116" fill="#808080" font-size="8" text-anchor="middle">Enhance</text>
+        <text x="266" y="116" fill="#808080" font-size="8" text-anchor="middle">Human</text>
+
+        <!-- Legend -->
+        <rect x="80" y="128" width="8" height="8" rx="2" fill="#50c878"/>
+        <text x="92" y="136" fill="#b0b0b0" font-size="8">v0.2.x</text>
+        <rect x="140" y="128" width="8" height="8" rx="2" fill="#8ec0f0"/>
+        <text x="152" y="136" fill="#b0b0b0" font-size="8">v0.3.0</text>
+      </svg>
+    </div>
+
+    <!-- Key themes -->
+    <div class="stack gap-4">
+      <span class="text-sm text-semibold">Key themes</span>
+      <span class="text-sm text-secondary">Close false-green paths in the verdict authority</span>
+      <span class="text-sm text-secondary">Harden every trust boundary before providers are pluggable</span>
+      <span class="text-sm text-secondary">Cut scan time from 55s to under 30s on large apps</span>
+      <span class="text-sm text-secondary">Wire the voicing lane - prove what screen readers say</span>
+      <span class="text-sm text-secondary">Human-validated onboarding and assistive-tech review</span>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Slide selector -->
+  <div class="row gap-8">
+    <button class="pill active" id="btn-near" onclick="showSlide('near')">Near-term: v0.2.x + v0.3.0</button>
+    <button class="pill" id="btn-vision" onclick="showSlide('vision')">Product vision</button>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- SLIDE: Near-term                                              -->
+  <!-- ============================================================ -->
+  <div id="slide-near" class="slide-content visible">
+    <div class="stack gap-24">
+
+      <!-- v0.2.x -->
+      <div class="stack gap-12">
+        <div class="row gap-12">
+          <h2>v0.2.x</h2>
+          <span class="pill pill-sm active" style="cursor:default">Current</span>
+        </div>
+        <p class="text-secondary">Hardening, human testing, and dogfooding. Patch releases that strengthen what shipped, close credential leaks, and run a real person through the onboarding path.</p>
+
+        <div class="grid gap-16" style="grid-template-columns:1fr 1fr 1fr">
+          <!-- Bug fixes -->
+          <div class="card">
+            <div class="card-header"><span>Bug fixes</span><span class="text-sm text-tertiary">4</span></div>
+            <div class="card-body stack gap-2">
+              <div class="issue-row"><span class="tag-dot dot-bug"></span><span class="issue-num">#274</span><span class="issue-title">Source attribute injection breaks JSX with generic type arguments</span></div>
+              <div class="issue-row"><span class="tag-dot dot-bug"></span><span class="issue-num">#265</span><span class="issue-title">Remaining wall-clock dependent tests</span></div>
+              <div class="issue-row"><span class="tag-dot dot-bug"></span><span class="issue-num">#261</span><span class="issue-title">PR comment drops waived findings, duplicates collapsed headline</span></div>
+              <div class="issue-row"><span class="tag-dot dot-security"></span><span class="issue-num">#257</span><span class="issue-title">Surface URLs echo credentials verbatim from operator config</span></div>
+            </div>
+          </div>
+          <!-- Enhancements -->
+          <div class="card">
+            <div class="card-header"><span>Enhancements</span><span class="text-sm text-tertiary">4</span></div>
+            <div class="card-body stack gap-2">
+              <div class="issue-row"><span class="tag-dot dot-performance"></span><span class="issue-num">#262</span><span class="issue-title">Accessibility lookups fetch the entire DOM tree per selector</span></div>
+              <div class="issue-row"><span class="tag-dot dot-enhancement"></span><span class="issue-num">#115</span><span class="issue-title">Alt-text manifest dormant without content requirements</span></div>
+              <div class="issue-row"><span class="tag-dot dot-enhancement"></span><span class="issue-num">#114</span><span class="issue-title">Whole-app documentation mode for all in-scope surfaces</span></div>
+              <div class="issue-row"><span class="tag-dot dot-enhancement"></span><span class="issue-num">#103</span><span class="issue-title">Link checker: reference-style links and autolinks</span></div>
+            </div>
+          </div>
+          <!-- Human validation -->
+          <div class="card">
+            <div class="card-header"><span>Human validation</span><span class="text-sm text-tertiary">2</span></div>
+            <div class="card-body stack gap-2">
+              <div class="issue-row"><span class="tag-dot dot-human"></span><span class="issue-num">#106</span><span class="issue-title">Accessibility review with Orca and keyboard</span></div>
+              <div class="issue-row"><span class="tag-dot dot-human"></span><span class="issue-num">#105</span><span class="issue-title">Human onboarding proof from a clean clone</span></div>
+              <p class="text-sm text-tertiary" style="margin-top:8px">Orca screen reader + keyboard-only pass, and a teammate onboarding from a clean clone in under 30 minutes.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- v0.3.0 -->
+      <div class="stack gap-12">
+        <div class="row gap-12">
+          <h2>v0.3.0</h2>
+          <span class="pill pill-sm" style="cursor:default">Next</span>
+        </div>
+        <p class="text-secondary">Verifier evidence and measured outcomes. The engine proves its own sensitivity, wires the voicing lane, hardens every trust boundary, and cuts scan time in half.</p>
+
+        <!-- Stats -->
+        <div class="grid gap-12" style="grid-template-columns:1fr 1fr 1fr 1fr">
+          <div class="stat"><div class="stat-value" style="color:var(--stat-danger)">8</div><div class="stat-label">Security hardening</div></div>
+          <div class="stat"><div class="stat-value" style="color:var(--stat-warning)">7</div><div class="stat-label">Engine correctness</div></div>
+          <div class="stat"><div class="stat-value" style="color:var(--stat-info)">3</div><div class="stat-label">Performance</div></div>
+          <div class="stat"><div class="stat-value" style="color:var(--stat-success)">5</div><div class="stat-label">Features</div></div>
+        </div>
+
+        <!-- Four cards -->
+        <div class="grid gap-16" style="grid-template-columns:1fr 1fr">
+          <!-- Security -->
+          <div class="card">
+            <div class="card-header"><span>Security hardening</span><span class="pill pill-sm pill-red" style="cursor:default">8 issues</span></div>
+            <div class="card-body stack gap-2">
+              <div class="issue-row"><span class="tag-dot dot-security"></span><span class="issue-num">#277</span><span class="issue-title">Session pins in shared temp with predictable names</span></div>
+              <div class="issue-row"><span class="tag-dot dot-security"></span><span class="issue-num">#260</span><span class="issue-title">Model-facing surfaces print outside untrusted frame</span></div>
+              <div class="issue-row"><span class="tag-dot dot-security"></span><span class="issue-num">#259</span><span class="issue-title">Library callers can pass ids the grammar would refuse</span></div>
+              <div class="issue-row"><span class="tag-dot dot-security"></span><span class="issue-num">#256</span><span class="issue-title">Structurally validate Result at stdin boundary</span></div>
+              <div class="issue-row"><span class="tag-dot dot-security"></span><span class="issue-num">#255</span><span class="issue-title">Dead session detection: residual false-green cases</span></div>
+              <div class="issue-row"><span class="tag-dot dot-security"></span><span class="issue-num">#254</span><span class="issue-title">Floor headroom hides new barriers at collapsed identity</span></div>
+              <div class="issue-row"><span class="tag-dot dot-security"></span><span class="issue-num">#223</span><span class="issue-title">gate() accepts an unvalidated floor</span></div>
+              <div class="issue-row"><span class="tag-dot dot-security"></span><span class="issue-num">#220</span><span class="issue-title">pathFor: mutable page global and escape collisions</span></div>
+            </div>
+          </div>
+          <!-- Engine correctness -->
+          <div class="card">
+            <div class="card-header"><span>Engine correctness</span><span class="pill pill-sm pill-orange" style="cursor:default">7 issues</span></div>
+            <div class="card-body stack gap-2">
+              <div class="issue-row"><span class="tag-dot dot-bug"></span><span class="issue-num">#258</span><span class="issue-title">Router discovery misses and misreads routes in known shapes</span></div>
+              <div class="issue-row"><span class="tag-dot dot-bug"></span><span class="issue-num">#228</span><span class="issue-title">Extension resolution assumes JS/TS; .vue/.svelte diverge</span></div>
+              <div class="issue-row"><span class="tag-dot dot-bug"></span><span class="issue-num">#227</span><span class="issue-title">Router parsers scan the whole module, not the router</span></div>
+              <div class="issue-row"><span class="tag-dot dot-bug"></span><span class="issue-num">#222</span><span class="issue-title">checkPage skips intake-mapped providers</span></div>
+              <div class="issue-row"><span class="tag-dot dot-bug"></span><span class="issue-num">#221</span><span class="issue-title">aria-live: resolve effective value through ancestors</span></div>
+              <div class="issue-row"><span class="tag-dot dot-bug"></span><span class="issue-num">#186</span><span class="issue-title">Partial-render residual: chrome mounts, content does not</span></div>
+              <div class="issue-row"><span class="tag-dot dot-bug"></span><span class="issue-num">#184</span><span class="issue-title">Readiness residual: client-side pause longer than DOM window</span></div>
+            </div>
+          </div>
+          <!-- Performance -->
+          <div class="card">
+            <div class="card-header"><span>Performance</span><span class="pill pill-sm pill-yellow" style="cursor:default">3 issues</span></div>
+            <div class="card-body stack gap-2">
+              <div class="issue-row"><span class="tag-dot dot-performance"></span><span class="issue-num">#271</span><span class="issue-title">Credential-dense page text makes redaction slow</span></div>
+              <div class="issue-row"><span class="tag-dot dot-performance"></span><span class="issue-num">#264</span><span class="issue-title">Scan time on large applications: 55s measured breakdown</span></div>
+              <div class="issue-row"><span class="tag-dot dot-performance"></span><span class="issue-num">#263</span><span class="issue-title">Define scan observation contract before walk optimization</span></div>
+              <div class="callout callout-info">Measured: 55s for one screen on a large app. Target: under 30s. DOM tree fetch alone is 34% of the rule phase.</div>
+            </div>
+          </div>
+          <!-- Features -->
+          <div class="card">
+            <div class="card-header"><span>Features</span><span class="pill pill-sm pill-blue" style="cursor:default">5 issues</span></div>
+            <div class="card-body stack gap-2">
+              <div class="issue-row"><span class="tag-dot dot-enhancement"></span><span class="issue-num">#188</span><span class="issue-title">Wire the voicing lane: register, feed contracts, calibrate</span></div>
+              <div class="issue-row"><span class="tag-dot dot-enhancement"></span><span class="issue-num">#126</span><span class="issue-title">usabl init: support monorepos and non-root apps</span></div>
+              <div class="issue-row"><span class="tag-dot dot-enhancement"></span><span class="issue-num">#96</span><span class="issue-title">Verifier evidence and measured outcomes (tracking)</span></div>
+              <div class="issue-row"><span class="tag-dot dot-enhancement"></span><span class="issue-num">#269</span><span class="issue-title">Docs manifest read twice; loadRequirements.reason not surfaced</span></div>
+              <div class="issue-row"><span class="tag-dot dot-bug"></span><span class="issue-num">#268</span><span class="issue-title">Overlay browser context failures counted per plugin, not browser</span></div>
+              <div class="callout callout-warn">
+                <div class="callout-title">Headline</div>
+                The voicing lane (#188) checks what a screen reader announces during an interaction, not just page structure. Built and exported, not yet wired.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- SLIDE: Product vision                                         -->
+  <!-- ============================================================ -->
+  <div id="slide-vision" class="slide-content">
+    <div class="stack gap-24">
+      <div class="stack gap-8">
+        <h2>Product vision</h2>
+        <p class="text-secondary">If usabl goes from contest entry to real product. These issues are tracked so the decisions and designs are not lost.</p>
+      </div>
+
+      <div class="grid gap-16" style="grid-template-columns:1fr 1fr">
+        <!-- Left column -->
+        <div class="stack gap-16">
+          <div class="card">
+            <div class="card-header"><span>Pluggable rulepacks</span><span class="text-sm text-tertiary">#195</span></div>
+            <div class="card-body stack gap-8">
+              <p class="text-sm">The hand-coded PatternFly rulepack becomes a pluggable, versioned capability. Declarative format for the common 80% (data, not code), code plugins for stateful interactions, PatternFly as the first-party anchor pack.</p>
+              <p class="text-sm text-semibold" style="color:var(--accent)">The moat is the engine, not the framework knowledge.</p>
+              <div class="stack gap-2">
+                <span class="text-sm text-secondary">Declarative rulepack format (data, not code)</span>
+                <span class="text-sm text-secondary">Code plugins for interactive 20%</span>
+                <span class="text-sm text-secondary">Rulepack authoring and calibration workflow</span>
+                <span class="text-sm text-secondary">Bring-your-own design system story</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><span>Fleet view</span><span class="text-sm text-tertiary">#270</span></div>
+            <div class="card-body">
+              <p class="text-sm">Cross-repository dashboard showing which screens are gated (required), measured (scanned but not required), and unlooked (in scope but never scanned). The visible payoff of coverage disclosure at fleet scale.</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><span>npm publish</span><span class="text-sm text-tertiary">#111</span></div>
+            <div class="card-body">
+              <p class="text-sm">Irreversible visibility decision. Publishing makes the engine public. Held pending scope, naming, and CI trust-boundary decisions.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right column -->
+        <div class="stack gap-16">
+          <div class="card">
+            <div class="card-header"><span>Identity strength for dynamic content</span><span class="text-sm text-tertiary">#267</span></div>
+            <div class="card-body">
+              <p class="text-sm">Collapsed identities for repeated controls (icon buttons per table row, kebabs per row) carry counts that track live data, not code. Runs against an unchanged codebase see different headroom. Needs stronger element keys and a stability pass that records only findings present on consecutive scans.</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><span>Dogfood on a second project</span><span class="text-sm text-tertiary">#110</span></div>
+            <div class="card-body">
+              <p class="text-sm">Real confidence comes from wiring usabl into a project it did not grow up with. Surface friction the fixture cannot. ansible-ui has already shown monorepo and runtime-route gaps.</p>
+            </div>
+          </div>
+
+          <div class="vision-box">
+            <div class="vb-title">Product thesis</div>
+            <p class="text-sm">usabl is an honest proof engine, not a scanner wrapper. One engine. Four verdicts a human can trust. Evidence classes that refuse to launder model judgment into "verified." Receipts that can be re-checked.</p>
+            <p class="text-sm text-secondary" style="margin-top:8px">The gate is the only verdict authority. Providers return Drafts. They never decide. The keyboard walk, readiness, voicing, the gate, and the receipt work on any framework. Framework rules are content riding on that engine.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  function showSlide(name) {
+    document.querySelectorAll('.slide-content').forEach(function(el) { el.classList.remove('visible'); });
+    document.getElementById('slide-' + name).classList.add('visible');
+    document.querySelectorAll('.row.gap-8 > .pill').forEach(function(el) { el.classList.remove('active'); });
+    document.getElementById('btn-' + name).classList.add('active');
+  }
+</script>
+</body>
+</html>
