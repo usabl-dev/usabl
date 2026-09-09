@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title>usabl dev-server overlay map</title>
+<style>
+:root{
+  --bg:#efece3;--panel:#ffffff;--panel2:#f3f1ea;--line:#dcd6c9;--line2:#c9c2b3;
+  --ink:#1a2233;--muted:#4f5b6b;--dim:#5d6878;
+  --browser:#2457e6;--vite:#a95f00;--engine:#177a4a;--files:#101827;
+  --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  --sans:"Red Hat Text",Overpass,Inter,"Segoe UI",Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
+a{color:var(--browser)}
+code,.path{font-family:var(--mono);font-size:.92em;background:var(--panel2);padding:1px 5px;border-radius:4px;color:var(--ink)}
+.wrap{max-width:1320px;margin:0 auto;padding:28px 22px 72px}
+header{border-bottom:1px solid var(--line2);padding-bottom:18px;margin-bottom:26px}
+h1{font-size:26px;margin:0 0 6px;letter-spacing:-.2px;font-weight:700}
+.sub{color:var(--muted);font-size:15px;max-width:900px;margin:0}
+h2{font-size:19px;margin:34px 0 8px;font-weight:700}
+h3{font-size:15px;margin:0;font-weight:700}
+p{max-width:900px}
+.note{color:var(--muted);font-size:14px;margin:0 0 14px;max-width:900px}
+
+/* lanes */
+.lanes{display:grid;grid-template-columns:1fr 64px 1.35fr 64px 1fr;gap:10px 0;align-items:stretch}
+.lanehead{font-size:12px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;padding:10px 12px;border-radius:8px 8px 0 0;color:#fff}
+.lanehead small{display:block;font-weight:500;letter-spacing:0;text-transform:none;font-size:12.5px;opacity:.95;margin-top:2px}
+.lanehead.browser{background:var(--browser)}
+.lanehead.vite{background:var(--vite)}
+.lanehead.engine{background:var(--engine)}
+.box{background:var(--panel);border:1px solid var(--line);border-left-width:4px;border-radius:8px;padding:10px 12px;font-size:13.5px;min-height:64px}
+.box p{margin:4px 0 0;color:var(--muted);font-size:13px;line-height:1.45}
+.box .path{font-size:12px}
+.browser .box,.box.browser{border-left-color:var(--browser)}
+.vite .box,.box.vite{border-left-color:var(--vite)}
+.engine .box,.box.engine{border-left-color:var(--engine)}
+.box.tall{display:flex;flex-direction:column;justify-content:center}
+.box.quiet{background:var(--panel2);border-style:dashed;color:var(--muted)}
+.box ul{margin:6px 0 0;padding-left:18px;color:var(--muted);font-size:13px}
+.box li{margin:2px 0}
+.gap{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:0 4px}
+.gap svg{width:44px;height:18px;display:block}
+.gap .step{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--files);color:#fff;font-size:12px;font-weight:800}
+.blank{min-height:0}
+.rowlabel{grid-column:1 / -1;font-size:12px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);margin:14px 0 -4px}
+
+/* files band */
+.files{background:var(--files);color:#e9edf5;border-radius:12px;padding:18px 20px;margin-top:26px;border-left:6px solid var(--browser)}
+.files h2{color:#fff;margin:0 0 6px;font-size:16px;letter-spacing:1.2px;text-transform:uppercase}
+.files p{color:#d7dde8;margin:0 0 12px;font-size:14px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{background:#1e2a3d;border:1px solid #33425a;color:#ffffff;border-radius:20px;padding:4px 11px;font-family:var(--mono);font-size:12.5px}
+.chip span{font-family:var(--sans);color:#d7dde8;margin-left:6px}
+
+/* steps + tables */
+ol.steps{max-width:960px;padding-left:22px}
+ol.steps li{margin:8px 0}
+ol.steps b{font-weight:700}
+table{border-collapse:collapse;width:100%;max-width:1100px;font-size:14px;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--line)}
+th{background:var(--panel2);font-weight:700;font-size:13px;letter-spacing:.4px}
+tr:last-child td{border-bottom:0}
+td:first-child{white-space:nowrap}
+.tablewrap{overflow-x:auto}
+.callouts{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;max-width:1100px}
+.callout{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:14px}
+.callout h3{font-size:14px;margin-bottom:4px}
+.callout p{margin:0;color:var(--muted);font-size:13.5px}
+pre{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;font:13px/1.5 var(--mono);max-width:960px;margin:10px 0 16px}
+pre code{background:none;padding:0;font-size:inherit}
+.outcomes{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;max-width:1100px;margin:12px 0 18px}
+.outcome{background:var(--panel);border:1px solid var(--line);border-top:4px solid var(--vite);border-radius:8px;padding:12px 14px;font-size:14px}
+.outcome h3{font-size:14px;margin-bottom:4px}
+.outcome p{margin:0;color:var(--muted);font-size:13.5px}
+footer{margin-top:40px;color:var(--muted);font-size:13px;border-top:1px solid var(--line2);padding-top:12px}
+
+@media (max-width: 900px){
+  .lanes{grid-template-columns:1fr}
+  .gap{display:none}
+  .blank{display:none}
+  .box.quiet{display:none}
+  .rowlabel{margin-top:10px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>usabl dev-server overlay: the files and how they interact</h1>
+  <p class="sub">The overlay is the accessibility inspector that appears inside a running Vite app. This page names every file that takes part, in the app and in the engine, and follows one scan from a page load to the panel. The panel never decides anything. It shows the result the gate produced.</p>
+</header>
+
+<h2 id="flow-title">One scan, left to right</h2>
+<p class="note">Three lanes: the browser where the developer works, the Vite dev server with the usabl plugin loaded, and the engine the plugin calls. Numbered arrows match the list under the diagram.</p>
+
+<section class="lanes" aria-labelledby="flow-title">
+  <div class="lanehead browser">Browser<small>the developer's page and the panel</small></div>
+  <div class="blank"></div>
+  <div class="lanehead vite">Vite dev server<small>npm run dev, plugin from vite.config.ts</small></div>
+  <div class="blank"></div>
+  <div class="lanehead engine">Engine<small>the same gate the terminal and CI use</small></div>
+
+  <div class="rowlabel">Page load</div>
+  <div class="box browser"><h3>Page opens</h3><p>You open <span class="path">http://127.0.0.1:5173/</span>. Vite serves your app's <span class="path">index.html</span>.</p></div>
+  <div class="gap"><span class="step">1</span><svg viewBox="0 0 44 18" aria-hidden="true"><path d="M2 9h34" stroke="#4f5b6b" stroke-width="2"/><path d="M30 3l8 6-8 6" fill="none" stroke="#4f5b6b" stroke-width="2"/></svg></div>
+  <div class="box vite"><h3>transformIndexHtml adds a loader</h3><p>One small script tag. If the browser is not automated and the address does not carry <span class="path">?usabl=off</span>, it imports <span class="path">/__usabl/client.js</span>.</p></div>
+  <div class="blank"></div>
+  <div class="box quiet tall"><p>The engine is not involved yet.</p></div>
+
+  <div class="box browser"><h3>Panel script boots</h3><p>Draws the <b>usabl</b> launcher in a corner, inside a shadow root so the app's styles cannot reach it. Captures the page's own <span class="path">fetch</span> before later scripts can replace it. That is hardening, not a boundary: the panel runs in the page's realm, so when it finds a global already replaced it says so in the panel instead of presenting the result as trustworthy.</p></div>
+  <div class="gap"><span class="step">2</span><svg viewBox="0 0 44 18" aria-hidden="true"><path d="M8 9h34" stroke="#4f5b6b" stroke-width="2"/><path d="M14 3l-8 6 8 6" fill="none" stroke="#4f5b6b" stroke-width="2"/></svg></div>
+  <div class="box vite"><h3>GET /__usabl/client.js</h3><p>The plugin serves the panel source from <span class="path">src/surfaces/overlay-client.ts</span>, with two lines in front that open a Vite hot context so the panel can hear the refresh event. Both <span class="path">/__usabl</span> endpoints refuse any request that does not come from the dev origin.</p></div>
+  <div class="blank"></div>
+  <div class="box quiet tall"><p>Still no engine work.</p></div>
+
+  <div class="rowlabel">The scan</div>
+  <div class="box browser"><h3>Panel asks for the result</h3><p>Sends <span class="path">GET /__usabl/result</span> with the page's native fetch.</p></div>
+  <div class="gap"><span class="step">3</span><svg viewBox="0 0 44 18" aria-hidden="true"><path d="M2 9h34" stroke="#4f5b6b" stroke-width="2"/><path d="M30 3l8 6-8 6" fill="none" stroke="#4f5b6b" stroke-width="2"/></svg></div>
+  <div class="box vite"><h3>Result cache</h3><p>Serves the last result if nothing changed. Otherwise starts one engine run. A second request joins the run in flight instead of starting another.</p></div>
+  <div class="gap"><span class="step">4</span><svg viewBox="0 0 44 18" aria-hidden="true"><path d="M2 9h34" stroke="#4f5b6b" stroke-width="2"/><path d="M30 3l8 6-8 6" fill="none" stroke="#4f5b6b" stroke-width="2"/></svg></div>
+  <div class="box engine"><h3>loadConfig, then buildDeps</h3><p>Reads <span class="path">usabl.config.json</span>, then assembles the run: a git reader, a file reader, the provider stack, version stamps for the runner and the scanners, and the saved session named by <span class="path">USABL_STORAGE_STATE</span> when one is set. It does not launch a browser here. The plugin hands it the one Chromium it keeps warm for the dev session.</p></div>
+
+  <div class="box quiet tall"><p>While the run is in progress the panel replaces the verdict word with <b>Scanning</b> and keeps the previous result's findings, coverage, and receipt on screen.</p></div>
+  <div class="blank"></div>
+  <div class="box quiet tall"><p>The plugin waits for the run. Nothing is computed on the server side except the call itself.</p></div>
+  <div class="blank"></div>
+  <div class="box engine"><h3>run(deps, config): the gate</h3>
+    <ul>
+      <li>Asks git which files changed, maps them to screens through the config.</li>
+      <li>Opens each affected screen at <span class="path">appBaseUrl</span>. That browser is automated, so it never sees the panel.</li>
+      <li>Runs axe, the PatternFly rules, and the keyboard walk.</li>
+      <li>Weighs findings against the evidence floor and waivers: new, carried, or waived.</li>
+      <li>Returns one Result, with a receipt when the verdict is verified.</li>
+    </ul>
+  </div>
+
+  <div class="box browser"><h3>Panel renders</h3><p>Verdict, coverage, findings split by the screen you are on, and the receipt. This screen's findings split again into barriers that block the run and debt already recorded. Offers <b>Highlight it</b>, <b>Move focus to it</b>, <b>Open in editor</b>, and <b>Check again</b>.</p></div>
+  <div class="gap"><span class="step">6</span><svg viewBox="0 0 44 18" aria-hidden="true"><path d="M8 9h34" stroke="#4f5b6b" stroke-width="2"/><path d="M14 3l-8 6 8 6" fill="none" stroke="#4f5b6b" stroke-width="2"/></svg></div>
+  <div class="box vite"><h3>projectOverlay seals the result</h3><p>Runs the scrubber: control characters stripped, credential-shaped text redacted, page text wrapped in the untrusted frame. Marks the payload advisory with exit code 0, then answers as JSON.</p></div>
+  <div class="gap"><span class="step">5</span><svg viewBox="0 0 44 18" aria-hidden="true"><path d="M8 9h34" stroke="#4f5b6b" stroke-width="2"/><path d="M14 3l-8 6 8 6" fill="none" stroke="#4f5b6b" stroke-width="2"/></svg></div>
+  <div class="box engine"><h3>Result</h3><p>The same object <span class="path">usabl check</span> prints in the terminal and the Stop hook reads.</p></div>
+
+  <div class="rowlabel">Keeping it current</div>
+  <div class="box browser"><h3>You save a UI file</h3><p>For example <span class="path">src/pages/Clusters.tsx</span>. The page hot-reloads as usual.</p></div>
+  <div class="gap"><span class="step">7</span><svg viewBox="0 0 44 18" aria-hidden="true"><path d="M2 9h34" stroke="#4f5b6b" stroke-width="2"/><path d="M30 3l8 6-8 6" fill="none" stroke="#4f5b6b" stroke-width="2"/></svg></div>
+  <div class="box vite"><h3>File watcher</h3><p>On change, add, or unlink: clears the cache straight away, then waits 80 ms to group a burst of saves before sending the <span class="path">usabl:refresh</span> event over the dev socket. Clearing first is deliberate. Clearing at the end of the wait left a window where a read could still be handed the tree from before the save. The panel hears the event and repeats step 3.</p></div>
+  <div class="blank"></div>
+  <div class="box quiet tall"><p>A new run starts only when the panel asks again.</p></div>
+
+  <div class="box browser"><h3>Check again</h3><p>The button in the panel. Sends <span class="path">/__usabl/result?fresh=1</span>.</p></div>
+  <div class="gap"><span class="step">8</span><svg viewBox="0 0 44 18" aria-hidden="true"><path d="M2 9h34" stroke="#4f5b6b" stroke-width="2"/><path d="M30 3l8 6-8 6" fill="none" stroke="#4f5b6b" stroke-width="2"/></svg></div>
+  <div class="box vite"><h3>fresh=1 skips the cache</h3><p>The one user-driven way to force a run. It still joins a run already in flight rather than starting a second one.</p></div>
+  <div class="blank"></div>
+  <div class="box quiet tall"><p>Runs the gate again, same as step 4 and 5.</p></div>
+
+  <div class="box quiet tall"><p>Findings arrive with a file and line, so the panel can name the exact place to edit.</p></div>
+  <div class="gap"><span class="step">9</span><svg viewBox="0 0 44 18" aria-hidden="true"><path d="M8 9h34" stroke="#4f5b6b" stroke-width="2"/><path d="M14 3l-8 6 8 6" fill="none" stroke="#4f5b6b" stroke-width="2"/></svg></div>
+  <div class="box vite"><h3>transform adds source markers</h3><p>In the dev server only, <span class="path">src/surfaces/vite-jsx-source.ts</span> adds <span class="path">data-source-file</span> and <span class="path">data-source-line</span> to JSX tags. The scan reads them back from the page.</p></div>
+  <div class="blank"></div>
+  <div class="box quiet tall"><p>This is why a finding can point at <span class="path">Clusters.tsx:26</span>.</p></div>
+</section>
+
+<section class="files" aria-labelledby="files-title">
+  <h2 id="files-title">Files in your project that the overlay reads</h2>
+  <p>Only the first one is wiring. The rest are the same policy and evidence files the terminal command uses, so the panel and the terminal always agree.</p>
+  <div class="chips">
+    <span class="chip">vite.config.ts<span>loads the plugin</span></span>
+    <span class="chip">usabl.config.json<span>screens, files, app address</span></span>
+    <span class="chip">usabl.routes.json<span>route manifest</span></span>
+    <span class="chip">.usabl-evidence.json<span>recorded debt, the floor</span></span>
+    <span class="chip">.usabl-waivers.json<span>time-boxed exceptions</span></span>
+    <span class="chip">whatever Vite watches<span>any change clears the cache, not only src</span></span>
+    <span class="chip">node_modules/usabl<span>link to the engine</span></span>
+    <span class="chip">USABL_STORAGE_STATE<span>saved login, when the app needs one</span></span>
+  </div>
+</section>
+
+<h2>How to read the diagram</h2>
+<ol class="steps">
+  <li><b>Page load.</b> Vite serves the app and the plugin's <code>transformIndexHtml</code> hook adds one loader line to the HTML.</li>
+  <li><b>Panel source.</b> The loader imports the panel from the plugin's own endpoint. Automated browsers and <code>?usabl=off</code> skip this step, so usabl never grades its own badge.</li>
+  <li><b>Ask for the result.</b> The panel requests the result endpoint.</li>
+  <li><b>Build the engine.</b> On a cache miss the plugin loads the config and builds the engine's dependencies: browser, git, and session.</li>
+  <li><b>Run the gate.</b> The engine scans the affected screens and returns one Result. This is the same function behind <code>usabl check</code>, the Stop hook, and CI.</li>
+  <li><b>Seal and show.</b> The plugin scrubs page text, frames it as data, marks the payload advisory, and the panel renders it.</li>
+  <li><b>Save a file.</b> The watcher clears the cache and tells the panel to ask again.</li>
+  <li><b>Check again.</b> The button forces a fresh run.</li>
+  <li><b>Source markers.</b> A separate transform, in the dev server only, stamps file and line onto JSX so findings can point at code.</li>
+</ol>
+
+<h2>How vite.config.ts loads the plugin</h2>
+<p>Two lines in the project's Vite config do all the work. This is the whole of the app-side wiring in usabl-app:</p>
+<pre><code>import { usablVitePluginFromConfig } from 'usabl/vite'
+
+export default defineConfig({
+  plugins: [
+    react(),
+    usablVitePluginFromConfig({ cwd: import.meta.dirname }),
+  ],
+})</code></pre>
+<ol class="steps">
+  <li><b><code>npm run dev</code> starts Vite.</b> Vite compiles <code>vite.config.ts</code> and runs it once, before it serves anything.</li>
+  <li><b>The import resolves through the package.</b> Node looks up <code>usabl</code> in <code>node_modules/usabl</code>. In usabl-app that is a symlink to the sibling engine folder, created by the <code>"usabl": "file:../usabl"</code> dependency. The engine's package.json maps the <code>./vite</code> export to <code>dist/vite-plugin.js</code>. The app runs whatever build sits in that folder, so an old engine build shows an old panel until you rebuild the engine and restart the dev server.</li>
+  <li><b>The function call builds a plugin object.</b> It records the folder you pass as <code>cwd</code>, resolves <code>usabl.config.json</code> inside it, and prepares one shared headless browser that launches lazily on the first scan. It returns an object named <code>usabl-overlay</code> with <code>enforce: 'pre'</code> and five hooks: <code>configResolved</code>, <code>configureServer</code>, <code>transformIndexHtml</code>, <code>transform</code>, and <code>closeBundle</code>. No scan happens at this point.</li>
+  <li><b>Vite calls the hooks at the right moments.</b> <code>configResolved</code> runs first and settles two things: whether source markers are switched on at all, by checking that Vite's command is <code>serve</code>, and which host and port the origin check will accept. At server start, <code>configureServer</code> registers the two <code>/__usabl</code> endpoints and the file watcher listeners. When a browser asks for the page, <code>transformIndexHtml</code> adds the loader line. For each JSX or TSX module, <code>transform</code> stamps the file and line markers. When the server stops, the warm browser is closed, with <code>closeBundle</code> as the backstop for hosts that run Vite in middleware mode and never expose a server to listen to.</li>
+  <li><b>The first scan waits for the browser.</b> Only when the panel requests <code>/__usabl/result</code> does the plugin's run function load the config, build the engine's dependencies, and call the gate. Each run reads the config and the session again, so exporting a new session or editing the config takes effect on the next scan without a restart.</li>
+</ol>
+<p>Two details matter in practice. The <code>cwd</code> you pass is where the config is read from. The ansible-ui demo keeps its Vite config under <code>platform/</code>, so it passes the parent folder. And <code>enforce: 'pre'</code> places the plugin before React's transform so the source markers see raw JSX. That ordering breaks generic JSX type arguments in ansible-ui, so that app spreads the plugin with <code>enforce: undefined</code> and gives up line numbers there.</p>
+
+<h2>Installing it: usabl install --overlay</h2>
+<p>Run the installer once, from the folder that holds the project's Vite config:</p>
+<pre><code>usabl install --overlay</code></pre>
+<p>It looks for a Vite config in the folder you run it from, with no search of parent or child folders, trying <code>vite.config.ts</code> and then the <code>.js</code>, <code>.mts</code>, <code>.mjs</code>, <code>.cts</code>, and <code>.cjs</code> variants in that order. It then takes one of three paths. It never edits an existing file.</p>
+<div class="outcomes">
+  <div class="outcome"><h3>No config exists</h3><p>Writes a new <code>vite.config.ts</code> with the import, the plugin entry, and a comment explaining what the plugin is. Prints "Wrote vite.config.ts with the usabl overlay plugin. Review this draft before you merge it."</p></div>
+  <div class="outcome"><h3>Config already loads the plugin</h3><p>Detects the import and the call, ignoring comments and strings, and prints "already wires the usabl overlay plugin. No change." Safe to run again at any time.</p></div>
+  <div class="outcome"><h3>Config exists without the plugin</h3><p>Refuses, because it cannot prove a lossless insertion into a hand-tuned config. Prints the exact import line and the exact plugins entry to add by hand, the same two lines shown above.</p></div>
+</div>
+<p>The draft it writes when no config exists:</p>
+<pre><code>import { defineConfig } from 'vite'
+import { usablVitePluginFromConfig } from 'usabl/vite'
+
+// usabl overlay wiring. This plugin projects the gate-owned Result inside the dev server
+// as an advisory badge. It never changes exit codes: usabl=off and webdriver runs skip it.
+export default defineConfig({
+  plugins: [
+    usablVitePluginFromConfig({ cwd: import.meta.dirname }),
+  ],
+})</code></pre>
+<p>After wiring, restart the dev server. Vite loads plugins once at startup. <code>usabl doctor</code> reports the overlay as wired when it finds the import and the call in a root Vite config. It reports the overlay as missing on a project whose Vite config lives in a subfolder, such as the ansible-ui demo, even when the plugin is wired there by hand. In that case the proof is the running server answering <code>/__usabl/client.js</code> and <code>/__usabl/result</code>.</p>
+<p>The installer lives in <code>src/install/overlay.ts</code>. It is one of seven install targets. The other six are <code>--claude</code> for the Claude Stop hook, <code>--claude-skill</code> for the two Claude skills <code>/usabl-check</code> and <code>/usabl-fix</code>, <code>--cursor</code> for the Cursor hook and its adapter, command, and rule, <code>--ci</code> for the gate workflow, <code>--docs-ci</code> for the docs gate workflow, and <code>--branch-rule</code> for a read-only branch protection check.</p>
+
+<h2>The engine files behind it</h2>
+<div class="tablewrap">
+<table>
+  <thead><tr><th scope="col">File</th><th scope="col">Owns</th></tr></thead>
+  <tbody>
+    <tr><td><code>src/surfaces/vite-plugin.ts</code></td><td>The plugin. Serves the two endpoints, keeps the result cache, watches files, sends the refresh event, injects the loader, and refuses requests that do not come from the dev origin. Also owns the browser: one Chromium, launched on the first scan and reused for the whole dev session, closed when the server stops. Exports <code>usablVitePluginFromConfig</code>, which is what <code>vite.config.ts</code> imports as <code>usabl/vite</code>.</td></tr>
+    <tr><td><code>src/surfaces/overlay-client.ts</code></td><td>The panel itself, shipped as a string and served as JavaScript. Isolated in a shadow root. Holds the launcher and inspector, the per-screen split of findings, the four-corner dock that moves itself out of the way when you ask to see an element it covers, the status-aware "How to fix it" detail, Highlight it, Move focus to it, Open in editor, Check again, the refresh listener, and the focus management and live regions that let the panel itself be operated by keyboard and screen reader.</td></tr>
+    <tr><td><code>src/surfaces/vite-jsx-source.ts</code></td><td>The transform that stamps file and line onto JSX opening tags, in the dev server only. It runs before the host JSX transform. On code with generic JSX type arguments it can break the build, which is why the ansible-ui demo places the plugin after React and gives up line numbers there.</td></tr>
+    <tr><td><code>src/surfaces/scrub.ts</code></td><td>Strips control characters, redacts credential-shaped values, removes frame markers from page text, and wraps page-derived strings in the untrusted frame.</td></tr>
+    <tr><td><code>src/install/overlay.ts</code></td><td>The installer behind <code>usabl install --overlay</code>. Writes a draft config when none exists, reports no change when already wired, and refuses to edit a hand-tuned config.</td></tr>
+    <tr><td><code>src/run.ts</code></td><td>The gate. One function, called by every surface.</td></tr>
+    <tr><td><code>src/output/disclosure.ts</code></td><td>Owns <code>isBlockingBarrier</code>, the single rule for whether a finding blocks. The panel does not copy this rule, it carries the function itself into the browser as source.</td></tr>
+    <tr><td><code>src/deps/build.ts</code></td><td>Assembles everything one run needs: the git reader, the file reader, the provider stack, the clock, version stamps for the runner and the scanners, and the session read from <code>USABL_STORAGE_STATE</code>. It can launch its own Chromium, but on the overlay path it does not, because the plugin passes in the browser it already keeps warm.</td></tr>
+    <tr><td><code>src/cli.ts</code></td><td>Provides <code>loadConfig</code>, the same config reader the terminal uses.</td></tr>
+    <tr><td><code>dist/vite-plugin.js</code></td><td>The built bundle that the <code>usabl/vite</code> package export resolves to. Rebuild the engine and restart the dev server to pick up a change.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Boundaries worth saying out loud</h2>
+<div class="callouts">
+  <div class="callout"><h3>Advisory by construction</h3><p>The panel has no way to write anything. It only asks for JSON the gate produced, and that payload is marked advisory with a display exit code of 0, even though it also carries the gate's real verdict and exit code so the panel can show them. The panel does sort, group, and count what it is given, but nothing it works out is fed back to the gate. The terminal command, the Stop hook, and CI are the surfaces that can block.</p></div>
+  <div class="callout"><h3>A run that fails says so</h3><p>If the run throws, the endpoint answers 500 and the panel says it could not load the current result and points at the dev server log, which is where the reason is written. The reason stays on the server, because a failure can carry absolute paths and config detail. A failed run is never presented as a run still in progress, and it is never cached, so the next read tries again.</p></div>
+  <div class="callout"><h3>One definition of what blocks</h3><p>The panel does not decide which findings are barriers. It carries the gate's own <code>isBlockingBarrier</code> function into the browser as source text, so its "barriers" and "recorded, not blocking" lists cannot drift from the gate's rule. This is a repaired defect, not a precaution: the panel used to split findings without reading their status, and so offered "How to fix it" for debt the gate had already accepted.</p></div>
+  <div class="callout"><h3>usabl never grades its own badge</h3><p>The scanner's browser is automated, so the loader skips the panel inside scanned pages. The findings you see describe your app, not the inspector.</p></div>
+  <div class="callout"><h3>Page text is sealed</h3><p>Anything read from the page reaches the panel, and any assistant, inside a labeled frame that marks it as data. The page cannot close that frame, because the markers are stripped out of page text before the frame is put around it.</p></div>
+  <div class="callout"><h3>A name collision</h3><p><code>src/intake/overlay-fs.ts</code> shares the word overlay but is unrelated. It layers requirement files for the intake step.</p></div>
+  <div class="callout"><h3>What needs a restart, and what does not</h3><p>Vite loads plugins once at startup, so editing <code>vite.config.ts</code> or rebuilding the engine needs a dev server restart, plus one hard reload so the browser fetches the new panel script. Editing <code>usabl.config.json</code> does not. Every run reads it again, so the change lands on the next scan.</p></div>
+  <div class="callout"><h3>Where the config lives matters</h3><p>The plugin reads <code>usabl.config.json</code> from the folder you pass as <code>cwd</code>. The ansible-ui demo keeps its Vite config under <code>platform/</code>, so it passes the parent folder.</p></div>
+</div>
+
+<footer>Written 2026-09-08 from the usabl engine at commit 2449a8b. Paths are relative to the engine repository unless marked as project files.</footer>
+</div>
+</body>
+</html>

@@ -334,6 +334,9 @@ interface UsablVitePluginFactoryPorts {
   // inject a fake and prove the process is made once, receives each run's options, and is closed
   // once, without a real Chromium.
   makeBrowser: () => SharedBrowser;
+  // Where a failed run's reason is written. A port for the same reason as the rest: a test reads it
+  // instead of the suite's output.
+  logError: (error: unknown) => void;
 }
 
 function makeUsablVitePluginFactoryPorts(
@@ -351,6 +354,7 @@ function makeUsablVitePluginFactoryPorts(
       ) => buildDeps(config, options)),
     runEngine: overrides.runEngine ?? (async (deps: Deps, config: UsablConfig) => run(deps, config)),
     makeBrowser: overrides.makeBrowser ?? (() => makeSharedBrowser()),
+    logError: overrides.logError ?? ((error: unknown) => console.error('[usabl]', error)),
   };
 }
 
@@ -536,6 +540,10 @@ export function usablVitePlugin(opts: {
   // Called once when the dev server or build shuts down. The config-backed factory uses it to close
   // the one warm browser it kept alive across refresh waves. It is guarded so it runs at most once.
   onClose?: () => void | Promise<void>;
+  // Where the reason for a failed run goes. It is a port so a test can read what was logged instead
+  // of writing to the suite's own output, and so the reason has one destination: the dev server's
+  // console, which is where the panel tells the user to look when it cannot load a result.
+  logError?: (error: unknown) => void;
 }): UsablVitePlugin {
   // The open invalidation wave, if any. It opens on the first watcher event and closes when the
   // debounce timer fires. The cache does not start a run while it is open.
@@ -551,6 +559,7 @@ export function usablVitePlugin(opts: {
   let httpServer: UsablHttpServer | null = null;
   let closed = false;
   const workspaceRoot = opts.workspaceRoot ?? '';
+  const logError = opts.logError ?? ((error: unknown) => console.error('[usabl]', error));
 
   // The one invalidation point. The file watcher calls this on change, add, and unlink, which are
   // the only events that make a completed result stale.
@@ -637,8 +646,27 @@ export function usablVitePlugin(opts: {
           // serves the cached result, and a fresh read still joins a run already in flight rather
           // than starting a second one beside it.
           const fresh = requestUrl.searchParams.get('fresh') === '1';
-          const result = await results.read({ fresh });
-          const projected = projectOverlay(result, opts.workspaceRoot ?? null);
+          // A run can fail for ordinary reasons: an unreadable config, a dev server that is not up
+          // yet, a browser that will not launch. Connect does not await what a middleware returns,
+          // so letting the rejection escape would set no status and leave the socket open, and the
+          // panel would sit on "Scanning" for a run that already failed. That is the one thing this
+          // engine must never do, report work that could not execute as work still in progress.
+          // Answering here hands the panel a response it already knows how to show as a failure.
+          let projected: OverlayProjection;
+          try {
+            const result = await results.read({ fresh });
+            projected = projectOverlay(result, opts.workspaceRoot ?? null);
+          } catch (error) {
+            logError(error);
+            res.statusCode = 500;
+            res.setHeader('content-type', 'application/json; charset=utf-8');
+            // The reason stays on the server. A failure message can carry absolute paths, config
+            // contents, and stack frames, and this endpoint is the one already guarded because of
+            // what it would otherwise disclose. The panel does not need the reason to report the
+            // failure, and it already points the user at the dev server log.
+            res.end(JSON.stringify({ error: 'The usabl run could not complete.' }));
+            return;
+          }
           res.statusCode = 200;
           res.setHeader('content-type', 'application/json; charset=utf-8');
           res.end(JSON.stringify(projected));
@@ -752,5 +780,6 @@ export function usablVitePluginFromConfig(
         await browser.close();
       }
     },
+    logError: resolvedPorts.logError,
   });
 }
