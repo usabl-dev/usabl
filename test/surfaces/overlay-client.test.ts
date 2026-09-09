@@ -411,6 +411,49 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
     await page.context().close();
   });
 
+  it('sends focus back to the panel on Escape without closing the panel or touching the app', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          findings: [finding({ elementPath: '#plain-target', elementName: 'Plain paragraph' })],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const host = page.locator(OVERLAY);
+    const panel = await openPanel(page);
+    const row = panel.getByRole('button', { name: /Focus stays behind the dialog/i });
+    await row.click();
+    await panel.getByRole('button', { name: 'Move focus to it' }).click();
+
+    // The announcement tells a screen reader user the shortcut exists before they need it.
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('plain-target');
+    expect(await host.locator('.locate-status').textContent()).toContain(
+      'Press Escape to return to the usabl panel.',
+    );
+
+    // Escape while parked on the element returns focus to the button that moved it, and the app
+    // underneath never sees the key: nothing on the page changes and the panel stays open.
+    await page.keyboard.press('Escape');
+
+    // Shadow focus lands on the "Move focus to it" button, so Tab continues from where they left.
+    const returned = await page.evaluate((sel) => {
+      const inspector = document.querySelector(sel);
+      const active = inspector?.shadowRoot?.activeElement as HTMLElement | null;
+      return active?.textContent ?? '';
+    }, OVERLAY);
+    expect(returned).toBe('Move focus to it');
+    // The borrowed tabindex is handed back, so the page's own tab order is left as it was.
+    expect(await page.locator('#plain-target').getAttribute('tabindex')).toBeNull();
+    // The panel did not close: Escape was consumed as "return", not as "dismiss".
+    expect(await panel.getByRole('button', { name: 'Move focus to it' }).isVisible()).toBe(true);
+    expect(await host.locator('.locate-status').textContent()).toContain(
+      'Keyboard focus returned to the usabl panel.',
+    );
+
+    await page.context().close();
+  });
+
   it('reports a stale selector honestly, expands the row, and changes nothing on the page', async () => {
     const page = await mount(
       projectOverlay(result({ findings: [finding({ elementPath: '#gone-since-scan' })] })),

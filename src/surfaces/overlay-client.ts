@@ -1875,6 +1875,7 @@ export const overlayClientSource = `(() => {
     storeValue(OPEN_STORAGE_KEY, open ? '1' : '0');
     if (!open) {
       state.expandedKey = null;
+      releaseFocusReturn();
       applyRowState();
       clearLocateStatus();
     }
@@ -2118,6 +2119,52 @@ export const overlayClientSource = `(() => {
     }
   }
 
+  // Take down whatever return-to-panel shortcut is currently armed. Safe to call when nothing is
+  // armed. Every path that moves focus, drops the highlight, or closes the panel calls this, so the
+  // Escape shortcut never outlives the single visit it was set up for.
+  function releaseFocusReturn() {
+    const teardown = state.focusReturn;
+    state.focusReturn = null;
+    if (typeof teardown === 'function') {
+      teardown();
+    }
+  }
+
+  // Arm the return-to-panel shortcut for one focus visit. While focus sits on the flagged element,
+  // Escape sends it back to the control that moved it (the "Move focus to it" button) and is kept
+  // away from the app underneath, so an app that also closes on Escape does not fire. The listener
+  // lives on the element itself, so Tabbing off it (blur) disarms the shortcut and Escape goes back
+  // to meaning whatever the page says it means.
+  function armFocusReturn(target, returnTo) {
+    releaseFocusReturn();
+    const onKeydown = (event) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      releaseFocusReturn();
+      releaseBorrowedTabindex();
+      if (returnTo && typeof returnTo.focus === 'function') {
+        try {
+          returnTo.focus();
+        } catch (_error) {
+          // The button may be gone if the row closed underneath us. Nothing to focus, nothing to do.
+        }
+      }
+      setLocateStatus('Keyboard focus returned to the usabl panel.', '');
+    };
+    const onBlur = () => {
+      releaseFocusReturn();
+    };
+    target.addEventListener('keydown', onKeydown, true);
+    target.addEventListener('blur', onBlur);
+    state.focusReturn = () => {
+      target.removeEventListener('keydown', onKeydown, true);
+      target.removeEventListener('blur', onBlur);
+    };
+  }
+
   function clearHighlight() {
     if (typeof state.highlightCleanup === 'function') {
       state.highlightCleanup();
@@ -2129,6 +2176,7 @@ export const overlayClientSource = `(() => {
       state.marker = null;
     }
     releaseBorrowedTabindex();
+    releaseFocusReturn();
     syncHighlightToggle();
   }
 
@@ -2288,12 +2336,15 @@ export const overlayClientSource = `(() => {
 
   // The explicit opt in. This moves real keyboard and assistive-technology focus onto the flagged
   // element so a screen reader user hears what the finding is about.
-  function focusFinding(finding) {
+  function focusFinding(finding, returnTo) {
     const found = resolveTarget(finding);
     if (found.target === null) {
       reportMissingElement(found.selector);
       return;
     }
+    // A prior visit may still have Escape armed on a different element. Take it down before we move
+    // focus, so only the element focus is about to land on carries the return shortcut.
+    releaseFocusReturn();
     const target = found.target;
     // Bring the element into view first, then get the panel out of its way, so a sighted keyboard
     // user can see the element the focus landed on and it is not left behind the panel. Focus itself
@@ -2309,7 +2360,9 @@ export const overlayClientSource = `(() => {
     // panel still cannot get out of the way.
     const dodgeNow = focusReducedMotion || typeof window.requestAnimationFrame !== 'function';
     const dodgeOutcome = state.host && dodgeNow ? dodgePanelAwayFrom(state.host, target) : 'clear';
-    const movedText = 'Keyboard focus moved to ' + elementLabel(finding, found.selector) + '.';
+    const movedText =
+      'Keyboard focus moved to ' + elementLabel(finding, found.selector)
+      + '. Press Escape to return to the usabl panel.';
     if (state.host && !dodgeNow) {
       afterScrollSettles(target, () => {
         if (state.host && dodgePanelAwayFrom(state.host, target) === 'blocked') {
@@ -2331,6 +2384,9 @@ export const overlayClientSource = `(() => {
       setLocateStatus('Could not move focus to this element.', found.selector);
       return;
     }
+    // Focus landed, so wire Escape to send it back to the button that moved it. Only after a real
+    // focus, never on the failure path above.
+    armFocusReturn(target, returnTo);
     setLocateStatus(dodgeOutcome === 'blocked' ? movedText + ' ' + DODGE_BLOCKED_TEXT : movedText, '');
   }
 
@@ -2462,7 +2518,7 @@ export const overlayClientSource = `(() => {
 
     const focusButton = make('button', 'detail-action', 'Move focus to it');
     focusButton.type = 'button';
-    focusButton.addEventListener('click', () => focusFinding(finding));
+    focusButton.addEventListener('click', () => focusFinding(finding, focusButton));
     actions.appendChild(focusButton);
 
     const editorHref = editorDeepLink(row.workspaceRoot, finding.appSource);
