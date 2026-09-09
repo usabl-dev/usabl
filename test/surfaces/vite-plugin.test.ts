@@ -639,6 +639,35 @@ describe('usablVitePlugin', () => {
     expect(runCount).toBe(4);
   });
 
+  it('answers a failed run with 500 rather than leaving the request open', async () => {
+    // Connect does not await the promise a middleware returns, so a rejection here reaches nobody:
+    // no status is ever set and the socket stays open. The panel waits on that fetch forever and
+    // keeps saying "Scanning", which reports a run that could not execute as a run still going.
+    // Answering 500 is what lets the panel's existing error path say the run failed.
+    const logged: unknown[] = [];
+    const plugin = usablVitePlugin({
+      run: async () => {
+        throw new Error('engine failed');
+      },
+      logError: (error) => {
+        logged.push(error);
+      },
+    });
+    const middleware = getMiddleware(plugin);
+
+    const response = await callMiddleware(middleware, '/__usabl/result');
+
+    expect(response.statusCode).toBe(500);
+    expect(response.headers['content-type']).toContain('application/json');
+    expect(JSON.parse(response.body)).toEqual({ error: 'The usabl run could not complete.' });
+    // The reason belongs in the dev server log, which is exactly where the panel tells the user to
+    // look. It must not travel to the browser: the failure can carry absolute paths and config
+    // detail, and this endpoint is the one that already guards that.
+    expect(response.body).not.toContain('engine failed');
+    expect(logged).toHaveLength(1);
+    expect(String(logged[0])).toContain('engine failed');
+  });
+
   it('does not cache a failed run, so the next fetch retries', async () => {
     let runCount = 0;
     const plugin = usablVitePlugin({
@@ -649,16 +678,12 @@ describe('usablVitePlugin', () => {
         }
         return baseResult({ summary: `run ${runCount}` });
       },
+      logError: () => {},
     });
     const middleware = getMiddleware(plugin);
 
-    await expect(
-      middleware(
-        { method: 'GET', url: '/__usabl/result', headers: { host: 'localhost:5173' } },
-        makeResponse(),
-        () => {},
-      ),
-    ).rejects.toThrow('engine failed');
+    const failed = await callMiddleware(middleware, '/__usabl/result');
+    expect(failed.statusCode).toBe(500);
 
     const retried = await callMiddleware(middleware, '/__usabl/result');
     expect(JSON.parse(retried.body).summary).toBe('run 2');
@@ -1260,21 +1285,14 @@ describe('usablVitePluginFromConfig', () => {
         runEngine: async () => {
           throw new Error('engine failed');
         },
+        logError: () => {},
       }),
     );
     const middleware = getMiddleware(plugin);
-    const response = makeResponse();
 
-    await expect(
-      middleware(
-        { method: 'GET', url: '/__usabl/result', headers: { host: 'localhost:5173' } },
-        response,
-        () => {
-          // middleware should throw before next() on this endpoint
-        },
-      ),
-    ).rejects.toThrow('engine failed');
-    // The throw did not close the warm browser.
+    const response = await callMiddleware(middleware, '/__usabl/result');
+    expect(response.statusCode).toBe(500);
+    // The failed run did not close the warm browser.
     expect(closeCalls()).toBe(0);
 
     // Shutdown still closes it once.
@@ -1547,16 +1565,19 @@ function makeFactoryPorts(overrides: {
   buildDeps?: BuildDepsPort;
   runEngine?: (deps: Deps, config: UsablConfig) => Promise<Result>;
   makeBrowser?: () => SharedBrowser;
+  logError?: (error: unknown) => void;
 }): {
   loadConfig: (path: string) => Promise<UsablConfig>;
   buildDeps: BuildDepsPort;
   runEngine: (deps: Deps, config: UsablConfig) => Promise<Result>;
   makeBrowser: () => SharedBrowser;
+  logError: (error: unknown) => void;
 } {
   return {
     loadConfig: overrides.loadConfig ?? (async () => makeConfig()),
     buildDeps: overrides.buildDeps ?? (async () => makeDeps()),
     runEngine: overrides.runEngine ?? (async () => baseResult({})),
     makeBrowser: overrides.makeBrowser ?? (() => fakeSharedBrowser({}).shared),
+    logError: overrides.logError ?? ((error: unknown) => console.error('[usabl]', error)),
   };
 }
