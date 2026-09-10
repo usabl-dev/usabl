@@ -1,8 +1,8 @@
 # Film script: `/usabl-check` + stop hook on ansible-ui-demo (Claude Code)
 
 One take, about 3 to 4 minutes. You type the prompts; the agent does the code. This is a
-**single-barrier** demo: the script injects one **new** regression (a decorative image with no
-alternative text) on the users screen, the stop hook blocks the finish, and the agent adds the
+**single-barrier** demo: the script adds the **platform logo** to the users page header with no
+alternative text (a real, visible image), the stop hook blocks the finish, and the agent adds the
 missing `alt` to clear it. The recorded **Automation Hub** contrast debt is shown in the overlay
 but not fixed on camera: it is recorded floor debt, it never gates, and fixing it edits a global
 chrome file mapped to no surface, which would open a coverage gap. This is the Claude Code twin of
@@ -136,10 +136,11 @@ cd /home/eparenti/work/repos/innovation-days-2026/ansible-ui-demo
 npm run demo:film:break
 ```
 
-Say: "I am shipping a small UI change." This adds a decorative image without alternative text on
-the users page. That is a **new** barrier above the floor, so the stop hook can block.
+Say: "I am shipping a small UI change." This adds the platform logo to the users page header with
+no alt text: a real, visible image you can see on the page. That is a **new** barrier above the
+floor, so the stop hook can block.
 
-Save/reload the browser if Vite did not hot-reload yet.
+Save/reload the browser if Vite did not hot-reload yet. The logo appears under the "Users" heading.
 
 ### Beat 3 - Mid-task check (~90s)
 
@@ -161,10 +162,18 @@ The skill runs `npx usabl check --self-check`. Narrate:
 Type the `/usabl-fix` skill, or paste (or paraphrase) this prompt:
 
 ```
-usabl flagged a blocking accessibility barrier on this change: the decorative image with no
-alternative text on the users page in platform/access/users/components/PlatformUsersList.tsx.
-Mark it decorative with an empty alt so screen readers skip it. Re-run usabl check when done.
+usabl flagged a blocking accessibility barrier on this change: the platform logo image with no alt
+text on the users page in platform/access/users/components/PlatformUsersList.tsx. This logo is
+decorative branding above a table already titled "Users", so mark it decorative with alt="". Apply
+that change directly, do not ask for confirmation. Re-run usabl check when done.
 ```
+
+The prompt pre-decides the decorative-vs-informative call on purpose. usabl's message hedges
+("or use an empty alt") because a static scanner cannot read intent, and a live agent that is left
+to resolve that ambiguity tends to stop and ask. Making the call in the prompt keeps the take
+moving. (If you would rather showcase the agent's own reasoning, drop the "so mark it decorative"
+clause and tell it to decide and apply without asking: both an empty `alt=""` and a descriptive
+`alt={t('Ansible Automation Platform')}` clear the rule and reach VERIFIED.)
 
 Scope the ask to the **image only**. Do not ask the agent to fix the nav contrast: it is recorded
 floor debt (non-blocking), and fixing it edits a framework file mapped to no surface, which opens a
@@ -249,8 +258,12 @@ you want it on `devel`. The film scripts and the `.claude` wiring are safe to ke
 
 ## What changed in source (for your notes)
 
-**Film break** (`PlatformUsersList.tsx`): 1x1 decorative `<img>` with no `alt` (the new regression
-the stop hook blocks). The agent's fix is an empty `alt=""` marking it decorative.
+**Film break** (`PlatformUsersList.tsx`): the platform logo `<img src="/platform-logo.svg">` added
+to the page header with no `alt` (the new regression the stop hook blocks). It is a real, visible
+image served by the dev server, not a hidden pixel, and it carries no demo comment markers, so the
+agent treats it as a genuine mistake. The fix is an empty `alt=""`: the logo is decorative branding
+above a table already titled "Users", so a descriptive alt would be redundant to a screen reader.
+That empty alt clears the image-alt rule.
 
 **Coverage mapping** (`usabl.config.json`, committed on `devel`): the `users` surface `files` list
 includes `platform/access/users/components/PlatformUsersList.tsx`, so the agent's fix on that
