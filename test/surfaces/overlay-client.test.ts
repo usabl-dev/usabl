@@ -370,6 +370,11 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
     const panel = await openPanel(page);
     await panel.getByRole('button', { name: /Focus stays behind the dialog/i }).click();
 
+    // Expanding a row already highlights its element, so the action flips to "Unhighlight".
+    expect(await page.locator(HIGHLIGHT).count()).toBe(1);
+    await panel.getByRole('button', { name: 'Unhighlight' }).click();
+    expect(await page.locator(HIGHLIGHT).count()).toBe(0);
+    // Toggling back on returns the label to "Highlight it" and re-outlines the element.
     await panel.getByRole('button', { name: 'Highlight it' }).click();
     expect(await page.locator(HIGHLIGHT).count()).toBe(1);
 
@@ -397,10 +402,101 @@ describe('overlay badge and panel', { timeout: 30_000 }, () => {
     await panel.getByRole('button', { name: 'Move focus to it' }).click();
 
     expect(await page.evaluate(() => document.activeElement?.id)).toBe('plain-target');
-    expect(await page.locator('#plain-target').getAttribute('tabindex')).toBe('-1');
+    // The borrow is tabindex 0, not -1: the element must join the tab order so a keyboard user can
+    // Shift+Tab back onto it. A -1 borrow would focus it once but then drop it out of Tab for good.
+    expect(await page.locator('#plain-target').getAttribute('tabindex')).toBe('0');
 
     // Closing the row removes the tabindex again, so the page's own tab order is unchanged.
     await row.click();
+    expect(await page.locator('#plain-target').getAttribute('tabindex')).toBeNull();
+
+    await page.context().close();
+  });
+
+  it('sends focus back to the panel on Escape without closing the panel or touching the app', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({
+          findings: [finding({ elementPath: '#plain-target', elementName: 'Plain paragraph' })],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const host = page.locator(OVERLAY);
+    const panel = await openPanel(page);
+    const row = panel.getByRole('button', { name: /Focus stays behind the dialog/i });
+    await row.click();
+    await panel.getByRole('button', { name: 'Move focus to it' }).click();
+
+    // The announcement tells a screen reader user the shortcut exists before they need it.
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('plain-target');
+    expect(await host.locator('.locate-status').textContent()).toContain(
+      'Press Escape to return to the usabl panel.',
+    );
+
+    // Escape while parked on the element returns focus to the button that moved it, and the app
+    // underneath never sees the key: nothing on the page changes and the panel stays open.
+    await page.keyboard.press('Escape');
+
+    // Shadow focus lands on the "Move focus to it" button, so Tab continues from where they left.
+    const returned = await page.evaluate((sel) => {
+      const inspector = document.querySelector(sel);
+      const active = inspector?.shadowRoot?.activeElement as HTMLElement | null;
+      return active?.textContent ?? '';
+    }, OVERLAY);
+    expect(returned).toBe('Move focus to it');
+    // The borrowed tabindex is handed back, so the page's own tab order is left as it was.
+    expect(await page.locator('#plain-target').getAttribute('tabindex')).toBeNull();
+    // The panel did not close: Escape was consumed as "return", not as "dismiss".
+    expect(await panel.getByRole('button', { name: 'Move focus to it' }).isVisible()).toBe(true);
+    expect(await host.locator('.locate-status').textContent()).toContain(
+      'Keyboard focus returned to the usabl panel.',
+    );
+
+    await page.context().close();
+  });
+
+  it('keeps Escape working after you really Tab off a non-focusable element and Shift+Tab back', async () => {
+    // The demo's flagged element is a plain <div> the page never made focusable, so usabl borrows a
+    // tabindex to move focus to it. This exercises real Tab/Shift+Tab keys (not .focus()/.blur(),
+    // which ignore the tab order) to prove the borrow actually puts the element back in reach: with a
+    // -1 borrow the browser skips it on Tab, it never regains focus, and Escape can never fire.
+    const page = await mount(
+      projectOverlay(
+        result({
+          findings: [finding({ elementPath: '#plain-target', elementName: 'Plain paragraph' })],
+        }),
+      ),
+      { path: '/clusters' },
+    );
+    const host = page.locator(OVERLAY);
+    const panel = await openPanel(page);
+    await panel.getByRole('button', { name: /Focus stays behind the dialog/i }).click();
+    await panel.getByRole('button', { name: 'Move focus to it' }).click();
+
+    // Focus landed on the borrowed element and it joined the tab order (tabindex 0, not -1).
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('plain-target');
+    expect(await page.locator('#plain-target').getAttribute('tabindex')).toBe('0');
+
+    // Wander off with a real Shift+Tab (to the previous focusable, #close-dialog), then a real Tab
+    // back. The return only reaches #plain-target if the borrow genuinely made it tabbable.
+    await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('close-dialog');
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('plain-target');
+
+    // Now Escape, parked back on the element, returns focus to the panel.
+    await page.keyboard.press('Escape');
+    const returned = await page.evaluate((sel) => {
+      const inspector = document.querySelector(sel);
+      const active = inspector?.shadowRoot?.activeElement as HTMLElement | null;
+      return active?.textContent ?? '';
+    }, OVERLAY);
+    expect(returned).toBe('Move focus to it');
+    expect(await host.locator('.locate-status').textContent()).toContain(
+      'Keyboard focus returned to the usabl panel.',
+    );
+    // The borrow is handed back once the shortcut fires, leaving the page's tab order as it was.
     expect(await page.locator('#plain-target').getAttribute('tabindex')).toBeNull();
 
     await page.context().close();
@@ -2996,7 +3092,6 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(overlapsBefore).toBe(true);
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Highlight it' }).click();
 
     // The panel moved off the bottom-right corner.
     await expect.poll(async () => dockCorner(page)).not.toBe('bottom-right');
@@ -3027,7 +3122,6 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(await dockCorner(page)).toBe('bottom-right');
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Highlight it' }).click();
     // Frames, not milliseconds: any move the panel made would be made on one of these.
     await passFrames(page, 15);
 
@@ -3062,6 +3156,52 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(axe.violations).toEqual([]);
 
     await context0(page);
+  });
+
+  it('collapses with the caret to the bottom, keeping the side the panel is on', async () => {
+    // Docked top-right, the caret drops the panel to bottom-right: a collapsed badge belongs at the
+    // bottom, never the top, and it keeps the right side because the dock moves left and right.
+    const right = await mountWithTarget({
+      targetCss: 'left: 20px; top: 80px;',
+      reducedMotion: true,
+      dockSeed: 'top-right',
+    });
+    expect(await dockCorner(right)).toBe('top-right');
+    await right
+      .locator(OVERLAY)
+      .getByRole('button', { name: 'Collapse the usabl inspector' })
+      .click();
+    expect(await dockCorner(right)).toBe('bottom-right');
+    // The drop is persisted, so reopening from the badge opens at the bottom too.
+    expect(await right.evaluate(() => localStorage.getItem('usabl.overlay.dock'))).toBe('bottom-right');
+    await context0(right);
+
+    // Docked top-left, it drops to bottom-left, keeping the left side.
+    const left = await mountWithTarget({
+      targetCss: 'left: 20px; top: 80px;',
+      reducedMotion: true,
+      dockSeed: 'top-left',
+    });
+    expect(await dockCorner(left)).toBe('top-left');
+    await left
+      .locator(OVERLAY)
+      .getByRole('button', { name: 'Collapse the usabl inspector' })
+      .click();
+    expect(await dockCorner(left)).toBe('bottom-left');
+    await context0(left);
+
+    // Already at the bottom, the caret leaves the corner exactly where it is.
+    const bottom = await mountWithTarget({
+      targetCss: 'left: 20px; top: 80px;',
+      reducedMotion: true,
+      dockSeed: 'bottom-left',
+    });
+    await bottom
+      .locator(OVERLAY)
+      .getByRole('button', { name: 'Collapse the usabl inspector' })
+      .click();
+    expect(await dockCorner(bottom)).toBe('bottom-left');
+    await context0(bottom);
   });
 
   // Wait until the overlay has asked for its nth smooth scroll, then let that scroll reach the
@@ -3125,7 +3265,6 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     expect(await panelOverlapsTarget(page)).toBe(true);
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Highlight it' }).click();
 
     await expect.poll(async () => dockCorner(page)).toMatch(/-right$/);
     expect(await panelOverlapsTarget(page)).toBe(false);
@@ -3149,7 +3288,6 @@ describe('the overlay moves out of the way of the element it points at', { timeo
     const panel = host.getByRole('region', { name: 'usabl accessibility inspector' });
 
     await panel.locator('.finding-button').click();
-    await panel.getByRole('button', { name: 'Highlight it' }).click();
     // Frames, not milliseconds: the dodge is decided on a frame, so frames are what to wait for.
     await passFrames(page, 15);
 

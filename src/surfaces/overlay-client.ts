@@ -1875,6 +1875,7 @@ export const overlayClientSource = `(() => {
     storeValue(OPEN_STORAGE_KEY, open ? '1' : '0');
     if (!open) {
       state.expandedKey = null;
+      releaseFocusReturn();
       applyRowState();
       clearLocateStatus();
     }
@@ -2118,6 +2119,49 @@ export const overlayClientSource = `(() => {
     }
   }
 
+  // Take down whatever return-to-panel shortcut is currently armed. Safe to call when nothing is
+  // armed. Every path that moves focus, drops the highlight, or closes the panel calls this, so the
+  // Escape shortcut never outlives the single visit it was set up for.
+  function releaseFocusReturn() {
+    const teardown = state.focusReturn;
+    state.focusReturn = null;
+    if (typeof teardown === 'function') {
+      teardown();
+    }
+  }
+
+  // Arm the return-to-panel shortcut. While focus sits on the flagged element, Escape sends it back
+  // to the control that moved it (the "Move focus to it" button) and is kept away from the app
+  // underneath, so an app that also closes on Escape does not fire. The listener lives on the element
+  // itself, so a keydown reaches it only while it has focus: Tabbing off it makes Escape mean whatever
+  // the page says, and Shift+Tabbing back onto it makes the shortcut work again, with no re-arming on
+  // our part. It is torn down only when focus moves to another finding, the row closes, or the panel
+  // closes, which is what releaseFocusReturn is called for on each of those paths.
+  function armFocusReturn(target, returnTo) {
+    releaseFocusReturn();
+    const onKeydown = (event) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      releaseFocusReturn();
+      releaseBorrowedTabindex();
+      if (returnTo && typeof returnTo.focus === 'function') {
+        try {
+          returnTo.focus();
+        } catch (_error) {
+          // The button may be gone if the row closed underneath us. Nothing to focus, nothing to do.
+        }
+      }
+      setLocateStatus('Keyboard focus returned to the usabl panel.', '');
+    };
+    target.addEventListener('keydown', onKeydown, true);
+    state.focusReturn = () => {
+      target.removeEventListener('keydown', onKeydown, true);
+    };
+  }
+
   function clearHighlight() {
     if (typeof state.highlightCleanup === 'function') {
       state.highlightCleanup();
@@ -2129,6 +2173,8 @@ export const overlayClientSource = `(() => {
       state.marker = null;
     }
     releaseBorrowedTabindex();
+    releaseFocusReturn();
+    syncHighlightToggle();
   }
 
   function setLocateStatus(text, selector) {
@@ -2277,6 +2323,7 @@ export const overlayClientSource = `(() => {
       window.removeEventListener('resize', position);
     };
     state.highlightKey = key;
+    syncHighlightToggle();
     setLocateStatus(
       dodgeOutcome === 'blocked' ? highlightedText + ' ' + DODGE_BLOCKED_TEXT : highlightedText,
       '',
@@ -2286,12 +2333,15 @@ export const overlayClientSource = `(() => {
 
   // The explicit opt in. This moves real keyboard and assistive-technology focus onto the flagged
   // element so a screen reader user hears what the finding is about.
-  function focusFinding(finding) {
+  function focusFinding(finding, returnTo) {
     const found = resolveTarget(finding);
     if (found.target === null) {
       reportMissingElement(found.selector);
       return;
     }
+    // A prior visit may still have Escape armed on a different element. Take it down before we move
+    // focus, so only the element focus is about to land on carries the return shortcut.
+    releaseFocusReturn();
     const target = found.target;
     // Bring the element into view first, then get the panel out of its way, so a sighted keyboard
     // user can see the element the focus landed on and it is not left behind the panel. Focus itself
@@ -2307,28 +2357,45 @@ export const overlayClientSource = `(() => {
     // panel still cannot get out of the way.
     const dodgeNow = focusReducedMotion || typeof window.requestAnimationFrame !== 'function';
     const dodgeOutcome = state.host && dodgeNow ? dodgePanelAwayFrom(state.host, target) : 'clear';
-    const movedText = 'Keyboard focus moved to ' + elementLabel(finding, found.selector) + '.';
+    const movedText =
+      'Keyboard focus moved to ' + elementLabel(finding, found.selector)
+      + '. Press Escape to return to the usabl panel.';
     if (state.host && !dodgeNow) {
       afterScrollSettles(target, () => {
+        // This runs after the smooth scroll settles, which can be after the user has already pressed
+        // Escape to return to the panel. Only re-assert the dodge status while focus is still on the
+        // element; otherwise this late write would clobber "Keyboard focus returned to the usabl panel."
+        if (document.activeElement !== target) {
+          return;
+        }
         if (state.host && dodgePanelAwayFrom(state.host, target) === 'blocked') {
           setLocateStatus(movedText + ' ' + DODGE_BLOCKED_TEXT, '');
         }
       });
     }
     try {
-      // Some flagged elements are not focusable. A temporary tabindex of -1 lets us focus them
-      // without adding them to the page's tab order. We record the exact node and the exact value it
-      // had, and put that back later, rather than marking it and sweeping the document afterwards.
-      if (!target.hasAttribute('tabindex')) {
+      // An element that is not already in the tab order (tabIndex < 0: a non-focusable node, or one
+      // the page parked at -1) gets a temporary tabindex of 0 rather than -1. Both let us focus it by
+      // script, but only 0 puts it into the sequential tab order, so a keyboard user who Tabs away can
+      // Shift+Tab back onto it and press Escape to return here. A borrowed -1 would be a dead end: the
+      // browser skips it on Tab, the element never regains focus, and the Escape shortcut never fires.
+      // An element that is already focusable and tabbable is left exactly as it is. We record the exact
+      // node and the exact value it had, and put that back later, rather than marking it and sweeping
+      // the document afterwards.
+      if (target.tabIndex < 0) {
         releaseBorrowedTabindex();
-        state.borrowedTabindex = { node: target, previous: null };
-        target.setAttribute('tabindex', '-1');
+        const previous = target.hasAttribute('tabindex') ? target.getAttribute('tabindex') : null;
+        state.borrowedTabindex = { node: target, previous };
+        target.setAttribute('tabindex', '0');
       }
       target.focus({ preventScroll: true });
     } catch (_error) {
       setLocateStatus('Could not move focus to this element.', found.selector);
       return;
     }
+    // Focus landed, so wire Escape to send it back to the button that moved it. Only after a real
+    // focus, never on the failure path above.
+    armFocusReturn(target, returnTo);
     setLocateStatus(dodgeOutcome === 'blocked' ? movedText + ' ' + DODGE_BLOCKED_TEXT : movedText, '');
   }
 
@@ -2350,6 +2417,22 @@ export const overlayClientSource = `(() => {
       }
     }
     return null;
+  }
+
+  // The one detail action whose label depends on live state. Highlighting is a toggle: when the
+  // open row's element is already outlined the action becomes "Unhighlight", otherwise "Highlight
+  // it". Both functions that move state.highlightKey call this, so every path (expand, close,
+  // screen switch, the button itself) keeps the visible label honest.
+  function syncHighlightToggle() {
+    if (state.expandedKey == null) {
+      return;
+    }
+    const row = rowByKey(state.expandedKey);
+    if (!row || !row.highlightButton) {
+      return;
+    }
+    row.highlightButton.textContent =
+      state.highlightKey === row.key ? 'Unhighlight' : 'Highlight it';
   }
 
   // One activation does three things at once: it locates the element on the page, it opens this
@@ -2432,12 +2515,19 @@ export const overlayClientSource = `(() => {
     const actions = make('div', 'detail-actions');
     const showAgain = make('button', 'detail-action', 'Highlight it');
     showAgain.type = 'button';
-    showAgain.addEventListener('click', () => highlightFinding(finding, row.key));
+    showAgain.addEventListener('click', () => {
+      if (state.highlightKey === row.key) {
+        clearHighlight();
+      } else {
+        highlightFinding(finding, row.key);
+      }
+    });
+    row.highlightButton = showAgain;
     actions.appendChild(showAgain);
 
     const focusButton = make('button', 'detail-action', 'Move focus to it');
     focusButton.type = 'button';
-    focusButton.addEventListener('click', () => focusFinding(finding));
+    focusButton.addEventListener('click', () => focusFinding(finding, focusButton));
     actions.appendChild(focusButton);
 
     const editorHref = editorDeepLink(row.workspaceRoot, finding.appSource);
@@ -2957,7 +3047,18 @@ export const overlayClientSource = `(() => {
     const collapseGlyph = make('span', '', '▼');
     collapseGlyph.setAttribute('aria-hidden', 'true');
     collapse.appendChild(collapseGlyph);
-    collapse.addEventListener('click', () => setOpen(host, false, true));
+    collapse.addEventListener('click', () => {
+      // The down arrow always collapses to the bottom, keeping the side the panel is on: a left dock
+      // drops to bottom-left, a right dock to bottom-right. A collapsed badge belongs at the bottom,
+      // never the top, so a top dock is flipped down before the panel collapses.
+      const dock = normalizeDock(state.dock);
+      if (dock === 'top-left') {
+        setDock(host, 'bottom-left');
+      } else if (dock === 'top-right') {
+        setDock(host, 'bottom-right');
+      }
+      setOpen(host, false, true);
+    });
     controls.appendChild(collapse);
     bar.appendChild(controls);
 
