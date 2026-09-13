@@ -7,7 +7,7 @@
 
 **Don't ship until it's usabl.**
 
-usabl checks changes to a web app's user interface for accessibility problems while the code is being written. It runs from the command line, a browser overlay, an AI coding assistant, and a pull request check, and all of them use the same engine.
+usabl checks changes to a web app's user interface for accessibility problems while the code is being written. It can also check your product documentation, because an app is not truly usable if its documentation is not. It runs from the command line, a browser overlay, an AI coding assistant, and a pull request check, and all of them use the same engine.
 
 When a check confirms a new problem that no waiver covers, usabl reports a regression. If you install the Claude Code or Cursor stop hook, it stops the assistant from finishing and tells it what to fix, with the exceptions listed under [Where it runs](#where-it-runs). If you make the usabl pull request check required, only people on your ruleset's bypass list can merge while the check fails. Problems that were already in the app are recorded and do not block, so you can add usabl to an existing app without fixing everything first.
 
