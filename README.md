@@ -5,134 +5,212 @@
 ![Node](https://img.shields.io/badge/node-%3E%3D22-blue?style=flat-square)
 ![Status](https://img.shields.io/badge/status-team%20preview-orange?style=flat-square)
 
-**usable by default.**
+**Don't ship until it's usabl.**
 
-usabl is an accessibility proof engine for product development. It checks that a change adds no new unwaived machine-checkable accessibility barriers above the reviewed evidence floor on the screens its coverage mapped from the changed UI files, and discloses every gap it detected. A barrier covered by an active waiver stays visible in the result and does not block. In CI, when `usabl-required` is a required check, a blocking verdict blocks the normal merge path, subject to the ruleset's bypass list. In an assistant, its Stop hook blocks the first attempt to stop on a blocking verdict (regression, not covered, or approval required) unless the user has issued a one-use bypass; idle runs, runs with no verdict, and hook errors are disclosed and allowed. A run that checked something returns one of four verdicts: verified, regression, not covered, or approval required. A run can also return no verdict: the change touched no covered surface (idle), or the run could not produce a verdict (a crash, or every affected screen failing to render). No verdict is not a pass. The scope is accessibility aligned with WCAG 2.2 AA. Screen-reader announcement is the differentiating layer, not the whole claim.
+usabl checks changes to a web app's user interface for accessibility problems while the code is being written. It can also check your product documentation, because an app is not truly usable if its documentation is not. It runs from the command line, a browser overlay, an AI coding assistant, a pull request check, and your Playwright tests, and all of them use the same engine.
 
-> **The AI can suggest fixes. It does not get to grade its own work.**
+When a check confirms a new problem that no waiver covers, usabl reports a regression. If you install the Claude Code or Cursor stop hook, it stops the assistant from finishing and tells it what to fix, with the exceptions listed under [Where it runs](#where-it-runs). If you make the usabl pull request check required, only people on your ruleset's bypass list can merge while the check fails. Problems that were already in the app are recorded and do not block, so you can add usabl to an existing app without fixing everything first.
 
-## Why usabl
+Every result comes from repeatable checks. usabl calls no AI model. An AI assistant can suggest and apply fixes, but it cannot decide the result.
 
-usabl is built to decide whether a change may be called done, rather than to produce a report:
+## What a result looks like
 
-- **A verdict with a receipt.** Only a verified run counts as proof. A verified run mints a receipt you can re-check later against the same source tree, policy hash, engine version, and scanner versions.
-- **One engine behind every surface.** The same engine runs behind the CLI, the Stop hook, the dev-server overlay, and CI. The overlay is advisory. CI reads policy from the trusted base branch, so a local run and a CI run can differ when local policy files differ from the base.
-- **Honest by construction.** The engine keeps verified, not covered, and merely observed apart in words, never by color. It never claims compliance, and it says so on its own output.
-- **Debt that only shrinks.** Known barriers sit in a reviewed evidence floor, recorded by screen, rule, and element identity. Exceptions live in a separate waiver ledger, where each waiver carries an owner, an approver, a reason, and an expiry date. A new, unwaived barrier above the floor on a scanned screen blocks. One residual is open by design: a barrier that lands in headroom the floor still records, or replaces a fixed one without growing the count, counts as carried until `usabl floor prune` re-arms the floor, and usabl discloses that headroom on every run where it exists. `usabl floor prune` removes floor entries that a full scan no longer observes, so a reintroduced barrier gates as new.
+This is `usabl check` on a real PatternFly app, after a change removed the label from an icon-only button:
 
-## The four verdicts
+```text
+usabl: ✖ REGRESSION (exit 1)
+  This change adds an accessibility barrier. It is blocked until fixed.
+  gate summary: regression: 3 blocking finding(s), 20 recorded
+  barriers that block this run: 3 finding(s)
+    [new] users · axe/button-name (critical): Ensure buttons have discernible text
+        fix: Provide visible text, aria-label, or aria-labelledby. PatternFly icon-only buttons need an aria-label.
+    [new] users · pf/pf-icon-button-name (serious): A button action is announced without a usable name.
+        fix: Add visible text, aria-label, or aria-labelledby so the button has a stable name.
+    [new] users · walk/keyboard-walk-unnamed-interactive (serious): An interactive element has no accessible name; screen-reader users hear only the role.
+        fix: Add aria-label or visible text to the element.
+  recorded, not blocking: 20 finding(s)
+    usabl already recorded these. They do not block this run.
+```
 
-A `usabl check` that checked something ends in one of four verdicts, each with a matching exit code:
-
-| Verdict               | Meaning                                                                                                                                 |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| **Verified**          | No new gating barriers on the screens coverage mapped from the changed UI files, and no coverage gap was detected. A receipt is minted. |
-| **Regression**        | A new machine-checkable barrier appeared. Exit 1; the Stop hook, the required CI check, or your own script turns that into a block.     |
-| **Not covered**       | usabl detected a touched surface it could not check, so it refuses to guess. This is honest uncertainty, not a pass.                    |
-| **Approval required** | The change edits policy itself, which needs a human code-owner decision before it can land.                                             |
-
-Two outcomes carry no verdict. The `verdict` field is `null` and no receipt is minted:
-
-| Outcome        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Idle**       | No changed file maps to a covered screen or documentation page, so there was nothing to check. Exit 0. This is not a pass; nothing was measured.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **No verdict** | The run could not produce a verdict: an unhandled error, or every affected screen failed to render. Exit 4, and the reason is printed. Not a pass. Two configuration cases differ: if the working-tree `usabl.config.json` cannot be read when the command starts, the command stops before the engine runs, prints the error, and exits 4 with no result at all; in a `--trusted-ref` run where the working-tree config diverged, a trusted-ref copy that is missing, malformed, or unreadable becomes a coverage gap: the overall verdict is `approval_required` (exit 2), the accessibility sub-result is `not_covered` (exit 3), and a result is present. If the guard itself fails to read the trusted ref, the run returns no verdict, exit 4, with a result. |
-
-Only the gate mints a verdict. Every other command drafts, inspects, wires, or reports.
+All three checks caught the same unnamed button. The 20 recorded problems were already in the app, so they do not block this change.
 
 ## How it works
 
-- **Deterministic checks.** Three layers run on every application scan: general accessibility rules through axe-core, PatternFly composition rules, and a keyboard and announcement walk. No layer asks a model to judge pass or fail.
-- **One gate, several surfaces.** The gate runs behind a Claude Stop hook, a CI gate, and an advisory dev-server overlay. The library ships those integrations as subpath exports (`usabl/vite`, `usabl/playwright`, `usabl/docs`). The overlay projects the gate's result and never mints one. It runs inside the tested page's own JavaScript, so the page can interfere with what it shows. The gate computes the verdict; the terminal command and CI enforce it, and the overlay only shows it.
-- **Playwright page check.** `checkPage(page)` from `usabl/playwright` runs the same providers on one live page and returns a page-level result. It has no evidence floor and no waivers, so a barrier the gate has already accepted still reads as a regression there. Its verdict can differ from `usabl check`.
-- **App and docs.** When a `usabl.docs.json` manifest is present, the same engine also scans the product's published documentation pages in the same run, which ends in one verdict or none. The rule profile differs: PatternFly rules do not run on docs pages, a docs rulepack runs only on docs pages, and axe uses the WCAG 2.2 A and AA tag set on docs pages.
-- **Coverage identity.** usabl records which changed files map to which screen, and it proves it scanned the address it was configured or discovered to scan. It cannot prove that an address showed the screen a reader expects: a redirect, a signed-out state, or a feature flag can change what an address renders. An optional `reachedWhen` selector adds partial evidence that the expected element was present. A manual surface entry is an operator assertion, not evidence.
-- **Receipts bound to the code.** A verified result mints a receipt tied to the exact source tree, the committed policy, the runner version, and the scanner versions. Change any of them and it no longer verifies.
-- **AI proposes, the gate decides.** The assistant can suggest and apply fixes, then it must re-run the same gate. It cannot approve its own work. Page text handed to the assistant sits inside a labeled frame that marks it as data rather than instructions. The frame delimiters are removed from page text, so a page cannot close its own frame. Control sequences are stripped and credential-shaped values are redacted before page text leaves the engine.
+- **Three checks.** On each app screen it scans, usabl runs axe-core for general accessibility rules, PatternFly rules for problems in how PatternFly components are put together, and a keyboard walk. The walk tabs through the page and records the name, role, and state at each stop from the browser's accessibility tree. That is an approximation of what a screen reader says. A virtual screen reader that checks what is announced during an interaction is built, but it is not wired in yet. Documentation pages skip the PatternFly rules.
+- **The screens it can map from a change.** usabl maps changed files to screens using your routes, your imports, the screens you map by hand, and files that affect every screen. If it maps a screen but cannot load it, it reports that screen as not covered. A screen it cannot map is not checked, so keep your mappings current.
+- **Existing problems are recorded.** `usabl baseline` records the problems it finds in an evidence floor file, `.usabl-evidence.json`, by screen, rule, and element, with a count. A problem blocks when it is new, or when there are more of it than the floor records. After you fix recorded problems, run `usabl floor prune` so they block if they come back.
+- **Exceptions expire.** A waiver in `.usabl-waivers.json` covers one element, or every element, for one rule on one screen. Each waiver names an owner, an approver, a reason, and an expiration date. After that date the waiver stops applying, and the problem blocks again unless the evidence floor records it. Waived problems still appear in the result.
+- **The rules are protected.** Policy files are `usabl.config.json`, `usabl.routes.json`, `usabl.docs.json`, the evidence floor, the waivers, your design requirements file if you have one, and any paths you list in `guardedPaths`. A change to any of them returns approval required. In CI, a code owner other than the pull request author must approve it, and the check reads policy from the base branch, so a pull request cannot change the rules it is checked against.
+- **Page text is treated as data.** Text from the page can reach an AI assistant, so usabl wraps it in a labeled frame that marks it as untrusted. It removes frame markers from the page text so a page cannot close the frame, strips control sequences, and redacts values that look like credentials.
+- **Documentation too.** With a `usabl.docs.json` manifest, the same run also checks your published documentation pages, using rules chosen for docs.
 
-## Quick start
+## Results
 
-usabl targets Node 22 and is not yet published to a package registry, so build it from source:
+| Result            | Exit code | Meaning                                                                                                                                                            |
+| ----------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Verified          | 0         | No new problem blocks on the screens usabl mapped from this change, and it checked all of them. New problems covered by a waiver can still appear.                 |
+| Regression        | 1         | A check confirmed a new problem that no waiver covers.                                                                                                             |
+| Approval required | 2         | The change edits policy files, so a code owner has to approve it. This result takes priority over the others.                                                      |
+| Not covered       | 3         | usabl could not check a screen it mapped from this change, for example because the page did not load, or a check could not reach a firm answer. It does not guess. |
+
+Two outcomes carry no verdict, and neither one is a pass:
+
+- **Idle** (exit 0): no changed file maps to a screen or documentation page that usabl checks, so there was nothing to check.
+- **No verdict** (exit 4): the run could not finish, for example after an unexpected error or when every affected screen failed to render.
+
+Three configuration problems are handled differently. If `usabl.config.json` cannot be read, the command prints the error and exits 4 before anything runs, with no result. In a CI run that reads policy from the base branch, if your config differs from the base branch and the base branch copy is missing or broken, the run returns approval required and reports the accessibility part as not covered. If usabl cannot read the base branch it compares policy against, the run returns no verdict.
+
+[Ground truth](docs/ground-truth.md#9-gate-verdict-authority) explains how the gate decides.
+
+## Receipts
+
+When `usabl check` or the stop hook finishes with a verified result, it writes a receipt to `.usabl/receipt.json`. The receipt records what was checked and the result. Four of its values tie it to your code:
+
+- the source tree, as a Git tree hash of your tracked files and any untracked files Git does not ignore, including uncommitted changes
+- a hash of the committed policy files
+- the usabl engine version, which includes a hash of the engine's own files
+- the versions of axe-core, Playwright, and Chromium
+
+To check a receipt, usabl rebuilds the tree hash from your current files, recomputes the policy hash, and compares all four values with the receipt. If any value differs, the receipt does not match.
+
+The stop hook uses this to avoid scanning twice. When the assistant tries to finish and no policy file has uncommitted changes, the hook checks the receipt first. If it matches, the assistant finishes without a new scan. If it does not match, or a policy file has changed, the hook continues with its normal behavior, described under [Where it runs](#where-it-runs).
+
+## Where it runs
+
+- **Command line.** `usabl check` prints the result and returns its exit code, so any script can act on it.
+- **Browser overlay.** `usabl install --overlay` adds the overlay plugin to your Vite config. It shows the current result on the page while you work. The overlay only shows results and never blocks anything. It runs inside your page, so the page's own code can affect what it shows.
+- **Claude Code.** `usabl install --claude` adds a stop hook to `.claude/settings.json`. When the assistant tries to finish on a regression, not covered, or approval required result, the hook blocks that first attempt and tells the assistant why. It lets the next attempt through, so the assistant cannot get stuck in a loop. A person can run `usabl bypass` to let one stop through without checking. If the hook itself fails, it lets the assistant stop and says so. `usabl install --claude-skill` adds the `/usabl-check` and `/usabl-fix` skills.
+- **Cursor.** `usabl install --cursor` adds a stop hook that sends the agent back when the result blocks, a `/usabl-check` command, and a rule that reminds the agent to check its UI changes. Like the Claude Code hook, it lets the agent stop after one follow-up.
+- **Pull requests.** `usabl install --ci` drafts `.github/workflows/usabl-gate.yml`. Before it can run, replace the placeholder with a usabl commit you trust, and add a `USABL_ENGINE_CHECKOUT_TOKEN` secret that can read the usabl repository. The workflow runs the check, comments on the pull request, and reports the `usabl-required` status. To block merges, make that status required in your branch rules. `usabl install --branch-rule` checks your rules and changes nothing. People on your ruleset's bypass list can still merge. `usabl install --docs-ci` drafts a separate workflow for documentation pages.
+- **Playwright tests.** `checkPage(page)` from `usabl/playwright` runs the core checks on one page inside your own tests. It does not use the evidence floor, waivers, or checks from design requirements, so its result can differ from `usabl check`.
+
+## Try it on your app
+
+usabl needs Node.js 22. It is not on npm yet, so build it next to your app:
 
 ```bash
 git clone https://github.com/usabl-dev/usabl.git
 cd usabl
-npm install        # also installs the shared git hooks
-npm run build      # builds dist/ and the usabl CLI
-npm run check      # optional: typecheck, tests, build, and a package smoke test
+npm ci
+npm run build
+npx playwright install chromium
 ```
 
-To watch the full loop end to end, from a live barrier through a blocked assistant to a verified receipt, follow the [team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md) in the companion fixture app. See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete development setup, including pre-commit.
+Add it to your app and draft your configuration:
 
-## Scanning a signed-in application
+```bash
+cd ../your-app
+npm install --save-dev file:../usabl
+npx usabl init       # drafts usabl.config.json and usabl.routes.json from your code
+```
 
-Most applications worth gating sit behind a login. usabl scans signed out unless you give it a session, and a signed-out scan of a login-gated screen measures the sign-in page or an empty redirect, not your product.
+Review both drafts, correct any screen mappings, and commit them. `usabl baseline` refuses to run while other policy files have uncommitted changes. Then start your app's dev server and record the problems that are already there:
 
-Export a [Playwright storage state](https://playwright.dev/docs/auth) file and point `USABL_STORAGE_STATE` at it:
+```bash
+npx usabl baseline   # scans every mapped screen and drafts .usabl-evidence.json
+```
+
+Review the evidence floor and commit it too, because usabl does not trust policy files with uncommitted changes. If `usabl baseline` says coverage is incomplete, fix the mappings, or run `usabl baseline --partial` to record only the screens it scanned without a coverage gap.
+
+Now make a UI change and check it, confirm the setup, and set up each place you want usabl to run, one per command:
+
+```bash
+npx usabl check
+npx usabl doctor
+npx usabl install --claude
+```
+
+Each `install` writes a new file, updates a file it can safely change, reports that it is already set up, or refuses and prints the manual step. `--branch-rule` only checks. Review what changed before you commit.
+
+A small `usabl.config.json` looks like this:
+
+```json
+{
+  "appBaseUrl": "http://localhost:5173",
+  "uiFileGlobs": ["src/**"],
+  "discovery": {
+    "routerFile": "src/App.tsx",
+    "wideBlastGlobs": ["src/main.tsx", "src/index.css"]
+  },
+  "surfaces": [
+    {
+      "id": "users",
+      "url": "http://localhost:5173/users",
+      "files": ["src/pages/UsersPage.tsx"]
+    }
+  ],
+  "guardedPaths": []
+}
+```
+
+- `appBaseUrl` is where your dev server runs.
+- `uiFileGlobs` says which files count as UI code.
+- `discovery.routerFile` is your router. `usabl init` reads it to draft `usabl.routes.json`, and usabl uses that file when it exists. `wideBlastGlobs` lists files that affect every screen, such as global CSS or the app shell.
+- `surfaces` lists screens you map by hand. Each one lists the exact file paths that screen depends on. If a surface has the same id as a route in `usabl.routes.json`, add `"overridesDiscoveredRoute": true` to it.
+- `guardedPaths` adds more files to treat as policy.
+
+## Apps behind a login
+
+usabl scans signed out unless you give it a session. Save a [Playwright storage state](https://playwright.dev/docs/auth) file and point `USABL_STORAGE_STATE` at it:
 
 ```bash
 export USABL_STORAGE_STATE="$HOME/.usabl/my-app-session.json"
-usabl doctor   # confirms a session is configured
-usabl check
+npx usabl doctor   # confirms a session is configured
+npx usabl check
 ```
 
-usabl reads the variable once, where it builds its dependencies, so every surface picks up the same session: the CLI, the Vite overlay, and the Claude Stop hook. It is an environment variable rather than a flag because the overlay and the Stop hook have no command line, and rather than a config field because the file holds live cookies and tokens. usabl does not write the path or the file into its config, its evidence files, or its output.
+The command line, the overlay, and the stop hook all read this variable. The file holds live cookies and tokens, so usabl never writes its path or contents into its config, evidence files, or output.
 
-If the variable names a file usabl cannot read, a file that is not JSON, or a session with nothing left in it that could authenticate, the run stops with an error instead of quietly scanning signed out. It stops before it opens a browser and returns no verdict. usabl prints neither the path nor the contents, in errors or in reports. That last check is deliberately strict: it refuses only when every cookie is dated, every date is past, there is no local storage or IndexedDB, and there are no stored credentials, because a false refusal would stop a working run.
+If the file cannot be read, is not JSON, or has clearly expired, usabl stops before it opens a browser and returns no verdict. A session can also end in ways the file does not show. When that happens during a scan, usabl reports the screen as not covered instead of scoring your sign-in page. It watches for 401 responses from your app, a password field on the page, or a browser that ended up on another page asking for a password. It can miss a sign-in page that makes no requests and shows no password field, such as a passkey prompt.
 
-Reading the file cannot tell you much beyond that. A token in local storage or IndexedDB carries no expiry, a passkey has none either, and your application can end a session before its cookie says so, so a file that looks live can still be dead. The rest is caught at scan time, on the page itself. A screen is reported as not reached when the application's own data requests come back 401, when a password field is present anywhere in it, or when the browser ended somewhere else that asks for a password. Any of those makes that screen a coverage gap: it contributes no findings, records no keyboard walk, and no barrier on your evidence floor can be reported as resolved from it. A run whose screens were all like that reports `not_covered`, never `verified`.
+To confirm the right screen loaded, add a `reachedWhen` CSS selector to the surface. Pick something only that screen has, such as its own table or heading, because a selector for the header or navigation also matches the sign-in page.
 
-Two of those rules can be steered. Only 401s from your `appBaseUrl` hostname count, or any subdomain of it, on any scheme and any port, so a third-party service with its own stale credentials cannot block a scan; if usabl cannot parse your `appBaseUrl` it counts every one, because a base URL it cannot read is a configuration it cannot reason about. And a `reachedWhen` selector on a surface, once it matches, outranks the password-field rule, which is how a genuine change-password screen stays scannable. A same-host 401 is never overridden.
+Do not put a password or token in a surface URL. usabl prints surface URLs in its output.
 
-Make `reachedWhen` name content only that screen has, such as its own table or heading. It is your assertion, not a proof usabl can check: a selector aimed at a shell, header, navigation, or footer matches your sign-in page too, and would quietly let a wrong page pass as the screen.
+[Ground truth](docs/ground-truth.md#limits-of-detecting-that-a-screen-was-not-reached-signed-in) lists exactly what usabl detects and what it misses.
 
-None of this is complete. A sign-in page that makes no API calls and shows no password field, such as a passkey or magic-link prompt, is still not caught. Declare a `reachedWhen` selector on a surface when you want a positive assertion that the screen loaded rather than a heuristic that it did not. The [ground truth](docs/ground-truth.md) states exactly what is closed and what is not, including one residual worth knowing now: a credential written into a surface URL in your own `usabl.config.json` is echoed verbatim by every surface, so do not put one there.
+## Commands
 
-## Command surface
+Only the gate decides a result. The commands that scan run the gate, and the other commands draft files, report, or show a result.
 
-These commands draft, inspect, wire, and report. Only `usabl check` decides a verdict.
+| Command                               | What it does                                                                                                                                                                                                                                 |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `usabl check`                         | Checks the screens usabl maps from your change and returns a result. This is the default command. `--self-check` prints a short advisory summary for an AI assistant and exits 0 once it has a result.                                       |
+| `usabl init`                          | Drafts `usabl.config.json` and `usabl.routes.json` from your code.                                                                                                                                                                           |
+| `usabl baseline`                      | Scans every mapped screen and drafts the evidence floor.                                                                                                                                                                                     |
+| `usabl install --<target>`            | Sets up one place usabl runs: `--overlay`, `--claude`, `--claude-skill`, `--cursor`, `--ci`, `--docs-ci`, or `--branch-rule`.                                                                                                                |
+| `usabl doctor`                        | Reports what is set up, missing, or out of date, including the login session. It changes nothing.                                                                                                                                            |
+| `usabl floor prune`                   | Scans again, then removes fixed problems from the evidence floor and lowers counts, so problems block if they come back. It keeps entries for screens it could not check.                                                                    |
+| `usabl drift routes`                  | Reports differences between `usabl.routes.json` and your router.                                                                                                                                                                             |
+| `usabl docs`                          | Writes the name, role, and state at each keyboard stop on each checked screen, as JSON or, with `--html`, as one accessible page. With design requirements, it also writes an alt text list. It always exits 0 and does not decide a result. |
+| `usabl comment`                       | Turns a result from standard input into a pull request comment.                                                                                                                                                                              |
+| `usabl enforce accessibility\|policy` | Reads a result from standard input and returns the CI check status. It does not rerun the checks.                                                                                                                                            |
+| `usabl stop-hook`                     | The entry point that the assistant stop hooks call.                                                                                                                                                                                          |
+| `usabl bypass`                        | Lets the assistant's next stop through once, without checking.                                                                                                                                                                               |
 
-| Command                               | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `usabl check`                         | The gate. Scans the affected screens (and docs pages when `usabl.docs.json` is present) and returns one of four verdicts with its exit code when something was checked, or no verdict (exit 0 when idle, exit 4 when it could not decide). This is the default command.                                                                                                                                                                             |
-| `usabl init`                          | Drafts coverage and policy from the application tree. Runs no gate and writes no evidence.                                                                                                                                                                                                                                                                                                                                                          |
-| `usabl baseline`                      | Runs a full scan and drafts the accepted accessibility floor as a reviewable working-tree diff.                                                                                                                                                                                                                                                                                                                                                     |
-| `usabl install <target>`              | Wires one integration surface as a draft, exactly one per run. Targets: `--overlay`, `--claude`, `--claude-skill`, `--cursor`, `--ci`, `--docs-ci`, `--branch-rule`. `--claude-skill` writes the on-demand `/usabl-check` skill; `--cursor` writes the Cursor `/usabl-check` command and a UI rule whose globs are derived from `uiFileGlobs` in `usabl.config.json` (defaulting to `src/**` when config is absent); `--branch-rule` only verifies. |
-| `usabl doctor`                        | Read-only self-check. Reports each surface as wired, missing, drifted, or unknown, including whether an authenticated session is configured, and mints no verdict.                                                                                                                                                                                                                                                                                  |
-| `usabl floor prune`                   | Re-arms the floor after a full scan: removes identities that are gone and lowers the recorded count where fewer barriers remain, so a reintroduced barrier gates as new instead of staying carried.                                                                                                                                                                                                                                                 |
-| `usabl drift routes`                  | Reports drift between the route manifest and the application router. Read-only.                                                                                                                                                                                                                                                                                                                                                                     |
-| `usabl comment`                       | Projects a run read from stdin into a pull request comment.                                                                                                                                                                                                                                                                                                                                                                                         |
-| `usabl stop-hook`                     | The stable Stop hook entry point. Runs the gate when the assistant tries to finish. It blocks the first stop attempt on a blocking verdict (regression, not covered, or approval required) unless a one-use `usabl bypass` was issued; it allows an active continuation, idle runs, and runs with no verdict, and says so. Always exits 0, so a wedged hook fails open with disclosure.                                                             |
-| `usabl enforce accessibility\|policy` | Reads a gate result from stdin and returns the CI check status. Never re-runs the gate.                                                                                                                                                                                                                                                                                                                                                             |
-| `usabl docs`                          | Projects design-intake and transcript artifacts as JSON on stdout. Add `--html` for one self-contained, accessible HTML page. Always exits 0 and mints no verdict.                                                                                                                                                                                                                                                                                  |
-| `usabl bypass`                        | A one-time, next-stop-only escape hatch that does not verify. It lets the next Stop hook skip verification once.                                                                                                                                                                                                                                                                                                                                    |
+## What usabl does not do
 
-The [team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md) shows these commands in the order a team runs them. Full contracts and semantics are in [docs/ground-truth.md](docs/ground-truth.md).
+- It does not claim an app is accessible or compliant. Its checks follow WCAG 2.2 AA, and some problems need a person to judge.
+- It does not replace expert audits or testing with people who use assistive technology.
+- The virtual screen reader check is built and tested, but it is not part of the result yet. It is planned for v0.3.0, along with calibration against the Orca screen reader.
+- The fleet insights script scans a list of URLs for measurement. It never decides a result.
 
-## Documentation
+## Learn more
 
 - [Team orientation](https://usabl-dev.github.io/usabl/team-orientation.html): start here.
-- [How usabl works](https://usabl-dev.github.io/usabl/how-usabl-works.html): the result model, trust boundary, and product surfaces.
-- [Code walkthrough](https://usabl-dev.github.io/usabl/code-walkthrough.html): the source in the order it runs, grouped into eight systems an engineer can own.
-- [Team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md): the complete operational walkthrough.
-- [Ground truth](docs/ground-truth.md): architecture, contracts, scan layers, adoption model, WCAG coverage, and the demo strategy.
+- [How usabl works](https://usabl-dev.github.io/usabl/how-usabl-works.html): results, the trust model, and where usabl runs.
+- [Code walkthrough](https://usabl-dev.github.io/usabl/code-walkthrough.html): the source in the order it runs.
+- [Team demo](https://github.com/usabl-dev/usabl-app/blob/main/README.md): a hands-on walkthrough on a small PatternFly app that takes about 20 minutes.
+- [Ground truth](docs/ground-truth.md): the design, contracts, and documented limits.
 
-## Status and roadmap
+## Status
 
-Team preview (v0.2.1). Teammates can learn the product, run the loop, choose a contribution lane, and file feedback. See [CHANGELOG.md](CHANGELOG.md) for changes since 0.1.0. This preview does not tag or publish the package.
-
-The screen-reader **voicing** preview and the **fleet-insights** measurement view are built and exported, but neither is part of the gate today. Voicing is planned to enter the check path in v0.3.0. Fleet-insights aggregates committed findings for reporting only and never changes a verdict.
+Team preview, version 0.2.1. This version is not tagged or published to npm. See [CHANGELOG.md](CHANGELOG.md) for changes since 0.1.0.
 
 ## Contributing
 
-The provider interface is the contribution seam: add a check, return `Draft[]`, and ship a rule. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup, including Node 22, pre-commit, and the build.
-
-Work runs in three independent lanes, implement, review, and security review, and the lane that writes a change does not review it or grade its own work. Follow [Conventional Commits](CONTRIBUTING.md#commits), write the failing test first, and open pull requests against `main`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, commit style, and how pull requests are reviewed. Developers add new checks by implementing the provider interface. A check returns draft findings, and only the gate turns findings into a result.
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
-
----
-
-**Don't ship until it's usabl.**
+Apache License 2.0. See [LICENSE](LICENSE).
