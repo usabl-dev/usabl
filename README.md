@@ -5,7 +5,7 @@
 ![Node](https://img.shields.io/badge/node-%3E%3D22-blue?style=flat-square)
 ![Status](https://img.shields.io/badge/status-team%20preview-orange?style=flat-square)
 
-**usable by default.**
+**Don't ship until it's usabl.**
 
 usabl checks changes to a web app's user interface for accessibility problems while the code is being written. It runs from the command line, a browser overlay, an AI coding assistant, and a pull request check, and all of them use the same engine.
 
