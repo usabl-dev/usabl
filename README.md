@@ -36,7 +36,7 @@ All three checks caught the same unnamed button. The 20 recorded problems were a
 
 ## How it works
 
-- **Three checks.** On each app screen it scans, usabl runs axe-core for general accessibility rules, PatternFly rules for problems in how PatternFly components are put together, and a keyboard walk. The walk tabs through the page and records the name, role, and state at each stop from the browser's accessibility tree. That is an approximation of what a screen reader says. usabl does not run a real screen reader. Documentation pages skip the PatternFly rules.
+- **Three checks.** On each app screen it scans, usabl runs axe-core for general accessibility rules, PatternFly rules for problems in how PatternFly components are put together, and a keyboard walk. The walk tabs through the page and records the name, role, and state at each stop from the browser's accessibility tree. That is an approximation of what a screen reader says. A virtual screen reader that checks what is announced during an interaction is built, but it is not wired in yet. Documentation pages skip the PatternFly rules.
 - **The screens it can map from a change.** usabl maps changed files to screens using your routes, your imports, the screens you map by hand, and files that affect every screen. If it maps a screen but cannot load it, it reports that screen as not covered. A screen it cannot map is not checked, so keep your mappings current.
 - **Existing problems are recorded.** `usabl baseline` records the problems it finds in an evidence floor file, `.usabl-evidence.json`, by screen, rule, and element, with a count. A problem blocks when it is new, or when there are more of it than the floor records. After you fix recorded problems, run `usabl floor prune` so they block if they come back.
 - **Exceptions expire.** A waiver in `.usabl-waivers.json` covers one element, or every element, for one rule on one screen. Each waiver names an owner, an approver, a reason, and an expiration date. After that date the waiver stops applying, and the problem blocks again unless the evidence floor records it. Waived problems still appear in the result.
@@ -192,7 +192,7 @@ Only the gate decides a result. The commands that scan run the gate, and the oth
 
 - It does not claim an app is accessible or compliant. Its checks follow WCAG 2.2 AA, and some problems need a person to judge.
 - It does not replace expert audits or testing with people who use assistive technology.
-- The voicing check, which predicts screen reader output from the accessibility tree, is built but not part of the result yet. It is planned for v0.3.0.
+- The virtual screen reader check is built and tested, but it is not part of the result yet. It is planned for v0.3.0, along with calibration against the Orca screen reader.
 - The fleet insights script scans a list of URLs for measurement. It never decides a result.
 
 ## Learn more
