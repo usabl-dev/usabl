@@ -214,7 +214,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, commit style, and how p
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
-
----
-
-**Don't ship until it's usabl.**
