@@ -8,7 +8,7 @@ ANSIBLE_UI_REPO="${ANSIBLE_UI_REPO:-https://github.com/usabl-dev/ansible-ui-demo
 USABL_REPO="${USABL_REPO:-https://github.com/usabl-dev/usabl.git}"
 SSH_KEY="${HOME}/.ssh/rht_classroom.rsa"
 AAP_USER="${AAP_USER:-admin}"
-AAP_PASSWORD="${AAP_PASSWORD:-redhat}"
+AAP_PASSWORD="${AAP_PASSWORD:-}"
 AUI_BASE_URL="${AUI_BASE_URL:-http://localhost:4100}"
 SKIP_CLONE=0
 SKIP_SESSION=0
@@ -30,7 +30,7 @@ Options:
 
 Environment:
   AAP_USER          Default: admin
-  AAP_PASSWORD      Default: redhat
+  AAP_PASSWORD      Required, no default. Export it or set it in WORKDIR/demo.env
   AUI_BASE_URL      Default: http://localhost:4100
 
 Before running:
@@ -186,6 +186,10 @@ mint_session() {
     echo "    AUI_BASE_URL=${AUI_BASE_URL} AAP_USER=${AAP_USER} AAP_PASSWORD=*** \\"
     echo "      AUI_STORAGE_STATE=./.usabl-session.json node ${USABL_DIR}/docs/demo/aap-login.mjs"
     return 0
+  fi
+  if [ -z "${AAP_PASSWORD}" ]; then
+    echo "error: AAP_PASSWORD is not set. Export it, or put it in ${WORKDIR}/demo.env." >&2
+    return 1
   fi
   info "minting Playwright session at ${ANSIBLE_UI_DIR}/.usabl-session.json"
   (
