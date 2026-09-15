@@ -5,6 +5,8 @@ out/
 .env
 .env.*
 !.env.example
+*.key
+*.pem
 *.log
 .DS_Store
 
@@ -12,8 +14,10 @@ out/
 .demo-integration.lock
 
 # Local-only tooling (not published to the remote)
+.claude/
 .cursor/
 .githooks/
+.remember/
 .superpowers/
 .usabl/
 .pre-commit-cache/
