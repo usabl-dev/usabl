@@ -24,7 +24,7 @@ import { SITE_BASE_PATH } from './stage-public-pages.mjs';
 // site root and is served under SITE_BASE_PATH, so `/usabl/page.html` names
 // docs/page.html, and a root-absolute link outside that prefix is broken.
 
-const ROOT_DOCS = ['README.md', 'CONTRIBUTING.md', 'CHANGELOG.md'];
+const ROOT_DOCS = ['README.md', 'CHANGELOG.md'];
 // The directory that becomes the site root once staged.
 const SITE_SOURCE_DIR = 'docs';
 const CORPUS_EXTENSIONS = new Set(['.md', '.html']);
