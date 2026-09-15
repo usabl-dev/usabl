@@ -26,8 +26,7 @@ fi
 echo "==> opening tunnel: localhost:${LOCAL_PORT} -> ${REMOTE_HOST}:${REMOTE_PORT} via ${AAP_LAB_USER}@${AAP_LAB_HOST}:${AAP_LAB_PORT}"
 ssh -f -N \
   -L "${LOCAL_PORT}:${REMOTE_HOST}:${REMOTE_PORT}" \
-  -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=/dev/null \
+  -o StrictHostKeyChecking=accept-new \
   -o ExitOnForwardFailure=yes \
   -i "${SSH_KEY}" \
   -p "${AAP_LAB_PORT}" \
