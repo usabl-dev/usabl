@@ -32,15 +32,17 @@ async function runChecker(sourceDir: string): Promise<RunResult> {
   }
 }
 
-// Write the four allowlisted pages the staging step requires, with the given
-// content per page. Every page not named gets a link-free body so the fixture
-// stages cleanly and only the page under test carries links.
+// Write the allowlisted pages the staging step requires, with the given content
+// per page. Every page not named gets a link-free body so the fixture stages
+// cleanly and only the page under test carries links. usabl-walkthrough.html is
+// also staged as index.html, so its body is what the site root serves.
 async function writePublicPages(source: string, pages: Record<string, string>): Promise<void> {
   await mkdir(join(source, 'demo'), { recursive: true });
   const defaults: Record<string, string> = {
     'team-orientation.html': '<h1 id="top">Orientation</h1>\n',
     'how-usabl-works.html': '<h1 id="intro">How it works</h1>\n',
-    'code-walkthrough.html': '<h1>Walkthrough</h1>\n',
+    'code-walkthrough.html': '<h1>Code</h1>\n',
+    'usabl-walkthrough.html': '<h1 id="top">Walkthrough</h1>\n',
     'demo/product-deck.html': '<h1>Deck</h1>\n',
   };
   for (const [name, body] of Object.entries({ ...defaults, ...pages })) {
@@ -99,17 +101,17 @@ describe('check-staged-links command', () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('0 broken');
-    // Three file links and one same-page fragment on the orientation page count
-    // twice because it is also staged as index.html, plus the one link on the
-    // deck. The external URL and the data URI are skipped, not checked.
-    expect(result.stdout).toContain('9 internal link(s) checked');
-    expect(result.stdout).toContain('4 external link(s) skipped');
+    // Three file links and one same-page fragment on the orientation page, plus
+    // the one link on the deck. The external URL and the data URI are skipped,
+    // not checked.
+    expect(result.stdout).toContain('5 internal link(s) checked');
+    expect(result.stdout).toContain('2 external link(s) skipped');
   });
 
   it('validates fragments against the staged file, including the root index', async () => {
     root = await mkdtemp(join(tmpdir(), 'usabl-staged-links-fragment-'));
     const source = join(root, 'docs');
-    // /usabl/ is served as the staged index.html, a copy of team-orientation.html,
+    // /usabl/ is served as the staged index.html, a copy of usabl-walkthrough.html,
     // which has id="top" and nothing named "missing". The source pass sees /usabl/
     // as the docs directory and cannot check that fragment; this pass must.
     await writePublicPages(source, {

@@ -78,7 +78,9 @@ async function writePublicPages(source: string, pages: Record<string, string>): 
   const defaults: Record<string, string> = {
     'team-orientation.html': '<h1 id="top">Orientation</h1>\n',
     'how-usabl-works.html': '<h1 id="intro">How it works</h1>\n',
-    'code-walkthrough.html': '<h1>Walkthrough</h1>\n',
+    'code-walkthrough.html': '<h1>Code</h1>\n',
+    // Also staged as index.html, so this body is what the site root serves.
+    'usabl-walkthrough.html': '<h1 id="top">Walkthrough</h1>\n',
     'demo/product-deck.html': '<h1>Deck</h1>\n',
   };
   for (const [name, body] of Object.entries({ ...defaults, ...pages })) {

@@ -15,15 +15,19 @@ const PUBLIC_FILES = [
   'demo/product-deck.html',
   'how-usabl-works.html',
   'team-orientation.html',
+  'usabl-walkthrough.html',
 ];
+// The page served at the site root. The walkthrough is the document the project
+// hands out, so the bare site URL opens it rather than a directory listing.
+const INDEX_SOURCE = 'usabl-walkthrough.html';
 // The exact set the output directory must contain afterward, as sorted POSIX paths.
-// index.html is a copy of team-orientation.html so the site root has a landing page.
 const OUTPUT_FILES = [
   'code-walkthrough.html',
   'demo/product-deck.html',
   'how-usabl-works.html',
   'index.html',
   'team-orientation.html',
+  'usabl-walkthrough.html',
 ];
 
 // Recursively list every regular file under dir as a sorted POSIX-relative path, so the
@@ -58,7 +62,7 @@ async function stagePublicPages(sourceDir = 'docs', outputDir = '.pages') {
     await mkdir(dirname(destination), { recursive: true });
     await copyFile(input, destination);
   }
-  await copyFile(resolve(source, 'team-orientation.html'), resolve(output, 'index.html'));
+  await copyFile(resolve(source, INDEX_SOURCE), resolve(output, 'index.html'));
 
   const staged = await listStagedFiles(output);
   if (JSON.stringify(staged) !== JSON.stringify(OUTPUT_FILES)) {
