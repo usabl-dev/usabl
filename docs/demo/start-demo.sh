@@ -50,14 +50,20 @@ say "lab API answers 200"
 
 # 3. Dev server with the scanner session path in its environment. Every scan reads that file, so
 #    minting again later refreshes the scanner without a restart. HTTPS is the app's default and
-#    the scanner does not ignore certificate errors, so the protocol is forced to HTTP.
+#    the scanner does not ignore certificate errors, so the protocol is forced to HTTP. The host is
+#    set to :: so the server listens on IPv6 and, on Linux, IPv4 too. This matters because localhost
+#    resolves to ::1 here, and Vite's default (and --host 0.0.0.0) binds IPv4 only: a browser opening
+#    localhost:4100 would then hit an IPv6 socket that is not there and get a connection reset, while
+#    curl to 127.0.0.1 kept working. Binding :: makes localhost, 127.0.0.1, and the LAN address all
+#    reachable. The overlay only serves on its own dev origin (localhost:4100), so localhost is the
+#    address to film on; the LAN address answers the app but 403s the overlay endpoints.
 if ss -ltn 2>/dev/null | grep -q ':4100 '; then
   say "dev server already listening on 4100"
 else
   say "starting the dev server on 4100"
   ( cd "${APP}" && USABL_STORAGE_STATE="${SESSION}" DEV_SERVER_PROTOCOL=http \
       PLATFORM_SERVER=https://aap.lab.example.com:8443/ BROWSER=none \
-      nohup npm --prefix platform start -- --no-open > "${WORKDIR}/aui-dev.log" 2>&1 & )
+      nohup npm --prefix platform start -- --no-open --host :: > "${WORKDIR}/aui-dev.log" 2>&1 & )
   for _ in $(seq 1 60); do ss -ltn 2>/dev/null | grep -q ':4100 ' && break; sleep 3; done
 fi
 curl -s -o /dev/null -w 'dev server: %{http_code}\n' --max-time 30 http://localhost:4100/
