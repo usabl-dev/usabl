@@ -204,6 +204,24 @@ mint_session() {
   )
 }
 
+apply_demo_edit() {
+  # A fresh clone lands clean on the floor commit, so the change-driven overlay shows
+  # "Nothing to check". Reintroduce a benign edit on the users screen so setup leaves the
+  # demo in the VERIFIED-carrying-29 state, ready to film. Working-tree only; never committed.
+  local route="${ANSIBLE_UI_DIR}/platform/routes/useGetPlatformUsersRoutes.tsx"
+  local marker='// demo: edit on the users screen so usabl grades this change'
+  if [[ ! -f "${route}" ]]; then
+    info "skipping demo edit (${route} not found)"
+    return 0
+  fi
+  if grep -qF "${marker}" "${route}"; then
+    info "demo edit already present on users screen"
+    return 0
+  fi
+  printf '%s\n' "${marker}" >>"${route}"
+  info "applied demo edit to users screen (uncommitted; overlay will show VERIFIED, 29 recorded)"
+}
+
 print_next_steps() {
   cat <<EOF
 
@@ -239,6 +257,7 @@ main() {
   [[ -d "${USABL_DIR}" ]] || die "usabl not found at ${USABL_DIR}"
   verify_key_fingerprint
   install_deps
+  apply_demo_edit
   check_hosts
   open_tunnel
   mint_session
