@@ -1764,23 +1764,24 @@ switch lives in the fixture app, not on `ScreenScan`.
 
 ### How the work is split
 
-- **Nitin** builds the detection engine (accessibility depth).
-- **Ed** builds the verdict core, AI loop, and intake/output interfaces (lead).
-- **Patrick** owns performance, behavior tests, demo capture, CI infra.
-- **Vishali** owns real-reader validation, honesty audit, adversarial security suite.
-- **Jim** makes the demo and presentation (week 4).
+- **Detection** builds the detection engine (accessibility depth).
+- **Gate** builds the verdict core, AI loop, and intake/output interfaces (lead).
+- **Infrastructure** owns performance, behavior tests, demo capture, CI infra.
+- **Validation** owns real-reader validation, honesty audit, adversarial security
+  suite.
+- **Production** makes the demo and presentation (week 4).
 
 ### Pairings
 
-- Nitin builds accessibility, Vishali reviews accessibility.
-- Ed builds the loop and surfaces, Patrick reviews and hardens them.
-- Ed owns intake schema, YAML normalize, and Reports; Nitin wires intake-derived
-  providers.
+- Detection builds accessibility, Validation reviews accessibility.
+- Gate builds the loop and surfaces, Infrastructure reviews and hardens them.
+- Gate owns intake schema, YAML normalize, and Reports; Detection wires
+  intake-derived providers.
 
 ### Integration
 
-The detection engine (Nitin) and the gate (Ed) integrate around day 6-8. Before
-that they work apart against the frozen contracts.
+The detection engine and the gate integrate around day 6-8. Before that they work
+apart against the frozen contracts.
 
 ### Schedule (4 weeks total, week 4 is demo polish)
 
@@ -1794,8 +1795,8 @@ that they work apart against the frozen contracts.
 - Week 4: demo production, rehearsal, deck, and buffer. No new features.
 
 The MVP and the demo are the same artifact. We are building what we demo the
-entire time. Week 4 is for Jim to produce the polished video, the team to
-rehearse the live segment, and everyone to practice the narrative.
+entire time. Week 4 is for the team to produce the polished video, rehearse the
+live segment, and practice the narrative.
 
 ### Cut line (dropped first)
 
@@ -2130,7 +2131,7 @@ a real PatternFly surface, not the fixture app.
 
 - **Target for demo:** state whatever the number is, honestly. A rate above 70%
   on a real surface is strong. Below 50% needs explanation.
-- **Measured by:** Vishali, on the real-repo smoke pass.
+- **Measured by:** the team, on the real-repo smoke pass.
 - **Shown in demo:** one slide, one number, cited honestly.
 
 ### Stop-hook policy gate for `not_covered`
@@ -2178,8 +2179,8 @@ demo are the same artifact. We build what we demo.
 
 - Weeks 1-2: core engine, surfaces, and the vertical slice working end to end.
 - Week 3: real-repo smoke pass, performance tuning, asset capture, overlay polish.
-- Week 4: Jim produces the polished video from raw captures. Team rehearses the
-  live segment. Deck finalized. No new features.
+- Week 4: the team produces the polished video from raw captures and rehearses
+  the live segment. Deck finalized. No new features.
 
 ### AI coding assistant
 
@@ -2221,7 +2222,7 @@ reader and judges recognize it. Lock the demo surface and the planted interactio
 **Validation harness and dogfood reader (Orca on Fedora).** Orca is the team's native
 reader on Fedora. It is the validation-harness target and the team's dogfood reader.
 Because guidepup automates VoiceOver and NVDA only (not Orca), the harness cannot
-drive Orca programmatically. Instead, Vishali captures Orca's spoken output via a
+drive Orca programmatically. Instead, the team captures Orca's spoken output via a
 speech-dispatcher log module or a manual transcription pass, then compares it offline
 to the Virtual Screen Reader transcript.
 
@@ -2252,17 +2253,6 @@ Credibility preflight before recording:
 - Listen to how a real screen reader pronounces "usabl" and note the intended spoken
   form in the presenter notes.
 
-### Demo roles
-
-- Patrick captures raw tool runs, sets up the live-reveal machine, and coordinates
-  the NVDA hero recording session (Windows VM or Assistiv Labs) after the hero bug is
-  locked.
-- Vishali runs the Orca validation pass on Fedora (speech-dispatcher capture or
-  manual transcription) and compares the output against the Virtual Screen Reader
-  transcript.
-- Jim produces the polished video and deck in week 4.
-- Ed presents.
-
 ---
 
 ## 27. Settled decisions
@@ -2287,8 +2277,8 @@ Credibility preflight before recording:
 | Storybook addon | Post-contest seam (section 11.8). |
 | Contest timeline | 4 weeks. Week 4 = demo polish. |
 | How many PF rules | Eight, with a cut line (structural rules first). |
-| Hero demo recording | NVDA (Windows VM or Assistiv Labs), captured once after hero bug is locked; Patrick coordinates. |
-| Validation / dogfood reader | Orca on Fedora; Vishali captures spoken output and compares offline to Virtual Screen Reader transcript. |
+| Hero demo recording | NVDA (Windows VM or Assistiv Labs), captured once after hero bug is locked. |
+| Validation / dogfood reader | Orca on Fedora; spoken output is captured and compared offline to the Virtual Screen Reader transcript. |
 | Evidence labels | On every Draft from day 1. Contest = all deterministic. |
 | Design intake in scope | Schema + YAML normalize in contest. Figma/CSV ingest is a seam. |
 | Reports in scope | Generate the three artifacts, bound to receipt. |
@@ -2298,12 +2288,12 @@ Credibility preflight before recording:
 
 | Decision | Who decides | When |
 |---|---|---|
-| The demo PatternFly app and the hero bug | Ed + Nitin | Before NVDA hero recording |
-| Real PatternFly repo for smoke pass | Ed | Week 2 |
-| Verified-verdict-rate target to state on stage | Vishali + Ed | After measurement |
-| CI host for branch protection (done: the main-branch ruleset requires `usabl-required`) | Ed | Week 2 |
-| Real bug sample for rule validation | Nitin + Vishali | Week 1 |
-| MCP wrapper vs Bash-only mid-task check | Ed | After hero loop works; before demo polish |
+| The demo PatternFly app and the hero bug | The team | Before NVDA hero recording |
+| Real PatternFly repo for smoke pass | The team | Week 2 |
+| Verified-verdict-rate target to state on stage | The team | After measurement |
+| CI host for branch protection (done: the main-branch ruleset requires `usabl-required`) | The team | Week 2 |
+| Real bug sample for rule validation | The team | Week 1 |
+| MCP wrapper vs Bash-only mid-task check | The team | After hero loop works; before demo polish |
 
 ---
 

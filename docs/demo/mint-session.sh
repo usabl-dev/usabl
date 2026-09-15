@@ -14,6 +14,6 @@ SESSION="${WORKDIR}/aui-session-live.json"
 
 cd "${APP}"
 AUI_BASE_URL="${AUI_BASE_URL:-http://localhost:4100}" AAP_USER="${AAP_USER:-admin}" \
-  AAP_PASSWORD="${AAP_PASSWORD:-redhat}" AUI_STORAGE_STATE="${SESSION}" \
+  AAP_PASSWORD="${AAP_PASSWORD:?set AAP_PASSWORD, or put it in ${WORKDIR}/demo.env}" AUI_STORAGE_STATE="${SESSION}" \
   node "${ENGINE}/docs/demo/aap-login.mjs"
 printf '==> session minted at %s; it lives about 15 minutes\n' "$(date +%H:%M)"

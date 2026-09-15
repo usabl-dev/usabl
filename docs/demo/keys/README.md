@@ -1,7 +1,7 @@
 # Lab SSH public key (fingerprint check only)
 
 This file is the **public** half of the shared classroom key in the team Drive folder
-(see `../ansible-ui-team-setup.md` or ask Ed for access). It does **not** grant access by itself.
+(see `../ansible-ui-team-setup.md` or ask the team for access). It does **not** grant access by itself.
 
 ## Verify your private key
 
