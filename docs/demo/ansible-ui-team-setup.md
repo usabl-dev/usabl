@@ -228,7 +228,7 @@ four), not a silent pass on zero work.
 
 ## Surfaces already wired in the fork
 
-Ed has already set up the CI gate, Vite overlay, baseline, and branch protection. You do not need to
+The CI gate, Vite overlay, baseline, and branch protection are already set up. You do not need to
 run the install commands below. This section explains what each surface does so you know what you are
 looking at.
 
@@ -534,8 +534,9 @@ usabl scans as a logged-in user. Mint a session with the script from the usabl c
 ansible-ui clone so the session file lands where usabl reads it:
 ```
 cd ansible-ui
+export AAP_PASSWORD='<lab admin password>'   # or set it once in WORKDIR/demo.env
 AUI_BASE_URL=http://localhost:4100 \
-AAP_USER=admin AAP_PASSWORD=redhat \
+AAP_USER=admin \
 AUI_STORAGE_STATE=./.usabl-session.json \
 node ../usabl/docs/demo/aap-login.mjs
 ```
@@ -572,7 +573,7 @@ surfaces. Use the committed `usabl.config.json`.
 - `curl` returns `000`: tunnel down, re-run `../usabl/docs/demo/open-aap-tunnel.sh`. If `127.0.0.1`
   works but the hostname does not, add the `/etc/hosts` line.
 - Key fingerprint mismatch: you have the wrong private key. Re-download from the team Drive folder,
-  not a key from your own lab DOWNLOAD unless Ed confirms it is the same pair.
+  not a key from your own lab DOWNLOAD unless the team confirms it is the same pair.
 - Login script times out on `#pf-login-username-id`: dev server not running, or API tunnel down. Open
   http://localhost:4100/login in a browser first.
 - Every page shows the login screen in usabl output: session is for the wrong port, re-mint step 4.
