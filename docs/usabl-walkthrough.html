@@ -541,11 +541,16 @@ kbd {
 .meter-key i { width: 0.85rem; height: 0.85rem; border: 1px solid var(--ink); display: inline-block; }
 
 /* ---------- reveal ---------- */
-.rv { opacity: 1; }
-.js .rv { opacity: 0; transform: translateY(14px); }
-.js .rv.in { opacity: 1; transform: none; transition: opacity 620ms cubic-bezier(.2,.7,.2,1), transform 620ms cubic-bezier(.2,.7,.2,1); }
+/* Movement only, never opacity. This used to fade in as well, and the repo's own
+   docs gate caught a figure caption partway through the fade at 4.35:1: the colour
+   is fine at full strength, but every intermediate frame of a fade is a lower
+   contrast than the one the design was checked at. Text on this page is therefore
+   only ever drawn at full opacity, and the reveal is carried by position. */
+.rv { transform: none; }
+.js .rv { transform: translateY(14px); }
+.js .rv.in { transform: none; transition: transform 620ms cubic-bezier(.2,.7,.2,1); }
 @media (prefers-reduced-motion: reduce) {
-  .js .rv { opacity: 1; transform: none; }
+  .js .rv { transform: none; }
   .js .rv.in { transition: none; }
 }
 
@@ -594,7 +599,7 @@ kbd {
       <div>
         <dl class="spec">
           <div><dt class="k">Version</dt><dd class="v">0.2.1 preview</dd></div>
-          <div><dt class="k">Licence</dt><dd class="v">Apache-2.0</dd></div>
+          <div><dt class="k">License</dt><dd class="v">Apache-2.0</dd></div>
           <div><dt class="k">Runtime</dt><dd class="v">Node &ge; 22, TypeScript</dd></div>
           <div><dt class="k">Standard</dt><dd class="v">WCAG 2.2, Level A and AA</dd></div>
           <div><dt class="k">Engine</dt><dd class="v">121 files, 25,772 lines</dd></div>
