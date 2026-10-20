@@ -1,7 +1,11 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CoverageGap, Draft, Requirement, RequirementBundle, Result } from '../../src/contracts/index.js';
 import {
   assertUsablVerdict,
+  loadProjectIntake,
   requirementGapsForPage,
   summarizePageCheck,
 } from '../../src/surfaces/playwright-helper.js';
@@ -237,5 +241,69 @@ describe('requirementGapsForPage', () => {
       approved: true,
     };
     expect(requirementGapsForPage(bundle(doc), 'page', known)).toEqual([]);
+  });
+
+  it('reports every runtime requirement as a gap for an unlabeled page, even when a surface is named page', () => {
+    // An unlabeled call is not any surface. If it read as the surface "page", the requirement
+    // for clusters would fall out of scope with no gap, and nothing would have checked it.
+    const withPageSurface = new Set(['page', 'clusters']);
+    const gaps = requirementGapsForPage(
+      bundle(content('heading', 'clusters'), content('page-title', 'page')),
+      null,
+      withPageSurface,
+    );
+    expect(gaps.map((gap) => gap.ref)).toEqual(['requirement:heading', 'requirement:page-title']);
+    expect(gaps[0]?.reason).toContain('not labeled');
+  });
+});
+
+describe('loadProjectIntake', () => {
+  async function withDir(run: (dir: string) => Promise<void>): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-intake-'));
+    try {
+      await run(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('is a gap that names the root when the caller passed a projectRoot that has no usabl.config.json', async () => {
+    await withDir(async (dir) => {
+      const intake = await loadProjectIntake(dir, true);
+      expect(intake.project).toEqual({ root: dir, configFound: false });
+      expect(intake.gaps).toHaveLength(1);
+      expect(intake.gaps[0]).toMatchObject({ ref: 'usabl.config.json', state: 'not-covered' });
+      expect(intake.gaps[0]?.reason).toContain(dir);
+    });
+  });
+
+  it('stays silent when the default root has no usabl.config.json, and says which root it read', async () => {
+    await withDir(async (dir) => {
+      const intake = await loadProjectIntake(dir, false);
+      expect(intake.gaps).toEqual([]);
+      expect(intake.requirements).toEqual({ version: 1, requirements: [] });
+      expect(intake.project).toEqual({ root: dir, configFound: false });
+    });
+  });
+
+  it('does not search parent directories for a config', async () => {
+    await withDir(async (dir) => {
+      const config = {
+        appBaseUrl: 'http://127.0.0.1:5173',
+        uiFileGlobs: ['src/**'],
+        discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
+        surfaces: [{ id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['src/Clusters.tsx'] }],
+        guardedPaths: [],
+      };
+      await writeFile(join(dir, 'usabl.config.json'), JSON.stringify(config));
+      const child = await mkdtemp(join(dir, 'child-'));
+      const intake = await loadProjectIntake(child, true);
+      expect(intake.project).toEqual({ root: child, configFound: false });
+      expect(intake.gaps.map((gap) => gap.ref)).toEqual(['usabl.config.json']);
+
+      const parent = await loadProjectIntake(dir, true);
+      expect(parent.project).toEqual({ root: dir, configFound: true });
+      expect(parent.gaps).toEqual([]);
+    });
   });
 });

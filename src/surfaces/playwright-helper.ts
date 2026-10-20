@@ -3,6 +3,7 @@
  * This unit gives tests a convenient verdict check surface.
  * It must never mint a new verdict or reinterpret gate ownership.
  */
+import { resolve } from 'node:path';
 import type { Page as PwPage } from 'playwright';
 import type {
   AccessibilityVerdict,
@@ -37,6 +38,15 @@ export interface PageCheckResult {
   gaps: CoverageGap[]; // providers that could not run on this page
   drafts: Draft[]; // every observation the providers emitted, in provider order
   summary: string;
+  // Set by checkPage: where it looked for usabl.config.json and whether it found one. A missing
+  // config at the default root adds no gap, because a project that does not use usabl config has
+  // none, so this field is how a caller can tell "no requirements" from "read the wrong folder".
+  project?: PageCheckProject;
+}
+
+export interface PageCheckProject {
+  root: string; // the absolute directory checkPage read usabl.config.json from; never searched upward
+  configFound: boolean;
 }
 
 /**
@@ -65,14 +75,17 @@ export function summarizePageCheck(drafts: Draft[], gaps: CoverageGap[]): PageCh
 export interface CheckPageOptions {
   // The surface id this page is, as usabl.config.json or the route manifest names it. Design
   // requirements are matched to a page by this id, the same way the CLI matches them to a screen.
-  // Defaults to 'page', which is no surface, so a project with design requirements gets a gap
-  // for each one until the page is labeled.
+  // Left out, the page is unlabeled: findings are labeled 'page', but the page counts as no surface,
+  // even in a project with a surface named page, so each design requirement is a gap until the
+  // page is labeled.
   screenId?: string;
   profile?: ProfileName; // 'app' (default) or 'docs'; 'docs' switches axe to the WCAG 2.2 AA tag set
   keyboardWalk?: boolean; // run the Tab-order walk; defaults to true
   tabCap?: number; // max Tab presses in the keyboard walk
   // The directory that holds usabl.config.json, which is where the CLI reads it. The design
-  // requirements it names are loaded from here. Defaults to the current working directory.
+  // requirements it names are loaded from the working tree here, not from a trusted ref. Defaults
+  // to the current working directory. Parent directories are never searched. A root passed here
+  // with no usabl.config.json in it is a gap; the default root with none is not.
   projectRoot?: string;
 }
 
@@ -96,11 +109,12 @@ function pageCheckCapabilities(providers: Provider[]): Capability[] {
 const NO_REQUIREMENTS: RequirementBundle = { version: 1, requirements: [] };
 
 // What checkPage reads from the project before it runs: the requirement bundle the CLI would
-// load, the surface ids the project names, and any gap that stopped either from being read.
-interface ProjectIntake {
+// load, the surface ids the project names, where it looked, and any gap that stopped it.
+export interface ProjectIntake {
   // Null means the requirements could not be read. Nothing was checked against them.
   requirements: RequirementBundle | null;
   knownSurfaceIds: ReadonlySet<string>;
+  project: PageCheckProject;
   gaps: CoverageGap[];
 }
 
@@ -110,23 +124,46 @@ function errorMessage(error: unknown): string {
 
 /**
  * Reads the project the way the CLI does: usabl.config.json at the root, then the requirements
- * directory it names, through the same loader. A project with no usabl.config.json has no design
- * requirements for the CLI to enforce either, so it loads none and discloses nothing. A config or
- * requirements directory that is present and cannot be read is a gap, never an empty bundle.
+ * directory it names, through the same loader. It reads only `projectRoot` and never searches
+ * parent directories, so the folder it reports is the folder it read.
+ *
+ * A missing usabl.config.json means different things by where the root came from. When the caller
+ * named the root, a missing config means the caller pointed at the wrong folder, and loading no
+ * requirements from it would quietly check none, so it is a gap that names the root. When the root
+ * is the default working directory, a missing config is the normal case for a project that does
+ * not use usabl config, so it adds no gap; the result's `project` field still says what was read.
+ * A config or requirements directory that is present and cannot be read is always a gap.
  */
-async function loadProjectIntake(projectRoot: string): Promise<ProjectIntake> {
-  const fs = makeFsGlob({ cwd: projectRoot });
+export async function loadProjectIntake(projectRoot: string, rootWasPassed: boolean): Promise<ProjectIntake> {
+  const root = resolve(projectRoot);
+  const fs = makeFsGlob({ cwd: root });
   let config: UsablConfig;
   try {
     const raw = await fs.readFile('usabl.config.json');
     if (raw === null) {
-      return { requirements: NO_REQUIREMENTS, knownSurfaceIds: new Set(), gaps: [] };
+      const missing: ProjectIntake = {
+        requirements: NO_REQUIREMENTS,
+        knownSurfaceIds: new Set(),
+        project: { root, configFound: false },
+        gaps: [],
+      };
+      if (rootWasPassed) {
+        missing.gaps.push({
+          ref: 'usabl.config.json',
+          state: 'not-covered',
+          reason: scrubString(
+            `projectRoot ${root} has no usabl.config.json, so no design requirements were read or checked. Pass the directory that holds usabl.config.json.`,
+          ),
+        });
+      }
+      return missing;
     }
     config = parseUsablConfig(raw);
   } catch (error: unknown) {
     return {
       requirements: null,
       knownSurfaceIds: new Set(),
+      project: { root, configFound: true },
       gaps: [
         {
           ref: 'usabl.config.json',
@@ -149,11 +186,13 @@ async function loadProjectIntake(projectRoot: string): Promise<ProjectIntake> {
     // a gap, never let one through unchecked.
   }
 
+  const project: PageCheckProject = { root, configFound: true };
   const loaded = await loadRequirements(fs, config);
   if (!loaded.ok) {
     return {
       requirements: null,
       knownSurfaceIds: known,
+      project,
       gaps: [
         {
           ref: 'requirements',
@@ -163,12 +202,12 @@ async function loadProjectIntake(projectRoot: string): Promise<ProjectIntake> {
       ],
     };
   }
-  return { requirements: loaded.bundle, knownSurfaceIds: known, gaps: [] };
+  return { requirements: loaded.bundle, knownSurfaceIds: known, project, gaps: [] };
 }
 
 /**
  * Which design requirements a single page check cannot account for. Pure so the rule is testable
- * without a browser or a project on disk.
+ * without a browser or a project on disk. A null screenId is an unlabeled page.
  *
  * Each runtime requirement (content or flow) lands in one of three places:
  * - Its surface is this page's surface, so its provider checks it on this page.
@@ -183,18 +222,20 @@ async function loadProjectIntake(projectRoot: string): Promise<ProjectIntake> {
  */
 export function requirementGapsForPage(
   requirements: RequirementBundle,
-  screenId: string,
+  screenId: string | null,
   knownSurfaceIds: ReadonlySet<string>,
 ): CoverageGap[] {
   const runtime = requirements.requirements.filter(
     (requirement) => requirement.assertion.type === 'content' || requirement.assertion.type === 'flow',
   );
+  // Null is an unlabeled page. It is no surface, so it is never known and nothing is in scope.
   const pageIsKnown =
-    knownSurfaceIds.has(screenId) || runtime.some((requirement) => requirement.surface === screenId);
+    screenId !== null &&
+    (knownSurfaceIds.has(screenId) || runtime.some((requirement) => requirement.surface === screenId));
 
   const gaps: CoverageGap[] = [];
   for (const requirement of runtime) {
-    if (requirement.surface === screenId) {
+    if (screenId !== null && requirement.surface === screenId) {
       continue;
     }
     if (pageIsKnown && knownSurfaceIds.has(requirement.surface)) {
@@ -202,7 +243,9 @@ export function requirementGapsForPage(
     }
     const reason = pageIsKnown
       ? `requirement ${requirement.id} names surface ${requirement.surface}, which matches no configured or discovered surface, so it was not checked`
-      : `this page is labeled ${screenId}, which matches no surface, so requirement ${requirement.id} for surface ${requirement.surface} was not checked; pass the page's surface id as screenId`;
+      : screenId === null
+        ? `this page is not labeled with a surface, so requirement ${requirement.id} for surface ${requirement.surface} was not checked; pass the page's surface id as screenId`
+        : `this page is labeled ${screenId}, which matches no surface, so requirement ${requirement.id} for surface ${requirement.surface} was not checked; pass the page's surface id as screenId`;
     gaps.push({ ref: `requirement:${requirement.id}`, state: 'not-covered', reason: scrubString(reason) });
   }
   return gaps;
@@ -212,18 +255,36 @@ export function requirementGapsForPage(
  * Runs the usabl accessibility engine against a live Playwright page and returns a verdict.
  *
  * This is the seam a Playwright suite uses: navigate and interact with the page in your test, then
- * hand the page to checkPage. It adopts the page (attaching a CDP session and the path helper without
- * ever closing the page or its context), runs the same provider list as `buildDeps` (axe, PatternFly
- * rulepack, docs rulepack, keyboard walk, then one provider per design requirement in the project),
- * and summarizes the drafts with the same precedence as a full usabl run. A design requirement this
- * page cannot be matched to is a gap, so the helper cannot return verified for a requirement it
- * never checked.
+ * hand the page to checkPage. It adopts the page (attaching a CDP session, the path helper, and the
+ * live-region capture, without ever closing the page or its context), runs the same provider list
+ * as `buildDeps` (axe, PatternFly rulepack, docs rulepack, keyboard walk, then one provider per
+ * design requirement in the project), and summarizes the drafts with the same precedence as a full
+ * usabl run. A design requirement this page cannot be matched to is a gap, so the helper cannot
+ * return verified for a requirement it never checked.
+ *
+ * Three things a caller should know:
+ * - It reads usabl.config.json and the design requirements from the working tree at `projectRoot`,
+ *   not from a trusted ref. Anyone who can edit those files can change what it checks.
+ * - It is not a merge gate. Its verdict is advisory test output. The gate that runs on a pull
+ *   request is the only verdict authority.
+ * - It acts on the caller's page. The keyboard walk presses Tab, the PatternFly probes open and
+ *   close dialogs and menus, and each flow requirement on this surface runs its authored steps:
+ *   clicks and key presses. Hand it a page you no longer need in its current state.
  */
 export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}): Promise<PageCheckResult> {
   const profile: ProfileName = options.profile ?? 'app';
-  const screenId = options.screenId ?? 'page';
-  const intake = await loadProjectIntake(options.projectRoot ?? process.cwd());
-  const providers: Provider[] = makeScanProviders(intake.requirements, {
+  // An unlabeled page is no surface, so no requirement is in scope and each one becomes a gap. Its
+  // providers are not built either: the only one that could run is one for a surface literally
+  // named page, and judging an unlabeled page against it would be a guess.
+  const labeledScreenId = options.screenId ?? null;
+  const screenId = labeledScreenId ?? 'page';
+  const intake = await loadProjectIntake(
+    options.projectRoot ?? process.cwd(),
+    options.projectRoot !== undefined,
+  );
+  const scannedRequirements =
+    labeledScreenId === null && intake.requirements !== null ? NO_REQUIREMENTS : intake.requirements;
+  const providers: Provider[] = makeScanProviders(scannedRequirements, {
     ...(options.keyboardWalk === undefined ? {} : { keyboardWalk: options.keyboardWalk }),
     ...(options.tabCap === undefined ? {} : { tabCap: options.tabCap }),
   });
@@ -236,8 +297,13 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
   );
 
   const requirementGaps =
-    intake.requirements === null ? [] : requirementGapsForPage(intake.requirements, screenId, intake.knownSurfaceIds);
-  return summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]);
+    intake.requirements === null
+      ? []
+      : requirementGapsForPage(intake.requirements, labeledScreenId, intake.knownSurfaceIds);
+  return {
+    ...summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]),
+    project: intake.project,
+  };
 }
 
 export function assertUsablVerdict(

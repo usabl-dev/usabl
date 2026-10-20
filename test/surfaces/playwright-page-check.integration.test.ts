@@ -1,4 +1,5 @@
 import { createServer, type Server } from 'node:http';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -170,16 +171,16 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage runs the desig
 
   // A project directory the way a consumer has one: usabl.config.json at the root and a
   // requirements directory beside it. Surfaces are clusters and reports.
-  async function makeProject(requirementFiles: Record<string, string>): Promise<{ dir: string; config: UsablConfig }> {
+  async function makeProject(
+    requirementFiles: Record<string, string>,
+    surfaceIds: readonly string[] = ['clusters', 'reports'],
+  ): Promise<{ dir: string; config: UsablConfig }> {
     const dir = await mkdtemp(join(tmpdir(), 'usabl-checkpage-'));
     const config: UsablConfig = {
       appBaseUrl: baseUrl,
       uiFileGlobs: ['src/**'],
       discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
-      surfaces: [
-        { id: 'clusters', url: `${baseUrl}/clusters`, files: ['src/Clusters.tsx'] },
-        { id: 'reports', url: `${baseUrl}/reports`, files: ['src/Reports.tsx'] },
-      ],
+      surfaces: surfaceIds.map((id) => ({ id, url: `${baseUrl}/${id}`, files: [`src/${id}.tsx`] })),
       requirements: 'requirements',
       guardedPaths: [],
     };
@@ -299,4 +300,131 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage runs the desig
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('agrees with the CLI on a flow requirement that expects a live region announcement', async () => {
+    // Save writes "Saved" into a role="status" region. The CLI's init script observes live regions
+    // from document start. checkPage adopts a page that is already open, so it has to install the
+    // same observer, or the flow reads no announcement and regresses where the CLI passes.
+    html = SAVE_PAGE;
+    const { dir, config } = await makeProject({ 'save.yaml': SAVE_REQUIREMENT });
+    try {
+      const deps = await buildDeps(config, { cwd: dir, env: {} });
+      let cliFailures: string[];
+      try {
+        const scan = await deps.checkRunner.scan({ id: 'clusters', url: `${baseUrl}/clusters` });
+        cliFailures = scan.drafts.filter((d) => d.confidence === 'fail').map((d) => d.rule);
+      } finally {
+        await deps.browser.close();
+      }
+      expect(cliFailures).toEqual([]);
+
+      const { context, page } = await openUrl(`${baseUrl}/clusters`);
+      try {
+        const result = await checkPage(page, { screenId: 'clusters', projectRoot: dir, tabCap: 10 });
+        expect(result.failures.map((f) => f.rule)).toEqual([]);
+        expect(result.gaps).toEqual([]);
+        expect(result.verdict).toBe('verified');
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is not_covered, and names the root, when the caller passes a projectRoot with no usabl.config.json', async () => {
+    html = headingPage('Clusters');
+    const empty = await mkdtemp(join(tmpdir(), 'usabl-checkpage-empty-'));
+    const { context, page } = await openUrl(`${baseUrl}/clusters`);
+    try {
+      const result = await checkPage(page, { screenId: 'clusters', projectRoot: empty, tabCap: 10 });
+      expect(result.verdict).toBe('not_covered');
+      const configGap = result.gaps.find((g) => g.ref === 'usabl.config.json');
+      expect(configGap?.reason).toContain(empty);
+      expect(result.project).toEqual({ root: empty, configFound: false });
+    } finally {
+      await context.close();
+      await rm(empty, { recursive: true, force: true });
+    }
+  });
+
+  it('says which root it read when projectRoot defaults to the working directory', async () => {
+    html = headingPage('Clusters');
+    const { context, page } = await openUrl(`${baseUrl}/clusters`);
+    try {
+      const result = await checkPage(page, { tabCap: 10 });
+      expect(result.project?.root).toBe(process.cwd());
+      expect(result.project?.configFound).toBe(existsSync(join(process.cwd(), 'usabl.config.json')));
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('gives an unlabeled page a gap for every requirement, even when a surface is literally named page', async () => {
+    // If the unlabeled default read as the surface "page", the clusters requirement would drop out
+    // of scope with no gap, and the page requirement would be judged on a page nobody labeled.
+    html = headingPage('Reports');
+    const { dir } = await makeProject(
+      { 'heading.yaml': HEADING_REQUIREMENT, 'page.yaml': PAGE_SURFACE_REQUIREMENT },
+      ['page', 'clusters'],
+    );
+    const { context, page } = await openUrl(`${baseUrl}/clusters`);
+    try {
+      const result = await checkPage(page, { projectRoot: dir, tabCap: 10 });
+      expect(result.verdict).toBe('not_covered');
+      expect(result.failures.filter((f) => f.rule.startsWith('intake:'))).toEqual([]);
+      expect(result.gaps.map((g) => g.ref).sort()).toEqual(['requirement:clusters-heading', 'requirement:page-heading']);
+    } finally {
+      await context.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
+
+const SAVE_PAGE = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Clusters</title>
+  </head>
+  <body>
+    <main>
+      <h1>Clusters</h1>
+      <button type="button" id="save">Save</button>
+      <div role="status" id="message"></div>
+    </main>
+    <script>
+      document.getElementById('save').addEventListener('click', () => {
+        document.getElementById('message').textContent = 'Saved';
+      });
+    </script>
+  </body>
+</html>`;
+
+const SAVE_REQUIREMENT = `version: 1
+requirements:
+  - id: save-announces
+    kind: flow
+    surface: clusters
+    description: Saving announces that the change was saved.
+    assertion:
+      type: flow
+      steps:
+        - do: click
+          selector: '#save'
+      expectedAnnouncement: Saved
+    approved: true
+`;
+
+const PAGE_SURFACE_REQUIREMENT = `version: 1
+requirements:
+  - id: page-heading
+    kind: content
+    surface: page
+    description: The page surface heading reads Page.
+    assertion:
+      type: content
+      selector: h1
+      expectedText: Page
+    approved: true
+`;
