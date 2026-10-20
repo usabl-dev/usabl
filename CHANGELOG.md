@@ -320,6 +320,16 @@
   get through CI. `prepare` now skips the hook installer when the file is absent and
   still runs it, with its exit status, in a clone. The package smoke now packs and
   installs with lifecycle scripts on, so the same break fails the build.
+- The git hook installer no longer changes another repository's hooks. A source
+  copy of usabl inside another project found that project's repository, and
+  `prepare` set its `core.hooksPath` to `.git/hooks`, which broke tools such as
+  husky. The installer now does nothing, and exits 0, unless the package root is
+  the top of its own git repository, it holds `.pre-commit-config.yaml`, and
+  `INIT_CWD`, when npm sets it, is the package root. The last rule covers an
+  install of usabl as a git dependency: npm runs `prepare` in a temporary clone
+  with its own `.git`, from the consumer's directory, and `pre-commit install`
+  there could fail offline. `prepare` now reads as a plain condition: if the
+  installer file exists, run it with bash and keep its exit status.
 
 ### Added
 
