@@ -1,81 +1,134 @@
 # Make a contribution
 
-Use this guide to turn one accessibility observation or proof gap into a small,
-reviewable change.
+This guide takes you from a fork to a merged pull request when you write the change
+yourself. If an AI coding agent writes the change, give it [AGENTS.md](../../AGENTS.md)
+as well. The rules are the same.
 
-Read [How usabl works](../how-usabl-works.html) before changing coverage,
-evidence, verdicts, receipts, or product surfaces.
+Read [How usabl works](../how-usabl-works.html) before you change coverage, evidence,
+verdicts, receipts, or product surfaces. Read the
+[ground truth](../ground-truth.md) before you change behavior.
 
 ## 1. Choose one outcome
 
-Start from a reported accessibility problem, proof gap, or agreed team task.
-State the outcome in one sentence.
+Start from an issue. State the outcome in one sentence.
 
 Examples:
 
-- The modal returns focus to its trigger after close.
 - The overlay explains `not_covered` without implying success.
+- The keyboard walk reports a trap inside a nested dialog.
 - The proof-loop guide names the command that failed.
-- The demo backup includes the verified receipt.
 
-If the sentence contains two independent outcomes, split the work.
+If the sentence has two independent outcomes, split the work into two pull requests.
+Comment on the issue to say you are taking it, how you will prove it, and any help you
+need.
 
-## 2. Choose the repository
+## 2. Set up the repository
 
-- **usabl:** evidence, gate, receipt, surfaces, engine tests, and product docs
-- **usabl-app:** fixture behavior, demo scenarios, overlay integration, and app tests
-- **usabl-plans:** accepted plans, ownership, decisions, and build record
+You need Node.js 22, npm, Git, and Python 3 for pre-commit.
 
-Ask before changing product language, verdict meaning, security policy, or the
-architecture.
+1. Fork `usabl-dev/usabl` on GitHub.
+2. Clone your fork and install:
 
-## 3. Claim the work
+   ```bash
+   git clone https://github.com/<your-user>/usabl.git
+   cd usabl
+   npm ci
+   npx playwright install chromium
+   ```
 
-Comment on the issue or tell the team which outcome you are taking. Name:
+   On Linux, if Playwright reports missing system libraries, run
+   `npx playwright install --with-deps chromium` instead.
 
-- The repository
-- The expected result
-- How you will prove it
-- Any help you need
+3. Install pre-commit, then install the hooks:
 
-This prevents two people from solving the same problem differently.
+   ```bash
+   pip install pre-commit
+   npm run prepare
+   ```
 
-## 4. Make a focused branch
+   The repository uses `.pre-commit-config.yaml`. The hooks check whitespace, YAML,
+   JSON, large files, private keys, leaked secrets (gitleaks), GitHub Actions syntax,
+   Markdown and YAML formatting outside `docs/`, and the Conventional Commits message
+   format. Without pre-commit, your commits skip these checks locally. CI runs the same
+   hooks, so the problems show up later as a red pull request instead.
 
-For code or documentation changes:
+4. Create a branch named `type/short-description`, where the type is `fix`, `feat`,
+   `docs`, `test`, or `chore`:
 
-```bash
-git switch main
-git pull --ff-only
-git switch -c type/short-description
-```
+   ```bash
+   git switch -c fix/overlay-not-covered-text
+   ```
 
-Use a branch type such as `fix`, `feat`, `docs`, or `test`.
+### Run your change against an app
 
-For accessibility behavior changes, write a failing test first. For
-documentation, identify the specific question the current text does not answer.
-
-## 5. Run the repository gates
-
-In `usabl`:
-
-```bash
-python -m pre_commit run --all-files
-npm run check
-gitleaks detect --verbose --redact --exit-code 1
-```
-
-In `usabl-app`:
+To try your local engine in an app, build it and point the app at the folder:
 
 ```bash
-npm test
 npm run build
-npm run lint
+cd ../your-app
+npm install --save-dev ../usabl
 ```
 
-Do not skip hooks. Do not treat an empty usabl result as a pass.
+The [usabl-app](https://github.com/usabl-dev/usabl-app) sample app has known
+accessibility barriers and is a good place to test.
 
-## 6. Commit clearly
+## 3. Write the test first
+
+For a behavior change, write a test that fails before you change the code. Run it and
+keep the failing output. You will paste it into the pull request. Then make the change
+and run the test again.
+
+For a docs change, name the question the current text does not answer, and check that
+your text answers it.
+
+Never weaken an existing test to make your change pass. If a test is wrong, say why in
+the pull request and fix it on its own.
+
+## 4. Commands to know
+
+| Command | What it does |
+| --- | --- |
+| `npm run check` | Typecheck, unit tests, build, and a package smoke test. Run it before every push. |
+| `npm run test:integration` | Integration tests against a real Chromium. Run it when you change scanning, readiness, or the Playwright page check. |
+| `npm run docs:linkcheck` | Checks every link in the docs and in the published pages. |
+| `npm run docs:a11y` | Runs axe on every HTML page under `docs/` in a real Chromium. |
+| `npm run docs:badges` | Checks that the README version badge matches `package.json`. |
+
+CI runs all of these, plus gitleaks, pre-commit, and Semgrep.
+
+## 5. Trust-critical paths
+
+These paths are listed in `.github/CODEOWNERS`. A change to any of them can weaken the
+gate, so it gets extra care:
+
+- `src/gate/`: the only part of usabl that decides a verdict.
+- `src/trust/`: the guard that stops a pull request from changing the policy it is
+  checked against.
+- `src/run.ts`: the sequencer that connects the guard, coverage, scan, and gate.
+- `.github/workflows/` and `.github/CODEOWNERS`: CI and the list of approvers.
+- `usabl.config.json`, `usabl.routes.json`, `usabl.docs.json`, `.usabl-evidence.json`,
+  and `.usabl-waivers.json`: policy and accepted debt.
+
+If you change one of these paths:
+
+- Say so in the pull request summary, and say why the change is safe.
+- Add a test that shows the gate still refuses what it refused before.
+- Expect a slower, more detailed review.
+- A policy file change makes usabl's own check on this repository return
+  `approval_required`. That is expected. It clears only when a code owner who is not
+  the author approves the current head commit.
+
+## 6. Writing style
+
+Every comment, message, doc, and commit follows the same rules:
+
+- Plain English. Short sentences. Common words.
+- No em dashes, and no doubled hyphens used as punctuation.
+- No marketing words, praise, or slogans.
+- A code comment says what the code does and why. It does not cite issue or pull
+  request numbers. Describe the failure instead.
+
+## 7. Commit
 
 Use Conventional Commits:
 
@@ -85,63 +138,40 @@ docs: explain the proof-loop setup
 test: cover the fixed modal route
 ```
 
-Do not add AI co-author trailers.
+The commit body is two or three sentences on what changed and why.
 
-## 7. Open the pull request
+## 8. Open the pull request
 
-Complete:
+Push your branch to your fork and open a pull request against `main`. Fill in the
+template:
 
-- **Summary:** what accessibility behavior or proof changed and why
-- **Test plan:** exact checks and observed results
-- **AI assistance:** keep the template note when AI helped
+- **Summary:** what changed and why. Name any trust-critical path you touched.
+- **Test plan:** the exact commands you ran and what they printed, including the
+  failing test run from step 3.
+- **AI assistance:** if AI helped with any part of the change, keep the template text
+  exactly as written. If no AI helped, replace it with one line that says so.
 
 Link the issue. Add screenshots only when they prove visible behavior.
 
-The change needs:
+The first CI run on a pull request from a fork waits until the maintainer approves it.
 
-- Green required checks
-- Independent engineering review
-- Independent security review against `main`
-- Founder merge decision
+### What reviewers look for
 
-Do not paste the private security review into the pull request.
+- One outcome, with a test that failed before and passes now.
+- No new path to a false green. A result that reads as verified when it is not is the
+  worst bug usabl can have.
+- Page text treated as untrusted data.
+- No timing or ordering dependence in anything that reaches the gate.
+- No secrets in code, tests, fixtures, or output.
+- Docs updated when behavior or commands change.
 
-### Policy and floor changes
+## Contributions without code
 
-A pull request that edits `usabl.config.json`, `usabl.routes.json`,
-the configured requirements path, `.usabl-evidence.json`, or
-`.usabl-waivers.json` is `approval_required`.
-That is not a merge dead-end. This is the consumer gate (the app that
-runs `usabl enforce policy`). This repository's own `.github/CODEOWNERS`
-is engine governance and is a separate file. It names individual logins,
-never org teams, because the org has no teams and a team reference would
-route no review at all.
+You can help without a branch:
 
-Two commands draft and maintain that evidence floor. `usabl baseline` runs a
-full scan and drafts the accepted accessibility floor in `.usabl-evidence.json`
-as a reviewable working-tree diff. `usabl floor prune` re-arms the floor after a
-full scan by removing an entry whose identity was not observed on a cleanly scanned
-screen and lowering the count where fewer were observed, so a reintroduced barrier
-gates as new instead of staying carried; it cannot tell a repair from a page rendering
-fewer rows. Both write drafts and neither mints a verdict.
-
-- The accessibility check reports what the gate would have decided without
-  the policy diff. It never uses exit 2.
-- The policy check stays red until a CODEOWNERS user who is not the author
-  approves the current head commit for **each** dirty guarded path.
-- Approving your own policy pull request does not count.
-- The sticky usabl comment still shows `APPROVAL REQUIRED` after the policy
-  check is green.
-
-## Non-code contributions
-
-You can contribute without a branch:
-
-- File a reproducible product or accessibility issue.
-- Test an existing pull request and report the exact result.
-- Review the orientation as a first-time user.
-- Generate the accessible documentation page with `usabl docs --html` and review it for accuracy and accessibility.
-- Rehearse the demo and record timing or recovery problems.
-- Own a checklist or evidence capture task.
-
-Use the [test and report guide](test-and-report.md) so the result is actionable.
+- File a reproducible bug with the [test and report guide](test-and-report.md).
+- Test an open pull request and report the exact result.
+- Read the [usabl walkthrough](../usabl-walkthrough.html) as a first-time user and
+  report what was unclear.
+- Generate the accessible documentation page with `usabl docs --html` and review it
+  for accuracy and accessibility.

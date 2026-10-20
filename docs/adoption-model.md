@@ -370,6 +370,6 @@ been shown to work on the sample app and one real PatternFly surface.
 
 - **Start here:** [usabl walkthrough](usabl-walkthrough.html), the product in one read
 - **Try** stage requirements: [ux-policy.md](./ux-policy.md), first-run experience
-- **Contribute** stage: `CONTRIBUTING.md` in the repo root
+- **Contribute** stage: [CONTRIBUTING.md](../CONTRIBUTING.md) in the repo root
 - **Discover** stage README: the quickstart README
 - **Expand**: [journeys.md](./journeys.md), Journey 4 (team onboarding)

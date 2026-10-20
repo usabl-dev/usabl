@@ -1,7 +1,7 @@
 # Test and report
 
-Use this guide to turn an accessibility observation into feedback another
-teammate can reproduce. You do not need to write code.
+Use this guide to turn an accessibility observation into a report someone else
+can reproduce. You do not need to write code.
 
 Read [How usabl works](../how-usabl-works.html) before testing result meaning,
 coverage, or agreement between product surfaces.
@@ -19,6 +19,9 @@ Test one surface at a time:
 - The published walkthrough pages or one of these guides
 
 ## Browser keyboard test
+
+These steps use the [usabl-app](https://github.com/usabl-dev/usabl-app) sample app,
+running locally. The [proof loop guide](proof-loop.md) explains how to start it.
 
 1. Open `http://127.0.0.1:5173/clusters`.
 2. Use `Tab` until **View cluster details** has focus.
@@ -62,29 +65,31 @@ Read the result without looking at source code. Answer:
 
 If one answer is unclear, quote the exact label or sentence that caused the problem.
 
-## File useful feedback
+## File a useful report
 
-Open the
-[usabl feedback form](https://github.com/usabl-dev/usabl/issues/new?template=feedback.yml).
+Open a
+[usabl bug report](https://github.com/usabl-dev/usabl/issues/new?template=bug_report.yml).
+A wrong, missing, or confusing result counts as a bug.
 
 Complete these fields:
 
-- **Surface:** where you saw the result
-- **Verdict seen:** the exact usabl answer
-- **Expected verdict:** what you expected
-- **Repro:** numbered steps, URL, command, and pull request link when relevant
-- **Honest or confusing:** whether the output matched what happened and what was
+- **usabl version, Node.js version, operating system, and app framework**
+- **Where did you see it:** the surface where you saw the result
+- **Exact command and output:** the command you ran and the exact usabl answer
+- **What you expected:** the verdict or behavior you expected, and why
+- **Steps to reproduce:** numbered steps, URL, command, and pull request link when
+  relevant
+- **Was the output clear:** whether the output matched what happened and what was
   unclear
 
 Add environment details when they affect the result:
 
-- Operating system
 - Browser and version
 - Screen reader and version
 - Engine and app commit IDs
 
 ## A useful report
 
-A teammate should be able to follow your steps without asking what you clicked,
+Someone else should be able to follow your steps without asking what you clicked,
 which URL you used, or what result you saw. If they cannot, add the missing detail
 before submitting.

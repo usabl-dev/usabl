@@ -1,28 +1,32 @@
-# Code owners for usabl's trust-critical surface.
+# Code owners for usabl.
 #
-# Individual GitHub logins only. The usabl-dev org has no teams, so an
-# "@usabl-dev/<name>" team reference silently resolves to nobody and routes no
-# review. Each owner must also have write access to this repo, or GitHub ignores
-# the entry.
+# The maintainer reviews and approves every pull request. Individual GitHub
+# logins only. The usabl-dev org has no teams, so an "@usabl-dev/<name>" team
+# reference silently resolves to nobody and routes no review. Each owner must
+# also have write access to this repo, or GitHub ignores the entry.
+#
+# The last matching rule wins, so the trust-critical rules below must stay
+# after this default.
+*                    @eparenti
 
 # The trust boundary detects guarded-manifest divergence and drives the
 # trusted-ref overlay that stops a pull request from steering scans.
-/src/trust/          @eparenti @nitin-dhevar @vishsanghishetty
+/src/trust/          @eparenti
 
 # The gate is the only verdict authority. Nothing else decides pass or fail.
-/src/gate/           @eparenti @nitin-dhevar @vishsanghishetty
+/src/gate/           @eparenti
 
 # The sequencer wires guard, coverage, scan, and gate together and applies the
 # untrusted-manifest overlay. A change here can weaken the trust boundary.
-/src/run.ts          @eparenti @nitin-dhevar @vishsanghishetty
+/src/run.ts          @eparenti
 
 # Engine configuration and the CI workflows that run the gate. A workflow edit
 # could disable enforcement, so an owner reviews these too.
-/usabl.config.json   @eparenti @nitin-dhevar @vishsanghishetty
-/.github/workflows/  @eparenti @nitin-dhevar @vishsanghishetty
+/usabl.config.json   @eparenti
+/.github/workflows/  @eparenti
 
 # The gate protects itself: changing who can approve policy needs owner review.
-/.github/CODEOWNERS  @eparenti @nitin-dhevar @vishsanghishetty
+/.github/CODEOWNERS  @eparenti
 
 # Every guarded path needs an owner or `usabl enforce policy` cannot be satisfied for it.
 # The four below are guarded (the first two by guardedPaths in usabl.config.json, the last
@@ -30,7 +34,7 @@
 # forever with no reviewer able to clear it. The evidence floor and the waiver ledger decide
 # which barriers are already accepted, and the docs and routes manifests decide what gets
 # scanned at all, so a quiet edit to any of them weakens a verdict without changing a rule.
-/.usabl-evidence.json @eparenti @nitin-dhevar @vishsanghishetty
-/.usabl-waivers.json  @eparenti @nitin-dhevar @vishsanghishetty
-/usabl.docs.json      @eparenti @nitin-dhevar @vishsanghishetty
-/usabl.routes.json    @eparenti @nitin-dhevar @vishsanghishetty
+/.usabl-evidence.json @eparenti
+/.usabl-waivers.json  @eparenti
+/usabl.docs.json      @eparenti
+/usabl.routes.json    @eparenti
