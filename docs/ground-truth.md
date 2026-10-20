@@ -887,6 +887,10 @@ set the gate is given, so no floored barrier on it can be reported as resolved.
   refusal with the same answer. So on a screen with no response path, a refusal followed by a
   success is still a gap, exactly as before.
 
+  What this still cannot catch: an application that answers an anonymous visitor with a 2xx, not
+  HTML, both on the refused address and on the declared data path. To usabl that reads the same as
+  a token refresh. Pick a response path that only a signed-in session can get a success from.
+
   The host match. A refused request counts when its hostname equals the `appBaseUrl` hostname, or
   ends with a dot followed by it, regardless of scheme and port. So `api.example.com` counts for
   `example.com` and `notexample.com` does not. Comparing origins instead was too narrow in three
