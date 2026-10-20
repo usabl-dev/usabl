@@ -6,7 +6,7 @@
  */
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { AxNode, BrowserDriver, Page } from '../contracts/index.js';
+import type { AncestorAttributesRead, AxNode, BrowserDriver, Page } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
@@ -327,46 +327,131 @@ async function stablePathForActiveElement(pw: PwPage): Promise<string> {
   });
 }
 
+/** The most elements the ancestor walk reads for one element before it stops and says so. */
+export const ANCESTOR_DEPTH_LIMIT = 512;
+
+// The walk runs in an isolated world: page script shares the DOM with it but not its globals or
+// prototypes. A page that redefines parentNode, assignedSlot, or getAttribute cannot change what
+// the walk reads.
+const ANCESTOR_WORLD = 'usabl-ancestors';
+const ANCESTOR_GROUP = 'usabl-ancestors';
+
+// The flat-tree parent of an element that is not slotted: its parent element, or the host when it
+// sits at the top of a shadow tree. Null at the top of the document or of a detached subtree.
+const FLAT_PARENT_FUNCTION = `function () {
+  const parent = this.parentNode;
+  if (parent instanceof Element) return parent;
+  if (parent instanceof ShadowRoot) return parent.host;
+  return null;
+}`;
+
+async function ancestorWorldContextId(cdp: CDPSession): Promise<number> {
+  const tree: unknown = await cdp.send('Page.getFrameTree');
+  const frameId = readString(getProp(getProp(getProp(tree, 'frameTree'), 'frame'), 'id'));
+  if (frameId === null) {
+    throw new Error('the page has no main frame to read ancestors in');
+  }
+  const world: unknown = await cdp.send('Page.createIsolatedWorld', { frameId, worldName: ANCESTOR_WORLD });
+  const contextId = readNumber(getProp(world, 'executionContextId'));
+  if (contextId === null) {
+    throw new Error('the browser did not create a world to read ancestors in');
+  }
+  return contextId;
+}
+
+function pickAttributes(flat: unknown, names: readonly string[]): Record<string, string | null> {
+  const record: Record<string, string | null> = {};
+  for (const name of names) {
+    record[name] = null;
+  }
+  if (!Array.isArray(flat)) {
+    return record;
+  }
+  // CDP lists attributes as name, value, name, value.
+  for (let index = 0; index + 1 < flat.length; index += 2) {
+    const name: unknown = flat[index];
+    const value: unknown = flat[index + 1];
+    if (typeof name === 'string' && typeof value === 'string' && names.includes(name)) {
+      record[name] = value;
+    }
+  }
+  return record;
+}
+
 /**
  * Reads the named attributes of the element a selector matches and of every element above it,
- * nearest first. The walk follows the flat tree, the tree the accessibility tree is built from: a
- * slotted element climbs to its slot, and the top of a shadow tree climbs to its host. A plain
- * parentElement walk would skip the slot and stop at the shadow root, and so miss a live region
- * that wraps the content only in the rendered tree. Null means nothing matched the selector.
+ * nearest first, along the flat tree that the accessibility tree is built from. A slotted element
+ * climbs to its slot, and the top of a shadow tree climbs to its host.
+ *
+ * Page script cannot do this walk. For a slot inside a closed shadow root, assignedSlot reads null,
+ * so a walk in the page skips the slot and everything around it in the shadow tree. CDP reports the
+ * assigned slot whatever the mode, and reads attributes from the DOM itself, so this walk sees what
+ * the browser sees. The walk stops after `limit` elements and reports that, so no page can keep it
+ * running. An element that is gone, or that left the document during the walk, is not found.
  */
 export async function readAncestorAttributes(
-  pw: PwPage,
+  cdp: CDPSession,
   selector: string,
   names: readonly string[],
-): Promise<Array<Record<string, string | null>> | null> {
-  return pw.evaluate(
-    ({ query, attributeNames }) => {
-      const start = document.querySelector(query);
-      if (!(start instanceof Element)) {
-        return null;
+  limit: number = ANCESTOR_DEPTH_LIMIT,
+): Promise<AncestorAttributesRead> {
+  const contextId = await ancestorWorldContextId(cdp);
+  try {
+    const found: unknown = await cdp.send('Runtime.evaluate', {
+      expression: `document.querySelector(${JSON.stringify(selector)})`,
+      contextId,
+      objectGroup: ANCESTOR_GROUP,
+    });
+    const startId = readString(getProp(getProp(found, 'result'), 'objectId'));
+    if (startId === null) {
+      return { kind: 'not-found' };
+    }
+
+    const chain: Array<Record<string, string | null>> = [];
+    let currentId: string | null = startId;
+    while (currentId !== null) {
+      if (chain.length >= limit) {
+        return { kind: 'too-deep', limit };
       }
-      const flatParent = (element: Element): Element | null => {
-        if (element.assignedSlot !== null) {
-          return element.assignedSlot;
+      const described: unknown = await cdp.send('DOM.describeNode', { objectId: currentId, depth: 0 });
+      const node = getProp(described, 'node');
+      chain.push(pickAttributes(getProp(node, 'attributes'), names));
+
+      const slotBackendId = readNumber(getProp(getProp(node, 'assignedSlot'), 'backendNodeId'));
+      if (slotBackendId !== null) {
+        const resolved: unknown = await cdp.send('DOM.resolveNode', {
+          backendNodeId: slotBackendId,
+          executionContextId: contextId,
+          objectGroup: ANCESTOR_GROUP,
+        });
+        currentId = readString(getProp(getProp(resolved, 'object'), 'objectId'));
+        if (currentId === null) {
+          throw new Error('the browser named a slot for the element and then could not resolve it');
         }
-        if (element.parentElement !== null) {
-          return element.parentElement;
-        }
-        const root = element.parentNode;
-        return root instanceof ShadowRoot ? root.host : null;
-      };
-      const chain: Array<Record<string, string | null>> = [];
-      for (let current: Element | null = start; current !== null; current = flatParent(current)) {
-        const record: Record<string, string | null> = {};
-        for (const name of attributeNames) {
-          record[name] = current.getAttribute(name);
-        }
-        chain.push(record);
+        continue;
       }
-      return chain;
-    },
-    { query: selector, attributeNames: [...names] },
-  );
+      const parent: unknown = await cdp.send('Runtime.callFunctionOn', {
+        objectId: currentId,
+        functionDeclaration: FLAT_PARENT_FUNCTION,
+        objectGroup: ANCESTOR_GROUP,
+      });
+      currentId = readString(getProp(getProp(parent, 'result'), 'objectId'));
+    }
+
+    // A walk that ended in a detached subtree did not reach the document, so the chain is not the
+    // element's real ancestry. The element was removed while it was read.
+    const connected: unknown = await cdp.send('Runtime.callFunctionOn', {
+      objectId: startId,
+      functionDeclaration: 'function () { return this.isConnected; }',
+      returnByValue: true,
+    });
+    if (getProp(getProp(connected, 'result'), 'value') !== true) {
+      return { kind: 'not-found' };
+    }
+    return { kind: 'chain', chain };
+  } finally {
+    await cdp.send('Runtime.releaseObjectGroup', { objectGroup: ANCESTOR_GROUP }).catch(() => undefined);
+  }
 }
 
 async function stablePathsForSelector(pw: PwPage, selector: string): Promise<string[]> {
@@ -705,11 +790,8 @@ function wrapPage(
     async getAttribute(selector: string, name: string): Promise<string | null> {
       return pw.locator(selector).getAttribute(name);
     },
-    async ancestorAttributes(
-      selector: string,
-      names: readonly string[],
-    ): Promise<Array<Record<string, string | null>> | null> {
-      return readAncestorAttributes(pw, selector, names);
+    async ancestorAttributes(selector: string, names: readonly string[]): Promise<AncestorAttributesRead> {
+      return readAncestorAttributes(cdp, selector, names);
     },
     async queryAll(selector: string): Promise<Array<{ selector: string }>> {
       const paths = await stablePathsForSelector(pw, selector);

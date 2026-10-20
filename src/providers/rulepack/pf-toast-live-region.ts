@@ -2,7 +2,7 @@
  * Static toast containment check for PatternFly alerts.
  * This unit must never claim the temporal announcement half. It only proves containment.
  */
-import type { Draft, ProviderContext } from '../../contracts/index.js';
+import type { AncestorAttributesRead, CoverageGap, Draft, ProviderContext } from '../../contracts/index.js';
 import { effectiveLiveValue, type LiveAttributes } from './live-value.js';
 import { SEL } from './selectors.js';
 
@@ -12,24 +12,62 @@ function toLiveAttributes(record: Record<string, string | null>): LiveAttributes
   return { ariaLive: record['aria-live'] ?? null, role: record['role'] ?? null };
 }
 
-export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Draft[]> {
-  const allAlerts = await ctx.page.queryAll(SEL.alert);
-  if (allAlerts.length === 0) {
-    return [];
-  }
+const GAP_REF = 'provider:pf-rulepack/pf-toast-live-region';
 
+function alertGap(selector: string, why: string): CoverageGap {
+  return {
+    ref: GAP_REF,
+    state: 'not-covered',
+    reason: `rulepack check pf-toast-live-region could not check alert ${selector}: ${why}`,
+  };
+}
+
+export interface ToastLiveRegionResult {
+  drafts: Draft[];
+  // One gap per alert whose live value could not be resolved. Each names the alert, so an alert
+  // that could not be checked is never read as one that passed, and it does not hide the others.
+  gaps: CoverageGap[];
+}
+
+export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<ToastLiveRegionResult> {
+  const allAlerts = await ctx.page.queryAll(SEL.alert);
   const drafts: Draft[] = [];
+  const gaps: CoverageGap[] = [];
+
   for (const alertRef of allAlerts) {
     // A CSS selector can only ask whether some live container sits anywhere above the alert. The
     // live value that applies is the one on the nearest element that sets one, so an off wrapper
     // between a polite region and the alert silences it. That is resolved here, one alert at a time.
-    const chain = await ctx.page.ancestorAttributes(alertRef.selector, LIVE_ATTRIBUTES);
-    if (chain === null || chain.length === 0) {
-      // The alert matched a moment ago and cannot be found now. Passing it would be a guess, so the
-      // throw becomes a disclosed gap for this check.
-      throw new Error(`could not read the ancestors of alert ${alertRef.selector}`);
+    let read: AncestorAttributesRead;
+    try {
+      read = await ctx.page.ancestorAttributes(alertRef.selector, LIVE_ATTRIBUTES);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      gaps.push(alertGap(alertRef.selector, `its ancestors could not be read: ${message}`));
+      continue;
     }
-    const nodes = chain.map(toLiveAttributes);
+    if (read.kind === 'not-found') {
+      // The alert matched a moment ago and cannot be found now. PatternFly toasts close on a timer,
+      // so this is expected. Passing it would be a guess, and so would dropping the other alerts.
+      gaps.push(
+        alertGap(alertRef.selector, 'it could not be found again to read its ancestors, so it may have closed'),
+      );
+      continue;
+    }
+    if (read.kind === 'too-deep') {
+      gaps.push(
+        alertGap(
+          alertRef.selector,
+          `it has more than ${read.limit} ancestors, so the walk stopped before it reached the root`,
+        ),
+      );
+      continue;
+    }
+    if (read.chain.length === 0) {
+      gaps.push(alertGap(alertRef.selector, 'the page returned no element for it'));
+      continue;
+    }
+    const nodes = read.chain.map(toLiveAttributes);
 
     // Two conditions, both required. The container above the alert must be live, because a live
     // value the alert carries itself does not make a region that exists before the alert mounts.
@@ -62,5 +100,5 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Draf
     });
   }
 
-  return drafts;
+  return { drafts, gaps };
 }

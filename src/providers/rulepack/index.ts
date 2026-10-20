@@ -19,10 +19,14 @@ import { probeDialogs, probeMenus } from './probes.js';
 
 type RulepackCheck = (ctx: ProviderContext) => Promise<Draft[]>;
 
+// A check may also report gaps of its own, for parts of the page it could not check, while it
+// still returns drafts for the rest.
+type CheckOutput = Draft[] | { drafts: Draft[]; gaps: CoverageGap[] };
+
 // Each check carries a stable name so a check that throws can be disclosed by name in a gap.
 interface NamedCheck {
   name: string;
-  run: RulepackCheck;
+  run: (ctx: ProviderContext) => Promise<CheckOutput>;
 }
 
 const STATIC_CHECKS: NamedCheck[] = [
@@ -81,7 +85,13 @@ export function makeRulepackProvider(extraChecks: RulepackCheck[] = []): Provide
       // gap and the checks after it still run. Silence is not evidence, so the throw is disclosed.
       for (const check of named) {
         try {
-          drafts.push(...(await check.run(ctx)));
+          const output = await check.run(ctx);
+          if (Array.isArray(output)) {
+            drafts.push(...output);
+          } else {
+            drafts.push(...output.drafts);
+            gaps.push(...output.gaps);
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           gaps.push(checkGap(check.name, message));

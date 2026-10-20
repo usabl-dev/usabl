@@ -29,7 +29,11 @@ function withRulepackPage(
 ): Page {
   return Object.assign(page, {
     queryAll: async (selector: string) => queryPlan[selector] ?? [],
-    ancestorAttributes: async (selector: string) => ancestorPlan[selector] ?? null,
+    // An alert the plan does not name is one the page can no longer find.
+    ancestorAttributes: async (selector: string) => {
+      const chain = ancestorPlan[selector];
+      return chain === undefined ? { kind: 'not-found' as const } : { kind: 'chain' as const, chain };
+    },
     axAt: async (selector: string) => {
       if (Object.hasOwn(axPlan, selector)) {
         return axPlan[selector] ?? null;
@@ -110,7 +114,7 @@ describe('makeRulepackProvider', () => {
 
   it('discloses a gap, not a pass, when an alert cannot be found again to read its ancestors', async () => {
     // The alert matched the first query and then vanished. Its containment is unknown, so the check
-    // must not pass it: the rulepack turns the throw into a scoped gap.
+    // must not pass it: that alert becomes a scoped gap.
     const vanished = element('.vanished-alert');
     const provider = makeRulepackProvider();
     const output = await provider.run(await makeContext({ [SEL.alert]: [vanished] }));
@@ -119,6 +123,41 @@ describe('makeRulepackProvider', () => {
     expect(gapsOf(output)).toEqual([
       expect.objectContaining({ ref: 'provider:pf-rulepack/pf-toast-live-region', state: 'not-covered' }),
     ]);
+    expect(gapsOf(output)[0]?.reason).toContain('.vanished-alert');
+  });
+
+  it('keeps checking the other alerts when one alert vanishes', async () => {
+    // A toast that closes on a timer must not hide a real violation elsewhere on the screen. The
+    // vanished alert is its own gap, and the loose alert is still flagged.
+    const vanished = element('.vanished-alert');
+    const loose = element('.loose-alert');
+    const provider = makeRulepackProvider();
+    const output = await provider.run(
+      await makeContext({ [SEL.alert]: [vanished, loose] }, {}, undefined, {
+        [loose.selector]: [{ 'aria-live': null, role: null }, { 'aria-live': null, role: null }],
+      }),
+    );
+
+    const toastDrafts = draftsOf(output).filter((draft) => draft.rule === 'pf-toast-live-region');
+    expect(toastDrafts.map((draft) => draft.elementPath)).toEqual(['.loose-alert']);
+    const toastGaps = gapsOf(output).filter((gap) => gap.ref === 'provider:pf-rulepack/pf-toast-live-region');
+    expect(toastGaps).toHaveLength(1);
+    expect(toastGaps[0]?.reason).toContain('.vanished-alert');
+    expect(toastGaps[0]?.reason).not.toContain('.loose-alert');
+  });
+
+  it('discloses a gap when the ancestor walk is cut off at the depth cap', async () => {
+    const deep = element('.deep-alert');
+    const provider = makeRulepackProvider();
+    const context = await makeContext({ [SEL.alert]: [deep] });
+    context.page.ancestorAttributes = async () => ({ kind: 'too-deep', limit: 512 });
+    const output = await provider.run(context);
+
+    expect(draftsOf(output).filter((draft) => draft.rule === 'pf-toast-live-region')).toEqual([]);
+    expect(gapsOf(output)).toEqual([
+      expect.objectContaining({ ref: 'provider:pf-rulepack/pf-toast-live-region', state: 'not-covered' }),
+    ]);
+    expect(gapsOf(output)[0]?.reason).toContain('512');
   });
 
   it('flags unnamed icon buttons and skips buttons with an AX name', async () => {

@@ -386,6 +386,15 @@ export interface AxNode {
 export interface ElementRef {
   selector: string;
 }
+// What Page.ancestorAttributes read. 'chain' is the element and every element above it, nearest
+// first. 'not-found' means no connected element matched, for example a toast that closed between
+// two reads. 'too-deep' means the walk reached `limit` elements and had more to go, so the chain is
+// incomplete. A caller must not read either of those two as an element with no live ancestors.
+export type AncestorAttributesRead =
+  | { kind: 'chain'; chain: Array<Record<string, string | null>> }
+  | { kind: 'not-found' }
+  | { kind: 'too-deep'; limit: number };
+
 export interface Page {
   gotoReady(): Promise<void>;
   // Where the browser actually is now, which is not always where it was sent. An application can
@@ -420,10 +429,10 @@ export interface Page {
   getAttribute(selector: string, name: string): Promise<string | null>;
   // The named attributes of the element a selector matches and of each element above it, nearest
   // first: the element itself, then its parent, up to the root. The walk follows the flat tree that
-  // the accessibility tree is built from, so a slotted element climbs through its slot and a shadow
-  // root climbs to its host. A missing attribute reads as null. Null overall means no element
-  // matched, which a caller must not read as an element with no ancestors.
-  ancestorAttributes(selector: string, names: readonly string[]): Promise<Array<Record<string, string | null>> | null>;
+  // the accessibility tree is built from, so a slotted element climbs through its slot, in an open
+  // or a closed shadow root, and a shadow root climbs to its host. A missing attribute reads as
+  // null. See AncestorAttributesRead for the two results that carry no chain.
+  ancestorAttributes(selector: string, names: readonly string[]): Promise<AncestorAttributesRead>;
   queryAll(selector: string): Promise<ElementRef[]>;
   close(): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;
