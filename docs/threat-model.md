@@ -39,7 +39,7 @@ re-baseline to green.
   Org team entries fail closed. The PR comment stays loud after the policy
   check is green.
 
-**Status:** [x] Documented in ground-truth; demo skeptic script in judge pass.
+**Status:** [x] Documented in ground-truth.
 
 ---
 
@@ -104,7 +104,7 @@ passing bundle from another run.
 
 ## Threat 5: Supply-chain rule drift
 
-**Attack:** axe-core or Playwright version changes alter rule behavior without team
+**Attack:** axe-core or Playwright version changes alter rule behavior without maintainer
 awareness.
 
 **Controls:**
@@ -113,9 +113,9 @@ awareness.
   4.13.0, Playwright 1.62.1).
 - Record `scannerVersions` (axe-core, Playwright, Chromium) in the receipt so a scanner
   swap moves the fingerprint and fails `verifyReceipt`.
-- Dependabot bumps require explicit team review for policy impact.
+- Dependabot bumps require explicit maintainer review for policy impact.
 
-**Status:** [x] Lockfile pins and receipt `scannerVersions` ship. [ ] The team review rule
+**Status:** [x] Lockfile pins and receipt `scannerVersions` ship. [ ] The maintainer review rule
 for scanner bumps is process, not code.
 
 ---

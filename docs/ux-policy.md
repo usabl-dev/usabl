@@ -73,14 +73,14 @@ operator as advisory-only.
 run on a typical touched surface. The full list is available via the CLI `--json` output
 and the PR comment expander.
 
-**Calibration:** Initial target; calibrate on an OpenShift measurement pass in build week. If
+**Calibration:** Initial target; calibrate on an OpenShift measurement pass. If
 real surfaces routinely produce >5 findings, raise the threshold or tighten collapse
 rules - do not ship a budget that fires on every run.
 
 **If over budget:** Collapse by rule with counts; show top 5 by severity; link to full
 JSON.
 
-**Measurement:** Demo app clean pass = 0 findings. Demo broken = exactly 3 (one per
+**Measurement:** Fixture app clean pass = 0 findings. Fixture broken = exactly 3 (one per
 layer). OpenShift measurement pass: track findings per surface for calibration.
 
 **Rip-out tie-in:** Exceeding budget without collapse is a top disable trigger (see
@@ -94,18 +94,20 @@ layer). OpenShift measurement pass: track findings per surface for calibration.
 
 **Path (target):**
 
-1. Clone the demo repo (it ships `usabl.config.json`), or run `npx usabl init` to scaffold
-   `usabl.config.json` and `usabl.routes.json` for a new app.
-2. `npm install` (or the documented package manager).
+1. `npm install --save-dev usabl`, then `npx playwright install chromium`.
+2. Run `npx usabl init` to scaffold `usabl.config.json` and `usabl.routes.json` for your
+   app, or clone the [usabl-app](https://github.com/usabl-dev/usabl-app) sample, which
+   ships `usabl.config.json`.
 3. `npm run dev` to start the app the config points at, then `npx usabl check`. Targets
    come from `usabl.config.json`; `check` takes no URL argument.
 
 **Success metric:** time from install to the first actionable finding, with no custom
 configuration beyond the documented defaults.
 
-**Stranger test:** Required before submission; record time and blockers in scorecard.
+**Stranger test:** Have someone new to usabl follow the README quickstart; record time and
+blockers in an issue.
 
-**Status:** Open - depends on quickstart README (engineering §7).
+**Status:** Open until the stranger test runs on the README quickstart.
 
 ---
 
@@ -138,14 +140,14 @@ preview, never as verified proof.
 
 ## Self-check: dogfooding surfaces
 
-Before submission, run harness on:
+Before a release, run the harness on:
 
 - [ ] HUD / overlay page
 - [ ] Fleet evidence view
 - [ ] PR comment HTML template
-- [ ] Deck (done - caught real finding)
 
-Same bar as production demo surfaces.
+Same bar as every published page. The harness has already caught a real finding on a
+published presentation page.
 
 ---
 

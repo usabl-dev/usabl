@@ -497,7 +497,7 @@
           </article>
           <article class="card">
             <h3>rulepack/</h3>
-            <p>Six checks written for PatternFly, the design system used by the demo app: icon button names, menu open-and-closed state, unique row actions, table headers, toast placement, and repeated toolbars. It also contains probes: small scripts that really open a dialog or a menu and watch where keyboard focus goes.</p>
+            <p>Six checks written for PatternFly, the design system used by the sample app: icon button names, menu open-and-closed state, unique row actions, table headers, toast placement, and repeated toolbars. It also contains probes: small scripts that really open a dialog or a menu and watch where keyboard focus goes.</p>
           </article>
           <article class="card">
             <h3>keyboard-walk/</h3>
@@ -582,7 +582,7 @@
               <p class="banner"><span aria-hidden="true">⚠</span> Not verified. These are observations, not proof. No receipt was minted for this run, so nothing on this card is bound to gate coverage.</p>
             </div>
           </div>
-          <figcaption>Captured text from two real <code>usabl docs --html</code> runs on the demo app: each panel shows the page overview line above one artifact's status banner. Same page, same artifacts. When no receipt is minted, every card falls back from "Verified" to "Not verified" on its own. The generator never shows a card as proof unless a receipt backs it.</figcaption>
+          <figcaption>Captured text from two real <code>usabl docs --html</code> runs on the sample app: each panel shows the page overview line above one artifact's status banner. Same page, same artifacts. When no receipt is minted, every card falls back from "Verified" to "Not verified" on its own. The generator never shows a card as proof unless a receipt backs it.</figcaption>
         </figure>
         <p class="rule"><strong>Consistency rule:</strong> if two surfaces showing the same <code>Result</code> ever disagree, the bug is in the display code, not in the decision. A local run and a CI run can differ, because CI reads policy from the trusted base, and the Playwright page check has no floor and no waivers. Start debugging from the <code>Result</code> object and work outward.</p>
       </div>

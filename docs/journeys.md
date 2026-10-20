@@ -39,7 +39,7 @@ hook), `usabl install --claude-skill` (the on-demand `/usabl-check` skill), `usa
   and scanner versions, so a green result is re-checkable rather than asserted.
 
 **Rip-out moment:** The assistant hook is disabled after one false block.
-**Prevention:** Accurate findings on the demo set; `not_covered` only with a reason; the
+**Prevention:** Accurate findings on the fixture set; `not_covered` only with a reason; the
 evidence floor keeps carried debt from blocking, so what gates is a new, unwaived
 violation above the floor, unconfirmed coverage, or a guarded policy edit. The
 `stop-hook` command always exits 0 and blocks through a stdout decision, so a wedged
@@ -139,8 +139,7 @@ still required, and usabl states that plainly rather than claiming to speak for 
 spoken-output preview module exists in the codebase but is dormant: it is not in the run
 or gate path and does not affect any verdict.
 
-**Demo:** A real NVDA cold open and bookend. Any spoken-output preview shown in the loop
-is labeled as a dev-time aid, not as evidence and not as James's approval.
+**Recordings:** Any spoken-output preview shown in the loop is labeled as a dev-time aid, not as evidence and not as James's approval.
 
 ---
 
@@ -148,7 +147,7 @@ is labeled as a dev-time aid, not as evidence and not as James's approval.
 
 | Journey | Disable trigger | Prevention |
 |---|---|---|
-| Assistant loop | False block, slow check | Accurate demo set; latency budget; re-checkable receipt |
+| Assistant loop | False block, slow check | Accurate fixture set; latency budget; re-checkable receipt |
 | Overlay | Clutter, flapping | Dedupe; single-flight; severity cap |
 | PR reviewer | Bot fatigue | Comment only on mapped screens and regressions |
 | Onboarding | Debt wall | Evidence floor; new-only gating; waivers with expiry |
@@ -158,10 +157,10 @@ is labeled as a dev-time aid, not as evidence and not as James's approval.
 
 ## Journey map status
 
-| Journey | Documented | Filmed / tested |
+| Journey | Documented | Tested |
 |---|---|---|
-| Priya assistant loop | Yes | Open (THE MOMENT) |
+| Priya assistant loop | Yes | Open |
 | Manual overlay | Yes | Open |
 | PR reviewer | Yes | Partial (static PR comment in the harness) |
 | Team onboarding | Yes | Open |
-| James outcome | Yes | Open (NVDA session) |
+| James outcome | Yes | Open (screen reader session) |
