@@ -18,13 +18,18 @@ function element(selector: string): ElementRef {
   return { selector };
 }
 
+// An alert's ancestor chain, nearest first, as the page reports it. The first entry is the alert.
+type AncestorPlan = Record<string, Array<Record<string, string | null>>>;
+
 function withRulepackPage(
   page: Page,
   queryPlan: Record<string, ElementRef[]>,
   axPlan: Record<string, AxNode | null>,
+  ancestorPlan: AncestorPlan = {},
 ): Page {
   return Object.assign(page, {
     queryAll: async (selector: string) => queryPlan[selector] ?? [],
+    ancestorAttributes: async (selector: string) => ancestorPlan[selector] ?? null,
     axAt: async (selector: string) => {
       if (Object.hasOwn(axPlan, selector)) {
         return axPlan[selector] ?? null;
@@ -38,11 +43,12 @@ async function makeContext(
   queryPlan: Record<string, ElementRef[]>,
   axPlan: Record<string, AxNode | null> = {},
   profile?: ProfileName,
+  ancestorPlan: AncestorPlan = {},
 ): Promise<ProviderContext> {
   const deps = makeFakeDeps();
   const page = await deps.browser.open(SCREEN.url);
   return {
-    page: withRulepackPage(page, queryPlan, axPlan),
+    page: withRulepackPage(page, queryPlan, axPlan, ancestorPlan),
     screen: SCREEN,
     config: testConfig(),
     ...(profile !== undefined ? { profile } : {}),
@@ -69,21 +75,21 @@ function draftFrom(rule: string): Draft {
 
 describe('makeRulepackProvider', () => {
   it('flags alerts outside live regions and stays silent when all alerts are contained', async () => {
-    // The contained query is built by distributing the alert descendant across each live-container
-    // term, because a comma binds looser than a descendant combinator and the plain
-    // `${SEL.liveContainer} ${SEL.alert}` concatenation attached the alert only to the last term.
-    // This mock keys on the query the rule actually sends, so it must use the same distributed form.
-    const containedQuery = SEL.liveContainer
-      .split(',')
-      .map((container) => `${container.trim()} ${SEL.alert}`)
-      .join(', ');
+    // Containment is read from each alert's ancestor chain, nearest first. The outside alert has
+    // no live value anywhere above it; the inside alert sits in a role="status" region.
     const outsideAlert = element('.outside-alert');
     const insideAlert = element('.inside-alert');
+    const ancestors: AncestorPlan = {
+      [outsideAlert.selector]: [{ 'aria-live': null, role: null }, { 'aria-live': null, role: null }],
+      [insideAlert.selector]: [{ 'aria-live': null, role: null }, { 'aria-live': null, role: 'status' }],
+    };
     const provider = makeRulepackProvider();
-    const outsideContext = await makeContext({
-      [SEL.alert]: [outsideAlert, insideAlert],
-      [containedQuery]: [insideAlert],
-    });
+    const outsideContext = await makeContext(
+      { [SEL.alert]: [outsideAlert, insideAlert] },
+      {},
+      undefined,
+      ancestors,
+    );
 
     const outsideDrafts = draftsOf(await provider.run(outsideContext));
 
@@ -95,14 +101,24 @@ describe('makeRulepackProvider', () => {
       elementPath: outsideAlert.selector,
     });
 
-    const insideOnlyContext = await makeContext({
-      [SEL.alert]: [insideAlert],
-      [containedQuery]: [insideAlert],
-    });
+    const insideOnlyContext = await makeContext({ [SEL.alert]: [insideAlert] }, {}, undefined, ancestors);
 
     const insideOnlyOutput = await provider.run(insideOnlyContext);
     expect(draftsOf(insideOnlyOutput)).toEqual([]);
     expect(gapsOf(insideOnlyOutput)).toEqual([]);
+  });
+
+  it('discloses a gap, not a pass, when an alert cannot be found again to read its ancestors', async () => {
+    // The alert matched the first query and then vanished. Its containment is unknown, so the check
+    // must not pass it: the rulepack turns the throw into a scoped gap.
+    const vanished = element('.vanished-alert');
+    const provider = makeRulepackProvider();
+    const output = await provider.run(await makeContext({ [SEL.alert]: [vanished] }));
+
+    expect(draftsOf(output).filter((draft) => draft.rule === 'pf-toast-live-region')).toEqual([]);
+    expect(gapsOf(output)).toEqual([
+      expect.objectContaining({ ref: 'provider:pf-rulepack/pf-toast-live-region', state: 'not-covered' }),
+    ]);
   });
 
   it('flags unnamed icon buttons and skips buttons with an AX name', async () => {
@@ -282,17 +298,11 @@ describe('makeRulepackProvider', () => {
     const provider = makeRulepackProvider([extra]);
     // A toast outside a live region would normally flag on the app profile.
     const outsideAlert = element('.outside-alert');
-    const containedQuery = SEL.liveContainer
-      .split(',')
-      .map((container) => `${container.trim()} ${SEL.alert}`)
-      .join(', ');
     const docsContext = await makeContext(
-      {
-        [SEL.alert]: [outsideAlert],
-        [containedQuery]: [],
-      },
+      { [SEL.alert]: [outsideAlert] },
       {},
       'docs',
+      { [outsideAlert.selector]: [{ 'aria-live': null, role: null }] },
     );
 
     const docsOutput = await provider.run(docsContext);

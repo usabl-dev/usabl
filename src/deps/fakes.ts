@@ -65,6 +65,8 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     activePath: async () => 'body',
     axAt: async () => null,
     getAttribute: async () => null,
+    // A fake page has no DOM, so it cannot find the element. Null is not a chain with no live region.
+    ancestorAttributes: async () => null,
     queryAll: async () => [],
     close: async () => {},
     setViewport: async () => {},

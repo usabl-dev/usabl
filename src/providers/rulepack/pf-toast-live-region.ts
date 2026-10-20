@@ -3,7 +3,14 @@
  * This unit must never claim the temporal announcement half. It only proves containment.
  */
 import type { Draft, ProviderContext } from '../../contracts/index.js';
+import { effectiveLiveValue, type LiveAttributes } from './live-value.js';
 import { SEL } from './selectors.js';
+
+const LIVE_ATTRIBUTES = ['aria-live', 'role'] as const;
+
+function toLiveAttributes(record: Record<string, string | null>): LiveAttributes {
+  return { ariaLive: record['aria-live'] ?? null, role: record['role'] ?? null };
+}
 
 export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Draft[]> {
   const allAlerts = await ctx.page.queryAll(SEL.alert);
@@ -11,24 +18,26 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Draf
     return [];
   }
 
-  // Set difference keeps this honest: only alerts outside any live container fail.
-  //
-  // The contained query pairs the descendant combinator with each live-container term
-  // separately. SEL.liveContainer is a comma group, and a comma binds looser than a descendant
-  // combinator, so `${SEL.liveContainer} ${SEL.alert}` would attach the alert only to the last
-  // term and read the other containers as bare matches. That left every real alert outside the
-  // contained set, so a contained alert was reported as loose. Distributing the descendant across
-  // each term matches an alert that sits inside any live container.
-  const containedQuery = SEL.liveContainer
-    .split(',')
-    .map((container) => `${container.trim()} ${SEL.alert}`)
-    .join(', ');
-  const containedAlerts = await ctx.page.queryAll(containedQuery);
-  const containedSelectors = new Set(containedAlerts.map((candidate) => candidate.selector));
-
   const drafts: Draft[] = [];
   for (const alertRef of allAlerts) {
-    if (containedSelectors.has(alertRef.selector)) {
+    // A CSS selector can only ask whether some live container sits anywhere above the alert. The
+    // live value that applies is the one on the nearest element that sets one, so an off wrapper
+    // between a polite region and the alert silences it. That is resolved here, one alert at a time.
+    const chain = await ctx.page.ancestorAttributes(alertRef.selector, LIVE_ATTRIBUTES);
+    if (chain === null || chain.length === 0) {
+      // The alert matched a moment ago and cannot be found now. Passing it would be a guess, so the
+      // throw becomes a disclosed gap for this check.
+      throw new Error(`could not read the ancestors of alert ${alertRef.selector}`);
+    }
+    const nodes = chain.map(toLiveAttributes);
+
+    // Two conditions, both required. The container above the alert must be live, because a live
+    // value the alert carries itself does not make a region that exists before the alert mounts.
+    // And the alert's own content must be live, because an aria-live="off" on the alert itself
+    // silences it even inside a live container.
+    const containerIsLive = effectiveLiveValue(nodes.slice(1)) !== 'off';
+    const contentIsLive = effectiveLiveValue(nodes) !== 'off';
+    if (containerIsLive && contentIsLive) {
       continue;
     }
 
@@ -43,7 +52,7 @@ export async function checkPfToastLiveRegion(ctx: ProviderContext): Promise<Draf
       elementName: node?.name ?? null,
       role: node?.role ?? null,
       whatUserExperiences: 'A toast appears but assistive technology may not announce it.',
-      why: 'The alert is outside every aria-live or status container.',
+      why: 'No polite or assertive live region reaches the alert.',
       fix: 'Render the alert inside a live region container that remains mounted.',
       evidence: {
         name: { value: node?.name ?? null, source: 'ax-tree', fromTree: true },

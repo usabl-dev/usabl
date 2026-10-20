@@ -418,6 +418,12 @@ export interface Page {
   activePath(): Promise<string>;
   axAt(selector: string): Promise<AxNode | null>;
   getAttribute(selector: string, name: string): Promise<string | null>;
+  // The named attributes of the element a selector matches and of each element above it, nearest
+  // first: the element itself, then its parent, up to the root. The walk follows the flat tree that
+  // the accessibility tree is built from, so a slotted element climbs through its slot and a shadow
+  // root climbs to its host. A missing attribute reads as null. Null overall means no element
+  // matched, which a caller must not read as an element with no ancestors.
+  ancestorAttributes(selector: string, names: readonly string[]): Promise<Array<Record<string, string | null>> | null>;
   queryAll(selector: string): Promise<ElementRef[]>;
   close(): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;

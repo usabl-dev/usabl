@@ -21,7 +21,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page as PwPage } from 'playwright';
 import type { AxNode, Page, ProviderContext } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
-import { LIVE_AND_PATH_INIT_SCRIPT, INSTALL_PATH_HELPER_SCRIPT } from '../../src/deps/real.js';
+import {
+  LIVE_AND_PATH_INIT_SCRIPT,
+  INSTALL_PATH_HELPER_SCRIPT,
+  readAncestorAttributes,
+} from '../../src/deps/real.js';
 import { checkPfToastLiveRegion } from '../../src/providers/rulepack/pf-toast-live-region.js';
 import { checkPfToolbarLabeledWhenRepeated } from '../../src/providers/rulepack/pf-toolbar-labeled-when-repeated.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
@@ -89,6 +93,9 @@ function livePage(pw: PwPage): Page {
     },
     async getAttribute(selector: string, name: string) {
       return pw.locator(selector).first().getAttribute(name);
+    },
+    async ancestorAttributes(selector: string, names: readonly string[]) {
+      return readAncestorAttributes(pw, selector, names);
     },
     async axAt(selector: string): Promise<AxNode | null> {
       const count = await pw.locator(selector).count();
@@ -354,6 +361,9 @@ describe('pathFor does not collapse elements that share an id', () => {
         }, selector);
         return paths.map((path) => ({ selector: path }));
       },
+      async ancestorAttributes(selector: string, names: readonly string[]) {
+        return readAncestorAttributes(pw, selector, names);
+      },
       async axAt(selector: string): Promise<AxNode | null> {
         const count = await pw.locator(selector).count();
         if (count === 0) {
@@ -607,6 +617,9 @@ describe('INSTALL_PATH_HELPER_SCRIPT (adoptPage path) also rejects duplicate ids
               : [];
           }, selector);
           return paths.map((p) => ({ selector: p }));
+        },
+        async ancestorAttributes(selector: string, names: readonly string[]) {
+          return readAncestorAttributes(page, selector, names);
         },
         async axAt(selector: string): Promise<AxNode | null> {
           const count = await page.locator(selector).count();

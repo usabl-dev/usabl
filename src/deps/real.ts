@@ -327,6 +327,48 @@ async function stablePathForActiveElement(pw: PwPage): Promise<string> {
   });
 }
 
+/**
+ * Reads the named attributes of the element a selector matches and of every element above it,
+ * nearest first. The walk follows the flat tree, the tree the accessibility tree is built from: a
+ * slotted element climbs to its slot, and the top of a shadow tree climbs to its host. A plain
+ * parentElement walk would skip the slot and stop at the shadow root, and so miss a live region
+ * that wraps the content only in the rendered tree. Null means nothing matched the selector.
+ */
+export async function readAncestorAttributes(
+  pw: PwPage,
+  selector: string,
+  names: readonly string[],
+): Promise<Array<Record<string, string | null>> | null> {
+  return pw.evaluate(
+    ({ query, attributeNames }) => {
+      const start = document.querySelector(query);
+      if (!(start instanceof Element)) {
+        return null;
+      }
+      const flatParent = (element: Element): Element | null => {
+        if (element.assignedSlot !== null) {
+          return element.assignedSlot;
+        }
+        if (element.parentElement !== null) {
+          return element.parentElement;
+        }
+        const root = element.parentNode;
+        return root instanceof ShadowRoot ? root.host : null;
+      };
+      const chain: Array<Record<string, string | null>> = [];
+      for (let current: Element | null = start; current !== null; current = flatParent(current)) {
+        const record: Record<string, string | null> = {};
+        for (const name of attributeNames) {
+          record[name] = current.getAttribute(name);
+        }
+        chain.push(record);
+      }
+      return chain;
+    },
+    { query: selector, attributeNames: [...names] },
+  );
+}
+
 async function stablePathsForSelector(pw: PwPage, selector: string): Promise<string[]> {
   return pw.evaluate((query) => {
     const pathFor = Reflect.get(window, '__usablPathFor');
@@ -662,6 +704,12 @@ function wrapPage(
     },
     async getAttribute(selector: string, name: string): Promise<string | null> {
       return pw.locator(selector).getAttribute(name);
+    },
+    async ancestorAttributes(
+      selector: string,
+      names: readonly string[],
+    ): Promise<Array<Record<string, string | null>> | null> {
+      return readAncestorAttributes(pw, selector, names);
     },
     async queryAll(selector: string): Promise<Array<{ selector: string }>> {
       const paths = await stablePathsForSelector(pw, selector);

@@ -556,6 +556,9 @@ export interface Page {
   activePath(): Promise<string>;
   axAt(selector: string): Promise<AxNode | null>;
   getAttribute(selector: string, name: string): Promise<string | null>;
+  // Named attributes of the element and each element above it, nearest first, along the flat tree.
+  // Null means nothing matched.
+  ancestorAttributes(selector: string, names: readonly string[]): Promise<Array<Record<string, string | null>> | null>;
   queryAll(selector: string): Promise<ElementRef[]>;
   close(): Promise<void>;
   // Capabilities wired for future checks (not used by contest providers)
@@ -636,7 +639,18 @@ checks (one file per rule) and two interaction probes (`pf-focus-into-dialog` an
 
 1. `pf-toast-live-region`: toasts, alert groups, inline validation, and async table
    loading must sit in a role=status/alert/aria-live region that exists before the
-   update.
+   update. The check resolves each alert's effective live value the way WAI-ARIA
+   defines it: the value on the nearest element that sets one, explicitly through
+   `aria-live` or implicitly through its role (alert is assertive, status and log are
+   polite, timer and marquee are off). The explicit attribute wins over the role on
+   the same element. Token values compare without regard to ASCII case. An empty
+   `aria-live` counts as not set. An unknown token takes the default, off; Chromium
+   treats it as not set, so this is the stricter reading. A role list uses its first
+   recognized role. The walk follows the flat tree, so a slotted alert climbs through
+   its slot. An alert passes only when the nearest value above it is polite or
+   assertive and the alert does not set off on itself. Its own live value does not
+   count as a container. An alert whose ancestors cannot be read becomes a disclosed
+   gap, never a pass.
 2. `pf-modal-focus-return`: open a modal, press Escape, focus returns to the exact
    trigger.
 3. `pf-focus-into-dialog`: focus moves into a dialog or menu on open.

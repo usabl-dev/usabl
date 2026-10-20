@@ -313,6 +313,16 @@
   refusal names the field and where the key falls in the order the keys are read
   back, never the key itself, and it says that this order is not always the order
   the keys appear in the file.
+- `pf-toast-live-region` now resolves each alert's live value from the nearest
+  element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector
+  whether any live container sits somewhere above the alert. The selector passed an
+  alert behind an `aria-live="off"` wrapper inside a polite region, and behind an off
+  wrapper inside a `role="status"` host, so a silent toast read as announced. It also
+  read `aria-live="OFF"`, empty, and unknown values as live. Now only polite and
+  assertive count, values ignore ASCII case, an unknown value is off, an empty value
+  defers to the role and the ancestors, and an alert that sets off on itself is
+  flagged. The `why` text on the finding now reads "No polite or assertive live region
+  reaches the alert."
 
 ### Added
 
