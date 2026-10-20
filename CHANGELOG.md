@@ -313,6 +313,13 @@
   refusal names the field and where the key falls in the order the keys are read
   back, never the key itself, and it says that this order is not always the order
   the keys appear in the file.
+- The published package no longer fails its own `prepare` script. `prepare` ran
+  `bash scripts/install-git-hooks.sh`, and the tarball ships only `dist` and the
+  changelog, so `npm pack` inside the unpacked package, and an install of it as a
+  folder dependency, stopped with exit 127. A consumer had to delete the script to
+  get through CI. `prepare` now skips the hook installer when the file is absent and
+  still runs it, with its exit status, in a clone. The package smoke now packs and
+  installs with lifecycle scripts on, so the same break fails the build.
 
 ### Added
 

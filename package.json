@@ -62,7 +62,7 @@
     "docs:a11y": "node scripts/check-docs-a11y.mjs",
     "docs:badges": "node scripts/check-readme-badges.mjs",
     "render:product-map": "node scripts/render-product-map.mjs",
-    "prepare": "bash scripts/install-git-hooks.sh"
+    "prepare": "node -e \"process.exit(require('node:fs').existsSync('scripts/install-git-hooks.sh') ? 1 : 0)\" || bash scripts/install-git-hooks.sh"
   },
   "devDependencies": {
     "@types/js-yaml": "4.0.9",
