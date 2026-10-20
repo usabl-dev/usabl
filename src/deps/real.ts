@@ -6,7 +6,7 @@
  */
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { AxNode, BrowserDriver, Page } from '../contracts/index.js';
+import type { ApiResponse, AxNode, BrowserDriver, Page } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
@@ -379,6 +379,7 @@ export function readyTimeoutMsFor(config: { readyTimeoutMs?: number }): number {
 export interface NetworkActivity {
   networkQuietFor(windowMs: number): boolean;
   unauthorizedApiUrls(): string[];
+  apiResponses(): ApiResponse[];
 }
 
 // The subset of a Playwright response this tracker reads. Narrow so a test can drive it.
@@ -420,6 +421,11 @@ export function makeNetworkActivityTracker(
   // runner reads this twice for exactly that reason. What it cannot hold is a response that
   // arrives after the last read, which is the one boundary nothing here can close.
   const unauthorized: string[] = [];
+  // Every data response, refused or not, in the same arrival order and from the same handler, so
+  // a refusal can be read against what the application answered for that address afterwards, and
+  // a declared readiness response can be looked up. Cumulative for the life of the page, like the
+  // refusal record.
+  const responses: ApiResponse[] = [];
 
   const settled = (): void => {
     inFlight = Math.max(0, inFlight - 1);
@@ -437,13 +443,15 @@ export function makeNetworkActivityTracker(
     // A listener that throws would take down the page event emitter, and a status read on a
     // response from a frame that has already gone can throw. Nothing here is worth that.
     try {
-      if (response.status() !== UNAUTHENTICATED_STATUS) {
-        return;
-      }
       if (!PAGE_DATA_RESOURCE_TYPES.has(response.request().resourceType())) {
         return;
       }
-      unauthorized.push(response.url());
+      const status = response.status();
+      const url = response.url();
+      responses.push({ url, status });
+      if (status === UNAUTHENTICATED_STATUS) {
+        unauthorized.push(url);
+      }
     } catch {
       return;
     }
@@ -458,6 +466,9 @@ export function makeNetworkActivityTracker(
     },
     unauthorizedApiUrls(): string[] {
       return [...unauthorized];
+    },
+    apiResponses(): ApiResponse[] {
+      return responses.map((response) => ({ ...response }));
     },
   };
 }
@@ -580,6 +591,9 @@ function wrapPage(
     },
     async unauthorizedApiRequests(): Promise<string[]> {
       return network.unauthorizedApiUrls();
+    },
+    async apiResponses(): Promise<ApiResponse[]> {
+      return network.apiResponses();
     },
     async countEverywhere(selector: string): Promise<number> {
       // A Playwright locator pierces open shadow roots on its own, and every frame is asked, so a

@@ -65,14 +65,62 @@ describe('parseUsablConfig surface reachedWhen', () => {
     }
   });
 
-  it('refuses a non-string reachedWhen', () => {
-    expect(() =>
-      parseUsablConfig(
-        configJson({
-          surfaces: [{ id: 'overview', url: 'http://127.0.0.1:5173/overview', files: ['src/Overview.tsx'], reachedWhen: 42 }],
-        }),
-      ),
-    ).toThrow(/reachedWhen/);
+  it('refuses a reachedWhen that is neither a string nor an object', () => {
+    for (const bad of [42, true, null, ['main#root']]) {
+      expect(() =>
+        parseUsablConfig(
+          configJson({
+            surfaces: [{ id: 'overview', url: 'http://127.0.0.1:5173/overview', files: ['src/Overview.tsx'], reachedWhen: bad }],
+          }),
+        ),
+      ).toThrow(/reachedWhen/);
+    }
+  });
+});
+
+describe('parseUsablConfig surface reachedWhen object form', () => {
+  const withSignal = (reachedWhen: unknown): string =>
+    configJson({
+      surfaces: [{ id: 'orders', url: 'http://127.0.0.1:5173/orders', files: ['src/Orders.tsx'], reachedWhen }],
+    });
+
+  it('reads a selector and a response together', () => {
+    const config = parseUsablConfig(withSignal({ selector: 'table#orders', response: '/api/orders' }));
+    expect(config.surfaces[0]?.reachedWhen).toEqual({ selector: 'table#orders', response: '/api/orders' });
+  });
+
+  it('reads a response on its own', () => {
+    const config = parseUsablConfig(withSignal({ response: '/api/orders' }));
+    expect(config.surfaces[0]?.reachedWhen).toEqual({ response: '/api/orders' });
+  });
+
+  it('reads a selector on its own', () => {
+    const config = parseUsablConfig(withSignal({ selector: 'table#orders' }));
+    expect(config.surfaces[0]?.reachedWhen).toEqual({ selector: 'table#orders' });
+  });
+
+  it('refuses an object that declares neither a selector nor a response', () => {
+    expect(() => parseUsablConfig(withSignal({}))).toThrow(/reachedWhen/);
+  });
+
+  it('refuses a key it does not know, so a misspelled signal is not silently dropped', () => {
+    expect(() => parseUsablConfig(withSignal({ selector: 'table#orders', respone: '/api/orders' }))).toThrow(
+      /respone/,
+    );
+  });
+
+  it('refuses an empty selector inside the object', () => {
+    expect(() => parseUsablConfig(withSignal({ selector: '  ' }))).toThrow(/reachedWhen\.selector/);
+  });
+
+  it('refuses a response that is not a path on the application', () => {
+    for (const bad of ['', 'api/orders', '//cdn.example/api', 'http://127.0.0.1:5173/api/orders', '/api/orders?x=1', '/api/orders#top', '/api/my orders', 42]) {
+      expect(() => parseUsablConfig(withSignal({ response: bad }))).toThrow(/reachedWhen\.response/);
+    }
+  });
+
+  it('refuses the bare root path, because every request on the host would satisfy it', () => {
+    expect(() => parseUsablConfig(withSignal({ response: '/' }))).toThrow(/reachedWhen\.response/);
   });
 });
 

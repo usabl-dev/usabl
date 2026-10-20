@@ -139,3 +139,43 @@ describe('the tracker records the page data requests that were refused', () => {
     expect(tracker.unauthorizedApiUrls()).toEqual(['http://app.test/api/v2/me']);
   });
 });
+
+describe('the tracker records every page data response, so a refusal can be read against what came after it', () => {
+  it('records fetch and xhr responses with their status, in arrival order', () => {
+    const { page, respond } = emitter();
+    const tracker = makeNetworkActivityTracker(page);
+
+    respond({ status: 401, url: 'http://app.test/api/me', resourceType: 'fetch' });
+    respond({ status: 200, url: 'http://app.test/auth/refresh', resourceType: 'xhr' });
+    respond({ status: 200, url: 'http://app.test/api/me', resourceType: 'fetch' });
+
+    expect(tracker.apiResponses()).toEqual([
+      { url: 'http://app.test/api/me', status: 401 },
+      { url: 'http://app.test/auth/refresh', status: 200 },
+      { url: 'http://app.test/api/me', status: 200 },
+    ]);
+  });
+
+  it('leaves out documents and assets, because only the page script asking for data counts', () => {
+    // An authentication wall answers 200 to its own document and stylesheet. Counting those would
+    // let any page satisfy a response signal.
+    const { page, respond } = emitter();
+    const tracker = makeNetworkActivityTracker(page);
+
+    for (const resourceType of ['document', 'stylesheet', 'image', 'font', 'script']) {
+      respond({ status: 200, url: `http://app.test/api/orders/${resourceType}`, resourceType });
+    }
+
+    expect(tracker.apiResponses()).toEqual([]);
+  });
+
+  it('hands back a copy, so a caller cannot edit the record', () => {
+    const { page, respond } = emitter();
+    const tracker = makeNetworkActivityTracker(page);
+    respond({ status: 200, url: 'http://app.test/api/orders', resourceType: 'fetch' });
+
+    tracker.apiResponses().push({ url: 'http://app.test/api/invented', status: 200 });
+
+    expect(tracker.apiResponses()).toEqual([{ url: 'http://app.test/api/orders', status: 200 }]);
+  });
+});

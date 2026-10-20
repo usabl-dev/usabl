@@ -322,6 +322,34 @@ describe('makeCheckRunner', () => {
     expect(scan.reachedWhenSelector).toBe('main#app-root');
   });
 
+  it('records whether a declared readiness response arrived, and names it', async () => {
+    for (const [responses, seen] of [
+      [[{ url: 'http://127.0.0.1:5173/api/clusters', status: 200 }], true],
+      [[{ url: 'http://127.0.0.1:5173/api/clusters', status: 401 }], false],
+      [[], false],
+    ] as const) {
+      const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+      Object.assign(page, { apiResponses: async () => responses });
+      const runner = makeCheckRunner({
+        browser: { open: async () => page, close: async () => {} },
+        providers: [],
+        config: testConfig({
+          appBaseUrl: 'http://127.0.0.1:5173',
+          surfaces: [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: { response: '/api/clusters' } }],
+        }),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+      });
+
+      const scan = await runner.scan(SCREEN);
+
+      expect(scan.reachedResponseSeen).toBe(seen);
+      expect(scan.reachedWhenResponse).toBe('/api/clusters');
+      // No selector was declared, so no selector claim is made.
+      expect(scan.reachedSelectorPresent).toBeNull();
+    }
+  });
+
   it('reads a reachedWhen that throws in the DOM as absent, not a scan failure', async () => {
     const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
     // A malformed selector makes the browser query throw. It cannot match, so it reads as absent

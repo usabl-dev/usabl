@@ -219,6 +219,96 @@ describe('rule A: the page\'s own data requests were refused as unauthenticated'
     ).not.toBeNull();
   });
 
+  it('is dismissed when the refused address was later answered and the readiness signal held', () => {
+    // A token refresh: the identity call is refused, the client refreshes, and the same call is
+    // answered. The screen's own signal held, so the session worked.
+    expect(
+      redirectedAwayGap(
+        SCREEN.id,
+        observation({
+          unauthorizedApiUrls: ['http://app.test/api/me'],
+          apiResponses: [
+            { url: 'http://app.test/api/me', status: 401 },
+            { url: 'http://app.test/auth/refresh', status: 200 },
+            { url: 'http://app.test/api/me', status: 200 },
+          ],
+          reachedSelectorPresent: true,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('is not dismissed by a later success when no readiness signal was declared', () => {
+    // A 401 then a 200 can also be an application that dropped a stale token and was answered as
+    // an anonymous visitor. Without positive evidence the screen rendered, that stays a gap.
+    expect(
+      redirectedAwayGap(
+        SCREEN.id,
+        observation({
+          unauthorizedApiUrls: ['http://app.test/api/me'],
+          apiResponses: [
+            { url: 'http://app.test/api/me', status: 401 },
+            { url: 'http://app.test/api/me', status: 200 },
+          ],
+        }),
+      ),
+    ).not.toBeNull();
+  });
+
+  it('is not dismissed by a later success when the readiness signal did not hold', () => {
+    expect(
+      redirectedAwayGap(
+        SCREEN.id,
+        observation({
+          unauthorizedApiUrls: ['http://app.test/api/me'],
+          apiResponses: [
+            { url: 'http://app.test/api/me', status: 401 },
+            { url: 'http://app.test/api/me', status: 200 },
+          ],
+          reachedSelectorPresent: true,
+          reachedResponseSeen: false,
+        }),
+      ),
+    ).not.toBeNull();
+  });
+
+  it('is not dismissed when the last answer to the refused address was a refusal', () => {
+    expect(
+      redirectedAwayGap(
+        SCREEN.id,
+        observation({
+          unauthorizedApiUrls: ['http://app.test/api/me', 'http://app.test/api/me'],
+          apiResponses: [
+            { url: 'http://app.test/api/me', status: 401 },
+            { url: 'http://app.test/api/me', status: 200 },
+            { url: 'http://app.test/api/me', status: 401 },
+          ],
+          reachedSelectorPresent: true,
+        }),
+      ),
+    ).not.toBeNull();
+  });
+
+  it('is not dismissed by a success on a different address', () => {
+    // The refresh call succeeding says nothing about whether the refused call was ever answered.
+    const gap = redirectedAwayGap(
+      SCREEN.id,
+      observation({
+        unauthorizedApiUrls: ['http://app.test/api/me', 'http://app.test/api/config'],
+        apiResponses: [
+          { url: 'http://app.test/api/me', status: 401 },
+          { url: 'http://app.test/api/config', status: 401 },
+          { url: 'http://app.test/auth/refresh', status: 200 },
+          { url: 'http://app.test/api/me', status: 200 },
+        ],
+        reachedSelectorPresent: true,
+      }),
+    );
+    expect(gap).not.toBeNull();
+    // Only the address nobody answered is counted and named.
+    expect(gap?.reason).toContain('1 of the application');
+  });
+
   it('shortens a refused address to its first two path segments', () => {
     // A path is where applications put opaque values: /reset/<token>, /invite/<token>. The
     // endpoint an operator needs to recognise is the front of the path.
@@ -344,6 +434,24 @@ describe('rule B: a password field anywhere, with a session configured', () => {
         observation({ passwordFieldPresent: true, reachedSelectorPresent: true }),
       ),
     ).toBeNull();
+  });
+
+  it('is overridden by a declared readiness response that arrived', () => {
+    expect(
+      redirectedAwayGap(
+        SCREEN.id,
+        observation({ passwordFieldPresent: true, reachedResponseSeen: true }),
+      ),
+    ).toBeNull();
+  });
+
+  it('still fires when the selector matched but the declared response did not arrive', () => {
+    expect(
+      redirectedAwayGap(
+        SCREEN.id,
+        observation({ passwordFieldPresent: true, reachedSelectorPresent: true, reachedResponseSeen: false }),
+      ),
+    ).not.toBeNull();
   });
 
   it('still fires when a declared reachedWhen selector matched nothing', () => {
@@ -556,6 +664,8 @@ describe('observeLanding: reading the facts off a live page', () => {
       unauthorizedApiUrls: ['http://app.test/api/me'],
       sessionConfigured: true,
       reachedSelectorPresent: null,
+      reachedResponseSeen: null,
+      apiResponses: [],
     });
   });
 
@@ -570,6 +680,9 @@ describe('observeLanding: reading the facts off a live page', () => {
       unauthorizedApiRequests: async () => {
         throw new Error('no record');
       },
+      apiResponses: async () => {
+        throw new Error('no record');
+      },
     });
     await expect(observeLanding(broken, { ...observeOptions, reachedWhen: undefined })).resolves.toEqual({
       requestedUrl: SCREEN.url,
@@ -579,7 +692,20 @@ describe('observeLanding: reading the facts off a live page', () => {
       unauthorizedApiUrls: [],
       sessionConfigured: true,
       reachedSelectorPresent: null,
+      reachedResponseSeen: null,
+      apiResponses: [],
     });
+  });
+
+  it('reads a declared response whose record cannot be fetched as not seen, never as seen', async () => {
+    const broken = makeFakePage({
+      apiResponses: async () => {
+        throw new Error('no record');
+      },
+    });
+    await expect(
+      observeLanding(broken, { ...observeOptions, reachedWhen: { response: '/api/users' } }),
+    ).resolves.toMatchObject({ reachedResponseSeen: false, apiResponses: [] });
   });
 
   it('reads an empty address as no claim', async () => {
