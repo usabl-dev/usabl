@@ -122,6 +122,38 @@ describe('parseUsablConfig surface reachedWhen object form', () => {
   it('refuses the bare root path, because every request on the host would satisfy it', () => {
     expect(() => parseUsablConfig(withSignal({ response: '/' }))).toThrow(/reachedWhen\.response/);
   });
+
+  // Each of these is written one way and compared another. URL parsing resolves dot segments, reads
+  // a backslash as a slash, and strips a trailing control character, so most of them come out as
+  // "/", which every data request on the host satisfies. The message never repeats the value.
+  const rootInDisguise: Array<[string, string]> = [
+    ['a dot-dot segment that climbs back to the root', '/api/..'],
+    ['a single dot segment', '/.'],
+    ['percent-encoded dot-dot segments', '/%2e%2e/'],
+    ['percent-encoded dot-dot segments in upper and mixed case', '/api/%2E%2e/'],
+    ['a dot segment next to an encoded one', '/api/.%2E'],
+    ['a dot segment in the middle of a path', '/api/./users'],
+    ['a backslash, which the URL parser reads as a slash', '/\\x'],
+    ['a backslash later in the path', '/api\\users'],
+    ['a control character the URL parser strips', '/\u0001'],
+  ];
+  for (const [name, bad] of rootInDisguise) {
+    it(`refuses ${name}, and does not repeat the value`, () => {
+      let message = '';
+      try {
+        parseUsablConfig(withSignal({ response: bad }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message).toMatch(/reachedWhen\.response/);
+      expect(message).not.toContain(bad);
+    });
+  }
+
+  it('still reads a segment that only starts with a dot', () => {
+    const config = parseUsablConfig(withSignal({ response: '/api/.well-known/users' }));
+    expect(config.surfaces[0]?.reachedWhen).toEqual({ response: '/api/.well-known/users' });
+  });
 });
 
 describe('parseUsablConfig surface id', () => {

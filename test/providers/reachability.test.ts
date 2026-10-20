@@ -37,44 +37,72 @@ describe('readinessSignalOf', () => {
 
 describe('responseSignalSeen', () => {
   it('is seen when the application answered the path with a success', () => {
-    expect(responseSignalSeen([{ url: `${APP}/api/orders`, status: 200 }], '/api/orders', APP)).toBe(true);
+    expect(responseSignalSeen([{ url: `${APP}/api/orders`, status: 200, contentType: 'application/json', sentBeforeWalk: true }], '/api/orders', APP)).toBe(true);
   });
 
   it('counts a deeper path and a query, at a segment boundary only', () => {
-    expect(responseSignalSeen([{ url: `${APP}/api/orders/42?x=1`, status: 200 }], '/api/orders', APP)).toBe(true);
-    expect(responseSignalSeen([{ url: `${APP}/api/orders-archive`, status: 200 }], '/api/orders', APP)).toBe(
+    expect(responseSignalSeen([{ url: `${APP}/api/orders/42?x=1`, status: 200, contentType: 'application/json', sentBeforeWalk: true }], '/api/orders', APP)).toBe(true);
+    expect(responseSignalSeen([{ url: `${APP}/api/orders-archive`, status: 200, contentType: 'application/json', sentBeforeWalk: true }], '/api/orders', APP)).toBe(
       false,
     );
   });
 
   it('counts an API subdomain of the application host, on any scheme and port', () => {
     expect(
-      responseSignalSeen([{ url: 'https://api.app.test/api/orders', status: 200 }], '/api/orders', APP),
+      responseSignalSeen([{ url: 'https://api.app.test/api/orders', status: 200, contentType: 'application/json', sentBeforeWalk: true }], '/api/orders', APP),
     ).toBe(true);
   });
 
   it('does not count another host, so a third-party service cannot stand in for the screen', () => {
     expect(
-      responseSignalSeen([{ url: 'http://notapp.test/api/orders', status: 200 }], '/api/orders', APP),
+      responseSignalSeen([{ url: 'http://notapp.test/api/orders', status: 200, contentType: 'application/json', sentBeforeWalk: true }], '/api/orders', APP),
     ).toBe(false);
   });
 
   it('does not count a refusal, a redirect, or a server error', () => {
     for (const status of [401, 403, 302, 404, 500]) {
-      expect(responseSignalSeen([{ url: `${APP}/api/orders`, status }], '/api/orders', APP)).toBe(false);
+      expect(responseSignalSeen([{ url: `${APP}/api/orders`, status, contentType: 'application/json', sentBeforeWalk: true }], '/api/orders', APP)).toBe(false);
     }
   });
 
   it('counts nothing when appBaseUrl cannot be read, so the screen becomes a gap', () => {
-    expect(responseSignalSeen([{ url: `${APP}/api/orders`, status: 200 }], '/api/orders', 'not a url')).toBe(
+    expect(responseSignalSeen([{ url: `${APP}/api/orders`, status: 200, contentType: 'application/json', sentBeforeWalk: true }], '/api/orders', 'not a url')).toBe(
       false,
     );
   });
 
   it('compares the configured path in the encoded form the browser sends', () => {
     expect(
-      responseSignalSeen([{ url: `${APP}/api/%C3%A9t%C3%A9/list`, status: 200 }], '/api/été', APP),
+      responseSignalSeen([{ url: `${APP}/api/%C3%A9t%C3%A9/list`, status: 200, contentType: 'application/json', sentBeforeWalk: true }], '/api/été', APP),
     ).toBe(true);
+  });
+});
+
+describe('responseSignalSeen and what kind of answer counts', () => {
+  const json = { contentType: 'application/json', sentBeforeWalk: true };
+
+  it('does not count an HTML answer, whatever its case or parameters', () => {
+    // A sign-in page, an SSO proxy, or a dev server history fallback that answers the data call
+    // with index.html and a 200 has not sent the screen its data.
+    for (const contentType of ['text/html', 'text/html; charset=utf-8', 'TEXT/HTML;charset=UTF-8', ' text/html ']) {
+      expect(
+        responseSignalSeen([{ url: `${APP}/api/orders`, status: 200, contentType, sentBeforeWalk: true }], '/api/orders', APP),
+      ).toBe(false);
+    }
+  });
+
+  it('counts a data answer, and one that carries no content type at all', () => {
+    for (const contentType of ['application/json', 'application/json; charset=utf-8', 'text/plain', null]) {
+      expect(
+        responseSignalSeen([{ url: `${APP}/api/orders`, status: 200, contentType, sentBeforeWalk: true }], '/api/orders', APP),
+      ).toBe(true);
+    }
+  });
+
+  it('does not count a request sent after the walk began, so a check cannot satisfy the signal', () => {
+    expect(
+      responseSignalSeen([{ url: `${APP}/api/orders`, status: 200, ...json, sentBeforeWalk: false }], '/api/orders', APP),
+    ).toBe(false);
   });
 });
 
@@ -96,7 +124,7 @@ describe('measureReadiness', () => {
   it('measures each declared part against the live page', async () => {
     const page = makeFakePage({
       queryAll: async () => [{ selector: 'table#orders' }],
-      apiResponses: async () => [{ url: `${APP}/api/orders`, status: 200 }],
+      apiResponses: async () => [{ url: `${APP}/api/orders`, status: 200, contentType: 'application/json', sentBeforeWalk: true }],
     });
     await expect(
       measureReadiness(page, { selector: 'table#orders', response: '/api/orders' }, APP),

@@ -174,6 +174,9 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // reachability either, because this page is not the one the assertion describes.
           result = notReachedScan(screen, notReached, signal);
         } else {
+          // Everything the page sent up to here is the screen loading. Everything after is usabl
+          // pressing keys and running checks, so it never counts toward the readiness response.
+          await page.markWalkStart();
           await page.armAnnouncementCapture();
 
           const transcript = await deps.stepRunner.run(page, tabSteps);
@@ -193,8 +196,10 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
 
           // Measure the readiness signal after the walk and providers have run, while the page is
           // still open. This is the only place the live page exists; markUnseenScreens runs later
-          // over collected scans and cannot query it. Both parts are read at this one moment, so
-          // the response part sees traffic up to here, including any a provider caused.
+          // over collected scans and cannot query it. Both parts are read at this one moment. The
+          // response part counts only requests sent before the walk began, so a request the page
+          // sent on load and the server answered slowly counts, and one a key press or a provider
+          // caused does not. The selector part sees the page as the checks left it.
           const readiness = await measureReadiness(page, signal, deps.config.appBaseUrl);
 
           // Rule A again, on the record as it stands now. Readiness settles about 1.5 seconds
@@ -206,10 +211,11 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // load-time values for the reason given above.
           //
           // The response record is re-read with it, so a refusal the application recovered from
-          // during the walk is read against its later answer. The readiness signal is NOT: a
-          // recovered refusal stands only when the signal held at load, before usabl touched the
-          // page, and the later measurement above still has to hold on its own for the screen to
-          // count as seen.
+          // during the walk is read against its later answer. Recovery also needs the declared
+          // response to have been answered at an address that was never refused, by a request sent
+          // before the walk; see recoveryStandsDown in redirected.ts. The selector part keeps its
+          // load-time value, and the later measurement above still has to hold on its own for the
+          // screen to count as seen.
           const lateRefusal = redirectedAwayGap(screen.id, {
             ...landing,
             unauthorizedApiUrls: await readRefusedRequests(page),

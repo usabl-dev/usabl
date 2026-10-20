@@ -102,20 +102,42 @@ function parseSelector(raw: unknown, label: string): string {
 //   - a full URL or a "//host" address names a host, and the host is always the application's;
 //   - a query or a fragment is never compared, so writing one would read as a filter that is not
 //     applied;
-//   - whitespace cannot appear in a request path as sent;
-//   - "/" alone is answered by every data request on the host, including a sign-in wall's own, so
-//     it proves nothing about this screen.
-function parseResponsePath(raw: unknown, label: string): string {
+//   - whitespace and control characters cannot appear in a request path as sent, and URL parsing
+//     strips a trailing control character;
+//   - a backslash is read as a slash by URL parsing, and a "." or ".." segment, plain or
+//     percent-encoded, is resolved away by it, so the path compared is not the path written;
+//   - "/" alone, or anything that parses to it, is answered by every data request on the host,
+//     including a sign-in wall's own, so it proves nothing about this screen.
+//
+// The message never repeats the value, because a value that parses differently from how it reads
+// is exactly what an operator cannot judge from a quote of it.
+const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
+
+function isPlainResponsePath(raw: string): boolean {
   if (
-    typeof raw !== 'string' ||
     !raw.startsWith('/') ||
     raw.startsWith('//') ||
-    raw === '/' ||
     raw.includes('?') ||
     raw.includes('#') ||
-    /\s/.test(raw)
+    raw.includes('\\') ||
+    /\s/.test(raw) ||
+    /[\u0000-\u001f\u007f]/.test(raw)
   ) {
-    throw configError`${label} must be a path on the application that only this screen requests, such as "/api/users". It starts with one slash and has no host, query, fragment, or spaces.`;
+    return false;
+  }
+  if (raw.split('/').some((segment) => DOT_SEGMENT.test(segment))) {
+    return false;
+  }
+  try {
+    return new URL(raw, 'http://usabl.invalid').pathname !== '/';
+  } catch {
+    return false;
+  }
+}
+
+function parseResponsePath(raw: unknown, label: string): string {
+  if (typeof raw !== 'string' || !isPlainResponsePath(raw)) {
+    throw configError`${label} must be a path on the application that only this screen requests, such as "/api/users". It starts with one slash, is not the root, and has no host, query, fragment, spaces, control characters, backslashes, or dot segments.`;
   }
   return raw;
 }

@@ -53,6 +53,8 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     unauthorizedApiRequests: async () => [],
     // Nor any data response, so a declared readiness response is never seen on a fake by default.
     apiResponses: async () => [],
+    // A fake page sends nothing, so there is nothing to date against the walk.
+    markWalkStart: async () => {},
     // A fake page has no DOM to search, so nothing matches anywhere.
     countEverywhere: async () => 0,
     focusBody: async () => {},

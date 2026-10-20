@@ -45,6 +45,12 @@ interface FixtureServer {
   ordersUrl: string;
   // The same screen, whose identity call is refused once and answered after a token refresh.
   ordersRecoveredUrl: string;
+  // A screen whose call for its own data is answered 200 with an HTML page, the way a dev server
+  // history fallback or a sign-in proxy answers it.
+  spaFallbackUrl: string;
+  // A page that asks for no data on load and requests the screen's data path only when a control
+  // is focused, so the only answer to that path is one the walk caused.
+  fetchOnFocusUrl: string;
   close: () => Promise<void>;
 }
 
@@ -66,7 +72,9 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/passkey-sign-in.html': await readFixture('passkey-sign-in.html'),
     '/magic-link.html': await readFixture('magic-link.html'),
     '/orders.html': await readFixture('orders-screen.html'),
+    '/fetch-on-focus.html': await readFixture('fetch-on-focus.html'),
   };
+  const spaFallback = await readFixture('spa-fallback.html');
   const authWall = await readFixture('auth-wall.html');
   // Addresses under /api/once/ already answered once. Each is refused the first time and answered
   // every time after, which is what a server does for a call made just before a token refresh.
@@ -117,6 +125,13 @@ async function makeFixtureServer(): Promise<FixtureServer> {
       }
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       res.end('{"user":"operator"}');
+      return;
+    }
+    // A history fallback: every address under it, the data call included, answers 200 with the
+    // same HTML page.
+    if (reqUrl.pathname.startsWith('/spa/')) {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(spaFallback);
       return;
     }
     // An authentication wall: every address under it answers 200 with the same landing page.
@@ -185,6 +200,8 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     authWallUrl: `http://127.0.0.1:${address.port}/wall/orders`,
     ordersUrl: `http://127.0.0.1:${address.port}/orders.html`,
     ordersRecoveredUrl: `http://127.0.0.1:${address.port}/orders.html?recover=1`,
+    spaFallbackUrl: `http://127.0.0.1:${address.port}/spa/orders`,
+    fetchOnFocusUrl: `http://127.0.0.1:${address.port}/fetch-on-focus.html`,
     close: async () =>
       new Promise<void>((resolve, reject) => {
         // The hang route leaves a socket open, and server.close() waits for it forever.
@@ -765,6 +782,20 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       });
       expect(result.gaps).toEqual([]);
       expect(result.drafts).toBe(1);
+    }, 30_000);
+
+    it('gaps a screen whose data call was answered 200 with an HTML page', async () => {
+      const result = await scanWithSignal(fixture.spaFallbackUrl, { response: '/spa/api/orders' });
+      expect(result.unseen).toBe(true);
+      expect(result.drafts).toBe(0);
+      expect(result.gaps.some((reason) => reason.includes('/spa/api/orders'))).toBe(true);
+    }, 30_000);
+
+    it('gaps a page whose only answer to the data path came from a request the walk caused', async () => {
+      const result = await scanWithSignal(fixture.fetchOnFocusUrl, { response: '/api/data/orders' });
+      expect(result.unseen).toBe(true);
+      expect(result.drafts).toBe(0);
+      expect(result.gaps.some((reason) => reason.includes('/api/data/orders'))).toBe(true);
     }, 30_000);
 
     it('still gaps that screen on the refusal when it declares no signal', async () => {

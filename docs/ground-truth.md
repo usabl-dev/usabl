@@ -868,15 +868,24 @@ set the gate is given, so no floored barrier on it can be reported as resolved.
   this session. 401 only; 403 means authenticated and not permitted, which a correct signed-in scan
   can legitimately meet.
 
-  One thing stands a refusal down, and it takes two facts together: the screen's readiness signal
-  (below) held when the page settled, and the last answer the page recorded for the refused
-  address was a 2xx. That is a token refresh: the identity call is refused, the client refreshes,
-  and the same call is answered. The address is compared without its fragment and with its query,
-  so a retry with a different query does not count, and a success on a different address, such as
-  the refresh call itself, never counts. Neither fact alone is enough. A signal is operator policy.
-  A 401 followed by a 200 can be an application that dropped its stale token and was answered as
-  an anonymous visitor. So on a screen with no signal, a refusal followed by a success is still a
-  gap, exactly as before.
+  One thing stands a refusal down, a token refresh, and it takes all of these together:
+
+  - The screen's readiness signal (below) declares a `response` path. A selector on its own, which
+    is what the string form of `reachedWhen` is, never stands Rule A down. That is the behaviour
+    from before recovery was read at all.
+  - That path was answered with a 2xx that is not an HTML page, by a request sent before the walk
+    began, at an address that was never refused in this record.
+  - A declared selector did not fail when the page settled.
+  - The last answer the page recorded for each refused address was a 2xx that is not an HTML page.
+
+  The address is compared without its fragment and with its query, so a retry with a different
+  query does not count, and a success on a different address, such as the refresh call itself,
+  never recovers a refusal. No one fact is enough. A 401 followed by a 200 can be an application
+  that dropped its stale token and was answered as an anonymous visitor. The "never refused" part
+  stops one 200 from doing two jobs: a wall that refuses `/api/users?page=1` and then answers the
+  anonymous retry of that same address would otherwise hold a `/api/users` signal and recover the
+  refusal with the same answer. So on a screen with no response path, a refusal followed by a
+  success is still a gap, exactly as before.
 
   The host match. A refused request counts when its hostname equals the `appBaseUrl` hostname, or
   ends with a dot followed by it, regardless of scheme and port. So `api.example.com` counts for
@@ -941,10 +950,26 @@ and every part it declares has to hold.
   stylesheet, image, font, or script response never counts, because an authentication wall answers
   200 to those too. When `appBaseUrl` cannot be read, nothing counts. The config loader refuses a
   `response` that does not start with one slash, that starts with two, that is `/` alone (every
-  data request on the host would satisfy it), or that carries a query, a fragment, or whitespace.
-  It refuses an unknown key in the object, so a misspelled part is not silently dropped.
+  data request on the host would satisfy it), or that carries a query, a fragment, whitespace, a
+  control character, a backslash, or a `.` or `..` segment, plain or percent-encoded. URL parsing
+  reads a backslash as a slash, resolves dot segments, and strips a trailing control character, so
+  each of those is compared as a different path from the one written, and most of them as `/`. It
+  also refuses any path that URL parsing turns into `/`. The message does not repeat the value. It
+  refuses an unknown key in the object, so a misspelled part is not silently dropped.
+- Two more things decide whether an answer counts toward `response`. An answer whose
+  `Content-Type` is `text/html` or `application/xhtml+xml`, with any parameters and in any case,
+  never counts: a sign-in page, an SSO or proxy login, and a development server's history
+  fallback all answer a data call with an HTML page and a 200. An API that really answers with
+  HTML therefore never satisfies the signal, and the screen becomes a gap, which is the safe
+  direction. An answer with no `Content-Type` counts. And only a request sent before the walk
+  began counts. usabl marks that moment just before the first key press, and an answer that
+  arrives later still counts when its request was sent before the mark, because a slow answer is
+  what the two reads exist for. A redirected request is dated by the request that started the
+  chain.
 
-Both parts are measured once, after the walk and the checks, while the page is still open. A part
+Both parts are measured once, after the walk and the checks, while the page is still open. The
+selector part sees the page as the checks left it. The response part counts only requests sent
+before the walk began, so traffic a key press or a check caused never counts. A part
 that does not hold marks the screen unseen: its findings and applicability are dropped and it gets a
 `not-covered` gap that names the selector or the path. The same signal, measured when the page
 settles and before usabl touches it, is what overrides Rule B and what lets a recovered refusal
@@ -978,21 +1003,24 @@ With a signal, these remain:
 - A selector that a sign-in page also matches, per the paragraph above.
 - A `response` the wall itself satisfies. If the application shell is public and runs its own
   script, its request for the screen's data reaches the wall, and a wall that answers that request
-  with a 200 of its own satisfies the path. Pair the path with a selector for content that only
-  real data renders.
-- Traffic or content a check caused. Both parts are read after the walk and the checks, so a
-  request a provider click triggered, or content it opened, counts toward the signal.
+  with a 200 that is not HTML, such as an empty JSON body, satisfies the path. A wall is caught
+  when its own page does not request the declared path, or when it answers that path with an HTML
+  page. Pair the path with a selector for content that only real data renders.
+- Content a check caused. The selector part is read after the walk and the checks, so content a
+  provider click opened counts toward it. Traffic a check caused does not count toward the
+  response part.
 - A 401 that arrives after the second read, which is the last observation of the page before it
   is closed, so a response still in flight at that moment is never recorded.
 
 A miss leaves exactly the behaviour that was there before, so none of this manufactures a new false
 green of its own. Each rule can also fire on a screen that was genuinely reached: a same-host
 endpoint that answers 401 where it means 403, every page-initiated 401 when `appBaseUrl` cannot be
-parsed, a refusal the application recovered from on a screen with no signal, a signed-in screen
+parsed, a refusal the application recovered from on a screen with no `response` path, a signed-in screen
 with a password field and no signal that holds, a stale configured URL. A signal that does not hold
-on a genuinely reached screen is a gap too: a selector for content that loads after the walk, or a
+on a genuinely reached screen is a gap too: a selector for content that loads after the walk, a
 `response` path whose data comes from a host that is neither the `appBaseUrl` hostname nor a
-subdomain of it, which never counts. The cost of each is a coverage gap, so the run reports `not_covered` rather than a verdict it
+subdomain of it, which never counts, a `response` path an API answers with HTML, or one the page
+requests only after the walk began, such as a poll. The cost of each is a coverage gap, so the run reports `not_covered` rather than a verdict it
 should not have minted.
 
 What an operator can do. Declare `reachedWhen` on the surface, naming content only that screen has,

@@ -164,9 +164,10 @@ never the shell, header, or navigation), a `response` path for a data request on
 makes, or both, as `{ "selector": "...", "response": "/api/..." }`. A screen whose signal does not
 hold is a coverage gap, never scored. A screen usabl cannot reach signed in is a gap too.
 Three rules decide that, in order. Rule A: a session is configured and one of the application's
-own same-host data requests came back 401 at either of the two reads. A matched `reachedWhen` does
-not override it on its own; only a signal that held plus a later success on that same address (a
-token refresh) stands it down. Rule B: a session is configured and the page has a password field
+own same-host data requests came back 401 at either of the two reads. A matched `reachedWhen`
+selector never overrides it. Only a token refresh stands it down: the declared `response` path was
+answered at an address that was never refused, and each refused address was answered later with a
+success. Rule B: a session is configured and the page has a password field
 anywhere; a `reachedWhen` signal that holds overrides it, which is what makes a real
 change-password screen scannable. Rule C: the browser landed on a different address and that page has a password
 field, with or without a session; a redirect alone does not fire it. `reachedWhen` is your

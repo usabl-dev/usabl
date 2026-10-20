@@ -103,13 +103,13 @@ const MAGIC_LINK: PageShape = {
 const AUTH_WALL_200: PageShape = {
   focusable: 'html > body > main > a#continue',
   present: ['main', 'h1', 'a#continue'],
-  responses: [{ url: 'http://app.test/wall/status', status: 200 }],
+  responses: [{ url: 'http://app.test/wall/status', status: 200, contentType: 'application/json', sentBeforeWalk: true }],
 };
 
 const REAL_USERS_SCREEN: PageShape = {
   focusable: 'html > body > main > button#save',
   present: ['main', 'h1', 'table#users', 'button#save'],
-  responses: [{ url: 'http://app.test/api/users?page=1', status: 200 }],
+  responses: [{ url: 'http://app.test/api/users?page=1', status: 200, contentType: 'application/json', sentBeforeWalk: true }],
 };
 
 function pageFor(shape: PageShape): Page {
@@ -215,10 +215,10 @@ describe('a refused request the application recovered from', () => {
     ...REAL_USERS_SCREEN,
     refused: ['http://app.test/api/me'],
     responses: [
-      { url: 'http://app.test/api/me', status: 401 },
-      { url: 'http://app.test/auth/refresh', status: 200 },
-      { url: 'http://app.test/api/me', status: 200 },
-      { url: 'http://app.test/api/users?page=1', status: 200 },
+      { url: 'http://app.test/api/me', status: 401, contentType: 'application/json', sentBeforeWalk: true },
+      { url: 'http://app.test/auth/refresh', status: 200, contentType: 'application/json', sentBeforeWalk: true },
+      { url: 'http://app.test/api/me', status: 200, contentType: 'application/json', sentBeforeWalk: true },
+      { url: 'http://app.test/api/users?page=1', status: 200, contentType: 'application/json', sentBeforeWalk: true },
     ],
   };
 
@@ -245,14 +245,71 @@ describe('a refused request the application recovered from', () => {
       ...REAL_USERS_SCREEN,
       refused: ['http://app.test/api/me', 'http://app.test/api/me'],
       responses: [
-        { url: 'http://app.test/api/me', status: 401 },
-        { url: 'http://app.test/auth/refresh', status: 200 },
-        { url: 'http://app.test/api/me', status: 401 },
+        { url: 'http://app.test/api/me', status: 401, contentType: 'application/json', sentBeforeWalk: true },
+        { url: 'http://app.test/auth/refresh', status: 200, contentType: 'application/json', sentBeforeWalk: true },
+        { url: 'http://app.test/api/me', status: 401, contentType: 'application/json', sentBeforeWalk: true },
       ],
     };
     const r = await run(depsFor(stillRefused, config, [quietProvider]), config);
     expect(r.verdict).toBe('not_covered');
     expect(r.coverage.gaps.some((gap) => gap.reason.includes('401'))).toBe(true);
+  });
+});
+
+describe('a refusal and its retry on the declared response path', () => {
+  it('is not verified when the only success is the anonymous retry of the refused address', async () => {
+    // A sign-in wall: /api/users?page=1 is refused, the client drops its token and retries the
+    // same address, and the wall answers it as an anonymous visitor. The one 200 must not count
+    // both as the signal holding and as the refused address recovering.
+    const config = configWith({ response: '/api/users' });
+    const wall: PageShape = {
+      ...REAL_USERS_SCREEN,
+      refused: ['http://app.test/api/users?page=1'],
+      responses: [
+        { url: 'http://app.test/api/users?page=1', status: 401, contentType: 'application/json', sentBeforeWalk: true },
+        { url: 'http://app.test/api/users?page=1', status: 200, contentType: 'application/json', sentBeforeWalk: true },
+      ],
+    };
+    const r = await run(depsFor(wall, config, [quietProvider]), config);
+    expect(r.verdict).not.toBe('verified');
+    expect(r.receipt).toBeNull();
+    expect(r.paidDownCount).toBe(0);
+    expect(r.coverage.gaps.some((gap) => gap.reason.includes('401'))).toBe(true);
+  });
+
+  it('is not verified when the string form of reachedWhen matched and the refused address was retried', async () => {
+    // The string form is a selector on its own. On main nothing stood Rule A down, and a selector
+    // still does not.
+    const config = configWith('table#users');
+    const recovered: PageShape = {
+      ...REAL_USERS_SCREEN,
+      refused: ['http://app.test/api/me'],
+      responses: [
+        { url: 'http://app.test/api/me', status: 401, contentType: 'application/json', sentBeforeWalk: true },
+        { url: 'http://app.test/api/me', status: 200, contentType: 'application/json', sentBeforeWalk: true },
+      ],
+    };
+    const r = await run(depsFor(recovered, config, [quietProvider]), config);
+    expect(r.verdict).toBe('not_covered');
+    expect(r.paidDownCount).toBe(0);
+  });
+});
+
+describe('a declared response the screen got back as HTML', () => {
+  it('gaps the screen when its data path answered 200 with an HTML page', async () => {
+    // A sign-in page, an SSO proxy, or a dev server history fallback answering the data call
+    // with index.html and a 200.
+    const config = configWith({ response: '/api/users' });
+    const htmlAnswer: PageShape = {
+      ...REAL_USERS_SCREEN,
+      responses: [
+        { url: 'http://app.test/api/users?page=1', status: 200, contentType: 'text/html; charset=utf-8', sentBeforeWalk: true },
+      ],
+    };
+    const r = await run(depsFor(htmlAnswer, config, [quietProvider]), config);
+    expect(r.verdict).toBeNull();
+    expect(r.paidDownCount).toBe(0);
+    expect(r.coverage.gaps.some((gap) => gap.reason.includes('/api/users'))).toBe(true);
   });
 });
 

@@ -321,15 +321,20 @@
   The string form is still a selector on its own. Every declared part has to hold,
   or the screen's findings are dropped and it is reported as a coverage gap that
   names the missing part. A `response` holds when a `fetch` or XHR request from the
-  page to that path on the application's own host answered with a 2xx status. This
-  is what catches a sign-in page the session rules cannot see: a passkey prompt, a
-  magic-link page, or an authentication wall that answers 200 to every request.
-  Each of those is still scored as the screen when no signal is declared.
+  page to that path on the application's own host answered with a 2xx status that
+  is not an HTML page, and the request was sent before usabl's keyboard walk began.
+  This is what catches a sign-in page the session rules cannot see: a passkey
+  prompt or a magic-link page. An authentication wall that answers 200 to every
+  request is caught when its own page does not request the declared path, or when
+  it answers that path with an HTML page. Each of those is still scored as the
+  screen when no signal is declared.
 - A refused data request no longer gaps a screen when the application recovered
-  from it: the screen's readiness signal held when the page settled, and the last
-  answer for that same address was a success, which is a token refresh. Without a
-  declared signal a refusal followed by a success is still a gap, because an
-  application can drop a stale token and be answered as an anonymous visitor.
+  from it, which is a token refresh. That needs the surface to declare a
+  `response` path, that path to be answered at an address that was never refused,
+  and the last answer for each refused address to be a success that is not an
+  HTML page. A selector on its own, including the string form of `reachedWhen`,
+  never stands a refusal down, because an application can drop a stale token and
+  be answered as an anonymous visitor.
 - `usabl init` recommends a readiness signal for every surface when the
   application looks login-gated: `USABL_STORAGE_STATE` is set, or a route has a
   sign-in path segment such as `login` or `sign-in`. It writes none itself.

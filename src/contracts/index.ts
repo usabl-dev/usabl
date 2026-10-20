@@ -398,6 +398,13 @@ export interface ElementRef {
 export interface ApiResponse {
   url: string;
   status: number;
+  // The Content-Type header the answer carried, as sent, or null when it carried none. An HTML
+  // answer is a page, such as a sign-in page or a history fallback, not the data that was asked for.
+  contentType: string | null;
+  // Whether the request was sent before Page.markWalkStart, so before usabl pressed a key or ran a
+  // check. Its answer can arrive later. True for every request until the mark is set. A request the
+  // tracker never saw sent reads as false once the mark is set, because nothing dates it.
+  sentBeforeWalk: boolean;
 }
 export interface Page {
   gotoReady(): Promise<void>;
@@ -412,6 +419,10 @@ export interface Page {
   // out, because an authentication wall answers 200 to those too. Empty means no data response was
   // seen, which is not proof that none was sent: one still in flight at the read is not here.
   apiResponses(): Promise<ApiResponse[]>;
+  // Marks the moment before the keyboard walk begins. A data request sent after it was caused by
+  // usabl or arrived during the checks, so it never counts toward the screen's readiness response.
+  // A request sent before it counts whenever its answer arrives. Only the first call sets the mark.
+  markWalkStart(): Promise<void>;
   // URLs of the page's own data requests (fetch and XHR) that came back 401 between navigation and
   // the moment this is read. A single page application that stays at the requested address and
   // swaps in a login form leaves no trace in the URL and may not have rendered the form yet, so

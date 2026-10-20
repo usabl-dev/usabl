@@ -12,8 +12,10 @@
  * session heuristics in redirected.ts, which look for signs of a sign-in page. A sign-in page that
  * makes no API call and has no password field (a passkey prompt, a magic-link page), and an
  * authentication wall that answers 200 to everything, give those heuristics nothing to see. They
- * still fail a signal, because none of them renders this screen's own content or asks for this
- * screen's own data.
+ * fail a selector for this screen's own content, because none of them renders it. They fail a
+ * response path when their page does not request this screen's data, or answers that request with
+ * an HTML page. A wall that answers the screen's data path with a 200 that is not HTML holds the
+ * response part, which is why a path is best paired with a selector.
  *
  * The signal is general on purpose. It answers "did this screen render", not "is the session
  * alive", so anything that needs that answer can use it.
@@ -94,6 +96,19 @@ function pathContinues(requestPath: string, declared: string): boolean {
 }
 
 /**
+ * Whether a Content-Type names an HTML document. Compared on the media type alone, without its
+ * parameters and in any case, so "text/html; charset=utf-8" and "TEXT/HTML" are both HTML.
+ * XHTML is a page too.
+ */
+export function isHtmlContentType(contentType: string | null): boolean {
+  if (contentType === null) {
+    return false;
+  }
+  const mediaType = (contentType.split(';')[0] ?? '').trim().toLowerCase();
+  return mediaType === 'text/html' || mediaType === 'application/xhtml+xml';
+}
+
+/**
  * Whether the declared response path was answered with a success on the application's own host.
  *
  * Host: the appBaseUrl hostname or a subdomain of it, on any scheme and port, the same match the
@@ -106,6 +121,15 @@ function pathContinues(requestPath: string, declared: string): boolean {
  * "/api/users-archive". The query string is never compared.
  *
  * Status: 200 to 299 only. A refusal, a redirect, and a server error are not the screen's data.
+ *
+ * Kind: an HTML answer never counts. A sign-in page, an SSO or proxy login, and a development
+ * server's history fallback all answer a data call with a page and a 200. An API that really
+ * answers with HTML therefore never satisfies the signal, and the screen becomes a gap, which is
+ * the safe direction. An answer with no Content-Type counts.
+ *
+ * When: only a request sent before the walk began counts, whenever its answer arrived. A request
+ * sent after that was caused by usabl's own key presses or checks, or by the page during them,
+ * and is not evidence that the screen loaded.
  *
  * Exported so the rule can be held without a browser.
  */
@@ -121,6 +145,9 @@ export function responseSignalSeen(
   }
   return responses.some((response) => {
     if (response.status < 200 || response.status > 299) {
+      return false;
+    }
+    if (!response.sentBeforeWalk || isHtmlContentType(response.contentType)) {
       return false;
     }
     const host = requestHostname(response.url);
@@ -150,19 +177,36 @@ export async function measureReachability(
   }
 }
 
-/** Read the page's data responses. A record that cannot be read is an empty one. */
+/**
+ * Read the page's data responses. A record that cannot be read is an empty one. An entry without a
+ * readable address or status is left out. An entry that does not say it was sent before the walk
+ * reads as sent after it, and an unreadable content type as none.
+ */
 export async function readApiResponses(page: Page): Promise<ApiResponse[]> {
   try {
-    const responses = await page.apiResponses();
-    return Array.isArray(responses)
-      ? responses.filter(
-          (response) =>
-            typeof response === 'object' &&
-            response !== null &&
-            typeof response.url === 'string' &&
-            typeof response.status === 'number',
-        )
-      : [];
+    const responses: unknown = await page.apiResponses();
+    if (!Array.isArray(responses)) {
+      return [];
+    }
+    const read: ApiResponse[] = [];
+    for (const response of responses as unknown[]) {
+      if (typeof response !== 'object' || response === null) {
+        continue;
+      }
+      const url: unknown = Reflect.get(response, 'url');
+      const status: unknown = Reflect.get(response, 'status');
+      if (typeof url !== 'string' || typeof status !== 'number') {
+        continue;
+      }
+      const contentType: unknown = Reflect.get(response, 'contentType');
+      read.push({
+        url,
+        status,
+        contentType: typeof contentType === 'string' ? contentType : null,
+        sentBeforeWalk: Reflect.get(response, 'sentBeforeWalk') === true,
+      });
+    }
+    return read;
   } catch {
     return [];
   }
