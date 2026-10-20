@@ -1406,6 +1406,23 @@ The gate stays at Stop. Neither path lets the agent grade its own work.
 A documented entry point that returns the core Result. Teams can call the same check
 from the tests they already run. A starting point, not a focus for the contest.
 
+`checkPage(page, options)` runs the same provider list the CLI runs on a screen. Both build
+it through `makeScanProviders` in `src/providers/core-stack.ts`: the core stack, then one
+provider per content or flow design requirement. `checkPage` reads `usabl.config.json` from
+`options.projectRoot` (default: the working directory) and loads the requirements directory it
+names through the same loader as the CLI. It reads the working tree; it does not apply a
+trusted ref. A project with no `usabl.config.json` has no requirements to load and adds no gap.
+A config or requirements directory that is present and cannot be read is a gap.
+
+A requirement is matched to the page by `options.screenId`, the surface id the page is
+(default `page`). Each runtime requirement is checked on the page when its surface is the
+page's surface, and is out of scope when its surface is another configured or discovered
+surface and the page's id is a surface the project or a requirement names. Every other
+requirement is a `not-covered` gap with ref `requirement:<id>`: the page is labeled with no
+known surface, or the requirement names a surface that matches no configured or discovered
+surface. So a page that regresses on a requirement in the CLI also regresses in `checkPage`
+when it is labeled with its surface id, and is `not_covered`, never `verified`, when it is not.
+
 ### 11.7 Other coding assistants (seam, not contest)
 
 The contest demo uses Claude Code's Stop lifecycle event. The architecture does not

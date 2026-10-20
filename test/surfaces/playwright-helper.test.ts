@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { CoverageGap, Draft, Result } from '../../src/contracts/index.js';
-import { assertUsablVerdict, summarizePageCheck } from '../../src/surfaces/playwright-helper.js';
+import type { CoverageGap, Draft, Requirement, RequirementBundle, Result } from '../../src/contracts/index.js';
+import {
+  assertUsablVerdict,
+  requirementGapsForPage,
+  summarizePageCheck,
+} from '../../src/surfaces/playwright-helper.js';
 
 const draft = (over: Partial<Draft>): Draft => ({
   rule: 'color-contrast',
@@ -172,5 +176,66 @@ describe('summarizePageCheck', () => {
     expect(result.summary).toContain('1 blocking');
     expect(result.summary).toContain('1 needs review');
     expect(result.summary).toContain('1 gap');
+  });
+});
+
+describe('requirementGapsForPage', () => {
+  const content = (id: string, surface: string): Requirement => ({
+    id,
+    kind: 'content',
+    surface,
+    description: id,
+    assertion: { type: 'content', selector: 'h1', expectedText: 'Clusters' },
+    approved: true,
+  });
+  const bundle = (...requirements: Requirement[]): RequirementBundle => ({ version: 1, requirements });
+  const known = new Set(['clusters', 'reports']);
+
+  it('reports no gap for a requirement on this page, which its provider checks', () => {
+    expect(requirementGapsForPage(bundle(content('heading', 'clusters')), 'clusters', known)).toEqual([]);
+  });
+
+  it('reports no gap for a requirement on another known surface when this page is a known surface', () => {
+    expect(requirementGapsForPage(bundle(content('heading', 'clusters')), 'reports', known)).toEqual([]);
+  });
+
+  it('reports every runtime requirement as a gap when the page is not labeled with a surface', () => {
+    const gaps = requirementGapsForPage(
+      bundle(content('heading', 'clusters'), content('title', 'reports')),
+      'page',
+      known,
+    );
+    expect(gaps.map((gap) => gap.ref)).toEqual(['requirement:heading', 'requirement:title']);
+    expect(gaps.every((gap) => gap.state === 'not-covered')).toBe(true);
+    expect(gaps[0]?.reason).toContain('screenId');
+  });
+
+  it('reports a requirement whose surface matches no configured or discovered surface', () => {
+    const gaps = requirementGapsForPage(bundle(content('heading', 'clustrs')), 'clusters', known);
+    expect(gaps).toEqual([
+      {
+        ref: 'requirement:heading',
+        state: 'not-covered',
+        reason:
+          'requirement heading names surface clustrs, which matches no configured or discovered surface, so it was not checked',
+      },
+    ]);
+  });
+
+  it('treats a page labeled with a requirement surface as known even when config does not list it', () => {
+    // The page is the requirement's surface, so the requirement runs here and nothing is a guess.
+    expect(requirementGapsForPage(bundle(content('heading', 'settings')), 'settings', known)).toEqual([]);
+  });
+
+  it('never reports a doc requirement, which is not a runtime check', () => {
+    const doc: Requirement = {
+      id: 'manifest',
+      kind: 'doc',
+      surface: 'nowhere',
+      description: 'manifest',
+      assertion: { type: 'doc', artifact: 'alt-text-manifest' },
+      approved: true,
+    };
+    expect(requirementGapsForPage(bundle(doc), 'page', known)).toEqual([]);
   });
 });

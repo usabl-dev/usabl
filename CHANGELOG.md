@@ -313,6 +313,15 @@
   refusal names the field and where the key falls in the order the keys are read
   back, never the key itself, and it says that this order is not always the order
   the keys appear in the file.
+- `checkPage`, the Playwright helper, now runs the design requirements the CLI runs. It
+  ran only the core stack, so a page that broke an authored content or flow requirement
+  returned `verified` from the helper while `usabl check` returned a regression. The CLI
+  and the helper now build their provider list through one function, and the helper reads
+  `usabl.config.json` and its requirements directory from `projectRoot` (default: the
+  working directory). Requirements are matched to the page by `screenId`. A requirement
+  the page cannot be matched to is a `not-covered` gap, so a project with design
+  requirements gets `not_covered` from `checkPage` until each page is labeled with its
+  surface id. A config or requirements directory that cannot be read is also a gap.
 
 ### Added
 
