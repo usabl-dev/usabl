@@ -26,7 +26,7 @@ own. Only `check` mints a verdict.
 ## Brownfield onboarding, step by step
 
 This is the ordered path for adding usabl to an existing app, with every human step
-marked. New to the product, start with the [team orientation](team-orientation.html)
+marked. New to the product, start with the [usabl walkthrough](usabl-walkthrough.html)
 for the one-read overview, then follow the steps here. The funnel below explains why
 each stage matters; this section is what a team actually types, in order.
 
@@ -351,7 +351,7 @@ No paid tier, no freemium gate, no telemetry-gated features. Apache-2.0.
 
 ---
 
-## Adoption metrics (tie to success-metrics.md)
+## Adoption metrics
 
 | Stage | Metric | How measured |
 |---|---|---|
@@ -369,7 +369,7 @@ surface.
 
 ## Relationship to other docs
 
-- **Start here:** [team orientation](team-orientation.html), the product in one read
+- **Start here:** [usabl walkthrough](usabl-walkthrough.html), the product in one read
 - **Try** stage requirements: [ux-policy.md](./ux-policy.md), first-run experience
 - **Contribute** stage: `CONTRIBUTING.md` in the repo root (engineering deliverable)
 - **Discover** stage README: the quickstart README

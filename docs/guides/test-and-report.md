@@ -16,7 +16,7 @@ Test one surface at a time:
 - The accessible documentation page from `usabl docs --html`
 - AI stop-hook behavior
 - Pull request comment and check status
-- The team orientation or one of these guides
+- The published walkthrough pages or one of these guides
 
 ## Browser keyboard test
 

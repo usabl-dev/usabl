@@ -100,7 +100,8 @@ layer). OpenShift measurement pass: track findings per surface for calibration.
 3. `npm run dev` to start the app the config points at, then `npx usabl check`. Targets
    come from `usabl.config.json`; `check` takes no URL argument.
 
-**Success metric:** [success-metrics.md](./success-metrics.md) §1.
+**Success metric:** time from install to the first actionable finding, with no custom
+configuration beyond the documented defaults.
 
 **Stranger test:** Required before submission; record time and blockers in scorecard.
 

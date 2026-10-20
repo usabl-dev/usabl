@@ -4,12 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 // The static published pages carry no active content at all, so their policy can
 // refuse script outright.
-const staticPages = [
-  'docs/team-orientation.html',
-  'docs/how-usabl-works.html',
-  'docs/code-walkthrough.html',
-  'docs/demo/product-deck.html',
-];
+const staticPages = ['docs/how-usabl-works.html', 'docs/code-walkthrough.html'];
 
 // The walkthrough is the one published page with behaviour: the audience tabs and
 // the outcome simulator. It is held to the same policy shape, with script allowed
