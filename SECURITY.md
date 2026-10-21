@@ -2,12 +2,16 @@
 
 ## Report a vulnerability
 
-Report vulnerabilities privately through GitHub private vulnerability reporting:
+Report vulnerabilities privately with GitHub's private vulnerability reporting form:
 
-1. Open the [Security tab](https://github.com/usabl-dev/usabl/security) of this
-   repository.
-2. Select **Report a vulnerability**.
-3. Describe the problem, the affected version, and the steps to reproduce it.
+**[Open a private vulnerability report](https://github.com/usabl-dev/usabl/security/advisories/new)**
+
+You need a GitHub account. Describe the problem, the affected version or commit, and the
+steps to reproduce it. Only you and the maintainer can see the report.
+
+You can also reach the form from the repository's **Security** tab: open **Advisories**
+and select **Report a vulnerability**. GitHub shows that button only to people who do
+not maintain the repository.
 
 Never report a vulnerability in a public issue, pull request, or discussion.
 
