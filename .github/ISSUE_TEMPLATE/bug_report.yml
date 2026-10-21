@@ -1,7 +1,7 @@
 name: Bug report
 description: A wrong, missing, or confusing result, a crash, or a docs error
 title: "bug: "
-labels: ["bug"]
+labels: ["bug", "needs-triage"]
 body:
   - type: markdown
     attributes:

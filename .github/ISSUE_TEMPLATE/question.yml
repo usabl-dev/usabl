@@ -1,7 +1,7 @@
 name: Question
 description: Ask how usabl works or how to use it
 title: "question: "
-labels: ["question"]
+labels: ["question", "needs-triage"]
 body:
   - type: markdown
     attributes:
