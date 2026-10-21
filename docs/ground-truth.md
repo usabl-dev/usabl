@@ -554,6 +554,10 @@ export interface Page {
   activePath(): Promise<string>;
   axAt(selector: string): Promise<AxNode | null>;
   getAttribute(selector: string, name: string): Promise<string | null>;
+  // Named attributes of the element and each element above it, nearest first, along the flat tree,
+  // through open and closed shadow roots. Also reports an element it could not find and a walk that
+  // stopped at 512 elements.
+  ancestorAttributes(selector: string, names: readonly string[]): Promise<AncestorAttributesRead>;
   queryAll(selector: string): Promise<ElementRef[]>;
   close(): Promise<void>;
   // Capabilities wired for future checks (not used by the built-in providers)
@@ -630,11 +634,35 @@ common rules with plain-language PatternFly-specific guidance. Every Draft has
 
 The provider id is `pf-rulepack` (layer `pf`). It emits eight named rules: six static
 checks (one file per rule) and two interaction probes (`pf-focus-into-dialog` and
-`pf-modal-focus-return`, both in `probes.ts`), all returning `Draft[]`:
+`pf-modal-focus-return`, both in `probes.ts`). They return drafts. `pf-toast-live-region`
+also returns a gap for each alert it could not check:
 
 1. `pf-toast-live-region`: toasts, alert groups, inline validation, and async table
    loading must sit in a role=status/alert/aria-live region that exists before the
-   update.
+   update. The check resolves each alert's effective live value the way WAI-ARIA
+   defines it: the value on the nearest element that sets one, explicitly through
+   `aria-live` or implicitly through its role (alert is assertive, status and log are
+   polite, timer and marquee are off). The explicit attribute wins over the role on
+   the same element. The check never passes an alert that a browser or screen reader
+   may keep silent, and the token rules follow from that. Only the exact lowercase
+   `aria-live` tokens `polite` and `assertive` are live. Every other non-empty value,
+   such as `POLITE`, `OFF`, or `banana`, is off and stops the walk. WAI-ARIA 1.2 does
+   not map an unknown value to the default: it tells browsers to expose it as
+   written, and Chromium 151 does, so `aria-live="POLITE"` reaches the screen reader
+   as `POLITE`. Reading such a value as off can only make an alert less live. An empty
+   `aria-live` counts as not set, as it does in Chromium. Role names match without
+   regard to ASCII case, as Chromium matches them. WAI-ARIA leaves role case to the
+   host language, and exact-case matching would be unsafe here: it would skip
+   `role="TIMER"`, whose implicit value is off, and pass the alert on a polite region
+   above it. A role list uses its first recognized role. The walk follows the flat
+   tree, so a slotted alert climbs through its slot. It runs over CDP in an isolated
+   world, so it sees slots inside closed shadow roots, which page script cannot, and a
+   page that redefines `assignedSlot` or `parentNode` cannot change what it reads. An
+   alert passes only when the nearest value above it is polite or assertive and the
+   alert does not set off on itself. Its own live value does not count as a
+   container. An alert that cannot be found again, for example a toast that closed on
+   its timer, and an alert with more than 512 ancestors each become their own
+   not-covered gap, never a pass, and the check goes on to the other alerts.
 2. `pf-modal-focus-return`: open a modal, press Escape, focus returns to the exact
    trigger.
 3. `pf-focus-into-dialog`: focus moves into a dialog or menu on open.

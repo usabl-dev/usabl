@@ -18,10 +18,14 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser, type Page as PwPage } from 'playwright';
-import type { AxNode, Page, ProviderContext } from '../../src/contracts/index.js';
+import { chromium, type Browser, type CDPSession, type Page as PwPage } from 'playwright';
+import type { AxNode, Draft, Page, ProviderContext } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
-import { LIVE_AND_PATH_INIT_SCRIPT, INSTALL_PATH_HELPER_SCRIPT } from '../../src/deps/real.js';
+import {
+  LIVE_AND_PATH_INIT_SCRIPT,
+  INSTALL_PATH_HELPER_SCRIPT,
+  readAncestorAttributes,
+} from '../../src/deps/real.js';
 import { checkPfToastLiveRegion } from '../../src/providers/rulepack/pf-toast-live-region.js';
 import { checkPfToolbarLabeledWhenRepeated } from '../../src/providers/rulepack/pf-toolbar-labeled-when-repeated.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
@@ -62,6 +66,25 @@ async function blockClasses(page: PwPage, selector: string): Promise<string[]> {
   );
 }
 
+// One CDP session per page, made on first use. The ancestor read walks the page over CDP, the
+// way the production driver does.
+const cdpSessions = new WeakMap<PwPage, Promise<CDPSession>>();
+async function readAncestorsOn(pw: PwPage, selector: string, names: readonly string[]) {
+  let session = cdpSessions.get(pw);
+  if (session === undefined) {
+    session = pw.context().newCDPSession(pw);
+    cdpSessions.set(pw, session);
+  }
+  return readAncestorAttributes(await session, selector, names);
+}
+
+// The toast check's drafts, after asserting it left no alert unchecked.
+async function toastDrafts(ctx: ProviderContext): Promise<Draft[]> {
+  const { drafts, gaps } = await checkPfToastLiveRegion(ctx);
+  expect(gaps).toEqual([]);
+  return drafts;
+}
+
 /**
  * A live-Chromium Page for the two rules under test. Mirrors the fake in pf6-real-markup.test.ts:
  * queryAll assigns a stable ref per matched element, axAt reads role and name from the DOM.
@@ -89,6 +112,9 @@ function livePage(pw: PwPage): Page {
     },
     async getAttribute(selector: string, name: string) {
       return pw.locator(selector).first().getAttribute(name);
+    },
+    async ancestorAttributes(selector: string, names: readonly string[]) {
+      return readAncestorsOn(pw, selector, names);
     },
     async axAt(selector: string): Promise<AxNode | null> {
       const count = await pw.locator(selector).count();
@@ -218,7 +244,7 @@ describe('block selectors match blocks, not their BEM children', () => {
     // region, so exactly one finding remains for the loose alert.
     const page = await openFixture();
     try {
-      const drafts = await checkPfToastLiveRegion(liveContext(page));
+      const drafts = await toastDrafts(liveContext(page));
       expect(drafts.length).toBe(1);
       expect(drafts[0]?.rule).toBe('pf-toast-live-region');
     } finally {
@@ -239,7 +265,7 @@ describe('block selectors match blocks, not their BEM children', () => {
     </main></body></html>`;
     const page = await openFixture(containedOnly);
     try {
-      const drafts = await checkPfToastLiveRegion(liveContext(page));
+      const drafts = await toastDrafts(liveContext(page));
       expect(drafts).toEqual([]);
     } finally {
       await page.close();
@@ -267,7 +293,7 @@ describe('block selectors match blocks, not their BEM children', () => {
     </main></body></html>`;
     const page = await openFixture(nestedContained);
     try {
-      const drafts = await checkPfToastLiveRegion(liveContext(page));
+      const drafts = await toastDrafts(liveContext(page));
       expect(drafts).toEqual([]);
     } finally {
       await page.close();
@@ -286,7 +312,7 @@ describe('block selectors match blocks, not their BEM children', () => {
     </main></body></html>`;
     const page = await openFixture(offRegion);
     try {
-      const drafts = await checkPfToastLiveRegion(liveContext(page));
+      const drafts = await toastDrafts(liveContext(page));
       expect(drafts.length).toBe(1);
       expect(drafts[0]?.rule).toBe('pf-toast-live-region');
     } finally {
@@ -306,7 +332,7 @@ describe('block selectors match blocks, not their BEM children', () => {
     </main></body></html>`;
     const page = await openFixture(statusOff);
     try {
-      const drafts = await checkPfToastLiveRegion(liveContext(page));
+      const drafts = await toastDrafts(liveContext(page));
       expect(drafts.length).toBe(1);
       expect(drafts[0]?.rule).toBe('pf-toast-live-region');
     } finally {
@@ -353,6 +379,9 @@ describe('pathFor does not collapse elements that share an id', () => {
           );
         }, selector);
         return paths.map((path) => ({ selector: path }));
+      },
+      async ancestorAttributes(selector: string, names: readonly string[]) {
+        return readAncestorsOn(pw, selector, names);
       },
       async axAt(selector: string): Promise<AxNode | null> {
         const count = await pw.locator(selector).count();
@@ -442,7 +471,7 @@ describe('pathFor does not collapse elements that share an id', () => {
     </main></body></html>`;
     const page = await openWithPathHelper(dupIdPage);
     try {
-      const drafts = await checkPfToastLiveRegion(pathForContext(page));
+      const drafts = await toastDrafts(pathForContext(page));
       expect(drafts.length).toBe(1);
       expect(drafts[0]?.rule).toBe('pf-toast-live-region');
       // The loose alert is the one flagged; the contained one must be silent.
@@ -608,6 +637,9 @@ describe('INSTALL_PATH_HELPER_SCRIPT (adoptPage path) also rejects duplicate ids
           }, selector);
           return paths.map((p) => ({ selector: p }));
         },
+        async ancestorAttributes(selector: string, names: readonly string[]) {
+          return readAncestorsOn(page, selector, names);
+        },
         async axAt(selector: string): Promise<AxNode | null> {
           const count = await page.locator(selector).count();
           if (count === 0) return null;
@@ -620,7 +652,7 @@ describe('INSTALL_PATH_HELPER_SCRIPT (adoptPage path) also rejects duplicate ids
       }),
     };
     try {
-      const drafts = await checkPfToastLiveRegion(ctx);
+      const drafts = await toastDrafts(ctx);
       expect(drafts.length).toBe(1);
       expect(drafts[0]?.rule).toBe('pf-toast-live-region');
       expect(drafts[0]?.elementName).toContain('Loose');

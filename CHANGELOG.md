@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `pf-toast-live-region` now resolves each alert's live value from the nearest
+  element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector
+  whether any live container sits somewhere above the alert. The selector passed an
+  alert behind an `aria-live="off"` wrapper inside a polite region, and behind an off
+  wrapper inside a `role="status"` host, so a silent toast read as announced. It also
+  read `aria-live="OFF"`, empty, and unknown values as live. Now only the exact
+  lowercase tokens `polite` and `assertive` count. Any other value, including
+  `POLITE`, is off, because Chromium passes such a value to the screen reader as
+  written and nothing shows screen readers honor it. An empty value defers to the
+  role and the ancestors. Role names still match without regard to case, as Chromium
+  matches them, because exact-case roles would skip `role="TIMER"` and pass a silent
+  alert. An alert that sets off on itself is flagged. The walk now runs over CDP, so
+  it sees a slot inside a closed shadow root, and a page script cannot loop it. An
+  alert that closes before it is read, or that has more than 512 ancestors, is now its
+  own not-covered gap; before, one such alert ended the check and dropped every
+  finding on the screen. The `why` text on the finding now reads "No polite or
+  assertive live region reaches the alert."
+
 ## 0.2.2 - 2026-10-21
 
 The first tagged release since v0.2.0. Version 0.2.1 was released without a git tag.
