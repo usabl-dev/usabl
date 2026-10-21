@@ -12,7 +12,7 @@
  *                          maps to stopHookActive to prevent recursive loops.
  */
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { Deps, Result, UsablConfig } from '../contracts/index.js';
@@ -23,6 +23,13 @@ import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } fro
 import { loadConfig } from '../cli.js';
 import { evaluateStopDecision, type HookContext } from './stop-hook.js';
 import { BYPASS_ONCE_PATH, loadReceipt, saveReceipt, type ReceiptFs } from './receipt-store.js';
+import {
+  currentUid,
+  deletePinFileFix,
+  makeFsSessionPinStore,
+  resolveSessionPinDir,
+  type SessionPinStore,
+} from './session-pin-store.js';
 
 export interface StopHookInput {
   stopHookActive: boolean;
@@ -35,7 +42,8 @@ export interface StopHookRunnerFs extends ReceiptFs {
 
 export interface StopHookRunnerPorts {
   fs: StopHookRunnerFs;
-  tmpDir: () => string;
+  // Where session pins are kept. The real one is private to the user; see session-pin-store.ts.
+  pins: SessionPinStore;
   cwd: () => string;
   stdoutWrite: (text: string) => Promise<void> | void;
   stderrWrite: (text: string) => Promise<void> | void;
@@ -67,7 +75,7 @@ function isSessionPins(value: unknown): value is SessionPins {
 }
 
 /**
- * Pin file location for one session in one repository.
+ * Pin file name for one session in one repository, inside the user's pin directory.
  *
  * The key includes the repository because the hook runs in the session's current working
  * directory, and that directory moves when the assistant changes directories. A session
@@ -77,11 +85,14 @@ function isSessionPins(value: unknown): value is SessionPins {
  * SHA-256 of the resolved working directory. Config is loaded from that directory, so it
  * is the repository root by construction.
  *
- * Pure: it derives a path and touches no filesystem.
+ * The user is bound by the directory, which only that user can use: see resolveSessionPinDir
+ * in session-pin-store.ts.
+ *
+ * Pure: it derives a name and touches no filesystem.
  */
-export function sessionPinPath(tmpDirPath: string, sessionId: string, cwd: string): string {
+export function sessionPinFileName(sessionId: string, cwd: string): string {
   const repoKey = createHash('sha256').update(resolve(cwd)).digest('hex').slice(0, 16);
-  return join(tmpDirPath, `usabl-pins-${sessionId}-${repoKey}.json`);
+  return `${sessionId}-${repoKey}.json`;
 }
 
 function parseSessionId(raw: string | null): { sessionId: string | null; warning: string | null } {
@@ -99,14 +110,14 @@ function parseSessionId(raw: string | null): { sessionId: string | null; warning
   return { sessionId: candidate, warning: null };
 }
 
-function isWithinDir(baseDir: string, path: string): boolean {
-  const resolvedBase = resolve(baseDir);
-  const resolvedPath = resolve(path);
-  return resolvedPath === resolvedBase || resolvedPath.startsWith(resolvedBase + sep);
-}
-
 async function writeStderr(ports: StopHookRunnerPorts, text: string): Promise<void> {
   await ports.stderrWrite(text.endsWith('\n') ? text : `${text}\n`);
+}
+
+async function writePinNotice(ports: StopHookRunnerPorts, notice: PinNotice | null): Promise<void> {
+  if (notice !== null) {
+    await writeStderr(ports, notice.message);
+  }
 }
 
 // Cursor stdin carries loop_count so we can detect re-entry. Claude stdin carries
@@ -150,11 +161,7 @@ async function consumeBypassOnce(fs: StopHookRunnerFs): Promise<boolean> {
   return true;
 }
 
-async function readSessionPins(fs: StopHookRunnerFs, path: string): Promise<SessionPins | null> {
-  const raw = await fs.readFile(path);
-  if (raw === null) {
-    return null;
-  }
+function parseSessionPins(raw: string): SessionPins | null {
   try {
     const parsed: unknown = JSON.parse(raw);
     return isSessionPins(parsed) ? parsed : null;
@@ -163,8 +170,35 @@ async function readSessionPins(fs: StopHookRunnerFs, path: string): Promise<Sess
   }
 }
 
-async function writeSessionPins(fs: StopHookRunnerFs, path: string, pins: SessionPins): Promise<void> {
-  await fs.writeFile(path, JSON.stringify(pins, null, 2));
+// What the operator reads when session pins were not used or not recorded on a stop. The stop goes
+// on rather than blocking: a block here would trap the session behind a file another user may
+// control, which is the fail-open decision the threat model records for a wedged hook. It is never
+// silent. It is written after the decision line, so stderr never ends on a line that reads as a
+// pass, and it always ends with what to change so pins work again.
+interface PinNotice {
+  // False when this stop did not compare pins, so the decision line must say so.
+  driftChecked: boolean;
+  message: string;
+}
+
+function pinsNotUsed(reason: string, fix: string): PinNotice {
+  return {
+    driftChecked: false,
+    message:
+      `NOT verified - usabl did not use session pins for this stop because ${reason}. ` +
+      'Guarded policy drift during this session was not checked. usabl changed nothing there. ' +
+      `To fix: ${fix}`,
+  };
+}
+
+function pinsNotRecorded(reason: string, fix: string, driftChecked: boolean): PinNotice {
+  const consequence = driftChecked
+    ? 'usabl checked guarded policy drift on this stop, but the next stop compares against the older pins.'
+    : 'Guarded policy drift during this session cannot be checked until pins are recorded.';
+  return {
+    driftChecked,
+    message: `NOT verified - usabl could not record session pins for this stop because ${reason}. ${consequence} To fix: ${fix}`,
+  };
 }
 
 async function verifyStoredReceipt(
@@ -219,10 +253,21 @@ function defaultFs(): StopHookRunnerFs {
   };
 }
 
-export function makeStopHookRunnerPorts(): StopHookRunnerPorts {
+export interface StopHookRunnerPortOptions {
+  // The user the session pins belong to. Absent means the user this process runs as. Tests set
+  // it to another id, because a test cannot chown a file to make it another user's.
+  uid?: number | null;
+  // Where XDG_RUNTIME_DIR is read from. Absent means the process environment. Tests inject one
+  // so a host setting never moves the pins they inspect.
+  env?: Record<string, string | undefined>;
+}
+
+export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {}): StopHookRunnerPorts {
+  const uid = options.uid === undefined ? currentUid() : options.uid;
+  const dir = resolveSessionPinDir({ env: options.env ?? process.env, tmpDir: tmpdir(), uid });
   return {
     fs: defaultFs(),
-    tmpDir: () => tmpdir(),
+    pins: makeFsSessionPinStore({ dir, uid }),
     cwd: () => process.cwd(),
     stdoutWrite: async (text: string) => {
       process.stdout.write(text);
@@ -267,6 +312,7 @@ export async function runStopHook(
   options: StopHookOptions = DEFAULT_OPTIONS,
 ): Promise<number> {
   let deps: Deps | null = null;
+  let pinNotice: PinNotice | null = null;
   try {
     if (await consumeBypassOnce(ports.fs)) {
       // One-shot bypass is loud so temporary overrides cannot become sticky silent greens.
@@ -291,17 +337,29 @@ export async function runStopHook(
       await writeStderr(ports, parsedSession.warning);
     }
     if (parsedSession.sessionId !== null) {
-      const pinsPath = sessionPinPath(ports.tmpDir(), parsedSession.sessionId, ports.cwd());
-      if (!isWithinDir(ports.tmpDir(), pinsPath)) {
-        await writeStderr(ports, `NOT verified - ignored unsafe session_id: ${JSON.stringify(parsedSession.sessionId)}.`);
+      const pinName = sessionPinFileName(parsedSession.sessionId, ports.cwd());
+      const stored = await ports.pins.read(pinName);
+      const previousPins = stored.status === 'found' ? parseSessionPins(stored.contents) : null;
+      if (stored.status === 'refused') {
+        // Never read as "no pins yet": that is exactly what would adopt a planted file.
+        pinNotice = pinsNotUsed(stored.reason, stored.fix);
+      } else if (stored.status === 'found' && previousPins === null) {
+        // A pin file of ours that does not parse is not "no pins yet" either. Recording fresh pins
+        // over it would take whatever is committed now, a tamper included, as the baseline.
+        pinNotice = pinsNotUsed(
+          'the session pin file does not hold pins usabl can read',
+          deletePinFileFix(ports.pins.locate(pinName)),
+        );
       } else {
-        const [previousPins, nextPins] = await Promise.all([
-          readSessionPins(ports.fs, pinsPath),
-          computeSessionPins(deps, config),
-        ]);
+        const nextPins = await computeSessionPins(deps, config);
+        const serialized = JSON.stringify(nextPins, null, 2);
 
         if (previousPins === null) {
-          await writeSessionPins(ports.fs, pinsPath, nextPins);
+          // No pins yet: this stop records the first pins for the session.
+          const written = await ports.pins.create(pinName, serialized);
+          if (written.status === 'refused') {
+            pinNotice = pinsNotRecorded(written.reason, written.fix, false);
+          }
         } else {
           const drift = diffSessionPins(previousPins, nextPins);
           if (drift.length > 0) {
@@ -316,7 +374,10 @@ export async function runStopHook(
             await emitProtocolBlock(ports, message, options);
             return 0;
           }
-          await writeSessionPins(ports.fs, pinsPath, nextPins);
+          const written = await ports.pins.replace(pinName, serialized);
+          if (written.status === 'refused') {
+            pinNotice = pinsNotRecorded(written.reason, written.fix, true);
+          }
         }
       }
     }
@@ -326,18 +387,23 @@ export async function runStopHook(
       await saveReceipt(ports.fs, result.receipt);
     }
 
-    const decision = ports.evaluateDecision(result, { stopHookActive: input.stopHookActive }, config);
+    const ctx: HookContext =
+      pinNotice === null
+        ? { stopHookActive: input.stopHookActive }
+        : { stopHookActive: input.stopHookActive, sessionDriftChecked: pinNotice.driftChecked };
+    const decision = ports.evaluateDecision(result, ctx, config);
     if (decision.block) {
       await emitProtocolBlock(ports, decision.message, options);
-      return 0;
+    } else {
+      await emitProtocolAllow(ports, decision.message, options);
     }
-
-    await emitProtocolAllow(ports, decision.message, options);
+    await writePinNotice(ports, pinNotice);
     return 0;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // Hook errors fail open with disclosure because a wedged stop hook is worse than an honest unverified allow.
     await emitProtocolAllow(ports, `NOT verified - stop hook error: ${message}`, options);
+    await writePinNotice(ports, pinNotice);
     return 0;
   } finally {
     if (deps !== null) {
