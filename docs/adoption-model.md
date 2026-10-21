@@ -26,7 +26,7 @@ own. Only `check` mints a verdict.
 ## Brownfield onboarding, step by step
 
 This is the ordered path for adding usabl to an existing app, with every human step
-marked. New to the product, start with the [team orientation](team-orientation.html)
+marked. New to the product, start with the [usabl walkthrough](usabl-walkthrough.html)
 for the one-read overview, then follow the steps here. The funnel below explains why
 each stage matters; this section is what a team actually types, in order.
 
@@ -34,9 +34,10 @@ each stage matters; this section is what a team actually types, in order.
 
 1. (human) Confirm the basics: the app runs on a local dev server, the repo is git,
    and Node 22 is available. Install the headless browser the scanner drives with
-   `npx playwright install chromium`, then install usabl. The package is not published
-   yet, so today this means building the engine from `usabl-dev/usabl` and linking it;
-   the generated CI clones and pins that same engine.
+   `npx playwright install chromium`, then install usabl. usabl is not on npm yet, so
+   this means building the engine from `usabl-dev/usabl` in a folder next to the app
+   and running `npm install --save-dev file:../usabl`. The generated CI clones
+   `usabl-dev/usabl` and pins the engine to a commit you choose.
 2. (automatic, `usabl init`) Drafts `usabl.config.json` and `usabl.routes.json` from
    the working tree. It infers `appBaseUrl` from the Vite port, reads the app router
    for screens, and seeds the interface globs, the wide-impact globs, and the
@@ -147,7 +148,7 @@ Each stage has a trigger, a goal, a friction risk, and a success signal.
 README from a search, or sees the rulepack referenced in a PatternFly issue.
 
 **Trigger:** Pain (accessibility audit surprise, failed 508 review, broken screen
-reader report) or curiosity (saw the demo, read the research).
+reader report) or curiosity (saw a walkthrough, read the research).
 
 **Goal:** Understand what usabl is in 30 seconds.
 
@@ -156,19 +157,19 @@ reader report) or curiosity (saw the demo, read the research).
 - README with a one-sentence thesis and a quickstart
 - A "What is this?" section that positions against familiar tools (axe, Lighthouse)
   in two sentences, not a wall of text
-- A live or recorded demo link (THE MOMENT)
+- A walkthrough link that shows a change blocked and then re-checked
 
-**Friction risk:** README too long, too academic, or too Red-Hat-internal. It must
-read as a useful open tool, not a contest entry.
+**Friction risk:** README too long, too academic, or too tied to one company. It must
+read as a useful open tool.
 
-**Success signal:** Clones the repo, or runs `npx usabl init` followed by
-`usabl check` on a demo app.
+**Success signal:** Installs usabl and runs `npx usabl init` followed by
+`usabl check` on their app or on the sample app.
 
 ---
 
 ## 2. Try
 
-**Who:** Engineer who cloned the repo or installed the package.
+**Who:** Engineer who installed usabl or cloned the sample app.
 
 **Trigger:** Ran `usabl init` and then `usabl check`.
 
@@ -306,6 +307,10 @@ comes down through `usabl floor prune`, and waivers expire on their dates.
 
 ## 5. Contribute
 
+**Status:** usabl is not accepting pull requests from outside the project yet. See
+[CONTRIBUTING.md](../CONTRIBUTING.md). This stage describes how contribution works once
+the project opens to it.
+
 **Who:** Engineer who wants to add a rule, fix a bug, write a provider, or propose a
 PatternFly rulepack addition.
 
@@ -343,7 +348,7 @@ PatternFly team accepts the upstream rulepack proposal.
 
 | Channel | Purpose |
 |---|---|
-| **npm** (`usabl`) | Planned primary install path. Not yet published; today build the engine from source and link it, then run `usabl init` and `usabl check` |
+| **npm** (`usabl`) | Not on npm yet. Today, build the engine from source and install it with `npm install --save-dev file:../usabl`, then run `usabl init` and `usabl check` |
 | **GitHub** (`usabl-dev/usabl`) | Source, issues, contributions, releases (Apache-2.0) |
 | **GitHub Action draft** | `usabl install --ci` writes the workflow; you pin the engine SHA and require the `usabl-required` check |
 
@@ -351,26 +356,25 @@ No paid tier, no freemium gate, no telemetry-gated features. Apache-2.0.
 
 ---
 
-## Adoption metrics (tie to success-metrics.md)
+## Adoption metrics
 
 | Stage | Metric | How measured |
 |---|---|---|
 | Discover | README views, clone count | GitHub Insights |
-| Try | First `usabl check` run (anon, opt-in only) | None in contest; future opt-in telemetry decision |
+| Try | First `usabl check` run (anon, opt-in only) | None today; future opt-in telemetry decision |
 | Integrate | Repos with `usabl.config.json` or the `usabl-gate` CI workflow | GitHub search (public), self-reported (private) |
 | Expand | Repos gating on the `usabl-required` check | GitHub search, self-reported |
 | Contribute | PRs from non-core contributors | GitHub |
 
-**Contest scope:** Adoption metrics are defined for the post-contest pilot. The contest
-submission demonstrates the funnel works on the demo app and one real PatternFly
-surface.
+**Current scope:** Adoption metrics are defined for a first pilot. So far the funnel has
+been shown to work on the sample app and one real PatternFly surface.
 
 ---
 
 ## Relationship to other docs
 
-- **Start here:** [team orientation](team-orientation.html), the product in one read
+- **Start here:** [usabl walkthrough](usabl-walkthrough.html), the product in one read
 - **Try** stage requirements: [ux-policy.md](./ux-policy.md), first-run experience
-- **Contribute** stage: `CONTRIBUTING.md` in the repo root (engineering deliverable)
+- **Contribute** stage: [CONTRIBUTING.md](../CONTRIBUTING.md) in the repo root
 - **Discover** stage README: the quickstart README
 - **Expand**: [journeys.md](./journeys.md), Journey 4 (team onboarding)

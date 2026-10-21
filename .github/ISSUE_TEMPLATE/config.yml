@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/usabl-dev/usabl/blob/main/SECURITY.md
+    about: Report vulnerabilities privately. Do not open a public issue.
+  - name: Documentation
+    url: https://usabl-dev.github.io/usabl/
+    about: Read how usabl works before you open an issue.

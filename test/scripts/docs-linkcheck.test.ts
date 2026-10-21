@@ -74,14 +74,12 @@ async function runComposite(root: string): Promise<PassResult & { passesRun: num
 }
 
 async function writePublicPages(source: string, pages: Record<string, string>): Promise<void> {
-  await mkdir(join(source, 'demo'), { recursive: true });
+  await mkdir(source, { recursive: true });
   const defaults: Record<string, string> = {
-    'team-orientation.html': '<h1 id="top">Orientation</h1>\n',
     'how-usabl-works.html': '<h1 id="intro">How it works</h1>\n',
-    'code-walkthrough.html': '<h1>Code</h1>\n',
+    'code-walkthrough.html': '<h1 id="top">Code</h1>\n',
     // Also staged as index.html, so this body is what the site root serves.
     'usabl-walkthrough.html': '<h1 id="top">Walkthrough</h1>\n',
-    'demo/product-deck.html': '<h1>Deck</h1>\n',
   };
   for (const [name, body] of Object.entries({ ...defaults, ...pages })) {
     await writeFile(join(source, name), body, 'utf8');
@@ -109,8 +107,8 @@ describe('docs:linkcheck composite command', () => {
     // query and reported it missing, while the staged pass stripped the query
     // and accepted it. The composite command failed on a valid link.
     await writePublicPages(join(root, 'docs'), {
-      'team-orientation.html':
-        '<h1 id="top">Orientation</h1>\n<a href="how-usabl-works.html?v=2#intro">How</a>\n',
+      'code-walkthrough.html':
+        '<h1 id="top">Code</h1>\n<a href="how-usabl-works.html?v=2#intro">How</a>\n',
     });
 
     const result = await runComposite(root);
@@ -124,28 +122,28 @@ describe('docs:linkcheck composite command', () => {
     root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-composite-staged-'));
     const source = join(root, 'docs');
     await writePublicPages(source, {
-      'demo/product-deck.html':
-        '<h1>Deck</h1>\n<p><a href="architecture-map.html">architecture-map.html</a></p>\n',
+      'code-walkthrough.html':
+        '<h1 id="top">Code</h1>\n<p><a href="architecture-map.html">architecture-map.html</a></p>\n',
     });
-    await writeFile(join(source, 'demo', 'architecture-map.html'), '<h1>Map</h1>\n', 'utf8');
+    await writeFile(join(source, 'architecture-map.html'), '<h1>Map</h1>\n', 'utf8');
 
     const result = await runComposite(root);
 
     expect(result.code).toBe(1);
     // The source pass passed (the file exists) and the staged pass caught it.
     expect(result.passesRun).toBe(2);
-    expect(result.stdout).toContain('demo/product-deck.html:2');
+    expect(result.stdout).toContain('code-walkthrough.html:2');
     expect(result.stdout).toContain('not in the staged Pages set');
   });
 
   it('accepts a root-absolute link under the site base path in both passes', async () => {
     root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-composite-base-'));
-    // /usabl/team-orientation.html returns 200 on the published site. The source
+    // /usabl/code-walkthrough.html returns 200 on the published site. The source
     // pass once reported it as a missing file, so the composite command failed
     // before the staged pass could resolve it.
     await writePublicPages(join(root, 'docs'), {
       'how-usabl-works.html':
-        '<h1 id="intro">How</h1>\n<a href="/usabl/team-orientation.html">Home</a>\n',
+        '<h1 id="intro">How</h1>\n<a href="/usabl/code-walkthrough.html">Code</a>\n',
     });
 
     const result = await runComposite(root);
@@ -176,7 +174,7 @@ describe('docs:linkcheck composite command', () => {
   it('rejects a root-absolute link in the source pass before staging runs', async () => {
     root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-composite-root-'));
     await writePublicPages(join(root, 'docs'), {
-      'team-orientation.html': '<h1 id="top">Orientation</h1>\n<a href="/how-usabl-works.html">How</a>\n',
+      'code-walkthrough.html': '<h1 id="top">Code</h1>\n<a href="/how-usabl-works.html">How</a>\n',
     });
 
     const result = await runComposite(root);
