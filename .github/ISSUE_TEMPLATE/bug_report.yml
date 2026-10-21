@@ -14,7 +14,7 @@ body:
     attributes:
       label: usabl version
       description: Run `npm ls usabl` in your app.
-      placeholder: "e.g. 0.2.2"
+      placeholder: "e.g. 0.2.1"
     validations:
       required: true
   - type: input

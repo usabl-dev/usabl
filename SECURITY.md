@@ -33,8 +33,8 @@ If you are not sure which it is, report it privately.
 
 ## Supported versions
 
-Security fixes go into the latest release only. Upgrade to the latest version of the
-`usabl` package to get them.
+Security fixes go into the latest release only. Update to the latest release to get
+them.
 
 ## Threat model
 

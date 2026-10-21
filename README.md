@@ -1,7 +1,6 @@
 # usabl
 
-![Version](https://img.shields.io/badge/version-0.2.2-blue?style=flat-square)
-[![npm](https://img.shields.io/badge/npm-usabl-cb3837?style=flat-square)](https://www.npmjs.com/package/usabl)
+![Version](https://img.shields.io/badge/version-0.2.1-blue?style=flat-square)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
 [![CI](https://github.com/usabl-dev/usabl/actions/workflows/usabl.yml/badge.svg?branch=main)](https://github.com/usabl-dev/usabl/actions/workflows/usabl.yml)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen?style=flat-square)](CONTRIBUTING.md)
@@ -37,15 +36,26 @@ page.
 
 ## Install
 
-usabl needs Node.js 22 or later.
+usabl needs Node.js 22 or later. It is not on npm yet, so build it from source in a
+folder next to your app:
 
 ```bash
-npm install --save-dev usabl
+git clone https://github.com/usabl-dev/usabl.git
+cd usabl
+npm ci
+npm run build
 npx playwright install chromium
 ```
 
 On Linux, if Playwright reports missing system libraries, run
 `npx playwright install --with-deps chromium` instead.
+
+Then add it to your app:
+
+```bash
+cd ../your-app
+npm install --save-dev file:../usabl
+```
 
 ## Quick start
 
@@ -88,7 +98,7 @@ To try usabl on an app with known barriers first, use the
 
 ## Status
 
-Version 0.2.2. This is an early release.
+Version 0.2.1. This is an early release, and it is not on npm yet.
 
 What has been proven, and on what:
 
@@ -105,8 +115,8 @@ Known limits:
 - usabl has not been load tested against a large fleet of applications.
 - Screens behind a login need a stored session, set with `USABL_STORAGE_STATE`. usabl
   detects many sign-in pages and reports them as gaps, but not every kind.
-- The CI workflow that `usabl install --ci` writes builds the engine from a pinned
-  commit of this repository, not from npm.
+- The CI workflow that `usabl install --ci` writes builds the engine from a commit of
+  this repository that you pin.
 
 ## Documentation
 

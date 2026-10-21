@@ -94,7 +94,8 @@ layer). OpenShift measurement pass: track findings per surface for calibration.
 
 **Path (target):**
 
-1. `npm install --save-dev usabl`, then `npx playwright install chromium`.
+1. Build usabl from source and add it with `npm install --save-dev file:../usabl`, as the
+   README describes, then `npx playwright install chromium`.
 2. Run `npx usabl init` to scaffold `usabl.config.json` and `usabl.routes.json` for your
    app, or clone the [usabl-app](https://github.com/usabl-dev/usabl-app) sample, which
    ships `usabl.config.json`.

@@ -34,9 +34,10 @@ each stage matters; this section is what a team actually types, in order.
 
 1. (human) Confirm the basics: the app runs on a local dev server, the repo is git,
    and Node 22 is available. Install the headless browser the scanner drives with
-   `npx playwright install chromium`, then install usabl with
-   `npm install --save-dev usabl`. The generated CI clones `usabl-dev/usabl` and pins
-   the engine to a commit you choose.
+   `npx playwright install chromium`, then install usabl. usabl is not on npm yet, so
+   this means building the engine from `usabl-dev/usabl` in a folder next to the app
+   and running `npm install --save-dev file:../usabl`. The generated CI clones
+   `usabl-dev/usabl` and pins the engine to a commit you choose.
 2. (automatic, `usabl init`) Drafts `usabl.config.json` and `usabl.routes.json` from
    the working tree. It infers `appBaseUrl` from the Vite port, reads the app router
    for screens, and seeds the interface globs, the wide-impact globs, and the
@@ -161,14 +162,14 @@ reader report) or curiosity (saw a walkthrough, read the research).
 **Friction risk:** README too long, too academic, or too tied to one company. It must
 read as a useful open tool.
 
-**Success signal:** Installs the package and runs `npx usabl init` followed by
+**Success signal:** Installs usabl and runs `npx usabl init` followed by
 `usabl check` on their app or on the sample app.
 
 ---
 
 ## 2. Try
 
-**Who:** Engineer who installed the package or cloned the sample app.
+**Who:** Engineer who installed usabl or cloned the sample app.
 
 **Trigger:** Ran `usabl init` and then `usabl check`.
 
@@ -343,7 +344,7 @@ PatternFly team accepts the upstream rulepack proposal.
 
 | Channel | Purpose |
 |---|---|
-| **npm** (`usabl`) | Primary install path: `npm install --save-dev usabl`, then run `usabl init` and `usabl check` |
+| **npm** (`usabl`) | Not on npm yet. Today, build the engine from source and install it with `npm install --save-dev file:../usabl`, then run `usabl init` and `usabl check` |
 | **GitHub** (`usabl-dev/usabl`) | Source, issues, contributions, releases (Apache-2.0) |
 | **GitHub Action draft** | `usabl install --ci` writes the workflow; you pin the engine SHA and require the `usabl-required` check |
 

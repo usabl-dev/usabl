@@ -1,11 +1,6 @@
 # Changelog
 
-## 0.2.2 (2026-10-21)
-
-This is the first release published to npm. Install it with
-`npm install --save-dev usabl`.
-
-0.2.1 was released without a git tag.
+## Unreleased
 
 ### Fixed
 
@@ -369,9 +364,10 @@ This is the first release published to npm. Install it with
 
 ### Added
 
-- The first npm release, and a contributor setup: a contributor guide, `AGENTS.md`
-  rules for AI coding agents, a Code of Conduct, a security policy with private
-  vulnerability reporting, and issue forms for bugs, features, and questions.
+- Project files for an open-source repository: a contributor guide that says the
+  project is not accepting pull requests yet, `AGENTS.md` rules for AI coding
+  agents, a Code of Conduct, a security policy with private vulnerability
+  reporting, and issue forms for bugs, features, and questions.
 - `checkPage()` in `usabl/playwright` runs the engine on a page a Playwright test
   already opened, and returns a verdict with the same precedence as a full run.
 - `usabl install --claude-skill` writes two Claude Code skills: `/usabl-check`, the

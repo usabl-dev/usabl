@@ -1,9 +1,9 @@
 # Personas
 
 Who usabl is for, who it is not for, and what each person needs to trust the project.
-These are open-source adopters (Apache-2.0). usabl is published to npm, so adopters
-install it with `npm install --save-dev usabl`, contribute on GitHub, and decide
-adoption on merit, not procurement.
+These are open-source adopters (Apache-2.0). usabl is not on npm yet, so adopters
+build it from the repository, report issues on GitHub, and decide adoption on merit,
+not procurement.
 
 Journey detail: [journeys.md](./journeys.md). Adoption funnel:
 [adoption-model.md](./adoption-model.md). The two core personas, Priya and James, are
