@@ -458,6 +458,24 @@
 
 ### Security
 
+- Stop hook session pins are private to the user. They were kept in the shared
+  temp directory under predictable names with the process umask, and the hook
+  followed whatever was at the path, so another local user could precreate a
+  file or a symlink there to cause false drift blocks, poison the pins, slip a
+  later tamper past the check, or overwrite another file the victim can write.
+  Pins now live in a per-user directory created with mode 0700 and checked to be
+  a real directory owned by the user with no group or other permission bits:
+  `usabl-pins` inside `$XDG_RUNTIME_DIR` when that passes the same checks, and
+  `usabl-pins-<uid>` under the temp directory otherwise. A symlink at the path is
+  refused rather than followed, and an open file is checked for owner and mode.
+  New pins are written to an exclusive 0600 temp file and renamed into place, so
+  a killed process never leaves an empty pin file. A failed check, or a pin file
+  that does not parse, writes nothing: the stop goes on without the drift
+  comparison, the decision line says `session drift not checked`, and stderr
+  ends with NOT verified, the reason, and what to delete to fix it. On Windows
+  the owner and mode checks are skipped, because the platform reports no user id
+  and modes that say nothing about access. Pins kept in the old location are no
+  longer read, so the first stop of a session after upgrading records fresh pins.
 - The pull request comment prints no number that is not a number. Sealing every
   string it carries left the numbers unsealed, and a document supplying a list
   as `{"length": "@user"}` put that text into the not-evaluated counts, because
