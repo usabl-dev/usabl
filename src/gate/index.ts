@@ -16,6 +16,7 @@ import { coverageIncomplete, decideAccessibilityVerdict, notEvaluatedCounts } fr
 import { sortBy } from '../primitives/sortKey.js';
 import { computeIdentity, identityKey } from '../primitives/identity.js';
 import { canonicalize } from '../primitives/canonical.js';
+import { checkGateInput } from './input.js';
 
 const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
 
@@ -24,7 +25,10 @@ const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
 const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
 
 export function gate(input: GateInput): GateOutput {
-  const accessibility = accessibilityOutcome(input);
+  // The gate checks its own input, because it is exported and a library caller can build one by
+  // hand. It then reads only the floor the parser returned. See ./input.ts.
+  const floor = checkGateInput(input);
+  const accessibility = accessibilityOutcome({ ...input, floor });
   if (input.guardDivergedPaths.length > 0) {
     // Policy divergence is a human approval problem, not an accessibility skip.
     // Keep the scan outcome so CI can AND a second check without GitHub inside the gate.
@@ -320,7 +324,7 @@ interface Differential {
 }
 
 export function buildFindings(input: GateInput): Finding[] {
-  return differential(input).findings;
+  return differential({ ...input, floor: checkGateInput(input) }).findings;
 }
 
 function differential(input: GateInput): Differential {

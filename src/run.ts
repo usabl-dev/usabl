@@ -36,6 +36,7 @@ import { parseEvidenceFloor } from './evidence/floor.js';
 import { parseUsablConfig } from './intake/config.js';
 import { loadRequirements } from './intake/load.js';
 import { overlayRequirementsFs } from './intake/overlay-fs.js';
+import { assertIdField } from './intake/input-refusal.js';
 import { assertIso8601Utc } from './primitives/iso8601.js';
 import { checkGuard } from './trust/guard.js';
 
@@ -54,7 +55,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function parseWaiver(value: unknown): Waiver {
+function parseWaiver(value: unknown, index: number): Waiver {
   if (!isRecord(value)) {
     throw new Error('waiver entry must be an object');
   }
@@ -69,7 +70,10 @@ function parseWaiver(value: unknown): Waiver {
   const expires = value['expires'];
 
   if (typeof rule !== 'string') throw new Error('waiver rule must be a string');
-  if (typeof surface !== 'string') throw new Error('waiver surface must be a string');
+  // The surface is a screen id, so it answers to the shared id grammar. A surface the grammar
+  // refuses can never match a screen, so the waiver would match nothing while reading as live.
+  // The refusal names the waiver by position and never repeats the id.
+  assertIdField('waiver ledger', `waivers[${index}].surface`, surface);
   if (typeof scope !== 'string') throw new Error('waiver scope must be a string');
   if (typeof reason !== 'string') throw new Error('waiver reason must be a string');
   if (typeof owner !== 'string') throw new Error('waiver owner must be a string');
@@ -95,7 +99,7 @@ export function parseWaiverLedger(value: unknown): WaiverLedger {
   if (!Array.isArray(waiversRaw)) {
     throw new Error('waiver ledger waivers must be an array');
   }
-  return { version: 1, waivers: waiversRaw.map((waiver) => parseWaiver(waiver)) };
+  return { version: 1, waivers: waiversRaw.map((waiver, index) => parseWaiver(waiver, index)) };
 }
 
 async function readJson(read: (path: string) => Promise<string | null>, path: string): Promise<unknown | null> {

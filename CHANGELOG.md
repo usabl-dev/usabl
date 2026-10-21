@@ -71,6 +71,34 @@
   unlabeled call ran no design requirements and could return `verified`. Findings from
   an unlabeled call still carry the label `page`.
 
+### Security
+
+- The exported `gate()` now refuses a floor with two entries at one identity. It
+  indexed the floor last-wins, so which entry survived decided whether a barrier read
+  as new or carried, and one order was a false green. The gate now parses the floor it
+  is handed with the same parser the floor file goes through, and reads only what that
+  parser returns, so a hand-built floor gets every check a file gets.
+- `gate()` and `mintReceipt()` now check every screen and surface id they are handed
+  against the shared id grammar: `coverage.affected[].screenId`, `drafts[].screenId`,
+  `floor.entries[].screenId`, `waivers[].surface`, and `cleanlyScannedScreens` on the
+  gate, and `checked`, `applicability[].screenId`, and the config's `surfaces[].id` and
+  `noiseBudget.perSurface` keys on the receipt. Reading `.usabl-evidence.json` and
+  `.usabl-waivers.json` now checks their screen ids too. A floor entry or waiver whose
+  id the grammar refuses used to match nothing; now the file is refused and the run
+  ends with exit 4, naming the entry by position.
+- Every refusal above is an `InputRefusedError`, now exported from the package entry.
+  Its `field` names the refused value by path and position, for example
+  `floor.entries[2].screenId`. The message never contains the value. A duplicate floor
+  entry used to be reported with its identity, which carries page text; it is now
+  named by position.
+- `usabl comment` and `usabl enforce` now check the whole Result they read from
+  standard input against the contract: every list is a list, every count is a whole
+  number, every enum value is one of its values, and every nested object has its
+  fields. Fields the contract does not name are dropped. A document that does not
+  match exits 4 with a reason that names the field and never repeats the value, and
+  `usabl comment` prints no comment. Text that is not JSON exits 4 the same way. The
+  JSON parser's own message, which quoted the input back, is no longer printed.
+
 ## 0.2.2 - 2026-10-21
 
 The first tagged release since v0.2.0. Version 0.2.1 was released without a git tag.
