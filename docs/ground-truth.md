@@ -1587,6 +1587,42 @@ The gate stays at Stop. Neither path lets the agent grade its own work.
 A documented entry point that returns the core Result. Teams can call the same check
 from the tests they already run. A starting point, not the main surface.
 
+`checkPage(page, options)` runs the same provider list the CLI runs on a screen. Both build
+it through `makeScanProviders` in `src/providers/core-stack.ts`: the core stack, then one
+provider per content or flow design requirement. `checkPage` reads `usabl.config.json` from
+`options.projectRoot` (default: the working directory) and loads the requirements directory it
+names through the same loader as the CLI. It reads the working tree; it does not apply a
+trusted ref. It never searches parent directories. When the caller passes `projectRoot` and
+there is no `usabl.config.json` in it, that is a `not-covered` gap with ref
+`usabl.config.json` whose reason names the root, because the caller pointed at a folder with no
+config and nothing would be checked. When the root is the default and there is no config, that
+adds no gap, because a project that does not use usabl config has none. Either way the result's
+`project` field holds the absolute root that was read and whether a config was found there, so
+a caller can tell an empty project from the wrong folder. A config or requirements directory
+that is present and cannot be read is a gap.
+
+`checkPage` is not a merge gate. Its verdict is advisory output for a test suite; the gate is
+the only verdict authority. It also acts on the caller's page: the keyboard walk presses Tab,
+the PatternFly probes open and close dialogs and menus, and each flow requirement on the page's
+surface runs its authored steps, clicks and key presses, on that page.
+
+`adoptPage` installs the same live-region capture the CLI's init script installs, from one
+shared source in `src/deps/real.ts`, guarded so a page that already has it keeps its one
+observer. So a flow requirement that expects an announcement hears the same text in both. On an
+adopted page the capture starts at adoption, not at document start.
+
+A requirement is matched to the page by `options.screenId`, the surface id the page is. Each
+runtime requirement is checked on the page when its surface is the page's surface, and is out
+of scope when its surface is another configured or discovered surface and the page's id is a
+surface the project or a requirement names. Every other requirement is a `not-covered` gap with
+ref `requirement:<id>`: the page is labeled with no known surface, or the requirement names a
+surface that matches no configured or discovered surface. A call with no `screenId` is an
+unlabeled page. Its findings carry the label `page`, but it counts as no surface, even in a
+project that has a surface named `page`, so every runtime requirement is a gap and none is
+judged on it. So a page that regresses on a requirement in the CLI also regresses in
+`checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
+when it is not.
+
 ### 11.7 Other coding assistants (seam)
 
 The reference integration uses Claude Code's Stop lifecycle event. The architecture does not

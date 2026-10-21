@@ -12,10 +12,9 @@ import type { BrowserDriver, Capability, Deps, UsablConfig } from "../contracts/
 import { canonicalHash, sha256 } from "../primitives/canonical.js";
 import { sortBy } from "../primitives/sortKey.js";
 import { makeCheckRunner } from "../providers/check-runner.js";
-import { makeCoreProviders } from "../providers/core-stack.js";
+import { makeScanProviders } from "../providers/core-stack.js";
 import { makeStepRunner } from "../providers/keyboard-walk/steps.js";
 import { loadRequirements } from "../intake/load.js";
-import { mapRequirementsToProviders } from "../intake/map-to-providers.js";
 import { overlayRequirementsFs } from "../intake/overlay-fs.js";
 import { resolveIntakeConfig } from "../intake/trusted-config.js";
 import { makeRealBrowserDriver, type RealBrowserOptions } from "./real.js";
@@ -220,10 +219,9 @@ export async function buildDeps(
     options.trustedRef,
   );
   const loadedRequirements = await loadRequirements(intakeFs, intakeConfig);
-  const providers = makeCoreProviders();
-  if (loadedRequirements.ok) {
-    providers.push(...mapRequirementsToProviders(loadedRequirements.bundle));
-  }
+  const providers = makeScanProviders(
+    loadedRequirements.ok ? loadedRequirements.bundle : null,
+  );
   // Intake parse failure is policy input failure, not an engine crash.
   // We keep building Deps so run() can fail closed through the gate path.
 

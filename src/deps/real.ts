@@ -78,9 +78,12 @@ const PATH_FOR_IMPL = `
   };
 `;
 
-// Inject before app scripts run so the first live update is observable and not lost.
-// Late injection would under-report announcements and create a false sense of coverage.
-export const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
+// Browser-side live-region capture used by both document-start injection and adoptPage install.
+// Keep this the only implementation, for the same reason as PATH_FOR_IMPL: the CLI and checkPage
+// must hear the same announcements, so a fix to what counts as a live region has to land in both
+// at once. It records the text of a live region each time something inside it changes, and
+// window.__usablDrain hands back what it recorded since the last drain.
+const LIVE_CAPTURE_IMPL = `
   const LIVE = '[aria-live],[role="status"],[role="alert"],[role="log"]';
   const buffer = [];
   const toText = (value) => {
@@ -115,9 +118,19 @@ export const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
   } else {
     startObserver();
   }
+`;
 
-  ${PATH_FOR_IMPL}
-  window.__usablPathFor = pathFor;
+// Inject before app scripts run so the first live update is observable and not lost.
+// Late injection would under-report announcements and create a false sense of coverage.
+// Each helper sits in its own block so their names cannot collide.
+export const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
+  {
+    ${LIVE_CAPTURE_IMPL}
+  }
+  {
+    ${PATH_FOR_IMPL}
+    window.__usablPathFor = pathFor;
+  }
 })();`;
 
 // Evaluated after adoptPage attaches to a caller-owned page that already navigated.
@@ -128,6 +141,16 @@ export const INSTALL_PATH_HELPER_SCRIPT = `(() => {
   }
   ${PATH_FOR_IMPL}
   window.__usablPathFor = pathFor;
+})();`;
+
+// Evaluated by adoptPage next to the path helper. Same LIVE_CAPTURE_IMPL as the init script, and
+// guarded the same way, so a page usabl opened, or one adopted twice, keeps its one observer and
+// its buffer. It hears only changes made after adoption, which is when a caller's checks start.
+export const INSTALL_LIVE_CAPTURE_SCRIPT = `(() => {
+  if (typeof window.__usablDrain === 'function') {
+    return;
+  }
+  ${LIVE_CAPTURE_IMPL}
 })();`;
 
 interface AxeResult {
@@ -836,7 +859,8 @@ function wrapPage(
       }, selector);
     },
     async armAnnouncementCapture(): Promise<void> {
-      // The init script installs observers at document start, so arming is already complete.
+      // The observer is already running: the init script installs it at document start on a page
+      // usabl opens, and adoptPage installs it on a page a caller hands in. Arming has nothing to do.
       return Promise.resolve();
     },
     async drainAnnouncements(): Promise<string[]> {
@@ -922,8 +946,9 @@ function wrapPage(
 /**
  * Adopts a Playwright page a caller already created and navigated, so usabl can run providers on it
  * (for example from a Playwright test suite). It attaches a CDP session for AX reads and installs the
- * path helper, then returns a usabl Page whose close() is a no-op: the caller owns the page and its
- * context, so adoption must never close them. Navigation and readiness are the caller's job.
+ * path helper and the live-region capture, then returns a usabl Page whose close() is a no-op: the
+ * caller owns the page and its context, so adoption must never close them. Navigation and readiness
+ * are the caller's job.
  *
  * The in-flight tracker starts at adoption, so it counts only requests fired after this call. The
  * one caller today, checkPage in playwright-helper.ts, never calls gotoReady, so this is inert. A
@@ -936,6 +961,9 @@ export async function adoptPage(pw: PwPage): Promise<Page> {
   const cdp = await context.newCDPSession(pw);
   await cdp.send('Accessibility.enable');
   await pw.evaluate(INSTALL_PATH_HELPER_SCRIPT);
+  // Without this, armAnnouncementCapture and drainAnnouncements hear nothing on an adopted page, and
+  // a flow requirement that expects an announcement fails here while the CLI passes it.
+  await pw.evaluate(INSTALL_LIVE_CAPTURE_SCRIPT);
   // The caller already navigated, so this tracker starts counting from adoption forward. A caller
   // that then uses gotoReady gets readiness measured against requests fired after adoption.
   const network = makeNetworkActivityTracker(pw);

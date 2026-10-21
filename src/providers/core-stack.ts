@@ -1,8 +1,11 @@
 /**
  * Deterministic scan providers shared by `buildDeps` and `checkPage`.
- * Intake-mapped providers stay wired only by buildDeps. This unit never mints a verdict.
+ * Both build their provider list through makeScanProviders, so the core stack and the
+ * intake-mapped providers cannot drift apart between the CLI and the Playwright helper.
+ * This unit never mints a verdict.
  */
-import type { Provider } from '../contracts/index.js';
+import type { Provider, RequirementBundle } from '../contracts/index.js';
+import { mapRequirementsToProviders } from '../intake/map-to-providers.js';
 import { axeProvider } from './axe/index.js';
 import { makeDocsRulepackProvider } from './docs-rulepack/index.js';
 import { makeKeyboardWalkProvider } from './keyboard-walk/index.js';
@@ -40,5 +43,23 @@ export function makeCoreProviders(options: CoreProviderOptions = {}): Provider[]
     walkOptions.tabCap = options.tabCap;
   }
   providers.push(makeKeyboardWalkProvider(walkOptions));
+  return providers;
+}
+
+/**
+ * The full provider list for one scan: the core stack, then one provider per runtime design
+ * requirement. This is the one place that list is built. The CLI and the Playwright helper both
+ * call it, so a page cannot pass one of them and regress in the other because a provider was
+ * wired into only one. Null means the requirements could not be loaded; the caller must disclose
+ * that, because the core stack alone does not check them.
+ */
+export function makeScanProviders(
+  requirements: RequirementBundle | null,
+  options: CoreProviderOptions = {},
+): Provider[] {
+  const providers = makeCoreProviders(options);
+  if (requirements !== null) {
+    providers.push(...mapRequirementsToProviders(requirements));
+  }
   return providers;
 }
