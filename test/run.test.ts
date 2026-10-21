@@ -35,6 +35,18 @@ const scanWith = (drafts: Draft[], gaps: ScreenScan['gaps'] = []): ScreenScan =>
   reachedSelectorPresent: null,
 });
 const guardOk = { files: { 'usabl.config.json': '{}' }, headContents: { 'usabl.config.json': '{}' } };
+// A clean clusters scan whose walk landed on the Save button. A floored barrier on that button that
+// is absent from the drafts was fixed, because its element rendered.
+const savedButtonScan = (): ScreenScan => ({
+  ...scanWith([], []),
+  stops: [
+    {
+      index: 0,
+      elementPath: 'main > button#save',
+      announcement: [{ kind: 'name', text: 'Save', fromTree: true, source: 'ax-tree' }],
+    },
+  ],
+});
 
 describe('run', () => {
   it('is idle (verdict null, exit 0) when no UI files changed', async () => {
@@ -313,15 +325,7 @@ describe('run', () => {
         { code: 'M', path: 'fixtures/app/src/SettingsPage.tsx' },
       ],
       scans: {
-        clusters: {
-          screenId: 'clusters',
-          url: 'http://127.0.0.1:5173/clusters',
-          stops: [],
-          drafts: [],
-          gaps: [],
-          applicability: [],
-          reachedSelectorPresent: null,
-        },
+        clusters: { ...savedButtonScan(), url: 'http://127.0.0.1:5173/clusters' },
         settings: {
           screenId: 'settings',
           url: 'http://127.0.0.1:5173/settings',
@@ -389,7 +393,7 @@ describe('run', () => {
       files: { 'usabl.config.json': '{}', '.usabl-evidence.json': floorJson },
       headContents: { 'usabl.config.json': '{}', '.usabl-evidence.json': floorJson },
       changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
-      scans: { clusters: scanWith([], []) },
+      scans: { clusters: savedButtonScan() },
     });
     const r = await run(deps, config);
 
@@ -444,7 +448,7 @@ describe('run', () => {
         }),
       },
       changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
-      scans: { clusters: scanWith([], []) },
+      scans: { clusters: savedButtonScan() },
     });
     const r = await run(deps, config);
     expect(r.findings.filter((f) => f.status === 'fixed')).toHaveLength(1);

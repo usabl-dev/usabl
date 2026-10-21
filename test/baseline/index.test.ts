@@ -306,11 +306,16 @@ describe('runBaseline', () => {
         },
       ),
       scans: {
-        clusters: scanWith([
-          draft({ rule: 'button-name', evidence: {}, elementName: null, role: null }),
-          draft({ rule: 'preview-only', evidenceClass: 'preview', confidence: 'unverified' }),
-          draft({ rule: 'model-only', evidenceClass: 'model-judgment', confidence: 'unverified' }),
-        ]),
+        // The screen's readiness signal held, so the seeded floor entry absent here is a fixed
+        // finding, which is what this case needs to show is left out of the new floor.
+        clusters: {
+          ...scanWith([
+            draft({ rule: 'button-name', evidence: {}, elementName: null, role: null }),
+            draft({ rule: 'preview-only', evidenceClass: 'preview', confidence: 'unverified' }),
+            draft({ rule: 'model-only', evidenceClass: 'model-judgment', confidence: 'unverified' }),
+          ]),
+          reachedSelectorPresent: true,
+        },
       },
     });
     const writer = new MemoryBaselineFs();
