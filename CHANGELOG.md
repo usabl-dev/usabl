@@ -338,6 +338,28 @@
 
 ### Added
 
+- A surface's `reachedWhen` readiness signal can now name a data response as well
+  as a selector: `"reachedWhen": { "selector": "table#users", "response": "/api/users" }`.
+  The string form is still a selector on its own. Every declared part has to hold,
+  or the screen's findings are dropped and it is reported as a coverage gap that
+  names the missing part. A `response` holds when a `fetch` or XHR request from the
+  page to that path on the application's own host answered with a 2xx status that
+  is not an HTML page, and the request was sent before usabl's keyboard walk began.
+  This is what catches a sign-in page the session rules cannot see: a passkey
+  prompt or a magic-link page. An authentication wall that answers 200 to every
+  request is caught when its own page does not request the declared path, or when
+  it answers that path with an HTML page. Each of those is still scored as the
+  screen when no signal is declared.
+- A refused data request no longer gaps a screen when the application recovered
+  from it, which is a token refresh. That needs the surface to declare a
+  `response` path, that path to be answered at an address that was never refused,
+  and the last answer for each refused address to be a success that is not an
+  HTML page. A selector on its own, including the string form of `reachedWhen`,
+  never stands a refusal down, because an application can drop a stale token and
+  be answered as an anonymous visitor.
+- `usabl init` recommends a readiness signal for every surface when the
+  application looks login-gated: `USABL_STORAGE_STATE` is set, or a route has a
+  sign-in path segment such as `login` or `sign-in`. It writes none itself.
 - `usabl doctor` reports the authenticated session as a surface of its own. Unset
   reads as missing and names the consequence: usabl will scan signed out, so a
   login-gated screen is measured as whatever a signed-out visitor sees. Set but
@@ -465,6 +487,24 @@
 
 ### Security
 
+- Stop hook session pins are private to the user. They were kept in the shared
+  temp directory under predictable names with the process umask, and the hook
+  followed whatever was at the path, so another local user could precreate a
+  file or a symlink there to cause false drift blocks, poison the pins, slip a
+  later tamper past the check, or overwrite another file the victim can write.
+  Pins now live in a per-user directory created with mode 0700 and checked to be
+  a real directory owned by the user with no group or other permission bits:
+  `usabl-pins` inside `$XDG_RUNTIME_DIR` when that passes the same checks, and
+  `usabl-pins-<uid>` under the temp directory otherwise. A symlink at the path is
+  refused rather than followed, and an open file is checked for owner and mode.
+  New pins are written to an exclusive 0600 temp file and renamed into place, so
+  a killed process never leaves an empty pin file. A failed check, or a pin file
+  that does not parse, writes nothing: the stop goes on without the drift
+  comparison, the decision line says `session drift not checked`, and stderr
+  ends with NOT verified, the reason, and what to delete to fix it. On Windows
+  the owner and mode checks are skipped, because the platform reports no user id
+  and modes that say nothing about access. Pins kept in the old location are no
+  longer read, so the first stop of a session after upgrading records fresh pins.
 - The pull request comment prints no number that is not a number. Sealing every
   string it carries left the numbers unsealed, and a document supplying a list
   as `{"length": "@user"}` put that text into the not-evaluated counts, because
