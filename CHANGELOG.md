@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 - 2026-10-21
+
+The first tagged release since v0.2.0. Version 0.2.1 was released without a git tag.
+usabl is not on npm. Install it from the `v0.2.2` tag, as the README shows.
 
 ### Fixed
 

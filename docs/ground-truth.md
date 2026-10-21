@@ -6,7 +6,7 @@ This is the project ground truth for the usabl product. It is one document that 
 the check-agnostic core, evidence labels, design intake, Reports, and the on/off
 adoption model.
 
-This document describes usabl v0.2.1: an Apache-2.0 accessibility proof engine, published
+This document describes usabl v0.2.2: an Apache-2.0 accessibility proof engine, published
 as ESM, requiring Node >=22, with a single bin `usabl` mapped to `./dist/cli.js`. Where
 this document and the source disagree, the source is authoritative.
 
@@ -258,7 +258,7 @@ These make "easy to add later" real. They are non-negotiable constraints on the 
 
 ### Module map
 
-This is the actual source layout as built for v0.2.1. Dedup is not a separate module;
+This is the actual source layout as built for v0.2.2. Dedup is not a separate module;
 it runs inside the gate (see section 9). There is no built MCP surface (section 11.5);
 an MCP wrapper stays an optional transport.
 
