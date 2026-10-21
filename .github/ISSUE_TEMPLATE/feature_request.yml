@@ -35,10 +35,3 @@ body:
       description: Optional. Other ways to solve the problem, including tools you use today.
     validations:
       required: false
-  - type: checkboxes
-    id: contribute
-    attributes:
-      label: Contribution
-      options:
-        - label: I would like to work on this myself.
-          required: false

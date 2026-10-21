@@ -1,8 +1,14 @@
-# Make a contribution
+# How usabl is developed
 
-This guide takes you from a fork to a merged pull request when you write the change
-yourself. If an AI coding agent writes the change, give it [AGENTS.md](../../AGENTS.md)
-as well. The rules are the same.
+This guide describes how changes to usabl are made by hand, from a branch to a merged
+pull request. Changes made with an AI coding agent follow [AGENTS.md](../../AGENTS.md),
+and the rules are the same.
+
+usabl is not accepting pull requests from outside the project yet. A pull request from
+outside the project will be closed without review. This guide is published so the
+process is open to read. To report a bug or give feedback, use the
+[issue forms](https://github.com/usabl-dev/usabl/issues/new/choose). See
+[CONTRIBUTING.md](../../CONTRIBUTING.md) for what the project accepts today.
 
 Read [How usabl works](../how-usabl-works.html) before you change coverage, evidence,
 verdicts, receipts, or product surfaces. Read the
@@ -19,18 +25,15 @@ Examples:
 - The proof-loop guide names the command that failed.
 
 If the sentence has two independent outcomes, split the work into two pull requests.
-Comment on the issue to say you are taking it, how you will prove it, and any help you
-need.
 
 ## 2. Set up the repository
 
 You need Node.js 22, npm, Git, and Python 3 for pre-commit.
 
-1. Fork `usabl-dev/usabl` on GitHub.
-2. Clone your fork and install:
+1. Clone the repository and install:
 
    ```bash
-   git clone https://github.com/<your-user>/usabl.git
+   git clone https://github.com/usabl-dev/usabl.git
    cd usabl
    npm ci
    npx playwright install chromium
@@ -39,7 +42,7 @@ You need Node.js 22, npm, Git, and Python 3 for pre-commit.
    On Linux, if Playwright reports missing system libraries, run
    `npx playwright install --with-deps chromium` instead.
 
-3. Install pre-commit, then install the hooks:
+2. Install pre-commit, then install the hooks:
 
    ```bash
    pip install pre-commit
@@ -52,7 +55,7 @@ You need Node.js 22, npm, Git, and Python 3 for pre-commit.
    format. Without pre-commit, your commits skip these checks locally. CI runs the same
    hooks, so the problems show up later as a red pull request instead.
 
-4. Create a branch named `type/short-description`, where the type is `fix`, `feat`,
+3. Create a branch named `type/short-description`, where the type is `fix`, `feat`,
    `docs`, `test`, or `chore`:
 
    ```bash
@@ -66,7 +69,7 @@ To try your local engine in an app, build it and point the app at the folder:
 ```bash
 npm run build
 cd ../your-app
-npm install --save-dev ../usabl
+npm install --save-dev file:../usabl
 ```
 
 The [usabl-app](https://github.com/usabl-dev/usabl-app) sample app has known
@@ -142,8 +145,7 @@ The commit body is two or three sentences on what changed and why.
 
 ## 8. Open the pull request
 
-Push your branch to your fork and open a pull request against `main`. Fill in the
-template:
+Push the branch and open a pull request against `main`. Fill in the template:
 
 - **Summary:** what changed and why. Name any trust-critical path you touched.
 - **Test plan:** the exact commands you ran and what they printed, including the
@@ -152,8 +154,6 @@ template:
   exactly as written. If no AI helped, replace it with one line that says so.
 
 Link the issue. Add screenshots only when they prove visible behavior.
-
-The first CI run on a pull request from a fork waits until the maintainer approves it.
 
 ### What reviewers look for
 
@@ -165,13 +165,12 @@ The first CI run on a pull request from a fork waits until the maintainer approv
 - No secrets in code, tests, fixtures, or output.
 - Docs updated when behavior or commands change.
 
-## Contributions without code
+## Reports and feedback
 
-You can help without a branch:
+Reports are welcome from anyone, and they need no branch:
 
 - File a reproducible bug with the [test and report guide](test-and-report.md).
-- Test an open pull request and report the exact result.
 - Read the [usabl walkthrough](../usabl-walkthrough.html) as a first-time user and
   report what was unclear.
-- Generate the accessible documentation page with `usabl docs --html` and review it
-  for accuracy and accessibility.
+- Generate the accessible documentation page with `usabl docs --html` and report
+  anything inaccurate or inaccessible.

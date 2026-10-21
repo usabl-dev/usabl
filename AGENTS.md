@@ -1,8 +1,9 @@
 # AGENTS.md
 
-Instructions for AI coding agents that work in this repository. Human contributors
-follow the same rules; their guide is
-[docs/guides/make-a-contribution.md](docs/guides/make-a-contribution.md).
+Instructions for AI coding agents that work in this repository. They describe how
+usabl is developed. usabl is not accepting pull requests from outside the project yet;
+see [CONTRIBUTING.md](CONTRIBUTING.md). Changes made by hand follow the same rules,
+described in [docs/guides/make-a-contribution.md](docs/guides/make-a-contribution.md).
 
 ## What usabl is
 

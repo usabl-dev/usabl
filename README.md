@@ -3,7 +3,6 @@
 ![Version](https://img.shields.io/badge/version-0.2.1-blue?style=flat-square)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
 [![CI](https://github.com/usabl-dev/usabl/actions/workflows/usabl.yml/badge.svg?branch=main)](https://github.com/usabl-dev/usabl/actions/workflows/usabl.yml)
-[![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen?style=flat-square)](CONTRIBUTING.md)
 
 usabl is an accessibility proof engine for web apps. It checks the screens a code
 change touches, while the code is being written, and tells you whether that change
@@ -131,11 +130,11 @@ Known limits:
 
 ## Contributing
 
-Contributions are welcome, from bug reports to new checks.
+usabl is not accepting pull requests yet. Bug reports and feedback are welcome through
+the [issue forms](https://github.com/usabl-dev/usabl/issues/new/choose).
 
-- [CONTRIBUTING.md](CONTRIBUTING.md): how to contribute and how review works.
-- [AGENTS.md](AGENTS.md): rules for AI coding agents. The same rules apply to people.
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): how we work together.
+- [CONTRIBUTING.md](CONTRIBUTING.md): what the project accepts today.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): how people in this project treat each other.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability privately.
 
 ## License

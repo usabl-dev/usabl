@@ -307,6 +307,10 @@ comes down through `usabl floor prune`, and waivers expire on their dates.
 
 ## 5. Contribute
 
+**Status:** usabl is not accepting pull requests from outside the project yet. See
+[CONTRIBUTING.md](../CONTRIBUTING.md). This stage describes how contribution works once
+the project opens to it.
+
 **Who:** Engineer who wants to add a rule, fix a bug, write a provider, or propose a
 PatternFly rulepack addition.
 

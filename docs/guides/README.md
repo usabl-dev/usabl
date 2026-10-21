@@ -12,8 +12,8 @@ choose one of the eight systems to work on.
   accessibility barrier on the sample app.
 - [Test and report](test-and-report.md): test with keyboard, assistive technology,
   and product judgment, then file a report that someone else can reproduce.
-- [Make a contribution](make-a-contribution.md): set up the repository, make
-  a focused change, and take it through review.
+- [How usabl is developed](make-a-contribution.md): setup, commands, and review
+  rules for changes to usabl. The project is not accepting outside pull requests yet.
 
 You do not need to complete every guide. Choose the one that matches the work you
 are taking on.

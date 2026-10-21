@@ -62,8 +62,8 @@ describe('public Pages security', () => {
     const readme = await readFile('README.md', 'utf8');
     // The walkthrough is the first document the README hands out.
     expect(readme).toContain('https://usabl-dev.github.io/usabl/');
-    // An open-source README must lead a visitor to the contributor and security policies.
-    for (const file of ['CONTRIBUTING.md', 'AGENTS.md', 'CODE_OF_CONDUCT.md', 'SECURITY.md']) {
+    // An open-source README must lead a visitor to the contribution and security policies.
+    for (const file of ['CONTRIBUTING.md', 'CODE_OF_CONDUCT.md', 'SECURITY.md']) {
       expect(readme).toContain(`](${file})`);
     }
     // Pages that were removed from the project must not come back as entry points.
