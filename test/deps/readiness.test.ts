@@ -226,6 +226,90 @@ describe('waitForRendered', () => {
     expect(outcome.readyAtMs).toBeLessThanOrEqual(2_000);
   });
 
+  it('waits on a settled page until readyWhen holds, then returns', async () => {
+    // A shell that settles at once, then a pause with nothing in flight. Only the signal says the
+    // content has not arrived yet. It arrives at 3000ms, past the DOM window.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    const start = Date.now();
+    const outcome = { readyAtMs: -1 };
+    const done = waitForRendered(page, TEST_BUDGET_MS, async () => Date.now() - start >= 3_000).then(() => {
+      outcome.readyAtMs = Date.now() - start;
+    });
+
+    // Settled, and without the signal this would already have returned.
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(outcome.readyAtMs).toBe(-1);
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await done;
+    expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_000);
+    expect(outcome.readyAtMs).toBeLessThanOrEqual(3_500);
+  });
+
+  it('asks readyWhen only when the DOM is stable and the network is quiet', async () => {
+    // A request is in flight until 2000ms. The signal holds from the start, but a page with a
+    // request out is still loading, so the probe must not end the wait early.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }], requestClearsAtMs: 2_000 });
+    const start = Date.now();
+    const askedAtMs: number[] = [];
+    const done = waitForRendered(page, TEST_BUDGET_MS, async () => {
+      askedAtMs.push(Date.now() - start);
+      return true;
+    });
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await done;
+    expect(askedAtMs.length).toBeGreaterThan(0);
+    // The request cleared at 2000ms and the network needs one quiet window after that.
+    expect(Math.min(...askedAtMs)).toBeGreaterThanOrEqual(2_500);
+  });
+
+  it('returns at the budget, without throwing, when the page settled and readyWhen never held', async () => {
+    // The caller measures the signal again and names the missing part in a coverage gap, which is
+    // more useful to an operator than a timeout message.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    const start = Date.now();
+    const outcome = { readyAtMs: -1 };
+    const done = waitForRendered(page, 3_000, async () => false).then(() => {
+      outcome.readyAtMs = Date.now() - start;
+    });
+
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(outcome.readyAtMs).toBe(-1);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await done;
+    expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_000);
+    expect(outcome.readyAtMs).toBeLessThanOrEqual(3_500);
+  });
+
+  it('still names the DOM phase when the page never stops changing, whatever readyWhen says', async () => {
+    const page = makeFakePage({ neverStops: true });
+    const done = waitForRendered(page, 3_000, async () => true);
+    const rejects = expect(done).rejects.toThrow(/DOM did not stop changing within 3000ms/);
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    await rejects;
+  });
+
+  it('reads a readyWhen that throws as not held and keeps waiting', async () => {
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    const start = Date.now();
+    const outcome = { readyAtMs: -1 };
+    const done = waitForRendered(page, TEST_BUDGET_MS, async () => {
+      if (Date.now() - start < 3_000) {
+        throw new Error('selector engine not ready');
+      }
+      return true;
+    }).then(() => {
+      outcome.readyAtMs = Date.now() - start;
+    });
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await done;
+    expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_000);
+  });
+
   it('passes a page failure out of evaluate through unchanged', async () => {
     // A closed context or a detached frame throws from evaluate, not as a TimeoutError. Readiness
     // must surface that as-is, so the caller can tell a broken page from a slow one. Nothing here

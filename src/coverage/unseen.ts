@@ -103,15 +103,17 @@ export function markUnseenScreens(screens: ScreenScan[]): UnseenPass {
     if (scan.reachedSelectorPresent === false) {
       const selector = scan.reachedWhenSelector ?? 'the declared reachedWhen selector';
       sentences.push(
-        `Nothing matched reachedWhen selector ${selector} in the rendered page, so the element the ` +
-          'operator said proves this screen loaded was absent.',
+        `Nothing matched reachedWhen selector ${selector} in the rendered page when the keyboard walk ` +
+          'began, after readiness waited for it, or when the checks finished, so the element the ' +
+          'operator said proves this screen loaded was absent while usabl checked the screen.',
       );
     }
     if (scan.reachedResponseSeen === false) {
       const path = scan.reachedWhenResponse ?? 'the declared reachedWhen response';
       sentences.push(
         `No fetch or XHR request to ${path} on the application's own host was answered with a ` +
-          'success, so the data the operator said proves this screen loaded never arrived.',
+          'success before the keyboard walk began, after readiness waited for it, so the data the ' +
+          'operator said proves this screen loaded had not arrived when usabl checked the screen.',
       );
     }
     if (sentences.length === 0) {

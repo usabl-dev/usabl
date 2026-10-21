@@ -138,10 +138,12 @@ export interface ScreenScan {
   // Positive reachability evidence, measured during the scan while the live DOM was available.
   // The tri-state is deliberate:
   //   null  = the surface declared no reachedWhen selector, so we make no claim either way.
-  //   true  = a reachedWhen selector was declared and at least one element matched it, so the
-  //           screen provably rendered.
-  //   false = a reachedWhen selector was declared and nothing matched it, so the screen did not
-  //           render what the operator said proves it loaded.
+  //   true  = a reachedWhen selector was declared and at least one element matched it both when
+  //           the keyboard walk began and after the checks, so the screen provably rendered before
+  //           usabl touched it.
+  //   false = a reachedWhen selector was declared and nothing matched it at one of those moments,
+  //           so the walk or the checks ran on a page without what the operator said proves it
+  //           loaded.
   // Only false triggers an unseen gap in markUnseenScreens. The value is a plain presence test,
   // never a count or a DOM walk, so a verdict that leans on it cannot depend on iteration order.
   reachedSelectorPresent: boolean | null;
@@ -149,10 +151,11 @@ export interface ScreenScan {
   // English. Optional and only meaningful when reachedSelectorPresent is false. Absent or null when
   // the surface declared no selector.
   reachedWhenSelector?: string | null;
-  // The response half of the readiness signal, measured at the same moment as the selector. The
+  // The response half of the readiness signal, measured at the same moments as the selector. The
   // same tri-state: absent or null when the surface declared no response, true when a fetch or XHR
-  // request to the declared path on the application's own host answered with a 2xx status, false
-  // when no such answer was seen. Only false triggers an unseen gap in markUnseenScreens.
+  // request to the declared path on the application's own host had answered with a 2xx status
+  // before the keyboard walk began, false when no such answer was seen by then. Only false
+  // triggers an unseen gap in markUnseenScreens.
   reachedResponseSeen?: boolean | null;
   // The response path the surface declared, carried so a coverage gap can name it. Absent or null
   // when the surface declared no response.
@@ -416,7 +419,13 @@ export interface ApiResponse {
   sentBeforeWalk: boolean;
 }
 export interface Page {
-  gotoReady(): Promise<void>;
+  // Waits until the page stopped changing and the network went quiet. With readyWhen, it also
+  // waits, inside the same budget, until readyWhen answers true at a moment when both of those
+  // hold. A page can settle on a small shell, pause with nothing in flight, and only then fetch and
+  // mount its real content, and only a positive signal tells that pause from a finished page. When
+  // the budget runs out on a settled page whose readyWhen never held, it returns rather than throws,
+  // so the caller must check the signal again and treat a screen that does not show it as a gap.
+  gotoReady(readyWhen?: () => Promise<boolean>): Promise<void>;
   // Where the browser actually is now, which is not always where it was sent. An application can
   // answer a request for a screen with a redirect, and a scan that never asks has no way to know
   // it measured a different page. Read it after the screen has loaded and before anything on the

@@ -722,18 +722,31 @@ function readinessTimeout(phase: string, timeoutMs: number, detail: string): str
  * larger render budget. The caller discloses that as a coverage gap, which is honest, where
  * returning quietly would publish a measurement of a page that had not arrived.
  *
- * Known limit, stated so a reviewer can attack it (tracked as issue #184): a pause driven purely by
- * client-side work with no request behind it is not covered. The network is genuinely quiet during
- * it, so a client-side pause longer than the DOM window can still read as settled. The threshold is
- * roughly that window, about 1.7 seconds of a frozen count that is also network-idle. Raising
- * readyTimeoutMs does not help, because the loop already believes it is done and has returned rather
- * than run out of budget. Closing this would need the application to signal its own render
- * completion, which this design avoids on purpose so it can measure any application without
- * cooperation.
+ * A pause with no request behind it. A page can mount a small shell, do nothing at all for a while,
+ * and only then fetch and mount its real content. The network is genuinely quiet during that pause
+ * and the DOM is genuinely still, so both signals read as done. Measured against real Chromium, a
+ * pause longer than about 1.7 seconds, the DOM window plus margin, is read as settled, and the scan
+ * grades the shell. Raising readyTimeoutMs does not help, because the loop believes it is done and
+ * returns rather than running out of budget.
+ *
+ * readyWhen closes that pause for a screen that declares a readiness signal. It is asked only at a
+ * moment when the DOM is stable and the network is quiet, and the loop keeps waiting until it
+ * answers true or the budget runs out. A probe that throws reads as false. When the budget runs out
+ * on a settled page whose readyWhen never held, this returns instead of throwing, because the caller
+ * measures the signal again and names the missing part in a coverage gap, which says more than a
+ * timeout would.
+ *
+ * Without readyWhen the pause is still not covered. Closing it without a signal would need the
+ * application to report its own render completion, which this design avoids on purpose so it can
+ * measure any application without cooperation.
  *
  * Exported for tests. Product code reaches this through Page.gotoReady().
  */
-export async function waitForRendered(pw: ReadinessPage, timeoutMs: number): Promise<void> {
+export async function waitForRendered(
+  pw: ReadinessPage,
+  timeoutMs: number,
+  readyWhen?: () => Promise<boolean>,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
 
   let previous: number | null = null;
@@ -746,12 +759,17 @@ export async function waitForRendered(pw: ReadinessPage, timeoutMs: number): Pro
     const domStable = repeats >= SETTLE_SAMPLES_REQUIRED;
     // Read live every pass, so a request that started since the last read resets the window.
     const networkQuiet = pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS);
-    if (domStable && networkQuiet) {
+    const settled = domStable && networkQuiet;
+    if (settled && (readyWhen === undefined || (await signalHolds(readyWhen)))) {
       return;
     }
 
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
+      if (settled) {
+        // Settled, and the caller's signal never held. The caller judges that, not this loop.
+        return;
+      }
       // Name the phase still unsatisfied. A settled DOM waiting only on the network points the
       // operator at a request budget; otherwise the DOM never stopped and its last count is the
       // useful detail.
@@ -763,6 +781,15 @@ export async function waitForRendered(pw: ReadinessPage, timeoutMs: number): Pro
       );
     }
     await new Promise<void>((resolve) => setTimeout(resolve, Math.min(SETTLE_SAMPLE_INTERVAL_MS, remaining)));
+  }
+}
+
+// A readiness probe that throws has not shown the signal, so it reads as false and the wait goes on.
+async function signalHolds(readyWhen: () => Promise<boolean>): Promise<boolean> {
+  try {
+    return (await readyWhen()) === true;
+  } catch {
+    return false;
   }
 }
 
@@ -796,8 +823,8 @@ function wrapPage(
     networkQuietFor: (windowMs) => network.networkQuietFor(windowMs),
   };
   const page: Page = {
-    async gotoReady(): Promise<void> {
-      await waitForRendered(readiness, readyTimeoutMs);
+    async gotoReady(readyWhen?: () => Promise<boolean>): Promise<void> {
+      await waitForRendered(readiness, readyTimeoutMs, readyWhen);
     },
     async currentUrl(): Promise<string> {
       // Playwright tracks the committed navigation, so this is the address after any redirect

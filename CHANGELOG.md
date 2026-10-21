@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- Readiness now waits for a screen's declared `reachedWhen` signal before the keyboard walk
+  starts. A page that mounted a small shell, paused for more than about 1.7 seconds with
+  nothing in flight, and only then fetched and mounted its content was read as settled
+  during the pause. With a selector or a response declared, that screen ended as a gap,
+  or, when the content arrived during the walk, as a pass whose walk never saw it. Now
+  readiness keeps waiting, inside `readyTimeoutMs`, until every declared part holds, and
+  a part counts only if it held both before the walk and after the checks. Measured on
+  real Chromium with pauses of 1.5, 1.8, 2.1, and 4.0 seconds, the walk and the checks
+  ran on the content every time. The cost: a screen whose signal never holds now spends
+  the whole readiness budget before it ends as a gap. A screen with no `reachedWhen` is
+  unchanged and can still be graded on its shell; declare a signal for a screen that
+  mounts late.
+
 - `pf-toast-live-region` now resolves each alert's live value from the nearest
   element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector
   whether any live container sits somewhere above the alert. The selector passed an

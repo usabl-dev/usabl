@@ -20,8 +20,14 @@ import type {
   UsablConfig,
 } from '../contracts/index.js';
 import { attachDomSourceToDrafts } from './dom-source.js';
-import { measureReadiness, readApiResponses, readinessSignalOf, type ReadinessSignal } from './reachability.js';
-import { observeLanding, readRefusedRequests, redirectedAwayGap } from './redirected.js';
+import {
+  measureReadiness,
+  readApiResponses,
+  readinessSignalOf,
+  type ReadinessMeasurement,
+  type ReadinessSignal,
+} from './reachability.js';
+import { observeLanding, readRefusedRequests, redirectedAwayGap, signalHeld } from './redirected.js';
 import { waitForScannerArtifactsToClear } from './scanner-artifacts.js';
 import { runProviders } from './index.js';
 
@@ -107,6 +113,19 @@ function responseFields(
   return { reachedResponseSeen: seen, reachedWhenResponse: signal.response };
 }
 
+/**
+ * Each part of the signal as measured twice, before the walk and after the checks. A part that was
+ * not declared stays null. A declared part holds only if both measurements held.
+ */
+function heldThroughout(beforeWalk: ReadinessMeasurement, afterChecks: ReadinessMeasurement): ReadinessMeasurement {
+  const both = (before: boolean | null, after: boolean | null): boolean | null =>
+    before === null && after === null ? null : before === true && after === true;
+  return {
+    selectorPresent: both(beforeWalk.selectorPresent, afterChecks.selectorPresent),
+    responseSeen: both(beforeWalk.responseSeen, afterChecks.responseSeen),
+  };
+}
+
 function makeTabSteps(tabCap: number): Step[] {
   return Array.from({ length: tabCap }, (): Step => ({ do: 'tab' }));
 }
@@ -153,18 +172,31 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
         ...responseFields(signal, null),
       };
       try {
-        await page.gotoReady();
+        const landingOptions = {
+          requestedUrl: screen.url,
+          appBaseUrl: deps.config.appBaseUrl,
+          sessionConfigured: deps.sessionConfigured === true,
+          ...(reachedWhen === undefined ? { reachedWhen: undefined } : { reachedWhen }),
+        };
+        // A page can settle on a small shell, pause with nothing in flight, and only then fetch and
+        // mount its content. A screen that declares a readiness signal says what its content looks
+        // like, so readiness waits, inside the same budget, until that signal holds before the walk
+        // starts. It also stops waiting as soon as the page is plainly not this screen, so a sign-in
+        // page the rules below can see costs no more than it did before.
+        const readyWhen =
+          signal === null
+            ? undefined
+            : async (): Promise<boolean> => {
+                const seen = await observeLanding(page, landingOptions);
+                return signalHeld(seen) || redirectedAwayGap(screen.id, seen) !== null;
+              };
+        await page.gotoReady(readyWhen);
 
         // Whether this is the requested screen, signed in. The address and the password count are
         // read here and only here: providers click and press keys, a click can navigate, so a
         // later DOM read could not tell what the application did on load from what usabl did to
         // it afterwards.
-        const landing = await observeLanding(page, {
-          requestedUrl: screen.url,
-          appBaseUrl: deps.config.appBaseUrl,
-          sessionConfigured: deps.sessionConfigured === true,
-          ...(reachedWhen === undefined ? { reachedWhen: undefined } : { reachedWhen }),
-        });
+        const landing = await observeLanding(page, landingOptions);
         const notReached = redirectedAwayGap(screen.id, landing);
         if (notReached !== null) {
           // Not this screen. The walk and the providers are skipped rather than run and thrown
@@ -194,13 +226,20 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           );
           const drafts = await attachDomSourceToDrafts(page, providerResult.drafts);
 
-          // Measure the readiness signal after the walk and providers have run, while the page is
-          // still open. This is the only place the live page exists; markUnseenScreens runs later
-          // over collected scans and cannot query it. Both parts are read at this one moment. The
-          // response part counts only requests sent before the walk began, so a request the page
-          // sent on load and the server answered slowly counts, and one a key press or a provider
-          // caused does not. The selector part sees the page as the checks left it.
-          const readiness = await measureReadiness(page, signal, deps.config.appBaseUrl);
+          // Measure the readiness signal again after the walk and providers have run, while the
+          // page is still open. This is the only place the live page exists; markUnseenScreens runs
+          // later over collected scans and cannot query it. The response part counts only requests
+          // sent before the walk began, so one a key press or a provider caused does not count. The
+          // selector part sees the page as the checks left it, so a walk that navigated away fails.
+          //
+          // A part holds only when it held both here and before the walk. The walk and the checks
+          // are only evidence about the screen if its content was there when they began, so a part
+          // that first holds during them, because the content arrived late or a check caused it,
+          // does not count.
+          const readiness = heldThroughout(
+            { selectorPresent: landing.reachedSelectorPresent, responseSeen: landing.reachedResponseSeen ?? null },
+            await measureReadiness(page, signal, deps.config.appBaseUrl),
+          );
 
           // Rule A again, on the record as it stands now. Readiness settles about 1.5 seconds
           // after a stable shell appears, so an application that sends its identity request later
