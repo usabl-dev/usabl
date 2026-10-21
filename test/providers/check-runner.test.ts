@@ -394,18 +394,21 @@ describe('makeCheckRunner', () => {
     expect(scan.reachedResponseSeen).toBe(false);
   });
 
-  it('still counts a declared response the page sent on load and that was answered during the walk', async () => {
-    // The slow answer the second read exists for: not in the record at load, in it afterwards.
+  it('does not count a declared response the page sent on load that was answered only during the walk', async () => {
+    // The request went out before the walk and its answer arrived after the walk began. Whatever
+    // that answer mounted, the walk ran without it, so the screen's data was not there when usabl
+    // checked it. The real readiness wait holds the walk while such a request is in flight, so this
+    // only happens when the budget runs out first.
     const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
-    let reads = 0;
+    let walkStarted = false;
     Object.assign(page, {
-      markWalkStart: async () => {},
-      apiResponses: async () => {
-        reads += 1;
-        return reads === 1
-          ? []
-          : [{ url: 'http://127.0.0.1:5173/api/clusters', status: 200, contentType: 'application/json', sentBeforeWalk: true }];
+      markWalkStart: async () => {
+        walkStarted = true;
       },
+      apiResponses: async () =>
+        walkStarted
+          ? [{ url: 'http://127.0.0.1:5173/api/clusters', status: 200, contentType: 'application/json', sentBeforeWalk: true }]
+          : [],
     });
     const runner = makeCheckRunner({
       browser: { open: async () => page, close: async () => {} },
@@ -420,7 +423,8 @@ describe('makeCheckRunner', () => {
 
     const scan = await runner.scan(SCREEN);
 
-    expect(scan.reachedResponseSeen).toBe(true);
+    expect(walkStarted).toBe(true);
+    expect(scan.reachedResponseSeen).toBe(false);
   });
 
   it('reads a reachedWhen that throws in the DOM as absent, not a scan failure', async () => {
