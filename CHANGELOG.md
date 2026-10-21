@@ -4,6 +4,45 @@
 
 ### Fixed
 
+- `pf-toast-live-region` now resolves each alert's live value from the nearest
+  element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector
+  whether any live container sits somewhere above the alert. The selector passed an
+  alert behind an `aria-live="off"` wrapper inside a polite region, and behind an off
+  wrapper inside a `role="status"` host, so a silent toast read as announced. It also
+  read `aria-live="OFF"`, empty, and unknown values as live. Now only the exact
+  lowercase tokens `polite` and `assertive` count. Any other value, including
+  `POLITE`, is off, because Chromium passes such a value to the screen reader as
+  written and nothing shows screen readers honor it. An empty value defers to the
+  role and the ancestors. Role names still match without regard to case, as Chromium
+  matches them, because exact-case roles would skip `role="TIMER"` and pass a silent
+  alert. An alert that sets off on itself is flagged. The walk now runs over CDP, so
+  it sees a slot inside a closed shadow root, and a page script cannot loop it. An
+  alert that closes before it is read, or that has more than 512 ancestors, is now its
+  own not-covered gap; before, one such alert ended the check and dropped every
+  finding on the screen. The `why` text on the finding now reads "No polite or
+  assertive live region reaches the alert."
+- `checkPage`, the Playwright helper, now runs the design requirements the CLI runs. It
+  ran only the core stack, so a page that broke an authored content or flow requirement
+  returned `verified` from the helper while `usabl check` returned a regression. The CLI
+  and the helper now build their provider list through one function, and the helper reads
+  `usabl.config.json` and its requirements directory from `projectRoot` (default: the
+  working directory). It reads them from the working tree, not from a trusted ref, and
+  it never searches parent directories. Requirements are matched to the page by
+  `screenId`. A requirement the page cannot be matched to is a `not-covered` gap. A
+  config or requirements directory that cannot be read is also a gap. `checkPage` is not
+  a merge gate: its verdict is advisory test output, and the gate stays the only verdict
+  authority. It runs each flow requirement's authored steps, its clicks and key presses,
+  on the caller's page.
+- `checkPage` now hears live region announcements. Only the CLI's init script installed
+  the live region capture, so on a page `checkPage` adopted, a flow requirement that
+  expects an announcement such as "Saved" from a `role="status"` region regressed while
+  `usabl check` passed it. `adoptPage` now installs the same capture from the same
+  source.
+- A `projectRoot` passed to `checkPage` with no `usabl.config.json` in it is now a
+  `not-covered` gap that names the root. Before, a wrong folder loaded no requirements
+  and could return `verified`. With the default root and no config, `checkPage` stays
+  silent, and the new `project` field on the result says which root it read and whether
+  it found a config there.
 - The published package no longer fails its own `prepare` script. `prepare` ran
   `bash scripts/install-git-hooks.sh`, and the tarball ships only `dist` and the
   changelog, so `npm pack` inside the unpacked package, and an install of it as a
@@ -21,6 +60,16 @@
   with its own `.git`, from the consumer's directory, and `pre-commit install`
   there could fail offline. `prepare` now reads as a plain condition: if the
   installer file exists, run it with bash and keep its exit status.
+
+### Changed
+
+- `checkPage` called without a `screenId` returns `not_covered` in a project that has
+  content or flow design requirements: the unlabeled page counts as no surface, so
+  each requirement is a `not-covered` gap until the call passes the page's surface id.
+  This holds even when a surface is named `page`: an unlabeled call is never read as
+  that surface, so no other surface's requirements drop out of scope unseen. Before, an
+  unlabeled call ran no design requirements and could return `verified`. Findings from
+  an unlabeled call still carry the label `page`.
 
 ## 0.2.2 - 2026-10-21
 

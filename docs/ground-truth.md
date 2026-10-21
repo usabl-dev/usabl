@@ -554,6 +554,10 @@ export interface Page {
   activePath(): Promise<string>;
   axAt(selector: string): Promise<AxNode | null>;
   getAttribute(selector: string, name: string): Promise<string | null>;
+  // Named attributes of the element and each element above it, nearest first, along the flat tree,
+  // through open and closed shadow roots. Also reports an element it could not find and a walk that
+  // stopped at 512 elements.
+  ancestorAttributes(selector: string, names: readonly string[]): Promise<AncestorAttributesRead>;
   queryAll(selector: string): Promise<ElementRef[]>;
   close(): Promise<void>;
   // Capabilities wired for future checks (not used by the built-in providers)
@@ -630,11 +634,35 @@ common rules with plain-language PatternFly-specific guidance. Every Draft has
 
 The provider id is `pf-rulepack` (layer `pf`). It emits eight named rules: six static
 checks (one file per rule) and two interaction probes (`pf-focus-into-dialog` and
-`pf-modal-focus-return`, both in `probes.ts`), all returning `Draft[]`:
+`pf-modal-focus-return`, both in `probes.ts`). They return drafts. `pf-toast-live-region`
+also returns a gap for each alert it could not check:
 
 1. `pf-toast-live-region`: toasts, alert groups, inline validation, and async table
    loading must sit in a role=status/alert/aria-live region that exists before the
-   update.
+   update. The check resolves each alert's effective live value the way WAI-ARIA
+   defines it: the value on the nearest element that sets one, explicitly through
+   `aria-live` or implicitly through its role (alert is assertive, status and log are
+   polite, timer and marquee are off). The explicit attribute wins over the role on
+   the same element. The check never passes an alert that a browser or screen reader
+   may keep silent, and the token rules follow from that. Only the exact lowercase
+   `aria-live` tokens `polite` and `assertive` are live. Every other non-empty value,
+   such as `POLITE`, `OFF`, or `banana`, is off and stops the walk. WAI-ARIA 1.2 does
+   not map an unknown value to the default: it tells browsers to expose it as
+   written, and Chromium 151 does, so `aria-live="POLITE"` reaches the screen reader
+   as `POLITE`. Reading such a value as off can only make an alert less live. An empty
+   `aria-live` counts as not set, as it does in Chromium. Role names match without
+   regard to ASCII case, as Chromium matches them. WAI-ARIA leaves role case to the
+   host language, and exact-case matching would be unsafe here: it would skip
+   `role="TIMER"`, whose implicit value is off, and pass the alert on a polite region
+   above it. A role list uses its first recognized role. The walk follows the flat
+   tree, so a slotted alert climbs through its slot. It runs over CDP in an isolated
+   world, so it sees slots inside closed shadow roots, which page script cannot, and a
+   page that redefines `assignedSlot` or `parentNode` cannot change what it reads. An
+   alert passes only when the nearest value above it is polite or assertive and the
+   alert does not set off on itself. Its own live value does not count as a
+   container. An alert that cannot be found again, for example a toast that closed on
+   its timer, and an alert with more than 512 ancestors each become their own
+   not-covered gap, never a pass, and the check goes on to the other alerts.
 2. `pf-modal-focus-return`: open a modal, press Escape, focus returns to the exact
    trigger.
 3. `pf-focus-into-dialog`: focus moves into a dialog or menu on open.
@@ -1558,6 +1586,42 @@ The gate stays at Stop. Neither path lets the agent grade its own work.
 
 A documented entry point that returns the core Result. Teams can call the same check
 from the tests they already run. A starting point, not the main surface.
+
+`checkPage(page, options)` runs the same provider list the CLI runs on a screen. Both build
+it through `makeScanProviders` in `src/providers/core-stack.ts`: the core stack, then one
+provider per content or flow design requirement. `checkPage` reads `usabl.config.json` from
+`options.projectRoot` (default: the working directory) and loads the requirements directory it
+names through the same loader as the CLI. It reads the working tree; it does not apply a
+trusted ref. It never searches parent directories. When the caller passes `projectRoot` and
+there is no `usabl.config.json` in it, that is a `not-covered` gap with ref
+`usabl.config.json` whose reason names the root, because the caller pointed at a folder with no
+config and nothing would be checked. When the root is the default and there is no config, that
+adds no gap, because a project that does not use usabl config has none. Either way the result's
+`project` field holds the absolute root that was read and whether a config was found there, so
+a caller can tell an empty project from the wrong folder. A config or requirements directory
+that is present and cannot be read is a gap.
+
+`checkPage` is not a merge gate. Its verdict is advisory output for a test suite; the gate is
+the only verdict authority. It also acts on the caller's page: the keyboard walk presses Tab,
+the PatternFly probes open and close dialogs and menus, and each flow requirement on the page's
+surface runs its authored steps, clicks and key presses, on that page.
+
+`adoptPage` installs the same live-region capture the CLI's init script installs, from one
+shared source in `src/deps/real.ts`, guarded so a page that already has it keeps its one
+observer. So a flow requirement that expects an announcement hears the same text in both. On an
+adopted page the capture starts at adoption, not at document start.
+
+A requirement is matched to the page by `options.screenId`, the surface id the page is. Each
+runtime requirement is checked on the page when its surface is the page's surface, and is out
+of scope when its surface is another configured or discovered surface and the page's id is a
+surface the project or a requirement names. Every other requirement is a `not-covered` gap with
+ref `requirement:<id>`: the page is labeled with no known surface, or the requirement names a
+surface that matches no configured or discovered surface. A call with no `screenId` is an
+unlabeled page. Its findings carry the label `page`, but it counts as no surface, even in a
+project that has a surface named `page`, so every runtime requirement is a gap and none is
+judged on it. So a page that regresses on a requirement in the CLI also regresses in
+`checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
+when it is not.
 
 ### 11.7 Other coding assistants (seam)
 

@@ -6,7 +6,7 @@
  */
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { ApiResponse, AxNode, BrowserDriver, Page } from '../contracts/index.js';
+import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
@@ -78,9 +78,12 @@ const PATH_FOR_IMPL = `
   };
 `;
 
-// Inject before app scripts run so the first live update is observable and not lost.
-// Late injection would under-report announcements and create a false sense of coverage.
-export const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
+// Browser-side live-region capture used by both document-start injection and adoptPage install.
+// Keep this the only implementation, for the same reason as PATH_FOR_IMPL: the CLI and checkPage
+// must hear the same announcements, so a fix to what counts as a live region has to land in both
+// at once. It records the text of a live region each time something inside it changes, and
+// window.__usablDrain hands back what it recorded since the last drain.
+const LIVE_CAPTURE_IMPL = `
   const LIVE = '[aria-live],[role="status"],[role="alert"],[role="log"]';
   const buffer = [];
   const toText = (value) => {
@@ -115,9 +118,19 @@ export const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
   } else {
     startObserver();
   }
+`;
 
-  ${PATH_FOR_IMPL}
-  window.__usablPathFor = pathFor;
+// Inject before app scripts run so the first live update is observable and not lost.
+// Late injection would under-report announcements and create a false sense of coverage.
+// Each helper sits in its own block so their names cannot collide.
+export const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
+  {
+    ${LIVE_CAPTURE_IMPL}
+  }
+  {
+    ${PATH_FOR_IMPL}
+    window.__usablPathFor = pathFor;
+  }
 })();`;
 
 // Evaluated after adoptPage attaches to a caller-owned page that already navigated.
@@ -128,6 +141,16 @@ export const INSTALL_PATH_HELPER_SCRIPT = `(() => {
   }
   ${PATH_FOR_IMPL}
   window.__usablPathFor = pathFor;
+})();`;
+
+// Evaluated by adoptPage next to the path helper. Same LIVE_CAPTURE_IMPL as the init script, and
+// guarded the same way, so a page usabl opened, or one adopted twice, keeps its one observer and
+// its buffer. It hears only changes made after adoption, which is when a caller's checks start.
+export const INSTALL_LIVE_CAPTURE_SCRIPT = `(() => {
+  if (typeof window.__usablDrain === 'function') {
+    return;
+  }
+  ${LIVE_CAPTURE_IMPL}
 })();`;
 
 interface AxeResult {
@@ -325,6 +348,133 @@ async function stablePathForActiveElement(pw: PwPage): Promise<string> {
     const active = document.activeElement instanceof Element ? document.activeElement : null;
     return pathFor(active);
   });
+}
+
+/** The most elements the ancestor walk reads for one element before it stops and says so. */
+export const ANCESTOR_DEPTH_LIMIT = 512;
+
+// The walk runs in an isolated world: page script shares the DOM with it but not its globals or
+// prototypes. A page that redefines parentNode, assignedSlot, or getAttribute cannot change what
+// the walk reads.
+const ANCESTOR_WORLD = 'usabl-ancestors';
+const ANCESTOR_GROUP = 'usabl-ancestors';
+
+// The flat-tree parent of an element that is not slotted: its parent element, or the host when it
+// sits at the top of a shadow tree. Null at the top of the document or of a detached subtree.
+const FLAT_PARENT_FUNCTION = `function () {
+  const parent = this.parentNode;
+  if (parent instanceof Element) return parent;
+  if (parent instanceof ShadowRoot) return parent.host;
+  return null;
+}`;
+
+async function ancestorWorldContextId(cdp: CDPSession): Promise<number> {
+  const tree: unknown = await cdp.send('Page.getFrameTree');
+  const frameId = readString(getProp(getProp(getProp(tree, 'frameTree'), 'frame'), 'id'));
+  if (frameId === null) {
+    throw new Error('the page has no main frame to read ancestors in');
+  }
+  const world: unknown = await cdp.send('Page.createIsolatedWorld', { frameId, worldName: ANCESTOR_WORLD });
+  const contextId = readNumber(getProp(world, 'executionContextId'));
+  if (contextId === null) {
+    throw new Error('the browser did not create a world to read ancestors in');
+  }
+  return contextId;
+}
+
+function pickAttributes(flat: unknown, names: readonly string[]): Record<string, string | null> {
+  const record: Record<string, string | null> = {};
+  for (const name of names) {
+    record[name] = null;
+  }
+  if (!Array.isArray(flat)) {
+    return record;
+  }
+  // CDP lists attributes as name, value, name, value.
+  for (let index = 0; index + 1 < flat.length; index += 2) {
+    const name: unknown = flat[index];
+    const value: unknown = flat[index + 1];
+    if (typeof name === 'string' && typeof value === 'string' && names.includes(name)) {
+      record[name] = value;
+    }
+  }
+  return record;
+}
+
+/**
+ * Reads the named attributes of the element a selector matches and of every element above it,
+ * nearest first, along the flat tree that the accessibility tree is built from. A slotted element
+ * climbs to its slot, and the top of a shadow tree climbs to its host.
+ *
+ * Page script cannot do this walk. For a slot inside a closed shadow root, assignedSlot reads null,
+ * so a walk in the page skips the slot and everything around it in the shadow tree. CDP reports the
+ * assigned slot whatever the mode, and reads attributes from the DOM itself, so this walk sees what
+ * the browser sees. The walk stops after `limit` elements and reports that, so no page can keep it
+ * running. An element that is gone, or that left the document during the walk, is not found.
+ */
+export async function readAncestorAttributes(
+  cdp: CDPSession,
+  selector: string,
+  names: readonly string[],
+  limit: number = ANCESTOR_DEPTH_LIMIT,
+): Promise<AncestorAttributesRead> {
+  const contextId = await ancestorWorldContextId(cdp);
+  try {
+    const found: unknown = await cdp.send('Runtime.evaluate', {
+      expression: `document.querySelector(${JSON.stringify(selector)})`,
+      contextId,
+      objectGroup: ANCESTOR_GROUP,
+    });
+    const startId = readString(getProp(getProp(found, 'result'), 'objectId'));
+    if (startId === null) {
+      return { kind: 'not-found' };
+    }
+
+    const chain: Array<Record<string, string | null>> = [];
+    let currentId: string | null = startId;
+    while (currentId !== null) {
+      if (chain.length >= limit) {
+        return { kind: 'too-deep', limit };
+      }
+      const described: unknown = await cdp.send('DOM.describeNode', { objectId: currentId, depth: 0 });
+      const node = getProp(described, 'node');
+      chain.push(pickAttributes(getProp(node, 'attributes'), names));
+
+      const slotBackendId = readNumber(getProp(getProp(node, 'assignedSlot'), 'backendNodeId'));
+      if (slotBackendId !== null) {
+        const resolved: unknown = await cdp.send('DOM.resolveNode', {
+          backendNodeId: slotBackendId,
+          executionContextId: contextId,
+          objectGroup: ANCESTOR_GROUP,
+        });
+        currentId = readString(getProp(getProp(resolved, 'object'), 'objectId'));
+        if (currentId === null) {
+          throw new Error('the browser named a slot for the element and then could not resolve it');
+        }
+        continue;
+      }
+      const parent: unknown = await cdp.send('Runtime.callFunctionOn', {
+        objectId: currentId,
+        functionDeclaration: FLAT_PARENT_FUNCTION,
+        objectGroup: ANCESTOR_GROUP,
+      });
+      currentId = readString(getProp(getProp(parent, 'result'), 'objectId'));
+    }
+
+    // A walk that ended in a detached subtree did not reach the document, so the chain is not the
+    // element's real ancestry. The element was removed while it was read.
+    const connected: unknown = await cdp.send('Runtime.callFunctionOn', {
+      objectId: startId,
+      functionDeclaration: 'function () { return this.isConnected; }',
+      returnByValue: true,
+    });
+    if (getProp(getProp(connected, 'result'), 'value') !== true) {
+      return { kind: 'not-found' };
+    }
+    return { kind: 'chain', chain };
+  } finally {
+    await cdp.send('Runtime.releaseObjectGroup', { objectGroup: ANCESTOR_GROUP }).catch(() => undefined);
+  }
 }
 
 async function stablePathsForSelector(pw: PwPage, selector: string): Promise<string[]> {
@@ -709,7 +859,8 @@ function wrapPage(
       }, selector);
     },
     async armAnnouncementCapture(): Promise<void> {
-      // The init script installs observers at document start, so arming is already complete.
+      // The observer is already running: the init script installs it at document start on a page
+      // usabl opens, and adoptPage installs it on a page a caller hands in. Arming has nothing to do.
       return Promise.resolve();
     },
     async drainAnnouncements(): Promise<string[]> {
@@ -744,6 +895,9 @@ function wrapPage(
     },
     async getAttribute(selector: string, name: string): Promise<string | null> {
       return pw.locator(selector).getAttribute(name);
+    },
+    async ancestorAttributes(selector: string, names: readonly string[]): Promise<AncestorAttributesRead> {
+      return readAncestorAttributes(cdp, selector, names);
     },
     async queryAll(selector: string): Promise<Array<{ selector: string }>> {
       const paths = await stablePathsForSelector(pw, selector);
@@ -792,8 +946,9 @@ function wrapPage(
 /**
  * Adopts a Playwright page a caller already created and navigated, so usabl can run providers on it
  * (for example from a Playwright test suite). It attaches a CDP session for AX reads and installs the
- * path helper, then returns a usabl Page whose close() is a no-op: the caller owns the page and its
- * context, so adoption must never close them. Navigation and readiness are the caller's job.
+ * path helper and the live-region capture, then returns a usabl Page whose close() is a no-op: the
+ * caller owns the page and its context, so adoption must never close them. Navigation and readiness
+ * are the caller's job.
  *
  * The in-flight tracker starts at adoption, so it counts only requests fired after this call. The
  * one caller today, checkPage in playwright-helper.ts, never calls gotoReady, so this is inert. A
@@ -806,6 +961,9 @@ export async function adoptPage(pw: PwPage): Promise<Page> {
   const cdp = await context.newCDPSession(pw);
   await cdp.send('Accessibility.enable');
   await pw.evaluate(INSTALL_PATH_HELPER_SCRIPT);
+  // Without this, armAnnouncementCapture and drainAnnouncements hear nothing on an adopted page, and
+  // a flow requirement that expects an announcement fails here while the CLI passes it.
+  await pw.evaluate(INSTALL_LIVE_CAPTURE_SCRIPT);
   // The caller already navigated, so this tracker starts counting from adoption forward. A caller
   // that then uses gotoReady gets readiness measured against requests fired after adoption.
   const network = makeNetworkActivityTracker(pw);
