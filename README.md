@@ -125,7 +125,7 @@ Known limits:
 - [Code walkthrough](https://usabl-dev.github.io/usabl/code-walkthrough.html): the
   source, system by system.
 - [Guides](https://github.com/usabl-dev/usabl/tree/main/docs/guides): run the proof
-  loop, test and report, and make a contribution.
+  loop, test and report, and how the project is developed.
 - [Changelog](CHANGELOG.md)
 
 ## Contributing
