@@ -13,6 +13,7 @@
  * no state depends on colour to be understood.
  */
 import type { Result } from '../contracts/index.js';
+import { wholeNumberText } from './carried.js';
 
 export interface VerdictLine {
   symbol: string;
@@ -75,7 +76,7 @@ const UNRECOGNIZED_VERDICT_WORD = 'UNRECOGNIZED VERDICT';
  * not a whole number is named as unknown rather than pasted into the line.
  */
 function formatExitCode(exitCode: number): string {
-  return Number.isInteger(exitCode) ? String(exitCode) : 'unknown';
+  return wholeNumberText(exitCode);
 }
 
 /**

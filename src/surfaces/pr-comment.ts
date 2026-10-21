@@ -14,6 +14,7 @@ import type {
   Verdict,
 } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
+import { NOT_A_LIST, wholeNumberText } from '../output/carried.js';
 import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence } from '../output/disclosure.js';
 import {
@@ -108,33 +109,21 @@ function escapeMarkdown(text: string): string {
 const OPEN_BRACKET = escapeMarkdown('[');
 const CLOSE_BRACKET = escapeMarkdown(']');
 
-// What a value is called when it is not the type the contract says it is.
-const UNKNOWN_VALUE = 'unknown';
-
-// What a section says when the field it lists is not a list.
-//
-// Saying "none" there would be a claim about the run, and a document that did not carry a list
-// said nothing about the run. Walking it anyway throws part way through a document that is
-// already half assembled, and the reader gets no comment at all.
-const NOT_A_LIST = '- unreadable: this Result did not carry a list here';
-
 /**
  * A count printed as a bare number, checked at the point of printing.
  *
  * Sealing by carrier holds for strings. It does not reach a number, and this surface reads a
- * document rather than a Result it built: `usabl comment` parses standard input and checks the
- * schema version, the accessibility exit code, and one forbidden accessibility verdict, then
- * takes every other field on trust. A field typed as a number is therefore whatever the document
+ * document rather than a Result it built, so a field typed as a number is whatever the document
  * said, and it does not even have to be a field. A list shaped `{"length": "@user"}` is never
- * iterated by the coverage counts, so nothing throws and the text lands in a line as a number.
+ * iterated by the coverage counts, so nothing throws and the text would land in a line as a
+ * number.
  *
  * A number is printed only when it really is a whole number, and named otherwise. A code span
  * would seal it just as well, but a count is the one value a span makes harder to read, and a
- * whole number cannot be markup, a link, or a mention, so the check is the better seal here.
+ * whole number cannot be markup, a link, or a mention, so the check is the better seal here. The
+ * check and the words for a failed check are shared with every other surface (../output/carried).
  */
-function wholeNumber(value: number): string {
-  return Number.isInteger(value) ? String(value) : UNKNOWN_VALUE;
-}
+const wholeNumber = wholeNumberText;
 
 // A code span, fenced long enough that nothing inside it can end the span early. Character
 // references are not interpreted inside a code span, so escaping is the wrong tool here: a value

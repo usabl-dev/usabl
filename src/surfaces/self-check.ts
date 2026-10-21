@@ -5,44 +5,17 @@
  */
 import type { Result, UsablConfig } from '../contracts/index.js';
 import { SELF_CHECK_MESSAGE_BUDGET, assembleBoundedMessage, boundField } from '../output/bounded-text.js';
-import {
-  APPROVAL_REQUIRED_HOW_IT_CLEARS,
-  APPROVAL_REQUIRED_HUMAN_LEVER,
-  discloseGaps,
-  fixOrAbsence,
-  gapDetail,
-  gapHeadline,
-  guardedFilesHeadline,
-  isBlockingBarrier,
-} from '../output/disclosure.js';
+import { fixOrAbsence, isBlockingBarrier } from '../output/disclosure.js';
 import {
   applyNoiseBudget,
-  formatCollapsedGroupHeadlineWithoutScreen,
+  formatCollapsedGroupStatus,
   resolveNoiseBudgetDefault,
   type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
+import { guardedFileLines, notEvaluatedPieces } from './model-pieces.js';
 import { frameUntrustedBlock, scrubResult } from './scrub.js';
-
-/**
- * What the run did not examine, one entry per gap state, bounded by the number of states.
- *
- * Each entry pairs the trusted gap headline with the page-derived detail, so the model can map
- * a reason to its state inside the single frame the caller builds.
- */
-function notEvaluatedPieces(result: Result): string[] {
-  const disclosures = discloseGaps(result.coverage.gaps);
-  // Ref and reason are bounded on their own, before the headline with its count is attached.
-  return disclosures.map((disclosure) => {
-    const detail = gapDetail({
-      ...disclosure,
-      ref: boundField(disclosure.ref, 'gapRef'),
-      reason: boundField(disclosure.reason, 'gapReason'),
-    });
-    return `- ${gapHeadline(disclosure)}: ${detail}`;
-  });
-}
 
 // The source location goes inside the untrusted frame with the other page-derived pieces. A
 // renderer-tier mapping reads the file and line from attributes on the rendered page, so a page
@@ -64,9 +37,9 @@ function pushSourcePieces(
   }
 }
 
-// A group whose free-text fields are bounded for printing. The count is left alone. Layer and
-// rule are printed outside the frame because the first-party providers author them; the screen
-// id can come from a route literal in the application, so it is printed inside the frame.
+// A group whose free-text fields are bounded for printing. The count is left alone. The screen
+// id, the layer, and the rule are carried by the Result, so all three are printed inside the
+// frame, whoever authored them, the same rule the stop hook and the pull request comment follow.
 function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
   return {
     ...group,
@@ -91,13 +64,13 @@ export function projectSelfCheck(
   const verdict = describeVerdict(safe);
 
   // The trusted engine scaffold stays outside the frame: the verdict line, the advisory line,
-  // the meaning, the guarded-file lines when policy files changed, and the Rule line, all
-  // engine text. Every free-text piece goes inside one frame with a short inline label: the
-  // gate's summary first, because a summary can name a route-derived screen id or carry a raw
-  // error message and so is not always engine-only, then for each barrier a "barrier:" line
-  // naming its rule, the source location, the experience, and the fix, and last the
-  // "Not evaluated:" label directly above the gap details, so a reader never meets that label
-  // and then reads about a button. The frame label says untrusted text, not page text, so
+  // the meaning, the guarded-file lines when policy files changed, and the Barrier lines with
+  // their checked status, severity, and count. Every value the Result carried goes inside one
+  // frame with a short inline label: the gate's summary first, because a summary can name a
+  // route-derived screen id or carry a raw error message and so is not always engine-only, then
+  // the guarded file paths, then for each barrier a "barrier" line naming its rule, the source
+  // location, the experience, and the fix, and last the "Not evaluated:" label directly above the
+  // gap details, so a reader never meets that label and then reads about a button. The frame label says untrusted text, not page text, so
   // engine free text sits there correctly. The pieces are bounded per field, the whole message
   // is bounded by dropping whole pieces, never the summary, and the frame is rebuilt around what
   // survives, so the single closing marker cannot be lost.
@@ -109,19 +82,18 @@ export function projectSelfCheck(
     'advisory: the stop hook is the gate.',
     verdict.meaning,
   ];
+  const pieces: string[] = [`engine summary: ${boundField(safe.summary, 'summary')}`];
   if (safe.verdict === 'approval_required') {
     // Which files, how the state clears, and the one lever a person has: the same account the
-    // stop hook gives, so the assistant reads one story on both surfaces.
-    const paths = safe.dirtyGuardedPaths;
-    const named = paths.length === 0 ? 'none recorded' : boundField(paths.join(', '), 'candidates');
-    scaffold.push(
-      `${guardedFilesHeadline(paths.length)}: ${named}`,
-      APPROVAL_REQUIRED_HOW_IT_CLEARS,
-      APPROVAL_REQUIRED_HUMAN_LEVER,
-    );
+    // stop hook gives, from the same unit, so the assistant reads one story on both surfaces.
+    const guarded = guardedFileLines(safe);
+    scaffold.push(...guarded.scaffold);
+    if (guarded.piece !== null) {
+      pieces.push(guarded.piece);
+    }
   }
   const keep = scaffold.length;
-  const pieces: string[] = [`engine summary: ${boundField(safe.summary, 'summary')}`];
+  const keepPieces = pieces.length;
   const budget = resolveNoiseBudgetDefault(config);
   // The same barriers the stop hook shows, by the gate's own blocking rule, so the snapshot an
   // assistant reads on the way to verified names the same work the stop hook will ask for.
@@ -130,28 +102,28 @@ export function projectSelfCheck(
 
   // Each free-text field is bounded on its own before it is labelled and framed, so a huge page
   // string shortens with a visible note and the counts around it stay whole.
+  // The scaffold line for a group carries only its checked status, severity, and count. Groups
+  // are numbered, so a scaffold line and its pieces match by number, and no label is built from a
+  // value the Result carried.
   if (view.groups.length === 1 && !view.collapsed) {
     const group = boundGroup(view.groups[0]!);
-    const ruleLabel =
-      group.count > 1 ? `${group.rule} (×${group.count})` : group.rule;
-    scaffold.push(`Rule: ${ruleLabel}`);
+    scaffold.push(`Barrier: ${formatCollapsedGroupStatus(group)}`);
     pieces.push(`barrier: ${group.rule}`);
     pushSourcePieces(pieces, group.representative, '');
     pieces.push(`experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`);
     pieces.push(`fix: ${boundField(fixOrAbsence(group.representative), 'fix')}`);
   } else if (view.groups.length > 0) {
     scaffold.push('Barriers:');
-    for (const raw of view.groups) {
+    view.groups.forEach((raw, index) => {
       const group = boundGroup(raw);
-      scaffold.push(`- ${formatCollapsedGroupHeadlineWithoutScreen(group)}`);
-      pieces.push(`barrier: ${group.rule}`);
-      pieces.push(`screen (${group.rule}): ${group.screenId}`);
-      pushSourcePieces(pieces, group.representative, ` (${group.rule})`);
-      pieces.push(
-        `experience (${group.rule}): ${boundField(group.representative.whatUserExperiences, 'experience')}`,
-      );
-      pieces.push(`fix (${group.rule}): ${boundField(fixOrAbsence(group.representative), 'fix')}`);
-    }
+      const n = index + 1;
+      scaffold.push(`- barrier ${n}: ${formatCollapsedGroupStatus(group)}`);
+      pieces.push(`barrier ${n}: ${group.layer}/${group.rule}`);
+      pieces.push(`screen (${n}): ${group.screenId}`);
+      pushSourcePieces(pieces, group.representative, ` (${n})`);
+      pieces.push(`experience (${n}): ${boundField(group.representative.whatUserExperiences, 'experience')}`);
+      pieces.push(`fix (${n}): ${boundField(fixOrAbsence(group.representative), 'fix')}`);
+    });
     if (view.showAllHint !== null) {
       scaffold.push(view.showAllHint);
     }
@@ -168,7 +140,7 @@ export function projectSelfCheck(
     scaffold,
     keep,
     pieces,
-    keepPieces: 1,
+    keepPieces,
     frame: frameUntrustedBlock,
     budget: SELF_CHECK_MESSAGE_BUDGET,
   });

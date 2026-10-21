@@ -71,6 +71,29 @@
   unlabeled call ran no design requirements and could return `verified`. Findings from
   an unlabeled call still carry the label `page`.
 
+### Security
+
+- The stop hook and the self-check now seal by carrier, as the pull request comment
+  already did. Every value a Result carries is printed inside the untrusted frame or is
+  type-checked first, whoever wrote it. A barrier's rule and layer, the guarded file
+  paths, and the receipt's `sourceTree` used to be printed outside the frame, as usabl's
+  own text, on the argument that the first-party providers wrote them. A library
+  caller's check runner can write a rule, and a pull request author names any file they
+  add under a guarded directory, so that argument did not hold. A finding's status and
+  severity are printed only when each is one of the contract's words, and "unknown"
+  otherwise. The exit code on the no-verdict line is printed only when it is a whole
+  number; it used to be pasted in as it arrived.
+- The layout of both messages changed to match. A barrier headline now reads
+  `- barrier 1: [new serious] (×3)`, and the rule is named inside the frame under the
+  same number: `barrier 1: axe/color-contrast`. A single barrier reads
+  `Barrier: [new serious] (×3)`. The guarded file line now gives the count, and the
+  paths follow the gate's summary inside the frame as `guarded files: ...`, and are
+  never dropped when a message is shortened. The verified allow line no longer carries
+  the receipt's source tree; it follows inside the frame.
+- A coverage gap list or a guarded path list that is not a list is now reported as
+  unreadable on both surfaces. Walking it used to throw, which the stop hook reported
+  as a hook error and let the stop through.
+
 ## 0.2.2 - 2026-10-21
 
 The first tagged release since v0.2.0. Version 0.2.1 was released without a git tag.

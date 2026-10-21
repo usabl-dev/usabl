@@ -8,6 +8,7 @@ import type { Finding, NoiseBudgetConfig, UsablConfig } from '../contracts/index
 import { sortBy } from '../primitives/sortKey.js';
 import { configError } from '../intake/config-error.js';
 import { describeIdProblem } from '../intake/id-grammar.js';
+import { FINDING_SEVERITIES, FINDING_STATUSES, knownWordText, wholeNumberText } from './carried.js';
 
 export const DEFAULT_NOISE_BUDGET = 5;
 
@@ -272,7 +273,7 @@ export function applyNoiseBudgetPerSurface(
  * carried one is not something a reader of one of these lines can see.
  */
 function countText(value: number): string {
-  return Number.isInteger(value) ? String(value) : 'unknown';
+  return wholeNumberText(value);
 }
 
 /**
@@ -287,21 +288,26 @@ export function formatCollapsedGroupCount(group: CollapsedFindingGroup): string 
 }
 
 /**
- * The group headline without the screen id.
+ * The part of a group headline a surface may print as its own text: the status, the severity,
+ * and the count, for example `[new serious] (×3)`.
  *
- * There is deliberately no formatter here that welds the screen id into a headline string. A
- * screen id is not usabl's own word: the router fallback derives it from a route literal in the
- * application source, so whoever writes the application chooses it, and page text reaches usabl
- * through the same routes. One did exist, and every caller that printed the string it returned
- * printed that id as trusted text, which is exactly the mistake a formatter of that shape
- * invites. A surface that wants the id in a headline now has to take it from the group and seal
- * it itself, the way it seals any other value the application chose.
+ * Every value here is type-checked. A status or a severity that is not one of the contract's
+ * words is printed as "unknown", and the count only when it is a whole number. So the line can
+ * carry no text the Result chose, whoever wrote the Result.
  *
- * Status and severity are usabl's vocabulary, and layer and rule are authored by the providers
- * in the first-party stack, so they stay here.
+ * There is deliberately no formatter here that welds the screen id, the layer, or the rule into a
+ * headline string. All three are open strings the Result carries. The screen id can come from a
+ * route literal in the application source, and the layer and the rule come from a provider, which
+ * a library caller's check runner can supply. One formatter that welded the screen id in did
+ * exist, and one that welded the layer and the rule in did too, on the argument that the
+ * first-party providers author them. Every caller printed what they returned as trusted text,
+ * which is the mistake a formatter of that shape invites. A surface that wants those values has to
+ * take them from the group and seal them itself.
  */
-export function formatCollapsedGroupHeadlineWithoutScreen(group: CollapsedFindingGroup): string {
-  return `[${group.status} ${group.severity}] ${group.layer}/${group.rule}${formatCollapsedGroupCount(group)}`;
+export function formatCollapsedGroupStatus(group: CollapsedFindingGroup): string {
+  const status = knownWordText(group.status, FINDING_STATUSES);
+  const severity = knownWordText(group.severity, FINDING_SEVERITIES);
+  return `[${status} ${severity}]${formatCollapsedGroupCount(group)}`;
 }
 
 export function parseNoiseBudgetConfig(raw: unknown): NoiseBudgetConfig | undefined {
