@@ -103,9 +103,9 @@ describe('check-doc-links command', () => {
 
   it('resolves root-absolute links under the site base path against docs and rejects the rest', async () => {
     root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-base-'));
-    await mkdir(join(root, 'docs', 'demo'), { recursive: true });
+    await mkdir(join(root, 'docs', 'nested'), { recursive: true });
     await writeFile(
-      join(root, 'docs', 'demo', 'a.html'),
+      join(root, 'docs', 'nested', 'a.html'),
       '<h1 id="top">A</h1>\n' +
         '<a href="/usabl/b.html#intro">Under base</a>\n' +
         '<a href="/usabl/">Site root</a>\n' +
@@ -114,7 +114,7 @@ describe('check-doc-links command', () => {
       'utf8',
     );
     await writeFile(join(root, 'docs', 'b.html'), '<h1 id="intro">B</h1>\n', 'utf8');
-    await writeFile(join(root, 'docs', 'demo', 'b.html'), '<h1>Demo B</h1>\n', 'utf8');
+    await writeFile(join(root, 'docs', 'nested', 'b.html'), '<h1>Nested B</h1>\n', 'utf8');
 
     const result = await runChecker(root);
 
@@ -122,9 +122,9 @@ describe('check-doc-links command', () => {
     expect(result.stdout).toContain('4 relative link(s) checked');
     expect(result.stdout).toContain('1 broken');
     expect(result.stdout).toContain(
-      'docs/demo/a.html:4: root-absolute path outside the site base path /usabl/: /b.html',
+      'docs/nested/a.html:4: root-absolute path outside the site base path /usabl/: /b.html',
     );
-    // The encoded slash is relative syntax and names demo/b.html, not /b.html.
+    // The encoded slash is relative syntax and names nested/b.html, not /b.html.
     expect(result.stdout).not.toContain('%2Fb.html');
   });
 

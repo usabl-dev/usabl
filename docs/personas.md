@@ -1,12 +1,12 @@
 # Personas
 
 Who usabl is for, who it is not for, and what each person needs to trust the project.
-These are open-source adopters (Apache-2.0). usabl is a team preview today, not yet
-published to npm, so adopters run it from the repo, contribute on GitHub, and decide
-adoption on merit, not procurement.
+These are open-source adopters (Apache-2.0). usabl is not on npm yet, so adopters
+build it from the repository, report issues on GitHub, and decide adoption on merit,
+not procurement.
 
 Journey detail: [journeys.md](./journeys.md). Adoption funnel:
-[adoption-model.md](./adoption-model.md). Challenge brief personas: Priya and James
+[adoption-model.md](./adoption-model.md). The two core personas, Priya and James, are
 below.
 
 ---
@@ -53,7 +53,7 @@ no longer observes it and the change ships in days, not quarters.
 
 **Voice rule:** We never speak for James. usabl's announcement checks are deterministic
 expectations, not a recording of what he hears; any claim about real screen-reader
-behavior needs SME validation, and we use real NVDA for ground truth. "Early preview,"
+behavior needs SME validation, and we use a real screen reader for ground truth. "Early preview,"
 not "James-approved."
 
 ---
@@ -107,20 +107,6 @@ tool; human review remains stated.
 
 ---
 
-### The judge
-
-**Role:** Mixed technical, business, and accessibility expertise in one room.
-
-**Goal:** See a real problem, a real solution, and honest scope in three minutes.
-
-**usabl value:** THE MOMENT (blocked done -> a re-check that no longer observes the barrier); real NVDA bookend; proof
-slide; self-check story (deck failed our own product).
-
-**Survives if:** Demo is live or filmed; claims match artifacts; limitation slide reads
-as confidence (ground truth already heard NVDA).
-
----
-
 ## Anti-persona
 
 **Buyers of end-user overlay widgets** (accessibility overlays on the live site).
@@ -139,8 +125,8 @@ issue conformance statements.
 
 | Activity | Who | Question | Status |
 |---|---|---|---|
-| 2–3 engineer interviews | Red Hat UI engineers | Does the loop fit real workflow? | Open |
+| 2–3 engineer interviews | UI engineers on PatternFly products | Does the loop fit real workflow? | Open |
 | 1 AT user interview | Daily screen reader user (SME recruit) | Do our announcement claims respect reality? | Open - depends on SME recruitment |
-| Stranger quickstart | Not on team | Time to first finding < 5 min? | Open |
+| Stranger quickstart | Someone new to usabl | Time to first finding < 5 min? | Open |
 
-Record notes in `usabl/.work/validation/` when interviews run.
+Record notes outside the repository, and summarize them in an issue, when interviews run.

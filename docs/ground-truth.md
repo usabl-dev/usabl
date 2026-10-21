@@ -2,12 +2,11 @@
 
 Status: working draft. Author: eparenti. August 2026.
 
-This is the project ground truth for the usabl product. It replaces shared-design.md,
-contest-build-plan.md, and team-work-plan.md with one document that includes the
-check-agnostic core, evidence labels, design intake, Reports, and the on/off
+This is the project ground truth for the usabl product. It is one document that covers
+the check-agnostic core, evidence labels, design intake, Reports, and the on/off
 adoption model.
 
-This document describes usabl v0.2.1: an Apache-2.0 accessibility proof engine, published
+This document describes usabl v0.2.2: an Apache-2.0 accessibility proof engine, published
 as ESM, requiring Node >=22, with a single bin `usabl` mapped to `./dist/cli.js`. Where
 this document and the source disagree, the source is authoritative.
 
@@ -69,9 +68,9 @@ Every surface is a thin wrapper over one CLI entry point that returns `Result`.
 | **Reports** | Publish approved accessibility artifacts (alt-text manifests, snippets, keyboard paths) bound to verified evidence. Command: `usabl docs`. |
 | **Playwright helper** | Same check inside tests teams already run. |
 
-Contest builds CLI, stop hook, overlay, CI, Reports, and mid-task self-check via
-CLI. An MCP wrapper is optional contest scope (section 11.5); ship after the hero
-loop is solid if discoverability matters.
+v0.2 builds CLI, stop hook, overlay, CI, Reports, and mid-task self-check via
+CLI. An MCP wrapper is optional and not built (section 11.5); add it only if
+discoverability matters.
 
 **One engine, two target surfaces.** The table above is about *where the engine runs*.
 On the other axis, *what it checks*, usabl covers two surfaces with the same engine and
@@ -104,8 +103,8 @@ The specific things that are new, each against what exists today:
    announcement as re-checkable evidence on a code change is new. The preview is
    current-run today; an automated before/after diff against a base run is a planned
    follow-up, not a v0.2.0 claim.
-5. It has rules for our design system. usabl ships composition rules for PatternFly,
-   the design system our products use.
+5. It has rules for a real design system. usabl ships composition rules for PatternFly,
+   an open-source design system used across many enterprise products.
 6. The rules cannot be silently weakened. Locally, policy edits are tamper-evident and
    leave a reviewable commit trail (`approval_required`). In CI with trusted-ref reads
    and required checks, policy tampering is blocked before merge.
@@ -123,7 +122,7 @@ what a screen reader actually hears.
 
 ## 3. Scope
 
-### Contest (built to full)
+### Built in v0.2
 
 - The check-agnostic core (gate, coverage, guard, receipts, evidence labels).
 - Three scan layers behind one provider interface: axe-core, PatternFly rulepack,
@@ -133,22 +132,21 @@ what a screen reader actually hears.
   surface is built.
 - Reports (accessible docs output): generate alt-text manifests, announcement snippets,
   and keyboard paths, bound to the receipt.
-- Evidence labels on every Draft (`evidenceClass`). During the contest everything is
+- Evidence labels on every Draft (`evidenceClass`). In v0.2 everything is
   `deterministic`.
 - Design intake: RequirementBundle schema and YAML normalize. Wiring intake-derived
-  providers is in contest; ingesting Figma/CSV is a seam.
+  providers is in v0.2 scope; ingesting Figma/CSV is a seam.
 - Page capabilities wired in the deps interface (viewport, zoom, reduced motion,
-  computed style, screenshot) even though default contest checks do not use them.
+  computed style, screenshot) even though the default checks do not use them.
 
-Overlay and Reports are in contest scope. They are not on the cut line. Mid-task
-self-check is in contest via CLI. The MCP wrapper is optional: add it only if agent
-discoverability in Claude Code matters more than protecting hero-loop time (section
-11.5).
+Overlay and Reports are built. Mid-task self-check is built via the CLI. The MCP
+wrapper is optional: add it only if agent discoverability in Claude Code is worth a
+fourth transport (section 11.5).
 
 ### Documentation checking (shipped in v0.2.1)
 
 usabl checks two target surfaces, not one: the application UI and the product's own
-documentation pages. This shipped in v0.2.1, after the contest scope above was written,
+documentation pages. This shipped in v0.2.1, after the scope above was written,
 and it reuses the same engine rather than adding a second product. One `usabl check`
 run scans both surfaces and returns one verdict, or none; there is no separate docs command and
 no `--docs` check flag.
@@ -176,21 +174,21 @@ Reports generates publishable artifacts from a verified run.
 
 Add a surface or provider only when it solves a problem nothing else solves. Every
 surface wraps `run()` → `Result`; it does not reimplement gate logic. If two surfaces
-would show the same Result the same way, keep one. Post-contest seams are documented
+would show the same Result the same way, keep one. Later seams are documented
 so the architecture is extensible; they are not a commitment to build everything.
 
 **Explicitly out:** IDE extensions and LSP diagnostics. The dev-server overlay covers
 hand-coding in the browser; the CLI covers on-demand runs. A separate editor plugin
 duplicates both without a new verdict path.
 
-### Stretch (deterministic, contest if the core is solid)
+### Stretch (deterministic, candidates once the core is solid)
 
 - Visible focus indicator (WCAG 2.4.7).
 - Reduced motion respected (preference injection; not a 2.2 A+AA row of its own).
 
 Do not add these to the fixture oracle. Delete them if they destabilize the loop.
 
-### Easy to add after the contest (deterministic checks we can call verified)
+### Easy to add later (deterministic checks we can call verified)
 
 - Text resize and reflow at 200 percent.
 - Target size for touch and pointer.
@@ -253,14 +251,14 @@ These make "easy to add later" real. They are non-negotiable constraints on the 
    human-confirmed findings are surfaced but never count toward or against `verified`.
    One of them can never slip into a verified answer by accident.
 
-5. **Give the page tool a few extra abilities now.** Even though we will not use them
-   for the contest, the Page interface supports changing the zoom and window size,
+5. **Give the page tool a few extra abilities now.** Even though the default checks do
+   not use them yet, the Page interface supports changing the zoom and window size,
    reading computed styles, taking a screenshot, and enabling reduced-motion preference.
    Setting these up now is what makes later checks cheap to add.
 
 ### Module map
 
-This is the actual source layout as built for v0.2.1. Dedup is not a separate module;
+This is the actual source layout as built for v0.2.2. Dedup is not a separate module;
 it runs inside the gate (see section 9). There is no built MCP surface (section 11.5);
 an MCP wrapper stays an optional transport.
 
@@ -366,7 +364,7 @@ export interface EvidenceFacts {
 
 export interface Draft {
   rule: string;
-  layer: string;                  // open; contest uses `axe` | `pf` | `walk`
+  layer: string;                  // open; built-in layers are `axe` | `pf` | `walk`
   severity: Severity;
   evidenceClass: EvidenceClass;   // the seam
   screenId: string;
@@ -558,7 +556,7 @@ export interface Page {
   getAttribute(selector: string, name: string): Promise<string | null>;
   queryAll(selector: string): Promise<ElementRef[]>;
   close(): Promise<void>;
-  // Capabilities wired for future checks (not used by contest providers)
+  // Capabilities wired for future checks (not used by the built-in providers)
   setViewport(width: number, height: number): Promise<void>;
   setZoom(percent: number): Promise<void>;
   setReducedMotion(enabled: boolean): Promise<void>;
@@ -595,7 +593,7 @@ export interface CheckRunner {
 
 ---
 
-## 7. Scan layers (contest)
+## 7. Scan layers
 
 Three layers, one `Provider` interface. The gate does not know or care how many
 providers exist.
@@ -1166,7 +1164,7 @@ is `carried`. Fewer is never a regression. It is also not proof of progress: the
 comes from a page rendering fewer rows, which is why the surfaces report both counts and let
 the operator say which happened.
 
-Contest layer ids are stable (`axe`, `pf`, `walk`) so dedup and identity do not churn.
+The built-in layer ids are stable (`axe`, `pf`, `walk`) so dedup and identity do not churn.
 The field stays `string` so a later provider can add a layer without a gate change.
 
 ### Dedup
@@ -1462,7 +1460,7 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   verified run routinely carries barriers the floor recorded.
 - `regression`: block.
 - `approval_required`: block.
-- `not_covered`: default block. Recalibrate after week-2 real-repo measurement
+- `not_covered`: default block. Recalibrate from real-repo measurement
   (section 25) if this drives persistent bypass behavior.
 - Policy mismatch against git anchor: block.
 - One-continuation escape: at most one forced continuation, then a loud disclosed
@@ -1537,11 +1535,10 @@ all three workflows so the rule that is tested is the rule that runs.
 before the Stop hook fires. The value is self-correction mid-task. The value is **not**
 "MCP."
 
-**How it works (contest default).** The agent runs `usabl check` through the host's
+**How it works (default).** The agent runs `usabl check` through the host's
 shell (Bash in Claude Code). Same `run()` → `Result` as every other surface. The Stop
-hook remains the gate; this path only advises the agent. The demo storyline (step 4)
-works with a CLI call on screen just as well as an MCP call - MCP is not load-bearing
-for the narrative.
+hook remains the gate; this path only advises the agent. A CLI call works just as well
+as an MCP call, so MCP is not required.
 
 **MCP wrapper (optional transport).** Same engine, thin protocol adapter. Decide MCP
 vs Bash-only on discoverability, not capability.
@@ -1551,17 +1548,16 @@ vs Bash-only on discoverability, not capability.
 | **Pros** | No server, protocol, or registration work. Same Result. Zero extra transport to test. No page text flowing into agent context as structured tool output (lower prompt-injection surface than MCP). | First-class tool with description in Claude Code; model more likely to call at the right moment. Structured content the model handles natively instead of stdout to parse. |
 | **Cons** | Model may forget to self-check without prompting. Parses CLI text output. | Fourth transport over one engine (integration + test surface). Page-derived text (aria-labels, headings, errors) returns as tool output - prompt-injection surface the Stop hook does not open. Requires `neutralize()` and untrusted-data framing (section 17). |
 
-**Contest sequencing.** Ship CLI mid-task check with the hero loop. Add the MCP wrapper
-in the same window as stretch goals if reliable agent self-correction in the demo
-matters more than hero-loop time. If MCP stays, it stays for discoverability, not
-because the story requires it.
+**Sequencing.** The CLI mid-task check ships first. Add the MCP wrapper only if
+reliable agent self-correction needs it. If MCP is added, it is for discoverability,
+not because the loop requires it.
 
 The gate stays at Stop. Neither path lets the agent grade its own work.
 
 ### 11.6 Playwright helper (seam)
 
 A documented entry point that returns the core Result. Teams can call the same check
-from the tests they already run. A starting point, not a focus for the contest.
+from the tests they already run. A starting point, not the main surface.
 
 `checkPage(page, options)` runs the same provider list the CLI runs on a screen. Both build
 it through `makeScanProviders` in `src/providers/core-stack.ts`: the core stack, then one
@@ -1599,31 +1595,31 @@ judged on it. So a page that regresses on a requirement in the CLI also regresse
 `checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
 when it is not.
 
-### 11.7 Other coding assistants (seam, not contest)
+### 11.7 Other coding assistants (seam)
 
-The contest demo uses Claude Code's Stop lifecycle event. The architecture does not
+The reference integration uses Claude Code's Stop lifecycle event. The architecture does not
 depend on Claude specifically. Any assistant that can run a subprocess or call MCP
 can integrate the same gate:
 
 | Assistant | Integration shape | What we ship |
 |---|---|---|
-| **Claude Code** | Stop hook → `usabl check`; mid-task via Bash (contest) or MCP wrapper (optional) | Contest |
+| **Claude Code** | Stop hook → `usabl check`; mid-task via Bash (built) or MCP wrapper (optional) | Shipped |
 | **Cursor** | `usabl install --cursor` writes the stop hook (`hooks.json` plus an adapter script) that loops the agent through Cursor's `followup_message` protocol, the `/usabl-check` command for advisory mid-task scans, and a UI-scoped rule | Shipped |
 | **GitHub Copilot** | Extension calls CLI on save or on "agent done" if/when that event exists | Seam documented |
-| **Any MCP host** | Optional on-demand tool; gate stays at task-complete lifecycle event | MCP wrapper if contest scope includes it |
+| **Any MCP host** | Optional on-demand tool; gate stays at task-complete lifecycle event | Not built; MCP wrapper is optional |
 
 Implementation is always the same three pieces: (1) detect UI-touching diff or
 surface list, (2) invoke `run()` → `Result`, (3) enforce or display per that host's
 rules. No second gate, no forked rulepack. A new assistant is a new **surface
 adapter**, not a new product.
 
-### 11.8 Post-contest surfaces (documented, not built)
+### 11.8 Later surfaces (documented, not built)
 
 **Storybook addon.** Run `usabl check` per story URL; pairs with discovery item 4
 (section 24) that auto-generates surface-map entries from stories. Value: component-level
 checks without booting the full app router. Same `Result`, story URL as `screenId`.
 
-Not in contest. Add only if teams using Storybook ask for it and discovery from routes
+Not built. Add only if teams using Storybook ask for it and discovery from routes
 is insufficient.
 
 ### 11.9 Doctor (onboarding health check, built)
@@ -1730,7 +1726,7 @@ PF checklist ──┘
 ```
 
 The normalizer accepts multiple input formats and produces one `RequirementBundle`.
-During the contest, hand-authored YAML in the repo is the primary shape.
+In v0.2, hand-authored YAML in the repo is the primary shape.
 
 ### Guarded
 
@@ -1953,56 +1949,19 @@ switch lives in the fixture app, not on `ScreenScan`.
 
 ---
 
-## 20. Work breakdown and team
+## 20. Build priorities
 
-### How the work is split
-
-- **Detection** builds the detection engine (accessibility depth).
-- **Gate** builds the verdict core, AI loop, and intake/output interfaces (lead).
-- **Infrastructure** owns performance, behavior tests, demo capture, CI infra.
-- **Validation** owns real-reader validation, honesty audit, adversarial security
-  suite.
-- **Production** makes the demo and presentation (week 4).
-
-### Pairings
-
-- Detection builds accessibility, Validation reviews accessibility.
-- Gate builds the loop and surfaces, Infrastructure reviews and hardens them.
-- Gate owns intake schema, YAML normalize, and Reports; Detection wires
-  intake-derived providers.
-
-### Integration
-
-The detection engine and the gate integrate around day 6-8. Before that they work
-apart against the frozen contracts.
-
-### Schedule (4 weeks total, week 4 is demo polish)
-
-- Day 1: contracts, primitives, deps, fakes, oracle. Lock by end of day.
-- Days 2-5: parallel build (providers, rulepack, walk vs. coverage, gate, guard).
-- End of week 1: working vertical slice with all four verdicts reachable.
-- Days 6-8: integration, surfaces, security controls, intake/output interfaces.
-- Days 9-11: harden, measure, real-repo smoke pass, overlay, Reports.
-- Days 12-14: full loop working end to end; all surfaces wired.
-- Week 3: polish, fix real-repo findings, performance tuning, demo asset capture.
-- Week 4: demo production, rehearsal, deck, and buffer. No new features.
-
-The MVP and the demo are the same artifact. We are building what we demo the
-entire time. Week 4 is for the team to produce the polished video, rehearse the
-live segment, and practice the narrative.
+When scope must shrink, detection breadth goes first. Overlay and Reports stay.
+Mid-task self-check via CLI stays; the MCP wrapper is optional (section 11.5).
 
 ### Cut line (dropped first)
 
-Detection breadth only. Overlay and Reports stay. Mid-task self-check via CLI
-stays; MCP wrapper is optional (section 11.5).
-
 1. `pf-toolbar-labeled-when-repeated`.
 2. `pf-row-action-name-unique` and `pf-table-header-assoc`.
-3. MCP wrapper (if hero loop is not solid yet).
+3. MCP wrapper (if the core loop is not solid yet).
 
 Never cut: the gate, receipt fast-path, config-guards-itself, CODEOWNERS, four-verdict
-output, announcement preview, the recorded hero loop, overlay, Reports, CLI mid-task
-self-check.
+output, announcement preview, overlay, Reports, CLI mid-task self-check.
 
 ---
 
@@ -2022,7 +1981,7 @@ self-check.
 - The announcement preview is an approximation from the accessibility tree, not a
   screen reader. It is labeled as a preview everywhere.
 - CDP does not serialize aria-sort; that one fact is read from the DOM attribute. The
-  exception is documented at the read site and disclosed in the demo.
+  exception is documented at the read site and disclosed in this document.
 - Local enforcement is tamper-evident, not tamper-proof. CI reads policy from the trusted
   base ref, so a pull request cannot change the policy it is judged against; the head code
   it scans is still the pull request's own.
@@ -2238,7 +2197,7 @@ Work on this section that is known and deferred until after the freeze.
 ### Data sources
 
 - PatternFly GitHub issues labeled accessibility or a11y.
-- Product bugs in Jira or Bugzilla (Red Hat internal, anonymized).
+- Product bugs from issue trackers, anonymized and used only with permission.
 - The PatternFly accessibility team's known problems list.
 - WCAG failure patterns from public audits of PatternFly-based products.
 
@@ -2255,7 +2214,7 @@ explicitly allowed data. No customer names in the repo.
 ### Why this matters
 
 "We ran these rules against 30 real PatternFly bugs and caught 22 of them" is
-evidence for the judges. It validates the rule set against real pain, not
+evidence a reader can check. It validates the rule set against real pain, not
 contrived fixtures. It also prioritizes: if a class of bug appears ten times in
 the sample and no rule catches it, that rule goes to the top of the backlog.
 
@@ -2267,16 +2226,16 @@ The eight PF rules were chosen because they represent composition mistakes that:
   standalone axe run reported zero violations on the broken fixture dialog while
   `pf-focus-into-dialog` and `pf-modal-focus-return` failed.
 - Real screen-reader users encounter regularly in PatternFly apps.
-- Are demonstrable in a short demo (visible to judges, audible in the transcript).
+- Can be shown in a short run (visible on screen, audible in the transcript).
 
-The five focus/interaction rules (1-5) carry the demo. The three structural rules
+The five focus/interaction rules (1-5) carry the proof loop. The three structural rules
 (6-8) add breadth. The cut line drops structural rules first.
 
 ---
 
 ## 24. Discovery improvement roadmap
 
-### Current limits (contest)
+### Current limits
 
 - Only relative import paths are followed.
 - Bundler aliases (`@/`, `~/`, tsconfig paths) are not resolved.
@@ -2286,7 +2245,7 @@ The five focus/interaction rules (1-5) carry the demo. The three structural rule
 
 These produce honest `not_covered`, never silent passes.
 
-### Improvement path (post-contest, in priority order)
+### Improvement path (in priority order)
 
 1. **tsconfig/vite alias resolution.** Read `tsconfig.json` paths and
    `vite.config` resolve.alias, then resolve non-relative specifiers against
@@ -2299,13 +2258,13 @@ These produce honest `not_covered`, never silent passes.
    configuration was found." Give the developer a clear fix path.
 4. **Storybook surface generation.** Auto-generate surface-map entries from
    Storybook stories, removing the mapping tax for teams that already use
-   Storybook. A post-contest **Storybook addon** (section 11.8) would run the same
+   Storybook. A later **Storybook addon** (section 11.8) would run the same
    CLI check per story URL.
 
-### Candidate pull-in for contest
+### Candidate pull-in
 
-If week-2 real-repo `not_covered` is high, pull runtime route dump (item 2 above)
-into contest scope. It is the single highest-leverage coverage improvement and has
+If real-repo `not_covered` is high, pull the runtime route dump (item 2 above)
+forward. It is the single highest-leverage coverage improvement and has
 more impact on trust than adding another deterministic rule.
 
 ### The trust cliff
@@ -2329,14 +2288,14 @@ The fraction of **UI-touching** changes the tool can actually verify (versus mar
 `not_covered`). Idle / nothing-to-check runs are not in the denominator. Measured on
 a real PatternFly surface, not the fixture app.
 
-- **Target for demo:** state whatever the number is, honestly. A rate above 70%
+- **Target:** state whatever the number is, honestly. A rate above 70%
   on a real surface is strong. Below 50% needs explanation.
-- **Measured by:** the team, on the real-repo smoke pass.
-- **Shown in demo:** one slide, one number, cited honestly.
+- **Measured by:** the maintainer, on a real-repo smoke pass.
+- **Reported as:** one number, cited honestly.
 
 ### Stop-hook policy gate for `not_covered`
 
-Do not lock this by philosophy alone. Tie behavior to the week-2 real-repo number:
+Do not lock this by philosophy alone. Tie behavior to the real-repo number:
 
 - If `not_covered` is rare (for example, <=10% of UI-touching runs), keep hard block.
 - If `not_covered` is common, switch to the existing one-continuation loud allow path
@@ -2370,60 +2329,12 @@ aggregates this measurement across repos; verdict authority stays with the gate.
 
 ---
 
-## 26. Demo strategy
+## 26. Screen-reader validation
 
-### Timeline
-
-The contest runs 4 weeks. Week 4 is demo polish and rehearsal. The MVP and the
-demo are the same artifact. We build what we demo.
-
-- Weeks 1-2: core engine, surfaces, and the vertical slice working end to end.
-- Week 3: real-repo smoke pass, performance tuning, asset capture, overlay polish.
-- Week 4: the team produces the polished video from raw captures and rehearses
-  the live segment. Deck finalized. No new features.
-
-### AI coding assistant
-
-Claude Code (Claude's stop hook lifecycle event). Confirmed.
-
-### Storyline
-
-1. Open cold on sound. Several seconds of the broken spoken announcement before
-   any UI appears. A screen-reader user lives with this across release cycles.
-2. Cut to the AI assistant mid-task on a real PatternFly screen. It thinks it is
-   done.
-3. The stop hook blocks. The four verdicts render plainly, with `not_covered`
-   shown on purpose. The seeded bug is a focus or interaction defect that a
-   screen-reader user feels, not contrived missing alt text.
-4. The assistant fixes it, running `usabl check` mid-task (CLI via Bash; MCP wrapper
-   if shipped). The hook re-runs and passes. A receipt is shown once.
-5. Replay the clean announcement. Start and end on sound. The before/after
-   contrast, broken at the cold open and clean at the bookend, is the empathy payload.
-6. One live reveal at the end: type a fresh broken change and watch the hook
-   block it live.
-7. Supporting and fast: one PR-comment screenshot, one short overlay clip, one
-   sentence each on the waiver, the differential, and the fleet roadmap.
-
-### Asset strategy
-
-Hybrid. A recorded, polished hero loop is the spine. Pure-live is too fragile for
-an agent, browser, and hook chain on contest hardware. One short live reveal at
-the end, because pure-recorded reads as staged.
-
-### Audio and honesty
-
-**Hero demo recording (NVDA).** The cold-open and bookend that contest judges hear is
-recorded using NVDA on Windows. Capture this once via a one-time Windows VM on the
-host (nested KVM from a toolbox container is typically blocked) or a hosted session
-such as Assistiv Labs. NVDA is chosen because it is the most widely used screen
-reader and judges recognize it. Lock the demo surface and the planted interaction bug
-**before** that recording; the audio cannot be the wrong bug.
-
-**Validation harness and dogfood reader (Orca on Fedora).** Orca is the team's native
-reader on Fedora. It is the validation-harness target and the team's dogfood reader.
+**Validation reader (Orca on Fedora).** Orca is the validation-harness target.
 Because guidepup automates VoiceOver and NVDA only (not Orca), the harness cannot
-drive Orca programmatically. Instead, the team captures Orca's spoken output via a
-speech-dispatcher log module or a manual transcription pass, then compares it offline
+drive Orca programmatically. Instead, Orca's spoken output is captured via a
+speech-dispatcher log module or a manual transcription pass, then compared offline
 to the Virtual Screen Reader transcript.
 
 The in-run announcement preview is derived from the accessibility tree captured during
@@ -2431,27 +2342,24 @@ the transcript, not from a real screen reader; its honesty class is "preview, no
 AT." usabl also ships its own headless virtual screen reader provider
 (`makeVirtualSrProvider`, the voicing lane), which is built but dormant in v0.2.0 and is
 not wired into the run or the gate (section 7.5); it is usabl's own code, not the npm
-`@guidepup/virtual-screen-reader` package, which is not a dependency in v0.2.0. The demo
-voice (NVDA) differs from the validated reader (Orca); this is the accepted seam. The
+`@guidepup/virtual-screen-reader` package, which is not a dependency in v0.2.0. The
 engine is screen-reader-agnostic; the validation harness measures the virtual-SR
-transcript's fidelity to a real reader, not to NVDA specifically.
+transcript's fidelity to a real reader, not to one product.
 
-If text-to-speech is used as a fallback, label it "synthesized from the announcement
+If text-to-speech is used in a recording, label it "synthesized from the announcement
 transcript" and never imply it is live screen-reader output.
 
-Disclose any attribute-read exception (aria-sort) on a slide. In an accessibility
-honesty demo, an undisclosed "we read the DOM here" is a fatal gotcha if a judge
-finds it. Disclosing it proactively reinforces the honesty claim.
+Disclose any attribute-read exception (aria-sort) wherever results are presented. In an
+accessibility honesty claim, an undisclosed "we read the DOM here" undercuts the claim.
+Disclosing it proactively reinforces it.
 
-Credibility preflight before recording:
+Credibility checks before publishing a recording:
 
-- Verify AX-tree preview text is a fair approximation of what NVDA announces for the
-  hero bug and the fixed state (demo recording); compare separately with Orca output
+- Verify AX-tree preview text is a fair approximation of what a real screen reader
+  announces for the broken and the fixed state; compare separately with Orca output
   for the validation pass.
 - Sweep for any other CDP serialization gaps so `aria-sort` is truly the only
   disclosed attribute-read exception.
-- Listen to how a real screen reader pronounces "usabl" and note the intended spoken
-  form in the presenter notes.
 
 ---
 
@@ -2462,25 +2370,23 @@ Credibility preflight before recording:
 | Product name | usabl |
 | AI coding assistant for stop hook | Claude Code (Stop lifecycle event) |
 | Target design system | PatternFly v6 |
-| Repo | github.com/usabl-dev/usabl (private, Apache-2.0) |
+| Repo | github.com/usabl-dev/usabl (public, Apache-2.0) |
 | Stack | TypeScript on Node 22, Vitest, Playwright, axe-core |
 | Adoption model | On or off. No modes. Advisory findings surface and never block (advisory lane, not a mode). |
 | Idle vs not_covered | Nothing to check is explicit informational allow, not `not_covered`. |
 | Partial scans | Forbidden for `verified`. Full affected set or `not_covered`. |
-| notCovered behavior | Not a config knob. Default hard block; recalibrate from week-2 real-repo `not_covered` rate. |
-| Overlay / Reports | In contest. Not on the cut line. |
-| CLI | In contest. Foundation; all surfaces call it. |
-| Mid-task self-check | In contest via CLI (Bash). Same Result as MCP. |
-| MCP wrapper | Optional. Discoverability vs hero-loop time (section 11.5). |
+| notCovered behavior | Not a config knob. Default hard block; recalibrate from the real-repo `not_covered` rate. |
+| Overlay / Reports | Built. Not on the cut line. |
+| CLI | Built. Foundation; all surfaces call it. |
+| Mid-task self-check | Built via CLI (Bash). Same Result as MCP. |
+| MCP wrapper | Optional, not built. Discoverability vs a fourth transport (section 11.5). |
 | IDE / LSP extension | Out. Overlay + CLI cover hand-coding. |
-| Other assistants (Cursor, Copilot) | Seam: same CLI + hook/MCP adapter. Claude Code for demo. |
-| Storybook addon | Post-contest seam (section 11.8). |
-| Contest timeline | 4 weeks. Week 4 = demo polish. |
+| Other assistants (Cursor, Copilot) | Seam: same CLI + hook/MCP adapter. Claude Code and Cursor ship today (section 11.7). |
+| Storybook addon | Later seam (section 11.8). |
 | How many PF rules | Eight, with a cut line (structural rules first). |
-| Hero demo recording | NVDA (Windows VM or Assistiv Labs), captured once after hero bug is locked. |
-| Validation / dogfood reader | Orca on Fedora; spoken output is captured and compared offline to the Virtual Screen Reader transcript. |
-| Evidence labels | On every Draft from day 1. Contest = all deterministic. |
-| Design intake in scope | Schema + YAML normalize in contest. Figma/CSV ingest is a seam. |
+| Validation reader | Orca on Fedora; spoken output is captured and compared offline to the Virtual Screen Reader transcript. |
+| Evidence labels | On every Draft from day 1. v0.2 = all deterministic. |
+| Design intake in scope | Schema + YAML normalize in v0.2. Figma/CSV ingest is a seam. |
 | Reports in scope | Generate the three artifacts, bound to receipt. |
 | Documentation checking | Shipped in v0.2.1. Same engine, `profile: 'docs'`, activated by a `usabl.docs.json` manifest. One verdict, or none, across app and docs. |
 
@@ -2488,12 +2394,10 @@ Credibility preflight before recording:
 
 | Decision | Who decides | When |
 |---|---|---|
-| The demo PatternFly app and the hero bug | The team | Before NVDA hero recording |
-| Real PatternFly repo for smoke pass | The team | Week 2 |
-| Verified-verdict-rate target to state on stage | The team | After measurement |
-| CI host for branch protection (done: the main-branch ruleset requires `usabl-required`) | The team | Week 2 |
-| Real bug sample for rule validation | The team | Week 1 |
-| MCP wrapper vs Bash-only mid-task check | The team | After hero loop works; before demo polish |
+| Real PatternFly repo for the smoke pass | The maintainer | Open |
+| Verified-verdict-rate target to state publicly | The maintainer | After measurement |
+| Real bug sample for rule validation | The maintainer | Open |
+| MCP wrapper vs Bash-only mid-task check | The maintainer | Open |
 
 ---
 
@@ -2505,11 +2409,11 @@ answer to "how much accessibility does this tool ensure?"
 
 Categories:
 
-- **Contest (deterministic):** usabl checks this now, mechanically, and can produce
+- **Built (deterministic):** usabl checks this now, mechanically, and can produce
   `verified` or `regression`.
-- **Stretch (deterministic):** Built during the contest if time allows, to prove the
-  architecture.
-- **Post-contest (deterministic):** Easy to add as a provider. The Page capabilities
+- **Stretch (deterministic):** A candidate check to prove the architecture. Not built
+  yet.
+- **Planned (deterministic):** Easy to add as a provider. The Page capabilities
   and provider interface support it. We just have not built the provider yet.
 - **Advisory (model-judgment):** usabl can surface a suggestion via the advisory lane
   but cannot verify it mechanically. A person decides.
@@ -2522,65 +2426,65 @@ Categories:
 
 | SC | Name | Level | usabl | How |
 |---|---|---|---|---|
-| 1.1.1 | Non-text Content | A | Contest (axe) + Advisory (quality) | axe checks presence of alt/aria-label (deterministic). Advisory lane judges whether the text is actually useful (model-judgment). Design intake can assert exact approved alt text (deterministic). |
+| 1.1.1 | Non-text Content | A | Built (axe) + Advisory (quality) | axe checks presence of alt/aria-label (deterministic). Advisory lane judges whether the text is actually useful (model-judgment). Design intake can assert exact approved alt text (deterministic). |
 | 1.2.1 | Audio-only/Video-only (Prerecorded) | A | Not applicable | PatternFly admin consoles rarely have prerecorded media. If present, this is a content decision outside the component library. |
-| 1.2.2 | Captions (Prerecorded) | A | Post-contest | Check for `<track kind="captions">` on video elements. Simple DOM query. |
+| 1.2.2 | Captions (Prerecorded) | A | Planned | Check for `<track kind="captions">` on video elements. Simple DOM query. |
 | 1.2.3 | Audio Description or Media Alternative | A | Not applicable | Same as 1.2.1. |
 | 1.2.4 | Captions (Live) | AA | Never | Live captioning is a runtime service decision, not a component property. |
 | 1.2.5 | Audio Description (Prerecorded) | AA | Not applicable | Same as 1.2.1. |
-| 1.3.1 | Info and Relationships | A | Contest (axe + PF rulepack) | axe checks semantic structure. PF rulepack checks table header association, toolbar labeling, live regions. |
-| 1.3.2 | Meaningful Sequence | A | Contest (axe) | axe checks reading order against DOM order. |
+| 1.3.1 | Info and Relationships | A | Built (axe + PF rulepack) | axe checks semantic structure. PF rulepack checks table header association, toolbar labeling, live regions. |
+| 1.3.2 | Meaningful Sequence | A | Built (axe) | axe checks reading order against DOM order. |
 | 1.3.3 | Sensory Characteristics | A | Advisory | Requires understanding whether instructions rely on shape/color/location. Model-judgment. |
-| 1.3.4 | Orientation | AA | Post-contest | Set viewport to portrait/landscape, assert no content loss. Uses `setViewport`. |
-| 1.3.5 | Identify Input Purpose | AA | Contest (axe) | axe checks autocomplete attributes on common input types. |
-| 1.4.1 | Use of Color | A | Contest (axe, partial) | axe flags some color-only information. The contest eight PF rules do not include a status-color-only check; do not cite a rule that is not in §7.2. |
+| 1.3.4 | Orientation | AA | Planned | Set viewport to portrait/landscape, assert no content loss. Uses `setViewport`. |
+| 1.3.5 | Identify Input Purpose | AA | Built (axe) | axe checks autocomplete attributes on common input types. |
+| 1.4.1 | Use of Color | A | Built (axe, partial) | axe flags some color-only information. The eight PF rules do not include a status-color-only check; do not cite a rule that is not in §7.2. |
 | 1.4.2 | Audio Control | A | Not applicable | PatternFly admin consoles do not auto-play audio. |
-| 1.4.3 | Contrast (Minimum) | AA | Contest (axe) | axe owns color contrast checking. usabl does not reimplement it. |
-| 1.4.4 | Resize Text | AA | Post-contest | Set zoom to 200%, assert no content loss or overlap. Uses `setZoom`. Not a stretch goal. |
-| 1.4.5 | Images of Text | AA | Contest (axe) | axe flags images used as text. |
-| 1.4.10 | Reflow | AA | Post-contest | Set viewport to 320px CSS width, assert no horizontal scroll. Uses `setViewport`. |
-| 1.4.11 | Non-text Contrast | AA | Contest (axe) | axe checks UI component and graphical object contrast. |
-| 1.4.12 | Text Spacing | AA | Post-contest | Inject increased spacing via CSS, assert no content loss. Uses `getComputedStyle` + `setViewport`. |
-| 1.4.13 | Content on Hover or Focus | AA | Post-contest | Trigger hover/focus content, assert dismissable + hoverable + persistent. Declarative probe. |
+| 1.4.3 | Contrast (Minimum) | AA | Built (axe) | axe owns color contrast checking. usabl does not reimplement it. |
+| 1.4.4 | Resize Text | AA | Planned | Set zoom to 200%, assert no content loss or overlap. Uses `setZoom`. Not a stretch goal. |
+| 1.4.5 | Images of Text | AA | Built (axe) | axe flags images used as text. |
+| 1.4.10 | Reflow | AA | Planned | Set viewport to 320px CSS width, assert no horizontal scroll. Uses `setViewport`. |
+| 1.4.11 | Non-text Contrast | AA | Built (axe) | axe checks UI component and graphical object contrast. |
+| 1.4.12 | Text Spacing | AA | Planned | Inject increased spacing via CSS, assert no content loss. Uses `getComputedStyle` + `setViewport`. |
+| 1.4.13 | Content on Hover or Focus | AA | Planned | Trigger hover/focus content, assert dismissable + hoverable + persistent. Declarative probe. |
 
 ### Principle 2: Operable
 
 | SC | Name | Level | usabl | How |
 |---|---|---|---|---|
-| 2.1.1 | Keyboard | A | Contest (keyboard walk + PF rulepack) | The keyboard walk tabs through interactive elements. Any interactive element not on the Tab path is reported. PF rules cover dialog focus, kebabs, and row actions. |
-| 2.1.2 | No Keyboard Trap | A | Contest (keyboard walk) | Cycle detection in the walk. If Tab never escapes a region, the walk reports it. |
+| 2.1.1 | Keyboard | A | Built (keyboard walk + PF rulepack) | The keyboard walk tabs through interactive elements. Any interactive element not on the Tab path is reported. PF rules cover dialog focus, kebabs, and row actions. |
+| 2.1.2 | No Keyboard Trap | A | Built (keyboard walk) | Cycle detection in the walk. If Tab never escapes a region, the walk reports it. |
 | 2.1.4 | Character Key Shortcuts | A | Never | Requires knowing whether single-character shortcuts exist in application logic. |
 | 2.2.1 | Timing Adjustable | A | Never | Time limits are application logic. usabl does not run over time. |
-| 2.2.2 | Pause, Stop, Hide | A | Post-contest | Detect auto-updating/moving content and assert a pause mechanism exists. Partially possible with animation detection. |
+| 2.2.2 | Pause, Stop, Hide | A | Planned | Detect auto-updating/moving content and assert a pause mechanism exists. Partially possible with animation detection. |
 | 2.3.1 | Three Flashes or Below | A | Never | Seizure detection requires frame-by-frame photosensitivity analysis. A different tool. |
-| 2.4.1 | Bypass Blocks | A | Contest (axe) | axe checks for skip links and landmark regions. |
-| 2.4.2 | Page Titled | A | Contest (axe) | axe checks document title presence. |
-| 2.4.3 | Focus Order | A | Contest (keyboard walk) | The walk records focus order. PF rulepack checks focus-into-dialog and focus-return. "Illogical" order is visible in the transcript; the contest check does not judge meaning. |
+| 2.4.1 | Bypass Blocks | A | Built (axe) | axe checks for skip links and landmark regions. |
+| 2.4.2 | Page Titled | A | Built (axe) | axe checks document title presence. |
+| 2.4.3 | Focus Order | A | Built (keyboard walk) | The walk records focus order. PF rulepack checks focus-into-dialog and focus-return. "Illogical" order is visible in the transcript; the check does not judge meaning. |
 | 2.4.4 | Link Purpose (In Context) | A | Advisory | Whether link text is descriptive requires understanding intent. Model-judgment. |
 | 2.4.5 | Multiple Ways | AA | Never | Whether there are multiple ways to find a page is an IA decision, not testable per screen. |
-| 2.4.6 | Headings and Labels | AA | Contest (axe) + Advisory | axe checks heading structure exists. Whether headings are descriptive is model-judgment. |
+| 2.4.6 | Headings and Labels | AA | Built (axe) + Advisory | axe checks heading structure exists. Whether headings are descriptive is model-judgment. |
 | 2.4.7 | Focus Visible | AA | Stretch | Tab through, compare focused vs unfocused computed styles. The stretch-goal check that *is* a 2.2 A+AA criterion. |
-| 2.4.11 | Focus Not Obscured (Minimum) | AA | Post-contest | At each focus stop, check whether the element is obscured by sticky/fixed positioned elements. Uses `getComputedStyle` + position checks. |
+| 2.4.11 | Focus Not Obscured (Minimum) | AA | Planned | At each focus stop, check whether the element is obscured by sticky/fixed positioned elements. Uses `getComputedStyle` + position checks. |
 | 2.5.1 | Pointer Gestures | A | Never | Whether multi-point or path-based gestures have single-pointer alternatives is application logic. |
 | 2.5.2 | Pointer Cancellation | A | Never | Up-event firing behavior is application logic. |
-| 2.5.3 | Label in Name | A | Contest (axe) | axe checks that visible label text is included in the accessible name. |
+| 2.5.3 | Label in Name | A | Built (axe) | axe checks that visible label text is included in the accessible name. |
 | 2.5.4 | Motion Actuation | A | Never | Whether motion-triggered actions have alternatives is application logic. |
 | 2.5.7 | Dragging Movements | AA | Never | Whether drag operations have non-dragging alternatives is application logic. |
-| 2.5.8 | Target Size (Minimum) | AA | Post-contest | Measure bounding boxes of interactive elements, flag below 24x24 CSS px. Uses `getComputedStyle`/bounding box. |
+| 2.5.8 | Target Size (Minimum) | AA | Planned | Measure bounding boxes of interactive elements, flag below 24x24 CSS px. Uses `getComputedStyle`/bounding box. |
 
 ### Principle 3: Understandable
 
 | SC | Name | Level | usabl | How |
 |---|---|---|---|---|
-| 3.1.1 | Language of Page | A | Contest (axe) | axe checks for `lang` attribute on `<html>`. |
-| 3.1.2 | Language of Parts | AA | Contest (axe) | axe checks `lang` on elements with different language content. |
-| 3.2.1 | On Focus | A | Contest (keyboard walk) | The walk flags observable context changes on focus (document URL change, or focus moving to a different control than the one just focused). It does not judge "unexpected" in the WCAG sense. |
-| 3.2.2 | On Input | A | Post-contest | Declarative probe: change an input value, assert no unexpected context change. |
-| 3.2.3 | Consistent Navigation | AA | Post-contest | Compare nav landmarks across surfaces, flag structural differences. Multi-page check. |
-| 3.2.4 | Consistent Identification | AA | Post-contest | Same function = same label across surfaces. Multi-page comparison. |
-| 3.2.6 | Consistent Help | A | Post-contest | Check that help mechanisms appear in the same relative order. Multi-page. |
+| 3.1.1 | Language of Page | A | Built (axe) | axe checks for `lang` attribute on `<html>`. |
+| 3.1.2 | Language of Parts | AA | Built (axe) | axe checks `lang` on elements with different language content. |
+| 3.2.1 | On Focus | A | Built (keyboard walk) | The walk flags observable context changes on focus (document URL change, or focus moving to a different control than the one just focused). It does not judge "unexpected" in the WCAG sense. |
+| 3.2.2 | On Input | A | Planned | Declarative probe: change an input value, assert no unexpected context change. |
+| 3.2.3 | Consistent Navigation | AA | Planned | Compare nav landmarks across surfaces, flag structural differences. Multi-page check. |
+| 3.2.4 | Consistent Identification | AA | Planned | Same function = same label across surfaces. Multi-page comparison. |
+| 3.2.6 | Consistent Help | A | Planned | Check that help mechanisms appear in the same relative order. Multi-page. |
 | 3.3.1 | Error Identification | A | Advisory | Whether errors are identified clearly requires semantic understanding of error states. Partially checkable via aria-invalid + aria-describedby. |
-| 3.3.2 | Labels or Instructions | A | Contest (axe) | axe checks that form inputs have labels. |
+| 3.3.2 | Labels or Instructions | A | Built (axe) | axe checks that form inputs have labels. |
 | 3.3.3 | Error Suggestion | AA | Advisory | Whether error messages suggest a fix requires understanding content. Model-judgment. |
 | 3.3.4 | Error Prevention (Legal/Financial) | AA | Never | Whether a submission is legal/financial is application context. |
 | 3.3.7 | Redundant Entry | A | Never | Whether previously entered info is auto-populated is application logic. |
@@ -2590,8 +2494,8 @@ Categories:
 
 | SC | Name | Level | usabl | How |
 |---|---|---|---|---|
-| 4.1.2 | Name, Role, Value | A | Contest (axe + PF rulepack + walk) | The core of what usabl checks. axe validates ARIA usage. PF rulepack checks PF-specific name/role/value patterns. The walk reads actual name, role, and state from the accessibility tree. |
-| 4.1.3 | Status Messages | A | Contest (PF rulepack) | `pf-toast-live-region` checks that status updates reach assistive technology via live regions. |
+| 4.1.2 | Name, Role, Value | A | Built (axe + PF rulepack + walk) | The core of what usabl checks. axe validates ARIA usage. PF rulepack checks PF-specific name/role/value patterns. The walk reads actual name, role, and state from the accessibility tree. |
+| 4.1.3 | Status Messages | A | Built (PF rulepack) | `pf-toast-live-region` checks that status updates reach assistive technology via live regions. |
 
 ### Summary
 
@@ -2600,9 +2504,9 @@ tables, not a rounded marketing total.
 
 | Category | Count | Percentage of Level A+AA |
 |---|---|---|
-| **Contest (deterministic)** | 21 | 38% |
-| **Stretch (deterministic, if time)** | 1 (2.4.7) | 2% |
-| **Post-contest (deterministic, buildable)** | 13 | 24% |
+| **Built (deterministic)** | 21 | 38% |
+| **Stretch (deterministic, not built)** | 1 (2.4.7) | 2% |
+| **Planned (deterministic, buildable)** | 13 | 24% |
 | **Advisory (model-judgment, never verified)** | 4 | 7% |
 | **Not applicable** (media in admin consoles) | 4 | 7% |
 | **Never** (application logic, human judgment) | 12 | 22% |
@@ -2612,9 +2516,9 @@ row, so it is not in the 55.
 
 **What we can say:**
 
-- At contest time: usabl mechanically verifies 21 of 55 Level A+AA criteria (38%).
+- As built: usabl mechanically verifies 21 of 55 Level A+AA criteria (38%).
   With visible-focus stretch, 22 (40%).
-- With the post-contest providers built: 35 of 55 (64%).
+- With the planned providers built: 35 of 55 (64%).
 - With advisory included (surfaced, person decides): 39 of 55 (71%).
 - The remaining 16 (29%) are not applicable to admin consoles (4) or require
   application logic or human judgment the tool will never replace (12).
@@ -2628,8 +2532,8 @@ row, so it is not in the 55.
 
 ### Stretch goals (prove the architecture)
 
-Two checks built during the contest to prove the provider interface extends without
-touching the gate. Only 2.4.7 counts in the 55. Reduced motion is extra.
+Two candidate checks that would prove the provider interface extends without touching
+the gate. Neither is built yet. Only 2.4.7 counts in the 55. Reduced motion is extra.
 
 1. **Visible focus indicator** (`focus-indicator` provider, WCAG 2.4.7)
 
@@ -2652,8 +2556,6 @@ touching the gate. Only 2.4.7 counts in the 55. Reduced motion is extra.
    and it is deterministic (no screenshots, no timing).
 
 Rules for stretch goals:
-- Only attempt if the core vertical slice is solid by end of week 2.
-- Do NOT add them to the demo fixture oracle. Run on the real-repo smoke pass.
+- Only attempt once the core loop is solid.
+- Do NOT add them to the fixture oracle. Run on a real-repo smoke pass.
 - If they cause any instability, delete them. They are never on the "never cut" list.
-- One slide, one sentence in the demo: "We added these in week 3 without touching
-  the gate."

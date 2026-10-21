@@ -372,8 +372,8 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
       policyResult,
       await repoDeps({
         dirty: 'src/gate/index.ts',
-        author: 'eparenti',
-        reviews: [{ userLogin: 'vishsanghishetty', state: 'APPROVED', commitId: head }],
+        author: 'outside-contributor',
+        reviews: [{ userLogin: 'eparenti', state: 'APPROVED', commitId: head }],
       }),
     );
     expect(out).toEqual({ exitCode: 0, message: 'policy owner approved current head' });
@@ -384,8 +384,8 @@ describe('enforcePolicy against this repository CODEOWNERS', () => {
       policyResult,
       await repoDeps({
         dirty: 'src/trust/guard.ts',
-        author: 'eparenti',
-        reviews: [{ userLogin: 'vishsanghishetty', state: 'APPROVED', commitId: 'stale' }],
+        author: 'outside-contributor',
+        reviews: [{ userLogin: 'eparenti', state: 'APPROVED', commitId: 'stale' }],
       }),
     );
     expect(out.exitCode).toBe(2);
