@@ -2423,7 +2423,7 @@ Categories:
 | 2.3.1 | Three Flashes or Below | A | Never | Seizure detection requires frame-by-frame photosensitivity analysis. A different tool. |
 | 2.4.1 | Bypass Blocks | A | Built (axe) | axe checks for skip links and landmark regions. |
 | 2.4.2 | Page Titled | A | Built (axe) | axe checks document title presence. |
-| 2.4.3 | Focus Order | A | Built (keyboard walk) | The walk records focus order. PF rulepack checks focus-into-dialog and focus-return. "Illogical" order is visible in the transcript; the contest check does not judge meaning. |
+| 2.4.3 | Focus Order | A | Built (keyboard walk) | The walk records focus order. PF rulepack checks focus-into-dialog and focus-return. "Illogical" order is visible in the transcript; the check does not judge meaning. |
 | 2.4.4 | Link Purpose (In Context) | A | Advisory | Whether link text is descriptive requires understanding intent. Model-judgment. |
 | 2.4.5 | Multiple Ways | AA | Never | Whether there are multiple ways to find a page is an IA decision, not testable per screen. |
 | 2.4.6 | Headings and Labels | AA | Built (axe) + Advisory | axe checks heading structure exists. Whether headings are descriptive is model-judgment. |
