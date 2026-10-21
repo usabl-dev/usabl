@@ -4,6 +4,31 @@
 
 ### Fixed
 
+- `pf-toast-live-region` now resolves each alert's live value from the nearest
+  element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector
+  whether any live container sits somewhere above the alert. The selector passed an
+  alert behind an `aria-live="off"` wrapper inside a polite region, and behind an off
+  wrapper inside a `role="status"` host, so a silent toast read as announced. It also
+  read `aria-live="OFF"`, empty, and unknown values as live. Now only the exact
+  lowercase tokens `polite` and `assertive` count. Any other value, including
+  `POLITE`, is off, because Chromium passes such a value to the screen reader as
+  written and nothing shows screen readers honor it. An empty value defers to the
+  role and the ancestors. Role names still match without regard to case, as Chromium
+  matches them, because exact-case roles would skip `role="TIMER"` and pass a silent
+  alert. An alert that sets off on itself is flagged. The walk now runs over CDP, so
+  it sees a slot inside a closed shadow root, and a page script cannot loop it. An
+  alert that closes before it is read, or that has more than 512 ancestors, is now its
+  own not-covered gap; before, one such alert ended the check and dropped every
+  finding on the screen. The `why` text on the finding now reads "No polite or
+  assertive live region reaches the alert."
+
+## 0.2.2 - 2026-10-21
+
+The first tagged release since v0.2.0. Version 0.2.1 was released without a git tag.
+usabl is not on npm. Install it from the `v0.2.2` tag, as the README shows.
+
+### Fixed
+
 - A screen a run did not reach signed in is no longer scored as that screen. On a
   login-gated application whose scan session had expired, usabl filed the sign-in
   page's barriers under the requested screen ids, disclosed nothing, and reported
@@ -313,26 +338,83 @@
   refusal names the field and where the key falls in the order the keys are read
   back, never the key itself, and it says that this order is not always the order
   the keys appear in the file.
-- `pf-toast-live-region` now resolves each alert's live value from the nearest
-  element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector
-  whether any live container sits somewhere above the alert. The selector passed an
-  alert behind an `aria-live="off"` wrapper inside a polite region, and behind an off
-  wrapper inside a `role="status"` host, so a silent toast read as announced. It also
-  read `aria-live="OFF"`, empty, and unknown values as live. Now only the exact
-  lowercase tokens `polite` and `assertive` count. Any other value, including
-  `POLITE`, is off, because Chromium passes such a value to the screen reader as
-  written and nothing shows screen readers honor it. An empty value defers to the
-  role and the ancestors. Role names still match without regard to case, as Chromium
-  matches them, because exact-case roles would skip `role="TIMER"` and pass a silent
-  alert. An alert that sets off on itself is flagged. The walk now runs over CDP, so
-  it sees a slot inside a closed shadow root, and a page script cannot loop it. An
-  alert that closes before it is read, or that has more than 512 ancestors, is now its
-  own not-covered gap; before, one such alert ended the check and dropped every
-  finding on the screen. The `why` text on the finding now reads "No polite or
-  assertive live region reaches the alert."
+- Readiness waits for a client-rendered page to finish rendering, not only for
+  the network to go quiet, and counts requests that start after the page first
+  goes idle. The operator can set the time budget. Before this, a scan could read
+  an empty page and report a screen it never saw as clean.
+- The keyboard walk runs on real applications. It had returned no findings on
+  every screen of a real PatternFly application while coverage still reported
+  clean.
+- Structural identity stays the same when a page remounts. An unchanged page no
+  longer reports one barrier as both fixed and new.
+- usabl refuses to grade a screen it never saw, and a run with no verdict names
+  its real reason instead of printing IDLE. Whether a screen was reached is now
+  based on positive evidence, not on two screens looking the same.
+- A floored identity is reported as fixed only when its screen was scanned
+  cleanly. Before this, a barrier on a screen nobody scanned could read as paid
+  down.
+- `usabl baseline` refuses to write a floor when the run has coverage gaps.
+- The evidence floor rejects two entries with the same identity, and counts that
+  are negative, fractional, or too large to compare safely.
+- An unreadable scan configuration produces a coverage gap and `not_covered`,
+  not an idle run.
+- The PatternFly rulepack keys on the markup PatternFly 6 emits. Three rules had
+  skipped the MenuToggle trigger, and the toolbar and alert rules matched the
+  BEM child elements as well as the blocks.
+- A rulepack check that throws no longer discards every other rulepack result on
+  that screen.
+- The kebab menu check judges focus against the menu the toggle opened.
+- `pf-toast-live-region` treats an alert inside `aria-live="off"` as not
+  announced.
+- Globs expand brace groups such as `src/**/*.{ts,tsx}`, and config load refuses
+  glob syntax the matcher does not support.
+- Coverage discovery resolves aliases the way Vite does and discovers routes in
+  data routers as URLs only. When a file cannot be resolved for certain, usabl
+  discloses it instead of guessing.
+- The CODEOWNERS policy gate can be satisfied. Patterns written with a leading
+  slash now match repository paths.
+- The generated CI workflow has one required check, `usabl-required`, that sees
+  both the accessibility verdict and the policy verdict, so an accessibility
+  regression cannot merge while the policy check is green.
+- The verdict summary names coverage usabl could not reach, the approval line
+  keeps the accessibility disclosure, every operator surface names the cause of a
+  block, and the CLI no longer prints the accessibility verdict twice.
+- The overlay recognizes a Vite config that imports the plugin across several
+  lines, and it reports a failed run instead of showing "Scanning" forever.
+- Stop hook policy pins are keyed by session and repository, so one session that
+  stops in two repositories no longer reports drift that never happened.
+- The retired Stop hook command match requires `usabl` to be a whole directory
+  name.
+- The drift report warns that an added route can be a false positive.
 
 ### Added
 
+- Project files for an open-source repository: a contributor guide that says the
+  project is not accepting pull requests yet, `AGENTS.md` rules for AI coding
+  agents, a Code of Conduct, a security policy with private vulnerability
+  reporting, and issue forms for bugs, features, and questions.
+- `checkPage()` in `usabl/playwright` runs the engine on a page a Playwright test
+  already opened, and returns a verdict with the same precedence as a full run.
+- `usabl install --claude-skill` writes two Claude Code skills: `/usabl-check`, the
+  advisory self-check, and `/usabl-fix`, which reads each finding, fixes it from
+  source, and checks again, treating page text as untrusted data.
+- `usabl install --cursor` wires Cursor: a stop hook that uses Cursor's
+  `followup_message` protocol, the `/usabl-check` command, and a rule scoped to
+  interface files.
+- Findings map to editable source locations. In development, the Vite plugin adds
+  `data-source-file` and `data-source-line` to component and native HTML elements,
+  so a finding points at the exact line.
+- The in-browser inspector is rebuilt as an advisory badge and issue list. Each
+  finding can be highlighted on the page or focused, and the highlight action
+  switches between Highlight it and Unhighlight.
+- The Result and the verified receipt record which rules applied on each screen,
+  so a screen that was checked and clean is told apart from one where nothing
+  matched.
+- A noise budget groups repeated findings by rule so a large application does not
+  flood a surface. Blocking and advisory findings are never grouped together.
+- `usabl doctor` checks that Playwright Chromium is installed, reports every
+  Claude skill, reads GitHub rulesets as well as classic branch protection, and
+  reports a path that CODEOWNERS gates but `guardedPaths` does not cover.
 - A surface's `reachedWhen` readiness signal can now name a data response as well
   as a selector: `"reachedWhen": { "selector": "table#users", "response": "/api/users" }`.
   The string form is still a selector on its own. Every declared part has to hold,
@@ -472,6 +554,8 @@
   to the item's content column, computed from the marker so `10.` stays
   aligned. The collapsed finding's rule line is a continuation of its item
   rather than a nested item, so the frame under it belongs to the right item.
+- The Stop hook and the self-check use one untrusted frame per message instead of
+  one per item, so a message with many gaps spends less of its length on markers.
 
 ### Security
 

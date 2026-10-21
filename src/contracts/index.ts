@@ -43,7 +43,7 @@ export interface EvidenceFacts {
 // Providers emit Draft only. They report observations and confidence, but never set status or verdict.
 export interface Draft {
   rule: string;
-  layer: string; // contest ids: 'axe' | 'pf' | 'walk'; stays open
+  layer: string; // built-in ids: 'axe' | 'pf' | 'walk'; stays open
   severity: Severity;
   evidenceClass: EvidenceClass; // only 'deterministic' (or later promoted) mints the gate verdict; preview and model-judgment surface, they never gate
   screenId: string;
@@ -286,7 +286,7 @@ export interface ConformanceSummary {
 // ---- evidence floor + waivers ----
 export interface FloorEntry {
   screenId: string;
-  layer: string; // contest: 'axe' | 'pf' | 'walk'
+  layer: string; // built-in: 'axe' | 'pf' | 'walk'
   rule: string;
   elementKey: string | null;
   identityBasis: IdentityBasis;

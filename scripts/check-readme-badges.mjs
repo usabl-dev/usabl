@@ -2,10 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// README badge checker. The repository is private, so shields.io cannot read
-// package.json and a dynamic badge would render as an error. The version badge
-// therefore stays hardcoded and this check is what stops it drifting from
-// package.json. It never guesses: an absent, duplicated, or unreadable badge is
+// README badge checker. The version badge is hardcoded, so it shows the version
+// in the same commit as the README rather than whatever a registry reports, and
+// this check is what stops it drifting from package.json. It never guesses: an absent, duplicated, or unreadable badge is
 // a failure with a stated reason, not a silent pass.
 
 const README_NAME = 'README.md';

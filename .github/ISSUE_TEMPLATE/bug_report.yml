@@ -1,0 +1,97 @@
+name: Bug report
+description: A wrong, missing, or confusing result, a crash, or a docs error
+title: "bug: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Do not report a security problem here. Follow [SECURITY.md](https://github.com/usabl-dev/usabl/blob/main/SECURITY.md) instead.
+
+        A result that reads as verified when it should not is the most important kind of bug. Please report it even if you are not sure.
+  - type: input
+    id: usabl-version
+    attributes:
+      label: usabl version
+      description: Run `npm ls usabl` in your app.
+      placeholder: "e.g. 0.2.2"
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      description: Run `node -v`.
+      placeholder: "e.g. v22.11.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "e.g. Fedora 43, macOS 15, Windows 11"
+    validations:
+      required: true
+  - type: input
+    id: framework
+    attributes:
+      label: App framework
+      description: The framework, bundler, and design system of the app you checked.
+      placeholder: "e.g. React 19, Vite 6, PatternFly 6"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did you see it?
+      options:
+        - CLI
+        - Overlay
+        - Stop hook
+        - CI or pull request comment
+        - Playwright helper
+        - Docs output (usabl docs)
+        - Documentation for usabl
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command and output
+      description: Paste the command you ran and its full output. Remove any secrets, tokens, or session data first.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: The verdict, message, or behavior you expected, and why.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, the URL or screen, and a link to a public repository or pull request if you have one.
+      placeholder: |
+        1. npx usabl init
+        2. npx usabl check
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: clarity
+    attributes:
+      label: Was the output clear?
+      description: Optional. Quote any label or sentence that was confusing or that did not match what happened.
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Other environment details
+      description: Optional. Browser and version, screen reader and version, or anything else that affects the result.
+    validations:
+      required: false
