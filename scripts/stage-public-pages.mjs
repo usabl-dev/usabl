@@ -8,30 +8,22 @@ import { fileURLToPath } from 'node:url';
 const SITE_BASE_PATH = '/usabl/';
 
 // The allowlist is the security boundary: only these files ever reach GitHub Pages.
-// Paths are relative to the docs source and may be nested; the deck ships under demo/
-// so its published URL is /usabl/demo/product-deck.html.
-const PUBLIC_FILES = [
-  'code-walkthrough.html',
-  'demo/product-deck.html',
-  'how-usabl-works.html',
-  'team-orientation.html',
-  'usabl-walkthrough.html',
-];
+// Paths are relative to the docs source and may be nested; a nested file keeps its
+// subdirectory in the published URL.
+const PUBLIC_FILES = ['code-walkthrough.html', 'how-usabl-works.html', 'usabl-walkthrough.html'];
 // The page served at the site root. The walkthrough is the document the project
 // hands out, so the bare site URL opens it rather than a directory listing.
 const INDEX_SOURCE = 'usabl-walkthrough.html';
 // The exact set the output directory must contain afterward, as sorted POSIX paths.
 const OUTPUT_FILES = [
   'code-walkthrough.html',
-  'demo/product-deck.html',
   'how-usabl-works.html',
   'index.html',
-  'team-orientation.html',
   'usabl-walkthrough.html',
 ];
 
 // Recursively list every regular file under dir as a sorted POSIX-relative path, so the
-// equality assertion below covers nested staged files (the deck) and never a directory entry.
+// equality assertion below covers nested staged files and never a directory entry.
 async function listStagedFiles(dir, base = dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   const files = [];

@@ -1,14 +1,15 @@
 # Run the accessibility proof loop
 
-Use the [usabl-app team demo runbook](https://github.com/usabl-dev/usabl-app/blob/main/README.md) for the complete live
-walkthrough. It is the single operational source for setup, commands, expected
+The [usabl-app README](https://github.com/usabl-dev/usabl-app/blob/main/README.md)
+walks you through the whole loop on a small PatternFly sample app with known
+accessibility barriers. It is the single source for setup, commands, expected
 results, repair, and recovery.
 
-Start with the [team orientation](../team-orientation.html). Read
+Start with the [usabl walkthrough](../usabl-walkthrough.html). Read
 [How usabl works](../how-usabl-works.html) when you need the result model, trust
 boundary, or system design.
 
-The runbook guides the team through:
+The sample app README guides you through:
 
 1. Experiencing several accessibility barriers in teaching previews.
 2. Changing the tracked source to the broken state.

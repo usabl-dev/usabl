@@ -4,12 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 // The static published pages carry no active content at all, so their policy can
 // refuse script outright.
-const staticPages = [
-  'docs/team-orientation.html',
-  'docs/how-usabl-works.html',
-  'docs/code-walkthrough.html',
-  'docs/demo/product-deck.html',
-];
+const staticPages = ['docs/how-usabl-works.html', 'docs/code-walkthrough.html'];
 
 // The walkthrough is the one published page with behaviour: the audience tabs and
 // the outcome simulator. It is held to the same policy shape, with script allowed
@@ -63,19 +58,17 @@ describe('public Pages security', () => {
     expect(html).toContain(`script-src 'sha256-${digest}'`);
   });
 
-  it('core README points to the published walkthrough and to no other document', async () => {
+  it('core README points to the published walkthrough and the contributor files', async () => {
     const readme = await readFile('README.md', 'utf8');
+    // The walkthrough is the first document the README hands out.
     expect(readme).toContain('https://usabl-dev.github.io/usabl/');
-    // The walkthrough is the single document the README hands out. Anything else here
-    // sends a reader to a page this project does not want to be the entry point.
-    for (const other of [
-      'team-orientation.html',
-      'how-usabl-works.html',
-      'code-walkthrough.html',
-      'CONTRIBUTING.md',
-      'docs/',
-    ]) {
-      expect(readme).not.toContain(other);
+    // An open-source README must lead a visitor to the contribution and security policies.
+    for (const file of ['CONTRIBUTING.md', 'CODE_OF_CONDUCT.md', 'SECURITY.md']) {
+      expect(readme).toContain(`](${file})`);
+    }
+    // Pages that were removed from the project must not come back as entry points.
+    for (const removed of ['team-orientation.html', 'product-deck.html', 'docs/demo/']) {
+      expect(readme).not.toContain(removed);
     }
   });
 });

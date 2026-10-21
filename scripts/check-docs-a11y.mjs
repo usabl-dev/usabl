@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 // Self-gate: usabl holds other products to WCAG 2.2 AA, so it holds its own
 // shipped HTML docs to the same bar. This scanner walks every `.html` file under
 // docs/, renders it in headless Chromium, and runs axe-core against it. A doc
-// that self-navigates one view at a time (the product deck shows one `.slide`
+// that self-navigates one view at a time (a slide deck that shows one `.slide`
 // per hash) is scanned once per view, because axe only sees what is visible.
 //
 // The view list is read from the live DOM, never hardcoded. An earlier harness
