@@ -74,7 +74,7 @@
     "docs:linkcheck": "node scripts/check-doc-links.mjs && node scripts/check-staged-links.mjs",
     "docs:a11y": "node scripts/check-docs-a11y.mjs",
     "docs:badges": "node scripts/check-readme-badges.mjs",
-    "prepare": "bash scripts/install-git-hooks.sh"
+    "prepare": "node -e \"if (require('node:fs').existsSync('scripts/install-git-hooks.sh')) process.exitCode = require('node:child_process').spawnSync('bash', ['scripts/install-git-hooks.sh'], { stdio: 'inherit' }).status ?? 1\""
   },
   "devDependencies": {
     "@types/js-yaml": "4.0.9",

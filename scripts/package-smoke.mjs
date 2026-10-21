@@ -31,6 +31,41 @@ try {
   const filename = report[0]?.filename;
   assert.equal(typeof filename, 'string', 'npm pack did not report an archive filename');
 
+  // The packed package must survive its own lifecycle scripts, so these steps leave scripts on.
+  // The tarball carries only dist and the changelog, so any script that points at a repository
+  // file breaks them. A consumer met that as a failed pack in CI, and had to delete the script.
+  const cleanApp = async (name) => {
+    const dir = join(workspace, name);
+    await mkdir(dir);
+    await writeFile(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: `usabl-${name}`, version: '1.0.0', private: true }, null, 2) + '\n',
+    );
+    return dir;
+  };
+
+  const tarballApp = await cleanApp('tarball-app');
+  const tarballInstall = run('npm', ['install', '--no-audit', '--no-fund', join(workspace, filename)], {
+    cwd: tarballApp,
+  });
+  assert.equal(tarballInstall.status, 0, failure('tarball install with scripts', tarballInstall));
+
+  const extracted = join(workspace, 'extracted');
+  await mkdir(extracted);
+  const untar = run('tar', ['-xzf', join(workspace, filename), '-C', extracted]);
+  assert.equal(untar.status, 0, failure('tarball extract', untar));
+  const unpacked = join(extracted, 'package');
+  const repackDir = join(workspace, 'repack');
+  await mkdir(repackDir);
+  const repacked = run('npm', ['pack', '--json', '--pack-destination', repackDir], { cwd: unpacked });
+  assert.equal(repacked.status, 0, failure('npm pack of the unpacked package with scripts', repacked));
+
+  const folderApp = await cleanApp('folder-app');
+  const folderInstall = run('npm', ['install', '--no-audit', '--no-fund', '--install-links', unpacked], {
+    cwd: folderApp,
+  });
+  assert.equal(folderInstall.status, 0, failure('folder install of the unpacked package with scripts', folderInstall));
+
   const consumer = join(workspace, 'consumer');
   await mkdir(consumer);
   await writeFile(
