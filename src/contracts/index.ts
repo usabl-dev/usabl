@@ -631,6 +631,22 @@ export interface GateInput {
   // apart. Required, never optional: the gate must always be told which screens it may claim a
   // paid-down `fixed` about, so a caller cannot leave the question unanswered and get a false green.
   cleanlyScannedScreens: ReadonlySet<string>;
+  // What each scanned screen showed of itself, by screen id. A cleanly scanned screen is still not
+  // proof that the part of the page holding a floored barrier rendered: a screen whose header
+  // mounted and whose content did not has no gap either. So a floored identity absent from the
+  // drafts is marked `fixed` only when this shows the screen's readiness signal held or the
+  // identity's own element was observed this run. Otherwise it is a coverage gap. Absent, or a
+  // screen missing from the map, means no such evidence, which is the safe reading: it can only
+  // turn a `fixed` into a gap, never the reverse. Build it with renderEvidenceOf in src/gate/.
+  renderEvidence?: ReadonlyMap<string, RenderEvidence>;
+}
+// What one scanned screen showed of itself. See GateInput.renderEvidence.
+export interface RenderEvidence {
+  // The surface declared a readiness signal and every declared part held.
+  signalHeld: boolean;
+  // Every element this run observed on the screen, through a keyboard stop or a draft, as the
+  // slots identitySlot reads off an identity key: "path:<neutralized path>" and "name:<slug>".
+  elementSlots: ReadonlySet<string>;
 }
 export interface GateOutput {
   verdict: Verdict | null;
@@ -639,8 +655,10 @@ export interface GateOutput {
   summary: string;
   accessibilityVerdict: AccessibilityVerdict | null;
   accessibilityExitCode: AccessibilityExitCode;
-  // A floor that predates barrier counting, whose placeholder counts cannot be compared at all.
-  // The gate counts the floor, so only the gate can find this, and it has already weighed it into
+  // Gaps the gate found while comparing the run with the floor: a floor that predates barrier
+  // counting, whose placeholder counts cannot be compared at all, and a screen whose floored
+  // barriers are absent while nothing shows their part of the page rendered (see renderEvidence).
+  // The gate counts the floor, so only the gate can find these, and it has already weighed them into
   // the verdict and named it in the summary. A caller that assembles a Coverage for the Result
   // appends these so the gaps a reader sees match the gaps the verdict was reached from.
   floorGaps: CoverageGap[];

@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- A floored barrier is no longer reported paid down on a screen whose content never
+  rendered. When a screen's header and navigation mounted and its content failed to
+  mount, the walk found a real control and no check failed, so the screen had no gap,
+  every floored barrier in the missing content was absent, and the run was verified
+  with those barriers marked `fixed`. Now an absent floored barrier is `fixed` only
+  when the screen's `reachedWhen` signal held, or when the walk or a check met the
+  barrier's own element, by its path or its accessible name. Otherwise the screen gets
+  a `not-covered` gap that names the screen and the rules, and the run is
+  `not_covered`. The floor format is unchanged. The cost: a counted barrier
+  (`button-name`, `pf-icon-button-name`) on a screen with no signal, or a fixed barrier
+  on an element the walk does not focus, now needs a `reachedWhen` signal or a
+  `usabl floor prune` before the run is verified again.
+
 - `pf-toast-live-region` now resolves each alert's live value from the nearest
   element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector
   whether any live container sits somewhere above the alert. The selector passed an

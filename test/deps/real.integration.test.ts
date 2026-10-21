@@ -2,8 +2,9 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { Provider, SurfaceConfig } from '../../src/contracts/index.js';
+import type { EvidenceFloor, GateOutput, Provider, SurfaceConfig } from '../../src/contracts/index.js';
 import { buildDeps } from '../../src/deps/build.js';
+import { gate, renderEvidenceOf } from '../../src/gate/index.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
 import { axeProvider } from '../../src/providers/axe/index.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
@@ -51,6 +52,9 @@ interface FixtureServer {
   // A page that asks for no data on load and requests the screen's data path only when a control
   // is focused, so the only answer to that path is one the walk caused.
   fetchOnFocusUrl: string;
+  // A header, a navigation, and a heading that always mount, and a table of orders that mounts only
+  // with ?content=ok. With ?content=fail its mount throws and nothing replaces it.
+  partialRenderUrl: string;
   close: () => Promise<void>;
 }
 
@@ -73,6 +77,7 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/magic-link.html': await readFixture('magic-link.html'),
     '/orders.html': await readFixture('orders-screen.html'),
     '/fetch-on-focus.html': await readFixture('fetch-on-focus.html'),
+    '/partial-render.html': await readFixture('partial-render.html'),
   };
   const spaFallback = await readFixture('spa-fallback.html');
   const authWall = await readFixture('auth-wall.html');
@@ -202,6 +207,7 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     ordersRecoveredUrl: `http://127.0.0.1:${address.port}/orders.html?recover=1`,
     spaFallbackUrl: `http://127.0.0.1:${address.port}/spa/orders`,
     fetchOnFocusUrl: `http://127.0.0.1:${address.port}/fetch-on-focus.html`,
+    partialRenderUrl: `http://127.0.0.1:${address.port}/partial-render.html`,
     close: async () =>
       new Promise<void>((resolve, reject) => {
         // The hang route leaves a socket open, and server.close() waits for it forever.
@@ -802,6 +808,89 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       const result = await scanWithSignal(fixture.ordersRecoveredUrl, undefined);
       expect(result.drafts).toBe(0);
       expect(result.gaps.some((reason) => reason.includes('401'))).toBe(true);
+    }, 30_000);
+  });
+
+  describe('a screen whose header mounted and whose content did not', () => {
+    // The floor accepted two barriers in the orders table: its two buttons had no name, which is a
+    // counted identity, and the first of them was too small, which is keyed by its path. The fixed
+    // screen names them and sizes them. The failed screen never renders the table at all.
+    const FLOOR: EvidenceFloor = {
+      version: 2,
+      entries: [
+        { screenId: 'orders', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count', count: 2 },
+        {
+          screenId: 'orders',
+          layer: 'axe',
+          rule: 'target-size',
+          elementKey: 'orders|target-size|struct:button:#orders>tbody>tr>td>button',
+          identityBasis: 'structural',
+          count: 1,
+        },
+      ],
+    };
+
+    // A real Chromium scan with axe, the unseen pass, and the gate, in the order run() uses them.
+    async function gateAfterScan(
+      content: 'ok' | 'fail',
+      floor: EvidenceFloor,
+      reachedWhen: SurfaceConfig['reachedWhen'],
+    ): Promise<GateOutput> {
+      const url = `${fixture.partialRenderUrl}?content=${content}`;
+      const runner = makeCheckRunner({
+        browser: driver,
+        providers: [axeProvider],
+        config: testConfig({
+          appBaseUrl: fixture.url,
+          surfaces: [{ id: 'orders', url, files: [], ...(reachedWhen === undefined ? {} : { reachedWhen }) }],
+        }),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+        transcriptTabCap: 5,
+      });
+      const { screens } = markUnseenScreens([await runner.scan({ id: 'orders', url })]);
+      return gate({
+        coverage: {
+          changedFiles: ['src/OrdersPage.tsx'],
+          affected: [{ screenId: 'orders', url, provenance: 'manual' }],
+          unresolvedFiles: [],
+          gaps: screens.flatMap((screen) => screen.gaps),
+          nothingToCheck: false,
+        },
+        guardDivergedPaths: [],
+        drafts: screens.flatMap((screen) => screen.drafts),
+        floor,
+        waivers: [],
+        now: '2026-01-01T00:00:00.000Z',
+        cleanlyScannedScreens: new Set(screens.filter((s) => s.gaps.length === 0).map((s) => s.screenId)),
+        renderEvidence: renderEvidenceOf(screens),
+      });
+    }
+
+    it('claims no barrier in the missing content fixed, and is not covered', async () => {
+      const out = await gateAfterScan('fail', FLOOR, undefined);
+      expect(out.findings.filter((finding) => finding.status === 'fixed')).toEqual([]);
+      expect(out.accessibilityVerdict).toBe('not_covered');
+      expect(out.floorGaps.some((gap) => gap.reason.includes('button-name'))).toBe(true);
+      expect(out.floorGaps.some((gap) => gap.reason.includes('target-size'))).toBe(true);
+    }, 30_000);
+
+    it('pays down both barriers on the rendered screen when its signal held', async () => {
+      const out = await gateAfterScan('ok', FLOOR, 'table#orders');
+      expect(out.floorGaps).toEqual([]);
+      expect(out.findings.filter((finding) => finding.status === 'fixed').map((f) => f.rule).sort()).toEqual([
+        'button-name',
+        'target-size',
+      ]);
+      expect(out.accessibilityVerdict).toBe('verified');
+    }, 30_000);
+
+    it('pays down the barrier keyed by its path on the rendered screen with no signal', async () => {
+      const structuralOnly: EvidenceFloor = { version: 2, entries: FLOOR.entries.filter((e) => e.identityBasis === 'structural') };
+      const out = await gateAfterScan('ok', structuralOnly, undefined);
+      expect(out.floorGaps).toEqual([]);
+      expect(out.findings.filter((finding) => finding.status === 'fixed').map((f) => f.rule)).toEqual(['target-size']);
+      expect(out.accessibilityVerdict).toBe('verified');
     }, 30_000);
   });
 

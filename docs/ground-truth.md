@@ -1016,7 +1016,9 @@ the address the scan asked for: a passkey prompt with one button, a magic-link f
 authentication wall that answers 200 to every request under it, including its own status call.
 None makes a refused request and none has a password field, so the three rules say nothing, and
 each has a real control to focus, so the body-only floor says nothing either. Each is scored as the
-screen when the surface declares no signal. Each is a gap when the surface declares a selector for
+screen when the surface declares no signal, unless the evidence floor holds a barrier for that
+screen: a floored barrier the page does not show, on a page the run cannot show rendered it, is a
+gap of its own (see "Absent is a fix only with evidence" in section 9). Each is a gap when the surface declares a selector for
 the screen's own table, and each is a gap when it declares the screen's own data path, because
 none of them renders that table or asks for that data. The same signal holds on the real screen.
 
@@ -1229,6 +1231,41 @@ The count comparison runs in both directions, and both are gate decisions:
   tell a paid-down barrier from a page rendering fewer rows today, so it says both readings and
   leaves the operator to pick: if the barriers were fixed, `usabl floor prune` re-arms the floor to
   what is present; if the page simply shows less content today, nothing needs to change.
+
+**Absent is a fix only with evidence the barrier's part of the page rendered.** A floored barrier
+missing from this run's drafts was either fixed or was on content that never rendered, and the two
+leave the same absence. A screen in the cleanly scanned set had no gap, but that is not enough: a
+screen whose header and navigation mount and whose content fails to mount has a real control to
+walk and no provider error, so it has no gap, and every floored barrier in the missing content is
+absent. That run used to be verified and to report the barriers paid down. So the gate marks an
+absent floored identity `fixed` only when one of these holds:
+
+- the screen's readiness signal (`reachedWhen`) was declared and every declared part held, or
+- the identity's own element was met this run: a keyboard stop or a draft on that screen at the
+  same element path, for a structural identity, or with the same accessible name, for a name
+  identity. A counted identity names no element, so only the signal can confirm it.
+
+Otherwise the identity is not claimed `fixed`, it is not reported as headroom, and its screen gets
+one `not-covered` gap that names the screen and the rules, never an element key, because a key
+carries page text. The run is then `not_covered`. Both tests are presence tests on sets, decided
+inside `gate()`, so they do not depend on order. `run()` builds the evidence from the scans with
+`renderEvidenceOf`, and a caller of the exported `gate()` that passes none gets the safe reading:
+no evidence, so a gap, never a `fixed`.
+
+No change to the floor format was needed: the element is read off the identity key the floor
+already stores. The cost falls on a genuinely fixed barrier the run cannot place. A counted barrier
+(`button-name`, `pf-icon-button-name`) on a screen with no signal, and a fixed barrier on an element
+the walk does not focus and no check reports, such as an image whose alternative text was added,
+now make the run `not_covered` until the operator declares `reachedWhen` for content only that
+screen has, or runs `usabl floor prune` and reviews the diff. `usabl floor prune` still removes such
+an entry, because it reads the screen's own scan gaps and this gap is the gate's, so the human
+review of the floor diff is what decides. `usabl baseline` without `--partial` refuses while the gap
+stands, as it does for any run that admits it did not see everything.
+
+What this still cannot catch. A path or a name that something else on the screen also has: another
+element at the same path once the position numbers are removed, or a header button with the same
+accessible name as the missing one. A signal that names the shell, which already lets a wrong page through (section
+8). Content that is missing and held no floored barrier, which leaves nothing to compare.
 
 ### The residual hole, and why it is open
 
