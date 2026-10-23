@@ -1277,11 +1277,33 @@ Two floor entries may not share an identity (the same `screenId`, `rule`, and `e
 layer is not part of it). The gate indexes the floor by that identity, so a second entry would
 replace the first, and which one survived would decide whether a barrier reads as new or carried.
 The floor is refused instead, with both entries named by position and never by key, because a key
-carries page text. The same parser runs on the floor file and, again, inside `gate()` on the floor
-it is handed, so a library caller that builds a floor by hand gets every check the file gets: the
-version, each entry's fields and count, the screen id grammar, and the duplicate check. The gate
-then reads only the floor the parser returned. A refusal is an `InputRefusedError` naming the
-field, for example `floor.entries[1]`.
+carries page text. One parser reads the floor everywhere: in `usabl check`, in `usabl floor
+prune`, in `usabl doctor`, and, again, inside `gate()` on the floor it is handed, so a library
+caller that builds a floor by hand gets every check the file gets: the version, each entry's
+fields and count, the screen id grammar, and the duplicate check. A refusal is an
+`InputRefusedError` naming the field, for example `floor.entries[1]`.
+
+`gate()` checks every other input it reads the same way, because a field of the wrong type is
+read in a way that looks like a pass. A `nothingToCheck` of "false" is truthy and read as idle,
+an `evidenceClass` of "Deterministic" never gates, and a `gaps` value with no length reads as no
+gaps. So the gate reads each input field once, checks what it read, and decides the verdict from
+that checked copy only. A getter that returned one value to the check and another to the gate
+would otherwise put an unchecked value in the verdict. What it checks:
+
+- `coverage` and every draft against the Result contract, with the reader `usabl comment`
+  uses: `nothingToCheck` is a boolean, every list is a list, every closed set holds one of its
+  values (evidence class, confidence, severity, gap state, provenance, profile), every text
+  field is a string, and a draft's evidence has the shape the contract gives it. A layer only has
+  to be a string, because the contract leaves layers open.
+- The floor with the floor parser, and every waiver with the waiver parser the ledger file goes
+  through, so a waiver's `created` and `expires` must be ISO-8601 UTC. The gate compares
+  `expires` with its clock as text, which is only a date comparison in that format.
+- `guardDivergedPaths` is a list of strings, and `now` is an ISO-8601 UTC timestamp.
+- `cleanlyScannedScreens` is a real `Set`. Its members are read through `Set`'s own iterator
+  and copied into a new set, and only that copy decides which floored identities may be marked
+  `fixed`, so an object or a subclass that answers `has` for screens it does not hold cannot
+  mark a barrier fixed on a screen nobody scanned.
+- Every screen and surface id against the id grammar, as above.
 
 ### Failure taxonomy
 
@@ -2149,9 +2171,12 @@ A refusal is an `InputRefusedError`, exported from the package entry. Its `field
 the refused value with its position, for example `floor.entries[2].screenId`, and its message
 names the same path, the grammar's reason, and the position and code point of a refused
 character. Neither ever contains the id. On the command path every one of these ids already
-passed a reader, so a run refuses nothing it accepted before, with one exception: a floor entry
-or waiver whose id the grammar refuses used to be read and match nothing, and now the file is
-refused. That run ends as an unhandled error (exit 4) whose summary names the entry by position.
+passed a reader, so nothing that was accepted before is refused now, with one exception: a floor
+entry or waiver whose id the grammar refuses used to be read and match nothing, and now the file
+is refused by every command that reads it, because they share one parser. `usabl check` ends as
+an unhandled error (exit 4) whose summary names the entry by position. `usabl floor prune`
+refuses with exit 4 and writes nothing. `usabl doctor` reports the evidence floor or the waiver
+ledger as drifted.
 The grammar governs screen and surface ids only. It does not govern rule ids, element keys,
 waiver scopes, receipt `notCovered` entries (file references), or receipt `surfaces` (output
 channels).

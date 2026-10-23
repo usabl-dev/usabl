@@ -466,3 +466,23 @@ describe('floor command parsing', () => {
     }
   });
 });
+
+describe('floor prune with a floor entry the id grammar refuses', () => {
+  it('refuses with exit 4, writes nothing, and never repeats the id', async () => {
+    const config: UsablConfig = testConfig();
+    const bad = JSON.stringify({
+      version: 2,
+      entries: [{ screenId: 'leak-me​now', layer: 'axe', rule: 'color-contrast', elementKey: null, identityBasis: 'count', count: 1 }],
+    });
+    const deps = makeFakeDeps({ ...withPolicyFiles({ '.usabl-evidence.json': bad }), scans: { clusters: scanWith([]) } });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, config, writer);
+
+    expect(outcome.exitCode).toBe(4);
+    expect(outcome.wrote).toBe(false);
+    expect(writer.writes).toHaveLength(0);
+    expect(outcome.message).toContain('entries[0].screenId');
+    expect(outcome.message).not.toContain('leak-me');
+  });
+});

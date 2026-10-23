@@ -770,6 +770,30 @@ export default defineConfig({
     expect(stateOf(reports, 'waivers')).toBe('drifted');
   });
 
+  it('reports an evidence floor and a waiver ledger whose screen ids the id grammar refuses as drifted', async () => {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+      fs: readOnlyFs({
+        '.usabl-evidence.json': JSON.stringify({
+          version: 2,
+          entries: [{ screenId: 'a\u200bb', layer: 'axe', rule: 'r', elementKey: null, identityBasis: 'count', count: 1 }],
+        }),
+        '.usabl-waivers.json': JSON.stringify({
+          version: 1,
+          waivers: [{
+            rule: 'r', surface: 'a\u200bb', scope: '*', reason: 'x', owner: 'o', approvedBy: 'p',
+            created: '2026-01-01T00:00:00.000Z', expires: '2027-01-01T00:00:00.000Z',
+          }],
+        }),
+      }),
+      gh: GH_UNAVAILABLE,
+      configPath: 'usabl.config.json',
+      }),
+    );
+    expect(stateOf(reports, 'evidence-floor')).toBe('drifted');
+    expect(stateOf(reports, 'waivers')).toBe('drifted');
+  });
+
   it('reports a differing ci workflow as drifted, never wired', async () => {
     const reports = await collectDoctorReport(
       doctorDeps({

@@ -33,11 +33,10 @@ import { enrichAppFindings } from './app/source-map.js';
 import { gate } from './gate/index.js';
 import { mintReceipt, summarizeApplicability } from './evidence/receipt.js';
 import { parseEvidenceFloor } from './evidence/floor.js';
+import { parseWaiver } from './evidence/waivers.js';
 import { parseUsablConfig } from './intake/config.js';
 import { loadRequirements } from './intake/load.js';
 import { overlayRequirementsFs } from './intake/overlay-fs.js';
-import { assertIdField } from './intake/input-refusal.js';
-import { assertIso8601Utc } from './primitives/iso8601.js';
 import { checkGuard } from './trust/guard.js';
 
 // Declared here rather than imported from baseline/, which imports run() and would cycle.
@@ -53,37 +52,6 @@ export interface RunOptions {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function parseWaiver(value: unknown, index: number): Waiver {
-  if (!isRecord(value)) {
-    throw new Error('waiver entry must be an object');
-  }
-
-  const rule = value['rule'];
-  const surface = value['surface'];
-  const scope = value['scope'];
-  const reason = value['reason'];
-  const owner = value['owner'];
-  const approvedBy = value['approvedBy'];
-  const created = value['created'];
-  const expires = value['expires'];
-
-  if (typeof rule !== 'string') throw new Error('waiver rule must be a string');
-  // The surface is a screen id, so it answers to the shared id grammar. A surface the grammar
-  // refuses can never match a screen, so the waiver would match nothing while reading as live.
-  // The refusal names the waiver by position and never repeats the id.
-  assertIdField('waiver ledger', `waivers[${index}].surface`, surface);
-  if (typeof scope !== 'string') throw new Error('waiver scope must be a string');
-  if (typeof reason !== 'string') throw new Error('waiver reason must be a string');
-  if (typeof owner !== 'string') throw new Error('waiver owner must be a string');
-  if (typeof approvedBy !== 'string') throw new Error('waiver approvedBy must be a string');
-  if (typeof created !== 'string') throw new Error('waiver created must be a string');
-  if (typeof expires !== 'string') throw new Error('waiver expires must be a string');
-  assertIso8601Utc(created, 'waiver created');
-  assertIso8601Utc(expires, 'waiver expires');
-
-  return { rule, surface, scope, reason, owner, approvedBy, created, expires };
 }
 
 // Exported so the read-only doctor projection can report waiver-ledger parse health without

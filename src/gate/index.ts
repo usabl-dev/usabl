@@ -24,11 +24,12 @@ const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
 // this one. run.ts keeps its own copy for the same reason.
 const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
 
-export function gate(input: GateInput): GateOutput {
+export function gate(raw: GateInput): GateOutput {
   // The gate checks its own input, because it is exported and a library caller can build one by
-  // hand. It then reads only the floor the parser returned. See ./input.ts.
-  const floor = checkGateInput(input);
-  const accessibility = accessibilityOutcome({ ...input, floor });
+  // hand. It reads the caller's input once and from then on reads only the checked copy. See
+  // ./input.ts.
+  const input = checkGateInput(raw);
+  const accessibility = accessibilityOutcome(input);
   if (input.guardDivergedPaths.length > 0) {
     // Policy divergence is a human approval problem, not an accessibility skip.
     // Keep the scan outcome so CI can AND a second check without GitHub inside the gate.
@@ -324,7 +325,7 @@ interface Differential {
 }
 
 export function buildFindings(input: GateInput): Finding[] {
-  return differential({ ...input, floor: checkGateInput(input) }).findings;
+  return differential(checkGateInput(input)).findings;
 }
 
 function differential(input: GateInput): Differential {

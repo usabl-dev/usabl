@@ -84,8 +84,18 @@
   gate, and `checked`, `applicability[].screenId`, and the config's `surfaces[].id` and
   `noiseBudget.perSurface` keys on the receipt. Reading `.usabl-evidence.json` and
   `.usabl-waivers.json` now checks their screen ids too. A floor entry or waiver whose
-  id the grammar refuses used to match nothing; now the file is refused and the run
-  ends with exit 4, naming the entry by position.
+  id the grammar refuses used to match nothing; now the file is refused. `usabl check`
+  ends with exit 4, naming the entry by position, `usabl floor prune` refuses with exit 4,
+  and `usabl doctor` reports the file as drifted.
+- `gate()` now checks every other input field the verdict depends on, reads each one once,
+  and decides from the checked copy only. A JavaScript caller with a type slip used to get a
+  false green: a `nothingToCheck` of "false" read as idle with a failing barrier, and an
+  `evidenceClass` of "Deterministic" returned `verified`. Coverage and drafts are checked
+  against the Result contract, so every closed set must hold one of its values. Waivers go
+  through the ledger's waiver parser, so their dates must be ISO-8601 UTC. `now` must be
+  ISO-8601 UTC, and `guardDivergedPaths` a list of strings. `cleanlyScannedScreens` must be a
+  real `Set`, and its members are copied before use, so an object that answers `has` for
+  every screen can no longer mark a barrier fixed on a screen nobody scanned.
 - Every refusal above is an `InputRefusedError`, now exported from the package entry.
   Its `field` names the refused value by path and position, for example
   `floor.entries[2].screenId`. The message never contains the value. A duplicate floor

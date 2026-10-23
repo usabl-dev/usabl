@@ -16,6 +16,9 @@
  * found there, because the value may be text written to render as a link or a mention. A record
  * key is page text too, so a bad record entry is named by its position, not its key.
  *
+ * The draft and coverage readers are also exported for the gate, which checks the drafts and the
+ * coverage a library caller hands it against the same contract, with its own wording.
+ *
  * This unit checks shape only. It must never decide a verdict, and it does not judge whether the
  * values agree with each other: the receipt, not the document, is what proves a run happened.
  */
@@ -43,9 +46,54 @@ type Json = Record<string, unknown>;
 
 const FIX = 'Pass the Result JSON that "usabl check --json" wrote, unchanged.';
 
+/**
+ * One field that does not match the contract. Readers throw it, and each public entry point turns
+ * it into an InputRefusedError worded for its own caller. The problem text never holds the value.
+ */
+class ShapeProblem extends Error {
+  readonly field: string;
+  readonly problem: string;
+
+  constructor(field: string, problem: string) {
+    super(problem);
+    this.field = field;
+    this.problem = problem;
+  }
+}
+
 function refuse(field: string, problem: string): never {
-  const where = field.length === 0 ? 'The Result' : `The Result field ${field}`;
-  throw new InputRefusedError(field, `${where} ${problem}. ${FIX}`);
+  throw new ShapeProblem(field, problem);
+}
+
+/** Runs a reader and words any problem it finds for the caller. */
+function worded<T>(read: () => T, word: (field: string, problem: string) => string): T {
+  try {
+    return read();
+  } catch (err) {
+    if (err instanceof ShapeProblem) {
+      throw new InputRefusedError(err.field, word(err.field, err.problem));
+    }
+    throw err;
+  }
+}
+
+const resultWording = (field: string, problem: string): string =>
+  `${field.length === 0 ? 'The Result' : `The Result field ${field}`} ${problem}. ${FIX}`;
+
+/**
+ * Reads one Draft against the contract and returns a copy built from the checked fields. Each
+ * field is read once. `source` names the caller in the refusal, for example "gate() input".
+ */
+export function readDraftShape(value: unknown, field: string, source: string): Draft {
+  return worded(() => draft(value, field), (at, problem) => `${source} ${at} ${problem}.`);
+}
+
+/**
+ * Reads one Coverage against the contract and returns a copy built from the checked fields, with
+ * the same wording as readDraftShape. It checks shape only, not the id grammar.
+ */
+export function readCoverageShape(value: unknown, field: string, source: string): Coverage {
+  return worded(() => coverage(value, field), (at, problem) => `${source} ${at} ${problem}.`);
 }
 
 function at(path: string, key: string): string {
@@ -367,6 +415,10 @@ function headroom(value: unknown, field: string): FloorHeadroom {
  * accessibility exit code of 2, is the one forgery that would move a required status.
  */
 export function parseResultDocument(value: unknown): Result {
+  return worded(() => readResult(value), resultWording);
+}
+
+function readResult(value: unknown): Result {
   const source = record(value, '');
   if (source['schemaVersion'] !== 'usabl.result.v1') {
     refuse('schemaVersion', 'must be usabl.result.v1');

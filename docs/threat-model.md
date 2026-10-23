@@ -60,12 +60,18 @@ re-baseline to green.
   user resets the baseline with no message, so pins are best-effort against an
   agent with a shell.
 - The exported `gate()` and `mintReceipt()` check their own input, because a library caller can
-  build it by hand and skip every file reader. The gate parses the floor it is handed with the
-  parser the floor file goes through, so two entries at one identity are refused. Before, they
-  were indexed last-wins, so entry order decided whether a barrier read as new or carried, and
-  one order was a false green. Both functions check every screen and surface id against the
-  shared id grammar. A refusal is a typed `InputRefusedError` that names the field and its
-  position and never repeats the value.
+  build it by hand and skip every file reader. The gate reads each input field once and decides
+  the verdict from the checked copy only. It parses the floor with the floor file parser, so two
+  entries at one identity are refused; before, they were indexed last-wins, so entry order
+  decided whether a barrier read as new or carried, and one order was a false green. It checks
+  `coverage` and every draft against the Result contract (a boolean `nothingToCheck`, real
+  lists, every closed set such as evidence class, confidence, and severity, and string text
+  fields; a layer is any string, as the contract leaves layers open), every waiver with the
+  ledger's waiver parser (including ISO-8601 UTC dates), `guardDivergedPaths` as a list of
+  strings, `now` as an ISO-8601 UTC timestamp, and `cleanlyScannedScreens` as a real `Set`,
+  copied before use. `mintReceipt()` checks the screen and surface ids it is handed. Both check
+  every screen and surface id against the shared id grammar. A refusal is a typed
+  `InputRefusedError` that names the field and its position and never repeats the value.
 
 **Status:** [x] Documented in ground-truth.
 
