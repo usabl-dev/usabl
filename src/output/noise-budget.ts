@@ -36,6 +36,9 @@ export interface NoiseBudgetView {
   grouped: boolean;
   collapsed: boolean;
   maxShown: number;
+  // How many rule groups there are before the budget slices them, so a surface that shows fewer
+  // groups than `groups` holds can say how many it shows out of how many.
+  totalGroupCount: number;
   showAllHint: string | null;
 }
 
@@ -178,6 +181,7 @@ export function applyNoiseBudget(
       grouped: false,
       collapsed: false,
       maxShown,
+      totalGroupCount: 0,
       showAllHint: null,
     };
   }
@@ -206,6 +210,7 @@ export function applyNoiseBudget(
     grouped,
     collapsed,
     maxShown,
+    totalGroupCount: groups.length,
     showAllHint,
   };
 }
@@ -249,6 +254,7 @@ export function applyNoiseBudgetPerSurface(
     grouped,
     collapsed,
     maxShown: resolveNoiseBudgetDefault(config),
+    totalGroupCount,
     // Disclose the total whenever grouping or truncation means the shown groups do not map one to
     // one to findings, so the overlay's group list and its finding count never disagree silently.
     showAllHint:

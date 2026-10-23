@@ -208,6 +208,17 @@ for (const surface of SURFACES) {
       expect(sealed(text)).toBe(true);
     });
 
+    it('names a verdict that is an Object prototype key as unrecognized, never as a function', () => {
+      // A plain-object lookup finds inherited members, so a verdict of "toString" used to print
+      // the function's source where the verdict word belongs.
+      for (const verdict of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf']) {
+        const text = surface.render(result({ verdict: verdict as unknown as Result['verdict'], findings: [] }));
+        expect(text, verdict).not.toContain('function');
+        expect(text, verdict).not.toContain('[native code]');
+        expect(text, verdict).not.toContain('[object Object]');
+      }
+    });
+
     it('prints an exit code only when it really is a whole number', () => {
       const text = surface.render(
         result({ verdict: null, exitCode: PAYLOAD as unknown as Result['exitCode'], summary: 'reserved', findings: [] }),

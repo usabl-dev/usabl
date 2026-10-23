@@ -29,6 +29,15 @@ export function wholeNumberText(value: unknown): string {
   return typeof value === 'number' && Number.isInteger(value) ? String(value) : UNKNOWN_VALUE;
 }
 
+/**
+ * The entry a table holds for a carried key, or undefined when the table has none of its own. A
+ * plain lookup also finds what every object inherits, so a key such as "toString" would return a
+ * function and print its source where a word belongs.
+ */
+export function ownEntry<T>(table: Readonly<Record<string, T>>, key: unknown): T | undefined {
+  return typeof key === 'string' && Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 /** An enum value as text when it is one of the words given, and the word for one that is not. */
 export function knownWordText(value: unknown, words: readonly string[]): string {
   return typeof value === 'string' && words.includes(value) ? value : UNKNOWN_VALUE;

@@ -387,7 +387,11 @@ mechanism. They print plain text to a language model with no renderer involved, 
 there is the untrusted frame rather than a code span. Every value the Result carries is
 inside the frame or is type-checked first: the gate's summary, each barrier's rule, layer,
 screen id, experience, fix, and source, each coverage gap's ref and reason, the guarded file
-paths, and the receipt's `sourceTree`. What those two surfaces print outside the frame is the
+paths, and the receipt's `sourceTree`, both on a verified run and on the stop hook's fast
+path, where the receipt is read from a file in the work tree. A verdict is looked up only
+among a table's own entries, so a verdict named after something every object inherits, such
+as `toString`, is printed as unrecognized and never as the source of a function. What those
+two surfaces print outside the frame is the
 verdict word and its meaning, the next step, the labels, the counts and the exit code once
 each is checked to be a whole number, and a group's status and severity once each is checked
 to be one of the contract's words. A value that fails its check is printed as "unknown". The

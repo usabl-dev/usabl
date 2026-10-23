@@ -14,7 +14,7 @@ import type {
   Verdict,
 } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
-import { NOT_A_LIST, wholeNumberText } from '../output/carried.js';
+import { NOT_A_LIST, ownEntry, wholeNumberText } from '../output/carried.js';
 import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence } from '../output/disclosure.js';
 import {
@@ -188,7 +188,7 @@ const HEADLINE: Record<Verdict, string> = {
 // verdict string, so the lookup can miss, and printing the miss put the word "undefined" where
 // the verdict belongs.
 function headlineFor(verdict: Verdict): string {
-  return HEADLINE[verdict] ?? 'UNRECOGNIZED VERDICT';
+  return ownEntry(HEADLINE, verdict) ?? 'UNRECOGNIZED VERDICT';
 }
 
 function projectHeadline(verdict: Verdict): string {

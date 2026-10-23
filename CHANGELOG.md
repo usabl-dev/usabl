@@ -88,8 +88,18 @@
   same number: `barrier 1: axe/color-contrast`. A single barrier reads
   `Barrier: [new serious] (×3)`. The guarded file line now gives the count, and the
   paths follow the gate's summary inside the frame as `guarded files: ...`, and are
-  never dropped when a message is shortened. The verified allow line no longer carries
-  the receipt's source tree; it follows inside the frame.
+  never dropped when a message is shortened. A single barrier also names its layer and
+  screen inside the frame: `barrier: axe/color-contrast` and `screen: <id>`. The verified
+  allow line no longer carries the receipt's source tree; it follows inside the frame. The
+  stop hook's fast-path allow, on a stored receipt, now reads "VERIFIED (exit 0): a stored
+  receipt matches this tree. You may stop." with the source tree inside the frame too.
+- A shortened stop-hook or self-check message now drops a barrier's headline together with
+  its pieces in the frame. It used to drop pieces from the end and keep every headline, so
+  a message could list barriers whose rule, screen, and fix it no longer held. The note now
+  says how many barriers were left out, and the show-all hint counts only those still shown.
+- A verdict named after something every object inherits, such as `toString` or
+  `constructor`, now prints as an unrecognized verdict on all three surfaces. A plain table
+  lookup found the inherited member, so the verdict word was the source text of a function.
 - A coverage gap list or a guarded path list that is not a list is now reported as
   unreadable on both surfaces. Walking it used to throw, which the stop hook reported
   as a hook error and let the stop through.

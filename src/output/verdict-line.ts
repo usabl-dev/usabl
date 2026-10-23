@@ -13,7 +13,7 @@
  * no state depends on colour to be understood.
  */
 import type { Result } from '../contracts/index.js';
-import { wholeNumberText } from './carried.js';
+import { ownEntry, wholeNumberText } from './carried.js';
 
 export interface VerdictLine {
   symbol: string;
@@ -107,10 +107,10 @@ export function describeVerdict(result: Result): VerdictLine {
     };
   }
   return {
-    symbol: VERDICT_SYMBOLS[result.verdict] ?? '',
-    word: VERDICT_WORDS[result.verdict] ?? UNRECOGNIZED_VERDICT_WORD,
+    symbol: ownEntry(VERDICT_SYMBOLS, result.verdict) ?? '',
+    word: ownEntry(VERDICT_WORDS, result.verdict) ?? UNRECOGNIZED_VERDICT_WORD,
     exitCode: result.exitCode,
-    meaning: VERDICT_MEANINGS[result.verdict] ?? 'usabl reached a verdict it has no words for.',
+    meaning: ownEntry(VERDICT_MEANINGS, result.verdict) ?? 'usabl reached a verdict it has no words for.',
     noVerdict: false,
   };
 }

@@ -1479,7 +1479,10 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - Unconfigured repo or unreadable input: loud fail-open. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. A run that started and failed prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
 - Nothing to check (no UI files in the diff): allow with explicit "nothing to check"
   message. Not `not_covered`.
-- Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser.
+- Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser. The line reads
+  "VERIFIED (exit 0): a stored receipt matches this tree. You may stop.", and the receipt's
+  `sourceTree` follows inside the untrusted frame, because it was read from a file in the
+  work tree.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is
   "No new barrier blocks this change. It can proceed." and the stop hook allows with
@@ -1504,11 +1507,21 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   A barrier headline outside the frame reads `- barrier 1: [new serious] (×3)`, and its
   pieces inside the frame carry the same number: `barrier 1: axe/color-contrast`,
   `screen (1): ...`, `experience (1): ...`, `fix (1): ...`. One barrier reads
-  `Barrier: [new serious] (×3)` with `barrier: <rule>` inside. When guarded files changed,
+  `Barrier: [new serious] (×3)` with `barrier: <layer>/<rule>` and `screen: <id>` inside, then
+  its experience and fix. When guarded files changed,
   the scaffold line gives their count, for example `Guarded files changed: 2, named under
   "guarded files" in the untrusted text below`, and the piece `guarded files: <paths>`
   follows the gate's summary and is never dropped when the message is shortened. A field
-  that should be a list and is not is reported as unreadable rather than walked.
+  that should be a list and is not is reported as unreadable rather than walked. A verdict
+  that is not one of the contract's words is printed as an unrecognized verdict on every
+  surface, including a name every object inherits, such as `toString`, which a plain table
+  lookup used to find and print as the source of a function.
+- When a message is over its budget, whole barriers are dropped first, from the last one: a
+  barrier's headline goes with its pieces in the frame, so no headline is left whose rule is
+  nowhere in the message. Coverage gap lines go only after every barrier is gone. The note
+  says how many lines and how many barriers were left out, in the form "[shortened to fit
+  the message budget, N line(s) omitted (K barrier(s) left out); run usabl check --json for
+  the full list]", and the show-all hint counts only the barriers still shown.
 - A findable single-run bypass (the "usabl bypass" command writes a one-shot .usabl/bypass-once file) so a wrong block means "bypass once and
   file it," not "delete the hook."
 

@@ -5,16 +5,11 @@
  */
 import type { Result, UsablConfig, Verdict } from '../contracts/index.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
-import { fixOrAbsence, isBlockingBarrier } from '../output/disclosure.js';
-import {
-  applyNoiseBudget,
-  formatCollapsedGroupStatus,
-  resolveNoiseBudgetDefault,
-  type CollapsedFindingGroup,
-} from '../output/noise-budget.js';
+import { isBlockingBarrier } from '../output/disclosure.js';
+import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-budget.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
-import { guardedFileLines, notEvaluatedPieces } from './model-pieces.js';
-import { frameUntrustedBlock, scrubResult } from './scrub.js';
+import { barrierLines, guardedFileLines, notEvaluatedPieces } from './model-pieces.js';
+import { frameUntrustedBlock, scrubResult, scrubString } from './scrub.js';
 
 export interface HookContext {
   stopHookActive: boolean;
@@ -146,24 +141,6 @@ function summaryPiece(result: Result): string {
 }
 
 /**
- * A group whose free-text fields are bounded for printing. The count is left alone, so a
- * headline can say how many findings a rule stands for even when the rule was cut short.
- *
- * The screen id, the layer, and the rule are all printed inside the frame, never in a headline.
- * The rule used to be printed outside it, on the argument that the first-party providers author
- * it. That argument is about who wrote a value, and the Result does not record who wrote it: a
- * library caller can supply a check runner of its own, so the decision is by carrier instead.
- */
-function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
-  return {
-    ...group,
-    screenId: boundField(group.screenId, 'screenId'),
-    layer: boundField(group.layer, 'layer'),
-    rule: boundField(group.rule, 'rule'),
-  };
-}
-
-/**
  * The whole block message, with at most one untrusted frame.
  *
  * It opens with the verdict word and exit code, what the verdict means, and the next step, so a
@@ -175,7 +152,7 @@ function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
  * each barrier's rule, layer, screen id, experience, and fix, and each gap detail.
  *
  * Inside the frame the pieces read in the order a reader needs them: each barrier opens with a
- * "barrier:" line naming its rule, and the "Not evaluated:" label sits directly above the gap
+ * "barrier:" line naming its layer and rule, and the "Not evaluated:" label sits directly above the gap
  * lines rather than outside the frame, so a reader never meets "Not evaluated:" and then reads
  * about a button. Both labels are engine text; they are pieces only so they stay next to what
  * they label.
@@ -209,41 +186,40 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   const keepPieces = pieces.length;
 
   // Each free-text field is bounded on its own before it is labelled and framed, so a huge page
-  // string shortens with a visible note and the counts around it stay whole. The scaffold line for
-  // a group carries only its checked status, severity, and count; the rule, the layer, and the
-  // screen id are pieces. Groups are numbered, so a scaffold line and its pieces match by number,
-  // and no label is built from a value the Result carried.
-  if (view.groups.length === 1 && !view.collapsed) {
-    const group = boundGroup(view.groups[0]!);
-    scaffold.push(`Barrier: ${formatCollapsedGroupStatus(group)}`);
-    pieces.push(`barrier: ${group.rule}`);
-    pieces.push(`experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`);
-    pieces.push(`fix: ${boundField(fixOrAbsence(group.representative), 'fix')}`);
-  } else if (view.groups.length > 0) {
-    scaffold.push('Barriers:');
-    view.groups.forEach((raw, index) => {
-      const group = boundGroup(raw);
-      const n = index + 1;
-      scaffold.push(`- barrier ${n}: ${formatCollapsedGroupStatus(group)}`);
-      pieces.push(`barrier ${n}: ${group.layer}/${group.rule}`);
-      pieces.push(`screen (${n}): ${group.screenId}`);
-      pieces.push(`experience (${n}): ${boundField(group.representative.whatUserExperiences, 'experience')}`);
-      pieces.push(`fix (${n}): ${boundField(fixOrAbsence(group.representative), 'fix')}`);
-    });
-    if (view.showAllHint !== null) {
-      scaffold.push(view.showAllHint);
-    }
-  }
+  // string shortens with a visible note and the counts around it stay whole. See barrierLines for
+  // what a barrier prints outside the frame and what inside it.
+  const barriers = barrierLines(view);
 
   const gapPieces = notEvaluatedPieces(result);
-  if (gapPieces.length > 0) {
-    pieces.push('Not evaluated:', ...gapPieces);
-  }
+  const tailPieces = gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : [];
 
-  // The whole message is bounded as well as each field. Whole pieces go first, then trailing
-  // scaffold lines, never the opening lines or the summary piece, and the frame is rebuilt
-  // around what survives.
-  return assembleBoundedMessage({ scaffold, keep, pieces, keepPieces, frame: frameUntrustedBlock });
+  // The whole message is bounded as well as each field. Whole barriers go first, headline and
+  // pieces together, then gap lines, never the opening lines, the summary piece, or the guarded
+  // file piece, and the frame is rebuilt around what survives.
+  return assembleBoundedMessage({
+    scaffold,
+    keep,
+    pieces,
+    keepPieces,
+    ...barriers,
+    tailPieces,
+    frame: frameUntrustedBlock,
+  });
+}
+
+/**
+ * The allow line for a stored receipt that still matches the working tree. The stop hook prints
+ * it on the fast path, before any run, so no Result exists yet. The receipt was read from a file
+ * in the work tree, so its source tree is a carried value and goes inside the frame.
+ */
+export function formatStoredReceiptAllow(sourceTree: unknown): string {
+  return assembleBoundedMessage({
+    scaffold: ['VERIFIED (exit 0): a stored receipt matches this tree. You may stop.'],
+    keep: 1,
+    pieces: [`receipt sourceTree: ${boundField(scrubString(String(sourceTree)), 'receipt')}`],
+    keepPieces: 1,
+    frame: frameUntrustedBlock,
+  });
 }
 
 export function evaluateStopDecision(

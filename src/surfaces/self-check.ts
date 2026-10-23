@@ -5,16 +5,11 @@
  */
 import type { Result, UsablConfig } from '../contracts/index.js';
 import { SELF_CHECK_MESSAGE_BUDGET, assembleBoundedMessage, boundField } from '../output/bounded-text.js';
-import { fixOrAbsence, isBlockingBarrier } from '../output/disclosure.js';
-import {
-  applyNoiseBudget,
-  formatCollapsedGroupStatus,
-  resolveNoiseBudgetDefault,
-  type CollapsedFindingGroup,
-} from '../output/noise-budget.js';
+import { isBlockingBarrier } from '../output/disclosure.js';
+import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-budget.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
-import { guardedFileLines, notEvaluatedPieces } from './model-pieces.js';
+import { barrierLines, guardedFileLines, notEvaluatedPieces } from './model-pieces.js';
 import { frameUntrustedBlock, scrubResult } from './scrub.js';
 
 // The source location goes inside the untrusted frame with the other page-derived pieces. A
@@ -35,18 +30,6 @@ function pushSourcePieces(
       `candidates${label}: ${boundField(finding.appSource.candidates.join(', '), 'candidates')}`,
     );
   }
-}
-
-// A group whose free-text fields are bounded for printing. The count is left alone. The screen
-// id, the layer, and the rule are carried by the Result, so all three are printed inside the
-// frame, whoever authored them, the same rule the stop hook and the pull request comment follow.
-function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
-  return {
-    ...group,
-    screenId: boundField(group.screenId, 'screenId'),
-    layer: boundField(group.layer, 'layer'),
-    rule: boundField(group.rule, 'rule'),
-  };
 }
 
 export function projectSelfCheck(
@@ -70,9 +53,10 @@ export function projectSelfCheck(
   // route-derived screen id or carry a raw error message and so is not always engine-only, then
   // the guarded file paths, then for each barrier a "barrier" line naming its rule, the source
   // location, the experience, and the fix, and last the "Not evaluated:" label directly above the
-  // gap details, so a reader never meets that label and then reads about a button. The frame label says untrusted text, not page text, so
-  // engine free text sits there correctly. The pieces are bounded per field, the whole message
-  // is bounded by dropping whole pieces, never the summary, and the frame is rebuilt around what
+  // gap details, so a reader never meets that label and then reads about a button. The frame
+  // label says untrusted text, not page text, so engine free text sits there correctly. The pieces
+  // are bounded per field. The whole message is bounded by dropping whole barriers, headline and
+  // pieces together, then gap lines, never the summary, and the frame is rebuilt around what
   // survives, so the single closing marker cannot be lost.
   //
   // No next step is printed here. This surface is advisory; the stop hook owns the decision and
@@ -101,38 +85,16 @@ export function projectSelfCheck(
   const view = applyNoiseBudget(gating, budget, 'gating findings');
 
   // Each free-text field is bounded on its own before it is labelled and framed, so a huge page
-  // string shortens with a visible note and the counts around it stay whole.
-  // The scaffold line for a group carries only its checked status, severity, and count. Groups
-  // are numbered, so a scaffold line and its pieces match by number, and no label is built from a
-  // value the Result carried.
-  if (view.groups.length === 1 && !view.collapsed) {
-    const group = boundGroup(view.groups[0]!);
-    scaffold.push(`Barrier: ${formatCollapsedGroupStatus(group)}`);
-    pieces.push(`barrier: ${group.rule}`);
-    pushSourcePieces(pieces, group.representative, '');
-    pieces.push(`experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`);
-    pieces.push(`fix: ${boundField(fixOrAbsence(group.representative), 'fix')}`);
-  } else if (view.groups.length > 0) {
-    scaffold.push('Barriers:');
-    view.groups.forEach((raw, index) => {
-      const group = boundGroup(raw);
-      const n = index + 1;
-      scaffold.push(`- barrier ${n}: ${formatCollapsedGroupStatus(group)}`);
-      pieces.push(`barrier ${n}: ${group.layer}/${group.rule}`);
-      pieces.push(`screen (${n}): ${group.screenId}`);
-      pushSourcePieces(pieces, group.representative, ` (${n})`);
-      pieces.push(`experience (${n}): ${boundField(group.representative.whatUserExperiences, 'experience')}`);
-      pieces.push(`fix (${n}): ${boundField(fixOrAbsence(group.representative), 'fix')}`);
-    });
-    if (view.showAllHint !== null) {
-      scaffold.push(view.showAllHint);
-    }
-  }
+  // string shortens with a visible note and the counts around it stay whole. See barrierLines for
+  // what a barrier prints outside the frame and what inside it.
+  const barriers = barrierLines(view, (finding, label) => {
+    const extra: string[] = [];
+    pushSourcePieces(extra, finding, label);
+    return extra;
+  });
 
   const gapPieces = notEvaluatedPieces(safe);
-  if (gapPieces.length > 0) {
-    pieces.push('Not evaluated:', ...gapPieces);
-  }
+  const tailPieces = gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : [];
 
   // This surface prints a source or candidates piece per group on top of what the stop hook
   // prints, so it has its own budget. Nothing is dropped at the default noise budget.
@@ -141,6 +103,8 @@ export function projectSelfCheck(
     keep,
     pieces,
     keepPieces,
+    ...barriers,
+    tailPieces,
     frame: frameUntrustedBlock,
     budget: SELF_CHECK_MESSAGE_BUDGET,
   });
