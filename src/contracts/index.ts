@@ -186,6 +186,22 @@ export interface FloorHeadroom {
   recorded: number; // barriers the floor accepted at this identity
   observed: number; // deterministic barriers this run actually saw there
 }
+/**
+ * Floored barriers on one screen that this run did not see and cannot call fixed.
+ *
+ * The screen was scanned cleanly, but nothing shows the part of the page that held them rendered:
+ * the screen declares no reachedWhen signal that held, and the walk and the checks met none of
+ * their elements. A fixed barrier and content that never mounted look the same from here, so these
+ * stay on the floor as debt and every surface says so. Disclosure only: this never moves the
+ * verdict.
+ *
+ * Screen id, rule names and a count. Never an element key, because a key carries page text.
+ */
+export interface FloorUnconfirmed {
+  screenId: string;
+  rules: string[]; // sorted, each rule once
+  barriers: number; // the sum of the recorded counts of the entries on this screen
+}
 export interface CoverageGap {
   ref: string; // surface id, url, or file path this gap concerns
   state: 'unresolved' | 'not-covered' | 'skipped' | 'capability-denied';
@@ -254,6 +270,10 @@ export interface Result {
   // disclosure that can go missing is not a disclosure.
   // Projection only. The gate never consumes it and it never influences a verdict.
   floorHeadroom: FloorHeadroom[];
+  // Floored barriers on cleanly scanned screens that this run did not see and has no evidence
+  // were rendered, so they are not claimed fixed. Required for the same reason as floorHeadroom.
+  // Projection only. The gate never consumes it and it never influences a verdict.
+  floorUnconfirmed: FloorUnconfirmed[];
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);
@@ -635,9 +655,10 @@ export interface GateInput {
   // proof that the part of the page holding a floored barrier rendered: a screen whose header
   // mounted and whose content did not has no gap either. So a floored identity absent from the
   // drafts is marked `fixed` only when this shows the screen's readiness signal held or the
-  // identity's own element was observed this run. Otherwise it is a coverage gap. Absent, or a
-  // screen missing from the map, means no such evidence, which is the safe reading: it can only
-  // turn a `fixed` into a gap, never the reverse. Build it with renderEvidenceOf in src/gate/.
+  // identity's own element was observed this run. Otherwise it is not claimed fixed, stays on the
+  // floor as debt, and is disclosed in floorUnconfirmed. Absent, or a screen missing from the map,
+  // means no such evidence, which is the safe reading: it can only withhold a `fixed`, never grant
+  // one. Build it with renderEvidenceOf in src/gate/.
   renderEvidence?: ReadonlyMap<string, RenderEvidence>;
 }
 // What one scanned screen showed of itself. See GateInput.renderEvidence.
@@ -656,12 +677,14 @@ export interface GateOutput {
   accessibilityVerdict: AccessibilityVerdict | null;
   accessibilityExitCode: AccessibilityExitCode;
   // Gaps the gate found while comparing the run with the floor: a floor that predates barrier
-  // counting, whose placeholder counts cannot be compared at all, and a screen whose floored
-  // barriers are absent while nothing shows their part of the page rendered (see renderEvidence).
+  // counting, whose placeholder counts cannot be compared at all.
   // The gate counts the floor, so only the gate can find these, and it has already weighed them into
   // the verdict and named it in the summary. A caller that assembles a Coverage for the Result
   // appends these so the gaps a reader sees match the gaps the verdict was reached from.
   floorGaps: CoverageGap[];
   // Floored identities the floor is ahead of. Disclosure only: this never moves the verdict.
   floorHeadroom: FloorHeadroom[];
+  // Floored barriers absent on a cleanly scanned screen with no render evidence, per screen.
+  // Disclosure only: this never moves the verdict. See FloorUnconfirmed.
+  floorUnconfirmed: FloorUnconfirmed[];
 }

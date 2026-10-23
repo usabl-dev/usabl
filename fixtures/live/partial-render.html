@@ -16,11 +16,14 @@
     </main>
     <script>
       // The header, the navigation, and the heading always mount. The screen's own content, a
-      // table of orders, mounts only when ?content=ok. With ?content=fail its component throws
-      // before it renders anything, which is what a failed mount looks like from outside.
+      // table of orders, mounts only when ?content=ok or ?content=broken. With ?content=fail its
+      // component throws before it renders anything, which is what a failed mount looks like from
+      // outside. With ?content=broken the table mounts with the barriers a floor would record:
+      // each row's button, link, and image has no accessible name. With ?content=ok they are fixed.
       const content = new URLSearchParams(location.search).get('content');
+      const named = content === 'ok';
       const mountOrders = () => {
-        if (content !== 'ok') {
+        if (content !== 'ok' && content !== 'broken') {
           throw new Error('orders failed to mount');
         }
         const table = document.createElement('table');
@@ -34,8 +37,18 @@
           const cell = document.createElement('td');
           const button = document.createElement('button');
           button.type = 'button';
-          button.textContent = 'Open ' + order;
+          if (named) button.textContent = 'Open ' + order;
           cell.appendChild(button);
+          const link = document.createElement('a');
+          link.href = '#' + order;
+          if (named) link.textContent = 'Details for ' + order;
+          cell.appendChild(link);
+          const image = document.createElement('img');
+          image.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+          image.width = 16;
+          image.height = 16;
+          if (named) image.alt = 'Status of ' + order;
+          cell.appendChild(image);
           row.appendChild(cell);
           body.appendChild(row);
         }

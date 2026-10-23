@@ -74,6 +74,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   accessibilityExitCode: 0,
   paidDownCount: 0,
   floorHeadroom: [],
+  floorUnconfirmed: [],
   ...over,
 });
 
@@ -339,6 +340,7 @@ describe('projectPrComment', () => {
         findings: [],
         paidDownCount: 2,
         floorHeadroom: [],
+        floorUnconfirmed: [],
       }),
     );
 
@@ -356,6 +358,7 @@ describe('projectPrComment', () => {
         findings: [],
         paidDownCount: 0,
         floorHeadroom: [],
+        floorUnconfirmed: [],
       }),
     );
 
@@ -870,6 +873,7 @@ describe('pr comment page text is sealed in code spans', () => {
           screens: [],
           paidDownCount: { length: payload } as unknown as number,
           floorHeadroom: [],
+          floorUnconfirmed: [],
         }),
       );
 

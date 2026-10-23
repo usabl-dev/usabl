@@ -21,6 +21,7 @@ import {
   resolveNoiseBudgetDefault,
   type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
+import { unconfirmedNotice } from '../output/floor-notice.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
 import { frameUntrustedBlock, scrubResult } from './scrub.js';
@@ -160,6 +161,12 @@ export function projectSelfCheck(
   const gapPieces = notEvaluatedPieces(safe);
   if (gapPieces.length > 0) {
     pieces.push('Not evaluated:', ...gapPieces);
+  }
+  // The floored barriers this run did not see on a screen it cannot show rendered, the same
+  // notices the Stop hook gives. Last, so the bound drops these before any barrier or gap. A
+  // notice names a screen id, which can come from a route literal, so it is a framed piece.
+  for (const entry of Array.isArray(safe.floorUnconfirmed) ? safe.floorUnconfirmed : []) {
+    pieces.push(`not claimed fixed: ${boundField(unconfirmedNotice(entry), 'notice')}`);
   }
 
   // This surface prints a source or candidates piece per group on top of what the stop hook

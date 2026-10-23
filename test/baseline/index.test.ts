@@ -583,3 +583,82 @@ describe('runBaseline', () => {
     expect(Object.prototype.hasOwnProperty.call(parsed, 'scope')).toBe(false);
   });
 });
+
+/**
+ * Baseline rewrites the floor from what the run saw. A floored barrier the run did not see on a
+ * screen it cannot show rendered is not something the run saw go away, so baseline keeps it, by
+ * the same rule the gate and prune read. Without this, a baseline taken while a screen's content
+ * failed to mount silently deleted that screen's debt.
+ */
+describe('runBaseline keeps floored barriers it cannot confirm were fixed', () => {
+  const searchEntry = {
+    screenId: 'clusters', layer: 'axe', rule: 'aria-input-field-name',
+    elementKey: 'clusters|aria-input-field-name|name:search', identityBasis: 'name', count: 2,
+  };
+  const floorWith = (...entries: object[]): string => JSON.stringify({ version: 2, entries });
+
+  it('carries an unconfirmed entry forward at its recorded count and says so', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': floorWith(searchEntry) }),
+      scans: { clusters: scanWith([draft()]) },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const outcome = await runBaseline(deps, testConfig(), writer);
+    const floor = parseWrittenFloor(writer);
+
+    expect(outcome.exitCode).toBe(0);
+    expect(floor.entries).toContainEqual(searchEntry);
+    expect(floor.entries.map((e) => e['rule']).sort()).toEqual(['aria-input-field-name', 'color-contrast']);
+    expect(outcome.entryCount).toBe(2);
+    expect(outcome.message).toContain(
+      'kept 1 floor entry (2 barriers) on screen clusters (aria-input-field-name) that this run did not see',
+    );
+    expect(outcome.message).not.toContain('name:search');
+  });
+
+  it('carries it forward in a partial baseline too', async () => {
+    const config = testConfig({
+      surfaces: [
+        { id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['fixtures/app/src/ClustersPage.tsx'] },
+        { id: 'reports', url: 'http://127.0.0.1:5173/reports', files: ['fixtures/app/src/ReportsPage.tsx'] },
+      ],
+    });
+    const files = {
+      'usabl.config.json': '{}',
+      'fixtures/app/src/ClustersPage.tsx': 'export {};\n',
+      'fixtures/app/src/ReportsPage.tsx': 'export {};\n',
+      '.usabl-evidence.json': floorWith(searchEntry),
+    };
+    const deps = makeFakeDeps({
+      files,
+      headContents: files,
+      scans: {
+        clusters: scanFor('clusters', 'http://127.0.0.1:5173/clusters', [draft()]),
+        reports: scanFor('reports', 'http://127.0.0.1:5173/reports', [], [
+          { ref: 'reports', state: 'not-covered', reason: 'page rendered nothing under the session' },
+        ]),
+      },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const outcome = await runBaseline(deps, config, writer, { partial: true });
+
+    expect(outcome.exitCode).toBe(0);
+    expect(parseWrittenFloor(writer).entries).toContainEqual(searchEntry);
+    expect(outcome.message).toContain('kept 1 floor entry (2 barriers) on screen clusters');
+  });
+
+  it('drops the entry when the screen signal held, because then the run saw it go', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': floorWith(searchEntry) }),
+      scans: { clusters: { ...scanWith([draft()]), reachedSelectorPresent: true } },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const outcome = await runBaseline(deps, testConfig(), writer);
+
+    expect(parseWrittenFloor(writer).entries.map((e) => e['rule'])).toEqual(['color-contrast']);
+    expect(outcome.message).not.toContain('kept');
+  });
+});

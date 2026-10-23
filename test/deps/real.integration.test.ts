@@ -2,9 +2,10 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { EvidenceFloor, GateOutput, Provider, SurfaceConfig } from '../../src/contracts/index.js';
+import type { EvidenceFloor, GateOutput, Provider, ScreenScan, SurfaceConfig } from '../../src/contracts/index.js';
 import { buildDeps } from '../../src/deps/build.js';
 import { gate, renderEvidenceOf } from '../../src/gate/index.js';
+import { computeIdentity, identityKey } from '../../src/primitives/identity.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
 import { axeProvider } from '../../src/providers/axe/index.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
@@ -812,30 +813,13 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
   });
 
   describe('a screen whose header mounted and whose content did not', () => {
-    // The floor accepted two barriers in the orders table: its two buttons had no name, which is a
-    // counted identity, and the first of them was too small, which is keyed by its path. The fixed
-    // screen names them and sizes them. The failed screen never renders the table at all.
-    const FLOOR: EvidenceFloor = {
-      version: 2,
-      entries: [
-        { screenId: 'orders', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count', count: 2 },
-        {
-          screenId: 'orders',
-          layer: 'axe',
-          rule: 'target-size',
-          elementKey: 'orders|target-size|struct:button:#orders>tbody>tr>td>button',
-          identityBasis: 'structural',
-          count: 1,
-        },
-      ],
-    };
+    // The floor is what a real axe scan of the broken screen records, built the way baseline builds
+    // it: one entry per identity, with the count of deterministic drafts behind it. The broken
+    // screen's buttons, links, and images have no name. The fixed screen names them all. The failed
+    // screen never renders the table at all.
+    type Content = 'ok' | 'broken' | 'fail';
 
-    // A real Chromium scan with axe, the unseen pass, and the gate, in the order run() uses them.
-    async function gateAfterScan(
-      content: 'ok' | 'fail',
-      floor: EvidenceFloor,
-      reachedWhen: SurfaceConfig['reachedWhen'],
-    ): Promise<GateOutput> {
+    async function scanOrders(content: Content, reachedWhen: SurfaceConfig['reachedWhen']): Promise<ScreenScan[]> {
       const url = `${fixture.partialRenderUrl}?content=${content}`;
       const runner = makeCheckRunner({
         browser: driver,
@@ -848,7 +832,24 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
         stepRunner: makeStepRunner(),
         transcriptTabCap: 5,
       });
-      const { screens } = markUnseenScreens([await runner.scan({ id: 'orders', url })]);
+      return markUnseenScreens([await runner.scan({ id: 'orders', url })]).screens;
+    }
+
+    function floorFrom(screens: ScreenScan[]): EvidenceFloor {
+      const entries = new Map<string, EvidenceFloor['entries'][number]>();
+      for (const draft of screens.flatMap((screen) => screen.drafts)) {
+        if (draft.evidenceClass !== 'deterministic') continue;
+        const { elementKey, identityBasis } = computeIdentity(draft);
+        const key = identityKey({ screenId: draft.screenId, rule: draft.rule, elementKey });
+        const entry = entries.get(key) ?? { screenId: draft.screenId, layer: draft.layer, rule: draft.rule, elementKey, identityBasis, count: 0 };
+        entry.count += 1;
+        entries.set(key, entry);
+      }
+      return { version: 2, entries: [...entries.values()] };
+    }
+
+    function gateOn(screens: ScreenScan[], floor: EvidenceFloor): GateOutput {
+      const url = screens[0]!.url;
       return gate({
         coverage: {
           changedFiles: ['src/OrdersPage.tsx'],
@@ -867,29 +868,48 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       });
     }
 
-    it('claims no barrier in the missing content fixed, and is not covered', async () => {
-      const out = await gateAfterScan('fail', FLOOR, undefined);
+    let floor: EvidenceFloor;
+    beforeAll(async () => {
+      floor = floorFrom(await scanOrders('broken', undefined));
+    }, 30_000);
+
+    it('records the barriers a real axe scan finds in the table', () => {
+      const rules = floor.entries.map((entry) => entry.rule);
+      expect(rules).toContain('button-name');
+      expect(rules).toContain('image-alt');
+      expect(rules).toContain('link-name');
+      // A real axe key, never a hand-written one: the image entry names its element by path.
+      const image = floor.entries.find((entry) => entry.rule === 'image-alt');
+      expect(image?.identityBasis).toBe('structural');
+    });
+
+    it('claims nothing fixed when the content did not mount, keeps the verdict, and gives the notice', async () => {
+      const out = gateOn(await scanOrders('fail', undefined), floor);
       expect(out.findings.filter((finding) => finding.status === 'fixed')).toEqual([]);
-      expect(out.accessibilityVerdict).toBe('not_covered');
-      expect(out.floorGaps.some((gap) => gap.reason.includes('button-name'))).toBe(true);
-      expect(out.floorGaps.some((gap) => gap.reason.includes('target-size'))).toBe(true);
-    }, 30_000);
-
-    it('pays down both barriers on the rendered screen when its signal held', async () => {
-      const out = await gateAfterScan('ok', FLOOR, 'table#orders');
       expect(out.floorGaps).toEqual([]);
-      expect(out.findings.filter((finding) => finding.status === 'fixed').map((f) => f.rule).sort()).toEqual([
-        'button-name',
-        'target-size',
-      ]);
       expect(out.accessibilityVerdict).toBe('verified');
+      expect(out.floorUnconfirmed).toHaveLength(1);
+      expect(out.floorUnconfirmed[0]!.rules).toEqual([...new Set(floor.entries.map((e) => e.rule))].sort());
+      expect(out.floorUnconfirmed[0]!.barriers).toBe(floor.entries.reduce((total, e) => total + e.count, 0));
     }, 30_000);
 
-    it('pays down the barrier keyed by its path on the rendered screen with no signal', async () => {
-      const structuralOnly: EvidenceFloor = { version: 2, entries: FLOOR.entries.filter((e) => e.identityBasis === 'structural') };
-      const out = await gateAfterScan('ok', structuralOnly, undefined);
-      expect(out.floorGaps).toEqual([]);
-      expect(out.findings.filter((finding) => finding.status === 'fixed').map((f) => f.rule)).toEqual(['target-size']);
+    it('does not claim a genuinely fixed image barrier fixed with no signal, and gives the notice', async () => {
+      // The image is not focusable and the fixed page raises no draft on it, so nothing in the run
+      // meets that element. Fixed and never mounted look the same here, so it is not paid down.
+      const out = gateOn(await scanOrders('ok', undefined), floor);
+      expect(out.findings.some((finding) => finding.status === 'fixed' && finding.rule === 'image-alt')).toBe(false);
+      expect(out.accessibilityVerdict).toBe('verified');
+      expect(out.floorUnconfirmed.flatMap((u) => u.rules)).toContain('image-alt');
+      expect(out.floorUnconfirmed.flatMap((u) => u.rules)).toContain('button-name');
+      expect(out.summary).toContain('not seen, not claimed fixed');
+    }, 30_000);
+
+    it('pays down every barrier on the fixed screen when its signal held', async () => {
+      const out = gateOn(await scanOrders('ok', 'table#orders'), floor);
+      expect(out.floorUnconfirmed).toEqual([]);
+      expect(out.findings.filter((finding) => finding.status === 'fixed').map((f) => f.rule).sort()).toEqual(
+        floor.entries.map((entry) => entry.rule).sort(),
+      );
       expect(out.accessibilityVerdict).toBe('verified');
     }, 30_000);
   });

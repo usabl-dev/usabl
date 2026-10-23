@@ -21,6 +21,7 @@ import {
   resolveNoiseBudgetDefault,
   type CollapsedFindingGroup,
 } from '../output/noise-budget.js';
+import { unconfirmedNotice } from '../output/floor-notice.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
 import { frameUntrustedBlock, scrubResult } from './scrub.js';
 
@@ -169,6 +170,16 @@ function summaryPiece(result: Result): string {
 }
 
 /**
+ * The floored barriers this run did not see on a screen it cannot show rendered, one notice per
+ * screen, as framed pieces. A notice names a screen id, which can come from a route literal, so it
+ * is untrusted text and goes inside the frame. Each one is bounded on its own.
+ */
+function unconfirmedPieces(result: Result): string[] {
+  const screens = Array.isArray(result.floorUnconfirmed) ? result.floorUnconfirmed : [];
+  return screens.map((entry) => `not claimed fixed: ${boundField(unconfirmedNotice(entry), 'notice')}`);
+}
+
+/**
  * What the run did not examine, one entry per gap state.
  *
  * The reader is a model deciding whether to keep working, so it gets a reason it can act on
@@ -286,6 +297,8 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   if (gapPieces.length > 0) {
     pieces.push('Not evaluated:', ...gapPieces);
   }
+  // Last, so the bound drops these before any barrier or gap: they never block anything.
+  pieces.push(...unconfirmedPieces(result));
 
   // The whole message is bounded as well as each field. Whole pieces go first, then trailing
   // scaffold lines, never the opening lines or the summary piece, and the frame is rebuilt
@@ -308,9 +321,17 @@ export function evaluateStopDecision(
       sourceTree === undefined
         ? 'the gate verified this change.'
         : `the gate verified this change. Receipt sourceTree ${boundField(sourceTree, 'receipt')}.`;
+    const pass = `${formatVerdictWord(verdict, passNote)}: ${proof} You may stop.`;
+    // A verified run is where the notice matters most: floored debt on a screen whose content may
+    // not have mounted. It does not change the decision. It travels with it, framed, so the model
+    // can pass it on. With nothing to say, the line stays exactly as it always was.
+    const notices = unconfirmedPieces(safe);
     return {
       block: false,
-      message: `${formatVerdictWord(verdict, passNote)}: ${proof} You may stop.`,
+      message:
+        notices.length === 0
+          ? pass
+          : assembleBoundedMessage({ scaffold: [pass], keep: 1, pieces: notices, frame: frameUntrustedBlock }),
     };
   }
 

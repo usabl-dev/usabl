@@ -5,9 +5,13 @@
  * The case this closes. A screen's header and navigation mount, and its content fails to mount.
  * The walk lands on a real link in the header, so the body-only floor is silent. No provider throws,
  * so no gap is raised. The content never rendered, so its floored barrier is absent from the
- * drafts, and the gate read that absence as a fix: the run was verified and claimed the barrier
- * paid down. A fixed barrier and content that never mounted leave the same absence, so the absence
- * alone proves neither.
+ * drafts, and the gate read that absence as a fix: it claimed the barrier paid down. A fixed barrier
+ * and content that never mounted leave the same absence, so the absence alone proves neither.
+ *
+ * Without that evidence the barrier is not claimed fixed, it stays on the floor as debt, and the
+ * run carries a notice that names the screen, the rules, and the fix. The verdict does not move:
+ * the screen reads the same as a debt-free screen whose content failed to mount, which is the
+ * blind spot a readiness signal closes.
  *
  * Driven through the real check runner, step runner, unseen pass, and gate, with a scripted page.
  */
@@ -127,21 +131,22 @@ function depsFor(page: () => Page, config: UsablConfig, entries: unknown[]): Dep
 }
 
 describe('a screen whose chrome mounted and whose content did not', () => {
-  const cases: Array<[string, unknown]> = [
+  const cases: Array<[string, { rule: string; count: number }]> = [
     ['a counted barrier', COUNT_ENTRY],
     ['a barrier keyed by its path', STRUCTURAL_ENTRY],
     ['a barrier keyed by its name', NAME_ENTRY],
   ];
   for (const [name, entry] of cases) {
-    it(`does not report ${name} in the missing content as paid down`, async () => {
+    it(`does not report ${name} in the missing content as paid down, and says so`, async () => {
       const config = configWith(undefined);
       const r = await run(depsFor(() => pageFor(CHROME_ONLY, ['header', 'nav']), config, [entry]), config);
       expect(r.findings.filter((f) => f.status === 'fixed')).toEqual([]);
       expect(r.paidDownCount).toBe(0);
-      expect(r.verdict).toBe('not_covered');
-      const gap = r.coverage.gaps.find((g) => g.ref === SCREEN_URL);
-      expect(gap?.state).toBe('not-covered');
-      expect(gap?.reason).toContain('orders');
+      // No gap comes from this rule, so the verdict is what it would be without the floor entry.
+      expect(r.coverage.gaps).toEqual([]);
+      expect(r.verdict).toBe('verified');
+      expect(r.floorUnconfirmed).toEqual([{ screenId: 'orders', rules: [entry.rule], barriers: entry.count }]);
+      expect(r.summary).toContain('1 recorded barrier not seen, not claimed fixed');
     });
   }
 });
@@ -156,6 +161,7 @@ describe('a fully rendered screen whose floored barriers were fixed', () => {
     expect(r.coverage.gaps).toEqual([]);
     expect(r.verdict).toBe('verified');
     expect(r.paidDownCount).toBe(1);
+    expect(r.floorUnconfirmed).toEqual([]);
   });
 
   it('pays down a barrier keyed by its path when the walk landed on that element, with no signal', async () => {
@@ -174,16 +180,20 @@ describe('a fully rendered screen whose floored barriers were fixed', () => {
     expect(r.paidDownCount).toBe(1);
   });
 
-  it('cannot pay down a counted barrier with no signal, because nothing places it on the page', async () => {
-    // The cost of the rule, pinned so it is a decision and not an accident. A counted identity has
-    // no element in it, so only a readiness signal that held can tell a fix from content that
-    // never mounted. Without one the run is a gap until the operator declares a signal or prunes.
+  it('does not pay down a counted barrier with no signal, and gives the notice instead', async () => {
+    // A counted identity has no element in it, so only a readiness signal that held can tell a
+    // fix from content that never mounted. Without one the barrier stays on the floor as debt.
     const config = configWith(undefined);
-    const r = await run(depsFor(() => pageFor(FULLY_RENDERED, ['header', 'nav']), config, [COUNT_ENTRY]), config);
+    const r = await run(
+      depsFor(() => pageFor(FULLY_RENDERED, ['header', 'nav']), config, [{ ...COUNT_ENTRY, count: 2 }]),
+      config,
+    );
     expect(r.paidDownCount).toBe(0);
-    expect(r.verdict).toBe('not_covered');
-    const gap = r.coverage.gaps.find((g) => g.ref === SCREEN_URL);
-    expect(gap?.reason).toContain('reachedWhen');
-    expect(gap?.reason).toContain('usabl floor prune');
+    expect(r.verdict).toBe('verified');
+    expect(r.coverage.gaps).toEqual([]);
+    // Barriers, not entries: one entry that recorded two barriers is two.
+    expect(r.floorUnconfirmed).toEqual([{ screenId: 'orders', rules: ['button-name'], barriers: 2 }]);
+    expect(r.summary).toContain('2 recorded barriers not seen, not claimed fixed');
+    expect(r.receipt?.findingsSummary.fixed).toBe(0);
   });
 });

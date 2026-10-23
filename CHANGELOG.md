@@ -7,15 +7,22 @@
 - A floored barrier is no longer reported paid down on a screen whose content never
   rendered. When a screen's header and navigation mounted and its content failed to
   mount, the walk found a real control and no check failed, so the screen had no gap,
-  every floored barrier in the missing content was absent, and the run was verified
-  with those barriers marked `fixed`. Now an absent floored barrier is `fixed` only
-  when the screen's `reachedWhen` signal held, or when the walk or a check met the
-  barrier's own element, by its path or its accessible name. Otherwise the screen gets
-  a `not-covered` gap that names the screen and the rules, and the run is
-  `not_covered`. The floor format is unchanged. The cost: a counted barrier
-  (`button-name`, `pf-icon-button-name`) on a screen with no signal, or a fixed barrier
-  on an element the walk does not focus, now needs a `reachedWhen` signal or a
-  `usabl floor prune` before the run is verified again.
+  every floored barrier in the missing content was absent, and the run marked those
+  barriers `fixed`. Now an absent floored barrier is `fixed` only when the screen's
+  `reachedWhen` signal held, or when the walk or a check met the barrier's own element,
+  by its path or its accessible name. Otherwise it is not claimed fixed and the floor
+  keeps it at its full count. The verdict does not change. The run shows a notice that
+  names the screen, the rules, and the number of barriers, and gives the fix, on the
+  terminal, the pull request comment, the Stop hook, the self-check, and the overlay,
+  and the summary line gains a `N recorded barriers not seen, not claimed fixed`
+  clause. The Result gains `floorUnconfirmed`. The blind spot: a screen whose content
+  fails to mount reads `verified`, with the notice when it holds floored debt, until it
+  declares a `reachedWhen` signal. That is the same as a screen with no debt.
+
+- `usabl floor prune` and `usabl baseline` keep a floored entry the run cannot confirm
+  was fixed, by the same rule the gate uses. `usabl floor prune --unconfirmed` removes
+  those entries on purpose and says how many it removed and why. Prune no longer says it
+  kept entries on unscanned screens when it kept none.
 
 - `pf-toast-live-region` now resolves each alert's live value from the nearest
   element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector

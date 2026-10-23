@@ -49,6 +49,9 @@ export const TEXT_CAPS = {
   candidates: 500,
   // A receipt source tree is a git object id, forty hex characters. Twice that is generous.
   receipt: 80,
+  // A notice for floored barriers a run did not see is usabl's own sentence around a screen id and
+  // the rule names on that screen. The start names the count and the screen.
+  notice: 600,
 } as const;
 
 export type TextCap = keyof typeof TEXT_CAPS;

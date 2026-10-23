@@ -10,6 +10,8 @@ import { neutralize } from '../primitives/neutralize.js';
 import { computeIdentity, identityKey } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { run } from '../run.js';
+import { parseEvidenceFloor } from '../evidence/floor.js';
+import { groupByScreen, isUnconfirmedAbsence, keptUnconfirmedLines, observeFloor } from '../floor/unconfirmed.js';
 import { checkGuard } from '../trust/guard.js';
 
 export const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
@@ -80,6 +82,37 @@ export function buildEvidenceFloorDraft(result: Result): EvidenceFloor {
   };
 }
 
+/**
+ * The entries of the floor being replaced that this run did not see on a screen it cannot show
+ * rendered, by the rule the gate and prune read. The new floor keeps them at their recorded count.
+ *
+ * A baseline writes what the run saw, and the run did not see these go away: a screen whose
+ * content failed to mount shows every barrier in that content as absent. Dropping them would turn
+ * a rendering failure into a silent pay-down in the committed floor.
+ *
+ * The working-tree floor is read, as prune reads it, because that is the file this command
+ * replaces. A floor that is missing or does not parse has nothing to carry, which is what baseline
+ * did before.
+ */
+async function unconfirmedCarry(deps: Deps, result: Result): Promise<FloorEntry[]> {
+  let previous: EvidenceFloor;
+  try {
+    const raw = await deps.fs.readFile(EVIDENCE_FLOOR_PATH);
+    if (raw === null || raw.trim().length === 0) return [];
+    previous = parseEvidenceFloor(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+  const seen = observeFloor(result.screens);
+  return previous.entries.filter((entry) => isUnconfirmedAbsence(entry, seen));
+}
+
+/** Adds the carried entries to a floor draft, keeping its sort order. */
+function withCarried(floor: EvidenceFloor, carried: FloorEntry[]): EvidenceFloor {
+  if (carried.length === 0) return floor;
+  return { ...floor, entries: sortBy([...floor.entries, ...carried], findingKey) };
+}
+
 // The screen ids that were scanned and reported no gap of their own. This is the same notion the
 // gate and floor prune use for cleanlyScannedScreens: scanned and no gap.
 function cleanlyScannedScreenIds(result: Result): Set<string> {
@@ -115,13 +148,14 @@ function entriesWord(count: number): string {
   return `${count} floor entr${count === 1 ? 'y' : 'ies'}`;
 }
 
-function formatSuccessReport(entryCount: number): string {
+function formatSuccessReport(entryCount: number, carried: FloorEntry[]): string {
   return [
     `wrote ${entriesWord(entryCount)} to ${EVIDENCE_FLOOR_PATH}.`,
     'draft only: review and merge this working-tree diff.',
     // "extra findings" would promise more than the floor can deliver. What gates is a finding at
     // an identity the floor does not hold, or a count above what it recorded there.
     'after merge, matching findings carry; a new identity, or more barriers at a recorded one, gates.',
+    ...keptUnconfirmedLines(groupByScreen(carried)),
   ].join('\n');
 }
 
@@ -150,7 +184,12 @@ function formatNothingCleanRefusal(): string {
 
 // The report for a partial floor. It says the scope is limited, lists the screens it covered, and
 // lists the screens it skipped because they had gaps, so a reader knows exactly what was accepted.
-function formatPartialReport(entryCount: number, coveredScreens: string[], skippedScreens: string[]): string {
+function formatPartialReport(
+  entryCount: number,
+  coveredScreens: string[],
+  skippedScreens: string[],
+  carried: FloorEntry[],
+): string {
   const lines = [
     `wrote ${entriesWord(entryCount)} to ${EVIDENCE_FLOOR_PATH} as a partial baseline.`,
     'draft only: review and merge this working-tree diff.',
@@ -163,6 +202,7 @@ function formatPartialReport(entryCount: number, coveredScreens: string[], skipp
       `skipped ${skippedScreens.length} screen${skippedScreens.length === 1 ? '' : 's'} with coverage gaps: ${skippedScreens.join(', ')}.`,
     );
   }
+  lines.push(...keptUnconfirmedLines(groupByScreen(carried)));
   return lines.join('\n');
 }
 
@@ -221,6 +261,8 @@ export async function runBaseline(
   }
 
   const incomplete = coverageIncomplete(result.coverage);
+  // Only cleanly scanned screens can hold one, so a partial floor keeps every carried entry too.
+  const carried = await unconfirmedCarry(deps, result);
 
   // Default baseline refuses when coverage is incomplete. A floor is an acceptance of existing
   // debt, so it must not be minted from a run that admits it did not see the whole application.
@@ -249,7 +291,7 @@ export async function runBaseline(
         entryCount: 0,
       };
     }
-    const partialFloor = buildPartialEvidenceFloorDraft(result, cleanScreenIds);
+    const partialFloor = withCarried(buildPartialEvidenceFloorDraft(result, cleanScreenIds), carried);
     await floorFs.writeFile(EVIDENCE_FLOOR_PATH, `${JSON.stringify(partialFloor, null, 2)}\n`);
     const coveredScreens = [...cleanScreenIds].sort();
     const skippedScreens = result.screens
@@ -260,16 +302,16 @@ export async function runBaseline(
       exitCode: 0,
       wrote: true,
       entryCount: partialFloor.entries.length,
-      message: formatPartialReport(partialFloor.entries.length, coveredScreens, skippedScreens),
+      message: formatPartialReport(partialFloor.entries.length, coveredScreens, skippedScreens, carried),
     };
   }
 
-  const floor = buildEvidenceFloorDraft(result);
+  const floor = withCarried(buildEvidenceFloorDraft(result), carried);
   await floorFs.writeFile(EVIDENCE_FLOOR_PATH, `${JSON.stringify(floor, null, 2)}\n`);
   return {
     exitCode: 0,
     wrote: true,
     entryCount: floor.entries.length,
-    message: formatSuccessReport(floor.entries.length),
+    message: formatSuccessReport(floor.entries.length, carried),
   };
 }

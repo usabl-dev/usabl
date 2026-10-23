@@ -6,7 +6,8 @@
  * a readiness signal that held, or the identity's own element met by the walk or by a check.
  */
 import { describe, expect, it } from 'vitest';
-import { gate, renderEvidenceOf } from '../../src/gate/index.js';
+import { gate, paydownConfirmed, renderEvidenceOf } from '../../src/gate/index.js';
+import { unconfirmedNotice } from '../../src/output/floor-notice.js';
 import { computeIdentity, elementSlots, identitySlot } from '../../src/primitives/identity.js';
 import type { Coverage, Draft, EvidenceFloor, FloorEntry, GateInput, ScreenScan } from '../../src/contracts/index.js';
 
@@ -147,7 +148,7 @@ describe('renderEvidenceOf', () => {
   });
 });
 
-describe('the gap for a pay-down the run cannot confirm', () => {
+describe('the notice for a pay-down the run cannot confirm', () => {
   const floored = draft({});
   const floor: EvidenceFloor = {
     version: 2,
@@ -162,44 +163,68 @@ describe('the gap for a pay-down the run cannot confirm', () => {
     scan({ screenId: 'users', url: 'http://app.test/users', stops: [{ index: 0, elementPath: 'header > a', announcement: [] }] }),
   ];
 
-  it('is one gap per screen, at the screen address, naming the rules and never an element key', () => {
+  it('claims nothing fixed, raises no gap, leaves the verdict alone, and counts barriers per screen', () => {
     const out = gate(input(floor, chromeOnly));
-    expect(out.findings.filter((f) => f.status === 'fixed')).toEqual([]);
-    expect(out.accessibilityVerdict).toBe('not_covered');
-    expect(out.floorGaps.map((gap) => gap.ref)).toEqual(['http://app.test/orders', 'http://app.test/users']);
-    const orders = out.floorGaps[0]!;
-    expect(orders.state).toBe('not-covered');
-    expect(orders.reason).toContain('2 floored barriers on screen "orders" (button-name, link-name)');
-    expect(orders.reason).not.toContain('#orders');
-    expect(orders.reason).not.toContain('struct:');
+    expect(out.findings).toEqual([]);
+    expect(out.floorGaps).toEqual([]);
+    expect(out.accessibilityVerdict).toBe('verified');
+    expect(out.floorUnconfirmed).toEqual([
+      { screenId: 'orders', rules: ['button-name', 'link-name'], barriers: 4 },
+      { screenId: 'users', rules: ['button-name'], barriers: 1 },
+    ]);
+    expect(out.summary).toBe('verified: nothing blocking, 5 recorded barriers not seen, not claimed fixed');
     // Not counted as headroom either: the run cannot say it observed zero there.
     expect(out.floorHeadroom).toEqual([]);
+  });
+
+  it('names the screen, the rules, and the fix, and never an element key', () => {
+    const out = gate(input(floor, chromeOnly));
+    const notice = unconfirmedNotice(out.floorUnconfirmed[0]!);
+    expect(notice).toBe(
+      '4 recorded barriers on screen orders (button-name, link-name) were not seen in this run, so they ' +
+        'are not claimed fixed. If they are fixed, add a reachedWhen signal for this screen or run usabl ' +
+        'floor prune --unconfirmed.',
+    );
+    expect(notice).not.toContain('#orders');
+    expect(notice).not.toContain('struct:');
+    expect(unconfirmedNotice({ screenId: 'users', rules: ['button-name'], barriers: 1 })).toBe(
+      '1 recorded barrier on screen users (button-name) was not seen in this run, so it is not claimed ' +
+        'fixed. If it is fixed, add a reachedWhen signal for this screen or run usabl floor prune --unconfirmed.',
+    );
   });
 
   it('does not depend on the order of the floor entries or of the scans', () => {
     const forward = gate(input(floor, chromeOnly));
     const reversed = gate(input({ ...floor, entries: [...floor.entries].reverse() }, [...chromeOnly].reverse()));
-    expect(reversed.floorGaps).toEqual(forward.floorGaps);
+    expect(reversed.floorUnconfirmed).toEqual(forward.floorUnconfirmed);
     expect(reversed.findings).toEqual(forward.findings);
-    expect(reversed.accessibilityVerdict).toBe(forward.accessibilityVerdict);
+    expect(reversed.summary).toBe(forward.summary);
   });
 
   it('is not raised for a screen the run did not scan cleanly, which makes no claim at all', () => {
     const gapped = [scan({ gaps: [{ ref: 'http://app.test/orders', state: 'not-covered', reason: 'failed' }] })];
     const out = gate(input({ ...floor, entries: floor.entries.filter((e) => e.screenId === 'orders') }, gapped));
-    expect(out.floorGaps).toEqual([]);
+    expect(out.floorUnconfirmed).toEqual([]);
     expect(out.findings).toEqual([]);
   });
 
   it('is not raised when the identity is still observed, which is carried debt', () => {
     const out = gate(input({ version: 2, entries: [entryFor(floored)] }, [scan({ drafts: [floored] })]));
-    expect(out.floorGaps).toEqual([]);
+    expect(out.floorUnconfirmed).toEqual([]);
     expect(out.findings[0]?.status).toBe('carried');
   });
 
   it('treats a caller that passes no render evidence as having none', () => {
     const out = gate({ ...input(floor, chromeOnly), renderEvidence: undefined } as unknown as GateInput);
     expect(out.findings.filter((f) => f.status === 'fixed')).toEqual([]);
-    expect(out.accessibilityVerdict).toBe('not_covered');
+    expect(out.floorUnconfirmed.map((u) => u.screenId)).toEqual(['orders', 'users']);
+  });
+
+  it('is the one rule prune and baseline read: confirmed only with a held signal or the element met', () => {
+    const entry = entryFor(floored);
+    expect(paydownConfirmed(entry, undefined)).toBe(false);
+    expect(paydownConfirmed(entry, { signalHeld: false, elementSlots: new Set() })).toBe(false);
+    expect(paydownConfirmed(entry, { signalHeld: true, elementSlots: new Set() })).toBe(true);
+    expect(paydownConfirmed(entry, { signalHeld: false, elementSlots: new Set(['path:#orders>tbody>tr>td>a']) })).toBe(true);
   });
 });

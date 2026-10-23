@@ -27,6 +27,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   accessibilityExitCode: 0,
   paidDownCount: 0,
   floorHeadroom: [],
+  floorUnconfirmed: [],
   ...over,
 });
 
@@ -46,6 +47,7 @@ describe('parseCliArgs', () => {
       enforceCheck: null,
       floorSubcommand: null,
       partial: false,
+      unconfirmed: false,
       driftSubcommand: null,
       installTarget: null,
       cursorStopHook: false,
@@ -79,6 +81,7 @@ describe('parseCliArgs', () => {
       enforceCheck: null,
       floorSubcommand: null,
       partial: false,
+      unconfirmed: false,
       driftSubcommand: null,
       installTarget: null,
       cursorStopHook: false,
@@ -144,6 +147,7 @@ describe('parseCliArgs', () => {
       enforceCheck: null,
       floorSubcommand: null,
       partial: false,
+      unconfirmed: false,
       driftSubcommand: null,
       installTarget: null,
       cursorStopHook: false,

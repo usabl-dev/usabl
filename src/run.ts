@@ -201,6 +201,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
         accessibilityExitCode: 4,
         paidDownCount: 0,
         floorHeadroom: [],
+        floorUnconfirmed: [],
       };
     }
 
@@ -278,6 +279,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       accessibilityExitCode: gated.accessibilityExitCode,
       paidDownCount,
       floorHeadroom: gated.floorHeadroom,
+      floorUnconfirmed: gated.floorUnconfirmed,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -297,6 +299,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       accessibilityExitCode: 4,
       paidDownCount: 0,
       floorHeadroom: [],
+      floorUnconfirmed: [],
     };
   }
 }

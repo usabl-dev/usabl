@@ -1016,9 +1016,9 @@ the address the scan asked for: a passkey prompt with one button, a magic-link f
 authentication wall that answers 200 to every request under it, including its own status call.
 None makes a refused request and none has a password field, so the three rules say nothing, and
 each has a real control to focus, so the body-only floor says nothing either. Each is scored as the
-screen when the surface declares no signal, unless the evidence floor holds a barrier for that
-screen: a floored barrier the page does not show, on a page the run cannot show rendered it, is a
-gap of its own (see "Absent is a fix only with evidence" in section 9). Each is a gap when the surface declares a selector for
+screen when the surface declares no signal. If the evidence floor holds barriers for that screen,
+the run claims none of them fixed and shows a notice that names the screen (see "Absent is a fix
+only with evidence" in section 9), but the verdict does not change. Each is a gap when the surface declares a selector for
 the screen's own table, and each is a gap when it declares the screen's own data path, because
 none of them renders that table or asks for that data. The same signal holds on the real screen.
 
@@ -1237,35 +1237,58 @@ missing from this run's drafts was either fixed or was on content that never ren
 leave the same absence. A screen in the cleanly scanned set had no gap, but that is not enough: a
 screen whose header and navigation mount and whose content fails to mount has a real control to
 walk and no provider error, so it has no gap, and every floored barrier in the missing content is
-absent. That run used to be verified and to report the barriers paid down. So the gate marks an
-absent floored identity `fixed` only when one of these holds:
+absent. That run used to report the barriers paid down. So the gate marks an absent floored
+identity `fixed` only when one of these holds:
 
 - the screen's readiness signal (`reachedWhen`) was declared and every declared part held, or
 - the identity's own element was met this run: a keyboard stop or a draft on that screen at the
   same element path, for a structural identity, or with the same accessible name, for a name
   identity. A counted identity names no element, so only the signal can confirm it.
 
-Otherwise the identity is not claimed `fixed`, it is not reported as headroom, and its screen gets
-one `not-covered` gap that names the screen and the rules, never an element key, because a key
-carries page text. The run is then `not_covered`. Both tests are presence tests on sets, decided
-inside `gate()`, so they do not depend on order. `run()` builds the evidence from the scans with
-`renderEvidenceOf`, and a caller of the exported `gate()` that passes none gets the safe reading:
-no evidence, so a gap, never a `fixed`.
+Otherwise the identity is not claimed `fixed`. It gets no finding, which is what a floor entry on a
+screen the run did not scan already gets, so it is not paid down, it is not counted fixed in the
+receipt, it is not reported as headroom, and the floor keeps its full count as debt. The verdict
+does not change and no gap is raised. Instead the run shows a notice for each such screen. It names
+the screen, the rules, and the number of barriers, and gives the fix, for example: "3 recorded
+barriers on screen orders (button-name, link-name) were not seen in this run, so they are not
+claimed fixed. If they are fixed, add a reachedWhen signal for this screen or run usabl floor prune
+--unconfirmed." It never names an element key, because a key carries page text. The summary line
+gains a `N recorded barriers not seen, not claimed fixed` clause that counts barriers, not entries,
+and the notice itself is printed by the terminal, the pull request comment, the Stop hook (on a
+verified stop too), the self-check, and the overlay. The text is written once, in
+`src/output/floor-notice.ts`. The data is `floorUnconfirmed` on the gate output and on the Result,
+one entry per screen.
+
+Both tests are presence tests on sets, decided inside `gate()`, so they do not depend on order.
+`run()` builds the evidence from the scans with `renderEvidenceOf`, and a caller of the exported
+`gate()` that passes none gets the safe reading: no evidence, so no `fixed`. `usabl floor prune`
+and `usabl baseline` read the same rule, `paydownConfirmed`, through `src/floor/unconfirmed.ts`.
+Prune keeps such an entry by default and says so; `usabl floor prune --unconfirmed` removes it on
+purpose and says how many it removed and why. Baseline, with or without `--partial`, carries such an
+entry into the new floor at its recorded count and says so.
+
+**The blind spot, stated plainly.** A screen whose content fails to mount reads `verified` until it
+declares a signal. With floored debt on it, the run shows the notice and claims nothing fixed. With
+no floored debt, there is nothing to compare and nothing to say, the same as before this rule. A
+notice is not a gap, so the verdict does not tell the two cases apart; the notice does. Declaring a
+`reachedWhen` signal for content only that screen has is what turns a missing mount into a gap.
 
 No change to the floor format was needed: the element is read off the identity key the floor
 already stores. The cost falls on a genuinely fixed barrier the run cannot place. A counted barrier
 (`button-name`, `pf-icon-button-name`) on a screen with no signal, and a fixed barrier on an element
 the walk does not focus and no check reports, such as an image whose alternative text was added,
-now make the run `not_covered` until the operator declares `reachedWhen` for content only that
-screen has, or runs `usabl floor prune` and reviews the diff. `usabl floor prune` still removes such
-an entry, because it reads the screen's own scan gaps and this gap is the gate's, so the human
-review of the floor diff is what decides. `usabl baseline` without `--partial` refuses while the gap
-stands, as it does for any run that admits it did not see everything.
+stay on the floor with the notice until the operator declares `reachedWhen` for content only that
+screen has, or runs `usabl floor prune --unconfirmed` and reviews the diff. Measured on a real
+Chromium scan of an axe-sourced floor: axe names a structural element with a short unique selector,
+such as `tr>td>img` or `a[href$="#A-100"]`, which is not the path a keyboard stop records, so in
+practice a structural axe entry is confirmed by a held signal, not by the walk. Name identities are
+confirmed by a stop with the same accessible name.
 
 What this still cannot catch. A path or a name that something else on the screen also has: another
 element at the same path once the position numbers are removed, or a header button with the same
-accessible name as the missing one. A signal that names the shell, which already lets a wrong page through (section
-8). Content that is missing and held no floored barrier, which leaves nothing to compare.
+accessible name as the missing one. A signal that names the shell, which already lets a wrong page
+through (section 8). Content that is missing and held no floored barrier, which leaves nothing to
+compare.
 
 ### The residual hole, and why it is open
 
@@ -1481,10 +1504,14 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   than one refuses with exit 2. `init` scaffolds policy; `install` wires integrations; they
   are different commands (see section 12).
 - Baseline drafts: `usabl baseline` runs a full UI scan and writes `.usabl-evidence.json`
-  as a reviewable working-tree diff.
+  as a reviewable working-tree diff. A floored entry the run did not see and cannot confirm was
+  fixed is carried into the new floor at its recorded count, with or without `--partial`.
 - Floor prune: `usabl floor prune` re-arms the gate on cleanly scanned screens. It removes
   entries whose identity is gone, and lowers the recorded count on entries whose identity is
-  still present but now holds fewer barriers. It never raises a count and never adds an
+  still present but now holds fewer barriers. An absent entry the run cannot confirm was fixed,
+  because nothing shows its part of the page rendered (section 9), is kept and named;
+  `--unconfirmed` removes those too and says how many and why. The report says it kept entries on
+  screens the run did not scan cleanly only when it kept some. It never raises a count and never adds an
   identity: accepting new debt is what `usabl baseline` does, under review. It leaves version 1
   name and structural counts alone, because those are placeholders the gate does not compare and
   writing a real number under them would present a placeholder as an observation. `prune` is the
