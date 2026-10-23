@@ -15,6 +15,12 @@ const TEST_BUDGET_MS = 15_000;
 // to a DOM that stopped changing. The shipped default has to clear that whole 25.7 s.
 const SLOWEST_MEASURED_MS = 25_700;
 
+// A signal probe with a cap longer than any test budget, so only the budget can end the wait,
+// unless a test sets its own cap.
+function probe(holds: () => Promise<boolean>, timeoutMs = 60_000): { holds: () => Promise<boolean>; timeoutMs: number } {
+  return { holds, timeoutMs };
+}
+
 interface MountStep {
   atMs: number;
   elements: number;
@@ -232,7 +238,7 @@ describe('waitForRendered', () => {
     const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
     const start = Date.now();
     const outcome = { readyAtMs: -1 };
-    const done = waitForRendered(page, TEST_BUDGET_MS, async () => Date.now() - start >= 3_000).then(() => {
+    const done = waitForRendered(page, TEST_BUDGET_MS, probe(async () => Date.now() - start >= 3_000)).then(() => {
       outcome.readyAtMs = Date.now() - start;
     });
 
@@ -252,10 +258,14 @@ describe('waitForRendered', () => {
     const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }], requestClearsAtMs: 2_000 });
     const start = Date.now();
     const askedAtMs: number[] = [];
-    const done = waitForRendered(page, TEST_BUDGET_MS, async () => {
-      askedAtMs.push(Date.now() - start);
-      return true;
-    });
+    const done = waitForRendered(
+      page,
+      TEST_BUDGET_MS,
+      probe(async () => {
+        askedAtMs.push(Date.now() - start);
+        return true;
+      }),
+    );
 
     await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
     await done;
@@ -270,7 +280,7 @@ describe('waitForRendered', () => {
     const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
     const start = Date.now();
     const outcome = { readyAtMs: -1 };
-    const done = waitForRendered(page, 3_000, async () => false).then(() => {
+    const done = waitForRendered(page, 3_000, probe(async () => false)).then(() => {
       outcome.readyAtMs = Date.now() - start;
     });
 
@@ -285,7 +295,7 @@ describe('waitForRendered', () => {
 
   it('still names the DOM phase when the page never stops changing, whatever readyWhen says', async () => {
     const page = makeFakePage({ neverStops: true });
-    const done = waitForRendered(page, 3_000, async () => true);
+    const done = waitForRendered(page, 3_000, probe(async () => true));
     const rejects = expect(done).rejects.toThrow(/DOM did not stop changing within 3000ms/);
 
     await vi.advanceTimersByTimeAsync(4_000);
@@ -296,18 +306,57 @@ describe('waitForRendered', () => {
     const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
     const start = Date.now();
     const outcome = { readyAtMs: -1 };
-    const done = waitForRendered(page, TEST_BUDGET_MS, async () => {
-      if (Date.now() - start < 3_000) {
-        throw new Error('selector engine not ready');
-      }
-      return true;
-    }).then(() => {
+    const done = waitForRendered(
+      page,
+      TEST_BUDGET_MS,
+      probe(async () => {
+        if (Date.now() - start < 3_000) {
+          throw new Error('selector engine not ready');
+        }
+        return true;
+      }),
+    ).then(() => {
       outcome.readyAtMs = Date.now() - start;
     });
 
     await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
     await done;
     expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_000);
+  });
+
+  it('ends the signal wait at its cap, counted from the first settled moment', async () => {
+    // Settled from the start, so the first settled moment is about 1500ms in. The cap is 2000ms,
+    // far inside the 15000ms budget, so the cap is what ends the wait.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    const start = Date.now();
+    const outcome = { readyAtMs: -1 };
+    const done = waitForRendered(page, TEST_BUDGET_MS, probe(async () => false, 2_000)).then(() => {
+      outcome.readyAtMs = Date.now() - start;
+    });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(outcome.readyAtMs).toBe(-1);
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await done;
+    expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_500);
+    expect(outcome.readyAtMs).toBeLessThanOrEqual(4_000);
+  });
+
+  it('keeps counting the cap from the first settled moment when the page changes after it', async () => {
+    // A page that settles, then mounts more, does not restart the cap. It still ends once the page
+    // has settled again, because a wait that ends mid-change hands the walk a moving page.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }, { atMs: 2_500, elements: 40 }] });
+    const start = Date.now();
+    const outcome = { readyAtMs: -1 };
+    const done = waitForRendered(page, TEST_BUDGET_MS, probe(async () => false, 2_000)).then(() => {
+      outcome.readyAtMs = Date.now() - start;
+    });
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await done;
+    expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_500);
+    expect(outcome.readyAtMs).toBeLessThanOrEqual(4_500);
   });
 
   it('passes a page failure out of evaluate through unchanged', async () => {

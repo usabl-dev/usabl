@@ -37,6 +37,22 @@ describe('parseUsablConfig readyTimeoutMs', () => {
   });
 });
 
+describe('parseUsablConfig signalTimeoutMs', () => {
+  it('reads the operator cap', () => {
+    expect(parseUsablConfig(configJson({ signalTimeoutMs: 30_000 })).signalTimeoutMs).toBe(30_000);
+  });
+
+  it('leaves the cap unset when the operator does not name one', () => {
+    expect(parseUsablConfig(configJson()).signalTimeoutMs).toBeUndefined();
+  });
+
+  it('refuses a cap that is not a positive whole number of milliseconds', () => {
+    for (const bad of [0, -1, 1.5, '15000', null, Number.NaN]) {
+      expect(() => parseUsablConfig(configJson({ signalTimeoutMs: bad }))).toThrow(/signalTimeoutMs/);
+    }
+  });
+});
+
 describe('parseUsablConfig surface reachedWhen', () => {
   it('reads an optional reachedWhen selector on a surface', () => {
     const config = parseUsablConfig(

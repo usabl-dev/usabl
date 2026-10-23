@@ -14,6 +14,7 @@ import type {
   CoverageGap,
   Page,
   Provider,
+  ReadinessProbe,
   ScreenScan,
   Step,
   StepRunner,
@@ -24,10 +25,11 @@ import {
   measureReadiness,
   readApiResponses,
   readinessSignalOf,
+  signalTimeoutMsFor,
   type ReadinessMeasurement,
   type ReadinessSignal,
 } from './reachability.js';
-import { observeLanding, readRefusedRequests, redirectedAwayGap, signalHeld } from './redirected.js';
+import { observeLanding, readRefusedRequests, redirectedAwayGap } from './redirected.js';
 import { waitForScannerArtifactsToClear } from './scanner-artifacts.js';
 import { runProviders } from './index.js';
 
@@ -179,16 +181,26 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           ...(reachedWhen === undefined ? { reachedWhen: undefined } : { reachedWhen }),
         };
         // A page can settle on a small shell, pause with nothing in flight, and only then fetch and
-        // mount its content. A screen that declares a readiness signal says what its content looks
-        // like, so readiness waits, inside the same budget, until that signal holds before the walk
-        // starts. It also stops waiting as soon as the page is plainly not this screen, so a sign-in
-        // page the rules below can see costs no more than it did before.
-        const readyWhen =
-          signal === null
+        // mount its content. A screen that declares a readiness selector says what its content
+        // looks like, so readiness waits until that selector matches at a settled moment, for at
+        // most signalTimeoutMs after the page first settled. It also stops waiting as soon as the
+        // page is plainly not this screen, so a sign-in page the rules below can see costs no more
+        // than it did before.
+        //
+        // Only the selector can end the wait. A response stays seen once it arrived, so it cannot
+        // tell the screen's content from a page that replaced it a moment later, and waiting on it
+        // would end the wait on whatever settled last. A screen that declares only a response
+        // waits exactly as it did without a signal.
+        const signalWaitMs = signalTimeoutMsFor(deps.config);
+        const readyWhen: ReadinessProbe | undefined =
+          signal === null || signal.selector === null
             ? undefined
-            : async (): Promise<boolean> => {
-                const seen = await observeLanding(page, landingOptions);
-                return signalHeld(seen) || redirectedAwayGap(screen.id, seen) !== null;
+            : {
+                timeoutMs: signalWaitMs,
+                holds: async (): Promise<boolean> => {
+                  const seen = await observeLanding(page, landingOptions);
+                  return seen.reachedSelectorPresent === true || redirectedAwayGap(screen.id, seen) !== null;
+                },
               };
         await page.gotoReady(readyWhen);
 
@@ -205,6 +217,22 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // them at all invites a later change to keep them. Nothing is claimed about
           // reachability either, because this page is not the one the assertion describes.
           result = notReachedScan(screen, notReached, signal);
+        } else if (readyWhen !== undefined && landing.reachedSelectorPresent !== true) {
+          // The signal wait ran out and the declared selector does not match. The page usabl would
+          // walk does not show the screen's content, so the walk and the checks are skipped and
+          // the unseen pass turns this into a gap that names the selector and the cap.
+          result = {
+            screenId: screen.id,
+            url: screen.url,
+            stops: [],
+            drafts: [],
+            gaps: [],
+            applicability: [],
+            reachedSelectorPresent: false,
+            reachedWhenSelector: signal?.selector ?? null,
+            signalWaitMs,
+            ...responseFields(signal, landing.reachedResponseSeen ?? null),
+          };
         } else {
           // Everything the page sent up to here is the screen loading. Everything after is usabl
           // pressing keys and running checks, so it never counts toward the readiness response.

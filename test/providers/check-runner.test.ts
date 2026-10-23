@@ -6,8 +6,11 @@ import type {
   Page,
   Provider,
   ProviderOutput,
+  ReadinessProbe,
   RuleApplicability,
+  SurfaceConfig,
 } from '../../src/contracts/index.js';
+import { markUnseenScreens } from '../../src/coverage/unseen.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -427,50 +430,57 @@ describe('makeCheckRunner', () => {
     expect(scan.reachedResponseSeen).toBe(false);
   });
 
-  it('asks readiness to wait for a declared signal, and for nothing more when none is declared', async () => {
+  it('asks readiness to wait only for a declared selector, under the signal cap', async () => {
     // The fake readiness does not wait, so the test reads the probe the runner handed it and asks
     // it directly, the way the real driver does once the page has settled.
-    const probes: Array<(() => Promise<boolean>) | undefined> = [];
+    const probes: Array<ReadinessProbe | undefined> = [];
     let contentMounted = false;
     const pageFor = async (): Promise<Page> => {
       const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
       return Object.assign(page, {
-        gotoReady: async (readyWhen?: () => Promise<boolean>): Promise<void> => {
+        gotoReady: async (readyWhen?: ReadinessProbe): Promise<void> => {
           probes.push(readyWhen);
         },
         queryAll: async () => (contentMounted ? [{ selector: 'table#clusters' }] : []),
       });
     };
-    const runnerFor = (reachedWhen: string | undefined) =>
+    const runnerFor = (reachedWhen: SurfaceConfig['reachedWhen'], signalTimeoutMs?: number) =>
       makeCheckRunner({
         browser: { open: pageFor, close: async () => {} },
         providers: [],
         config: testConfig({
           surfaces: [{ id: SCREEN.id, url: SCREEN.url, files: [], ...(reachedWhen === undefined ? {} : { reachedWhen }) }],
+          ...(signalTimeoutMs === undefined ? {} : { signalTimeoutMs }),
         }),
         allowedCapabilities: ['live'],
         stepRunner: makeStepRunner(),
       });
 
     await runnerFor(undefined).scan(SCREEN);
+    // A response stays seen once it arrived, so it cannot say the screen is still showing its
+    // data. It never holds or ends the wait.
+    await runnerFor({ response: '/api/clusters' }).scan(SCREEN);
     await runnerFor('table#clusters').scan(SCREEN);
+    await runnerFor({ selector: 'table#clusters', response: '/api/clusters' }, 4_000).scan(SCREEN);
 
     expect(probes[0]).toBeUndefined();
-    const probe = probes[1];
-    expect(probe).toBeTypeOf('function');
-    // Shell only: the signal has not held, so readiness keeps waiting.
-    await expect(probe?.()).resolves.toBe(false);
+    expect(probes[1]).toBeUndefined();
+    const probe = probes[2];
+    expect(probe?.timeoutMs).toBe(15_000);
+    expect(probes[3]?.timeoutMs).toBe(4_000);
+    // Shell only: the selector has not held, so readiness keeps waiting.
+    await expect(probe?.holds()).resolves.toBe(false);
     contentMounted = true;
-    await expect(probe?.()).resolves.toBe(true);
+    await expect(probe?.holds()).resolves.toBe(true);
   });
 
   it('stops the readiness wait at once on a page that is plainly not this screen', async () => {
     // A redirect to a page with a password field is a sign-in page whatever the signal says, so
-    // waiting the whole budget for the screen's content would only delay the gap.
-    const probes: Array<(() => Promise<boolean>) | undefined> = [];
+    // waiting the whole cap for the screen's content would only delay the gap.
+    const probes: Array<ReadinessProbe | undefined> = [];
     const page = await makeScriptedPage({ activePaths: ['#first'], activeNodes: [null] });
     Object.assign(page, {
-      gotoReady: async (readyWhen?: () => Promise<boolean>): Promise<void> => {
+      gotoReady: async (readyWhen?: ReadinessProbe): Promise<void> => {
         probes.push(readyWhen);
       },
       currentUrl: async () => 'http://127.0.0.1:5173/sign-in',
@@ -489,20 +499,62 @@ describe('makeCheckRunner', () => {
 
     const scan = await runner.scan(SCREEN);
 
-    await expect(probes[0]?.()).resolves.toBe(true);
+    await expect(probes[0]?.holds()).resolves.toBe(true);
     expect(scan.gaps[0]?.reason).toContain('redirected away');
   });
 
-  it('does not count a selector that first matched after the walk began', async () => {
-    // The content arrived during the walk or a check put it there. The walk ran on a page without
-    // it, so the selector holding afterwards is not evidence about what the walk saw.
+  it('ends the screen as a gap with no walk when the selector did not hold within the cap', async () => {
+    // The wait ran out with the declared selector absent. Walking and checking a page that does
+    // not show the screen's content would only produce evidence about some other page.
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    let walkStarted = false;
+    let tabs = 0;
+    Object.assign(page, {
+      markWalkStart: async () => {
+        walkStarted = true;
+      },
+      tab: async () => {
+        tabs += 1;
+      },
+      queryAll: async () => [],
+    });
+    const providerRun = vi.fn(async (): Promise<Draft[]> => [makeDraft('should-not-run')]);
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [{ id: 'checks', layer: 'fake', capabilities: ['live'], run: providerRun }],
+      config: testConfig({
+        surfaces: [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: 'table#clusters' }],
+        signalTimeoutMs: 4_000,
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(walkStarted).toBe(false);
+    expect(tabs).toBe(0);
+    expect(providerRun).not.toHaveBeenCalled();
+    expect(scan.stops).toEqual([]);
+    expect(scan.drafts).toEqual([]);
+    expect(scan.reachedSelectorPresent).toBe(false);
+    const reasons = markUnseenScreens([scan]).screens[0]?.gaps.map((gap) => gap.reason) ?? [];
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('table#clusters');
+    expect(reasons[0]).toContain('4000');
+    expect(reasons[0]).toContain('signalTimeoutMs');
+  });
+
+  it('does not count a selector that held before the walk and was gone after the checks', async () => {
+    // The selector held before the walk and was gone after it, so the walk or a check changed
+    // the page. The part holds only when it held at both moments.
     const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
     let walkStarted = false;
     Object.assign(page, {
       markWalkStart: async () => {
         walkStarted = true;
       },
-      queryAll: async () => (walkStarted ? [{ selector: 'table#clusters' }] : []),
+      queryAll: async () => (walkStarted ? [] : [{ selector: 'table#clusters' }]),
     });
     const runner = makeCheckRunner({
       browser: { open: async () => page, close: async () => {} },

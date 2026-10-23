@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orders</title>
+  </head>
+  <body>
+    <header>
+      <nav aria-label="Main">
+        <a id="home-link" href="#home">Home</a>
+      </nav>
+    </header>
+    <main id="root"></main>
+    <script>
+      // The shell pauses for three seconds with nothing in flight. Then it asks for the screen's
+      // data, which answers 200 with JSON, and mounts the orders table. 800 ms later the page
+      // replaces itself with a magic-link sign-in form: no password field and no refused request.
+      // The table never holds still long enough to count as settled, and the sign-in form does.
+      window.addEventListener('load', () => {
+        setTimeout(async () => {
+          const response = await fetch('/api/data/orders');
+          const orders = await response.json();
+          const root = document.getElementById('root');
+          if (!root) {
+            return;
+          }
+          const table = document.createElement('table');
+          table.id = 'orders';
+          for (const order of orders) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.textContent = order;
+            row.appendChild(cell);
+            table.appendChild(row);
+          }
+          root.appendChild(table);
+          setTimeout(() => {
+            root.textContent = '';
+            const heading = document.createElement('h1');
+            heading.textContent = 'Sign in';
+            const label = document.createElement('label');
+            label.textContent = 'Email';
+            const input = document.createElement('input');
+            input.type = 'email';
+            input.id = 'email';
+            label.appendChild(input);
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.id = 'send-link';
+            button.textContent = 'Send me a sign-in link';
+            root.append(heading, label, button);
+          }, 800);
+        }, 3000);
+      });
+    </script>
+  </body>
+</html>

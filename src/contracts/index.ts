@@ -147,6 +147,10 @@ export interface ScreenScan {
   // Only false triggers an unseen gap in markUnseenScreens. The value is a plain presence test,
   // never a count or a DOM walk, so a verdict that leans on it cannot depend on iteration order.
   reachedSelectorPresent: boolean | null;
+  // Set only when the screen ended before the walk because its declared selector did not hold
+  // within the signal wait: the signalTimeoutMs cap that ran out, carried so the gap can name it.
+  // Such a scan has no stops, drafts, or applicability, because nothing was walked or checked.
+  signalWaitMs?: number;
   // The reachedWhen selector the surface declared, carried so a coverage gap can name it in plain
   // English. Optional and only meaningful when reachedSelectorPresent is false. Absent or null when
   // the surface declared no selector.
@@ -418,14 +422,21 @@ export interface ApiResponse {
   // tracker never saw sent reads as false once the mark is set, because nothing dates it.
   sentBeforeWalk: boolean;
 }
+// What readiness waits for beyond a settled page. holds is asked only at a moment when the DOM is
+// stable and the network is quiet. timeoutMs caps the wait, counted from the first such moment.
+export interface ReadinessProbe {
+  holds(): Promise<boolean>;
+  timeoutMs: number;
+}
 export interface Page {
   // Waits until the page stopped changing and the network went quiet. With readyWhen, it also
-  // waits, inside the same budget, until readyWhen answers true at a moment when both of those
-  // hold. A page can settle on a small shell, pause with nothing in flight, and only then fetch and
-  // mount its real content, and only a positive signal tells that pause from a finished page. When
-  // the budget runs out on a settled page whose readyWhen never held, it returns rather than throws,
-  // so the caller must check the signal again and treat a screen that does not show it as a gap.
-  gotoReady(readyWhen?: () => Promise<boolean>): Promise<void>;
+  // waits until readyWhen.holds answers true at a moment when both of those hold, for at most
+  // readyWhen.timeoutMs after the first such moment and always inside the readiness budget. A page
+  // can settle on a small shell, pause with nothing in flight, and only then fetch and mount its
+  // real content, and only a positive signal tells that pause from a finished page. When the cap or
+  // the budget runs out on a settled page whose probe never held, it returns rather than throws, so
+  // the caller must check the signal again and treat a screen that does not show it as a gap.
+  gotoReady(readyWhen?: ReadinessProbe): Promise<void>;
   // Where the browser actually is now, which is not always where it was sent. An application can
   // answer a request for a screen with a redirect, and a scan that never asks has no way to know
   // it measured a different page. Read it after the screen has loaded and before anything on the
@@ -576,6 +587,11 @@ export interface UsablConfig {
   // in operator config because how long an application takes to render is a property of that
   // application, not of the engine. Absent means the engine default.
   readyTimeoutMs?: number;
+  // Whole-milliseconds cap on how long readiness waits for a screen's declared reachedWhen selector,
+  // counted from the first moment the page settled and inside readyTimeoutMs. A screen whose
+  // selector does not hold by then is a coverage gap and is not walked. Absent means the engine
+  // default.
+  signalTimeoutMs?: number;
   // Caps how many finding groups bounded surfaces show before collapsing by rule.
   noiseBudget?: NoiseBudgetConfig;
 }

@@ -6,7 +6,7 @@
  */
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page } from '../contracts/index.js';
+import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page, ReadinessProbe } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
@@ -729,12 +729,14 @@ function readinessTimeout(phase: string, timeoutMs: number, detail: string): str
  * grades the shell. Raising readyTimeoutMs does not help, because the loop believes it is done and
  * returns rather than running out of budget.
  *
- * readyWhen closes that pause for a screen that declares a readiness signal. It is asked only at a
- * moment when the DOM is stable and the network is quiet, and the loop keeps waiting until it
- * answers true or the budget runs out. A probe that throws reads as false. When the budget runs out
- * on a settled page whose readyWhen never held, this returns instead of throwing, because the caller
- * measures the signal again and names the missing part in a coverage gap, which says more than a
- * timeout would.
+ * readyWhen closes that pause for a screen that declares a readiness selector. Its probe is asked
+ * only at a moment when the DOM is stable and the network is quiet, and the loop keeps waiting
+ * until it answers true, until readyWhen.timeoutMs has passed since the first such moment, or until
+ * the budget runs out, whichever comes first. The cap is counted from the first settled moment and
+ * never restarts, so a page that keeps changing cannot stretch it. A probe that throws reads as
+ * false. When the cap or the budget runs out on a settled page whose probe never held, this returns
+ * instead of throwing, because the caller measures the signal again and ends the screen as a
+ * coverage gap that names the selector and the cap, which says more than a timeout would.
  *
  * Without readyWhen the pause is still not covered. Closing it without a signal would need the
  * application to report its own render completion, which this design avoids on purpose so it can
@@ -745,9 +747,11 @@ function readinessTimeout(phase: string, timeoutMs: number, detail: string): str
 export async function waitForRendered(
   pw: ReadinessPage,
   timeoutMs: number,
-  readyWhen?: () => Promise<boolean>,
+  readyWhen?: ReadinessProbe,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+  // When the signal wait ends, set at the first settled moment.
+  let signalDeadline: number | null = null;
 
   let previous: number | null = null;
   let repeats = 0;
@@ -760,8 +764,15 @@ export async function waitForRendered(
     // Read live every pass, so a request that started since the last read resets the window.
     const networkQuiet = pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS);
     const settled = domStable && networkQuiet;
-    if (settled && (readyWhen === undefined || (await signalHolds(readyWhen)))) {
-      return;
+    if (settled) {
+      if (readyWhen === undefined) {
+        return;
+      }
+      signalDeadline ??= Date.now() + readyWhen.timeoutMs;
+      // The cap ran out on a settled page. The caller judges the signal, not this loop.
+      if ((await signalHolds(readyWhen.holds)) || Date.now() >= signalDeadline) {
+        return;
+      }
     }
 
     const remaining = deadline - Date.now();
@@ -785,9 +796,9 @@ export async function waitForRendered(
 }
 
 // A readiness probe that throws has not shown the signal, so it reads as false and the wait goes on.
-async function signalHolds(readyWhen: () => Promise<boolean>): Promise<boolean> {
+async function signalHolds(holds: () => Promise<boolean>): Promise<boolean> {
   try {
-    return (await readyWhen()) === true;
+    return (await holds()) === true;
   } catch {
     return false;
   }
@@ -823,7 +834,7 @@ function wrapPage(
     networkQuietFor: (windowMs) => network.networkQuietFor(windowMs),
   };
   const page: Page = {
-    async gotoReady(readyWhen?: () => Promise<boolean>): Promise<void> {
+    async gotoReady(readyWhen?: ReadinessProbe): Promise<void> {
       await waitForRendered(readiness, readyTimeoutMs, readyWhen);
     },
     async currentUrl(): Promise<string> {

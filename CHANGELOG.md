@@ -4,18 +4,19 @@
 
 ### Fixed
 
-- Readiness now waits for a screen's declared `reachedWhen` signal before the keyboard walk
-  starts. A page that mounted a small shell, paused for more than about 1.7 seconds with
-  nothing in flight, and only then fetched and mounted its content was read as settled
-  during the pause. With a selector or a response declared, that screen ended as a gap,
-  or, when the content arrived during the walk, as a pass whose walk never saw it. Now
-  readiness keeps waiting, inside `readyTimeoutMs`, until every declared part holds, and
-  a part counts only if it held both before the walk and after the checks. Measured on
-  real Chromium with pauses of 1.5, 1.8, 2.1, and 4.0 seconds, the walk and the checks
-  ran on the content every time. The cost: a screen whose signal never holds now spends
-  the whole readiness budget before it ends as a gap. A screen with no `reachedWhen` is
-  unchanged and can still be graded on its shell; declare a signal for a screen that
-  mounts late.
+- Readiness now waits for a screen's declared `reachedWhen` selector before the keyboard
+  walk starts. A page that mounted a small shell, paused for more than about 1.7 seconds
+  with nothing in flight, and only then fetched and mounted its content was read as
+  settled during the pause. With a selector declared, that screen ended as a gap, or, when
+  the content arrived during the walk, as a pass whose walk never saw it. Now readiness
+  keeps waiting until the selector matches at a settled moment, and a part of the signal
+  counts only if it held both before the walk and after the checks. Measured on real
+  Chromium with pauses of 1.5, 1.8, 2.1, and 4.0 seconds, the walk and the checks ran on
+  the content every time. A declared `response` never ends or extends the wait, because
+  it stays seen after a page replaces its content, so a screen that declares only a
+  response behaves as before and a long pause ends as a gap. A screen with no
+  `reachedWhen` is unchanged and can still be graded on its shell; declare a selector for
+  a screen that mounts late.
 
 - `pf-toast-live-region` now resolves each alert's live value from the nearest
   element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector
@@ -73,6 +74,15 @@
   with its own `.git`, from the consumer's directory, and `pre-commit install`
   there could fail offline. `prepare` now reads as a plain condition: if the
   installer file exists, run it with bash and keep its exit status.
+
+### Added
+
+- `signalTimeoutMs` in `usabl.config.json`, a positive whole number of milliseconds,
+  default 15000. It caps the wait for a `reachedWhen` selector, counted from the first
+  moment the page settled and inside `readyTimeoutMs`. A screen whose selector does not
+  match within it is not walked or checked, and ends as a `not-covered` gap that names the
+  selector and the cap. Measured on real Chromium, such a screen ends in about 17.6
+  seconds with the default cap.
 
 ### Changed
 

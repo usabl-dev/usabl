@@ -54,6 +54,9 @@ interface FixtureServer {
   // A shell with one link, then a pause of ?pause= milliseconds with nothing in flight and nothing
   // changing, then a fetch that mounts the screen's real content.
   frozenPauseUrl: string;
+  // A shell that pauses, mounts the orders table from a 200 JSON answer, and 800 ms later replaces
+  // itself with a magic-link sign-in form. The table never holds still; the sign-in form does.
+  swapToSignInUrl: string;
   close: () => Promise<void>;
 }
 
@@ -77,6 +80,7 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/orders.html': await readFixture('orders-screen.html'),
     '/fetch-on-focus.html': await readFixture('fetch-on-focus.html'),
     '/frozen-pause.html': await readFixture('frozen-pause.html'),
+    '/swap-to-sign-in.html': await readFixture('swap-to-sign-in.html'),
   };
   const spaFallback = await readFixture('spa-fallback.html');
   const authWall = await readFixture('auth-wall.html');
@@ -207,6 +211,7 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     spaFallbackUrl: `http://127.0.0.1:${address.port}/spa/orders`,
     fetchOnFocusUrl: `http://127.0.0.1:${address.port}/fetch-on-focus.html`,
     frozenPauseUrl: `http://127.0.0.1:${address.port}/frozen-pause.html`,
+    swapToSignInUrl: `http://127.0.0.1:${address.port}/swap-to-sign-in.html`,
     close: async () =>
       new Promise<void>((resolve, reject) => {
         // The hang route leaves a socket open, and server.close() waits for it forever.
@@ -884,21 +889,76 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       };
     }
 
-    const SIGNALS: Array<[string, SurfaceConfig['reachedWhen']]> = [
-      ['a selector', '#late-orders button'],
-      ['a response', { response: '/api/data/late-orders' }],
-    ];
+    describe('a screen that shows its data and then swaps itself for a sign-in page', () => {
+      // The wait must not end on the sign-in page. A response stays seen once it arrived, so it
+      // cannot tell the table from what replaced it, and only a selector that holds at a settled
+      // moment may end the wait.
+      async function scanSwap(
+        reachedWhen: SurfaceConfig['reachedWhen'],
+        signalTimeoutMs?: number,
+      ): Promise<{ stops: number; drafts: number; gaps: string[]; elapsedMs: number }> {
+        const url = fixture.swapToSignInUrl;
+        const runner = makeCheckRunner({
+          browser: driver,
+          providers: [alwaysFiringProvider('orders')],
+          config: testConfig({
+            appBaseUrl: fixture.url,
+            surfaces: [{ id: 'orders', url, files: [], ...(reachedWhen === undefined ? {} : { reachedWhen }) }],
+            ...(signalTimeoutMs === undefined ? {} : { signalTimeoutMs }),
+          }),
+          allowedCapabilities: ['live'],
+          stepRunner: makeStepRunner(),
+          transcriptTabCap: 5,
+          sessionConfigured: true,
+        });
+        const started = Date.now();
+        const scanned = await runner.scan({ id: 'orders', url });
+        const elapsedMs = Date.now() - started;
+        const screen = markUnseenScreens([scanned]).screens[0];
+        return {
+          stops: scanned.stops.length,
+          drafts: screen?.drafts.length ?? 0,
+          gaps: (screen?.gaps ?? []).map((gap) => gap.reason),
+          elapsedMs,
+        };
+      }
+
+      it('gaps the screen when it declares only a response', async () => {
+        const result = await scanSwap({ response: '/api/data/orders' });
+        expect(result.gaps.length).toBeGreaterThan(0);
+        expect(result.drafts).toBe(0);
+      }, 30_000);
+
+      it('ends the wait at the signal cap, runs no walk, and names the selector and the cap', async () => {
+        const result = await scanSwap('table#orders', 3_000);
+        expect(result.stops).toBe(0);
+        expect(result.drafts).toBe(0);
+        expect(result.gaps.some((reason) => reason.includes('table#orders') && reason.includes('3000'))).toBe(true);
+        // The page first settles at about 1.5 s, so the cap ends the wait well inside the default
+        // readiness budget.
+        expect(result.elapsedMs).toBeLessThan(12_000);
+      }, 30_000);
+    });
 
     for (const pauseMs of PAUSES_MS) {
-      for (const [shape, reachedWhen] of SIGNALS) {
-        it(`grades the content that mounts after a ${pauseMs} ms pause when the screen declares ${shape}`, async () => {
-          const result = await scanAfterPause(pauseMs, reachedWhen);
-          // Readiness waited for the signal, so the walk and the checks both ran on the content.
-          expect(result.gapped).toBe(false);
+      it(`grades the content that mounts after a ${pauseMs} ms pause when the screen declares a selector`, async () => {
+        const result = await scanAfterPause(pauseMs, '#late-orders button');
+        // Readiness waited for the selector, so the walk and the checks both ran on the content.
+        expect(result.gapped).toBe(false);
+        expect(result.walkSawContent).toBe(true);
+        expect(result.checksSawContent).toBe(true);
+      }, 30_000);
+
+      it(`never passes the shell after a ${pauseMs} ms pause when the screen declares only a response`, async () => {
+        // A response does not extend the wait. A request sent after the walk began never counts,
+        // so a pause long enough to end readiness ends as a gap, and a shorter one is graded.
+        const result = await scanAfterPause(pauseMs, { response: '/api/data/late-orders' });
+        expect(result.gapped || (result.walkSawContent && result.checksSawContent)).toBe(true);
+        if (!result.gapped) {
           expect(result.walkSawContent).toBe(true);
           expect(result.checksSawContent).toBe(true);
-        }, 30_000);
-      }
+        }
+      }, 30_000);
     }
   });
 

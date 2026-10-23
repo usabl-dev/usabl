@@ -236,6 +236,12 @@ export function parseUsablConfig(raw: string): UsablConfig {
       ? undefined
       : expectPositiveWholeNumber(readyTimeoutRaw, 'readyTimeoutMs');
 
+  const signalTimeoutRaw = Reflect.get(root, 'signalTimeoutMs');
+  const signalTimeoutMs =
+    signalTimeoutRaw === undefined
+      ? undefined
+      : expectPositiveWholeNumber(signalTimeoutRaw, 'signalTimeoutMs');
+
   const noiseBudgetRaw = Reflect.get(root, 'noiseBudget');
   const noiseBudget =
     noiseBudgetRaw === undefined ? undefined : parseNoiseBudgetConfig(noiseBudgetRaw);
@@ -255,6 +261,7 @@ export function parseUsablConfig(raw: string): UsablConfig {
     ...(requirements === undefined ? {} : { requirements }),
     ...(promotedObligations === undefined ? {} : { promotedObligations }),
     ...(readyTimeoutMs === undefined ? {} : { readyTimeoutMs }),
+    ...(signalTimeoutMs === undefined ? {} : { signalTimeoutMs }),
     ...(noiseBudget === undefined ? {} : { noiseBudget }),
   };
 }
