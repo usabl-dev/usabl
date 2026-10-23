@@ -107,7 +107,9 @@ describe('runFloorPrune', () => {
           ]),
         ),
       }),
-      scans: { clusters: scanWith([draft()]) },
+      // The screen declares a readiness signal and it held, so the run shows the search field's
+      // part of the page rendered and its absence is a pay-down.
+      scans: { clusters: { ...scanWith([draft()]), reachedSelectorPresent: true } },
     });
     const writer = new MemoryFloorFs();
 
@@ -247,7 +249,7 @@ describe('runFloorPrune', () => {
           'usabl.config.json': '{}',
         },
       ),
-      scans: { clusters: scanWith([]) },
+      scans: { clusters: { ...scanWith([]), reachedSelectorPresent: true } },
     });
     const writer = new MemoryFloorFs();
 
