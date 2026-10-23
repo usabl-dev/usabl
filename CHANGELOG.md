@@ -81,6 +81,12 @@
   there could fail offline. `prepare` now reads as a plain condition: if the
   installer file exists, run it with bash and keep its exit status.
 
+### Added
+
+- `usabl doctor` reports a readiness signals surface. It is missing when a screen holds
+  floored debt and declares no `reachedWhen` signal, and its next step names those
+  screens, because a floored barrier there can never be claimed fixed.
+
 ### Changed
 
 - `checkPage` called without a `screenId` returns `not_covered` in a project that has

@@ -1265,7 +1265,8 @@ Both tests are presence tests on sets, decided inside `gate()`, so they do not d
 and `usabl baseline` read the same rule, `paydownConfirmed`, through `src/floor/unconfirmed.ts`.
 Prune keeps such an entry by default and says so; `usabl floor prune --unconfirmed` removes it on
 purpose and says how many it removed and why. Baseline, with or without `--partial`, carries such an
-entry into the new floor at its recorded count and says so.
+entry into the new floor at its recorded count and says so. `usabl doctor` names every screen that
+holds floored debt and declares no `reachedWhen` signal.
 
 **The blind spot, stated plainly.** A screen whose content fails to mount reads `verified` until it
 declares a signal. With floored debt on it, the run shows the notice and claims nothing fixed. With
@@ -1719,9 +1720,12 @@ is insufficient.
 `usabl doctor` is a read-only projection that reports the state of each wired
 integration surface. It always exits 0, because a missing surface is information, not a
 failure; its filesystem port throws on any write so an accidental write fails loudly. It
-reports ten surfaces: config, authenticated session, route manifest, evidence floor,
-waivers, overlay, stop-hook, usabl-check skill, ci, and branch-rule, each with a state
-such as wired, missing, drifted, or unknown. The session surface reads the
+reports these surfaces: config, authenticated session, playwright chromium, route manifest,
+evidence floor, readiness signals, waivers, overlay, stop-hook, the usabl-check and usabl-fix
+skills, cursor, ci, branch-rule, and policy scope, each with a state such as wired, missing,
+drifted, or unknown. The readiness signals surface is missing when a screen holds floored debt and
+declares no `reachedWhen` signal, and its next step names those screens, because a floored barrier
+there can never be claimed fixed (section 9). The session surface reads the
 `USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file:
 unset is missing, a readable JSON file that still holds something which could authenticate
 is wired, and a path that names no file, names a file that is not JSON, or names a state

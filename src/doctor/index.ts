@@ -68,6 +68,7 @@ const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
 const BRANCH_RULE_LABEL = `branch protection (main requires ${REQUIRED_CHECK})`;
 const PLAYWRIGHT_CHROMIUM_LABEL = 'playwright chromium (headless browser)';
 const POLICY_SCOPE_LABEL = 'policy scope (guardedPaths covers CODEOWNERS)';
+const READINESS_SIGNALS_LABEL = 'readiness signals (reachedWhen on screens with floored debt)';
 
 // Four states, and unknown is first class. wired is a positive confirmation. missing is a
 // confident absence. drifted is present-but-not-what-usabl-expects. unknown is "cannot
@@ -284,6 +285,64 @@ async function collectEvidenceFloor(deps: DoctorDeps): Promise<SurfaceReport> {
     };
   }
   return { id: 'evidence-floor', label: EVIDENCE_FLOOR_LABEL, state: 'wired', nextStep: '' };
+}
+
+/**
+ * Screens that hold floored debt and declare no reachedWhen signal.
+ *
+ * On such a screen a floored barrier the run does not see is never claimed fixed, because a fixed
+ * barrier and content that never mounted look the same to the run. The debt stays on the floor and
+ * every run says so. A signal that names content only that screen has is what lets usabl tell the
+ * two apart, so doctor names the screens. Screen ids come from the floor and the config, both the
+ * operator's own files, and the line is neutralized at print time like every other next step.
+ */
+async function collectReadinessSignals(deps: DoctorDeps): Promise<SurfaceReport> {
+  const id = 'readiness-signals';
+  const label = READINESS_SIGNALS_LABEL;
+  const rawConfig = await deps.fs.readFile(deps.configPath);
+  if (rawConfig === null) {
+    return {
+      id,
+      label,
+      state: 'missing',
+      nextStep: `No usabl config, so doctor cannot tell which screens need a reachedWhen signal. Run "usabl init" to create ${deps.configPath}.`,
+    };
+  }
+  let surfaces;
+  try {
+    surfaces = parseUsablConfig(rawConfig).surfaces;
+  } catch {
+    return { id, label, state: 'unknown', nextStep: `${deps.configPath} does not parse, so doctor cannot read which screens declare a reachedWhen signal.` };
+  }
+  const rawFloor = await deps.fs.readFile(EVIDENCE_FLOOR_PATH);
+  if (rawFloor === null) {
+    return { id, label, state: 'wired', nextStep: '' };
+  }
+  let entries;
+  try {
+    entries = parseEvidenceFloor(JSON.parse(rawFloor)).entries;
+  } catch {
+    return { id, label, state: 'unknown', nextStep: `${EVIDENCE_FLOOR_PATH} does not parse, so doctor cannot tell which screens hold floored debt.` };
+  }
+  const signalled = new Set(surfaces.filter((surface) => surface.reachedWhen !== undefined).map((surface) => surface.id));
+  const unsignalled = [...new Set(entries.filter((entry) => entry.count > 0).map((entry) => entry.screenId))]
+    .filter((screenId) => !signalled.has(screenId))
+    .sort();
+  if (unsignalled.length === 0) {
+    return { id, label, state: 'wired', nextStep: '' };
+  }
+  const one = unsignalled.length === 1;
+  return {
+    id,
+    label,
+    state: 'missing',
+    nextStep:
+      `${one ? 'Screen' : 'Screens'} ${unsignalled.join(', ')} ${one ? 'holds' : 'hold'} floored debt and ` +
+      `${one ? 'declares' : 'declare'} no reachedWhen signal, so a floored barrier there is never claimed fixed: ` +
+      'usabl cannot tell a fixed barrier from content that never mounted. Add a reachedWhen signal to each in ' +
+      `${deps.configPath}, naming content only that screen has, such as its own table or a data request only it makes. ` +
+      'A screen found from routes needs a surfaces entry with the same id to carry one.',
+  };
 }
 
 async function collectWaivers(deps: DoctorDeps): Promise<SurfaceReport> {
@@ -636,7 +695,7 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
 
 export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceReport[]> {
   // Order mirrors the slice: config, authenticated session, playwright chromium, routes,
-  // evidence floor, waivers, overlay, stop hook, usabl-check skill, cursor assistant, ci
+  // evidence floor, readiness signals for the screens it holds debt on, waivers, overlay, stop hook, usabl-check skill, cursor assistant, ci
   // workflow, branch rule. The session sits second because it decides what every later scan
   // actually measures. Each
   // collector is self-contained health logic with no printing,
@@ -657,6 +716,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     await guardRead('playwright-chromium', PLAYWRIGHT_CHROMIUM_LABEL, () => collectPlaywrightChromium(deps)),
     await guardRead('routes', ROUTES_LABEL, () => collectRoutes(deps)),
     await guardRead('evidence-floor', EVIDENCE_FLOOR_LABEL, () => collectEvidenceFloor(deps)),
+    await guardRead('readiness-signals', READINESS_SIGNALS_LABEL, () => collectReadinessSignals(deps)),
     await guardRead('waivers', WAIVERS_LABEL, () => collectWaivers(deps)),
     await guardRead('overlay', OVERLAY_LABEL, () => collectOverlay(deps)),
     await guardRead('stop-hook', STOP_HOOK_LABEL, () => collectStopHook(deps)),

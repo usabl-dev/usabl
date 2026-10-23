@@ -367,6 +367,63 @@ describe('collectDoctorReport', () => {
   });
 });
 
+/**
+ * A screen that holds floored debt and declares no reachedWhen signal can never have that debt
+ * claimed fixed: a fixed barrier and content that never mounted look the same to the run. Doctor
+ * says which screens those are and what to add, so the operator does not learn it one notice at a
+ * time.
+ */
+describe('readiness signals for screens with floored debt', () => {
+  const entry = (screenId: string, rule: string, count = 1): object => ({
+    screenId, layer: 'axe', rule, elementKey: null, identityBasis: 'count', count,
+  });
+  const floorWith = (...entries: object[]): string => JSON.stringify({ version: 2, entries });
+  const configWithSurfaces = (surfaces: object[]): string =>
+    JSON.stringify({ ...(JSON.parse(VALID_CONFIG) as object), surfaces });
+  const surface = (id: string, reachedWhen?: unknown): object => ({
+    id, url: `http://127.0.0.1:5173/${id}`, files: [`fixtures/app/src/${id}.tsx`],
+    ...(reachedWhen === undefined ? {} : { reachedWhen }),
+  });
+  const report = async (files: Record<string, string>): Promise<SurfaceReport> =>
+    byId(
+      await collectDoctorReport(doctorDeps({ fs: readOnlyFs(files), gh: GH_VERIFIED, configPath: 'usabl.config.json' })),
+      'readiness-signals',
+    );
+
+  it('recommends a signal for every screen that holds floored debt and declares none', async () => {
+    const found = await report({
+      'usabl.config.json': configWithSurfaces([surface('orders'), surface('users', '#users-table'), surface('jobs')]),
+      // home comes from routes, not from a surface, so it has nowhere to declare one yet.
+      '.usabl-evidence.json': floorWith(entry('orders', 'button-name', 2), entry('users', 'link-name'), entry('home', 'image-alt')),
+    });
+    expect(found.state).toBe('missing');
+    expect(found.nextStep).toContain('home, orders');
+    expect(found.nextStep).not.toContain('users');
+    expect(found.nextStep).not.toContain('jobs');
+    expect(found.nextStep).toContain('reachedWhen');
+    expect(found.nextStep).toContain('usabl.config.json');
+  });
+
+  it('is wired when every screen with floored debt declares a signal', async () => {
+    const found = await report({
+      'usabl.config.json': configWithSurfaces([surface('orders', { response: '/api/orders' })]),
+      '.usabl-evidence.json': floorWith(entry('orders', 'button-name')),
+    });
+    expect(found.state).toBe('wired');
+    expect(found.nextStep).toBe('');
+  });
+
+  it('is wired when the floor holds no debt', async () => {
+    const found = await report({ 'usabl.config.json': configWithSurfaces([surface('orders')]), '.usabl-evidence.json': floorWith() });
+    expect(found.state).toBe('wired');
+  });
+
+  it('cannot confirm anything when the floor does not parse', async () => {
+    const found = await report({ 'usabl.config.json': VALID_CONFIG, '.usabl-evidence.json': '{not json' });
+    expect(found.state).toBe('unknown');
+  });
+});
+
 describe('authenticated session surface', () => {
   it('reports a readable storage state as wired', async () => {
     const reports = await collectDoctorReport(
