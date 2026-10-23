@@ -295,7 +295,8 @@ describe('projectSelfCheck', () => {
     expect(lines[open - 1]).toBe('Barrier: [new serious]');
     expect(lines.slice(open + 1, close)).toEqual([
       'engine summary: regression: 1 gating finding(s), 1 gap(s)',
-      'barrier: button-name',
+      'barrier: axe/button-name',
+      'screen: clusters',
       'source: src/Clusters.tsx:4',
       'experience: A button with no accessible name',
       'fix: Add an accessible name',

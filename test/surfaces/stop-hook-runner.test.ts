@@ -316,7 +316,7 @@ describe('stop-hook-runner protocol', () => {
 
     expect(exitCode).toBe(0);
     expect(runEngineCalled).toBe(true);
-    expect(stderr.join('')).not.toContain('verified receipt sourceTree');
+    expect(stderr.join('')).not.toContain('a stored receipt matches this tree');
   });
 
   it('does not compare pins across repositories in the same session', async () => {

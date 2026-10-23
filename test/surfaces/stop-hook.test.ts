@@ -280,7 +280,7 @@ describe('evaluateStopDecision', () => {
 
       // The count is scaffold and stays whole. The rule is carried, so it is cut inside the frame.
       expect(decision.message).toMatch(/^Barrier: \[new serious\] \(×3\)$/m);
-      expect(decision.message).toMatch(/^barrier: rule-r+ \[shortened, \d+ characters omitted\]$/m);
+      expect(decision.message).toMatch(/^barrier: axe\/rule-r+ \[shortened, \d+ characters omitted\]$/m);
     });
 
     it('leaves a normal message untouched: no note appears', () => {
@@ -409,9 +409,9 @@ describe('evaluateStopDecision', () => {
     });
 
     it('holds the budget as a real bound when an operator raises the noise budget', () => {
-      // At 20 groups the headlines fit and the frame survives with fewer pieces. At 200 the
-      // headlines alone exceed the budget, so every piece goes and the frame is absent rather
-      // than broken. Either way the opening lines survive whole.
+      // At 20 groups and at 200, whole barriers are dropped from the end, each headline with its
+      // pieces, until the message fits. The summary piece is kept, so the frame survives whole,
+      // and the opening lines survive whole.
       for (const budget of [20, 200]) {
         const config: UsablConfig = { ...testConfig(), noiseBudget: { default: budget } };
         const decision = evaluateStopDecision(
@@ -438,7 +438,7 @@ describe('evaluateStopDecision', () => {
         expect(opens).toBe(1);
         expect(closes).toBe(1);
         // The drop is visible and points at the full list.
-        expect(lines.at(-1)).toMatch(/^\[shortened to fit the message budget, \d+ line\(s\) omitted; run usabl check --json for the full list\]$/);
+        expect(lines.at(-1)).toMatch(/^\[shortened to fit the message budget, \d+ line\(s\) omitted \([1-9]\d* barrier\(s\) left out\); run usabl check --json for the full list\]$/);
       }
     });
 
@@ -574,7 +574,7 @@ describe('evaluateStopDecision', () => {
       expect(next.startsWith('Next: fix each barrier below')).toBe(true);
       expect(next).toContain('tell the user that guarded policy files changed');
       expect(next).toContain('Do not edit those files to clear this block.');
-      expect(message).toContain('barrier: button-name');
+      expect(message).toContain('barrier: axe/button-name');
     });
 
     it('keeps the plain policy step when no barrier was found', () => {
@@ -619,7 +619,7 @@ describe('evaluateStopDecision', () => {
 
         expect(next.startsWith('Next: fix each barrier below')).toBe(true);
         expect(next).toContain('tell the user that guarded policy files changed');
-        expect(message).toContain('barrier: button-name');
+        expect(message).toContain('barrier: axe/button-name');
       });
 
       it('does not ask for a fix when the only findings are waived', () => {
@@ -633,7 +633,7 @@ describe('evaluateStopDecision', () => {
         expect(next.startsWith('Next: tell the user that guarded policy files changed')).toBe(true);
         expect(next).not.toContain('fix each barrier');
         // A waived finding is not a barrier, so it is not presented as one.
-        expect(message).not.toContain('barrier: button-name');
+        expect(message).not.toContain('barrier: axe/button-name');
         expect(message).not.toContain('Barrier: [');
       });
 
@@ -647,7 +647,7 @@ describe('evaluateStopDecision', () => {
 
         expect(next.startsWith('Next: tell the user that guarded policy files changed')).toBe(true);
         expect(next).not.toContain('fix each barrier');
-        expect(message).not.toContain('barrier: button-name');
+        expect(message).not.toContain('barrier: axe/button-name');
       });
 
       it('keeps the coverage instruction when the accessibility half is not covered', () => {
@@ -673,7 +673,7 @@ describe('evaluateStopDecision', () => {
         expect(message).toContain('provider pf-rulepack denied capability: network');
         // A carried finding is accepted debt in the evidence floor. The gate lets a run carrying
         // one pass as verified, so it is not a barrier and is never listed as something to fix.
-        expect(message).not.toContain('barrier: button-name');
+        expect(message).not.toContain('barrier: axe/button-name');
         expect(message).not.toContain('Barrier: [');
       });
     });
@@ -849,7 +849,8 @@ describe('evaluateStopDecision', () => {
     expect(lines[open - 1]).toBe('Barrier: [new serious]');
     expect(lines.slice(open + 1, close)).toEqual([
       'engine summary: regression: 1 gating finding(s), 1 gap(s)',
-      'barrier: button-name',
+      'barrier: axe/button-name',
+      'screen: clusters',
       'experience: A button with no accessible name',
       'fix: Add an accessible name',
       'Not evaluated:',
