@@ -934,9 +934,11 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
         expect(result.stops).toBe(0);
         expect(result.drafts).toBe(0);
         expect(result.gaps.some((reason) => reason.includes('table#orders') && reason.includes('3000'))).toBe(true);
-        // The page first settles at about 1.5 s, so the cap ends the wait well inside the default
-        // readiness budget.
-        expect(result.elapsedMs).toBeLessThan(12_000);
+        // The page first settles at about 1.5 s, in its pause, so the cap ends the wait near
+        // 4.5 s even though the page mounts and swaps after that. Navigation and the landing read
+        // add the rest. The default readiness budget is far longer, so a wait that ran on past the
+        // cap would fail here.
+        expect(result.elapsedMs).toBeLessThan(7_000);
       }, 30_000);
     });
 

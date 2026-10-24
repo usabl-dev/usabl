@@ -34,6 +34,8 @@ interface FakePageSpec {
   requestClearsAtMs?: number;
   networkNeverIdle?: boolean;
   neverStops?: boolean;
+  // The page holds still until this time and then never stops changing.
+  neverStopsAfterMs?: number;
   // A page-side failure thrown from evaluate, such as a closed context. Readiness must let it
   // through unchanged rather than swallow it or relabel it as a timeout.
   evaluateError?: Error;
@@ -55,6 +57,9 @@ function makeFakePage(spec: FakePageSpec): FakePage {
   const elements = (): number => {
     const elapsed = Date.now() - start;
     if (spec.neverStops === true) {
+      return elapsed;
+    }
+    if (spec.neverStopsAfterMs !== undefined && elapsed >= spec.neverStopsAfterMs) {
       return elapsed;
     }
     let current = 0;
@@ -343,20 +348,24 @@ describe('waitForRendered', () => {
     expect(outcome.readyAtMs).toBeLessThanOrEqual(4_000);
   });
 
-  it('keeps counting the cap from the first settled moment when the page changes after it', async () => {
-    // A page that settles, then mounts more, does not restart the cap. It still ends once the page
-    // has settled again, because a wait that ends mid-change hands the walk a moving page.
-    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }, { atMs: 2_500, elements: 40 }] });
+  it('ends the signal wait at the cap even while the page keeps changing after it settled', async () => {
+    // First settled at about 1500ms, cap 2000ms, and the DOM never stops changing from 2500ms. The
+    // cap is counted from the first settled moment and checked on every pass, so the wait ends near
+    // 3500ms as a timed-out signal. It used to wait for another settle that never came and run on
+    // to the readiness budget.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }], neverStopsAfterMs: 2_500 });
     const start = Date.now();
-    const outcome = { readyAtMs: -1 };
-    const done = waitForRendered(page, TEST_BUDGET_MS, probe(async () => false, 2_000)).then(() => {
+    const outcome = { readyAtMs: -1, signal: '' };
+    const done = waitForRendered(page, TEST_BUDGET_MS, probe(async () => false, 2_000)).then((result) => {
       outcome.readyAtMs = Date.now() - start;
+      outcome.signal = (result as { signal?: string } | undefined)?.signal ?? 'none';
     });
 
-    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS + 1_000);
     await done;
+    expect(outcome.signal).toBe('timed-out');
     expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_500);
-    expect(outcome.readyAtMs).toBeLessThanOrEqual(4_500);
+    expect(outcome.readyAtMs).toBeLessThanOrEqual(3_600);
   });
 
   it('passes a page failure out of evaluate through unchanged', async () => {
