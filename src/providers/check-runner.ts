@@ -202,7 +202,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
                   return seen.reachedSelectorPresent === true || redirectedAwayGap(screen.id, seen) !== null;
                 },
               };
-        await page.gotoReady(readyWhen);
+        const readiness = await page.gotoReady(readyWhen);
 
         // Whether this is the requested screen, signed in. The address and the password count are
         // read here and only here: providers click and press keys, a click can navigate, so a
@@ -217,10 +217,19 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // them at all invites a later change to keep them. Nothing is claimed about
           // reachability either, because this page is not the one the assertion describes.
           result = notReachedScan(screen, notReached, signal);
-        } else if (readyWhen !== undefined && landing.reachedSelectorPresent !== true) {
-          // The signal wait ran out and the declared selector does not match. The page usabl would
-          // walk does not show the screen's content, so the walk and the checks are skipped and
-          // the unseen pass turns this into a gap that names the selector and the cap.
+        } else if (
+          readyWhen !== undefined &&
+          (readiness?.signal !== 'held' || landing.reachedSelectorPresent !== true)
+        ) {
+          // The declared selector did not hold at a settled moment before the cap ran out, or it
+          // held and is gone now. Either way the page usabl would walk is not known to show the
+          // screen's settled content, so the walk and the checks are skipped and the unseen pass
+          // turns this into a gap that names the selector and the cap.
+          //
+          // The readiness outcome decides, whatever the landing read says. The selector can
+          // appear after the cap ran out and before that read, on a page still changing, and a
+          // walk then would grade a page that had not settled. A page that reports no outcome is
+          // read the same way, because nothing says the signal held.
           result = {
             screenId: screen.id,
             url: screen.url,

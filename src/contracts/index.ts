@@ -428,15 +428,24 @@ export interface ReadinessProbe {
   holds(): Promise<boolean>;
   timeoutMs: number;
 }
+// How the readiness wait ended. not-declared: no probe was given and the page settled. held: the
+// probe answered true at a settled moment. timed-out: a probe was given and never held before its
+// cap or the readiness budget ran out, settled or not. A caller must act on timed-out as it is:
+// reading the signal again afterwards can find an element that appeared on a page still changing.
+export interface ReadinessOutcome {
+  signal: 'held' | 'timed-out' | 'not-declared';
+}
 export interface Page {
   // Waits until the page stopped changing and the network went quiet. With readyWhen, it also
   // waits until readyWhen.holds answers true at a moment when both of those hold, for at most
   // readyWhen.timeoutMs after the first such moment and always inside the readiness budget. A page
   // can settle on a small shell, pause with nothing in flight, and only then fetch and mount its
-  // real content, and only a positive signal tells that pause from a finished page. When the cap or
-  // the budget runs out on a settled page whose probe never held, it returns rather than throws, so
-  // the caller must check the signal again and treat a screen that does not show it as a gap.
-  gotoReady(readyWhen?: ReadinessProbe): Promise<void>;
+  // real content, and only a positive signal tells that pause from a finished page. The cap is
+  // counted from the first settled moment and checked on every pass, so a page that keeps changing
+  // after it cannot stretch it. When the cap runs out, or the budget runs out on a settled page,
+  // before the probe held, it returns timed-out rather than throwing, and the caller treats the
+  // screen as a gap.
+  gotoReady(readyWhen?: ReadinessProbe): Promise<ReadinessOutcome>;
   // Where the browser actually is now, which is not always where it was sent. An application can
   // answer a request for a screen with a redirect, and a scan that never asks has no way to know
   // it measured a different page. Read it after the screen has loaded and before anything on the

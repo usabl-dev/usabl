@@ -81,8 +81,9 @@
   default 15000. It caps the wait for a `reachedWhen` selector, counted from the first
   moment the page settled and inside `readyTimeoutMs`. A screen whose selector does not
   match within it is not walked or checked, and ends as a `not-covered` gap that names the
-  selector and the cap. Measured on real Chromium, such a screen ends in about 17.6
-  seconds with the default cap.
+  selector and the cap. The cap holds while the page keeps changing, and a selector that
+  appears only after the cap ran out does not count. Measured on real Chromium, such a
+  screen ends in about 17.1 seconds with the default cap.
 
 ### Changed
 

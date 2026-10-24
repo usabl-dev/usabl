@@ -6,6 +6,7 @@ import type {
   Page,
   Provider,
   ProviderOutput,
+  ReadinessOutcome,
   ReadinessProbe,
   RuleApplicability,
   SurfaceConfig,
@@ -543,6 +544,49 @@ describe('makeCheckRunner', () => {
     expect(reasons[0]).toContain('table#clusters');
     expect(reasons[0]).toContain('4000');
     expect(reasons[0]).toContain('signalTimeoutMs');
+  });
+
+  it('ends the screen as a gap when the cap ran out, even if the selector appears just after', async () => {
+    // The selector mounts after the cap ran out and before the landing read. The page was not
+    // settled when it appeared, so a walk and checks run then would grade a moving page. The
+    // readiness outcome decides, whatever the landing read says.
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    let mounted = false;
+    let walkStarted = false;
+    Object.assign(page, {
+      gotoReady: async (readyWhen?: ReadinessProbe): Promise<ReadinessOutcome> => {
+        // The real wait asked the probe at settled moments and it never held, then the cap ran out.
+        expect(await readyWhen?.holds()).toBe(false);
+        mounted = true;
+        return { signal: 'timed-out' };
+      },
+      markWalkStart: async () => {
+        walkStarted = true;
+      },
+      queryAll: async () => (mounted ? [{ selector: 'table#clusters' }] : []),
+    });
+    const providerRun = vi.fn(async (): Promise<Draft[]> => [makeDraft('should-not-run')]);
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [{ id: 'checks', layer: 'fake', capabilities: ['live'], run: providerRun }],
+      config: testConfig({
+        surfaces: [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: 'table#clusters' }],
+        signalTimeoutMs: 4_000,
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(walkStarted).toBe(false);
+    expect(providerRun).not.toHaveBeenCalled();
+    expect(scan.stops).toEqual([]);
+    expect(scan.reachedSelectorPresent).toBe(false);
+    const reasons = markUnseenScreens([scan]).screens[0]?.gaps.map((gap) => gap.reason) ?? [];
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('table#clusters');
+    expect(reasons[0]).toContain('4000');
   });
 
   it('does not count a selector that held before the walk and was gone after the checks', async () => {

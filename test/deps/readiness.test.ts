@@ -368,6 +368,32 @@ describe('waitForRendered', () => {
     expect(outcome.readyAtMs).toBeLessThanOrEqual(3_600);
   });
 
+  it('says how the wait ended: no signal declared, the signal held, or the cap ran out', async () => {
+    // The caller acts on this outcome. Reading the selector again after the wait cannot tell a
+    // signal that held at a settled moment from one that appeared after the cap ran out.
+    const settledPage = (): ReturnType<typeof makeFakePage> => makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    const results: unknown[] = [];
+    const runs = [
+      waitForRendered(settledPage(), TEST_BUDGET_MS),
+      waitForRendered(settledPage(), TEST_BUDGET_MS, probe(async () => true)),
+      waitForRendered(settledPage(), TEST_BUDGET_MS, probe(async () => false, 2_000)),
+    ].map((run, index) => run.then((result) => { results[index] = result; }));
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await Promise.all(runs);
+    expect(results).toEqual([{ signal: 'not-declared' }, { signal: 'held' }, { signal: 'timed-out' }]);
+  });
+
+  it('reports a timed-out signal when the budget runs out on a settled page before the cap', async () => {
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    let result: unknown;
+    const done = waitForRendered(page, 3_000, probe(async () => false)).then((value) => { result = value; });
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    await done;
+    expect(result).toEqual({ signal: 'timed-out' });
+  });
+
   it('passes a page failure out of evaluate through unchanged', async () => {
     // A closed context or a detached frame throws from evaluate, not as a TimeoutError. Readiness
     // must surface that as-is, so the caller can tell a broken page from a slow one. Nothing here

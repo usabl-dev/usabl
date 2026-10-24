@@ -1003,14 +1003,18 @@ longer than about 1.7 seconds reads as a finished page. When a surface declares 
 selector, readiness does not stop at the first moment the page is still and quiet. It checks the
 selector at each such moment and keeps waiting until it matches at one of them, for at most
 `signalTimeoutMs` (15000 by default) counted from the first moment the page settled, and always
-inside `readyTimeoutMs`. The cap never restarts, so a page that keeps changing cannot stretch it.
+inside `readyTimeoutMs`. The cap never restarts, and it is checked on every pass whether or not the
+page has settled since, so a page that keeps changing cannot stretch it.
 Readiness stops waiting early when the page is plainly not this screen, by the rules above (a
 refused data request under a configured session, a password field with no signal that holds, or a
 redirect to a sign-in page), so those gaps cost no more than before.
 
-When the cap runs out and the selector does not match, the screen is not walked and not checked. It
-ends as a `not-covered` gap that names the selector and the cap and says to raise `signalTimeoutMs`
-if the screen needs longer.
+When the cap runs out before the selector matched at a settled moment, the screen is not walked and
+not checked. It ends as a `not-covered` gap that names the selector and the cap and says to raise
+`signalTimeoutMs` if the screen needs longer. The wait reports how it ended, and that outcome
+decides, not a second read of the selector: an element can appear after the cap ran out on a page
+that is still changing, and walking that page would grade something that had not settled. The cap
+running out while the page is still changing is the same gap, never the `readyTimeoutMs` error.
 
 Only the selector can end the wait. A response stays seen once its answer arrived, so it cannot tell
 the screen's content from a page that replaced it a moment later. Measured through a real browser
@@ -1042,7 +1046,7 @@ it, is what overrides Rule B and what lets a recovered refusal stand under Rule 
 The cost is time, and only on a screen whose selector does not match: a sign-in page the session
 rules cannot see, or a selector that names the wrong element. Such a screen now spends the signal
 cap after it first settles before it ends as a gap. Measured through a real browser with the default
-cap, a page whose selector never matched ended after about 17.6 seconds with no walk. Before, it
+cap, a page whose selector never matched ended after about 17.1 seconds with no walk. Before, it
 settled in about 1.5 seconds and ended as the same gap after a walk and the checks. A screen whose
 selector matches pays nothing extra.
 
