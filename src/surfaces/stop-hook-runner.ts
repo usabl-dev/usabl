@@ -21,7 +21,7 @@ import { verifyReceipt } from '../evidence/receipt.js';
 import { run } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
 import { loadConfig } from '../cli.js';
-import { evaluateStopDecision, type HookContext } from './stop-hook.js';
+import { evaluateStopDecision, formatStoredReceiptAllow, type HookContext } from './stop-hook.js';
 import { BYPASS_ONCE_PATH, loadReceipt, saveReceipt, type ReceiptFs } from './receipt-store.js';
 import {
   currentUid,
@@ -215,7 +215,7 @@ async function verifyStoredReceipt(
   const currentSourceTree = await deps.git.writeTree();
   const verification = await verifyReceipt(deps, config, receipt, currentSourceTree);
   if (verification.valid) {
-    return { verified: true, details: `verified receipt sourceTree ${receipt.sourceTree}` };
+    return { verified: true, details: formatStoredReceiptAllow(receipt.sourceTree) };
   }
   return {
     verified: false,

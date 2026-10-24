@@ -153,10 +153,27 @@ export interface BoundedMessageInput {
   // Builds the single frame around the pieces. Called with the pieces that survive.
   frame: (pieces: string[]) => string;
   budget?: number;
+  // Barriers, each a headline printed after the scaffold and pieces printed in the frame after
+  // `pieces`. A barrier is kept or dropped whole, so no headline survives without its pieces.
+  groups?: BoundedGroup[];
+  // A scaffold line printed above the group headlines while any group is shown.
+  groupHeading?: string;
+  // A scaffold line printed after the group headlines, built from how many groups are shown, so a
+  // count in it matches what the message really holds. Null prints nothing.
+  groupFooter?: (shownGroups: number) => string | null;
+  // Pieces printed in the frame after every group's pieces, such as the coverage gap lines.
+  tailPieces?: string[];
 }
 
-function noteFor(omitted: number): string {
-  return `[shortened to fit the message budget, ${omitted} line(s) omitted; run usabl check --json for the full list]`;
+/** One barrier: its headline outside the frame and its pieces inside it. */
+export interface BoundedGroup {
+  headline: string;
+  pieces: string[];
+}
+
+function noteFor(omitted: number, droppedGroups = 0): string {
+  const barriers = droppedGroups > 0 ? ` (${droppedGroups} barrier(s) left out)` : '';
+  return `[shortened to fit the message budget, ${omitted} line(s) omitted${barriers}; run usabl check --json for the full list]`;
 }
 
 /**
@@ -179,16 +196,35 @@ export function assembleBoundedMessage(input: BoundedMessageInput): string {
   const budget = input.budget ?? AGENT_MESSAGE_BUDGET;
   const keepPieces = input.keepPieces ?? 0;
   const scaffold = [...input.scaffold];
-  const pieces = [...input.pieces];
+  const groups = [...(input.groups ?? [])];
+  const totalGroups = groups.length;
+  // Pieces in frame order: the leading pieces, then each group's, then the tail. Only leading and
+  // tail pieces are dropped one at a time; a group's pieces go with its headline.
+  const lead = [...input.pieces];
+  const tail = [...(input.tailPieces ?? [])];
   let omitted = 0;
 
+  const groupLines = (): string[] => {
+    if (groups.length === 0) {
+      return [];
+    }
+    const footer = input.groupFooter?.(groups.length) ?? null;
+    return [
+      ...(input.groupHeading === undefined ? [] : [input.groupHeading]),
+      ...groups.map((group) => group.headline),
+      ...(footer === null ? [] : [footer]),
+    ];
+  };
+  const framed = (): string[] => [...lead, ...groups.flatMap((group) => group.pieces), ...tail];
+
   const render = (): string => {
-    const lines = [...scaffold];
+    const lines = [...scaffold, ...groupLines()];
+    const pieces = framed();
     if (pieces.length > 0) {
       lines.push(input.frame(pieces));
     }
     if (omitted > 0) {
-      lines.push(noteFor(omitted));
+      lines.push(noteFor(omitted, totalGroups - groups.length));
     }
     return lines.join('\n');
   };
@@ -199,18 +235,36 @@ export function assembleBoundedMessage(input: BoundedMessageInput): string {
     return whole;
   }
 
-  const canDrop = (): boolean => pieces.length > keepPieces || scaffold.length > input.keep;
-  const drop = (): string => (pieces.length > keepPieces ? pieces.pop()! : scaffold.pop()!);
+  // Barriers go first, whole and from the end, because each is one of many and the note names how
+  // many went. Coverage lines go after them, because there are at most a handful and each one
+  // limits what the whole run can claim. Then leading pieces past the kept ones, then scaffold
+  // lines past the kept ones.
+  const canDrop = (): boolean =>
+    groups.length > 0 || tail.length > 0 || lead.length > keepPieces || scaffold.length > input.keep;
+  const drop = (): number => {
+    const group = groups.pop();
+    if (group !== undefined) {
+      omitted += 1 + group.pieces.length;
+      return group.headline.length + 1 + group.pieces.reduce((total, piece) => total + piece.length + 1, 0);
+    }
+    omitted += 1;
+    if (tail.length > 0) return tail.pop()!.length + 1;
+    if (lead.length > keepPieces) return lead.pop()!.length + 1;
+    return scaffold.pop()!.length + 1;
+  };
 
   // First pass on line lengths alone, so the frame is not rebuilt once per dropped line. Each
   // line costs its length plus a newline, the frame costs its two markers, and the note costs
   // its longest form. This over-counts by a few characters, so it never stops short.
   const lengthOf = (lines: string[]): number => lines.reduce((total, line) => total + line.length + 1, 0);
-  const frameCost = pieces.length > 0 ? input.frame([]).length + 1 : 0;
-  let estimate = lengthOf(scaffold) + lengthOf(pieces) + frameCost + noteFor(pieces.length + scaffold.length).length + 1;
+  const frameCost = input.frame([]).length + 1;
+  const lineCount = scaffold.length + lead.length + tail.length + groups.reduce((n, g) => n + 1 + g.pieces.length, 0);
+  const footerCost = (input.groupFooter?.(totalGroups)?.length ?? 0) + 1;
+  let estimate =
+    lengthOf(scaffold) + lengthOf(groupLines()) + footerCost + lengthOf(framed()) + frameCost +
+    noteFor(lineCount, totalGroups).length + 1;
   while (estimate > budget && canDrop()) {
-    estimate -= drop().length + 1;
-    omitted += 1;
+    estimate -= drop();
   }
 
   // Second pass on the rendered message. The frame scrubs each piece, which can lengthen one
@@ -218,7 +272,6 @@ export function assembleBoundedMessage(input: BoundedMessageInput): string {
   let message = render();
   while (message.length > budget && canDrop()) {
     drop();
-    omitted += 1;
     message = render();
   }
   return message;
