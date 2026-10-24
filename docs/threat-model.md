@@ -206,7 +206,7 @@ the tool errored, not because the page is accessible.
   or a path a wall answers with a 200 that is not HTML, lets a wrong page through. Readiness
   waits for the selector before the walk, for at most `signalTimeoutMs`, and each part must hold
   both before the walk and after the checks, so content a check caused does not count toward the
-  selector. A response never ends that wait, because it stays seen after the page replaced its
+  selector, and a declared response must have arrived before the walk began. A response never ends that wait, because it stays seen after the page replaced its
   content. The response part
   counts only requests sent before the walk began, and never an HTML answer. A refused
   request is stood down only when the surface declares a response path, that path was answered

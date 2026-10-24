@@ -13,8 +13,12 @@
   counts only if it held both before the walk and after the checks. Measured on real
   Chromium with pauses of 1.5, 1.8, 2.1, and 4.0 seconds, the walk and the checks ran on
   the content every time. A declared `response` never ends or extends the wait, because
-  it stays seen after a page replaces its content, so a screen that declares only a
-  response behaves as before and a long pause ends as a gap. A screen with no
+  it stays seen after a page replaces its content. What changed for a response is when
+  it must arrive: it now has to have arrived before the walk began. Before, it was read
+  only after the checks, so a request sent before the walk and answered during it
+  counted. Now that answer makes the screen a gap, because the screen's data was not
+  there when the walk and the checks began. A screen that declares only a response
+  waits as a screen with no signal does, so a long pause ends as a gap. A screen with no
   `reachedWhen` is unchanged and can still be graded on its shell; declare a selector for
   a screen that mounts late.
 

@@ -1022,6 +1022,10 @@ against a page that pauses three seconds, fetches its data (200, JSON), mounts i
 later replaces itself with a magic-link sign-in form: waiting on the response would end the wait
 when the sign-in form settled, and the walk and the checks would grade the sign-in form as the
 screen. So a screen that declares only a `response` waits exactly as a screen with no signal does.
+What changed for it is when the response must arrive. Before this, both parts were read once, after
+the walk and the checks, so a request sent before the walk and answered during it counted. Now a
+declared response must have arrived before the walk began, and one that arrives during the walk
+makes the screen a gap, because the screen's data was not there when the walk and the checks began.
 After a pause long enough to end readiness, the screen's data request is sent after the walk began,
 it never counts, and the screen is a gap. That is the honest outcome, and the fix is to add a
 selector. That sign-in form page is a gap with a response alone, and a gap with a selector once the
@@ -1031,7 +1035,7 @@ Measured through a real browser against a shell with one link that pauses for 1.
 4.0 seconds before it mounts its content: with a selector declared, the walk and the checks ran on
 the content in all four cases. Before this, the 1.5 second pause was graded on the content and the
 three longer ones ended as gaps, because the content arrived after the scan. With only a response
-declared, the 1.5 second pause is graded on the content and the longer ones are gaps, as before.
+declared, the 1.5 second pause is graded on the content and the longer ones are gaps.
 
 Both parts are then measured twice: once just before the walk, after that wait, and once after the
 walk and the checks, while the page is still open. A part holds only if it held both times. The
