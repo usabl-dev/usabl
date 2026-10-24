@@ -82,7 +82,7 @@
 ### Added
 
 - `signalTimeoutMs` in `usabl.config.json`, a positive whole number of milliseconds,
-  default 15000. It caps the wait for a `reachedWhen` selector, counted from the first
+  default 15000, at most 600000 (ten minutes). It caps the wait for a `reachedWhen` selector, counted from the first
   moment the page settled and inside `readyTimeoutMs`. A screen whose selector does not
   match within it is not walked or checked, and ends as a `not-covered` gap that names the
   selector and the cap. The cap holds while the page keeps changing, and a selector that

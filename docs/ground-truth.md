@@ -2256,8 +2256,9 @@ declares a `reachedWhen` selector, for that selector to match.
 surface's `reachedWhen` selector, counted from the first moment the page settled, and it never
 extends `readyTimeoutMs`. A screen whose selector does not match within it is not walked or
 checked and is disclosed as `not-covered`, with a reason that names the selector and the cap. The
-value must be a positive whole number of milliseconds; anything else is refused when the config is
-read. How long that
+value must be a positive whole number of milliseconds, at most 600000 (ten minutes); anything else,
+including a number too large to hold exactly, is refused when the config is read, and the refusal
+names the field and the limit. How long that
 takes is a property of the application, so a heavy authenticated app on a loaded lab may
 need more: an Ansible Automation Platform screen measured 25.7 seconds. A screen that runs
 out of budget is disclosed as `not-covered` with a reason naming which of the two phases
