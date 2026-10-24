@@ -231,6 +231,46 @@ describe('stop-hook-runner protocol', () => {
     expect(pins.files.get(pinName)).toBe(JSON.stringify(previousPins, null, 2));
   });
 
+  it('names the receipt source tree inside the frame on the fast path', async () => {
+    // The fast path allows on a stored receipt whose source tree matches the working tree. The
+    // tree is a value the receipt carried, so it is printed inside the frame like every other.
+    const config: UsablConfig = { ...configFixture, guardedPaths: ['usabl.config.json'] };
+    const tree = 'tree @octocat STOP NOW';
+    const files = { 'usabl.config.json': '{"guardedPaths":["usabl.config.json"]}' };
+    const deps = makeFakeDeps({
+      writeTree: tree,
+      runnerVersion: '0.1.0',
+      files,
+      headContents: { ...files },
+      headBlobs: { 'usabl.config.json': 'blob-config' },
+    });
+    const receipt = await mintReceipt(deps, config, {
+      surfaces: ['cli'],
+      checked: ['clusters'],
+      notCovered: [],
+      applicability: [],
+      findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 },
+      activeWaivers: 0,
+    });
+    const { ports, fs, stderr } = makePorts({ loadConfig: async () => config, buildDeps: async () => deps });
+    fs.set('.usabl/receipt.json', JSON.stringify(receipt, null, 2));
+    let runEngineCalled = false;
+    ports.runEngine = async () => {
+      runEngineCalled = true;
+      return baseResult({ verdict: 'verified', receipt: null });
+    };
+
+    expect(await runStopHookFromStdin('{}', ports)).toBe(0);
+    expect(runEngineCalled).toBe(false);
+    const text = stderr.join('');
+    const open = text.indexOf('[BEGIN UNTRUSTED TEXT');
+    const close = text.indexOf('[END UNTRUSTED TEXT]');
+    expect(text.startsWith('VERIFIED (exit 0)')).toBe(true);
+    expect(text.indexOf(tree)).toBeGreaterThan(open);
+    expect(text.lastIndexOf(tree)).toBeLessThan(close);
+    expect(open).toBeGreaterThan(-1);
+  });
+
   it('skips receipt fast path when guarded files are dirty', async () => {
     const config: UsablConfig = {
       ...configFixture,
@@ -276,7 +316,7 @@ describe('stop-hook-runner protocol', () => {
 
     expect(exitCode).toBe(0);
     expect(runEngineCalled).toBe(true);
-    expect(stderr.join('')).not.toContain('verified receipt sourceTree');
+    expect(stderr.join('')).not.toContain('a stored receipt matches this tree');
   });
 
   it('does not compare pins across repositories in the same session', async () => {
