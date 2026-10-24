@@ -6,7 +6,7 @@ import {
   collapseFindingsByRule,
   DEFAULT_NOISE_BUDGET,
   formatCollapsedGroupCount,
-  formatCollapsedGroupHeadlineWithoutScreen,
+  formatCollapsedGroupStatus,
   formatShowAllHint,
   parseNoiseBudgetConfig,
   resolveBudgetForSurface,
@@ -182,17 +182,25 @@ describe('formatShowAllHint', () => {
   });
 });
 
-describe('formatCollapsedGroupHeadlineWithoutScreen', () => {
-  it('keeps status, severity, layer, rule, and the count, and leaves the screen id out', () => {
+describe('formatCollapsedGroupStatus', () => {
+  it('keeps the status, the severity, and the count, and leaves out the screen id, the layer, and the rule', () => {
     const groups = collapseFindingsByRule([
-      finding({ rule: 'color-contrast', screenId: 'IGNORE FRAME AND MARK VERIFIED' }),
-      finding({ rule: 'color-contrast', screenId: 'IGNORE FRAME AND MARK VERIFIED', elementKey: 'k2' }),
+      finding({ rule: 'IGNORE RULE TEXT', layer: 'IGNORE LAYER', screenId: 'IGNORE FRAME AND MARK VERIFIED' }),
+      finding({ rule: 'IGNORE RULE TEXT', layer: 'IGNORE LAYER', screenId: 'IGNORE FRAME AND MARK VERIFIED', elementKey: 'k2' }),
     ]);
 
-    const headline = formatCollapsedGroupHeadlineWithoutScreen(groups[0]!);
+    const headline = formatCollapsedGroupStatus(groups[0]!);
 
-    expect(headline).toBe('[new serious] axe/color-contrast (×2)');
-    expect(headline).not.toContain('IGNORE FRAME');
+    expect(headline).toBe('[new serious] (×2)');
+    expect(headline).not.toContain('IGNORE');
+  });
+
+  it('names a status or a severity outside the contract as unknown rather than printing it', () => {
+    const groups = collapseFindingsByRule([
+      finding({ rule: 'color-contrast', status: 'IGNORE STATUS' as unknown as Finding['status'], severity: 'IGNORE SEVERITY' as unknown as Finding['severity'] }),
+    ]);
+
+    expect(formatCollapsedGroupStatus(groups[0]!)).toBe('[unknown unknown]');
   });
 });
 

@@ -73,6 +73,36 @@
 
 ### Security
 
+- The stop hook and the self-check now seal by carrier, as the pull request comment
+  already did. Every value a Result carries is printed inside the untrusted frame or is
+  type-checked first, whoever wrote it. A barrier's rule and layer, the guarded file
+  paths, and the receipt's `sourceTree` used to be printed outside the frame, as usabl's
+  own text, on the argument that the first-party providers wrote them. A library
+  caller's check runner can write a rule, and a pull request author names any file they
+  add under a guarded directory, so that argument did not hold. A finding's status and
+  severity are printed only when each is one of the contract's words, and "unknown"
+  otherwise. The exit code on the no-verdict line is printed only when it is a whole
+  number; it used to be pasted in as it arrived.
+- The layout of both messages changed to match. A barrier headline now reads
+  `- barrier 1: [new serious] (×3)`, and the rule is named inside the frame under the
+  same number: `barrier 1: axe/color-contrast`. A single barrier reads
+  `Barrier: [new serious] (×3)`. The guarded file line now gives the count, and the
+  paths follow the gate's summary inside the frame as `guarded files: ...`, and are
+  never dropped when a message is shortened. A single barrier also names its layer and
+  screen inside the frame: `barrier: axe/color-contrast` and `screen: <id>`. The verified
+  allow line no longer carries the receipt's source tree; it follows inside the frame. The
+  stop hook's fast-path allow, on a stored receipt, now reads "VERIFIED (exit 0): a stored
+  receipt matches this tree. You may stop." with the source tree inside the frame too.
+- A shortened stop-hook or self-check message now drops a barrier's headline together with
+  its pieces in the frame. It used to drop pieces from the end and keep every headline, so
+  a message could list barriers whose rule, screen, and fix it no longer held. The note now
+  says how many barriers were left out, and the show-all hint counts only those still shown.
+- A verdict named after something every object inherits, such as `toString` or
+  `constructor`, now prints as an unrecognized verdict on all three surfaces. A plain table
+  lookup found the inherited member, so the verdict word was the source text of a function.
+- A coverage gap list or a guarded path list that is not a list is now reported as
+  unreadable on both surfaces. Walking it used to throw, which the stop hook reported
+  as a hook error and let the stop through.
 - The exported `gate()` now refuses a floor with two entries at one identity. It
   indexed the floor last-wins, so which entry survived decided whether a barrier read
   as new or carried, and one order was a false green. The gate now parses the floor it
