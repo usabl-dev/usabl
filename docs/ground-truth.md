@@ -1521,7 +1521,9 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   still present but now holds fewer barriers. An absent entry the run cannot confirm was fixed,
   because nothing shows its part of the page rendered (section 9), is kept and named;
   `--unconfirmed` removes those too and says how many and why. The report says it kept entries on
-  screens the run did not scan cleanly only when it kept some. It never raises a count and never adds an
+  screens the run did not scan cleanly only when it kept some. It scans every docs page source in
+  the manifest as well as uiFileGlobs, the same way baseline does, so a docs entry can be confirmed
+  or removed. It never raises a count and never adds an
   identity: accepting new debt is what `usabl baseline` does, under review. It leaves version 1
   name and structural counts alone, because those are placeholders the gate does not compare and
   writing a real number under them would present a placeholder as an observation. `prune` is the
@@ -1733,8 +1735,12 @@ reports these surfaces: config, authenticated session, playwright chromium, rout
 evidence floor, readiness signals, waivers, overlay, stop-hook, the usabl-check and usabl-fix
 skills, cursor, ci, branch-rule, and policy scope, each with a state such as wired, missing,
 drifted, or unknown. The readiness signals surface is missing when a screen holds floored debt and
-declares no `reachedWhen` signal, and its next step names those screens, because a floored barrier
-there can never be claimed fixed (section 9). The session surface reads the
+declares no `reachedWhen` signal, and its next step names those screens. A floored barrier the run
+does not see is claimed fixed only with evidence its part of the page rendered: a readiness signal
+that held is one way, and a matching element seen on the run is the other (section 9). A docs page
+cannot declare a signal, and a surfaces entry with its id is refused, so doctor names docs pages
+with floored debt in a note of their own that points to `usabl floor prune --unconfirmed` for a
+barrier known to be fixed. The session surface reads the
 `USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file:
 unset is missing, a readable JSON file that still holds something which could authenticate
 is wired, and a path that names no file, names a file that is not JSON, or names a state

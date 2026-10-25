@@ -262,6 +262,20 @@ function formatPartialReport(
   return lines.join('\n');
 }
 
+/**
+ * Every app file under uiFileGlobs and every docs page source in the manifest, sorted, so a run
+ * over them scans every screen and every docs page. uiFileGlobs never matches docs sources, so
+ * without the manifest a docs page is never scanned. Baseline and floor prune both read the floor
+ * for the whole application, so both scan with this.
+ */
+export async function everyScannableFile(deps: Deps, config: UsablConfig): Promise<string[]> {
+  const appFiles = await deps.fs.glob(config.uiFileGlobs);
+  const docsManifest = await parseDocsManifest(deps.fs);
+  const docsSourceFiles =
+    docsManifest === null ? [] : docsManifest.pages.flatMap((page) => page.sources);
+  return [...new Set([...appFiles, ...docsSourceFiles])].sort();
+}
+
 export async function runBaseline(
   deps: Deps,
   config: UsablConfig,
@@ -293,11 +307,7 @@ export async function runBaseline(
     return { exitCode: 4, wrote: false, message: formatUnreadableFloorRefusal(previous.reason), entryCount: 0 };
   }
 
-  const appFiles = await deps.fs.glob(config.uiFileGlobs);
-  const docsManifest = await parseDocsManifest(deps.fs);
-  const docsSourceFiles =
-    docsManifest === null ? [] : docsManifest.pages.flatMap((page) => page.sources);
-  const changedFiles = [...new Set([...appFiles, ...docsSourceFiles])].sort();
+  const changedFiles = await everyScannableFile(deps, config);
   const result = await run(deps, config, {
     ...(opts.trustedRef === undefined ? {} : { trustedRef: opts.trustedRef }),
     changedFiles,

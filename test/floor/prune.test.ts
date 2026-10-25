@@ -594,6 +594,39 @@ describe('runFloorPrune round two', () => {
     }
   });
 
+  it('scans docs pages too, so a docs entry can be confirmed or removed on purpose', async () => {
+    const manifest = JSON.stringify({
+      format: 'asciidoc-modular',
+      docsBaseUrl: 'http://localhost:8080/docs',
+      builtRoot: 'build/html',
+      buildCommand: null,
+      pages: [{ pageId: 'install-guide', url: '/install.html', assemblyFile: 'modules/install.adoc', sources: ['modules/install.adoc'] }],
+      sharedGlobs: [],
+    });
+    const fixedDraft = draft({ screenId: 'install-guide', layer: 'docs-axe', rule: 'image-alt', elementPath: 'img', elementName: null, role: null, evidence: {} });
+    const entry = { screenId: 'install-guide', layer: 'docs-axe', rule: 'image-alt', ...computeIdentity(fixedDraft), count: 1 };
+    const files = {
+      'usabl.config.json': '{}',
+      'usabl.docs.json': manifest,
+      'modules/install.adoc': '= Install\n',
+      '.usabl-evidence.json': JSON.stringify({ version: 2, entries: [entry] }),
+    };
+    const deps = makeFakeDeps({
+      files,
+      headContents: files,
+      scans: { 'install-guide': { ...scanWith([]), screenId: 'install-guide', url: 'http://localhost:8080/docs/install.html' } },
+    });
+    const config = testConfig({ surfaces: [], guardedPaths: ['usabl.config.json', 'usabl.docs.json'] });
+
+    const kept = await runFloorPrune(deps, config, new MemoryFloorFs());
+    expect(kept.keptUnconfirmedCount).toBe(1);
+
+    const writer = new MemoryFloorFs();
+    const removed = await runFloorPrune(deps, config, writer, { unconfirmed: true });
+    expect(removed.prunedCount).toBe(1);
+    expect(parseWrittenFloor(writer).entries).toEqual([]);
+  });
+
   it('reads an identity with only an advisory draft left the way the gate does', async () => {
     const entry = { screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count' as const, count: 2 };
     const deps = makeFakeDeps({

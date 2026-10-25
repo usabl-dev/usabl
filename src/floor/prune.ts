@@ -4,7 +4,7 @@
  * It must never mint a verdict, never edit the floor inside `run()`, and never treat an unscanned screen as fixed.
  */
 import type { Deps, FloorEntry, UsablConfig } from '../contracts/index.js';
-import { EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
+import { EVIDENCE_FLOOR_PATH, everyScannableFile } from '../baseline/index.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { identityKey } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
@@ -129,7 +129,11 @@ export async function runFloorPrune(
       return { exitCode: 0, wrote: false, message: formatNoopReport(), ...NOTHING };
     }
 
-    const changedFiles = [...new Set(await deps.fs.glob(config.uiFileGlobs))].sort();
+    // Docs pages too, the same way baseline enumerates them. Without them a docs page is never
+    // scanned, its entries are always kept as unscanned, and even --unconfirmed cannot remove a
+    // docs barrier that was fixed. Reaching this point means no guarded file other than the floor
+    // is dirty, so the manifest read here matches the trusted one.
+    const changedFiles = await everyScannableFile(deps, config);
     const result = await run(deps, config, {
       ...(opts.trustedRef === undefined ? {} : { trustedRef: opts.trustedRef }),
       changedFiles,

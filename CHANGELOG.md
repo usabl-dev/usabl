@@ -22,10 +22,11 @@
 - `usabl floor prune` and `usabl baseline` keep a floored entry the run cannot confirm
   was fixed, by the same rule the gate uses. `usabl floor prune --unconfirmed` removes
   those entries on purpose and says how many it removed and why. Prune no longer says it
-  kept entries on unscanned screens when it kept none. Baseline refuses, writing nothing,
-  when such an entry is a version 1 placeholder count it would otherwise write into a
-  version 2 floor (exit 3), and when the floor it would replace exists and does not parse
-  (exit 4).
+  kept entries on unscanned screens when it kept none. Prune now scans docs pages too, as
+  baseline does, so a fixed docs barrier no longer stays on the floor for good. Baseline
+  refuses, writing nothing, when such an entry is a version 1 placeholder count it would
+  otherwise write into a version 2 floor (exit 3), and when the floor it would replace
+  exists and does not parse (exit 4).
 
 - `pf-toast-live-region` now resolves each alert's live value from the nearest
   element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector
@@ -88,7 +89,11 @@
 
 - `usabl doctor` reports a readiness signals surface. It is missing when a screen holds
   floored debt and declares no `reachedWhen` signal, and its next step names those
-  screens, because a floored barrier there can never be claimed fixed.
+  screens. A floored barrier the run does not see is claimed fixed only with evidence its
+  part of the page rendered: a readiness signal that held is one way, and a matching
+  element seen on the run is the other. A docs page cannot declare a signal, so doctor
+  names docs pages with floored debt separately and points to `usabl floor prune
+  --unconfirmed` for a barrier known to be fixed.
 
 ### Changed
 

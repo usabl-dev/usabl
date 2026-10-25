@@ -427,6 +427,34 @@ describe('readiness signals for screens with floored debt', () => {
     expect(found.nextStep).not.toContain('abcdefgh');
   });
 
+  it('says a signal is one way to confirm a fix and a matching element seen on the run is the other', async () => {
+    const found = await report({
+      'usabl.config.json': configWithSurfaces([surface('orders')]),
+      '.usabl-evidence.json': floorWith(entry('orders', 'button-name')),
+    });
+    expect(found.nextStep).not.toMatch(/never (be )?claimed fixed/);
+    expect(found.nextStep).toContain('readiness signal is the other way to confirm');
+    expect(found.nextStep).toContain('matching element');
+  });
+
+  it('gives docs pages guidance that works for them, since a docs page cannot declare a signal', async () => {
+    const docs = JSON.stringify({
+      format: 'asciidoc-modular', docsBaseUrl: 'http://localhost:8080/docs', builtRoot: 'build/html', buildCommand: null,
+      pages: [{ pageId: 'install-guide', url: '/install.html', assemblyFile: 'modules/install.adoc', sources: ['modules/install.adoc'] }],
+      sharedGlobs: [],
+    });
+    const found = await report({
+      'usabl.config.json': configWithSurfaces([surface('orders', '#orders')]),
+      'usabl.docs.json': docs,
+      'modules/install.adoc': '= Install\n',
+      '.usabl-evidence.json': floorWith(entry('install-guide', 'image-alt')),
+    });
+    // No surfaces entry for a docs page: the planner refuses a docs page id that is also a surface id.
+    expect(found.nextStep).not.toContain('surfaces entry');
+    expect(found.nextStep).toContain('install-guide');
+    expect(found.nextStep).toContain('usabl floor prune --unconfirmed');
+  });
+
   it('cannot confirm anything when the floor does not parse', async () => {
     const found = await report({ 'usabl.config.json': VALID_CONFIG, '.usabl-evidence.json': '{not json' });
     expect(found.state).toBe('unknown');
