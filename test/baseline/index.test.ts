@@ -671,6 +671,95 @@ describe('runBaseline refuses what it cannot carry honestly', () => {
   const v1Count = { screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count', count: 3 };
   const v1Floor = (...entries: object[]): string => JSON.stringify({ version: 1, entries });
 
+  it('refuses, writing nothing, when a version 1 placeholder count would be carried into version 2', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': v1Floor(v1Name) }),
+      scans: { clusters: scanWith([draft()]) },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const outcome = await runBaseline(deps, testConfig(), writer);
+
+    expect(outcome.exitCode).toBe(3);
+    expect(outcome.wrote).toBe(false);
+    expect(writer.writes).toHaveLength(0);
+    expect(outcome.message).toContain('clusters');
+    expect(outcome.message).toContain('aria-input-field-name');
+    expect(outcome.message).not.toContain('name:search');
+    expect(outcome.message).toContain('reachedWhen');
+    expect(outcome.message).toContain('usabl floor prune --unconfirmed');
+  });
+
+  it('refuses the same way in a partial baseline', async () => {
+    const config = testConfig({
+      surfaces: [
+        { id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['fixtures/app/src/ClustersPage.tsx'] },
+        { id: 'reports', url: 'http://127.0.0.1:5173/reports', files: ['fixtures/app/src/ReportsPage.tsx'] },
+      ],
+    });
+    const files = {
+      'usabl.config.json': '{}',
+      'fixtures/app/src/ClustersPage.tsx': 'export {};\n',
+      'fixtures/app/src/ReportsPage.tsx': 'export {};\n',
+      '.usabl-evidence.json': v1Floor(v1Name),
+    };
+    const deps = makeFakeDeps({
+      files,
+      headContents: files,
+      scans: {
+        clusters: scanFor('clusters', 'http://127.0.0.1:5173/clusters', [draft()]),
+        reports: scanFor('reports', 'http://127.0.0.1:5173/reports', [], SCAN_GAP.map((gap) => ({ ...gap, ref: 'reports' }))),
+      },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const outcome = await runBaseline(deps, config, writer, { partial: true });
+
+    expect(outcome.exitCode).toBe(3);
+    expect(writer.writes).toHaveLength(0);
+  });
+
+  it('carries a version 1 count-basis entry, because its count was always real', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': v1Floor(v1Count) }),
+      scans: { clusters: scanWith([draft()]) },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const outcome = await runBaseline(deps, testConfig(), writer);
+
+    expect(outcome.exitCode).toBe(0);
+    expect(parseWrittenFloor(writer).entries).toContainEqual(v1Count);
+  });
+
+  it('refuses, writing nothing, when the floor it would replace does not parse', async () => {
+    for (const bad of ['<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> main\n', '{"version":2,"entries":[{"screenId":"x"}]}']) {
+      // Broken in the working tree only, the way a merge conflict leaves it, so the run itself
+      // reads no floor and does not fail.
+      const deps = makeFakeDeps({
+        ...withPolicyFiles({ '.usabl-evidence.json': bad }, {}),
+        scans: { clusters: scanWith([draft()]) },
+      });
+      const writer = new MemoryBaselineFs();
+
+      const outcome = await runBaseline(deps, testConfig(), writer);
+
+      expect(outcome.exitCode).toBe(4);
+      expect(outcome.wrote).toBe(false);
+      expect(writer.writes).toHaveLength(0);
+      expect(outcome.message).toContain('.usabl-evidence.json');
+      expect(outcome.message).toMatch(/fix it or delete it/);
+      expect(outcome.message).not.toContain('<<<<<<<');
+      expect(outcome.message).not.toContain('"screenId"');
+    }
+  });
+
+  it('still writes a floor when there is no floor to replace', async () => {
+    const deps = makeFakeDeps({ ...withPolicyFiles({}), scans: { clusters: scanWith([draft()]) } });
+    const writer = new MemoryBaselineFs();
+    expect((await runBaseline(deps, testConfig(), writer)).exitCode).toBe(0);
+  });
+
   it('redacts a token-shaped screen id and rule in what it prints', async () => {
     const id = 'orders?token=abcdefgh';
     const entry = { screenId: id, layer: 'axe', rule: 'rule-token=abcdefgh12345678', elementKey: null, identityBasis: 'count', count: 1 };

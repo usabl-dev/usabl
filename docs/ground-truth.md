@@ -1265,7 +1265,14 @@ Both tests are presence tests on sets, decided inside `gate()`, so they do not d
 and `usabl baseline` read the same rule, `paydownConfirmed`, through `src/floor/unconfirmed.ts`.
 Prune keeps such an entry by default and says so; `usabl floor prune --unconfirmed` removes it on
 purpose and says how many it removed and why. Baseline, with or without `--partial`, carries such an
-entry into the new floor at its recorded count and says so. `usabl doctor` names every screen that
+entry into the new floor at its recorded count and says so. Two cases refuse instead, and write
+nothing. If the floor being replaced is version 1 and a carried entry is a name or structural
+entry, its count is a placeholder the run cannot replace with a real one, and writing it into a
+version 2 floor would present it as measured, so baseline exits 3, names the screens and rules, and
+gives the two ways forward: a `reachedWhen` signal and a re-run, or `usabl floor prune
+--unconfirmed` and then baseline. If the floor being replaced exists and does not parse, baseline
+exits 4 before it scans, names the file and the reason without quoting it, and says to fix or
+delete it first, because replacing it would lose its debt. `usabl doctor` names every screen that
 holds floored debt and declares no `reachedWhen` signal.
 
 **The blind spot, stated plainly.** A screen whose content fails to mount reads `verified` until it
@@ -1506,7 +1513,9 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   are different commands (see section 12).
 - Baseline drafts: `usabl baseline` runs a full UI scan and writes `.usabl-evidence.json`
   as a reviewable working-tree diff. A floored entry the run did not see and cannot confirm was
-  fixed is carried into the new floor at its recorded count, with or without `--partial`.
+  fixed is carried into the new floor at its recorded count, with or without `--partial`. It
+  refuses when such an entry is a version 1 placeholder count (exit 3), and when the floor it would
+  replace exists and does not parse (exit 4).
 - Floor prune: `usabl floor prune` re-arms the gate on cleanly scanned screens. It removes
   entries whose identity is gone, and lowers the recorded count on entries whose identity is
   still present but now holds fewer barriers. An absent entry the run cannot confirm was fixed,

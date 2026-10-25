@@ -22,7 +22,10 @@
 - `usabl floor prune` and `usabl baseline` keep a floored entry the run cannot confirm
   was fixed, by the same rule the gate uses. `usabl floor prune --unconfirmed` removes
   those entries on purpose and says how many it removed and why. Prune no longer says it
-  kept entries on unscanned screens when it kept none.
+  kept entries on unscanned screens when it kept none. Baseline refuses, writing nothing,
+  when such an entry is a version 1 placeholder count it would otherwise write into a
+  version 2 floor (exit 3), and when the floor it would replace exists and does not parse
+  (exit 4).
 
 - `pf-toast-live-region` now resolves each alert's live value from the nearest
   element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector

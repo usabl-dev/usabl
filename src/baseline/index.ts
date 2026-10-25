@@ -12,6 +12,7 @@ import { sortBy } from '../primitives/sortKey.js';
 import { run } from '../run.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { groupByScreen, isUnconfirmedAbsence, keptUnconfirmedLines, observeFloor } from '../floor/unconfirmed.js';
+import { scrubString } from '../surfaces/scrub.js';
 import { checkGuard } from '../trust/guard.js';
 
 export const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
@@ -83,28 +84,83 @@ export function buildEvidenceFloorDraft(result: Result): EvidenceFloor {
 }
 
 /**
+ * The floor this baseline would replace, read from the working tree, as prune reads it, because
+ * that is the file this command overwrites.
+ *
+ * Missing or empty means there is nothing to carry. A file that exists and does not parse is a
+ * refusal, never an empty floor: a merge conflict, a duplicate identity, or a hand edit gone wrong
+ * would otherwise be replaced, and the debt it records, including barriers this run did not see,
+ * would be lost without a word. The reason names what is wrong in usabl's own words and never
+ * quotes the file, because a parse error can repeat its content and an identity carries page text.
+ */
+type PreviousFloor = { kind: 'none' } | { kind: 'floor'; floor: EvidenceFloor } | { kind: 'unreadable'; reason: string };
+
+async function readPreviousFloor(deps: Deps): Promise<PreviousFloor> {
+  const raw = await deps.fs.readFile(EVIDENCE_FLOOR_PATH);
+  if (raw === null || raw.trim().length === 0) return { kind: 'none' };
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return { kind: 'unreadable', reason: 'it is not valid JSON, which is what an unresolved merge conflict leaves behind' };
+  }
+  try {
+    return { kind: 'floor', floor: parseEvidenceFloor(value) };
+  } catch {
+    return {
+      kind: 'unreadable',
+      reason: 'it is not a valid evidence floor: an entry is malformed, two entries share one identity, or the counts are out of range',
+    };
+  }
+}
+
+function formatUnreadableFloorRefusal(reason: string): string {
+  return [
+    `refused: ${EVIDENCE_FLOOR_PATH} exists but cannot be read, because ${reason}.`,
+    'baseline would replace it and lose the debt it records, so no floor was written.',
+    `fix it or delete it first, then re-run usabl baseline.`,
+  ].join('\n');
+}
+
+/**
  * The entries of the floor being replaced that this run did not see on a screen it cannot show
  * rendered, by the rule the gate and prune read. The new floor keeps them at their recorded count.
  *
  * A baseline writes what the run saw, and the run did not see these go away: a screen whose
  * content failed to mount shows every barrier in that content as absent. Dropping them would turn
  * a rendering failure into a silent pay-down in the committed floor.
- *
- * The working-tree floor is read, as prune reads it, because that is the file this command
- * replaces. A floor that is missing or does not parse has nothing to carry, which is what baseline
- * did before.
  */
-async function unconfirmedCarry(deps: Deps, result: Result): Promise<FloorEntry[]> {
-  let previous: EvidenceFloor;
-  try {
-    const raw = await deps.fs.readFile(EVIDENCE_FLOOR_PATH);
-    if (raw === null || raw.trim().length === 0) return [];
-    previous = parseEvidenceFloor(JSON.parse(raw));
-  } catch {
-    return [];
-  }
+function unconfirmedCarry(previous: PreviousFloor, result: Result): FloorEntry[] {
+  if (previous.kind !== 'floor') return [];
   const seen = observeFloor(result.screens);
-  return previous.entries.filter((entry) => isUnconfirmedAbsence(entry, seen));
+  return previous.floor.entries.filter((entry) => isUnconfirmedAbsence(entry, seen));
+}
+
+/**
+ * Carried entries a version 2 floor cannot hold honestly. A version 1 name or structural entry
+ * records a placeholder count of 1 rather than the barriers observed, and this run did not see
+ * those barriers, so it has no real count to give them. Writing the placeholder into a version 2
+ * floor would present it as measured, and the gate would stop disclosing that it is not. A
+ * count-basis entry always carried a real count, so it is not one of these.
+ */
+function placeholderCarry(previous: PreviousFloor, carried: FloorEntry[]): FloorEntry[] {
+  if (previous.kind !== 'floor' || previous.floor.version !== 1) return [];
+  return carried.filter((entry) => entry.identityBasis !== 'count');
+}
+
+function formatPlaceholderRefusal(entries: FloorEntry[]): string {
+  const screens = groupByScreen(entries);
+  return [
+    'refused: no baseline floor was written.',
+    `${EVIDENCE_FLOOR_PATH} is version 1, and this run did not see these entries on screens it scanned cleanly, with nothing to show that part of the page rendered:`,
+    ...screens.map((screen) =>
+      `  - screen ${scrubString(screen.screenId)} (${[...screen.rules].sort().map((rule) => scrubString(rule)).join(', ')}): ` +
+      `${screen.entries} entr${screen.entries === 1 ? 'y' : 'ies'}`,
+    ),
+    'a version 1 name or structural entry records a placeholder count of 1, and a run that did not see these barriers cannot give them real counts.',
+    'either declare a reachedWhen signal for those screens and re-run usabl baseline,',
+    'or remove them on purpose with usabl floor prune --unconfirmed and then run usabl baseline.',
+  ].join('\n');
 }
 
 /** Adds the carried entries to a floor draft, keeping its sort order. */
@@ -231,6 +287,12 @@ export async function runBaseline(
   // in the same commit. Absent manifest leaves the app-only behavior byte-identical. Reaching this
   // point means no guarded file other than the floor is dirty, so the working-tree manifest matches
   // the trusted one; enumerating its sources cannot smuggle in attacker-chosen scan targets.
+  // Read before the scan, so a floor that cannot be read is refused without running the browser.
+  const previous = await readPreviousFloor(deps);
+  if (previous.kind === 'unreadable') {
+    return { exitCode: 4, wrote: false, message: formatUnreadableFloorRefusal(previous.reason), entryCount: 0 };
+  }
+
   const appFiles = await deps.fs.glob(config.uiFileGlobs);
   const docsManifest = await parseDocsManifest(deps.fs);
   const docsSourceFiles =
@@ -262,7 +324,13 @@ export async function runBaseline(
 
   const incomplete = coverageIncomplete(result.coverage);
   // Only cleanly scanned screens can hold one, so a partial floor keeps every carried entry too.
-  const carried = await unconfirmedCarry(deps, result);
+  const carried = unconfirmedCarry(previous, result);
+  // Checked before the coverage refusal, in both modes, because a version 1 floor always leaves a
+  // coverage gap of its own, and this is the more specific reason and the one with a way forward.
+  const placeholders = placeholderCarry(previous, carried);
+  if (placeholders.length > 0) {
+    return { exitCode: 3, wrote: false, message: formatPlaceholderRefusal(placeholders), entryCount: 0 };
+  }
 
   // Default baseline refuses when coverage is incomplete. A floor is an acceptance of existing
   // debt, so it must not be minted from a run that admits it did not see the whole application.
