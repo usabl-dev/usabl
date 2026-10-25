@@ -45,6 +45,7 @@ const verified: Result = {
   accessibilityExitCode: 0,
   paidDownCount: 0,
   floorHeadroom: [],
+  floorUnconfirmed: [],
 };
 
 const REAL_UID = typeof process.getuid === 'function' ? process.getuid() : null;

@@ -97,6 +97,9 @@ export const overlayClientSource = `(() => {
   const BLOCKING_HEADING = 'Barriers that block this run';
   const RECORDED_HEADING = 'Recorded, not blocking';
   const HEADROOM_HEADING = 'Floor ahead of this run';
+  // Floored barriers the run did not see on a screen it cannot show rendered. The sentences come in
+  // the payload, built from the text the terminal prints, so this file keeps no copy of them.
+  const UNCONFIRMED_HEADING = 'Recorded barriers not seen';
   // The same three lines the terminal prints, word for word, so the two surfaces cannot drift.
   // They state what was counted and offer both readings of it: usabl cannot tell a paid-down
   // barrier from a page rendering fewer rows today, so it names the command for one case and says
@@ -2655,6 +2658,28 @@ export const overlayClientSource = `(() => {
     return group;
   }
 
+  /**
+   * The floored barriers this run did not see on a screen it cannot show rendered, one notice per
+   * screen. Text only, like the floor headroom group, and for the same reasons: nothing here is a
+   * finding, nothing blocks, and nothing changes the verdict. Every screen's notice is listed,
+   * because each one names its screen. Absent or empty in the payload renders nothing.
+   */
+  function renderFloorUnconfirmed(payload) {
+    const entries = Array.isArray(payload.floorUnconfirmed) ? payload.floorUnconfirmed : [];
+    if (entries.length === 0) {
+      return null;
+    }
+    const group = make('div', 'finding-group');
+    const heading = make('div', 'group-heading');
+    heading.appendChild(make('h4', '', UNCONFIRMED_HEADING));
+    heading.appendChild(make('span', 'section-count', entries.length === 1 ? '1 screen' : entries.length + ' screens'));
+    group.appendChild(heading);
+    for (const entry of entries) {
+      group.appendChild(make('p', 'group-note', String(entry.notice)));
+    }
+    return group;
+  }
+
   // The current-screen section: every finding on this screen, one row each. This is where the
   // developer works, so nothing is grouped away and nothing is hidden behind a budget.
   //
@@ -2710,6 +2735,10 @@ export const overlayClientSource = `(() => {
       if (onlyHeadroom) {
         section.appendChild(onlyHeadroom);
       }
+      const onlyUnconfirmed = renderFloorUnconfirmed(payload);
+      if (onlyUnconfirmed) {
+        section.appendChild(onlyUnconfirmed);
+      }
       return section;
     }
 
@@ -2736,6 +2765,10 @@ export const overlayClientSource = `(() => {
     const headroom = renderFloorHeadroom(payload);
     if (headroom) {
       scroll.appendChild(headroom);
+    }
+    const unconfirmed = renderFloorUnconfirmed(payload);
+    if (unconfirmed) {
+      scroll.appendChild(unconfirmed);
     }
     // Rows are built a page at a time.
     //

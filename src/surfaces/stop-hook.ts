@@ -8,7 +8,7 @@ import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { isBlockingBarrier } from '../output/disclosure.js';
 import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-budget.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
-import { barrierLines, guardedFileLines, notEvaluatedPieces } from './model-pieces.js';
+import { barrierLines, guardedFileLines, notEvaluatedPieces, unconfirmedPieces } from './model-pieces.js';
 import { frameUntrustedBlock, scrubResult, scrubString } from './scrub.js';
 
 export interface HookContext {
@@ -191,11 +191,13 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   const barriers = barrierLines(view);
 
   const gapPieces = notEvaluatedPieces(result);
-  const tailPieces = gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : [];
+  // The floor notices close the frame. Like gap lines they limit what the run can claim, so they
+  // are tail pieces and outlast every barrier when the message is shortened.
+  const tailPieces = [...(gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : []), ...unconfirmedPieces(result)];
 
   // The whole message is bounded as well as each field. Whole barriers go first, headline and
-  // pieces together, then gap lines, never the opening lines, the summary piece, or the guarded
-  // file piece, and the frame is rebuilt around what survives.
+  // pieces together, then floor notices and gap lines from the end, never the opening lines, the
+  // summary piece, or the guarded file piece, and the frame is rebuilt around what survives.
   return assembleBoundedMessage({
     scaffold,
     keep,
@@ -234,18 +236,23 @@ export function evaluateStopDecision(
     const sourceTree = safe.receipt?.sourceTree;
     const verdict = describeVerdict(safe);
     const line = `${formatVerdictWord(verdict, passNote)}: the gate verified this change. You may stop.`;
-    if (sourceTree === undefined) {
+    // A verified run is where the floor notice matters most: floored debt on a screen whose
+    // content may not have mounted. It does not change the decision. It travels with it, framed.
+    const notices = unconfirmedPieces(safe);
+    if (sourceTree === undefined && notices.length === 0) {
       return { block: false, message: line };
     }
     // The receipt's source tree is carried by the Result, so it is a piece inside the frame like
     // every other carried string, not part of the line usabl speaks in.
+    const pieces = sourceTree === undefined ? [] : [`receipt sourceTree: ${boundField(String(sourceTree), 'receipt')}`];
     return {
       block: false,
       message: assembleBoundedMessage({
         scaffold: [line],
         keep: 1,
-        pieces: [`receipt sourceTree: ${boundField(String(sourceTree), 'receipt')}`],
-        keepPieces: 1,
+        pieces,
+        keepPieces: pieces.length,
+        tailPieces: notices,
         frame: frameUntrustedBlock,
       }),
     };
@@ -328,6 +335,8 @@ export function evaluateStopDecision(
         keep: scaffold.length,
         pieces,
         keepPieces: pieces.length,
+        // The floor notices travel with the stop here too, inside the frame, after the summary.
+        tailPieces: unconfirmedPieces(safe),
         frame: frameUntrustedBlock,
       }),
     };

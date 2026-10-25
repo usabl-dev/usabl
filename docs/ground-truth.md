@@ -1077,7 +1077,9 @@ the address the scan asked for: a passkey prompt with one button, a magic-link f
 authentication wall that answers 200 to every request under it, including its own status call.
 None makes a refused request and none has a password field, so the three rules say nothing, and
 each has a real control to focus, so the body-only floor says nothing either. Each is scored as the
-screen when the surface declares no signal. Each is a gap when the surface declares a selector for
+screen when the surface declares no signal. If the evidence floor holds barriers for that screen,
+the run claims none of them fixed and shows a notice that names the screen (see "Absent is a fix
+only with evidence" in section 9), but the verdict does not change. Each is a gap when the surface declares a selector for
 the screen's own table, and each is a gap when it declares the screen's own data path, because
 none of them renders that table or asks for that data. The same signal holds on the real screen.
 
@@ -1274,7 +1276,9 @@ are what `usabl baseline` counted when it wrote the floor.
 owner writes it in an `approval_required` accept commit. Advisory findings are never
 written to the floor. The accept loop converges: after the acceptance commit lands, the
 next unchanged run sees the same floor and settles to `verified` (or `not_covered` only if
-coverage cannot be re-established).
+coverage cannot be re-established). Every count must be a safe whole number, and a floor whose
+counts add up past the largest whole number a JavaScript number holds exactly is refused, because a
+total past it depends on the order the counts are added in.
 
 The count comparison runs in both directions, and both are gate decisions:
 
@@ -1291,6 +1295,75 @@ The count comparison runs in both directions, and both are gate decisions:
   tell a paid-down barrier from a page rendering fewer rows today, so it says both readings and
   leaves the operator to pick: if the barriers were fixed, `usabl floor prune` re-arms the floor to
   what is present; if the page simply shows less content today, nothing needs to change.
+
+**Absent is a fix only with evidence the barrier's part of the page rendered.** A floored identity
+is absent when this run has no deterministic draft at it. An advisory draft at the identity does not
+make it present, because the floor counts deterministic barriers only; the gate, prune, and baseline
+all read absence through one shared function. A floored barrier
+missing from this run's drafts was either fixed or was on content that never rendered, and the two
+leave the same absence. A screen in the cleanly scanned set had no gap, but that is not enough: a
+screen whose header and navigation mount and whose content fails to mount has a real control to
+walk and no provider error, so it has no gap, and every floored barrier in the missing content is
+absent. That run used to report the barriers paid down. So the gate marks an absent floored
+identity `fixed` only when one of these holds:
+
+- the screen's readiness signal (`reachedWhen`) was declared and every declared part held, or
+- the identity's own element was met this run: a keyboard stop or a draft on that screen at the
+  same element path, for a structural identity, or with the same accessible name, for a name
+  identity. A counted identity names no element, so only the signal can confirm it.
+
+Otherwise the identity is not claimed `fixed`. It gets no finding, which is what a floor entry on a
+screen the run did not scan already gets, so it is not paid down, it is not counted fixed in the
+receipt, it is not reported as headroom, and the floor keeps its full count as debt. The verdict
+does not change and no gap is raised. Instead the run shows a notice for each such screen. It names
+the screen, the rules, and the number of barriers, and gives the fix, for example: "3 recorded
+barriers on screen orders (button-name, link-name) were not seen in this run, so they are not
+claimed fixed. If they are fixed, add a reachedWhen signal for this screen or run usabl floor prune
+--unconfirmed." It never names an element key, because a key carries page text. The summary line
+gains a `N recorded barriers not seen, not claimed fixed` clause that counts barriers, not entries,
+and the notice itself is printed by the terminal, the pull request comment, the Stop hook (on a
+verified stop too), the self-check, and the overlay. The text is written once, in
+`src/output/floor-notice.ts`. The data is `floorUnconfirmed` on the gate output and on the Result,
+one entry per screen.
+
+Both tests are presence tests on sets, decided inside `gate()`, so they do not depend on order.
+`run()` builds the evidence from the scans with `renderEvidenceOf`, and a caller of the exported
+`gate()` that passes none gets the safe reading: no evidence, so no `fixed`. `usabl floor prune`
+and `usabl baseline` read the same rule, `paydownConfirmed`, through `src/floor/unconfirmed.ts`.
+Prune keeps such an entry by default and says so; `usabl floor prune --unconfirmed` removes it on
+purpose and says how many it removed and why. Baseline, with or without `--partial`, carries such an
+entry into the new floor at its recorded count and says so. Two cases refuse instead, and write
+nothing. If the floor being replaced is version 1 and a carried entry is a name or structural
+entry, its count is a placeholder the run cannot replace with a real one, and writing it into a
+version 2 floor would present it as measured, so baseline exits 3, names the screens and rules, and
+gives the two ways forward: a `reachedWhen` signal and a re-run, or `usabl floor prune
+--unconfirmed` and then baseline. If the floor being replaced exists and does not parse, baseline
+exits 4 before it scans, names the file and the reason without quoting it, and says to fix or
+delete it first, because replacing it would lose its debt. `usabl doctor` names every screen that
+holds floored debt and declares no `reachedWhen` signal.
+
+**The blind spot, stated plainly.** A screen whose content fails to mount reads `verified` until it
+declares a signal. With floored debt on it, the run shows the notice and claims nothing fixed. With
+no floored debt, there is nothing to compare and nothing to say, the same as before this rule. A
+notice is not a gap, so the verdict does not tell the two cases apart; the notice does. Declaring a
+`reachedWhen` signal for content only that screen has is what turns a missing mount into a gap.
+
+No change to the floor format was needed: the element is read off the identity key the floor
+already stores. The cost falls on a genuinely fixed barrier the run cannot place. A counted barrier
+(`button-name`, `pf-icon-button-name`) on a screen with no signal, and a fixed barrier on an element
+the walk does not focus and no check reports, such as an image whose alternative text was added,
+stay on the floor with the notice until the operator declares `reachedWhen` for content only that
+screen has, or runs `usabl floor prune --unconfirmed` and reviews the diff. Measured on a real
+Chromium scan of an axe-sourced floor: axe names a structural element with a short unique selector,
+such as `tr>td>img` or `a[href$="#A-100"]`, which is not the path a keyboard stop records, so in
+practice a structural axe entry is confirmed by a held signal, not by the walk. Name identities are
+confirmed by a stop with the same accessible name.
+
+What this still cannot catch. A path or a name that something else on the screen also has: another
+element at the same path once the position numbers are removed, or a header button with the same
+accessible name as the missing one. A signal that names the shell, which already lets a wrong page
+through (section 8). Content that is missing and held no floored barrier, which leaves nothing to
+compare.
 
 ### The residual hole, and why it is open
 
@@ -1506,10 +1579,18 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   than one refuses with exit 2. `init` scaffolds policy; `install` wires integrations; they
   are different commands (see section 12).
 - Baseline drafts: `usabl baseline` runs a full UI scan and writes `.usabl-evidence.json`
-  as a reviewable working-tree diff.
+  as a reviewable working-tree diff. A floored entry the run did not see and cannot confirm was
+  fixed is carried into the new floor at its recorded count, with or without `--partial`. It
+  refuses when such an entry is a version 1 placeholder count (exit 3), and when the floor it would
+  replace exists and does not parse (exit 4).
 - Floor prune: `usabl floor prune` re-arms the gate on cleanly scanned screens. It removes
   entries whose identity is gone, and lowers the recorded count on entries whose identity is
-  still present but now holds fewer barriers. It never raises a count and never adds an
+  still present but now holds fewer barriers. An absent entry the run cannot confirm was fixed,
+  because nothing shows its part of the page rendered (section 9), is kept and named;
+  `--unconfirmed` removes those too and says how many and why. The report says it kept entries on
+  screens the run did not scan cleanly only when it kept some. It scans every docs page source in
+  the manifest as well as uiFileGlobs, the same way baseline does, so a docs entry can be confirmed
+  or removed. It never raises a count and never adds an
   identity: accepting new debt is what `usabl baseline` does, under review. It leaves version 1
   name and structural counts alone, because those are placeholders the gate does not compare and
   writing a real number under them would present a placeholder as an observation. `prune` is the
@@ -1745,9 +1826,16 @@ is insufficient.
 `usabl doctor` is a read-only projection that reports the state of each wired
 integration surface. It always exits 0, because a missing surface is information, not a
 failure; its filesystem port throws on any write so an accidental write fails loudly. It
-reports ten surfaces: config, authenticated session, route manifest, evidence floor,
-waivers, overlay, stop-hook, usabl-check skill, ci, and branch-rule, each with a state
-such as wired, missing, drifted, or unknown. The session surface reads the
+reports these surfaces: config, authenticated session, playwright chromium, route manifest,
+evidence floor, readiness signals, waivers, overlay, stop-hook, the usabl-check and usabl-fix
+skills, cursor, ci, branch-rule, and policy scope, each with a state such as wired, missing,
+drifted, or unknown. The readiness signals surface is missing when a screen holds floored debt and
+declares no `reachedWhen` signal, and its next step names those screens. A floored barrier the run
+does not see is claimed fixed only with evidence its part of the page rendered: a readiness signal
+that held is one way, and a matching element seen on the run is the other (section 9). A docs page
+cannot declare a signal, and a surfaces entry with its id is refused, so doctor names docs pages
+with floored debt in a note of their own that points to `usabl floor prune --unconfirmed` for a
+barrier known to be fixed. The session surface reads the
 `USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file:
 unset is missing, a readable JSON file that still holds something which could authenticate
 is wired, and a path that names no file, names a file that is not JSON, or names a state

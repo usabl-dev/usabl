@@ -13,7 +13,7 @@ usabl install <one>   wire one integration surface at a time (--overlay | --clau
 usabl baseline        draft the accepted accessibility floor (.usabl-evidence.json)
 usabl doctor          read-only health check across every wired surface
 usabl check           run the local gate (this is the default command)
-usabl floor prune     re-arm the floor as debt is paid down (removes and lowers counts)
+usabl floor prune     re-arm the floor as debt is paid down (removes and lowers counts; --unconfirmed)
 usabl drift routes    check the route manifest against the app router
 ```
 
@@ -276,7 +276,8 @@ assistant loop.
 - `usabl floor prune` to re-arm the floor. On screens that scanned cleanly with no gaps, it
   removes an entry whose identity was not observed and lowers the count where fewer were
   observed. It cannot tell a repaired barrier from a page rendering fewer rows, so run it
-  when you know why the count dropped
+  when you know why the count dropped. It keeps an entry the run did not see when nothing
+  shows that part of the page rendered; `--unconfirmed` removes those too
 - `usabl drift routes` to catch the route manifest drifting from the app router
 - Team documentation on what the verdicts mean and who can change policy
 

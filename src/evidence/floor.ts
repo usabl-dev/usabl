@@ -70,6 +70,19 @@ export function parseEvidenceFloor(value: unknown): EvidenceFloor {
     }
     seenIdentities.add(key);
   }
+  // Every count is a safe integer, but a sum of them need not be. Past Number.MAX_SAFE_INTEGER a
+  // total depends on the order the counts are added in, so a summary or a notice could change with
+  // the order of the file. Refuse such a floor. The message names the file and never the values.
+  let total = 0;
+  for (const entry of entries) {
+    total += entry.count;
+    if (total > Number.MAX_SAFE_INTEGER) {
+      throw new Error(
+        '.usabl-evidence.json records more barriers in total than usabl can count exactly. ' +
+          'Lower the counts, or regenerate the floor with usabl baseline.',
+      );
+    }
+  }
   // The version is carried through, not normalized. Readers need it to know whether the
   // per-entry counts are observed debt (version 2) or a placeholder 1 (version 1).
   // Scope is optional. Absent means a complete whole-application floor, so it is left off the

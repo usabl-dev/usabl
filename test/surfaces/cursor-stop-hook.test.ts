@@ -40,6 +40,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   accessibilityExitCode: 0,
   paidDownCount: 0,
   floorHeadroom: [],
+  floorUnconfirmed: [],
   ...over,
 });
 

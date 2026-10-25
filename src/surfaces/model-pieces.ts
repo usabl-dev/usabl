@@ -12,6 +12,7 @@
 import type { Finding, Result } from '../contracts/index.js';
 import { boundField, type BoundedGroup } from '../output/bounded-text.js';
 import { NOT_A_LIST, wholeNumberText } from '../output/carried.js';
+import { unconfirmedNotice } from '../output/floor-notice.js';
 import {
   APPROVAL_REQUIRED_HOW_IT_CLEARS,
   APPROVAL_REQUIRED_HUMAN_LEVER,
@@ -49,6 +50,26 @@ export function notEvaluatedPieces(result: Result): string[] {
     });
     return `- ${gapHeadline(disclosure)}: ${detail}`;
   });
+}
+
+/**
+ * The notices for floored barriers the run did not see and cannot call fixed, one framed piece
+ * per screen.
+ *
+ * Each notice names a screen id and rules the Result carried, and a count, so the whole sentence
+ * is a piece inside the frame and nothing of it is scaffold. Callers pass these as tail pieces
+ * after the gap lines: like a gap, a notice limits what the run can claim, so a shortened message
+ * drops every barrier before it drops one. A list that is not a list is reported as unreadable.
+ */
+export function unconfirmedPieces(result: Result): string[] {
+  const entries: unknown = result.floorUnconfirmed;
+  if (entries === undefined) {
+    return [];
+  }
+  if (!Array.isArray(entries)) {
+    return [NOT_A_LIST];
+  }
+  return entries.map((entry) => `not claimed fixed: ${boundField(unconfirmedNotice(entry), 'notice')}`);
 }
 
 /** The label of the framed piece that names the guarded files. */
