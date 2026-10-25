@@ -6,7 +6,7 @@
  */
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page } from '../contracts/index.js';
+import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page, ReadinessOutcome, ReadinessProbe } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
@@ -722,19 +722,42 @@ function readinessTimeout(phase: string, timeoutMs: number, detail: string): str
  * larger render budget. The caller discloses that as a coverage gap, which is honest, where
  * returning quietly would publish a measurement of a page that had not arrived.
  *
- * Known limit, stated so a reviewer can attack it (tracked as issue #184): a pause driven purely by
- * client-side work with no request behind it is not covered. The network is genuinely quiet during
- * it, so a client-side pause longer than the DOM window can still read as settled. The threshold is
- * roughly that window, about 1.7 seconds of a frozen count that is also network-idle. Raising
- * readyTimeoutMs does not help, because the loop already believes it is done and has returned rather
- * than run out of budget. Closing this would need the application to signal its own render
- * completion, which this design avoids on purpose so it can measure any application without
- * cooperation.
+ * A pause with no request behind it. A page can mount a small shell, do nothing at all for a while,
+ * and only then fetch and mount its real content. The network is genuinely quiet during that pause
+ * and the DOM is genuinely still, so both signals read as done. Measured against real Chromium, a
+ * pause longer than about 1.7 seconds, the DOM window plus margin, is read as settled, and the scan
+ * grades the shell. Raising readyTimeoutMs does not help, because the loop believes it is done and
+ * returns rather than running out of budget.
+ *
+ * readyWhen closes that pause for a screen that declares a readiness selector. Its probe is asked
+ * only at a moment when the DOM is stable and the network is quiet, and the loop keeps waiting
+ * until it answers true, until readyWhen.timeoutMs has passed since the first such moment, or until
+ * the budget runs out, whichever comes first. The cap is counted from the first settled moment,
+ * never restarts, and is checked on every pass whether or not the page is settled, and no sleep
+ * runs past it, so a page that keeps changing cannot stretch it. A probe that throws reads as false.
+ *
+ * The result says how the wait ended, and the caller acts on it rather than reading the signal
+ * again. A second read can find the selector on an element that appeared after the cap ran out, on
+ * a page that was still changing, and walking that page would grade something that had not
+ * settled. timed-out covers the cap running out, settled or not, and the budget running out on a
+ * settled page whose probe never held. The caller ends the screen as a coverage gap that names the
+ * selector and the cap, which says more than a timeout would. The budget running out on a page that
+ * never settled still throws, before the cap or with no probe, as it always has.
+ *
+ * Without readyWhen the pause is still not covered. Closing it without a signal would need the
+ * application to report its own render completion, which this design avoids on purpose so it can
+ * measure any application without cooperation.
  *
  * Exported for tests. Product code reaches this through Page.gotoReady().
  */
-export async function waitForRendered(pw: ReadinessPage, timeoutMs: number): Promise<void> {
+export async function waitForRendered(
+  pw: ReadinessPage,
+  timeoutMs: number,
+  readyWhen?: ReadinessProbe,
+): Promise<ReadinessOutcome> {
   const deadline = Date.now() + timeoutMs;
+  // When the signal wait ends, set at the first settled moment.
+  let signalDeadline: number | null = null;
 
   let previous: number | null = null;
   let repeats = 0;
@@ -746,12 +769,29 @@ export async function waitForRendered(pw: ReadinessPage, timeoutMs: number): Pro
     const domStable = repeats >= SETTLE_SAMPLES_REQUIRED;
     // Read live every pass, so a request that started since the last read resets the window.
     const networkQuiet = pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS);
-    if (domStable && networkQuiet) {
-      return;
+    const settled = domStable && networkQuiet;
+    if (settled) {
+      if (readyWhen === undefined) {
+        return { signal: 'not-declared' };
+      }
+      signalDeadline ??= Date.now() + readyWhen.timeoutMs;
+      if (await signalHolds(readyWhen.holds)) {
+        return { signal: 'held' };
+      }
+    }
+    // Checked on every pass, settled or not, so DOM changes after the first settled moment cannot
+    // carry the wait past the cap.
+    if (signalDeadline !== null && Date.now() >= signalDeadline) {
+      return { signal: 'timed-out' };
     }
 
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
+      if (settled) {
+        // Settled, and the declared signal never held. readyWhen is defined here, because a
+        // settled pass with no probe has already returned.
+        return { signal: 'timed-out' };
+      }
       // Name the phase still unsatisfied. A settled DOM waiting only on the network points the
       // operator at a request budget; otherwise the DOM never stopped and its last count is the
       // useful detail.
@@ -762,7 +802,18 @@ export async function waitForRendered(pw: ReadinessPage, timeoutMs: number): Pro
         readinessTimeout('DOM did not stop changing', timeoutMs, `, last element count ${elements}`),
       );
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(SETTLE_SAMPLE_INTERVAL_MS, remaining)));
+    // Bounded by both deadlines, so the cap is never overslept.
+    const untilCap = signalDeadline === null ? remaining : Math.max(0, signalDeadline - Date.now());
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(SETTLE_SAMPLE_INTERVAL_MS, remaining, untilCap)));
+  }
+}
+
+// A readiness probe that throws has not shown the signal, so it reads as false and the wait goes on.
+async function signalHolds(holds: () => Promise<boolean>): Promise<boolean> {
+  try {
+    return (await holds()) === true;
+  } catch {
+    return false;
   }
 }
 
@@ -796,8 +847,8 @@ function wrapPage(
     networkQuietFor: (windowMs) => network.networkQuietFor(windowMs),
   };
   const page: Page = {
-    async gotoReady(): Promise<void> {
-      await waitForRendered(readiness, readyTimeoutMs);
+    async gotoReady(readyWhen?: ReadinessProbe): Promise<ReadinessOutcome> {
+      return waitForRendered(readiness, readyTimeoutMs, readyWhen);
     },
     async currentUrl(): Promise<string> {
       // Playwright tracks the committed navigation, so this is the address after any redirect

@@ -100,18 +100,28 @@ export function markUnseenScreens(screens: ScreenScan[]): UnseenPass {
           'that never rendered, one behind a login, and one that threw on mount all look like this.',
       );
     }
-    if (scan.reachedSelectorPresent === false) {
+    if (scan.reachedSelectorPresent === false && scan.signalWaitMs !== undefined) {
       const selector = scan.reachedWhenSelector ?? 'the declared reachedWhen selector';
       sentences.push(
-        `Nothing matched reachedWhen selector ${selector} in the rendered page, so the element the ` +
-          'operator said proves this screen loaded was absent.',
+        `Nothing matched reachedWhen selector ${selector} before the keyboard walk, after readiness ` +
+          `waited for it for up to ${scan.signalWaitMs} ms (signalTimeoutMs) from the moment the page ` +
+          'first settled, so usabl did not walk or check the screen. If this screen needs longer to ' +
+          'show that element, raise signalTimeoutMs in usabl.config.json.',
+      );
+    } else if (scan.reachedSelectorPresent === false) {
+      const selector = scan.reachedWhenSelector ?? 'the declared reachedWhen selector';
+      sentences.push(
+        `Nothing matched reachedWhen selector ${selector} in the rendered page when the keyboard walk ` +
+          'began, after readiness waited for it, or when the checks finished, so the element the ' +
+          'operator said proves this screen loaded was absent while usabl checked the screen.',
       );
     }
     if (scan.reachedResponseSeen === false) {
       const path = scan.reachedWhenResponse ?? 'the declared reachedWhen response';
       sentences.push(
         `No fetch or XHR request to ${path} on the application's own host was answered with a ` +
-          'success, so the data the operator said proves this screen loaded never arrived.',
+          'success before the keyboard walk began, after readiness waited for it, so the data the ' +
+          'operator said proves this screen loaded had not arrived when usabl checked the screen.',
       );
     }
     if (sentences.length === 0) {

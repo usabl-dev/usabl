@@ -53,8 +53,14 @@ interface FixtureServer {
   // A page that asks for no data on load and requests the screen's data path only when a control
   // is focused, so the only answer to that path is one the walk caused.
   fetchOnFocusUrl: string;
+  // A shell with one link, then a pause of ?pause= milliseconds with nothing in flight and nothing
+  // changing, then a fetch that mounts the screen's real content.
+  frozenPauseUrl: string;
+  // A shell that pauses, mounts the orders table from a 200 JSON answer, and 800 ms later replaces
+  // itself with a magic-link sign-in form. The table never holds still; the sign-in form does.
+  swapToSignInUrl: string;
   // A header, a navigation, and a heading that always mount, and a table of orders that mounts only
-  // with ?content=ok. With ?content=fail its mount throws and nothing replaces it.
+  // with ?content=ok or ?content=broken. With ?content=fail its mount throws and nothing replaces it.
   partialRenderUrl: string;
   close: () => Promise<void>;
 }
@@ -78,6 +84,8 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/magic-link.html': await readFixture('magic-link.html'),
     '/orders.html': await readFixture('orders-screen.html'),
     '/fetch-on-focus.html': await readFixture('fetch-on-focus.html'),
+    '/frozen-pause.html': await readFixture('frozen-pause.html'),
+    '/swap-to-sign-in.html': await readFixture('swap-to-sign-in.html'),
     '/partial-render.html': await readFixture('partial-render.html'),
   };
   const spaFallback = await readFixture('spa-fallback.html');
@@ -208,6 +216,8 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     ordersRecoveredUrl: `http://127.0.0.1:${address.port}/orders.html?recover=1`,
     spaFallbackUrl: `http://127.0.0.1:${address.port}/spa/orders`,
     fetchOnFocusUrl: `http://127.0.0.1:${address.port}/fetch-on-focus.html`,
+    frozenPauseUrl: `http://127.0.0.1:${address.port}/frozen-pause.html`,
+    swapToSignInUrl: `http://127.0.0.1:${address.port}/swap-to-sign-in.html`,
     partialRenderUrl: `http://127.0.0.1:${address.port}/partial-render.html`,
     close: async () =>
       new Promise<void>((resolve, reject) => {
@@ -223,6 +233,9 @@ async function makeFixtureServer(): Promise<FixtureServer> {
       }),
   };
 }
+
+// The readiness budget for scans whose declared signal never holds. See signalDriver.
+const SIGNAL_BUDGET_MS = 5_000;
 
 /** A provider that reports one barrier on whatever page it is given, so a scan that must report
  * nothing can be told apart from a scan that had nothing to report. */
@@ -254,6 +267,11 @@ function alwaysFiringProvider(screenId: string): Provider {
 describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver integration', () => {
   let fixture: FixtureServer;
   const driver = makeRealBrowserDriver();
+  // Readiness waits for a declared signal until the readiness budget runs out, so a scan of a page
+  // that never shows its signal costs the whole budget before it ends as a gap. These fixtures
+  // settle in under two seconds, so a short budget keeps those scans quick without changing what
+  // they prove.
+  const signalDriver = makeRealBrowserDriver({ readyTimeoutMs: SIGNAL_BUDGET_MS });
 
   beforeAll(async () => {
     fixture = await makeFixtureServer();
@@ -261,6 +279,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
 
   afterAll(async () => {
     await driver.close();
+    await signalDriver.close();
     await fixture.close();
   });
 
@@ -341,7 +360,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
 
   it('measures reachedSelectorPresent false when the selector is absent from the DOM', async () => {
     const runner = makeCheckRunner({
-      browser: driver,
+      browser: signalDriver,
       providers: [],
       config: testConfig({
         surfaces: [{ id: 'integration-screen', url: fixture.url, files: [], reachedWhen: '#never-rendered-marker' }],
@@ -355,7 +374,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
 
     expect(scan.reachedSelectorPresent).toBe(false);
     expect(scan.reachedWhenSelector).toBe('#never-rendered-marker');
-  });
+    // Readiness waits the whole signal budget for a selector that never matches.
+  }, 30_000);
 
   it('reports the address the browser ended on after a real redirect, not the one requested', async () => {
     const page = await driver.open(fixture.gatedUrl);
@@ -720,7 +740,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       reachedWhen: SurfaceConfig['reachedWhen'],
     ): Promise<{ unseen: boolean; drafts: number; gaps: string[] }> {
       const runner = makeCheckRunner({
-        browser: driver,
+        browser: signalDriver,
         providers: [alwaysFiringProvider('orders')],
         config: testConfig({
           appBaseUrl: fixture.url,
@@ -810,6 +830,145 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       expect(result.drafts).toBe(0);
       expect(result.gaps.some((reason) => reason.includes('401'))).toBe(true);
     }, 30_000);
+  });
+
+  describe('content that mounts after a frozen pause', () => {
+    // The pauses measured against real Chromium when this residual was found. At 1.5 s readiness
+    // still waited for the content. From 1.8 s on it settled inside the pause and the scan graded
+    // the shell, a header with one link, as the screen.
+    const PAUSES_MS = [1_500, 1_800, 2_100, 4_000];
+
+    // Reports one draft when the screen's real content is in the page at the time the checks run,
+    // so a scan of the content can be told apart from a scan of the shell.
+    const contentProbe: Provider = {
+      id: 'late-content-probe',
+      layer: 'test',
+      capabilities: ['live'],
+      run: async ({ page, screen }) => {
+        const buttons = await page.queryAll('#late-orders button');
+        if (buttons.length === 0) {
+          return [];
+        }
+        return [
+          {
+            rule: 'late-content-present',
+            layer: 'test',
+            severity: 'minor' as const,
+            evidenceClass: 'deterministic' as const,
+            screenId: screen.id,
+            elementPath: '#late-orders',
+            elementName: null,
+            role: null,
+            whatUserExperiences: 'placeholder',
+            why: 'placeholder',
+            fix: 'placeholder',
+            evidence: {},
+            confidence: 'fail' as const,
+          },
+        ];
+      },
+    };
+
+    async function scanAfterPause(
+      pauseMs: number,
+      reachedWhen: SurfaceConfig['reachedWhen'],
+    ): Promise<{ gapped: boolean; walkSawContent: boolean; checksSawContent: boolean }> {
+      const url = `${fixture.frozenPauseUrl}?pause=${pauseMs}`;
+      const runner = makeCheckRunner({
+        browser: driver,
+        providers: [contentProbe],
+        config: testConfig({
+          appBaseUrl: fixture.url,
+          surfaces: [
+            { id: 'late-orders', url, files: [], ...(reachedWhen === undefined ? {} : { reachedWhen }) },
+          ],
+        }),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+        transcriptTabCap: 5,
+      });
+      const pass = markUnseenScreens([await runner.scan({ id: 'late-orders', url })]);
+      const screen = pass.screens[0];
+      return {
+        gapped: (screen?.gaps.length ?? 0) > 0,
+        walkSawContent: (screen?.stops ?? []).some((stop) => stop.elementPath.includes('#late-orders')),
+        checksSawContent: (screen?.drafts ?? []).some((draft) => draft.rule === 'late-content-present'),
+      };
+    }
+
+    describe('a screen that shows its data and then swaps itself for a sign-in page', () => {
+      // The wait must not end on the sign-in page. A response stays seen once it arrived, so it
+      // cannot tell the table from what replaced it, and only a selector that holds at a settled
+      // moment may end the wait.
+      async function scanSwap(
+        reachedWhen: SurfaceConfig['reachedWhen'],
+        signalTimeoutMs?: number,
+      ): Promise<{ stops: number; drafts: number; gaps: string[]; elapsedMs: number }> {
+        const url = fixture.swapToSignInUrl;
+        const runner = makeCheckRunner({
+          browser: driver,
+          providers: [alwaysFiringProvider('orders')],
+          config: testConfig({
+            appBaseUrl: fixture.url,
+            surfaces: [{ id: 'orders', url, files: [], ...(reachedWhen === undefined ? {} : { reachedWhen }) }],
+            ...(signalTimeoutMs === undefined ? {} : { signalTimeoutMs }),
+          }),
+          allowedCapabilities: ['live'],
+          stepRunner: makeStepRunner(),
+          transcriptTabCap: 5,
+          sessionConfigured: true,
+        });
+        const started = Date.now();
+        const scanned = await runner.scan({ id: 'orders', url });
+        const elapsedMs = Date.now() - started;
+        const screen = markUnseenScreens([scanned]).screens[0];
+        return {
+          stops: scanned.stops.length,
+          drafts: screen?.drafts.length ?? 0,
+          gaps: (screen?.gaps ?? []).map((gap) => gap.reason),
+          elapsedMs,
+        };
+      }
+
+      it('gaps the screen when it declares only a response', async () => {
+        const result = await scanSwap({ response: '/api/data/orders' });
+        expect(result.gaps.length).toBeGreaterThan(0);
+        expect(result.drafts).toBe(0);
+      }, 30_000);
+
+      it('ends the wait at the signal cap, runs no walk, and names the selector and the cap', async () => {
+        const result = await scanSwap('table#orders', 3_000);
+        expect(result.stops).toBe(0);
+        expect(result.drafts).toBe(0);
+        expect(result.gaps.some((reason) => reason.includes('table#orders') && reason.includes('3000'))).toBe(true);
+        // The page first settles at about 1.5 s, in its pause, so the cap ends the wait near
+        // 4.5 s even though the page mounts and swaps after that. Navigation and the landing read
+        // add the rest. The default readiness budget is far longer, so a wait that ran on past the
+        // cap would fail here.
+        expect(result.elapsedMs).toBeLessThan(7_000);
+      }, 30_000);
+    });
+
+    for (const pauseMs of PAUSES_MS) {
+      it(`grades the content that mounts after a ${pauseMs} ms pause when the screen declares a selector`, async () => {
+        const result = await scanAfterPause(pauseMs, '#late-orders button');
+        // Readiness waited for the selector, so the walk and the checks both ran on the content.
+        expect(result.gapped).toBe(false);
+        expect(result.walkSawContent).toBe(true);
+        expect(result.checksSawContent).toBe(true);
+      }, 30_000);
+
+      it(`never passes the shell after a ${pauseMs} ms pause when the screen declares only a response`, async () => {
+        // A response does not extend the wait. A request sent after the walk began never counts,
+        // so a pause long enough to end readiness ends as a gap, and a shorter one is graded.
+        const result = await scanAfterPause(pauseMs, { response: '/api/data/late-orders' });
+        expect(result.gapped || (result.walkSawContent && result.checksSawContent)).toBe(true);
+        if (!result.gapped) {
+          expect(result.walkSawContent).toBe(true);
+          expect(result.checksSawContent).toBe(true);
+        }
+      }, 30_000);
+    }
   });
 
   describe('a screen whose header mounted and whose content did not', () => {

@@ -203,9 +203,12 @@ the tool errored, not because the page is accessible.
   authentication wall that answers 200 but does not request the screen's data path or answers it
   with HTML. A signal that does not hold drops the screen's findings
   and gaps it. The signal is operator policy, not proof: a selector a sign-in page also matches,
-  or a path a wall answers with a 200 that is not HTML, lets a wrong page through. The selector
-  is read after the checks have run, so content a check caused counts toward it. The response
-  part counts only requests sent before the walk began, and never an HTML answer. A refused
+  or a path a wall answers with a 200 that is not HTML, lets a wrong page through. Readiness
+  waits for the selector before the walk, for at most `signalTimeoutMs`, and each part must hold
+  both before the walk and after the checks, so content a check caused does not count toward the
+  selector, and a declared response must have arrived before the walk began. A response never ends that wait, because it stays seen after the page replaced its
+  content. The response part
+  counts only requests sent before the walk began, and never an HTML answer. A refused
   request is stood down only when the surface declares a response path, that path was answered
   at an address that was never refused, and the refused address was later answered with a 2xx
   that is not HTML. A selector, or recovery alone, never stands it down. See ground-truth
@@ -382,33 +385,37 @@ them. Full structural validation of an externally supplied Result is not impleme
 consumer that pipes a Result from an untrusted source into `usabl comment` is reporting
 that source's claims, and the receipt, not the comment, is what proves a run happened.
 
-The stop hook and the self-check are held to the same rule by their own mechanism. They
-print plain text to a language model with no renderer involved, so the question there is
-the untrusted frame rather than a code span, and every value the Result carries is inside
-it: the gate's summary, each finding's experience, fix, source, and screen id, and each
-coverage gap's ref and reason. What those two surfaces print outside the frame is the
-verdict word and its meaning, the next step, the labels, the counts, a group's status,
-severity, layer, and rule, and the list of guarded files that changed.
+The stop hook and the self-check are held to the same rule, by carrier, through their own
+mechanism. They print plain text to a language model with no renderer involved, so the seal
+there is the untrusted frame rather than a code span. Every value the Result carries is
+inside the frame or is type-checked first: the gate's summary, each barrier's rule, layer,
+screen id, experience, fix, and source, each coverage gap's ref and reason, the guarded file
+paths, and the receipt's `sourceTree`, both on a verified run and on the stop hook's fast
+path, where the receipt is read from a file in the work tree. A verdict is looked up only
+among a table's own entries, so a verdict named after something every object inherits, such
+as `toString`, is printed as unrecognized and never as the source of a function. What those
+two surfaces print outside the frame is the
+verdict word and its meaning, the next step, the labels, the counts and the exit code once
+each is checked to be a whole number, and a group's status and severity once each is checked
+to be one of the contract's words. A value that fails its check is printed as "unknown". The
+checks are the ones the pull request comment uses (`src/output/carried.ts`), so the three
+surfaces cannot drift apart on what counts as checked. One set of tests runs every carrier
+case against all three surfaces, including a rule, a layer, a status, and a severity written
+to close the frame and give an instruction after it.
 
-Both surfaces project a Result built by `run()` in the same process. Their projectors,
-`evaluateStopDecision` and `projectSelfCheck`, are internal modules that the package does
-not export: the package root exports neither, and there is no subpath under which either
-can be imported. Verified against the packed and installed package rather than by reading
-the source. `Object.keys(await import('usabl'))` contains neither name, and every subpath
-form, `usabl/surfaces/stop-hook.js`, `usabl/dist/surfaces/stop-hook.js`, `usabl/stop-hook`,
-and `usabl/dist/index.js`, fails to resolve with `ERR_PACKAGE_PATH_NOT_EXPORTED`, because
-the `exports` map lists only the root, `./vite`, `./playwright`, `./docs`, and `./measure`.
-`projectPrComment` is not exported either; the comment is reached through the `usabl
-comment` command, which is why that command is the document boundary this section is about.
-
-Neither surface therefore has a document entry point for a consumer of this package. Inside
-this repository the modules can of course be imported and handed anything, and someone
-running arbitrary code in this repository is not an attacker this model defends against:
-they can edit the surfaces themselves. That is the residual assumption, and it is a
-statement about the supported package surface rather than about who wrote a provider. Two
-values that a Result could carry are no longer pasted into either line whatever their
-content: an unrecognized verdict is named with a fixed word rather than echoed, and an exit
-code that is not a whole number is named as unknown.
+An earlier version of this section rested on a narrower argument. A group's status, severity,
+layer, and rule, and the list of guarded files, were printed outside the frame, because the
+projectors, `evaluateStopDecision` and `projectSelfCheck`, are internal modules the package
+does not export, and a Result reaching them was built by `run()` in the same process. That is
+still true of the supported package surface, as verified against the packed and installed
+package: `Object.keys(await import('usabl'))` contains neither name, and every subpath form,
+`usabl/surfaces/stop-hook.js`, `usabl/dist/surfaces/stop-hook.js`, `usabl/stop-hook`, and
+`usabl/dist/index.js`, fails to resolve with `ERR_PACKAGE_PATH_NOT_EXPORTED`, because the
+`exports` map lists only the root, `./vite`, `./playwright`, `./docs`, and `./measure`. It did
+not cover the authors inside that process. A library caller can hand `run()` a check runner of
+its own, so a rule is whatever that runner wrote, and a pull request author chooses the name of
+any file they add under a guarded directory, so a guarded path is text that author wrote.
+Deciding by author does not survive either case, so these surfaces now decide by carrier too.
 
 **Not handled:** credential-dense hostile input costs more than it did. About three million
 characters of back-to-back credentials take roughly 0.7 s to redact, and roughly 1.5 s with

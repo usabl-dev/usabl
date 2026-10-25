@@ -179,10 +179,9 @@ export interface LandingObservation {
    * when the surface declared no selector, true when it declared one and it matched, false when it
    * declared one and nothing matched.
    *
-   * Measured here as well as after the providers run, because the two answer different questions.
-   * The later measurement is the one recorded on the scan for the unseen detector. This one has to
-   * be taken before the walk, because the walk and the providers are the thing this decides
-   * whether to run at all.
+   * Measured here as well as after the providers run. This one has to be taken before the walk,
+   * because the walk and the providers are the thing this decides whether to run at all. The scan
+   * records a part as held for the unseen detector only when it held here and after the providers.
    */
   reachedSelectorPresent: boolean | null;
   /**
@@ -205,7 +204,7 @@ export interface LandingObservation {
 }
 
 /** Whether the observation carries a readiness signal that held as a whole. */
-function signalHeld(observation: LandingObservation): boolean {
+export function signalHeld(observation: LandingObservation): boolean {
   return (
     readinessMet({
       selectorPresent: observation.reachedSelectorPresent,

@@ -34,6 +34,24 @@
   The floor parser refuses a floor whose counts add up past the largest exact whole
   number, and baseline, prune, and doctor scrub the screen ids and rules they print.
 
+- Readiness now waits for a screen's declared `reachedWhen` selector before the keyboard
+  walk starts. A page that mounted a small shell, paused for more than about 1.7 seconds
+  with nothing in flight, and only then fetched and mounted its content was read as
+  settled during the pause. With a selector declared, that screen ended as a gap, or, when
+  the content arrived during the walk, as a pass whose walk never saw it. Now readiness
+  keeps waiting until the selector matches at a settled moment, and a part of the signal
+  counts only if it held both before the walk and after the checks. Measured on real
+  Chromium with pauses of 1.5, 1.8, 2.1, and 4.0 seconds, the walk and the checks ran on
+  the content every time. A declared `response` never ends or extends the wait, because
+  it stays seen after a page replaces its content. What changed for a response is when
+  it must arrive: it now has to have arrived before the walk began. Before, it was read
+  only after the checks, so a request sent before the walk and answered during it
+  counted. Now that answer makes the screen a gap, because the screen's data was not
+  there when the walk and the checks began. A screen that declares only a response
+  waits as a screen with no signal does, so a long pause ends as a gap. A screen with no
+  `reachedWhen` is unchanged and can still be graded on its shell; declare a selector for
+  a screen that mounts late.
+
 - `pf-toast-live-region` now resolves each alert's live value from the nearest
   element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector
   whether any live container sits somewhere above the alert. The selector passed an
@@ -101,6 +119,14 @@
   names docs pages with floored debt separately and points to `usabl floor prune
   --unconfirmed` for a barrier known to be fixed.
 
+- `signalTimeoutMs` in `usabl.config.json`, a positive whole number of milliseconds,
+  default 15000, at most 600000 (ten minutes). It caps the wait for a `reachedWhen` selector, counted from the first
+  moment the page settled and inside `readyTimeoutMs`. A screen whose selector does not
+  match within it is not walked or checked, and ends as a `not-covered` gap that names the
+  selector and the cap. The cap holds while the page keeps changing, and a selector that
+  appears only after the cap ran out does not count. Measured on real Chromium, such a
+  screen ends in about 17.1 seconds with the default cap.
+
 ### Changed
 
 - `checkPage` called without a `screenId` returns `not_covered` in a project that has
@@ -110,6 +136,39 @@
   that surface, so no other surface's requirements drop out of scope unseen. Before, an
   unlabeled call ran no design requirements and could return `verified`. Findings from
   an unlabeled call still carry the label `page`.
+
+### Security
+
+- The stop hook and the self-check now seal by carrier, as the pull request comment
+  already did. Every value a Result carries is printed inside the untrusted frame or is
+  type-checked first, whoever wrote it. A barrier's rule and layer, the guarded file
+  paths, and the receipt's `sourceTree` used to be printed outside the frame, as usabl's
+  own text, on the argument that the first-party providers wrote them. A library
+  caller's check runner can write a rule, and a pull request author names any file they
+  add under a guarded directory, so that argument did not hold. A finding's status and
+  severity are printed only when each is one of the contract's words, and "unknown"
+  otherwise. The exit code on the no-verdict line is printed only when it is a whole
+  number; it used to be pasted in as it arrived.
+- The layout of both messages changed to match. A barrier headline now reads
+  `- barrier 1: [new serious] (×3)`, and the rule is named inside the frame under the
+  same number: `barrier 1: axe/color-contrast`. A single barrier reads
+  `Barrier: [new serious] (×3)`. The guarded file line now gives the count, and the
+  paths follow the gate's summary inside the frame as `guarded files: ...`, and are
+  never dropped when a message is shortened. A single barrier also names its layer and
+  screen inside the frame: `barrier: axe/color-contrast` and `screen: <id>`. The verified
+  allow line no longer carries the receipt's source tree; it follows inside the frame. The
+  stop hook's fast-path allow, on a stored receipt, now reads "VERIFIED (exit 0): a stored
+  receipt matches this tree. You may stop." with the source tree inside the frame too.
+- A shortened stop-hook or self-check message now drops a barrier's headline together with
+  its pieces in the frame. It used to drop pieces from the end and keep every headline, so
+  a message could list barriers whose rule, screen, and fix it no longer held. The note now
+  says how many barriers were left out, and the show-all hint counts only those still shown.
+- A verdict named after something every object inherits, such as `toString` or
+  `constructor`, now prints as an unrecognized verdict on all three surfaces. A plain table
+  lookup found the inherited member, so the verdict word was the source text of a function.
+- A coverage gap list or a guarded path list that is not a list is now reported as
+  unreadable on both surfaces. Walking it used to throw, which the stop hook reported
+  as a hook error and let the stop through.
 
 ## 0.2.2 - 2026-10-21
 

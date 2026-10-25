@@ -5,25 +5,11 @@
  */
 import type { Result, UsablConfig, Verdict } from '../contracts/index.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
-import {
-  APPROVAL_REQUIRED_HOW_IT_CLEARS,
-  APPROVAL_REQUIRED_HUMAN_LEVER,
-  discloseGaps,
-  fixOrAbsence,
-  gapDetail,
-  gapHeadline,
-  guardedFilesHeadline,
-  isBlockingBarrier,
-} from '../output/disclosure.js';
-import {
-  applyNoiseBudget,
-  formatCollapsedGroupHeadlineWithoutScreen,
-  resolveNoiseBudgetDefault,
-  type CollapsedFindingGroup,
-} from '../output/noise-budget.js';
-import { unconfirmedNotice } from '../output/floor-notice.js';
+import { isBlockingBarrier } from '../output/disclosure.js';
+import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-budget.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
-import { frameUntrustedBlock, scrubResult } from './scrub.js';
+import { barrierLines, guardedFileLines, notEvaluatedPieces, unconfirmedPieces } from './model-pieces.js';
+import { frameUntrustedBlock, scrubResult, scrubString } from './scrub.js';
 
 export interface HookContext {
   stopHookActive: boolean;
@@ -129,24 +115,9 @@ function chooseNextStep(result: Result, steps: NextSteps): string | undefined {
 }
 
 /**
- * The lines that follow the next step when guarded files changed: which files, how the state
- * clears, and the one lever a person has. All engine text, so it is scaffold; the joined path
- * list is bounded because nothing else bounds it.
- */
-function approvalLines(result: Result): string[] {
-  const paths = result.dirtyGuardedPaths;
-  const named = paths.length === 0 ? 'none recorded' : boundField(paths.join(', '), 'candidates');
-  return [
-    `${guardedFilesHeadline(paths.length)}: ${named}`,
-    APPROVAL_REQUIRED_HOW_IT_CLEARS,
-    APPROVAL_REQUIRED_HUMAN_LEVER,
-  ];
-}
-
-/**
  * The line every stop-hook message opens with: the verdict word and exit code, then what that
- * means for the change. Every part is an engine constant chosen by the verdict, so it is trusted
- * scaffold and never framed.
+ * means for the change. Every part is an engine constant chosen by the verdict, or the exit code
+ * once it is checked to be a whole number, so it is trusted scaffold and never framed.
  */
 function verdictLine(result: Result, meaningPrefix: string): string {
   const verdict = describeVerdict(result);
@@ -170,75 +141,18 @@ function summaryPiece(result: Result): string {
 }
 
 /**
- * The floored barriers this run did not see on a screen it cannot show rendered, one notice per
- * screen, as framed pieces. A notice names a screen id, which can come from a route literal, so it
- * is untrusted text and goes inside the frame. Each one is bounded on its own.
- */
-function unconfirmedPieces(result: Result): string[] {
-  const screens = Array.isArray(result.floorUnconfirmed) ? result.floorUnconfirmed : [];
-  return screens.map((entry) => `not claimed fixed: ${boundField(unconfirmedNotice(entry), 'notice')}`);
-}
-
-/**
- * What the run did not examine, one entry per gap state.
- *
- * The reader is a model deciding whether to keep working, so it gets a reason it can act on
- * rather than a count it cannot. One example per state and a count of the rest, because gaps
- * cluster: five screens behind one broken server produce five near-identical reasons, while a
- * denied capability is a different fact that must never be crowded out by them.
- *
- * Each line pairs the gap headline, which is trusted usabl-chosen text, with the page-derived
- * detail, so the model can still map each reason to its state inside the single frame.
- *
- * The number of entries is bounded by construction: there are four gap states plus one entry
- * for unrecognized states, so at most five. The length of each entry is bounded per field, ref
- * and reason, before the headline with its count is attached, so a provider error the size of a
- * stack trace cannot fill the model's context and the count is never cut. No assembled string
- * is ever cut to fit. Cutting could remove a closing frame marker and hand the model an
- * unterminated block of untrusted text.
- */
-function notEvaluatedPieces(result: Result): string[] {
-  const disclosures = discloseGaps(result.coverage.gaps);
-  return disclosures.map((disclosure) => {
-    const detail = gapDetail({
-      ...disclosure,
-      ref: boundField(disclosure.ref, 'gapRef'),
-      reason: boundField(disclosure.reason, 'gapReason'),
-    });
-    return `- ${gapHeadline(disclosure)}: ${detail}`;
-  });
-}
-
-/**
- * A group whose free-text fields are bounded for printing. The count is left alone, so a
- * headline can name a rule that was cut short and still say how many findings it stands for.
- *
- * Layer and rule are printed outside the frame. In the first-party provider stack both are
- * authored by the providers, never read from the page, so they are trusted scaffold here. The
- * screen id is not: the router fallback derives it from a route literal in the application, so
- * it is printed inside the frame as a piece and never in the headline.
- */
-function boundGroup(group: CollapsedFindingGroup): CollapsedFindingGroup {
-  return {
-    ...group,
-    screenId: boundField(group.screenId, 'screenId'),
-    layer: boundField(group.layer, 'layer'),
-    rule: boundField(group.rule, 'rule'),
-  };
-}
-
-/**
  * The whole block message, with at most one untrusted frame.
  *
  * It opens with the verdict word and exit code, what the verdict means, and the next step, so a
  * model reads the decision before any detail. The trusted engine scaffold stays outside the
- * frame: those opening lines, the guarded-file lines when policy files changed, the Rule or
- * Barriers headline lines, and the show-all hint. Every free-text piece, the gate's summary
- * first, then each finding experience, each fix, and each gap detail, goes inside one frame,
- * each with a short inline label so the model can map evidence to cause.
+ * frame: those opening lines, the guarded-file lines when policy files changed, the Barrier or
+ * Barriers headline lines with their checked status, severity, and count, and the show-all hint.
+ * Every value the Result carried goes inside one frame, each with a short inline label so the
+ * model can map evidence to cause: the gate's summary first, then the guarded file paths, then
+ * each barrier's rule, layer, screen id, experience, and fix, and each gap detail.
  *
  * Inside the frame the pieces read in the order a reader needs them: each barrier opens with a
- * "barrier:" line naming its rule, and the "Not evaluated:" label sits directly above the gap
+ * "barrier:" line naming its layer and rule, and the "Not evaluated:" label sits directly above the gap
  * lines rather than outside the frame, so a reader never meets "Not evaluated:" and then reads
  * about a button. Both labels are engine text; they are pieces only so they stay next to what
  * they label.
@@ -258,52 +172,56 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   if (nextStep !== undefined) {
     scaffold.push(nextStep);
   }
+  const pieces: string[] = [summaryPiece(result)];
   if (result.verdict === 'approval_required') {
-    scaffold.push(...approvalLines(result));
+    const guarded = guardedFileLines(result);
+    scaffold.push(...guarded.scaffold);
+    if (guarded.piece !== null) {
+      pieces.push(guarded.piece);
+    }
   }
   // The verdict line, the next step, and the guarded-file lines always survive the message
-  // bound, as does the summary piece that opens the frame.
+  // bound, as do the summary piece that opens the frame and the guarded-file piece after it.
   const keep = scaffold.length;
-  const pieces: string[] = [summaryPiece(result)];
+  const keepPieces = pieces.length;
 
   // Each free-text field is bounded on its own before it is labelled and framed, so a huge page
-  // string shortens with a visible note and the counts around it stay whole.
-  if (view.groups.length === 1 && !view.collapsed) {
-    const group = boundGroup(view.groups[0]!);
-    const ruleLabel =
-      group.count > 1 ? `${group.rule} (×${group.count})` : group.rule;
-    scaffold.push(`Rule: ${ruleLabel}`);
-    pieces.push(`barrier: ${group.rule}`);
-    pieces.push(`experience: ${boundField(group.representative.whatUserExperiences, 'experience')}`);
-    pieces.push(`fix: ${boundField(fixOrAbsence(group.representative), 'fix')}`);
-  } else if (view.groups.length > 0) {
-    scaffold.push('Barriers:');
-    for (const raw of view.groups) {
-      const group = boundGroup(raw);
-      scaffold.push(`- ${formatCollapsedGroupHeadlineWithoutScreen(group)}`);
-      pieces.push(`barrier: ${group.rule}`);
-      pieces.push(`screen (${group.rule}): ${group.screenId}`);
-      pieces.push(
-        `experience (${group.rule}): ${boundField(group.representative.whatUserExperiences, 'experience')}`,
-      );
-      pieces.push(`fix (${group.rule}): ${boundField(fixOrAbsence(group.representative), 'fix')}`);
-    }
-    if (view.showAllHint !== null) {
-      scaffold.push(view.showAllHint);
-    }
-  }
+  // string shortens with a visible note and the counts around it stay whole. See barrierLines for
+  // what a barrier prints outside the frame and what inside it.
+  const barriers = barrierLines(view);
 
   const gapPieces = notEvaluatedPieces(result);
-  if (gapPieces.length > 0) {
-    pieces.push('Not evaluated:', ...gapPieces);
-  }
-  // Last, so the bound drops these before any barrier or gap: they never block anything.
-  pieces.push(...unconfirmedPieces(result));
+  // The floor notices close the frame. Like gap lines they limit what the run can claim, so they
+  // are tail pieces and outlast every barrier when the message is shortened.
+  const tailPieces = [...(gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : []), ...unconfirmedPieces(result)];
 
-  // The whole message is bounded as well as each field. Whole pieces go first, then trailing
-  // scaffold lines, never the opening lines or the summary piece, and the frame is rebuilt
-  // around what survives.
-  return assembleBoundedMessage({ scaffold, keep, pieces, keepPieces: 1, frame: frameUntrustedBlock });
+  // The whole message is bounded as well as each field. Whole barriers go first, headline and
+  // pieces together, then floor notices and gap lines from the end, never the opening lines, the
+  // summary piece, or the guarded file piece, and the frame is rebuilt around what survives.
+  return assembleBoundedMessage({
+    scaffold,
+    keep,
+    pieces,
+    keepPieces,
+    ...barriers,
+    tailPieces,
+    frame: frameUntrustedBlock,
+  });
+}
+
+/**
+ * The allow line for a stored receipt that still matches the working tree. The stop hook prints
+ * it on the fast path, before any run, so no Result exists yet. The receipt was read from a file
+ * in the work tree, so its source tree is a carried value and goes inside the frame.
+ */
+export function formatStoredReceiptAllow(sourceTree: unknown): string {
+  return assembleBoundedMessage({
+    scaffold: ['VERIFIED (exit 0): a stored receipt matches this tree. You may stop.'],
+    keep: 1,
+    pieces: [`receipt sourceTree: ${boundField(scrubString(String(sourceTree)), 'receipt')}`],
+    keepPieces: 1,
+    frame: frameUntrustedBlock,
+  });
 }
 
 export function evaluateStopDecision(
@@ -317,21 +235,26 @@ export function evaluateStopDecision(
   if (safe.verdict === 'verified') {
     const sourceTree = safe.receipt?.sourceTree;
     const verdict = describeVerdict(safe);
-    const proof =
-      sourceTree === undefined
-        ? 'the gate verified this change.'
-        : `the gate verified this change. Receipt sourceTree ${boundField(sourceTree, 'receipt')}.`;
-    const pass = `${formatVerdictWord(verdict, passNote)}: ${proof} You may stop.`;
-    // A verified run is where the notice matters most: floored debt on a screen whose content may
-    // not have mounted. It does not change the decision. It travels with it, framed, so the model
-    // can pass it on. With nothing to say, the line stays exactly as it always was.
+    const line = `${formatVerdictWord(verdict, passNote)}: the gate verified this change. You may stop.`;
+    // A verified run is where the floor notice matters most: floored debt on a screen whose
+    // content may not have mounted. It does not change the decision. It travels with it, framed.
     const notices = unconfirmedPieces(safe);
+    if (sourceTree === undefined && notices.length === 0) {
+      return { block: false, message: line };
+    }
+    // The receipt's source tree is carried by the Result, so it is a piece inside the frame like
+    // every other carried string, not part of the line usabl speaks in.
+    const pieces = sourceTree === undefined ? [] : [`receipt sourceTree: ${boundField(String(sourceTree), 'receipt')}`];
     return {
       block: false,
-      message:
-        notices.length === 0
-          ? pass
-          : assembleBoundedMessage({ scaffold: [pass], keep: 1, pieces: notices, frame: frameUntrustedBlock }),
+      message: assembleBoundedMessage({
+        scaffold: [line],
+        keep: 1,
+        pieces,
+        keepPieces: pieces.length,
+        tailPieces: notices,
+        frame: frameUntrustedBlock,
+      }),
     };
   }
 
@@ -366,11 +289,13 @@ export function evaluateStopDecision(
   const shouldBlock = safe.verdict !== null && BLOCKING_VERDICTS.has(safe.verdict);
   if (!shouldBlock) {
     // A null verdict with no idle flag and no crash can only be composed outside run(). Say
-    // that usabl reached no verdict rather than guess which null state it is.
+    // that usabl reached no verdict rather than guess which null state it is. The exit code goes
+    // through the shared verdict word, which prints it only when it is a whole number.
+    const noVerdict = formatVerdictWord({ ...describeVerdict(safe), word: 'NO VERDICT' });
     return {
       block: false,
       message: assembleBoundedMessage({
-        scaffold: [`NO VERDICT (exit ${safe.exitCode}): usabl did not reach a verdict for this change.`],
+        scaffold: [`${noVerdict}: usabl did not reach a verdict for this change.`],
         keep: 1,
         pieces: [summaryPiece(safe)],
         keepPieces: 1,
@@ -395,17 +320,23 @@ export function evaluateStopDecision(
     if (step !== undefined) {
       scaffold.push(step);
     }
+    const pieces = [summaryPiece(safe)];
     if (safe.verdict === 'approval_required') {
-      scaffold.push(...approvalLines(safe));
+      const guarded = guardedFileLines(safe);
+      scaffold.push(...guarded.scaffold);
+      if (guarded.piece !== null) {
+        pieces.push(guarded.piece);
+      }
     }
     return {
       block: false,
       message: assembleBoundedMessage({
         scaffold,
         keep: scaffold.length,
+        pieces,
+        keepPieces: pieces.length,
         // The floor notices travel with the stop here too, inside the frame, after the summary.
-        pieces: [summaryPiece(safe), ...unconfirmedPieces(safe)],
-        keepPieces: 1,
+        tailPieces: unconfirmedPieces(safe),
         frame: frameUntrustedBlock,
       }),
     };

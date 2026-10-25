@@ -68,6 +68,23 @@ function expectPositiveWholeNumber(value: unknown, label: string): number {
   return value;
 }
 
+// The longest signal cap usabl accepts, ten minutes. A screen that needs longer than that to show
+// its own content is not one a gate can wait on, and a value past it is almost always a typo.
+export const MAX_SIGNAL_TIMEOUT_MS = 600_000;
+
+/**
+ * The signal cap, refused unless it is a safe positive whole number no larger than ten minutes.
+ * A safe integer, because JSON reads 1e100 as a number that passes Number.isInteger, and a cap that
+ * large would wait forever inside readyTimeoutMs. The refusal names the field and the limit and
+ * never echoes the value. Exported so tests can pass NaN and Infinity, which JSON cannot carry.
+ */
+export function parseSignalTimeoutMs(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || value > MAX_SIGNAL_TIMEOUT_MS) {
+    throw configError`signalTimeoutMs must be a positive whole number of milliseconds, at most ${String(MAX_SIGNAL_TIMEOUT_MS)}`;
+  }
+  return value;
+}
+
 // The readiness signal a surface declares: positive evidence that the screen really rendered. Two
 // shapes are accepted. A string is a CSS selector on its own, which is the shape every earlier
 // config uses. An object names a selector, a response path, or both, and every part it names has to
@@ -236,6 +253,12 @@ export function parseUsablConfig(raw: string): UsablConfig {
       ? undefined
       : expectPositiveWholeNumber(readyTimeoutRaw, 'readyTimeoutMs');
 
+  const signalTimeoutRaw = Reflect.get(root, 'signalTimeoutMs');
+  const signalTimeoutMs =
+    signalTimeoutRaw === undefined
+      ? undefined
+      : parseSignalTimeoutMs(signalTimeoutRaw);
+
   const noiseBudgetRaw = Reflect.get(root, 'noiseBudget');
   const noiseBudget =
     noiseBudgetRaw === undefined ? undefined : parseNoiseBudgetConfig(noiseBudgetRaw);
@@ -255,6 +278,7 @@ export function parseUsablConfig(raw: string): UsablConfig {
     ...(requirements === undefined ? {} : { requirements }),
     ...(promotedObligations === undefined ? {} : { promotedObligations }),
     ...(readyTimeoutMs === undefined ? {} : { readyTimeoutMs }),
+    ...(signalTimeoutMs === undefined ? {} : { signalTimeoutMs }),
     ...(noiseBudget === undefined ? {} : { noiseBudget }),
   };
 }
