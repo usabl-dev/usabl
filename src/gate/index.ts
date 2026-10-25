@@ -359,6 +359,7 @@ function applyWaivers(findings: Finding[], waivers: Waiver[], now: string): Find
 interface UnconfirmedPaydown {
   screenId: string;
   rule: string;
+  elementKey: string | null;
   count: number;
 }
 
@@ -419,12 +420,9 @@ function differential(input: GateInput): Differential {
   // mixed tally against a deterministic-only floor, so one preview draft sharing an identity with
   // a deterministic one read as growth and reported a barrier that was not there.
   const groups = new Map<string, Finding[]>();
-  const countByGroup = new Map<string, number>();
+  const countByGroup = deterministicCountsByIdentity(input.drafts);
   for (const f of raw) {
     const key = identityKey(f);
-    if (GATES(f.evidenceClass)) {
-      countByGroup.set(key, (countByGroup.get(key) ?? 0) + 1);
-    }
     const group = groups.get(key);
     if (group) group.push(f);
     else groups.set(key, [f]);
@@ -472,7 +470,9 @@ function differential(input: GateInput): Differential {
       // So the finding stays carried, the verdict is untouched, and every surface says the floor
       // is ahead of what is here and names the command that re-arms it. The operator, not the row
       // count, decides when to close it.
-      if (now < floor.count) {
+      // None at all is absence, decided below with the other absent identities: an advisory
+      // draft at a floored identity is not one of the barriers the floor counts.
+      if (now > 0 && now < floor.count) {
         staleIdentities.push({ screenId: f.screenId, rule: f.rule, recorded: floor.count, observed: now });
       }
     } else {
@@ -498,11 +498,11 @@ function differential(input: GateInput): Differential {
   // claimed fixed: it gets no finding, as on a screen nobody scanned, keeps its place on the floor,
   // and is disclosed in floorUnconfirmed. Both tests are presence tests on sets, so the result does
   // not depend on order.
-  for (const [key, e] of floorByKey) {
-    if (byIdentity.has(key)) continue;
+  for (const e of floorByKey.values()) {
+    if (!floorEntryAbsent(e, countByGroup)) continue;
     if (!input.cleanlyScannedScreens.has(e.screenId)) continue;
     if (!paydownConfirmed(e, input.renderEvidence?.get(e.screenId))) {
-      unconfirmed.push({ screenId: e.screenId, rule: e.rule, count: e.count });
+      unconfirmed.push({ screenId: e.screenId, rule: e.rule, elementKey: e.elementKey, count: e.count });
       continue;
     }
     // Absent is the largest headroom there is, not the absence of headroom. The entry still holds
@@ -529,8 +529,34 @@ function differential(input: GateInput): Differential {
   return {
     findings: sortBy(applyWaivers(findings, input.waivers, input.now), findingKey),
     staleIdentities: sortBy(staleIdentities, (s) => `${s.screenId}|${s.rule}`),
-    unconfirmed: sortBy(unconfirmed, (u) => `${u.screenId}|${u.rule}`),
+    // Sorted by the whole identity, so no two entries tie and the per-screen sums below always add
+    // in the same order, even where a sum is past the range a number holds exactly.
+    unconfirmed: sortBy(unconfirmed, (u) => identityKey(u)),
   };
+}
+
+/**
+ * How many deterministic drafts landed on each identity this run.
+ *
+ * The floor counts deterministic barriers only, because that is what `usabl baseline` writes, so
+ * this is the tally a floor entry is compared against, and absence is read off it too. The gate,
+ * prune, and baseline all count this way, so they cannot disagree about whether an identity is
+ * still there. An advisory draft at a floored identity does not count: it is not one of the
+ * barriers the floor recorded.
+ */
+export function deterministicCountsByIdentity(drafts: readonly Draft[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const draft of drafts) {
+    if (!GATES(draft.evidenceClass)) continue;
+    const key = identityKey({ screenId: draft.screenId, rule: draft.rule, elementKey: computeIdentity(draft).elementKey });
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** A floor entry is absent when this run saw no deterministic barrier at its identity. */
+export function floorEntryAbsent(entry: FloorEntry, counts: ReadonlyMap<string, number>): boolean {
+  return (counts.get(identityKey(entry)) ?? 0) === 0;
 }
 
 /**

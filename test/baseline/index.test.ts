@@ -662,3 +662,26 @@ describe('runBaseline keeps floored barriers it cannot confirm were fixed', () =
     expect(outcome.message).not.toContain('kept');
   });
 });
+
+describe('runBaseline refuses what it cannot carry honestly', () => {
+  const v1Name = {
+    screenId: 'clusters', layer: 'axe', rule: 'aria-input-field-name',
+    elementKey: 'clusters|aria-input-field-name|name:search', identityBasis: 'name', count: 1,
+  };
+  const v1Count = { screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count', count: 3 };
+  const v1Floor = (...entries: object[]): string => JSON.stringify({ version: 1, entries });
+
+  it('reads an identity with only an advisory draft left the way the gate does', async () => {
+    const entry = { screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count', count: 2 };
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': JSON.stringify({ version: 2, entries: [entry] }) }),
+      scans: { clusters: scanWith([draft({ rule: 'button-name', evidenceClass: 'preview', confidence: 'unverified' })]) },
+    });
+    const writer = new MemoryBaselineFs();
+
+    const outcome = await runBaseline(deps, testConfig(), writer);
+
+    expect(parseWrittenFloor(writer).entries).toContainEqual(entry);
+    expect(outcome.message).toContain('kept 1 floor entry (2 barriers) on screen clusters (button-name)');
+  });
+});

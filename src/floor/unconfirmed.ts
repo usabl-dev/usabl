@@ -10,8 +10,9 @@
  * The lines name screens and rules, never an element key, because a key carries page text.
  */
 import type { FloorEntry, RenderEvidence, ScreenScan } from '../contracts/index.js';
-import { paydownConfirmed, renderEvidenceOf } from '../gate/index.js';
-import { computeIdentity, identityKey } from '../primitives/identity.js';
+import { deterministicCountsByIdentity, floorEntryAbsent, paydownConfirmed, renderEvidenceOf } from '../gate/index.js';
+import { identityKey } from '../primitives/identity.js';
+import { sortBy } from '../primitives/sortKey.js';
 import { neutralize } from '../primitives/neutralize.js';
 
 /** Absent entries on one screen that the run cannot confirm were fixed. */
@@ -35,16 +36,8 @@ export interface FloorObservation {
  * writes and what the gate compares.
  */
 export function observeFloor(screens: readonly ScreenScan[]): FloorObservation {
-  const observedCounts = new Map<string, number>();
-  for (const screen of screens) {
-    for (const draft of screen.drafts) {
-      if (draft.evidenceClass !== 'deterministic') {
-        continue;
-      }
-      const key = identityKey({ screenId: draft.screenId, rule: draft.rule, elementKey: computeIdentity(draft).elementKey });
-      observedCounts.set(key, (observedCounts.get(key) ?? 0) + 1);
-    }
-  }
+  // The gate's own tally, so an identity is absent here exactly when it is absent there.
+  const observedCounts = deterministicCountsByIdentity(screens.flatMap((screen) => screen.drafts));
   return {
     cleanlyScanned: new Set(screens.filter((screen) => screen.gaps.length === 0).map((screen) => screen.screenId)),
     observedCounts,
@@ -56,15 +49,19 @@ export function observeFloor(screens: readonly ScreenScan[]): FloorObservation {
 export function isUnconfirmedAbsence(entry: FloorEntry, seen: FloorObservation): boolean {
   return (
     seen.cleanlyScanned.has(entry.screenId) &&
-    (seen.observedCounts.get(identityKey(entry)) ?? 0) === 0 &&
+    floorEntryAbsent(entry, seen.observedCounts) &&
     !paydownConfirmed(entry, seen.renderEvidence.get(entry.screenId))
   );
 }
 
-/** Groups entries by screen, in screen order, so the lines do not depend on floor order. */
+/**
+ * Groups entries by screen, in screen order, so the lines do not depend on floor order. The
+ * entries are added in identity order, which has no ties, so a sum past the range a number holds
+ * exactly still comes out the same whatever order the floor listed them in.
+ */
 export function groupByScreen(entries: readonly FloorEntry[]): UnconfirmedOnScreen[] {
   const byScreen = new Map<string, UnconfirmedOnScreen>();
-  for (const entry of entries) {
+  for (const entry of sortBy([...entries], identityKey)) {
     const screen = byScreen.get(entry.screenId) ?? { screenId: entry.screenId, rules: new Set<string>(), entries: 0, barriers: 0 };
     screen.rules.add(entry.rule);
     screen.entries += 1;

@@ -3,6 +3,8 @@ import type { Draft, EvidenceFloor, ScreenScan, UsablConfig } from '../../src/co
 import { main } from '../../src/cli.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { runFloorPrune } from '../../src/floor/prune.js';
+import { groupByScreen } from '../../src/floor/unconfirmed.js';
+import { computeIdentity } from '../../src/primitives/identity.js';
 import { parseCliArgs } from '../../src/surfaces/cli.js';
 import { testConfig } from '../helpers.js';
 
@@ -572,6 +574,29 @@ describe('runFloorPrune keeps barriers it cannot confirm were fixed', () => {
 
     expect(outcome.prunedCount).toBe(1);
     expect(outcome.message).toContain('kept 1 floor entry on screens this run did not scan cleanly.');
+  });
+});
+
+describe('runFloorPrune round two', () => {
+  it('reads an identity with only an advisory draft left the way the gate does', async () => {
+    const entry = { screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count' as const, count: 2 };
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': JSON.stringify({ version: 2, entries: [entry] }) }),
+      scans: { clusters: scanWith([draft({ rule: 'button-name', evidenceClass: 'preview', confidence: 'unverified' })]) },
+    });
+
+    const outcome = await runFloorPrune(deps, testConfig(), new MemoryFloorFs());
+
+    expect(outcome.keptUnconfirmedCount).toBe(1);
+    expect(outcome.wrote).toBe(false);
+  });
+
+  it('adds barriers per screen in an order that does not depend on the floor', () => {
+    const entries = [Number.MAX_SAFE_INTEGER, 2, 1].map((count, index) => ({
+      screenId: 'orders', layer: 'axe', rule: 'link-name', elementKey: `orders|link-name|struct:link:#row${index}`,
+      identityBasis: 'structural' as const, count,
+    }));
+    expect(groupByScreen([...entries].reverse())).toEqual(groupByScreen(entries));
   });
 });
 

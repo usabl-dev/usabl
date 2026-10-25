@@ -228,3 +228,33 @@ describe('the notice for a pay-down the run cannot confirm', () => {
     expect(paydownConfirmed(entry, { signalHeld: false, elementSlots: new Set(['path:#orders>tbody>tr>td>a']) })).toBe(true);
   });
 });
+
+describe('one absence rule for the gate', () => {
+  it('reads a floored identity with only an advisory draft left as absent, as prune and baseline do', () => {
+    // The floor counts deterministic barriers, so an advisory draft at the identity is not one of
+    // them. With no signal, the run cannot say the barriers are gone, so they are unconfirmed.
+    const floor: EvidenceFloor = {
+      version: 2,
+      entries: [{ screenId: 'orders', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count', count: 2 }],
+    };
+    const advisory = draft({ rule: 'button-name', evidenceClass: 'preview', confidence: 'unverified', elementPath: 'header > button' });
+    const out = gate(input(floor, [scan({ drafts: [advisory] })]));
+    expect(out.floorUnconfirmed).toEqual([{ screenId: 'orders', rules: ['button-name'], barriers: 2 }]);
+    expect(out.floorHeadroom).toEqual([]);
+    expect(out.accessibilityVerdict).toBe('verified');
+    expect(out.exitCode).toBe(0);
+  });
+});
+
+describe('totals that do not depend on order', () => {
+  it('gives the same barrier total for the same floor in either order, even past the safe range', () => {
+    const entries: FloorEntry[] = [Number.MAX_SAFE_INTEGER, 2, 1].map((count, index) => ({
+      screenId: 'orders', layer: 'axe', rule: 'link-name', elementKey: `orders|link-name|struct:link:#row${index}`,
+      identityBasis: 'structural', count,
+    }));
+    const forward = gate(input({ version: 2, entries }, [scan({})]));
+    const reversed = gate(input({ version: 2, entries: [...entries].reverse() }, [scan({})]));
+    expect(reversed.floorUnconfirmed).toEqual(forward.floorUnconfirmed);
+    expect(reversed.summary).toBe(forward.summary);
+  });
+});

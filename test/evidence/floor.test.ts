@@ -78,3 +78,19 @@ describe('parseEvidenceFloor', () => {
     expect(parseEvidenceFloor({ version: 2, entries: [entry, other] }).entries).toHaveLength(2);
   });
 });
+
+describe('parseEvidenceFloor total', () => {
+  it('refuses a floor whose counts add up past the largest exact whole number, naming the file only', () => {
+    const entry = (rule: string, count: number) => ({
+      screenId: 'orders', layer: 'axe', rule, elementKey: null, identityBasis: 'count', count,
+    });
+    const floor = { version: 2, entries: [entry('button-name', Number.MAX_SAFE_INTEGER), entry('image-alt', 2)] };
+    expect(() => parseEvidenceFloor(floor)).toThrow(/\.usabl-evidence\.json/);
+    try {
+      parseEvidenceFloor(floor);
+    } catch (err) {
+      expect(String(err)).not.toContain(String(Number.MAX_SAFE_INTEGER));
+    }
+    expect(() => parseEvidenceFloor({ version: 2, entries: [entry('button-name', Number.MAX_SAFE_INTEGER)] })).not.toThrow();
+  });
+});
