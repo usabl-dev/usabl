@@ -138,21 +138,28 @@ export interface ScreenScan {
   // Positive reachability evidence, measured during the scan while the live DOM was available.
   // The tri-state is deliberate:
   //   null  = the surface declared no reachedWhen selector, so we make no claim either way.
-  //   true  = a reachedWhen selector was declared and at least one element matched it, so the
-  //           screen provably rendered.
-  //   false = a reachedWhen selector was declared and nothing matched it, so the screen did not
-  //           render what the operator said proves it loaded.
+  //   true  = a reachedWhen selector was declared and at least one element matched it both when
+  //           the keyboard walk began and after the checks, so the screen provably rendered before
+  //           usabl touched it.
+  //   false = a reachedWhen selector was declared and nothing matched it at one of those moments,
+  //           so the walk or the checks ran on a page without what the operator said proves it
+  //           loaded.
   // Only false triggers an unseen gap in markUnseenScreens. The value is a plain presence test,
   // never a count or a DOM walk, so a verdict that leans on it cannot depend on iteration order.
   reachedSelectorPresent: boolean | null;
+  // Set only when the screen ended before the walk because its declared selector did not hold
+  // within the signal wait: the signalTimeoutMs cap that ran out, carried so the gap can name it.
+  // Such a scan has no stops, drafts, or applicability, because nothing was walked or checked.
+  signalWaitMs?: number;
   // The reachedWhen selector the surface declared, carried so a coverage gap can name it in plain
   // English. Optional and only meaningful when reachedSelectorPresent is false. Absent or null when
   // the surface declared no selector.
   reachedWhenSelector?: string | null;
-  // The response half of the readiness signal, measured at the same moment as the selector. The
+  // The response half of the readiness signal, measured at the same moments as the selector. The
   // same tri-state: absent or null when the surface declared no response, true when a fetch or XHR
-  // request to the declared path on the application's own host answered with a 2xx status, false
-  // when no such answer was seen. Only false triggers an unseen gap in markUnseenScreens.
+  // request to the declared path on the application's own host had answered with a 2xx status
+  // before the keyboard walk began, false when no such answer was seen by then. Only false
+  // triggers an unseen gap in markUnseenScreens.
   reachedResponseSeen?: boolean | null;
   // The response path the surface declared, carried so a coverage gap can name it. Absent or null
   // when the surface declared no response.
@@ -415,8 +422,30 @@ export interface ApiResponse {
   // tracker never saw sent reads as false once the mark is set, because nothing dates it.
   sentBeforeWalk: boolean;
 }
+// What readiness waits for beyond a settled page. holds is asked only at a moment when the DOM is
+// stable and the network is quiet. timeoutMs caps the wait, counted from the first such moment.
+export interface ReadinessProbe {
+  holds(): Promise<boolean>;
+  timeoutMs: number;
+}
+// How the readiness wait ended. not-declared: no probe was given and the page settled. held: the
+// probe answered true at a settled moment. timed-out: a probe was given and never held before its
+// cap or the readiness budget ran out, settled or not. A caller must act on timed-out as it is:
+// reading the signal again afterwards can find an element that appeared on a page still changing.
+export interface ReadinessOutcome {
+  signal: 'held' | 'timed-out' | 'not-declared';
+}
 export interface Page {
-  gotoReady(): Promise<void>;
+  // Waits until the page stopped changing and the network went quiet. With readyWhen, it also
+  // waits until readyWhen.holds answers true at a moment when both of those hold, for at most
+  // readyWhen.timeoutMs after the first such moment and always inside the readiness budget. A page
+  // can settle on a small shell, pause with nothing in flight, and only then fetch and mount its
+  // real content, and only a positive signal tells that pause from a finished page. The cap is
+  // counted from the first settled moment and checked on every pass, so a page that keeps changing
+  // after it cannot stretch it. When the cap runs out, or the budget runs out on a settled page,
+  // before the probe held, it returns timed-out rather than throwing, and the caller treats the
+  // screen as a gap.
+  gotoReady(readyWhen?: ReadinessProbe): Promise<ReadinessOutcome>;
   // Where the browser actually is now, which is not always where it was sent. An application can
   // answer a request for a screen with a redirect, and a scan that never asks has no way to know
   // it measured a different page. Read it after the screen has loaded and before anything on the
@@ -567,6 +596,11 @@ export interface UsablConfig {
   // in operator config because how long an application takes to render is a property of that
   // application, not of the engine. Absent means the engine default.
   readyTimeoutMs?: number;
+  // Whole-milliseconds cap on how long readiness waits for a screen's declared reachedWhen selector,
+  // counted from the first moment the page settled and inside readyTimeoutMs. A screen whose
+  // selector does not hold by then is a coverage gap and is not walked. Absent means the engine
+  // default.
+  signalTimeoutMs?: number;
   // Caps how many finding groups bounded surfaces show before collapsing by rule.
   noiseBudget?: NoiseBudgetConfig;
 }

@@ -36,6 +36,18 @@
 import type { ApiResponse, Page, ReachedWhenSignal } from '../contracts/index.js';
 import { appHostname, isAppHost, requestHostname } from './app-host.js';
 
+// How long readiness waits for a declared selector after the page first settled. Long enough for a
+// screen that pauses before it fetches and mounts its content, which measured at up to four seconds
+// on real Chromium, with room to spare. Short enough that a screen whose selector never appears,
+// such as a sign-in page served in its place, ends as a gap well inside a stop hook's time limit.
+// An operator whose screens need longer sets signalTimeoutMs in usabl.config.json.
+const DEFAULT_SIGNAL_TIMEOUT_MS = 15_000;
+
+/** The signal wait for a run: the operator's cap when the config names one, the default otherwise. */
+export function signalTimeoutMsFor(config: { signalTimeoutMs?: number }): number {
+  return config.signalTimeoutMs ?? DEFAULT_SIGNAL_TIMEOUT_MS;
+}
+
 /** A declared signal with both parts spelled out. Null means the part was not declared. */
 export interface ReadinessSignal {
   selector: string | null;

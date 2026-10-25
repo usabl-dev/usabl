@@ -4,7 +4,7 @@
  * is before the run builds deps or opens a browser.
  */
 import { describe, expect, it } from 'vitest';
-import { parseUsablConfig } from '../../src/intake/config.js';
+import { parseSignalTimeoutMs, parseUsablConfig } from '../../src/intake/config.js';
 import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
 import { describeSurfaceIdProblem } from '../../src/intake/surface-ids.js';
 import { screenIdFromUrl } from '../../src/coverage/router-parse.js';
@@ -34,6 +34,51 @@ describe('parseUsablConfig readyTimeoutMs', () => {
     for (const bad of [0, -1, 1.5, '30000', null, Number.NaN]) {
       expect(() => parseUsablConfig(configJson({ readyTimeoutMs: bad }))).toThrow(/readyTimeoutMs/);
     }
+  });
+});
+
+describe('parseUsablConfig signalTimeoutMs', () => {
+  it('reads the operator cap', () => {
+    expect(parseUsablConfig(configJson({ signalTimeoutMs: 30_000 })).signalTimeoutMs).toBe(30_000);
+  });
+
+  it('leaves the cap unset when the operator does not name one', () => {
+    expect(parseUsablConfig(configJson()).signalTimeoutMs).toBeUndefined();
+  });
+
+  it('refuses a cap that is not a positive whole number of milliseconds', () => {
+    for (const bad of [0, -1, 1.5, '15000', null, Number.NaN]) {
+      expect(() => parseUsablConfig(configJson({ signalTimeoutMs: bad }))).toThrow(/signalTimeoutMs/);
+    }
+  });
+});
+
+describe('parseSignalTimeoutMs', () => {
+  // Called directly, because a JSON round trip turns NaN and Infinity into null and never tests them.
+  it('refuses NaN, Infinity, an unsafe integer, and anything above ten minutes', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53, 600_001]) {
+      expect(() => parseSignalTimeoutMs(bad)).toThrow(/signalTimeoutMs/);
+    }
+  });
+
+  it('names the field and the limit and never echoes the value', () => {
+    expect(() => parseSignalTimeoutMs(600_001)).toThrow(/at most 600000/);
+    try {
+      parseSignalTimeoutMs(600_001);
+    } catch (err) {
+      expect(String(err)).not.toContain('600001');
+    }
+  });
+
+  it('accepts the limit itself', () => {
+    expect(parseSignalTimeoutMs(600_000)).toBe(600_000);
+  });
+
+  it('refuses a huge number in the raw config text', () => {
+    const text = configJson().replace(/}\s*$/, ', "signalTimeoutMs": 1e100}');
+    expect(() => parseUsablConfig(text)).toThrow(/signalTimeoutMs/);
+    const longer = configJson().replace(/}\s*$/, ', "signalTimeoutMs": 123456789012345678901234567890}');
+    expect(() => parseUsablConfig(longer)).toThrow(/signalTimeoutMs/);
   });
 });
 
