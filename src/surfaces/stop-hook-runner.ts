@@ -21,7 +21,12 @@ import { verifyReceipt } from '../evidence/receipt.js';
 import { run } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
 import { loadConfig } from '../cli.js';
-import { evaluateStopDecision, formatStoredReceiptAllow, type HookContext } from './stop-hook.js';
+import {
+  evaluateStopDecision,
+  formatStoredReceiptAllow,
+  type HookContext,
+  type StoredReceiptPinState,
+} from './stop-hook.js';
 import { BYPASS_ONCE_PATH, loadReceipt, saveReceipt, type ReceiptFs } from './receipt-store.js';
 import {
   currentUid,
@@ -205,6 +210,7 @@ async function verifyStoredReceipt(
   ports: StopHookRunnerPorts,
   deps: Deps,
   config: UsablConfig,
+  pins: StoredReceiptPinState,
 ): Promise<{ verified: boolean; details: string }> {
   const receipt = await loadReceipt(ports.fs);
   if (receipt === null) {
@@ -215,7 +221,7 @@ async function verifyStoredReceipt(
   const currentSourceTree = await deps.git.writeTree();
   const verification = await verifyReceipt(deps, config, receipt, currentSourceTree);
   if (verification.valid) {
-    return { verified: true, details: formatStoredReceiptAllow(receipt.sourceTree) };
+    return { verified: true, details: formatStoredReceiptAllow(receipt.sourceTree, pins) };
   }
   return {
     verified: false,
@@ -323,15 +329,12 @@ export async function runStopHook(
     const config = await ports.loadConfig();
     deps = await ports.buildDeps(config);
     const dirtyGuardedPaths = await checkGuard(deps, config);
-    if (dirtyGuardedPaths.length === 0) {
-      // Receipt trust binds committed state, while checkGuard catches local guarded edits before any fast allow.
-      const receiptCheck = await verifyStoredReceipt(ports, deps, config);
-      if (receiptCheck.verified) {
-        await emitProtocolAllow(ports, receiptCheck.details, options);
-        return 0;
-      }
-    }
 
+    // Session pins are compared before the receipt fast path. A receipt binds the committed policy
+    // as it is when the receipt was minted, so a policy weakened and committed during the session,
+    // then checked under the weaker policy, mints a receipt that matches. Only the pins see that
+    // drift, so a stored receipt must never answer a stop before they are compared.
+    let pinsCompared = false;
     const parsedSession = parseSessionId(input.sessionId);
     if (parsedSession.warning !== null) {
       await writeStderr(ports, parsedSession.warning);
@@ -374,11 +377,25 @@ export async function runStopHook(
             await emitProtocolBlock(ports, message, options);
             return 0;
           }
+          pinsCompared = true;
           const written = await ports.pins.replace(pinName, serialized);
           if (written.status === 'refused') {
             pinNotice = pinsNotRecorded(written.reason, written.fix, true);
           }
         }
+      }
+    }
+
+    if (dirtyGuardedPaths.length === 0) {
+      // Receipt trust binds committed state, while checkGuard catches local guarded edits before any fast allow.
+      const receiptCheck = await verifyStoredReceipt(ports, deps, config, {
+        pinsCompared,
+        sessionDriftChecked: pinNotice?.driftChecked ?? true,
+      });
+      if (receiptCheck.verified) {
+        await emitProtocolAllow(ports, receiptCheck.details, options);
+        await writePinNotice(ports, pinNotice);
+        return 0;
       }
     }
 

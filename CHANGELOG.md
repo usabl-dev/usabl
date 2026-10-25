@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- The stop hook now compares session pins before it allows a stop on a stored receipt.
+  Before, a matching receipt allowed the stop first, so a guarded policy file weakened and
+  committed during the session, then checked with `usabl check` under the weaker policy,
+  produced a receipt that matched and a VERIFIED stop with no drift check. Now drift
+  blocks whether or not a receipt matches, and the fast path records and replaces pins as
+  a full run does. The fast-path line now names what the receipt matched (the tree, the
+  committed policy, the engine, and the scanners), says no new scan ran, says the guarded
+  files match the session pins only when this stop compared them, and carries the
+  `session drift not checked` note and the pin notice when pins were not used.
+
 - Readiness now waits for a screen's declared `reachedWhen` selector before the keyboard
   walk starts. A page that mounted a small shell, paused for more than about 1.7 seconds
   with nothing in flight, and only then fetched and mounted its content was read as

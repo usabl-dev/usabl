@@ -117,6 +117,10 @@ passing bundle from another run.
   and compares all four bindings. A bundle lifted from another run fails because its
   bindings do not match this tree, policy, runner, and scanners. The stop-hook fast path
   re-checks the stored receipt the same way before it trusts a green.
+- A receipt minted under a weakened policy matches that policy. If the weakening was
+  committed during a session, the only binding that sees it is the session pins, so the stop
+  hook compares pins before it reads the stored receipt. Drift blocks the stop whether or not
+  a receipt matches.
 - Future: signed attestation on the receipt (engineering §7).
 
 **Status:** Receipt bindings ship and re-verify; cross-run signing is still open.

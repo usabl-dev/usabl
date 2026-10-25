@@ -1541,10 +1541,19 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - Unconfigured repo or unreadable input: loud fail-open. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. A run that started and failed prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
 - Nothing to check (no UI files in the diff): allow with explicit "nothing to check"
   message. Not `not_covered`.
-- Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser. The line reads
-  "VERIFIED (exit 0): a stored receipt matches this tree. You may stop.", and the receipt's
-  `sourceTree` follows inside the untrusted frame, because it was read from a file in the
-  work tree.
+- Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser. The session
+  pins are read and compared first, with every refusal described under Session pinning, so a
+  stored receipt never allows a stop that the pin comparison would block. A receipt binds the
+  committed policy as it was when the receipt was minted. A policy weakened and committed
+  during the session, then checked under the weaker policy, mints a receipt that matches, and
+  only the pins see that drift. The fast path records or replaces pins exactly as a full run
+  does. The line reads "VERIFIED (exit 0): a stored receipt matches this tree, the committed
+  policy, the engine, and the scanners. No new scan ran. You may stop." When this stop
+  compared the pins and found no drift, "Guarded policy files match the session pins." comes
+  before "No new scan ran." When the pins were not used, the line carries the
+  `session drift not checked` note and the pin notice follows on stderr, as on a full run.
+  The receipt's `sourceTree` follows inside the untrusted frame, because it was read from a
+  file in the work tree.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is
   "No new barrier blocks this change. It can proceed." and the stop hook allows with

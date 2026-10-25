@@ -409,3 +409,225 @@ describe('stop-hook-runner protocol', () => {
     expect(pins.writes).toEqual([]);
   });
 });
+
+/**
+ * The stored receipt fast path and the session pins.
+ *
+ * A receipt binds the committed policy as it is when the receipt is minted. A session pin binds
+ * the committed policy as it was at the session's first stop. They answer different questions, so
+ * a receipt that matches today's policy says nothing about whether that policy was weakened and
+ * committed during the session. These cases hold that a receipt never lets a stop through that the
+ * pin comparison would block, and that the fast path records pins the way a full run does.
+ */
+describe('stop-hook-runner fast path and session pins', () => {
+  const STRICT_CONFIG = '{"guardedPaths":["usabl.config.json"],"note":"strict"}';
+  const WEAK_CONFIG = '{"guardedPaths":["usabl.config.json"],"note":"weaker"}';
+
+  // A repository whose guarded policy is committed and clean, so checkGuard finds nothing.
+  function committedRepo(configBytes: string, blob: string): Deps {
+    const files = { 'usabl.config.json': configBytes };
+    return makeFakeDeps({
+      writeTree: 'tree-unchanged',
+      runnerVersion: '0.1.0',
+      files,
+      headContents: { ...files },
+      headBlobs: { 'usabl.config.json': blob },
+    });
+  }
+
+  // What `usabl check` saves after a verified run: a receipt minted against today's policy.
+  async function receiptFor(deps: Deps): Promise<string> {
+    const receipt = await mintReceipt(deps, configFixture, {
+      surfaces: ['cli'],
+      checked: ['clusters'],
+      notCovered: [],
+      applicability: [],
+      findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 },
+      activeWaivers: 0,
+    });
+    return JSON.stringify(receipt, null, 2);
+  }
+
+  function sessionStop(sessionId: string, active = false): string {
+    return JSON.stringify({ session_id: sessionId, stop_hook_active: active });
+  }
+
+  function harness(initial: Deps) {
+    let current = initial;
+    let engineRuns = 0;
+    const made = makePorts({ buildDeps: async () => current });
+    made.ports.runEngine = async () => {
+      engineRuns += 1;
+      return baseResult({ verdict: 'verified', receipt: null });
+    };
+    return {
+      ...made,
+      use(deps: Deps) {
+        current = deps;
+      },
+      engineRuns: () => engineRuns,
+      clearOutput() {
+        made.stdout.length = 0;
+        made.stderr.length = 0;
+      },
+    };
+  }
+
+  it('blocks a committed policy weakening even when a receipt minted under the weaker policy matches', async () => {
+    const strict = committedRepo(STRICT_CONFIG, 'blob-strict');
+    const weak = committedRepo(WEAK_CONFIG, 'blob-weak');
+    const h = harness(strict);
+    const pinName = sessionPinFileName('session-weaken', '/repo/one');
+
+    // 1. The first stop of the session records the session pins.
+    await runStopHookFromStdin(sessionStop('session-weaken'), h.ports);
+    const firstPins = h.pins.files.get(pinName);
+    expect(firstPins).toBeDefined();
+
+    // 2. The agent weakens the guarded config and commits it, so nothing is dirty.
+    h.use(weak);
+    // 3. `usabl check` runs under the weaker policy, verifies, and saves a receipt.
+    h.fs.set('.usabl/receipt.json', await receiptFor(weak));
+    h.clearOutput();
+
+    // 4. The next stop must still compare pins, and block on the drift.
+    expect(await runStopHookFromStdin(sessionStop('session-weaken'), h.ports)).toBe(0);
+    const stdout = h.stdout.join('');
+    const stderr = h.stderr.join('');
+    expect(stderr).not.toContain('a stored receipt matches');
+    expect(stderr).not.toContain('VERIFIED');
+    const payload = JSON.parse(stdout.trim()) as { decision: string; reason: string };
+    expect(payload.decision).toBe('block');
+    expect(payload.reason).toContain('guarded policy drift during this session: usabl.config.json');
+    // The pins are kept, so retrying the stop cannot clear the evidence.
+    expect(h.pins.files.get(pinName)).toBe(firstPins);
+  });
+
+  it('lets an active continuation through on drift with a matching receipt, but never as verified', async () => {
+    const strict = committedRepo(STRICT_CONFIG, 'blob-strict');
+    const weak = committedRepo(WEAK_CONFIG, 'blob-weak');
+    const h = harness(strict);
+    const pinName = sessionPinFileName('session-active', '/repo/one');
+    await runStopHookFromStdin(sessionStop('session-active'), h.ports);
+    const firstPins = h.pins.files.get(pinName);
+    h.use(weak);
+    h.fs.set('.usabl/receipt.json', await receiptFor(weak));
+    h.clearOutput();
+
+    expect(await runStopHookFromStdin(sessionStop('session-active', true), h.ports)).toBe(0);
+
+    const stderr = h.stderr.join('');
+    expect(h.stdout.join('')).not.toContain('"decision":"block"');
+    expect(stderr.startsWith('NOT verified - guarded policy drift during this session')).toBe(true);
+    expect(stderr).toContain('continuation already active');
+    expect(stderr).not.toContain('VERIFIED');
+    expect(h.pins.files.get(pinName)).toBe(firstPins);
+  });
+
+  it('takes the fast path with no drift and a matching receipt, and says the pins were compared', async () => {
+    const repo = committedRepo(STRICT_CONFIG, 'blob-strict');
+    const h = harness(repo);
+    const pinName = sessionPinFileName('session-clean', '/repo/one');
+    await runStopHookFromStdin(sessionStop('session-clean'), h.ports);
+    expect(h.engineRuns()).toBe(1);
+    const firstPins = h.pins.files.get(pinName);
+    h.fs.set('.usabl/receipt.json', await receiptFor(repo));
+    h.clearOutput();
+    h.pins.writes.length = 0;
+
+    expect(await runStopHookFromStdin(sessionStop('session-clean'), h.ports)).toBe(0);
+
+    const stderr = h.stderr.join('');
+    expect(h.engineRuns()).toBe(1);
+    expect(h.stdout.join('')).not.toContain('"decision":"block"');
+    expect(stderr.startsWith('VERIFIED (exit 0): a stored receipt matches')).toBe(true);
+    expect(stderr).toContain('Guarded policy files match the session pins.');
+    expect(stderr).toContain('No new scan ran.');
+    expect(stderr).not.toContain('session drift not checked');
+    // Pins are replaced on a fast allow exactly as on a full run with no drift.
+    expect(h.pins.writes).toEqual([pinName]);
+    expect(h.pins.files.get(pinName)).toBe(firstPins);
+  });
+
+  it('records the first pins of a session when the first stop takes the fast path', async () => {
+    const repo = committedRepo(STRICT_CONFIG, 'blob-strict');
+    const h = harness(repo);
+    const pinName = sessionPinFileName('session-first', '/repo/one');
+    h.fs.set('.usabl/receipt.json', await receiptFor(repo));
+
+    expect(await runStopHookFromStdin(sessionStop('session-first'), h.ports)).toBe(0);
+
+    const stderr = h.stderr.join('');
+    expect(h.engineRuns()).toBe(0);
+    expect(stderr.startsWith('VERIFIED (exit 0): a stored receipt matches')).toBe(true);
+    expect(h.pins.files.get(pinName)).toBeDefined();
+    // Nothing was compared on a first stop, so the line does not say the pins matched.
+    expect(stderr).not.toContain('match the session pins');
+
+    // The pins it recorded are the baseline: a committed weakening after this stop is caught.
+    const weak = committedRepo(WEAK_CONFIG, 'blob-weak');
+    h.use(weak);
+    h.fs.set('.usabl/receipt.json', await receiptFor(weak));
+    h.clearOutput();
+    await runStopHookFromStdin(sessionStop('session-first'), h.ports);
+    expect(h.stdout.join('')).toContain('guarded policy drift during this session');
+  });
+
+  it('prints the pin notice on a fast allow when the pin store refuses', async () => {
+    const repo = committedRepo(STRICT_CONFIG, 'blob-strict');
+    const h = harness(repo);
+    h.ports.pins = {
+      ...h.pins,
+      read: async () => ({
+        status: 'refused',
+        reason: 'the session pin directory is owned by another user',
+        fix: 'remove the directory.',
+      }),
+    };
+    h.fs.set('.usabl/receipt.json', await receiptFor(repo));
+
+    expect(await runStopHookFromStdin(sessionStop('session-refused'), h.ports)).toBe(0);
+
+    const stderr = h.stderr.join('');
+    expect(h.engineRuns()).toBe(0);
+    expect(h.stdout.join('')).not.toContain('"decision":"block"');
+    expect(stderr.startsWith('VERIFIED (exit 0, session drift not checked): a stored receipt matches')).toBe(true);
+    expect(stderr).not.toContain('match the session pins');
+    const notice = stderr.indexOf('NOT verified - usabl did not use session pins for this stop because');
+    expect(notice).toBeGreaterThan(stderr.indexOf('[END UNTRUSTED TEXT]'));
+    expect(stderr.trimEnd().endsWith('To fix: remove the directory.')).toBe(true);
+    expect(h.pins.writes).toEqual([]);
+  });
+
+  it('prints the pin notice on a fast allow when our pin file does not parse, and does not re-pin', async () => {
+    const repo = committedRepo(STRICT_CONFIG, 'blob-strict');
+    const h = harness(repo);
+    const pinName = sessionPinFileName('session-garbled', '/repo/one');
+    h.pins.files.set(pinName, '{not json');
+    h.fs.set('.usabl/receipt.json', await receiptFor(repo));
+
+    expect(await runStopHookFromStdin(sessionStop('session-garbled'), h.ports)).toBe(0);
+
+    const stderr = h.stderr.join('');
+    expect(stderr.startsWith('VERIFIED (exit 0, session drift not checked): a stored receipt matches')).toBe(true);
+    expect(stderr).toContain('the session pin file does not hold pins usabl can read');
+    expect(h.pins.files.get(pinName)).toBe('{not json');
+    expect(h.pins.writes).toEqual([]);
+  });
+
+  it('says on a fast allow when new pins could not be recorded', async () => {
+    const repo = committedRepo(STRICT_CONFIG, 'blob-strict');
+    const h = harness(repo);
+    h.ports.pins = {
+      ...h.pins,
+      create: async () => ({ status: 'refused', reason: 'the pin directory is full', fix: 'free some space.' }),
+    };
+    h.fs.set('.usabl/receipt.json', await receiptFor(repo));
+
+    expect(await runStopHookFromStdin(sessionStop('session-norecord'), h.ports)).toBe(0);
+
+    const stderr = h.stderr.join('');
+    expect(stderr.startsWith('VERIFIED (exit 0, session drift not checked): a stored receipt matches')).toBe(true);
+    expect(stderr).toContain('NOT verified - usabl could not record session pins for this stop because the pin directory is full');
+  });
+});
