@@ -1214,7 +1214,9 @@ are what `usabl baseline` counted when it wrote the floor.
 owner writes it in an `approval_required` accept commit. Advisory findings are never
 written to the floor. The accept loop converges: after the acceptance commit lands, the
 next unchanged run sees the same floor and settles to `verified` (or `not_covered` only if
-coverage cannot be re-established).
+coverage cannot be re-established). Every count must be a safe whole number, and a floor whose
+counts add up past the largest whole number a JavaScript number holds exactly is refused, because a
+total past it depends on the order the counts are added in.
 
 The count comparison runs in both directions, and both are gate decisions:
 
@@ -1232,7 +1234,10 @@ The count comparison runs in both directions, and both are gate decisions:
   leaves the operator to pick: if the barriers were fixed, `usabl floor prune` re-arms the floor to
   what is present; if the page simply shows less content today, nothing needs to change.
 
-**Absent is a fix only with evidence the barrier's part of the page rendered.** A floored barrier
+**Absent is a fix only with evidence the barrier's part of the page rendered.** A floored identity
+is absent when this run has no deterministic draft at it. An advisory draft at the identity does not
+make it present, because the floor counts deterministic barriers only; the gate, prune, and baseline
+all read absence through one shared function. A floored barrier
 missing from this run's drafts was either fixed or was on content that never rendered, and the two
 leave the same absence. A screen in the cleanly scanned set had no gap, but that is not enough: a
 screen whose header and navigation mount and whose content fails to mount has a real control to

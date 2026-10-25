@@ -28,6 +28,12 @@
   otherwise write into a version 2 floor (exit 3), and when the floor it would replace
   exists and does not parse (exit 4).
 
+- The gate, `usabl floor prune`, and `usabl baseline` read a floored identity as absent the
+  same way: no deterministic draft at it. An identity with only an advisory draft left was
+  headroom in the gate and an unconfirmed absence in the commands; the verdict is unchanged.
+  The floor parser refuses a floor whose counts add up past the largest exact whole
+  number, and baseline, prune, and doctor scrub the screen ids and rules they print.
+
 - `pf-toast-live-region` now resolves each alert's live value from the nearest
   element that sets one, as WAI-ARIA defines it, instead of asking a CSS selector
   whether any live container sits somewhere above the alert. The selector passed an
