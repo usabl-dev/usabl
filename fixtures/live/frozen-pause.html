@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Late orders</title>
+  </head>
+  <body>
+    <header>
+      <nav aria-label="Main">
+        <a id="home-link" href="#home">Home</a>
+      </nav>
+    </header>
+    <main id="root"></main>
+    <script>
+      // A shell that is the whole page for a while. After the load event the page does nothing at
+      // all for ?pause= milliseconds: no request in flight and no change to the DOM. Then it asks
+      // for its data and mounts the screen's real content. Readiness that settles inside the pause
+      // grades the shell alone.
+      const pause = Number(new URLSearchParams(location.search).get('pause') ?? '0');
+      window.addEventListener('load', () => {
+        setTimeout(async () => {
+          const response = await fetch('/api/data/late-orders');
+          const orders = await response.json();
+          const root = document.getElementById('root');
+          if (!root) {
+            return;
+          }
+          const table = document.createElement('table');
+          table.id = 'late-orders';
+          const body = document.createElement('tbody');
+          for (const order of orders) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = 'Open ' + order;
+            cell.appendChild(button);
+            row.appendChild(cell);
+            body.appendChild(row);
+          }
+          table.appendChild(body);
+          root.appendChild(table);
+        }, pause);
+      });
+    </script>
+  </body>
+</html>

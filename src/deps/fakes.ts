@@ -44,7 +44,12 @@ const notUsed = (name: string) => async (): Promise<never> => {
 
 export function makeFakePage(overrides: Partial<Page> = {}): Page {
   return {
-    gotoReady: async () => {},
+    // No real wait. A declared probe is asked once, as if the page were settled at once, so a fake
+    // reports held or timed-out the way the real wait would on a page that never changes.
+    gotoReady: async (readyWhen) => {
+      if (readyWhen === undefined) return { signal: 'not-declared' };
+      return { signal: (await readyWhen.holds()) ? 'held' : 'timed-out' };
+    },
     // An empty address is "this fake cannot say where it is", which is the honest default for a
     // page that never navigated. Consumers must make no redirect claim from it. Fakes handed a
     // URL by browser.open report that URL instead.

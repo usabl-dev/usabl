@@ -992,18 +992,79 @@ and every part it declares has to hold.
   fallback all answer a data call with an HTML page and a 200. An API that really answers with
   HTML therefore never satisfies the signal, and the screen becomes a gap, which is the safe
   direction. An answer with no `Content-Type` counts. And only a request sent before the walk
-  began counts. usabl marks that moment just before the first key press, and an answer that
-  arrives later still counts when its request was sent before the mark, because a slow answer is
-  what the two reads exist for. A redirected request is dated by the request that started the
+  began counts. usabl marks that moment just before the first key press, so traffic a key press
+  or a check caused never counts. A redirected request is dated by the request that started the
   chain.
 
-Both parts are measured once, after the walk and the checks, while the page is still open. The
-selector part sees the page as the checks left it. The response part counts only requests sent
-before the walk began, so traffic a key press or a check caused never counts. A part
-that does not hold marks the screen unseen: its findings and applicability are dropped and it gets a
-`not-covered` gap that names the selector or the path. The same signal, measured when the page
-settles and before usabl touches it, is what overrides Rule B and what lets a recovered refusal
-stand under Rule A.
+**Readiness waits for the selector.** A page can mount a small shell, do nothing at all for a
+while (no request in flight and no change to the DOM), and only then fetch and mount its real
+content. During that pause both readiness conditions really hold, so without a signal a pause
+longer than about 1.7 seconds reads as a finished page. When a surface declares a `reachedWhen`
+selector, readiness does not stop at the first moment the page is still and quiet. It checks the
+selector at each such moment and keeps waiting until it matches at one of them, for at most
+`signalTimeoutMs` (15000 by default) counted from the first moment the page settled, and always
+inside `readyTimeoutMs`. The cap never restarts, and it is checked on every pass whether or not the
+page has settled since, so a page that keeps changing cannot stretch it.
+Readiness stops waiting early when the page is plainly not this screen, by the rules above (a
+refused data request under a configured session, a password field with no signal that holds, or a
+redirect to a sign-in page), so those gaps cost no more than before.
+
+When the cap runs out before the selector matched at a settled moment, the screen is not walked and
+not checked. It ends as a `not-covered` gap that names the selector and the cap and says to raise
+`signalTimeoutMs` if the screen needs longer. The wait reports how it ended, and that outcome
+decides, not a second read of the selector: an element can appear after the cap ran out on a page
+that is still changing, and walking that page would grade something that had not settled. The cap
+running out while the page is still changing is the same gap, never the `readyTimeoutMs` error.
+
+Only the selector can end the wait. A response stays seen once its answer arrived, so it cannot tell
+the screen's content from a page that replaced it a moment later. Measured through a real browser
+against a page that pauses three seconds, fetches its data (200, JSON), mounts its table, and 800 ms
+later replaces itself with a magic-link sign-in form: waiting on the response would end the wait
+when the sign-in form settled, and the walk and the checks would grade the sign-in form as the
+screen. So a screen that declares only a `response` waits exactly as a screen with no signal does.
+What changed for it is when the response must arrive. Before this, both parts were read once, after
+the walk and the checks, so a request sent before the walk and answered during it counted. Now a
+declared response must have arrived before the walk began, and one that arrives during the walk
+makes the screen a gap, because the screen's data was not there when the walk and the checks began.
+After a pause long enough to end readiness, the screen's data request is sent after the walk began,
+it never counts, and the screen is a gap. That is the honest outcome, and the fix is to add a
+selector. That sign-in form page is a gap with a response alone, and a gap with a selector once the
+cap runs out.
+
+Measured through a real browser against a shell with one link that pauses for 1.5, 1.8, 2.1, and
+4.0 seconds before it mounts its content: with a selector declared, the walk and the checks ran on
+the content in all four cases. Before this, the 1.5 second pause was graded on the content and the
+three longer ones ended as gaps, because the content arrived after the scan. With only a response
+declared, the 1.5 second pause is graded on the content and the longer ones are gaps.
+
+Both parts are then measured twice: once just before the walk, after that wait, and once after the
+walk and the checks, while the page is still open. A part holds only if it held both times. The
+walk and the checks are only evidence about the screen if its content was there when they began, so
+a selector that first matches during them, because the content arrived late or a check opened it,
+does not count, and neither does a response whose answer first arrived during them. The second
+measurement catches a walk that navigated away from the screen. A part that does not hold marks the
+screen unseen: its findings and applicability are dropped and it gets a `not-covered` gap that names
+the selector or the path. The same signal, measured when the page settles and before usabl touches
+it, is what overrides Rule B and what lets a recovered refusal stand under Rule A.
+
+The cost is time, and only on a screen whose selector does not match: a sign-in page the session
+rules cannot see, or a selector that names the wrong element. Such a screen now spends the signal
+cap after it first settles before it ends as a gap. Measured through a real browser with the default
+cap, a page whose selector never matched ended after about 17.1 seconds with no walk. Before, it
+settled in about 1.5 seconds and ended as the same gap after a walk and the checks. A screen whose
+selector matches pays nothing extra.
+
+**Without a signal the pause is still not covered.** Measured through the same real browser with
+no `reachedWhen`, the 1.8, 2.1, and 4.0 second pauses were graded on the shell and returned no gap.
+Raising `readyTimeoutMs` does not help, because readiness believes the page is done and returns
+before the budget runs out. Comparing what a screen showed with what it showed on an earlier run
+would need a trusted record of that earlier run, and usabl has none that fits. The evidence floor
+is trusted, because CI reads it from the trusted ref and a code owner reviews it, but it records
+accepted barriers, not how many controls a screen rendered, and a screen with no accepted barrier
+has no entry at all. The local receipt is not trusted for this: it is written by the stop hook on
+the developer's machine, only after a verified run, it is not present in CI, and it records rule
+counts, not controls. A run that was itself graded on the shell would write the shell as the
+record. The answer for a screen with a late or slow mount is to declare `reachedWhen`.
 
 `usabl init` recommends a signal for every surface it drafts when the application looks
 login-gated: when `USABL_STORAGE_STATE` is set while init runs, or when a discovered route has a
@@ -1036,9 +1097,9 @@ With a signal, these remain:
   with a 200 that is not HTML, such as an empty JSON body, satisfies the path. A wall is caught
   when its own page does not request the declared path, or when it answers that path with an HTML
   page. Pair the path with a selector for content that only real data renders.
-- Content a check caused. The selector part is read after the walk and the checks, so content a
-  provider click opened counts toward it. Traffic a check caused does not count toward the
-  response part.
+- Content that mounts in two bursts with a still, quiet pause between them, when the signal names
+  content from the first burst. Readiness returns once that content is there, and the walk grades
+  the page without the second burst. Name content that only the finished screen has.
 - A 401 that arrives after the second read, which is the last observation of the page before it
   is closed, so a response still in flight at that moment is never recorded.
 
@@ -1047,7 +1108,8 @@ green of its own. Each rule can also fire on a screen that was genuinely reached
 endpoint that answers 401 where it means 403, every page-initiated 401 when `appBaseUrl` cannot be
 parsed, a refusal the application recovered from on a screen with no `response` path, a signed-in screen
 with a password field and no signal that holds, a stale configured URL. A signal that does not hold
-on a genuinely reached screen is a gap too: a selector for content that loads after the walk, a
+on a genuinely reached screen is a gap too: a selector for content that loads only after the
+signal cap runs out or only on interaction, a
 `response` path whose data comes from a host that is neither the `appBaseUrl` hostname nor a
 subdomain of it, which never counts, a `response` path an API answers with HTML, or one the page
 requests only after the walk began, such as a poll. The cost of each is a coverage gap, so the run reports `not_covered` rather than a verdict it
@@ -2275,7 +2337,16 @@ screen to count as seen. See "Limits of detecting that a screen was not reached 
 section 8 for exactly when each part holds, what the loader refuses, and what it does not prove.
 
 `readyTimeoutMs` is optional and defaults to 60000. It is the whole budget for one screen
-to navigate, for its network to go quiet, and for its DOM to stop changing. How long that
+to navigate, for its network to go quiet, for its DOM to stop changing, and, when the surface
+declares a `reachedWhen` selector, for that selector to match.
+
+`signalTimeoutMs` is optional and defaults to 15000. It caps how long readiness waits for a
+surface's `reachedWhen` selector, counted from the first moment the page settled, and it never
+extends `readyTimeoutMs`. A screen whose selector does not match within it is not walked or
+checked and is disclosed as `not-covered`, with a reason that names the selector and the cap. The
+value must be a positive whole number of milliseconds, at most 600000 (ten minutes); anything else,
+including a number too large to hold exactly, is refused when the config is read, and the refusal
+names the field and the limit. How long that
 takes is a property of the application, so a heavy authenticated app on a loaded lab may
 need more: an Ansible Automation Platform screen measured 25.7 seconds. A screen that runs
 out of budget is disclosed as `not-covered` with a reason naming which of the two phases

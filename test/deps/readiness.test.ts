@@ -15,6 +15,12 @@ const TEST_BUDGET_MS = 15_000;
 // to a DOM that stopped changing. The shipped default has to clear that whole 25.7 s.
 const SLOWEST_MEASURED_MS = 25_700;
 
+// A signal probe with a cap longer than any test budget, so only the budget can end the wait,
+// unless a test sets its own cap.
+function probe(holds: () => Promise<boolean>, timeoutMs = 60_000): { holds: () => Promise<boolean>; timeoutMs: number } {
+  return { holds, timeoutMs };
+}
+
 interface MountStep {
   atMs: number;
   elements: number;
@@ -28,6 +34,8 @@ interface FakePageSpec {
   requestClearsAtMs?: number;
   networkNeverIdle?: boolean;
   neverStops?: boolean;
+  // The page holds still until this time and then never stops changing.
+  neverStopsAfterMs?: number;
   // A page-side failure thrown from evaluate, such as a closed context. Readiness must let it
   // through unchanged rather than swallow it or relabel it as a timeout.
   evaluateError?: Error;
@@ -49,6 +57,9 @@ function makeFakePage(spec: FakePageSpec): FakePage {
   const elements = (): number => {
     const elapsed = Date.now() - start;
     if (spec.neverStops === true) {
+      return elapsed;
+    }
+    if (spec.neverStopsAfterMs !== undefined && elapsed >= spec.neverStopsAfterMs) {
       return elapsed;
     }
     let current = 0;
@@ -224,6 +235,163 @@ describe('waitForRendered', () => {
     // An empty state is a real page. Stability is the test, not how much the page rendered.
     expect(outcome.readyAtMs).toBeGreaterThanOrEqual(0);
     expect(outcome.readyAtMs).toBeLessThanOrEqual(2_000);
+  });
+
+  it('waits on a settled page until readyWhen holds, then returns', async () => {
+    // A shell that settles at once, then a pause with nothing in flight. Only the signal says the
+    // content has not arrived yet. It arrives at 3000ms, past the DOM window.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    const start = Date.now();
+    const outcome = { readyAtMs: -1 };
+    const done = waitForRendered(page, TEST_BUDGET_MS, probe(async () => Date.now() - start >= 3_000)).then(() => {
+      outcome.readyAtMs = Date.now() - start;
+    });
+
+    // Settled, and without the signal this would already have returned.
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(outcome.readyAtMs).toBe(-1);
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await done;
+    expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_000);
+    expect(outcome.readyAtMs).toBeLessThanOrEqual(3_500);
+  });
+
+  it('asks readyWhen only when the DOM is stable and the network is quiet', async () => {
+    // A request is in flight until 2000ms. The signal holds from the start, but a page with a
+    // request out is still loading, so the probe must not end the wait early.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }], requestClearsAtMs: 2_000 });
+    const start = Date.now();
+    const askedAtMs: number[] = [];
+    const done = waitForRendered(
+      page,
+      TEST_BUDGET_MS,
+      probe(async () => {
+        askedAtMs.push(Date.now() - start);
+        return true;
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await done;
+    expect(askedAtMs.length).toBeGreaterThan(0);
+    // The request cleared at 2000ms and the network needs one quiet window after that.
+    expect(Math.min(...askedAtMs)).toBeGreaterThanOrEqual(2_500);
+  });
+
+  it('returns at the budget, without throwing, when the page settled and readyWhen never held', async () => {
+    // The caller measures the signal again and names the missing part in a coverage gap, which is
+    // more useful to an operator than a timeout message.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    const start = Date.now();
+    const outcome = { readyAtMs: -1 };
+    const done = waitForRendered(page, 3_000, probe(async () => false)).then(() => {
+      outcome.readyAtMs = Date.now() - start;
+    });
+
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(outcome.readyAtMs).toBe(-1);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await done;
+    expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_000);
+    expect(outcome.readyAtMs).toBeLessThanOrEqual(3_500);
+  });
+
+  it('still names the DOM phase when the page never stops changing, whatever readyWhen says', async () => {
+    const page = makeFakePage({ neverStops: true });
+    const done = waitForRendered(page, 3_000, probe(async () => true));
+    const rejects = expect(done).rejects.toThrow(/DOM did not stop changing within 3000ms/);
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    await rejects;
+  });
+
+  it('reads a readyWhen that throws as not held and keeps waiting', async () => {
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    const start = Date.now();
+    const outcome = { readyAtMs: -1 };
+    const done = waitForRendered(
+      page,
+      TEST_BUDGET_MS,
+      probe(async () => {
+        if (Date.now() - start < 3_000) {
+          throw new Error('selector engine not ready');
+        }
+        return true;
+      }),
+    ).then(() => {
+      outcome.readyAtMs = Date.now() - start;
+    });
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await done;
+    expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_000);
+  });
+
+  it('ends the signal wait at its cap, counted from the first settled moment', async () => {
+    // Settled from the start, so the first settled moment is about 1500ms in. The cap is 2000ms,
+    // far inside the 15000ms budget, so the cap is what ends the wait.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    const start = Date.now();
+    const outcome = { readyAtMs: -1 };
+    const done = waitForRendered(page, TEST_BUDGET_MS, probe(async () => false, 2_000)).then(() => {
+      outcome.readyAtMs = Date.now() - start;
+    });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(outcome.readyAtMs).toBe(-1);
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await done;
+    expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_500);
+    expect(outcome.readyAtMs).toBeLessThanOrEqual(4_000);
+  });
+
+  it('ends the signal wait at the cap even while the page keeps changing after it settled', async () => {
+    // First settled at about 1500ms, cap 2000ms, and the DOM never stops changing from 2500ms. The
+    // cap is counted from the first settled moment and checked on every pass, so the wait ends near
+    // 3500ms as a timed-out signal. It used to wait for another settle that never came and run on
+    // to the readiness budget.
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }], neverStopsAfterMs: 2_500 });
+    const start = Date.now();
+    const outcome = { readyAtMs: -1, signal: '' };
+    const done = waitForRendered(page, TEST_BUDGET_MS, probe(async () => false, 2_000)).then((result) => {
+      outcome.readyAtMs = Date.now() - start;
+      outcome.signal = (result as { signal?: string } | undefined)?.signal ?? 'none';
+    });
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS + 1_000);
+    await done;
+    expect(outcome.signal).toBe('timed-out');
+    expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_500);
+    expect(outcome.readyAtMs).toBeLessThanOrEqual(3_600);
+  });
+
+  it('says how the wait ended: no signal declared, the signal held, or the cap ran out', async () => {
+    // The caller acts on this outcome. Reading the selector again after the wait cannot tell a
+    // signal that held at a settled moment from one that appeared after the cap ran out.
+    const settledPage = (): ReturnType<typeof makeFakePage> => makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    const results: unknown[] = [];
+    const runs = [
+      waitForRendered(settledPage(), TEST_BUDGET_MS),
+      waitForRendered(settledPage(), TEST_BUDGET_MS, probe(async () => true)),
+      waitForRendered(settledPage(), TEST_BUDGET_MS, probe(async () => false, 2_000)),
+    ].map((run, index) => run.then((result) => { results[index] = result; }));
+
+    await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+    await Promise.all(runs);
+    expect(results).toEqual([{ signal: 'not-declared' }, { signal: 'held' }, { signal: 'timed-out' }]);
+  });
+
+  it('reports a timed-out signal when the budget runs out on a settled page before the cap', async () => {
+    const page = makeFakePage({ mounts: [{ atMs: 0, elements: 20 }] });
+    let result: unknown;
+    const done = waitForRendered(page, 3_000, probe(async () => false)).then((value) => { result = value; });
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    await done;
+    expect(result).toEqual({ signal: 'timed-out' });
   });
 
   it('passes a page failure out of evaluate through unchanged', async () => {
