@@ -232,6 +232,39 @@ describe('stop-hook-runner protocol', () => {
     expect(pins.files.get(pinName)).toBe(JSON.stringify(previousPins, null, 2));
   });
 
+  it('gives the floor notices on a blocking run during an active continuation', async () => {
+    const { ports, stdout, stderr } = makePorts({
+      runEngine: async () =>
+        baseResult({
+          verdict: 'not_covered',
+          exitCode: 3,
+          accessibilityVerdict: 'not_covered',
+          accessibilityExitCode: 3,
+          summary: 'not_covered: nothing blocking, 2 recorded barriers not seen, not claimed fixed, 1 gap(s)',
+          coverage: {
+            changedFiles: [],
+            affected: [],
+            unresolvedFiles: [],
+            gaps: [{ ref: 'http://127.0.0.1:5173/settings', state: 'not-covered', reason: 'failed to load' }],
+            nothingToCheck: false,
+          },
+          floorUnconfirmed: [{ screenId: 'orders', rules: ['button-name'], barriers: 2 }],
+        }),
+    });
+
+    const exitCode = await runStopHookFromStdin(
+      JSON.stringify({ session_id: 'session-n', stop_hook_active: true }),
+      ports,
+    );
+
+    expect(exitCode).toBe(0);
+    const out = stdout.join('') + stderr.join('');
+    expect(out).toContain('continuation already active');
+    expect(out).toContain('2 recorded barriers on screen orders (button-name) were not seen in this run');
+    // Inside the frame, after its opening marker, like the other untrusted pieces.
+    expect(out.indexOf('2 recorded barriers on screen orders')).toBeGreaterThan(out.indexOf('engine summary:'));
+  });
+
   it('skips receipt fast path when guarded files are dirty', async () => {
     const config: UsablConfig = {
       ...configFixture,

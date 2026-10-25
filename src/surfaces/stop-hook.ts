@@ -403,7 +403,8 @@ export function evaluateStopDecision(
       message: assembleBoundedMessage({
         scaffold,
         keep: scaffold.length,
-        pieces: [summaryPiece(safe)],
+        // The floor notices travel with the stop here too, inside the frame, after the summary.
+        pieces: [summaryPiece(safe), ...unconfirmedPieces(safe)],
         keepPieces: 1,
         frame: frameUntrustedBlock,
       }),
