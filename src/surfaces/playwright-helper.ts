@@ -24,6 +24,7 @@ import { parseUsablConfig } from '../intake/config.js';
 import { loadRequirements } from '../intake/load.js';
 import { makeScanProviders } from '../providers/core-stack.js';
 import { runProviders } from '../providers/index.js';
+import { attachRowScopeToDrafts } from '../providers/row-scope.js';
 import { scrubResult, scrubString } from './scrub.js';
 
 // A single-page check outcome for a live Playwright page. It calls the same precedence function
@@ -290,11 +291,14 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
   });
 
   const page = await adoptPage(pwPage);
-  const { drafts, gaps } = await runProviders(
+  const provided = await runProviders(
     providers,
     { page, screen: { id: screenId, url: pwPage.url() }, config: PAGE_CHECK_CONFIG, profile },
     pageCheckCapabilities(providers),
   );
+  // The same row keys the CLI attaches, so a finding here carries the identity it has in usabl check.
+  const drafts = await attachRowScopeToDrafts(page, provided.drafts);
+  const gaps = provided.gaps;
 
   const requirementGaps =
     intake.requirements === null

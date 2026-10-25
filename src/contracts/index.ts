@@ -26,7 +26,9 @@ export type AccessibilityVerdict = Exclude<Verdict, 'approval_required'>;
 // AccessibilityExitCode never includes 2. Crash is 4.
 export type AccessibilityExitCode = 0 | 1 | 3 | 4;
 export type FactSource = 'ax-tree' | 'attribute';
-export type IdentityBasis = 'name' | 'structural' | 'count';
+// 'row' keys a control inside a keyed table row by the row and the control's place in it, so the
+// same control in two rows never shares an identity. Only a version 3 floor holds row entries.
+export type IdentityBasis = 'name' | 'structural' | 'count' | 'row';
 
 // ---- evidence + findings ----
 export interface Fact<T = string | null> {
@@ -302,7 +304,10 @@ export interface FloorEntry {
 export interface EvidenceFloor {
   // Version 1 recorded a literal 1 for name and structural entries, so those counts prove nothing.
   // Version 2 records the observed count for every basis, so the gate can compare all of them.
-  version: 1 | 2;
+  // Version 3 also keys a control inside a keyed table row per row (identity basis 'row'). Version 1
+  // and 2 floors recorded those controls collapsed across rows, so the gate compares them with the
+  // keys they were written with and discloses a gap until `usabl baseline` rewrites the floor.
+  version: 1 | 2 | 3;
   // Present and 'partial' only when `usabl baseline --partial` wrote a floor from a subset of the
   // application, the screens that were cleanly scanned. A complete whole-application floor omits
   // this field entirely, so its bytes stay identical to floors written before this field existed.
@@ -401,6 +406,22 @@ export interface AxNode {
 export interface ElementRef {
   selector: string;
 }
+// What Page.rowContext read about the table row an element sits in. Null from rowContext means the
+// element is not in a row that has a key: no row, a header row, or a row with no key attribute that
+// is unique in its table and no row header. `text` is the raw key, page text, and must never be
+// stored: the caller hashes it at once.
+export interface RowContextRead {
+  // The stable path of the table, grid, or row group that holds the row, from the path helper.
+  table: string;
+  // Where the key came from: 'attr:<name>' for a key attribute on the row, 'header' for a row header.
+  source: string;
+  text: string;
+  // The element's role attribute, or a role implied by its tag, or its tag name.
+  role: string;
+  // Tag and child position from the row down to the element, for example 'td:nth-child(4) > button:nth-child(1)'.
+  // Empty when the element is the row itself.
+  path: string;
+}
 // What Page.ancestorAttributes read. 'chain' is the element and every element above it, nearest
 // first. 'not-found' means no connected element matched, for example a toast that closed between
 // two reads. 'too-deep' means the walk reached `limit` elements and had more to go, so the chain is
@@ -493,6 +514,9 @@ export interface Page {
   // null. See AncestorAttributesRead for the two results that carry no chain.
   ancestorAttributes(selector: string, names: readonly string[]): Promise<AncestorAttributesRead>;
   queryAll(selector: string): Promise<ElementRef[]>;
+  // The keyed table row the element a selector matches sits in, or null. See RowContextRead. It
+  // throws when the selector is malformed, like the other selector reads.
+  rowContext(selector: string): Promise<RowContextRead | null>;
   close(): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;
   setZoom(percent: number): Promise<void>;

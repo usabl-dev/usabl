@@ -6,7 +6,7 @@
  */
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page, ReadinessOutcome, ReadinessProbe } from '../contracts/index.js';
+import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
@@ -475,6 +475,109 @@ export async function readAncestorAttributes(
   } finally {
     await cdp.send('Runtime.releaseObjectGroup', { objectGroup: ANCESTOR_GROUP }).catch(() => undefined);
   }
+}
+
+// The most row key text read back from the page. The key is hashed at once, so this only bounds
+// what one read can carry across the bridge; a longer key is cut at the same place every time.
+const ROW_KEY_TEXT_LIMIT = 4_096;
+
+/**
+ * The keyed table row an element sits in, read in the page. See RowContextRead.
+ *
+ * The row is the nearest `tr` or `role="row"` above the element, or the element itself. Its key is
+ * the first of these that the row has:
+ *   1. a key attribute (`data-row-key`, `data-key`, `data-id`, `data-ouia-component-id`, `id`) whose
+ *      value is not a framework-generated id and is held by no other row of the same table, because
+ *      an id minted per mount changes on every load and a value every row shares names no row;
+ *   2. a row header: a `th` that is not a column header, or an element with `role="rowheader"`,
+ *      in a row outside `thead`. Its text is the key.
+ * A row with neither has no key, and the element keys as it did before row keys existed. A row's
+ * position is never used: rows move when a list is sorted or grows, and a key that moved with them
+ * would make the same control a new barrier on every reload.
+ */
+async function rowContextForSelector(pw: PwPage, selector: string): Promise<RowContextRead | null> {
+  return pw.evaluate(
+    ({ query, limit }) => {
+      const element = document.querySelector(query);
+      if (!(element instanceof Element)) {
+        return null;
+      }
+      const row = element.closest('tr, [role="row"]');
+      if (row === null) {
+        return null;
+      }
+      const table = row.closest('table, [role="table"], [role="grid"], [role="treegrid"]') ?? row.parentElement;
+      const rows = table === null ? [row] : Array.from(table.querySelectorAll('tr, [role="row"]'));
+      const generated = /^OUIA-Generated-|pf-random-id-|:r[0-9a-z]+:|\u00abr[0-9a-z]+\u00bb|_r_[0-9a-z]+_/i;
+
+      let source: string | null = null;
+      let text: string | null = null;
+      for (const name of ['data-row-key', 'data-key', 'data-id', 'data-ouia-component-id', 'id']) {
+        const value = row.getAttribute(name);
+        if (value === null || value.trim() === '' || generated.test(value)) {
+          continue;
+        }
+        if (rows.filter((other) => other.getAttribute(name) === value).length !== 1) {
+          continue;
+        }
+        source = `attr:${name}`;
+        text = value;
+        break;
+      }
+      if (text === null && row.closest('thead') === null) {
+        const header = Array.from(row.children).find((cell) =>
+          cell.matches('th:not([scope="col"]):not([scope="colgroup"]), [role="rowheader"]'),
+        );
+        if (header !== undefined) {
+          source = 'header';
+          text = header.textContent ?? '';
+        }
+      }
+      if (source === null || text === null) {
+        return null;
+      }
+
+      const steps: string[] = [];
+      let current: Element | null = element;
+      while (current !== null && current !== row) {
+        const parent: Element | null = current.parentElement;
+        let index = 1;
+        let sibling = current.previousElementSibling;
+        while (sibling !== null) {
+          index += 1;
+          sibling = sibling.previousElementSibling;
+        }
+        steps.unshift(`${current.tagName.toLowerCase()}:nth-child(${String(index)})`);
+        current = parent;
+      }
+
+      const tag = element.tagName.toLowerCase();
+      const explicitRole = element.getAttribute('role')?.trim() ?? '';
+      const inputType = (element.getAttribute('type') ?? 'text').toLowerCase();
+      const implicitRole =
+        tag === 'button' ? 'button'
+        : tag === 'a' && element.hasAttribute('href') ? 'link'
+        : tag === 'select' ? 'combobox'
+        : tag === 'textarea' ? 'textbox'
+        : tag === 'img' ? 'img'
+        : tag === 'input'
+          ? ['button', 'submit', 'reset', 'image'].includes(inputType) ? 'button'
+            : inputType === 'checkbox' || inputType === 'radio' ? inputType
+            : 'textbox'
+        : tag;
+
+      const pathFor = Reflect.get(window, '__usablPathFor');
+      const tablePath = table !== null && typeof pathFor === 'function' ? String(pathFor(table)) : '';
+      return {
+        table: tablePath,
+        source,
+        text: text.slice(0, limit),
+        role: explicitRole.length > 0 ? explicitRole : implicitRole,
+        path: steps.join(' > '),
+      };
+    },
+    { query: selector, limit: ROW_KEY_TEXT_LIMIT },
+  );
 }
 
 async function stablePathsForSelector(pw: PwPage, selector: string): Promise<string[]> {
@@ -953,6 +1056,9 @@ function wrapPage(
     async queryAll(selector: string): Promise<Array<{ selector: string }>> {
       const paths = await stablePathsForSelector(pw, selector);
       return paths.map((path) => ({ selector: path }));
+    },
+    async rowContext(selector: string): Promise<RowContextRead | null> {
+      return rowContextForSelector(pw, selector);
     },
     async close(): Promise<void> {
       await context.close();

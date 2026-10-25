@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- A control repeated in every table row, such as an unnamed icon button or a kebab
+  toggle, now has one identity per row. Before, every row shared one identity whose count
+  followed how many rows the page showed, so a floor of two, with one row fixed and a new
+  broken row added, still counted two and was verified with a receipt. Now the new row has
+  an identity the floor never accepted and blocks as new. A row is named by a key attribute
+  no other row of the table holds (`data-row-key`, `data-key`, `data-id`,
+  `data-ouia-component-id`, or `id`, but not a framework-generated id) or by its row
+  header. The key is hashed at once, so no row text reaches a finding or the floor. A row
+  the page does not show today is reported as fixed and as headroom and does not move the
+  verdict. Controls outside a keyed row keep their old keys.
+
 - Readiness now waits for a screen's declared `reachedWhen` selector before the keyboard
   walk starts. A page that mounted a small shell, paused for more than about 1.7 seconds
   with nothing in flight, and only then fetched and mounted its content was read as
@@ -90,6 +101,20 @@
   screen ends in about 17.1 seconds with the default cap.
 
 ### Changed
+
+- `usabl baseline` now scans twice and records only the barriers both scans found, at the
+  smaller of the two counts. The rest are listed as intermittent, by screen and rule and
+  never by element key, with what to do: fix them, check the screen against fixed data, or
+  waive the rule on that screen with an expiry. An intermittent barrier is not on the
+  floor, so it blocks as new on a run where it appears. Both scans must have complete
+  coverage; `--partial` floors only the screens both scans saw cleanly.
+- `usabl baseline` writes floor version 3, which keys controls in table rows per row. A
+  version 1 or 2 floor is still compared with the keys it was written with, so nothing
+  reads as new or fixed only because the keys changed. When a run finds barriers in keyed
+  rows on a screen such a floor holds entries for, it reports a coverage gap and
+  `not_covered`, because the old collapsed count cannot rule out a new barrier in another
+  row. Run `usabl baseline` and merge the version 3 floor to clear it. A waiver scoped to
+  one element key of a control in a keyed row names the old key and must be rewritten.
 
 - `checkPage` called without a `screenId` returns `not_covered` in a project that has
   content or flow design requirements: the unlabeled page counts as no surface, so

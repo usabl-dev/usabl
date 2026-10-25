@@ -7,7 +7,7 @@ import type { Deps, FloorEntry, ScreenScan, UsablConfig } from '../contracts/ind
 import { EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
 import { coverageIncomplete } from '../coverage/completeness.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
-import { computeIdentity, identityKey } from '../primitives/identity.js';
+import { computeIdentity, identityKey, identitySchemeFor, type IdentityScheme } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { run } from '../run.js';
 import { checkGuard } from '../trust/guard.js';
@@ -55,14 +55,14 @@ function floorEntrySortKey(value: { screenId: string; layer: string; rule: strin
  * Deterministic drafts only, matching what `usabl baseline` counts and what the gate compares
  * against. Counting advisory evidence here would write a number the gate never sees.
  */
-function observedDeterministicCounts(screens: ScreenScan[]): Map<string, number> {
+function observedDeterministicCounts(screens: ScreenScan[], scheme: IdentityScheme): Map<string, number> {
   const counts = new Map<string, number>();
   for (const screen of screens) {
     for (const draft of screen.drafts) {
       if (draft.evidenceClass !== 'deterministic') {
         continue;
       }
-      const identity = computeIdentity(draft);
+      const identity = computeIdentity(draft, scheme);
       const key = identityKey({
         screenId: draft.screenId,
         rule: draft.rule,
@@ -167,12 +167,15 @@ export async function runFloorPrune(
     const cleanlyScannedScreens = new Set(
       result.screens.filter((screen) => screen.gaps.length === 0).map((screen) => screen.screenId),
     );
-    const observedCounts = observedDeterministicCounts(result.screens);
+    // Count with the keys the floor was written with, as the gate compares it. A version 2 floor
+    // collapsed a control repeated in every table row onto one entry, so counting rows apart here
+    // would read every such entry as gone and prune debt that is still on the page.
+    const observedCounts = observedDeterministicCounts(result.screens, identitySchemeFor(floor));
     // The same test the gate applies before it compares a count. A version 1 floor wrote a
     // placeholder 1 for name and structural entries, so those numbers are not observations and the
     // gate ignores them. Writing a real count into one would present it as observed debt while the
     // file still says version 1, which is the confusion the version field exists to prevent. Those
-    // entries are re-armed by `usabl baseline`, which rewrites the floor at version 2.
+    // entries are re-armed by `usabl baseline`, which rewrites the floor at the current version.
     const countIsObserved = (entry: FloorEntry): boolean =>
       entry.identityBasis === 'count' || floor.version >= 2;
 
