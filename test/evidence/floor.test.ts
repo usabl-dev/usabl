@@ -20,7 +20,7 @@ describe('parseEvidenceFloor', () => {
   });
 
   it('rejects a version it cannot interpret', () => {
-    expect(() => parseEvidenceFloor({ version: 3, entries: [] })).toThrow(/version/);
+    expect(() => parseEvidenceFloor({ version: 4, entries: [] })).toThrow(/version/);
   });
 
   it('carries a partial scope through when present', () => {
