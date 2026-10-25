@@ -671,6 +671,23 @@ describe('runBaseline refuses what it cannot carry honestly', () => {
   const v1Count = { screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count', count: 3 };
   const v1Floor = (...entries: object[]): string => JSON.stringify({ version: 1, entries });
 
+  it('redacts a token-shaped screen id and rule in what it prints', async () => {
+    const id = 'orders?token=abcdefgh';
+    const entry = { screenId: id, layer: 'axe', rule: 'rule-token=abcdefgh12345678', elementKey: null, identityBasis: 'count', count: 1 };
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': JSON.stringify({ version: 2, entries: [entry] }) }),
+      scans: { [id]: scanFor(id, 'http://127.0.0.1:5173/orders', []) },
+    });
+    const config = testConfig({ surfaces: [{ id, url: 'http://127.0.0.1:5173/orders', files: ['fixtures/app/src/ClustersPage.tsx'] }] });
+    const writer = new MemoryBaselineFs();
+
+    const outcome = await runBaseline(deps, config, writer);
+
+    expect(outcome.message).toContain('kept 1 floor entry');
+    expect(outcome.message).not.toContain('abcdefgh');
+    expect(outcome.message).toContain('[REDACTED]');
+  });
+
   it('reads an identity with only an advisory draft left the way the gate does', async () => {
     const entry = { screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count', count: 2 };
     const deps = makeFakeDeps({

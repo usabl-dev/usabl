@@ -418,6 +418,15 @@ describe('readiness signals for screens with floored debt', () => {
     expect(found.state).toBe('wired');
   });
 
+  it('redacts a token-shaped screen id', async () => {
+    const found = await report({
+      'usabl.config.json': configWithSurfaces([surface('orders')]),
+      '.usabl-evidence.json': floorWith(entry('orders?token=abcdefgh', 'button-name')),
+    });
+    expect(found.nextStep).toContain('[REDACTED]');
+    expect(found.nextStep).not.toContain('abcdefgh');
+  });
+
   it('cannot confirm anything when the floor does not parse', async () => {
     const found = await report({ 'usabl.config.json': VALID_CONFIG, '.usabl-evidence.json': '{not json' });
     expect(found.state).toBe('unknown');

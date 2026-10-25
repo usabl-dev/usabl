@@ -578,6 +578,22 @@ describe('runFloorPrune keeps barriers it cannot confirm were fixed', () => {
 });
 
 describe('runFloorPrune round two', () => {
+  it('redacts a token-shaped screen id and rule in what it prints', async () => {
+    const id = 'orders?token=abcdefgh';
+    const entry = { screenId: id, layer: 'axe', rule: 'rule-token=abcdefgh12345678', elementKey: null, identityBasis: 'count' as const, count: 1 };
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': JSON.stringify({ version: 2, entries: [entry] }) }),
+      scans: { [id]: { ...scanWith([]), screenId: id } },
+    });
+    const config = testConfig({ surfaces: [{ id, url: 'http://127.0.0.1:5173/orders', files: ['fixtures/app/src/ClustersPage.tsx'] }] });
+
+    for (const unconfirmed of [false, true]) {
+      const outcome = await runFloorPrune(deps, config, new MemoryFloorFs(), { unconfirmed });
+      expect(outcome.message).toContain('[REDACTED]');
+      expect(outcome.message).not.toContain('abcdefgh');
+    }
+  });
+
   it('reads an identity with only an advisory draft left the way the gate does', async () => {
     const entry = { screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count' as const, count: 2 };
     const deps = makeFakeDeps({

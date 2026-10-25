@@ -7,13 +7,15 @@
  * with render evidence built from the same scans, and keep what it cannot confirm. One rule in one
  * place means the floor a command writes and the claim a run makes cannot disagree.
  *
- * The lines name screens and rules, never an element key, because a key carries page text.
+ * The lines name screens and rules, never an element key, because a key carries page text. Each
+ * screen id and rule goes through the same scrubber the Result surfaces use, so a value the id
+ * grammar allows, such as one carrying a token, is redacted before it is printed.
  */
 import type { FloorEntry, RenderEvidence, ScreenScan } from '../contracts/index.js';
 import { deterministicCountsByIdentity, floorEntryAbsent, paydownConfirmed, renderEvidenceOf } from '../gate/index.js';
 import { identityKey } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
-import { neutralize } from '../primitives/neutralize.js';
+import { scrubString } from '../surfaces/scrub.js';
 
 /** Absent entries on one screen that the run cannot confirm were fixed. */
 export interface UnconfirmedOnScreen {
@@ -82,7 +84,7 @@ export function keptUnconfirmedLines(screens: readonly UnconfirmedOnScreen[]): s
     const are = screen.entries === 1 ? 'is' : 'are';
     return (
       `kept ${plural(screen.entries, 'floor entry', 'floor entries')} (${plural(screen.barriers, 'barrier', 'barriers')}) ` +
-      `on screen ${neutralize(screen.screenId)} (${[...screen.rules].sort().map((rule) => neutralize(rule)).join(', ')}) ` +
+      `on screen ${scrubString(screen.screenId)} (${[...screen.rules].sort().map((rule) => scrubString(rule)).join(', ')}) ` +
       `that this run did not see, because nothing shows that part of the page rendered, so ${they} ${are} not ` +
       `claimed fixed. If ${they} ${are} fixed, add a reachedWhen signal for this screen or run usabl floor prune --unconfirmed.`
     );
@@ -95,7 +97,7 @@ export function removedUnconfirmedLines(screens: readonly UnconfirmedOnScreen[])
     const one = screen.entries === 1;
     return (
       `${screen.entries} of them (${plural(screen.barriers, 'barrier', 'barriers')}) on screen ` +
-      `${neutralize(screen.screenId)} ${one ? 'was' : 'were'} removed because you passed --unconfirmed: ` +
+      `${scrubString(screen.screenId)} ${one ? 'was' : 'were'} removed because you passed --unconfirmed: ` +
       `this run did not see ${one ? 'it' : 'them'} and cannot show that part of the page rendered.`
     );
   });

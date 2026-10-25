@@ -29,6 +29,7 @@ import {
   type EnvReader,
 } from '../deps/session.js';
 import { neutralize } from '../primitives/neutralize.js';
+import { scrubString } from '../surfaces/scrub.js';
 import { buildGuardedSet } from '../trust/guard.js';
 import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
 
@@ -293,8 +294,9 @@ async function collectEvidenceFloor(deps: DoctorDeps): Promise<SurfaceReport> {
  * On such a screen a floored barrier the run does not see is never claimed fixed, because a fixed
  * barrier and content that never mounted look the same to the run. The debt stays on the floor and
  * every run says so. A signal that names content only that screen has is what lets usabl tell the
- * two apart, so doctor names the screens. Screen ids come from the floor and the config, both the
- * operator's own files, and the line is neutralized at print time like every other next step.
+ * two apart, so doctor names the screens. Screen ids come from the floor and the config, and the
+ * id grammar allows text shaped like a credential, so each one goes through the scrubber the Result
+ * surfaces use, and the line is neutralized at print time like every other next step.
  */
 async function collectReadinessSignals(deps: DoctorDeps): Promise<SurfaceReport> {
   const id = 'readiness-signals';
@@ -337,7 +339,7 @@ async function collectReadinessSignals(deps: DoctorDeps): Promise<SurfaceReport>
     label,
     state: 'missing',
     nextStep:
-      `${one ? 'Screen' : 'Screens'} ${unsignalled.join(', ')} ${one ? 'holds' : 'hold'} floored debt and ` +
+      `${one ? 'Screen' : 'Screens'} ${unsignalled.map((screenId) => scrubString(screenId)).join(', ')} ${one ? 'holds' : 'hold'} floored debt and ` +
       `${one ? 'declares' : 'declare'} no reachedWhen signal, so a floored barrier there is never claimed fixed: ` +
       'usabl cannot tell a fixed barrier from content that never mounted. Add a reachedWhen signal to each in ' +
       `${deps.configPath}, naming content only that screen has, such as its own table or a data request only it makes. ` +
