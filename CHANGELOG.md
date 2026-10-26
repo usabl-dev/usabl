@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- The terminal report printed `NO VERDICT: IDLE` for a null verdict on a run that had
+  something to check, which is the shape of a failed run, not an idle one. It now prints
+  IDLE only when there was nothing to check. Otherwise it prints `NO VERDICT` and says
+  usabl did not reach a verdict, so the run proved nothing about the change, the same
+  reading the stop hook and the self-check give that state.
+
 - `usabl.config.json` now refuses a `surfaces[].url` or an `appBaseUrl` that carries a
   user name or a password, such as `https://user:pass@host/screen`. Before, the URL was
   printed as written in every report, including the pull request comment, so the

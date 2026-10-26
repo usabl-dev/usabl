@@ -73,6 +73,15 @@ describe('formatSummary', () => {
     expect(out).toContain('IDLE');
   });
 
+  it('never prints IDLE for a null verdict on a run that had something to check', () => {
+    const out = formatSummary(baseResult({ verdict: null, exitCode: 0, summary: 'no verdict' }));
+    const lines = out.split('\n');
+
+    expect(out).not.toContain('IDLE');
+    expect(lines[0]).toMatch(/^usabl: \S+ NO VERDICT \(exit 0\)$/);
+    expect(lines[1]).toBe('  usabl did not reach a verdict, so the run proved nothing about this change.');
+  });
+
   it('separates a failed run from idle even though both carry no verdict', () => {
     const out = formatSummary(
       baseResult({ verdict: null, exitCode: 4, summary: 'usabl never saw the application: all 3 affected screens' }),
