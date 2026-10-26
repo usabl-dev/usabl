@@ -14,19 +14,19 @@ describe('injectJsxSourceAttributes: native HTML elements', () => {
   it('injects on a native input with attributes and self-closing slash', () => {
     const code = ['<input type="text" />'].join('\n');
     const out = injectJsxSourceAttributes(code, FILE);
-    expect(out).toContain(`<input type="text" data-source-file="${FILE}" data-source-line="1"/>`);
+    expect(out).toContain(`<input data-source-file="${FILE}" data-source-line="1" type="text" />`);
   });
 
   it('injects on a native anchor', () => {
     const code = ['', '', '<a href="x">go</a>'].join('\n');
     const out = injectJsxSourceAttributes(code, FILE);
-    expect(out).toContain(`<a href="x" data-source-file="${FILE}" data-source-line="3">go</a>`);
+    expect(out).toContain(`<a data-source-file="${FILE}" data-source-line="3" href="x">go</a>`);
   });
 
   it('injects on a self-closing native img', () => {
     const code = ['<img src="y" />'].join('\n');
     const out = injectJsxSourceAttributes(code, FILE);
-    expect(out).toContain(`<img src="y" data-source-file="${FILE}" data-source-line="1"/>`);
+    expect(out).toContain(`<img data-source-file="${FILE}" data-source-line="1" src="y" />`);
   });
 });
 
@@ -64,7 +64,7 @@ describe('injectJsxSourceAttributes: existing behavior preserved', () => {
   it('still injects on capitalized component tags', () => {
     const code = ['<Button label="x" />'].join('\n');
     const out = injectJsxSourceAttributes(code, FILE);
-    expect(out).toContain(`<Button label="x" data-source-file="${FILE}" data-source-line="1"/>`);
+    expect(out).toContain(`<Button data-source-file="${FILE}" data-source-line="1" label="x" />`);
   });
 
   it('is idempotent when data-source-file is already present', () => {
@@ -106,10 +106,10 @@ describe('injectJsxSourceAttributes: mixed realistic TSX', () => {
     expect(outLines[2]).toBe('  const map: Map<string, number> = new Map();');
     // native + component injected with correct line numbers
     expect(outLines[4]).toContain(`<section data-source-file="${FILE}" data-source-line="5">`);
-    expect(outLines[5]).toContain(`<Header title="hi" data-source-file="${FILE}" data-source-line="6"/>`);
+    expect(outLines[5]).toContain(`<Header data-source-file="${FILE}" data-source-line="6" title="hi" />`);
     expect(outLines[6]).toContain('data-source-line="7"');
     expect(outLines[6]).toContain('<button onClick=');
-    expect(outLines[7]).toContain(`<input value={name} data-source-file="${FILE}" data-source-line="8"/>`);
+    expect(outLines[7]).toContain(`<input data-source-file="${FILE}" data-source-line="8" value={name} />`);
   });
 
   it('produces output that still parses as valid TSX', () => {
