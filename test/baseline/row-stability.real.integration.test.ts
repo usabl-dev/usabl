@@ -96,9 +96,19 @@ const ROW_SHAPES_HTML = `<!doctype html>
         <thead><tr><th scope="col">Host</th><th scope="col"><button id="sort" type="button">Sort</button></th></tr></thead>
         <tbody>
           <tr data-row-key="host-17"><td>db-1.example.com</td><td><span><button id="by-attr" type="button"></button></span></td></tr>
-          <tr data-row-key="same" id="pf-random-id-:r4:"><th>web-1.example.com</th><td><button id="by-header" type="button"></button></td></tr>
-          <tr data-row-key="same"><td>no key here</td><td><a id="no-key" href="#x"></a></td></tr>
+          <tr data-row-key="same"><td>web-1.example.com</td><td><button id="dup-a" type="button"></button></td></tr>
+          <tr data-row-key="same"><td>web-2.example.com</td><td><button id="dup-b" type="button"></button></td></tr>
+          <tr><td>no key here</td><td><a id="no-key" href="#x"></a></td></tr>
         </tbody>
+      </table>
+      <table aria-label="Services">
+        <tbody>
+          <tr id="pf-random-id-:r4:"><th>web-1.example.com</th><td><button id="by-header" type="button"></button></td></tr>
+          <tr><td>plain</td><td>no header</td></tr>
+        </tbody>
+      </table>
+      <table aria-label="Plain">
+        <tbody><tr><td>one</td><td><button id="plain-table" type="button"></button></td></tr></tbody>
       </table>
       <div role="grid" aria-label="Users">
         <div role="row" data-ouia-component-id="OUIA-Generated-Row-3">
@@ -233,26 +243,32 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('row keys and the baselin
     try {
       await page.gotoReady();
 
-      // A key attribute held by one row only.
+      // A key attribute held by one row only. The table is named by its id, never by its place.
       const byAttr = await page.rowContext('#by-attr');
-      expect(byAttr).toMatchObject({ source: 'attr:data-row-key', text: 'host-17', role: 'button', path: 'td:nth-child(2) > span:nth-child(1) > button:nth-child(1)' });
-      expect(byAttr?.table).toBe('#hosts');
+      expect(byAttr).toMatchObject({ kind: 'keyed', source: 'attr:data-row-key', key: 'host-17', role: 'button', path: 'td:nth-child(2) > span:nth-child(1) > button:nth-child(1)' });
+      expect(byAttr.kind === 'keyed' ? byAttr.table : null).toBe('[["attr:id","hosts"]]');
 
-      // A key two rows share names no row, and a generated id is skipped, so the row header keys it.
+      // The table keys its rows by data-row-key, so a key two rows share, or a row without one,
+      // cannot be told apart. That is not the same as outside a row.
+      expect(await page.rowContext('#dup-a')).toEqual({ kind: 'ambiguous', reason: 'row-key-duplicate' });
+      expect(await page.rowContext('#no-key')).toEqual({ kind: 'ambiguous', reason: 'row-key-missing' });
+
+      // A generated id is not a key, so this table keys its rows by row header. The table is named
+      // by its accessible name.
       const byHeader = await page.rowContext('#by-header');
-      expect(byHeader).toMatchObject({ source: 'header', text: 'web-1.example.com', role: 'button', path: 'td:nth-child(2) > button:nth-child(1)' });
+      expect(byHeader).toMatchObject({ kind: 'keyed', source: 'header', key: 'web-1.example.com', role: 'button', path: 'td:nth-child(2) > button:nth-child(1)' });
 
-      // No unique key and no row header: no row context, so the element keys as it did before.
-      expect(await page.rowContext('#no-key')).toBeNull();
-      // A header row is not a data row.
-      expect(await page.rowContext('#sort')).toBeNull();
+      // A table none of whose rows has a key keys nothing, so its controls key as they did before.
+      expect(await page.rowContext('#plain-table')).toEqual({ kind: 'none' });
+      // A header row is not a body row.
+      expect(await page.rowContext('#sort')).toEqual({ kind: 'none' });
       // Not in a row at all.
-      expect(await page.rowContext('#outside')).toBeNull();
+      expect(await page.rowContext('#outside')).toEqual({ kind: 'none' });
 
       // An ARIA grid row with a generated OUIA id falls back to its row header, and an explicit
       // role wins over the tag.
       const grid = await page.rowContext('#grid-item');
-      expect(grid).toMatchObject({ source: 'header', text: 'Ada Lovelace', role: 'menuitem' });
+      expect(grid).toMatchObject({ kind: 'keyed', source: 'header', key: 'Ada Lovelace', role: 'menuitem' });
     } finally {
       await page.close();
     }
