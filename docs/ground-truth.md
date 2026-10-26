@@ -765,8 +765,10 @@ An import with no extension is probed against a fixed list: `.mjs`, `.js`, `.mts
 `.tsx`, `.vue`, and `.svelte`, then the same names as `index` files in a directory. usabl does not
 read `resolve.extensions` from the Vite config, because it cannot run the config. When more than
 one candidate exists, for example `Widget.vue` beside `Widget.tsx`, usabl does not pick one: the
-import makes no edge, and the gap for a changed file it would have reached names every candidate.
-Write the import with its extension to resolve it. One case is not disclosed: an extension outside
+import links every candidate, so a change to any of them maps to the screen. That can scan a
+screen that does not render the changed file, and never leaves out one that does. The ambiguity
+is still disclosed: the gap of a changed file that maps to no screen names every candidate of an
+ambiguous import on its way. Write the import with its extension to resolve it. One case is not disclosed: an extension outside
 the list, such as `.web.tsx` added through `resolve.extensions`, is never probed, so a sibling
 with that extension is not seen and the file usabl did find is attributed.
 

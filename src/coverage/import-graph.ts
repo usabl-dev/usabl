@@ -44,8 +44,9 @@ const DYNAMIC_IMPORT_RE = /\bimport\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
 // project can add to resolve.extensions. usabl does not read resolve.extensions from the Vite
 // config, because it cannot run the config, and a partial read that missed an extension would be
 // worse than a list that may hold too many. The bundler's exact pick depends on that order, so
-// when more than one candidate exists in a tier we disclose instead of guessing. Guessing could
-// attribute a changed file to a screen that actually renders the sibling file.
+// when more than one candidate exists in a tier we link all of them and disclose the ambiguity
+// instead of guessing. Guessing, or linking none, could leave a screen that renders the changed
+// file out of the scan.
 const EXTENSIONS = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.vue', '.svelte'];
 const FILE_SUFFIXES = EXTENSIONS;
 const INDEX_SUFFIXES = EXTENSIONS.map((extension) => `/index${extension}`);
@@ -116,6 +117,14 @@ async function resolveRelativeImport(fs: FsGlob, importer: string, specifier: st
   return resolveFileAtPath(fs, base);
 }
 
+// The files an import links to. An ambiguous import links every candidate: a change to any of them
+// then maps to the screen, which can scan a screen that does not render the changed file, but
+// never leaves out one that does. The ambiguity is still disclosed.
+function edgeTargets(resolution: Resolution): string[] {
+  if (resolution === null) return [];
+  return 'file' in resolution ? [resolution.file] : resolution.candidates;
+}
+
 // The disclosure for an import that did not resolve to exactly one file.
 function unresolvedEntry(
   importer: string,
@@ -173,10 +182,11 @@ export async function buildImportGraph(
         const resolved = await resolveFileAtPath(fs, aliasPath);
         if (resolved === null || 'candidates' in resolved) {
           pushUniqueUnresolvable(unresolvable, unresolvedEntry(file, specifier, resolved));
-          continue;
         }
-        pushUnique(fileEdges, resolved.file);
-        queue.push(resolved.file);
+        for (const target of edgeTargets(resolved)) {
+          pushUnique(fileEdges, target);
+          queue.push(target);
+        }
         continue;
       }
 
@@ -188,11 +198,11 @@ export async function buildImportGraph(
       const resolved = await resolveRelativeImport(fs, file, specifier);
       if (resolved === null || 'candidates' in resolved) {
         pushUniqueUnresolvable(unresolvable, unresolvedEntry(file, specifier, resolved));
-        continue;
       }
-
-      pushUnique(fileEdges, resolved.file);
-      queue.push(resolved.file);
+      for (const target of edgeTargets(resolved)) {
+        pushUnique(fileEdges, target);
+        queue.push(target);
+      }
     }
     edges.set(file, fileEdges);
   }
