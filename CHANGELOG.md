@@ -116,8 +116,8 @@
   screens. A floored barrier the run does not see is claimed fixed only with evidence its
   part of the page rendered: a readiness signal that held is one way, and a matching
   element seen on the run is the other. A docs page cannot declare a signal, so doctor
-  names docs pages with floored debt separately and points to `usabl floor prune
-  --unconfirmed` for a barrier known to be fixed.
+  names docs pages with floored debt separately and points to
+  `usabl floor prune --unconfirmed` for a barrier known to be fixed.
 
 - `signalTimeoutMs` in `usabl.config.json`, a positive whole number of milliseconds,
   default 15000, at most 600000 (ten minutes). It caps the wait for a `reachedWhen` selector, counted from the first
