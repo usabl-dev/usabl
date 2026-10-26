@@ -1638,7 +1638,8 @@ then the finding sections `### New barriers`, `### Known (recorded debt)`, and
 `### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
 when the noise budget collapses it, then `### Coverage gaps` and
 `### Announcements (current run)`. The known section lists carried and waived deterministic
-findings, each with its status, the same recorded debt the terminal and the overlay list. All page-derived text passes through `neutralize()`. Sticky comment
+findings, each with its status, the same recorded debt the terminal and the overlay list. A
+collapsed group names its screen id and rule once, in its headline. All page-derived text passes through `neutralize()`. Sticky comment
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
 

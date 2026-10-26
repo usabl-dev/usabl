@@ -668,7 +668,7 @@ describe('pr comment page text is sealed in code spans', () => {
       );
 
     for (const [name, screenId] of hostile) {
-      it(`seals ${name} in a code span, in the headline as well as the rule line`, () => {
+      it(`seals ${name} in a code span wherever it appears`, () => {
         const markdown = collapsedFor(screenId);
         const lines = markdown.split('\n');
         const headline = lines.find((line) => line.startsWith('- &#91;'));
@@ -1129,5 +1129,24 @@ describe('pr comment recorded debt', () => {
 
     expect(markdown).toContain('### Findings (collapsed by rule)');
     expect(markdown).toContain('- &#91;`waived serious`&#93; `clusters`/`axe/link-name`');
+  });
+});
+
+describe('pr comment collapsed headline', () => {
+  // The collapsed headline already names the screen id, the layer, the rule, and the severity, all
+  // sealed. A second line under it named the same four values again, so every group printed them
+  // twice.
+  it('names the screen and rule once per group', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        findings: Array.from({ length: 6 }, (_, index) => baseFinding({ rule: `rule-${index}`, elementKey: `k-${index}` })),
+      }),
+    );
+    const lines = markdown.split('\n');
+    const headline = lines.indexOf('- &#91;`new serious`&#93; `clusters`/`axe/rule-0`');
+
+    expect(headline).toBeGreaterThan(-1);
+    expect(lines[headline + 1]).toBe(`  ${UNTRUSTED_FRAME_START}`);
+    expect(lines.some((line) => line.trimStart().startsWith('rule: '))).toBe(false);
   });
 });

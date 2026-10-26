@@ -388,13 +388,10 @@ function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
   const status = neutralize(group.status);
   const count = formatCollapsedGroupCount(group);
   const headline = `${OPEN_BRACKET}${inlineCode(`${status} ${severity}`)}${CLOSE_BRACKET} ${inlineCode(screenId)}/${inlineCode(`${layer}/${rule}`)}${count}`;
-  // The rule line is a continuation of the item, not a nested item. A nested item would make
-  // the framed lines after it lazy continuations of the nested paragraph, so they would render
-  // inside the wrong item.
-  return listItem('-', headline, [
-    `rule: ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)} · ${inlineCode(severity)}`,
-    ...framedMarkdownLines(findingPieces(finding)),
-  ]);
+  // The headline names the screen id, layer, rule, and severity, so the frame follows it directly.
+  // A second line naming the same four values only repeated them. The frame lines are
+  // continuations of the item, not a nested item, so they render inside this item.
+  return listItem('-', headline, framedMarkdownLines(findingPieces(finding)));
 }
 
 function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): string[] {
