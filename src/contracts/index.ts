@@ -415,7 +415,19 @@ export type RowAmbiguity =
   // The key, or the table's identity, is longer than usabl reads.
   | 'row-key-too-long'
   // Another table on the screen has the same identity, so the two cannot be told apart.
-  | 'table-ambiguous';
+  | 'table-ambiguous'
+  // The table sits in a row of another table that keys none of its rows, so the row it sits in has
+  // no identity, and neither does anything under it.
+  | 'enclosing-row-unkeyed';
+
+// Why usabl could not find the one element a selector names. See RowContextRead.
+export type RowUnreadable =
+  // The page could not parse the selector.
+  | 'selector-invalid'
+  // The selector matched no element: the element went away after the scanner saw it.
+  | 'element-missing'
+  // The selector matched more than one element, so which one the scanner meant is unknown.
+  | 'element-multiple';
 
 // What Page.rowContext read about the table row an element sits in.
 //
@@ -425,8 +437,12 @@ export type RowAmbiguity =
 // `table` and `key` are page text, exact and in full, and must never be stored: the caller hashes
 // them at once. `table` names the table without using its position: its own key attribute, its
 // accessible name, or its caption, after the identity of the row it is nested in, if any.
-// 'ambiguous': the element is in a row of a keyed table, but the row cannot be told apart. The
-// caller must not key it by row, and must disclose that it could not.
+// 'ambiguous': the element is in a row of a keyed table, but the row cannot be told apart. So is an
+// element under such a row, or under a table that cannot be told apart. The caller must not key it
+// by row, and must disclose that it could not.
+// 'unreadable': the selector did not name exactly one element, so whether that element sits in a
+// keyed row is unknown. The caller must disclose it, exactly as for 'ambiguous'. Only an element
+// that was found and seen outside every body row of a keyed table is 'none'.
 export type RowContextRead =
   | { kind: 'none' }
   | {
@@ -440,8 +456,14 @@ export type RowContextRead =
       // Tag and child position from the row down to the element, for example
       // 'td:nth-child(4) > button:nth-child(1)'. Empty when the element is the row itself.
       path: string;
+      // The keys of the table's other body rows, from the same source, and the identities of every
+      // other table on the screen. Page text like `key` and `table`, so the caller only hashes them.
+      // They let the caller check that no two rows of the table, and no two tables, share a hash.
+      otherKeys: string[];
+      otherTables: string[];
     }
-  | { kind: 'ambiguous'; reason: RowAmbiguity };
+  | { kind: 'ambiguous'; reason: RowAmbiguity }
+  | { kind: 'unreadable'; reason: RowUnreadable };
 // What Page.ancestorAttributes read. 'chain' is the element and every element above it, nearest
 // first. 'not-found' means no connected element matched, for example a toast that closed between
 // two reads. 'too-deep' means the walk reached `limit` elements and had more to go, so the chain is
@@ -534,8 +556,9 @@ export interface Page {
   // null. See AncestorAttributesRead for the two results that carry no chain.
   ancestorAttributes(selector: string, names: readonly string[]): Promise<AncestorAttributesRead>;
   queryAll(selector: string): Promise<ElementRef[]>;
-  // The table row the element a selector matches sits in. See RowContextRead. A selector the page
-  // cannot parse, or one that matches nothing, is 'none'. It throws when the page cannot be read.
+  // The table row the one element a selector matches sits in. See RowContextRead. A selector the
+  // page cannot parse, or one that matches no element or more than one, is 'unreadable', never
+  // 'none'. It throws when the page cannot be read.
   rowContext(selector: string): Promise<RowContextRead>;
   close(): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;

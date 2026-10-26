@@ -12,7 +12,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from 'playwright';
-import type { Deps, Result, UsablConfig } from '../../src/contracts/index.js';
+import type { BrowserDriver, Deps, FloorEntry, Result, UsablConfig } from '../../src/contracts/index.js';
 import { runBaseline } from '../../src/baseline/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
@@ -103,14 +103,14 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('row identity edge cases 
     };
   }
 
-  function depsFor(config: UsablConfig, floorJson: string | null): Deps {
+  function depsFor(config: UsablConfig, floorJson: string | null, browser: BrowserDriver = driver): Deps {
     const files: Record<string, string> = { 'usabl.config.json': '{}', [PAGE_FILE]: 'export {};\n' };
     if (floorJson !== null) files['.usabl-evidence.json'] = floorJson;
     const base = makeFakeDeps({ files, headContents: files, writeTree: 'tree-rows', changed: [{ code: 'M', path: PAGE_FILE }] });
     return {
       ...base,
       checkRunner: makeCheckRunner({
-        browser: driver,
+        browser,
         providers: makeCoreProviders({ keyboardWalk: false }),
         config,
         allowedCapabilities: ['live'],
@@ -233,6 +233,129 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('row identity edge cases 
     // The barrier itself was found and keyed by row, so the check above is not vacuous.
     expect(out.result.findings.some((f) => f.identityBasis === 'row' && f.rule === 'button-name')).toBe(true);
   }, 120_000);
+
+  // An outer table whose rows hold a nested "Hosts" table with one keyed row and a failing button.
+  const hosts = `<table aria-label="Hosts"><tbody><tr data-row-key="h1"><td>one</td><td>${BROKEN}</td></tr></tbody></table>`;
+
+  it('never verifies a nested table moved between two outer rows that share a key', async () => {
+    const outer = (first: string, second: string): string =>
+      table(
+        `<tr data-row-key="A"><td>${first}</td><td>first</td></tr>` +
+          `<tr data-row-key="A"><td>${second}</td><td>second</td></tr>` +
+          `<tr data-row-key="B"><td>other</td><td>third</td></tr>`,
+        ' id="jobs"',
+      );
+    const out = await swap('/nested-dup-outer', outer(hosts, 'plain'), outer('plain', hosts));
+    // The outer row cannot be told apart, so nothing inside it can be keyed by row.
+    expect(out.result.verdict).not.toBe('verified');
+    expect(out.result.verdict).toBe('not_covered');
+    expect(out.baselineExit).toBe(3);
+    expect(out.result.receipt).toBeNull();
+    expect(out.result.coverage.gaps.some((g) => g.reason.includes('rule button-name'))).toBe(true);
+  }, 120_000);
+
+  it('never verifies a nested table moved between two outer tables that cannot be told apart', async () => {
+    const outer = (inner: string): string => table(`<tr data-row-key="r1"><td>${inner}</td><td>only</td></tr>`);
+    const out = await swap('/nested-dup-table', outer(hosts) + outer('plain'), outer('plain') + outer(hosts));
+    expect(out.result.verdict).not.toBe('verified');
+    expect(out.result.verdict).toBe('not_covered');
+    expect(out.result.receipt).toBeNull();
+    expect(out.baselineExit).toBe(3);
+  }, 120_000);
+
+  it('never verifies a barrier whose element is gone before its row is read, against a version 2 floor', async () => {
+    // The button is in a keyed row when axe finds it. Before row enrichment reads its row, a click
+    // removes it. The version 2 floor accepts one such button under the old count key.
+    const vanish =
+      '<p><button type="button" id="vanish" onclick="document.querySelectorAll(\'[data-vanish]\').forEach((e) => e.remove())">Remove</button></p>';
+    const brokenRow = `<tr data-row-key="r1"><td>job</td><td><button type="button" data-vanish="1"><svg aria-hidden="true" width="12" height="12"></svg></button></td></tr>`;
+    const url = fixture.set('/vanish', page(vanish + table(brokenRow + keyedRow('r2', false), ' id="jobs"')));
+    const config = configFor(url);
+
+    // The floor a version 2 baseline wrote: findings keyed the old way. A floor entry on another
+    // screen makes this run use the old scheme without raising the migration gap for this screen.
+    const legacyRun = await run(
+      depsFor(config, JSON.stringify({ version: 2, entries: [{ screenId: 'elsewhere', layer: 'axe', rule: 'region', elementKey: null, identityBasis: 'count', count: 1 }] })),
+      config,
+    );
+    const counts = new Map<string, FloorEntry>();
+    for (const f of legacyRun.findings.filter((x) => x.status !== 'fixed' && x.screenId === 'rows')) {
+      const key = JSON.stringify([f.screenId, f.layer, f.rule, f.elementKey, f.identityBasis]);
+      const entry = counts.get(key) ?? { screenId: f.screenId, layer: f.layer, rule: f.rule, elementKey: f.elementKey, identityBasis: f.identityBasis, count: 0 };
+      entry.count += 1;
+      counts.set(key, entry);
+    }
+    const entries = [...counts.values()];
+    expect(entries.some((e) => e.rule === 'button-name' && e.identityBasis === 'count')).toBe(true);
+    const v2Floor = JSON.stringify({ version: 2, entries });
+
+    let removed = false;
+    const vanishing: BrowserDriver = {
+      open: async (target) => {
+        const real = await driver.open(target);
+        return {
+          ...real,
+          rowContext: async (selector: string) => {
+            if (!removed) {
+              removed = true;
+              await real.click('#vanish');
+            }
+            return real.rowContext(selector);
+          },
+        };
+      },
+      close: async () => {},
+    };
+    const result = await run(depsFor(config, v2Floor, vanishing), config);
+    expect(removed).toBe(true);
+    expect(result.verdict).toBe('not_covered');
+    expect(result.receipt).toBeNull();
+    expect(result.coverage.gaps.some((g) => g.reason.includes('rule button-name') && g.reason.includes('could not find the element again'))).toBe(true);
+  }, 120_000);
+
+  it('reads a selector it cannot resolve to one element as unreadable, never as outside a row', async () => {
+    const url = fixture.set(
+      '/unresolvable',
+      page(table(keyedRow('r1', true) + keyedRow('r2', true), ' id="jobs"')),
+    );
+    const p = await driver.open(url);
+    try {
+      await p.gotoReady();
+      expect(await p.rowContext('button[')).toEqual({ kind: 'unreadable', reason: 'selector-invalid' });
+      expect(await p.rowContext('#nothing-here')).toEqual({ kind: 'unreadable', reason: 'element-missing' });
+      expect(await p.rowContext('tbody button')).toEqual({ kind: 'unreadable', reason: 'element-multiple' });
+      // Found, and confirmed outside any body row: that alone is 'none'.
+      expect(await p.rowContext('h1')).toEqual({ kind: 'none' });
+    } finally {
+      await p.close();
+    }
+  }, 60_000);
+
+  it('reads a table name in accessible-name order with white space collapsed', async () => {
+    const url = fixture.set(
+      '/names',
+      page(
+        '<span id="lbl">Cluster\n   hosts</span>' +
+          '<table aria-labelledby="lbl" aria-label="Other name"><tbody><tr data-row-key="x"><td><button id="named-by-ref" type="button"></button></td></tr></tbody></table>' +
+          '<table><caption>Team   one</caption><tbody><tr data-row-key="x"><td><button id="team-a" type="button"></button></td></tr></tbody></table>' +
+          '<table><caption> Team one </caption><tbody><tr data-row-key="x"><td><button id="team-b" type="button"></button></td></tr></tbody></table>' +
+          '<table><tbody><tr><td><table aria-label="Inner"><tbody><tr data-row-key="i1"><td><button id="under-unkeyed" type="button"></button></td></tr></tbody></table></td></tr></tbody></table>',
+      ),
+    );
+    const p = await driver.open(url);
+    try {
+      await p.gotoReady();
+      const byRef = await p.rowContext('#named-by-ref');
+      expect(byRef.kind === 'keyed' ? byRef.table : byRef).toBe('[["labelledby","Cluster hosts"]]');
+      // The two captions are the same text once white space is collapsed, so the tables cannot be
+      // told apart.
+      expect(await p.rowContext('#team-a')).toEqual({ kind: 'ambiguous', reason: 'table-ambiguous' });
+      // A table nested in a row of a table that keys no rows has no row identity to sit under.
+      expect(await p.rowContext('#under-unkeyed')).toEqual({ kind: 'ambiguous', reason: 'enclosing-row-unkeyed' });
+    } finally {
+      await p.close();
+    }
+  }, 60_000);
 
   it('returns no query string, fragment, or credential from checkPage, in gap refs or anywhere else', async () => {
     const dupRows = table(keyedRow('same', true) + keyedRow('same', true));

@@ -111,3 +111,63 @@ describe('row scope when a row cannot be told apart', () => {
     ]);
   });
 });
+
+describe('row scope when the element cannot be found again', () => {
+  // The scanner named an element, and by the time its row is read the selector no longer finds
+  // exactly that one element. Whether it sat in a keyed row is unknown, so it is disclosed. Reading
+  // it as outside a row would key it the old way, where a version 2 count floor carries it.
+  for (const [reason, words] of [
+    ['element-missing', 'could not find the element again'],
+    ['element-multiple', 'matched more than one element'],
+    ['selector-invalid', 'could not use the selector'],
+  ] as const) {
+    it(`reports a gap and keeps the finding unkeyed when the read is ${reason}`, async () => {
+      const out = await attachRowScopeToDrafts(
+        pageAnswering({ '#a': { kind: 'unreadable', reason } as unknown as RowContextRead }),
+        SCREEN,
+        [draft('#a')],
+      );
+      expect(out.drafts[0]!.evidence).toEqual({});
+      expect(out.drafts[0]!.confidence).toBe('unverified');
+      expect(out.gaps).toHaveLength(1);
+      expect(out.gaps[0]!.state).toBe('not-covered');
+      expect(out.gaps[0]!.reason).toContain('screen jobs, rule button-name');
+      expect(out.gaps[0]!.reason).toContain(words);
+    });
+  }
+});
+
+describe('row scope when two hashes collide', () => {
+  // Uniqueness is checked on the exact text, and only 16 hex characters of its hash are kept. Two
+  // different keys that share those 16 characters would share one identity, so the tokens are
+  // checked again after hashing. A hash that maps everything to one value forces the collision.
+  const collide = (): string => '0'.repeat(64);
+
+  it('treats a row whose token another row of its table shares as ambiguous', async () => {
+    const read = { ...KEYED, otherKeys: ['acme-corp-restore'], otherTables: [] } as RowContextRead;
+    const out = await attachRowScopeToDrafts(pageAnswering({ '#a': read }), SCREEN, [draft('#a')], { hash: collide });
+    expect(out.drafts[0]!.evidence).toEqual({});
+    expect(out.drafts[0]!.confidence).toBe('unverified');
+    expect(out.gaps).toHaveLength(1);
+    expect(out.gaps[0]!.reason).toContain('screen jobs, rule button-name');
+    expect(out.gaps[0]!.reason).toContain('same short hash');
+    expect(JSON.stringify(out)).not.toContain('acme');
+  });
+
+  it('treats a row whose table token another table on the screen shares as ambiguous', async () => {
+    // Only table names collide here: the row hash is left distinct.
+    const tableOnly = (value: string): string => (value.includes('"table"') ? '1'.repeat(64) : value.length.toString(16).padStart(64, 'a'));
+    const read = { ...KEYED, otherKeys: [], otherTables: ['[["caption","Other jobs"]]'] } as RowContextRead;
+    const out = await attachRowScopeToDrafts(pageAnswering({ '#a': read }), SCREEN, [draft('#a')], { hash: tableOnly });
+    expect(out.drafts[0]!.evidence).toEqual({});
+    expect(out.gaps).toHaveLength(1);
+    expect(out.gaps[0]!.reason).toContain('same short hash');
+  });
+
+  it('keys the row when no token collides', async () => {
+    const read = { ...KEYED, otherKeys: ['acme-corp-restore'], otherTables: ['[["caption","Other jobs"]]'] } as RowContextRead;
+    const out = await attachRowScopeToDrafts(pageAnswering({ '#a': read }), SCREEN, [draft('#a')]);
+    expect(out.gaps).toEqual([]);
+    expect(out.drafts[0]!.evidence.extra?.['rowScope']).toBeDefined();
+  });
+});
