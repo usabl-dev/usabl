@@ -8,6 +8,7 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
 import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page, ReadinessOutcome, ReadinessProbe } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
+import { createLiveResolver } from '../providers/rulepack/live-value.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
 // Ansible Automation Platform screen measured 12.4 s to network idle plus 13.3 s to a DOM that
@@ -95,8 +96,42 @@ const PATH_FOR_IMPL = `
 // at once. It records the text of a live region each time something inside it changes, and
 // window.__usablDrain hands back what it recorded since the last drain. It runs in the live world
 // below, so window here is that world's global, never the page's.
+//
+// What counts as live comes from the resolver pf-toast-live-region uses, carried in as its own
+// source. A CSS selector for live regions cannot do this: it matches aria-live="off" and any odd
+// token, and it cannot see an off wrapper between a polite region and the text that changed. The
+// capture used one, so it recorded text no screen reader would speak, and a flow requirement that
+// expected that text passed. The walk follows the flat tree the way the rule's walk does, so a
+// slotted element climbs through its slot.
 const LIVE_CAPTURE_IMPL = `
-  const LIVE = '[aria-live],[role="status"],[role="alert"],[role="log"]';
+  const liveResolver = (${createLiveResolver.toString()})();
+  const flatParent = (element) => {
+    if (element.assignedSlot) {
+      return element.assignedSlot;
+    }
+    const parent = element.parentNode;
+    if (parent instanceof Element) {
+      return parent;
+    }
+    if (parent instanceof ShadowRoot) {
+      return parent.host;
+    }
+    return null;
+  };
+  // The element whose region the change belongs to: the nearest one that sets a live value, when
+  // that value is polite or assertive. Null when the change is not live.
+  const liveHost = (start) => {
+    const elements = [];
+    const chain = [];
+    for (let current = start; current instanceof Element; current = flatParent(current)) {
+      elements.push(current);
+      chain.push({ ariaLive: current.getAttribute('aria-live'), role: current.getAttribute('role') });
+    }
+    if (liveResolver.effectiveLiveValue(chain) === 'off') {
+      return null;
+    }
+    return elements[liveResolver.nearestLiveSetter(chain)] ?? null;
+  };
   const buffer = [];
   const toText = (value) => {
     const normalized = (value ?? '').trim();
@@ -118,7 +153,7 @@ const LIVE_CAPTURE_IMPL = `
     }
     for (const mutation of mutations) {
       const target = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
-      const host = target && target.closest ? target.closest(LIVE) : null;
+      const host = target ? liveHost(target) : null;
       if (host) {
         push(host.textContent);
       }

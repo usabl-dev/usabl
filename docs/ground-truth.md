@@ -1827,6 +1827,15 @@ surface runs its authored steps, clicks and key presses, on that page.
 On an adopted page the capture starts at adoption, not at document start, and it also starts in
 any document the page navigates to afterwards.
 
+The capture hears a change only when the region it falls in is live. It resolves the effective
+live value with the same resolver `pf-toast-live-region` uses, carried into the browser as that
+resolver's own source, so the two cannot disagree: the nearest element that sets a value wins,
+an explicit `aria-live` beats the role, only the exact tokens `polite` and `assertive` are live,
+and roles match without regard to case. A change inside `aria-live="off"`, inside an off wrapper
+within a polite region, or inside a region whose token is `POLITE` or `banana` is not heard. The
+walk climbs through a slot the way the rule's walk does, but it runs in page script, so it sees
+only slots in open shadow roots.
+
 The capture and the element path function run in isolated worlds, which share the DOM with the
 page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
 page that defines `window.__usablDrain` or `window.__usablPathFor` before adoption, or replaces

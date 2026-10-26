@@ -358,6 +358,101 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     }
   });
 
+  describe('which regions the capture hears', () => {
+    // The capture hears a region only when its effective live value is polite or assertive, the
+    // same way pf-toast-live-region resolves it: the nearest element that sets a value wins, an
+    // explicit aria-live beats the role, and every other aria-live token is off. Each page also
+    // writes "Heard" to a polite region, so an empty list cannot pass by the capture not running.
+    function regionPage(region: string): string {
+      return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title></head><body>
+        <main><button type="button" id="save">Save</button>
+        <div aria-live="polite" id="control"></div>
+        ${region}
+        </main>
+        <script>
+          document.getElementById('save').addEventListener('click', () => {
+            document.getElementById('message').textContent = 'Message';
+            document.getElementById('control').textContent = 'Heard';
+          });
+        </script>
+      </body></html>`;
+    }
+
+    const cases: Array<[string, string]> = [
+      ['an aria-live="off" region', '<div aria-live="off" id="message"></div>'],
+      [
+        'an aria-live="off" wrapper inside a polite region',
+        '<div aria-live="polite"><div aria-live="off"><span id="message"></span></div></div>',
+      ],
+      ['an uppercase aria-live="POLITE" token', '<div aria-live="POLITE" id="message"></div>'],
+      ['an unknown aria-live="banana" token', '<div aria-live="banana" id="message"></div>'],
+      ['an aria-live="off" on a role="status" element', '<div role="status" aria-live="off" id="message"></div>'],
+      [
+        'a role="timer" inside an assertive region',
+        '<div aria-live="assertive"><div role="timer"><span id="message"></span></div></div>',
+      ],
+      [
+        'an off wrapper inside a polite shadow host slot',
+        '<div aria-live="polite"><x-off-slot><span id="message"></span></x-off-slot></div>' +
+          "<script>customElements.define('x-off-slot', class extends HTMLElement { constructor() { super();" +
+          " this.attachShadow({ mode: 'open' }).innerHTML = '<div aria-live=\"off\"><slot></slot></div>'; } });</script>",
+      ],
+    ];
+
+    for (const [name, region] of cases) {
+      it(`does not hear ${name}`, async () => {
+        const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(regionPage(region))}`);
+        try {
+          await page.click('#save');
+          expect(await page.drainAnnouncements()).toEqual(['Heard']);
+        } finally {
+          await page.close();
+        }
+      });
+    }
+
+    const heard: Array<[string, string]> = [
+      ['a role="alert" region with no aria-live', '<div role="alert" id="message"></div>'],
+      ['a role="log" region with no aria-live', '<div role="log" id="message"></div>'],
+      ['a role="STATUS" region, matched without regard to case', '<div role="STATUS" id="message"></div>'],
+      ['an empty aria-live on a role="status" element', '<div role="status" aria-live="" id="message"></div>'],
+      [
+        'a polite region inside an off wrapper',
+        '<div aria-live="off"><div aria-live="polite" id="message"></div></div>',
+      ],
+    ];
+
+    // checkPage adopts a page the caller opened, and the capture it installs there must make the
+    // same call as the one the CLI installs at document start.
+    it('does not hear an off wrapper inside a polite region on an adopted page', async () => {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const pw = await browser.newPage();
+        await pw.setContent(
+          regionPage('<div aria-live="polite"><div aria-live="off"><span id="message"></span></div></div>'),
+          { waitUntil: 'domcontentloaded' },
+        );
+        const page = await adoptPage(pw);
+        await page.click('#save');
+        expect(await page.drainAnnouncements()).toEqual(['Heard']);
+      } finally {
+        await browser.close();
+      }
+    });
+
+    for (const [name, region] of heard) {
+      it(`hears ${name}`, async () => {
+        const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(regionPage(region))}`);
+        try {
+          await page.click('#save');
+          expect([...(await page.drainAnnouncements())].sort()).toEqual(['Heard', 'Message']);
+        } finally {
+          await page.close();
+        }
+      });
+    }
+  });
+
   describe('a document without the announcement capture', () => {
     // Silence from a document where the capture is not running would read as a page that
     // announced nothing, and a flow requirement would fail or pass on no evidence. The drain throws

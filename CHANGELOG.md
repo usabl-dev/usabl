@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- The announcement capture now hears a region only when its effective live value is
+  polite or assertive, resolved the way `pf-toast-live-region` resolves it. Before, it
+  heard any element with an `aria-live` attribute, including `aria-live="off"`, an
+  uppercase or unknown token, and text inside an off wrapper within a polite region. A
+  flow requirement could then pass on an announcement no screen reader spoke. The rule
+  and the capture now share one resolver source. A `role="STATUS"` region, which the
+  capture used to miss, is now heard, as the rule already treated it.
+
 - Egress redaction now catches credential shapes it used to print: whitespace or a quote
   between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
   header segment or a JWT cut to two segments, the user name and password after `//` in
