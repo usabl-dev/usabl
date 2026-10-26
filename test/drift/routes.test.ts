@@ -143,8 +143,12 @@ describe('runRoutesDrift', () => {
         ],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
-        <Route path="/about" element={<About />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/home" element={<Home />} />
+            <Route path="/about" element={<About />} />
+          </Routes>
+        );
       `,
     });
 
@@ -161,8 +165,12 @@ describe('runRoutesDrift', () => {
         routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
-        <Route path="/about" element={<About />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/home" element={<Home />} />
+            <Route path="/about" element={<About />} />
+          </Routes>
+        );
       `,
     });
 
@@ -183,7 +191,7 @@ describe('runRoutesDrift', () => {
         ],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
+        export const App = () => <Routes><Route path="/home" element={<Home />} /></Routes>;
       `,
     });
 
@@ -246,6 +254,42 @@ describe('runRoutesDrift', () => {
     expect(outcome.stdout ?? '').not.toContain('Route drift detected');
   });
 
+  it('returns exit 2 and names each route it could not read, because drift is then unconfirmed', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+      }),
+      'src/router.tsx': [
+        "import { ROUTES } from './paths';",
+        'export const router = createBrowserRouter([',
+        "  { path: '/home' },",
+        '  { path: ROUTES.settings },',
+        ']);',
+      ].join('\n'),
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toContain('src/router.tsx line 4');
+    expect(outcome.stderr).toContain('Verify');
+  });
+
+  it('returns exit 2 when the router file does not parse', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+      }),
+      'src/router.tsx': `export const App = () => <Routes><Route path="/home" ></Routes>;`,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toContain('src/router.tsx');
+    expect(outcome.stderr).toContain('does not parse');
+  });
+
   it('returns exit 2 when router file is unreadable', async () => {
     const throwingFs = {
       async readFile(path: string): Promise<string | null> {
@@ -281,8 +325,12 @@ describe('runRoutesDrift', () => {
         ],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
-        <Route path="/y\x1b[2Kspoof" element={<Y />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/home" element={<Home />} />
+            <Route path="/y\x1b[2Kspoof" element={<Y />} />
+          </Routes>
+        );
       `,
     });
 
@@ -358,7 +406,7 @@ describe('runRoutesDrift', () => {
         ],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
+        export const App = () => <Routes><Route path="/home" element={<Home />} /></Routes>;
       `,
     });
 
@@ -378,8 +426,12 @@ describe('runRoutesDrift', () => {
         routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
-        <Route path="/added" element={<Added />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/home" element={<Home />} />
+            <Route path="/added" element={<Added />} />
+          </Routes>
+        );
       `,
     });
 
@@ -400,9 +452,13 @@ describe('runRoutesDrift', () => {
         ],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
-        <Route path="/home" element={<HomeDuplicate />} />
-        <Route path="/about" element={<About />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/home" element={<Home />} />
+            <Route path="/home" element={<HomeDuplicate />} />
+            <Route path="/about" element={<About />} />
+          </Routes>
+        );
       `,
     });
 
@@ -434,6 +490,94 @@ describe('drift command parsing', () => {
       expect(stderr.join('')).toContain('drift supports only the routes subcommand');
     } finally {
       writeSpy.mockRestore();
+    }
+  });
+});
+
+describe('runRoutesDrift with routes usabl cannot read', () => {
+  // A common router has a splat, a guard element among the routes, and routes built with map.
+  // Each is an entry usabl cannot read, which refuses drift until the sidecar acknowledges it.
+  const router = [
+    "const pages = [{ path: '/a' }];",
+    'export const App = () => (',
+    '  <Routes>',
+    '    <Route path="/home" element={<Home />} />',
+    '    <Route path="/app/*" element={<AppRoutes />} />',
+    '    <RequireAuth><Route path="/admin" element={<Admin />} /></RequireAuth>',
+    '    {pages.map((page) => <Route key={page.path} path={page.path} />)}',
+    '  </Routes>',
+    ');',
+  ].join('\n');
+  const sidecar = (acknowledgedUnreadable?: unknown): string =>
+    JSON.stringify({
+      routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+      ...(acknowledgedUnreadable === undefined ? {} : { acknowledgedUnreadable }),
+    });
+  const idsIn = (text: string): string[] => [...text.matchAll(/\[id ([0-9a-f]{12})\]/g)].map((match) => match[1] ?? '');
+
+  it('refuses and names each entry with an id the sidecar can acknowledge', async () => {
+    const outcome = await runRoutesDrift(fsOf({ 'usabl.routes.json': sidecar(), 'src/router.tsx': router }), 'src/router.tsx');
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toContain('src/router.tsx line 5');
+    expect(outcome.stderr).toContain('src/router.tsx line 6');
+    expect(outcome.stderr).toContain('src/router.tsx line 7');
+    expect(idsIn(outcome.stderr ?? '')).toHaveLength(3);
+    expect(outcome.stderr).toContain('acknowledgedUnreadable');
+  });
+
+  it('passes once every entry is acknowledged, and still lists them', async () => {
+    const first = await runRoutesDrift(fsOf({ 'usabl.routes.json': sidecar(), 'src/router.tsx': router }), 'src/router.tsx');
+    const acknowledged = idsIn(first.stderr ?? '').map((id) => ({ file: 'src/router.tsx', id }));
+
+    const outcome = await runRoutesDrift(
+      fsOf({ 'usabl.routes.json': sidecar(acknowledged), 'src/router.tsx': router }),
+      'src/router.tsx',
+    );
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.stderr).toBeUndefined();
+    expect(outcome.stdout).toContain('No drift detected');
+    expect(outcome.stdout).toContain('acknowledged in usabl.routes.json');
+    expect(outcome.stdout).toContain('src/router.tsx line 5');
+  });
+
+  it('keeps an acknowledgement when other lines move, and refuses when the declaration changes', async () => {
+    const first = await runRoutesDrift(fsOf({ 'usabl.routes.json': sidecar(), 'src/router.tsx': router }), 'src/router.tsx');
+    const acknowledged = idsIn(first.stderr ?? '').map((id) => ({ file: 'src/router.tsx', id }));
+
+    const moved = `// a new first line\n${router}`;
+    const stillOk = await runRoutesDrift(
+      fsOf({ 'usabl.routes.json': sidecar(acknowledged), 'src/router.tsx': moved }),
+      'src/router.tsx',
+    );
+    expect(stillOk.exitCode).toBe(0);
+
+    const changed = router.replace('path="/app/*"', 'path="/workspace/*"');
+    const refused = await runRoutesDrift(
+      fsOf({ 'usabl.routes.json': sidecar(acknowledged), 'src/router.tsx': changed }),
+      'src/router.tsx',
+    );
+    expect(refused.exitCode).toBe(2);
+    expect(refused.stderr).toContain('src/router.tsx line 5');
+    expect(refused.stderr).not.toContain('src/router.tsx line 6');
+  });
+
+  it('never lets a router file that does not parse be acknowledged', async () => {
+    const outcome = await runRoutesDrift(
+      fsOf({
+        'usabl.routes.json': sidecar([{ file: 'src/router.tsx', id: '000000000000' }]),
+        'src/router.tsx': 'export const App = () => <Routes><Route path="/home" ></Routes>;',
+      }),
+      'src/router.tsx',
+    );
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toContain('does not parse');
+  });
+
+  it('refuses a sidecar acknowledgement that is not a file and a 12-character hex id', async () => {
+    for (const bad of [[{ file: 'src/router.tsx', id: 'nothex' }], [{ id: 'aaaaaaaaaaaa' }], 'all']) {
+      await expect(
+        runRoutesDrift(fsOf({ 'usabl.routes.json': sidecar(bad), 'src/router.tsx': router }), 'src/router.tsx'),
+      ).rejects.toThrow(/acknowledgedUnreadable/);
     }
   });
 });

@@ -1,7 +1,7 @@
 /**
  * Import graph discovery for coverage planning.
  * It follows only files that can be proven to exist on disk.
- * It must never guess alias config or unresolved file extensions.
+ * It must never guess alias config or pick between candidate files.
  * `unresolvable` records incomplete graph evidence, not a coverage gap by itself.
  */
 // Use POSIX paths so coverage keys stay stable across operating systems.
@@ -13,11 +13,20 @@ import {
   resolveAliasSpecifier,
 } from './alias-config.js';
 
-export interface UnresolvableImport {
-  importer: string;
-  specifier: string;
-  kind: 'alias-unconfigured' | 'alias-unmapped' | 'file-not-found';
-}
+export type UnresolvableImport =
+  | {
+      importer: string;
+      specifier: string;
+      kind: 'alias-unconfigured' | 'alias-unmapped' | 'file-not-found';
+    }
+  | {
+      importer: string;
+      specifier: string;
+      // More than one file could be what the import loads. usabl does not pick one.
+      kind: 'ambiguous-candidates';
+      // Every candidate that exists, sorted.
+      candidates: string[];
+    };
 
 export interface ImportGraphView {
   get(file: string): string[];
@@ -31,11 +40,16 @@ export interface ImportGraphView {
 const FROM_IMPORT_RE = /\bimport\s+(?:type\s+)?[^"'`;\n]+?\sfrom\s*["'`]([^"'`]+)["'`]/g;
 const DYNAMIC_IMPORT_RE = /\bimport\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
 // Candidate suffixes for an extensionless import, split into a file tier and a directory-index
-// tier. The bundler's exact pick depends on its resolve.extensions order, which we do not parse, so
-// when more than one candidate exists in a tier we disclose instead of guessing. Guessing could
-// attribute a changed file to a screen that actually renders the sibling file.
-const FILE_SUFFIXES = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx'];
-const INDEX_SUFFIXES = ['/index.mjs', '/index.js', '/index.mts', '/index.ts', '/index.jsx', '/index.tsx'];
+// tier. The list is fixed: Vite's default JS and TS extensions, plus .vue and .svelte, which a
+// project can add to resolve.extensions. usabl does not read resolve.extensions from the Vite
+// config, because it cannot run the config, and a partial read that missed an extension would be
+// worse than a list that may hold too many. The bundler's exact pick depends on that order, so
+// when more than one candidate exists in a tier we link all of them and disclose the ambiguity
+// instead of guessing. Guessing, or linking none, could leave a screen that renders the changed
+// file out of the scan.
+const EXTENSIONS = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.vue', '.svelte'];
+const FILE_SUFFIXES = EXTENSIONS;
+const INDEX_SUFFIXES = EXTENSIONS.map((extension) => `/index${extension}`);
 
 function extractSpecifiers(source: string): string[] {
   const found: string[] = [];
@@ -76,26 +90,50 @@ async function existingCandidates(fs: FsGlob, base: string, suffixes: string[]):
   return hits;
 }
 
-async function resolveFileAtPath(fs: FsGlob, filePath: string): Promise<string | null> {
+// What an import path resolves to: one file, several candidates usabl will not choose between,
+// or nothing on disk.
+type Resolution = { file: string } | { candidates: string[] } | null;
+
+async function resolveFileAtPath(fs: FsGlob, filePath: string): Promise<Resolution> {
   if (hasKnownExtension(filePath)) {
-    return (await fs.readFile(filePath)) !== null ? filePath : null;
+    return (await fs.readFile(filePath)) !== null ? { file: filePath } : null;
   }
   // File tier before index tier (the bundler prefers a file over a directory index). Within a tier,
   // exactly one hit resolves; more than one is ambiguous, so disclose rather than pick.
-  const fileHits = await existingCandidates(fs, filePath, FILE_SUFFIXES);
-  if (fileHits.length === 1) {
-    return fileHits[0] ?? null;
+  for (const suffixes of [FILE_SUFFIXES, INDEX_SUFFIXES]) {
+    const hits = await existingCandidates(fs, filePath, suffixes);
+    if (hits.length === 1 && hits[0] !== undefined) {
+      return { file: hits[0] };
+    }
+    if (hits.length > 1) {
+      return { candidates: [...hits].sort() };
+    }
   }
-  if (fileHits.length > 1) {
-    return null;
-  }
-  const indexHits = await existingCandidates(fs, filePath, INDEX_SUFFIXES);
-  return indexHits.length === 1 ? (indexHits[0] ?? null) : null;
+  return null;
 }
 
-async function resolveRelativeImport(fs: FsGlob, importer: string, specifier: string): Promise<string | null> {
+async function resolveRelativeImport(fs: FsGlob, importer: string, specifier: string): Promise<Resolution> {
   const base = resolveBaseFile(importer, specifier);
   return resolveFileAtPath(fs, base);
+}
+
+// The files an import links to. An ambiguous import links every candidate: a change to any of them
+// then maps to the screen, which can scan a screen that does not render the changed file, but
+// never leaves out one that does. The ambiguity is still disclosed.
+function edgeTargets(resolution: Resolution): string[] {
+  if (resolution === null) return [];
+  return 'file' in resolution ? [resolution.file] : resolution.candidates;
+}
+
+// The disclosure for an import that did not resolve to exactly one file.
+function unresolvedEntry(
+  importer: string,
+  specifier: string,
+  resolution: { candidates: string[] } | null,
+): UnresolvableImport {
+  return resolution === null
+    ? { importer, specifier, kind: 'file-not-found' }
+    : { importer, specifier, kind: 'ambiguous-candidates', candidates: resolution.candidates };
 }
 
 function pushUniqueUnresolvable(list: UnresolvableImport[], entry: UnresolvableImport): void {
@@ -142,16 +180,13 @@ export async function buildImportGraph(
           continue;
         }
         const resolved = await resolveFileAtPath(fs, aliasPath);
-        if (resolved === null) {
-          pushUniqueUnresolvable(unresolvable, {
-            importer: file,
-            specifier,
-            kind: 'file-not-found',
-          });
-          continue;
+        if (resolved === null || 'candidates' in resolved) {
+          pushUniqueUnresolvable(unresolvable, unresolvedEntry(file, specifier, resolved));
         }
-        pushUnique(fileEdges, resolved);
-        queue.push(resolved);
+        for (const target of edgeTargets(resolved)) {
+          pushUnique(fileEdges, target);
+          queue.push(target);
+        }
         continue;
       }
 
@@ -161,17 +196,13 @@ export async function buildImportGraph(
       }
 
       const resolved = await resolveRelativeImport(fs, file, specifier);
-      if (resolved === null) {
-        pushUniqueUnresolvable(unresolvable, {
-          importer: file,
-          specifier,
-          kind: 'file-not-found',
-        });
-        continue;
+      if (resolved === null || 'candidates' in resolved) {
+        pushUniqueUnresolvable(unresolvable, unresolvedEntry(file, specifier, resolved));
       }
-
-      pushUnique(fileEdges, resolved);
-      queue.push(resolved);
+      for (const target of edgeTargets(resolved)) {
+        pushUnique(fileEdges, target);
+        queue.push(target);
+      }
     }
     edges.set(file, fileEdges);
   }
@@ -216,23 +247,15 @@ export async function inspectDirectImports(
         continue;
       }
       const resolved = await resolveFileAtPath(fs, aliasPath);
-      if (resolved === null) {
-        pushUniqueUnresolvable(unresolvable, {
-          importer: file,
-          specifier,
-          kind: 'file-not-found',
-        });
+      if (resolved === null || 'candidates' in resolved) {
+        pushUniqueUnresolvable(unresolvable, unresolvedEntry(file, specifier, resolved));
       }
       continue;
     }
     if (isRelativeSpecifier(specifier)) {
       const resolved = await resolveRelativeImport(fs, file, specifier);
-      if (resolved === null) {
-        pushUniqueUnresolvable(unresolvable, {
-          importer: file,
-          specifier,
-          kind: 'file-not-found',
-        });
+      if (resolved === null || 'candidates' in resolved) {
+        pushUniqueUnresolvable(unresolvable, unresolvedEntry(file, specifier, resolved));
       }
     }
   }
