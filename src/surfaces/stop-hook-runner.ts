@@ -21,6 +21,8 @@ import { verifyReceipt } from '../evidence/receipt.js';
 import { run } from '../run.js';
 import { checkGuard, computeSessionPins, diffSessionPins, type SessionPins } from '../trust/guard.js';
 import { loadConfig } from '../cli.js';
+import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
+import { frameUntrustedBlock } from './scrub.js';
 import {
   evaluateStopDecision,
   formatStoredReceiptAllow,
@@ -100,19 +102,46 @@ export function sessionPinFileName(sessionId: string, cwd: string): string {
   return `${sessionId}-${repoKey}.json`;
 }
 
-function parseSessionId(raw: string | null): { sessionId: string | null; warning: string | null } {
+// What to change when the hook input carried no session id usabl can use. Fixed text.
+const SESSION_ID_FIX =
+  'run the hook from an assistant that sends a session id in its Stop hook input ' +
+  '(Claude Code sends session_id, Cursor sends conversation_id). Each stop goes without the drift ' +
+  'comparison until then.';
+
+// A session id usabl can key pins by, or the notice that says why it could not. The id the input
+// carried is a value someone else wrote, so the notice prints it only inside the frame.
+function parseSessionId(raw: string | null): { sessionId: string } | { notice: PinNotice } {
   if (raw === null) {
-    return { sessionId: null, warning: null };
+    return { notice: pinsNotUsed('the hook input carried no session id', SESSION_ID_FIX) };
   }
   const candidate = raw.trim();
   const safePattern = /^[A-Za-z0-9._-]{1,128}$/;
   if (!safePattern.test(candidate) || candidate.includes('..')) {
     return {
-      sessionId: null,
-      warning: `NOT verified - ignored unsafe session_id: ${JSON.stringify(raw)}.`,
+      notice: pinsNotUsed('the session id in the hook input is not one usabl can use as a file name', SESSION_ID_FIX, [
+        `session_id: ${JSON.stringify(raw)}`,
+      ]),
     };
   }
-  return { sessionId: candidate, warning: null };
+  return { sessionId: candidate };
+}
+
+/**
+ * Fixed lines, then the carried values inside one untrusted frame. Paths, ids, and error text in
+ * this file come from the repository, the hook input, the environment, or a thrown error, so none
+ * of them is printed as usabl's own words. Each piece is bounded and scrubbed by the frame.
+ */
+function framedMessage(lines: string[], pieces: string[]): string {
+  if (pieces.length === 0) {
+    return lines.join('\n');
+  }
+  return assembleBoundedMessage({
+    scaffold: lines,
+    keep: lines.length,
+    pieces: pieces.map((piece) => boundField(piece, 'gapReason')),
+    keepPieces: pieces.length,
+    frame: frameUntrustedBlock,
+  });
 }
 
 async function writeStderr(ports: StopHookRunnerPorts, text: string): Promise<void> {
@@ -186,24 +215,64 @@ interface PinNotice {
   message: string;
 }
 
-function pinsNotUsed(reason: string, fix: string): PinNotice {
+/**
+ * The notice for pins this stop did not use. `reason` and `fix` are fixed text from usabl, except
+ * that the pin store's reasons and fixes name directories and files, and those paths come from the
+ * environment. So a reason or fix that is not fixed text goes in `carried`, which is printed inside
+ * the frame, and the fixed line says where to find it.
+ */
+function pinsNotUsed(reason: string, fix: string, carried: string[] = []): PinNotice {
   return {
     driftChecked: false,
-    message:
-      `NOT verified - usabl did not use session pins for this stop because ${reason}. ` +
-      'Guarded policy drift during this session was not checked. usabl changed nothing there. ' +
-      `To fix: ${fix}`,
+    message: framedMessage(
+      [
+        `NOT verified - usabl did not use session pins for this stop because ${reason}. ` +
+          'Guarded policy drift during this session was not checked. usabl changed nothing there. ' +
+          `To fix: ${fix}`,
+      ],
+      carried,
+    ),
   };
 }
 
-function pinsNotRecorded(reason: string, fix: string, driftChecked: boolean): PinNotice {
+/** A refusal from the pin store: its reason and fix name paths, so both go inside the frame. */
+function pinsRefused(refusal: { reason: string; fix: string }): PinNotice {
+  return pinsNotUsed(
+    'the pin store refused to read them (its reason is under "pin reason" in the untrusted text below)',
+    'see "pin fix" in the untrusted text below.',
+    [`pin reason: ${refusal.reason}`, `pin fix: ${refusal.fix}`],
+  );
+}
+
+function pinsNotRecorded(refusal: { reason: string; fix: string }, driftChecked: boolean): PinNotice {
   const consequence = driftChecked
     ? 'usabl checked guarded policy drift on this stop, but the next stop compares against the older pins.'
     : 'Guarded policy drift during this session cannot be checked until pins are recorded.';
   return {
     driftChecked,
-    message: `NOT verified - usabl could not record session pins for this stop because ${reason}. ${consequence} To fix: ${fix}`,
+    message: framedMessage(
+      [
+        'NOT verified - usabl could not record session pins for this stop because the pin store refused to ' +
+          `write them (its reason is under "pin reason" in the untrusted text below). ${consequence} ` +
+          'To fix: see "pin fix" in the untrusted text below.',
+      ],
+      [`pin reason: ${refusal.reason}`, `pin fix: ${refusal.fix}`],
+    ),
   };
+}
+
+/**
+ * The drift lines. The changed paths are file names in the repository, which anyone who can add a
+ * file under a guarded directory chooses, so they are carried values and go inside the frame.
+ */
+function driftMessage(drift: string[], continuation: boolean): string {
+  const head =
+    `NOT verified - guarded policy drift during this session: ${drift.length} guarded file(s) changed ` +
+    'since the session pins were recorded, named under "drifted files" in the untrusted text below.';
+  const next = continuation
+    ? 'usabl let this stop through without blocking again (continuation already active). Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to clear this.'
+    : 'Next: tell the user that guarded policy files changed during this session and need review. Do not edit those files to clear this block.';
+  return framedMessage([head, next], [`drifted files: ${drift.join(', ')}`]);
 }
 
 async function verifyStoredReceipt(
@@ -336,22 +405,24 @@ export async function runStopHook(
     // drift, so a stored receipt must never answer a stop before they are compared.
     let pinsCompared = false;
     const parsedSession = parseSessionId(input.sessionId);
-    if (parsedSession.warning !== null) {
-      await writeStderr(ports, parsedSession.warning);
-    }
-    if (parsedSession.sessionId !== null) {
+    if ('notice' in parsedSession) {
+      // No usable session id means no pins to compare. That is never silent: an allow on this stop
+      // says session drift was not checked, and the notice says why.
+      pinNotice = parsedSession.notice;
+    } else {
       const pinName = sessionPinFileName(parsedSession.sessionId, ports.cwd());
       const stored = await ports.pins.read(pinName);
       const previousPins = stored.status === 'found' ? parseSessionPins(stored.contents) : null;
       if (stored.status === 'refused') {
         // Never read as "no pins yet": that is exactly what would adopt a planted file.
-        pinNotice = pinsNotUsed(stored.reason, stored.fix);
+        pinNotice = pinsRefused(stored);
       } else if (stored.status === 'found' && previousPins === null) {
         // A pin file of ours that does not parse is not "no pins yet" either. Recording fresh pins
         // over it would take whatever is committed now, a tamper included, as the baseline.
         pinNotice = pinsNotUsed(
           'the session pin file does not hold pins usabl can read',
-          deletePinFileFix(ports.pins.locate(pinName)),
+          'see "pin fix" in the untrusted text below.',
+          [`pin fix: ${deletePinFileFix(ports.pins.locate(pinName))}`],
         );
       } else {
         const nextPins = await computeSessionPins(deps, config);
@@ -361,26 +432,25 @@ export async function runStopHook(
           // No pins yet: this stop records the first pins for the session.
           const written = await ports.pins.create(pinName, serialized);
           if (written.status === 'refused') {
-            pinNotice = pinsNotRecorded(written.reason, written.fix, false);
+            pinNotice = pinsNotRecorded(written, false);
           }
         } else {
           const drift = diffSessionPins(previousPins, nextPins);
           if (drift.length > 0) {
-            const message = `NOT verified - guarded policy drift during this session: ${drift.join(', ')}`;
             if (input.stopHookActive) {
               // Allow one continuation while active to avoid recursive stop-hook loops.
               // We keep the previous pins so a retry cannot convert detected drift into a silent allow.
-              await emitProtocolAllow(ports, `${message}. continuation already active.`, options);
+              await emitProtocolAllow(ports, driftMessage(drift, true), options);
               return 0;
             }
             // Drift is a trust boundary. Overwriting pins here would let "retry stop" clear the evidence.
-            await emitProtocolBlock(ports, message, options);
+            await emitProtocolBlock(ports, driftMessage(drift, false), options);
             return 0;
           }
           pinsCompared = true;
           const written = await ports.pins.replace(pinName, serialized);
           if (written.status === 'refused') {
-            pinNotice = pinsNotRecorded(written.reason, written.fix, true);
+            pinNotice = pinsNotRecorded(written, true);
           }
         }
       }
@@ -419,7 +489,19 @@ export async function runStopHook(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // Hook errors fail open with disclosure because a wedged stop hook is worse than an honest unverified allow.
-    await emitProtocolAllow(ports, `NOT verified - stop hook error: ${message}`, options);
+    // The error text can carry a path or a value from the repository, so it goes inside the frame.
+    await emitProtocolAllow(
+      ports,
+      framedMessage(
+        [
+          'NOT verified - stop hook error: the hook failed before it reached a verdict, so it proved nothing ' +
+            'about this change. usabl is not blocking this stop. The error is under "error" in the untrusted text below.',
+          'Next: run usabl check, or check the change by hand, before you call this change accessible.',
+        ],
+        [`error: ${message}`],
+      ),
+      options,
+    );
     await writePinNotice(ports, pinNotice);
     return 0;
   } finally {
