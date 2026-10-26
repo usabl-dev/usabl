@@ -1238,7 +1238,8 @@ rather than guessing narrow, and it ignores includes shown as code blocks or com
 Manifest paths are validated: a page `url` must start with `/`, reject `@` and
 percent-encoded traversal, and `assemblyFile`/`sources` are `..`-rejecting repo-relative
 paths. `docsBaseUrl` is refused when it carries a user name or password, found by URL parsing,
-by an `@` in the authority after `//`, or by an `@` before the first `/`, `?`, or `#`. Every
+by an `@` in the authority after `//`, or by an `@` before the first `/`, `?`, or `#`, with
+backslashes read as slashes for the last two, the same readings `usabl.config.json` URLs get. Every
 docs screen url is built on it and printed in the results, so the refusal names the field and
 never the value.
 

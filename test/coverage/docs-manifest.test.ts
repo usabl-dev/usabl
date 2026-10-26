@@ -205,6 +205,9 @@ describe('parseDocsManifest refuses a user name or password in docsBaseUrl', () 
     ['backslashes the URL parser reads as slashes', 'https:\\\\docuser:SECRETPOISON@docs.local'],
     ['an authority the URL parser refuses', 'http://docuser:SECRETPOISON@[docs/'],
     ['no scheme', 'docuser:SECRETPOISON@docs.local/docs'],
+    // URL parsing reads this as a path, but a reader, or another parser that takes a backslash
+    // for a slash, reads a user name and password in it.
+    ['a backslash that reads as a second slash', 'foo:/\\docuser:SECRETPOISON@docs.local'],
   ];
 
   for (const [name, docsBaseUrl] of refused) {

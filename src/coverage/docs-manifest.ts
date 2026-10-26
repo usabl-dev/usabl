@@ -76,29 +76,27 @@ function expectDocsPathUrl(value: unknown, field: string): string {
   return url;
 }
 
-/**
- * True when a base URL carries a user name or password, by any of three readings.
- *
- * The URL parser is the first reading, and it finds userinfo where the text does not show it
- * plainly, for example after backslashes it reads as slashes. It cannot judge a value it refuses
- * to parse, so two plain text readings follow: an "@" inside the authority after "//", and an "@"
- * before the first "/", "?", or "#", which catches a value written without a scheme. An "@" in a
- * path, a query, or a fragment is none of these.
- */
-function carriesUserinfo(value: string): boolean {
+// Userinfo is read three ways, and any one of them refuses the value. They match the readings
+// that refuse a user name or password in surfaces[].url and appBaseUrl. URL parsing finds it in
+// the spellings a browser accepts, such as a backslash for a slash. The two shape checks run on
+// every value, with backslashes read as slashes, because a person or another parser can read a
+// credential where URL parsing finds none. The first finds an "@" in the authority after "//".
+// The second finds an "@" before the first slash, query, or fragment, which covers a value with
+// no "//" at all. An "@" in a path, a query, or a fragment is none of these.
+const USERINFO_SHAPE = /^[^/?#]*\/\/[^/?#]*@/;
+const LEADING_USERINFO_SHAPE = /^[^/?#]*@/;
+
+function carriesUserinfo(raw: string): boolean {
   try {
-    const parsed = new URL(value);
-    if (parsed.username !== '' || parsed.password !== '') {
+    const url = new URL(raw);
+    if (url.username !== '' || url.password !== '') {
       return true;
     }
   } catch {
-    // Not parseable. The text readings below still apply.
+    // Not a URL the parser accepts. The shape checks below still apply.
   }
-  const slashes = value.indexOf('//');
-  if (slashes !== -1 && /^[^/?#]*@/.test(value.slice(slashes + 2))) {
-    return true;
-  }
-  return /^[^/?#]*@/.test(value);
+  const slashed = raw.replace(/\\/g, '/');
+  return USERINFO_SHAPE.test(slashed) || LEADING_USERINFO_SHAPE.test(slashed);
 }
 
 function expectDocsBaseUrl(value: unknown, field: string): string {
@@ -107,7 +105,7 @@ function expectDocsBaseUrl(value: unknown, field: string): string {
   // request comment included. A user name or password here would be printed there, so it is
   // refused, and the message never repeats the value because the value is the secret.
   if (carriesUserinfo(url)) {
-    throw configError`usabl.docs.json ${field} must not contain a user name or password. Every docs screen url is built on it, and those urls are printed in the results. Remove the user name and password. To reach protected docs, use a storage state, which is never committed.`;
+    throw configError`usabl.docs.json ${field} has a user name or password in it. Every docs screen url is built on it, and usabl prints those urls in every report, including pull request comments, so it refuses a URL with credentials. Remove them, and reach protected docs with a storage state (USABL_STORAGE_STATE) instead.`;
   }
   return url;
 }
