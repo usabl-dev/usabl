@@ -1616,6 +1616,16 @@ client runs inside the tested page's own JavaScript realm, so the page can inter
 what the overlay shows; the gate computes the verdict and the CLI and CI enforce it. Oracle-preserving:
 mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
 
+In `vite serve` only, the plugin adds `data-source-file` and `data-source-line` to each component
+and HTML element opening tag in the application's `.tsx` and `.jsx` files, so a finding can name
+the line that rendered the element. The plugin runs before the host's JSX transform
+(`enforce: 'pre'`), so it reads raw TSX. It parses each file with `@babel/parser` and puts the
+attributes right after the tag name and any type arguments, so an element such as
+`<PageWizard<Data>>` stays valid. Strings, comments, types, and generic arrow functions are not
+tags in the syntax tree and are never touched. A namespaced tag such as `<svg:rect>` is left as
+written. A file the parser cannot read is served unchanged, with one warning in the dev server log
+that names the file. Its elements carry no source line, and the application still runs.
+
 ### 11.4 CI/PR comment (trusted-ref policy read)
 
 Reads policy from the protected branch (or the trusted ref), never the working tree.

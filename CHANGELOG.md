@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- The Vite plugin no longer breaks a JSX element that has type arguments. It adds
+  `data-source-file` and `data-source-line` to raw TSX, and it found tags by matching
+  text, so in `<PageWizard<SubscriptionWizardData> ...>` it put the attributes inside
+  the type argument list. It did the same inside a generic arrow function such as
+  `<T,>(value: T) => value`. The file then failed to parse, and the dev server answered
+  500 for every module that imported it. Now the plugin parses each file and puts the
+  attributes right after the tag name and any type arguments. Nested type arguments, a
+  generic element inside a conditional, a self-closing generic element, and a
+  member-expression tag such as `<Foo.Bar>` all stay valid. A fragment and a namespaced
+  tag such as `<svg:rect>` get no attributes. A file the parser cannot read is served
+  unchanged, with one warning in the dev server log that names the file, never a 500.
+  The attributes now come right after the tag name instead of just before the tag close.
+
 - The stop hook now compares session pins before it allows a stop on a stored receipt.
   Before, a matching receipt allowed the stop first, so a guarded policy file weakened and
   committed during the session, then checked with `usabl check` under the weaker policy,
@@ -104,6 +117,13 @@
 
 ### Changed
 
+- usabl now has one more runtime dependency, `@babel/parser`, pinned to exactly
+  7.29.11 (MIT). The Vite plugin's source attribute injector uses it to read JSX and
+  TypeScript, including type arguments and comments, instead of matching text. Only the
+  parser is used. It brings three small packages with it: `@babel/types`,
+  `@babel/helper-string-parser`, and `@babel/helper-validator-identifier`, all MIT. The
+  7.x line is used because 8.x requires Node.js 22.18 or later, and usabl supports every
+  Node.js 22 release.
 - `checkPage` called without a `screenId` returns `not_covered` in a project that has
   content or flow design requirements: the unlabeled page counts as no surface, so
   each requirement is a `not-covered` gap until the call passes the page's surface id.

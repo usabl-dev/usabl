@@ -545,6 +545,7 @@ operator must set the engine SHA before the gate can run.
 | axe-core | MPL-2.0 | Dynamic link; surface version in output |
 | Playwright | Apache-2.0 | Browser binaries separate terms |
 | PatternFly | MIT | Rulepack data only |
+| @babel/parser | MIT | Pinned exactly. Reads JSX and TypeScript source; parser only. Brings @babel/types, @babel/helper-string-parser, and @babel/helper-validator-identifier, all MIT |
 | Guidepup (if adopted) | MIT | Optional phrasing validation |
 
 **usabl release license:** Apache-2.0 (repo `LICENSE`). MPL boundary: do not vendor
