@@ -325,3 +325,35 @@ describe('injectJsxSourceAttributes: elements with type arguments and other tag 
     expect(reported).toEqual([TSX]);
   });
 });
+
+describe('injectJsxSourceAttributes: attribute order and other syntax', () => {
+  const TSX = 'src/pages/Widget.tsx';
+  const injected = (line: number, file = TSX): string => `data-source-file="${file}" data-source-line="${line}"`;
+
+  it('puts the attributes after a spread, so a spread cannot replace the element location', () => {
+    // Props spread onto an element can carry a data-source-file from the parent. In JSX the last
+    // attribute wins, so the element's own location has to come after the spread.
+    const code = 'export const B = (rest: Props) => <button {...rest}>Go</button>;';
+    const out = injectJsxSourceAttributes(code, TSX);
+    expect(out).toBe(`export const B = (rest: Props) => <button {...rest} ${injected(1)}>Go</button>;`);
+    const compiled = transformSync(out, { loader: 'tsx', jsx: 'automatic' }).code;
+    expect(compiled.indexOf('...rest')).toBeLessThan(compiled.indexOf('"data-source-file"'));
+  });
+
+  it('injects in a .tsx file that uses decorators', () => {
+    const code = ['@observer', 'class Store {}', 'export const A = () => <div>x</div>;'].join('\n');
+    const reported: string[] = [];
+    const out = injectJsxSourceAttributes(code, TSX, (file) => reported.push(file));
+    expect(reported).toEqual([]);
+    expect(out).toContain(`<div ${injected(3)}>x</div>`);
+  });
+
+  it('injects in a .jsx file that uses Flow types', () => {
+    const JSX = 'src/pages/Widget.jsx';
+    const code = ['// @flow', 'type Props = { title: string };', 'export const A = (props: Props) => <h1>{props.title}</h1>;'].join('\n');
+    const reported: string[] = [];
+    const out = injectJsxSourceAttributes(code, JSX, (file) => reported.push(file));
+    expect(reported).toEqual([]);
+    expect(out).toContain(`<h1 ${injected(3, JSX)}>{props.title}</h1>`);
+  });
+});
