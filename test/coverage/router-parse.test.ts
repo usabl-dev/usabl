@@ -369,3 +369,144 @@ describe('router-parse: routes that match many URLs', () => {
     expect(result.unreadable.map((gap) => gap.line)).toEqual([4]);
   });
 });
+
+// Shapes where reading only the known router dropped a real route with no gap. Each route must be
+// read, or named as unreadable with its line. None may vanish.
+describe('router-parse: never drops a route-shaped thing in silence', () => {
+  const read = (raw: string, file = 'router.tsx') => parseRouterFallback(raw, file);
+  const urls = (raw: string, file?: string): string[] => read(raw, file).routes.map((route) => route.url);
+  const lines = (raw: string, file?: string): Array<number | null> => read(raw, file).unreadable.map((gap) => gap.line);
+
+  it('reads the routes passed to useRoutes next to a <Routes> element', () => {
+    const raw = [
+      "const adminRoutes = [{ path: '/admin', element: <Admin /> }];",
+      'export const Admin = () => useRoutes(adminRoutes);',
+      'export const App = () => <Routes><Route path="/home" element={<Home />} /></Routes>;',
+    ].join('\n');
+    expect(urls(raw).sort()).toEqual(['/admin', '/home']);
+    expect(lines(raw)).toEqual([]);
+  });
+
+  it('names a <Route> beside a <Switch> in the v5 modal pattern', () => {
+    const raw = [
+      'export const App = () => (',
+      '  <Router>',
+      '    <Switch>',
+      '      <Route path="/gallery" component={Gallery} />',
+      '    </Switch>',
+      '    <Route path="/img/:id" component={Modal} />',
+      '  </Router>',
+      ');',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/gallery']);
+    expect(lines(raw)).toEqual([6]);
+  });
+
+  it('reads a createMemoryRouter and names the routes of a JSX router with no <Routes> in one file', () => {
+    // A <Route> directly under <BrowserRouter> is the older style with no <Routes> or <Switch>.
+    // The createMemoryRouter call made the file look like it had a router, so the JSX routes were
+    // dropped.
+    const raw = [
+      'export const App = () => <BrowserRouter><Route path="/home" component={Home} /></BrowserRouter>;',
+      'export function renderAt(entry: string) {',
+      "  return createMemoryRouter([{ path: '/settings', element: <Settings /> }], { initialEntries: [entry] });",
+      '}',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/settings']);
+    expect(lines(raw)).toEqual([1]);
+  });
+
+  it('reads a router factory imported under another name', () => {
+    const raw = [
+      "import { createBrowserRouter as makeRouter } from 'react-router-dom';",
+      "export const router = makeRouter([{ path: '/aliased' }]);",
+      'export const App = () => <Routes><Route path="/home" /></Routes>;',
+    ].join('\n');
+    expect(urls(raw).sort()).toEqual(['/aliased', '/home']);
+    expect(lines(raw)).toEqual([]);
+  });
+
+  it('reads a router factory wrapped by a call that takes the factory', () => {
+    const raw = [
+      "import * as Sentry from '@sentry/react';",
+      'const sentryCreateBrowserRouter = Sentry.wrapCreateBrowserRouterV6(createBrowserRouter);',
+      "export const router = sentryCreateBrowserRouter([{ path: '/wrapped' }]);",
+      'export const App = () => <Routes><Route path="/home" /></Routes>;',
+    ].join('\n');
+    expect(urls(raw).sort()).toEqual(['/home', '/wrapped']);
+    expect(lines(raw)).toEqual([]);
+  });
+
+  it('names a call to a router factory it does not know', () => {
+    const raw = [
+      "export const router = sentryCreateBrowserRouter([{ path: '/unknown' }]);",
+      'export const App = () => <Routes><Route path="/home" /></Routes>;',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/home']);
+    expect(lines(raw)).toEqual([1]);
+  });
+
+  it('names a const route list that is changed before it reaches the router', () => {
+    const raw = [
+      "const routes = [{ path: '/a' }];",
+      "routes.push({ path: '/debug' });",
+      "const more = [{ path: '/b' }, { path: '/c' }];",
+      "more[1] = { path: '/replaced' };",
+      'const extra = [<Route key="a" path="/x" />];',
+      'extra.push(<Route key="b" path="/b" />);',
+      'export const router = createBrowserRouter([...routes, ...more]);',
+      'export const App = () => <Routes>{extra}</Routes>;',
+    ].join('\n');
+    expect(urls(raw)).toEqual([]);
+    expect(lines(raw)).toEqual([7, 7, 8]);
+  });
+
+  it('names a file with route objects but no router, once', () => {
+    const raw = "export const routes = [{ path: '/a' }, { path: '/b' }];";
+    expect(urls(raw)).toEqual([]);
+    expect(lines(raw)).toEqual([null]);
+    expect(read(raw).unreadable[0]?.reason).toMatch(/no router/);
+  });
+
+  it('reads a route object with method shorthand beside its path and children', () => {
+    const raw = [
+      'export const router = createBrowserRouter([',
+      "  { path: '/', async loader() { return null; }, action() {}, children: [{ path: 'child' }] },",
+      ']);',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/', '/child']);
+    expect(lines(raw)).toEqual([]);
+  });
+
+  it('names a route object whose spread could supply its path or children', () => {
+    const raw = [
+      'export const router = createBrowserRouter([',
+      "  { ...shared, path: '/one', children: [] },",
+      "  { path: '/two', ...shared },",
+      "  { [key]: '/three' },",
+      ']);',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/one']);
+    expect(lines(raw)).toEqual([3, 4]);
+  });
+
+  it('reads a router file that uses decorators', () => {
+    const raw = [
+      '@observer',
+      'class Store {}',
+      'export const App = () => <Routes><Route path="/home" /></Routes>;',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/home']);
+    expect(lines(raw)).toEqual([]);
+  });
+
+  it('reads a .jsx router file with Flow types', () => {
+    const raw = [
+      '// @flow',
+      'type Props = { title: string };',
+      'export const App = (props: Props) => <Routes><Route path="/home" /></Routes>;',
+    ].join('\n');
+    expect(urls(raw, 'src/App.jsx')).toEqual(['/home']);
+    expect(lines(raw, 'src/App.jsx')).toEqual([]);
+  });
+});

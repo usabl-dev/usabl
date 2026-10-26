@@ -204,6 +204,26 @@ export const router = createBrowserRouter([
     expect(draft.routes.routes).toEqual([{ screenId: 'account', url: '/account', entryFile: null }]);
   });
 
+  it('names a route outside the router in a Review note, with its line', async () => {
+    const app = `import { Route, Routes } from 'react-router-dom'
+import { Home } from './pages/Home'
+import { Account } from './pages/Account'
+
+export const Modal = () => <Route path="/account" element={<Account />} />
+
+export function App() {
+  return (
+    <Routes>
+      <Route path="/home" element={<Home />} />
+    </Routes>
+  )
+}
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([{ screenId: 'home', url: '/home', entryFile: 'src/pages/Home.tsx' }]);
+    expect(draft.notes.some((note) => note.startsWith('Review: src/App.tsx line 5:'))).toBe(true);
+  });
+
   it('writes no route and names the file when it has routes but no router', async () => {
     // With no router in the file, usabl cannot tell which routes are real, so it reads none of
     // them and says so once for the file, instead of guessing.
