@@ -500,7 +500,8 @@ describe('stop-hook-runner fast path and session pins', () => {
     expect(stderr).not.toContain('VERIFIED');
     const payload = JSON.parse(stdout.trim()) as { decision: string; reason: string };
     expect(payload.decision).toBe('block');
-    expect(payload.reason).toContain('guarded policy drift during this session: usabl.config.json');
+    expect(payload.reason.startsWith('NOT verified - guarded policy drift during this session')).toBe(true);
+    expect(payload.reason).toContain('drifted files: usabl.config.json');
     // The pins are kept, so retrying the stop cannot clear the evidence.
     expect(h.pins.files.get(pinName)).toBe(firstPins);
   });
@@ -597,7 +598,8 @@ describe('stop-hook-runner fast path and session pins', () => {
     expect(stderr).not.toContain('match the session pins');
     const notice = stderr.indexOf('NOT verified - usabl did not use session pins for this stop because');
     expect(notice).toBeGreaterThan(stderr.indexOf('[END UNTRUSTED TEXT]'));
-    expect(stderr.trimEnd().endsWith('To fix: remove the directory.')).toBe(true);
+    expect(stderr).toContain('pin fix: remove the directory.');
+    expect(stderr.trimEnd().endsWith('[END UNTRUSTED TEXT]')).toBe(true);
     expect(h.pins.writes).toEqual([]);
   });
 
@@ -630,7 +632,8 @@ describe('stop-hook-runner fast path and session pins', () => {
 
     const stderr = h.stderr.join('');
     expect(stderr.startsWith('VERIFIED (exit 0, session drift not checked): a stored receipt matches')).toBe(true);
-    expect(stderr).toContain('NOT verified - usabl could not record session pins for this stop because the pin directory is full');
+    expect(stderr).toContain('NOT verified - usabl could not record session pins for this stop');
+    expect(stderr).toContain('pin reason: the pin directory is full');
   });
 });
 
