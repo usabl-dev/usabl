@@ -1261,36 +1261,58 @@ the operator say which happened.
 #### Row keys
 
 After the providers run, the check runner reads, on the same live page, the table row each
-finding's element sits in (`Page.rowContext`). The row is the nearest `tr` or `role="row"` above
-the element. Its key is the first of these the row has:
+finding's element sits in (`Page.rowContext`). A table is a `table` or an element with role
+`table`, `grid`, or `treegrid`. Its rows are the `tr` and `role="row"` elements whose nearest table
+is that table, so a row of a nested table is never one of the outer table's rows. Header and footer
+rows (inside `thead` or `tfoot`, or holding a column header) are not body rows.
 
-1. A key attribute (`data-row-key`, `data-key`, `data-id`, `data-ouia-component-id`, `id`) whose
-   value no other row of the same table holds and that is not an id a framework mints per mount
-   (React `useId`, `pf-random-id-`, `OUIA-Generated-`). A value every row shares names no row.
-2. A row header: a `th` that is not a column header, or `role="rowheader"`, in a row outside
-   `thead`. Its text is the key.
+**How a table keys its rows.** The table's key source is the first of these that any of its body
+rows has:
 
-A row with neither has no key, and its controls key as they did before. A row's position is never
-used: rows move when a list is sorted or grows, and a key that moved with them would make the same
-control a new barrier on every reload.
+1. A key attribute: `data-row-key`, `data-key`, `data-id`, `data-ouia-component-id`, or `id`. An
+   id a framework mints per mount (React `useId`, `pf-random-id-`, `OUIA-Generated-`) does not
+   count.
+2. A row header: a `th` that is not a column header, or `role="rowheader"`. Its text is the key.
 
-The key is page text, often customer data such as a host or user name. It is folded (control
-characters removed, white space collapsed, lower case) and hashed with SHA-256 at once, and only
-the first 16 hex characters are kept, in `evidence.extra.rowScope`. So a row key carries no page
-text into a finding or the committed floor. Name keys already carry a slug of an accessible name;
-row keys carry less. The rest of the row scope is the table's neutralized structural path, the
-control's role folded to a token, and the tag and child-position path from the row down to the
-control. The child positions are kept inside the row, so two unnamed buttons in one row stay
-apart, and they do not depend on the row's position in the table.
+A table none of whose body rows has any of these is not keyed, and its controls key as they did
+before. In a keyed table, every body row must have the table's key source with a value no other row
+of the table holds. Values are compared exactly, as they are hashed: the full string, with case and
+spaces. A row's position is never used: rows move when a list is sorted or grows.
+
+**How a table is named.** By its own key attribute (`id`, `data-ouia-component-id`,
+`data-table-key`), its accessible name (`aria-label`, `aria-labelledby`), or its caption, after the
+identity of the table and row it is nested in, if any. Its position is never used. An unnamed table
+is fine when it is the only table on the screen with its identity.
+
+**Rows that cannot be told apart.** A row in a keyed table that has no key of the table's kind, a
+key another row of the table holds exactly, a key or a table identity over 65,536 characters, or a
+table whose identity another table on the screen shares, is ambiguous. So is a row the page could
+not be read for. Such a finding keeps its old key and is marked unverified, and the scan adds a
+not-covered gap for the screen that names the screen and the rule, never a key, and says why and
+what to change. Under the old key a new barrier in one row could fill a count accepted for another
+and read as carried, so the run cannot prove it is not hiding there. Calling the finding new would
+be a guess, so it is unverified: it blocks as not covered, never as carried. A finding outside any
+body row of a keyed table is not ambiguous: it keeps the old key with no gap, as before.
+
+**What is kept.** The row key and the table identity are page text, often customer data such as a
+host or user name, and a nested table's identity includes the key of the row around it. Each is
+hashed with SHA-256, exactly and in full, at once, and only the first 16 hex characters are kept,
+in `evidence.extra.rowScope`. Hashing the exact value is what keeps two rows the page reader told
+apart from sharing a hash; folding case or cutting a long key did not. So no row key or table name
+reaches a finding's identity or the committed floor. The rest of the row scope is the control's
+role folded to a token and the tag and child-position path from the row down to the control. The
+child positions are kept inside the row, so two unnamed buttons in one row stay apart, and they do
+not depend on the row's position in the table. A finding's `elementPath` is the scanner's selector,
+which tells a developer where the element is; it is not part of the identity and is printed only
+through the scrubber.
 
 The element key is `screenId|rule|row:` followed by the JSON encoding of those four values, so a
 separator inside one cannot make two rows share a key. A row scope on a draft that is not four
 strings is ignored, because a library caller can hand the gate any draft.
 
-What row keys do not cover: a control outside any table row, a row with no unique key attribute
-and no row header, and a grid built without row roles. Those keep the name, structural, or count
-key and the residual described under Evidence floor. Rows that share one row header text share a
-key, and their count separates them as before.
+What row keys do not cover: a control outside any table row, a control in a table none of whose
+rows has a key, and a grid built without row roles. Those keep the name, structural, or count key
+and the residual described under Evidence floor.
 
 #### Which keys a comparison uses
 
@@ -1391,6 +1413,9 @@ element key, because a key can carry page text. An intermittent barrier is not a
 blocks as new on any later run where it appears. The report says so and names the ways out: fix
 it, check the screen against fixed data, or waive the rule on that screen with an expiry. Coverage
 must be complete in both scans; a partial baseline floors only the screens both scans saw cleanly.
+The gaps the gate raises because the committed floor is old, the version 1 placeholder counts and
+the version 1 or 2 floor that predates row keys, do not count against completeness here: they say
+to regenerate the floor, and this is the command that does it. Every other gap still does.
 
 The file carries a `version`. Version 1 wrote a placeholder count of 1 for every name and
 structural entry, so those counts are not observations and the gate must not compare them.

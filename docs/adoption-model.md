@@ -95,8 +95,13 @@ that, and what to do.
 - **Controls in table rows key per row.** An icon button or a kebab toggle in every row is one
   identity per row, named by the row's key attribute (`data-row-key`, `data-key`, `data-id`, or a
   unique `id`) or by its row header (`<th>` in a body row, or `role="rowheader"`). The key is
-  hashed, so no row text reaches the floor. Give each row one of these. A row with neither falls
-  back to one identity for the whole column, whose count follows how many rows the page shows.
+  hashed, so no row text reaches the floor. Give every body row of a table the same kind of key,
+  with a value no other row of that table holds, and give each table an `id`, a caption, or an
+  accessible name that no other table on the screen shares. A table whose rows have no key at all
+  falls back to one identity for the whole column, whose count follows how many rows the page shows.
+- **Rows usabl cannot tell apart are a gap.** If a keyed table has a row without a key, two rows
+  with the same key, or two tables on a screen look the same, the run reports a coverage gap that
+  names the screen and the rule, and the run is `not_covered`. Fix the keys and run again.
 - **Fewer rows is never a block.** A recorded row the page does not show today is reported as
   fixed and as a floor entry ahead of the run. The verdict does not move, and the row is carried
   again when it comes back. Do not run `usabl floor prune` only because a list came back shorter:
@@ -113,7 +118,8 @@ that, and what to do.
 - **A floor from before row keys.** A floor at version 1 or 2 recorded those controls as one
   identity across rows. usabl still compares it the old way, and on screens where it now finds
   barriers in keyed rows it reports a coverage gap until you run `usabl baseline` and merge the
-  version 3 floor. A waiver scoped to one element key of such a control names the old key; rewrite
+  version 3 floor. `usabl baseline` itself does not refuse on that gap, or on the version 1 gap,
+  because it is the command that clears them. A waiver scoped to one element key of such a control names the old key; rewrite
   it with the new key from `usabl check --json`.
 
 ### Phase 4: install the surfaces (human, one draft per run)

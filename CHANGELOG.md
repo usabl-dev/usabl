@@ -11,9 +11,15 @@
   an identity the floor never accepted and blocks as new. A row is named by a key attribute
   no other row of the table holds (`data-row-key`, `data-key`, `data-id`,
   `data-ouia-component-id`, or `id`, but not a framework-generated id) or by its row
-  header. The key is hashed at once, so no row text reaches a finding or the floor. A row
-  the page does not show today is reported as fixed and as headroom and does not move the
-  verdict. Controls outside a keyed row keep their old keys.
+  header, compared and hashed exactly and in full, so rows whose keys differ only in case
+  or share a long prefix stay apart. A table is named by its own id, its accessible name,
+  or its caption, after the row it is nested in, never by its position, and only the rows
+  it owns count. Row keys and table names are hashed at once, so no row text or table name
+  reaches a finding's identity or the floor. A row that cannot be told apart (a missing or
+  shared key in a keyed table, two tables that look the same) or cannot be read is a
+  not-covered gap for its screen and rule. A row the page does not show today is reported
+  as fixed and as headroom and does not move the verdict. Controls outside a keyed table
+  keep their old keys.
 
 - Readiness now waits for a screen's declared `reachedWhen` selector before the keyboard
   walk starts. A page that mounted a small shell, paused for more than about 1.7 seconds
@@ -107,7 +113,10 @@
   never by element key, with what to do: fix them, check the screen against fixed data, or
   waive the rule on that screen with an expiry. An intermittent barrier is not on the
   floor, so it blocks as new on a run where it appears. Both scans must have complete
-  coverage; `--partial` floors only the screens both scans saw cleanly.
+  coverage; `--partial` floors only the screens both scans saw cleanly. A default
+  `usabl baseline` no longer refuses on the gaps an old floor raises against itself (the
+  version 1 placeholder counts and the version 2 row-key gap), so it can replace that floor
+  with a complete one.
 - `usabl baseline` writes floor version 3, which keys controls in table rows per row. A
   version 1 or 2 floor is still compared with the keys it was written with, so nothing
   reads as new or fixed only because the keys changed. When a run finds barriers in keyed
