@@ -249,36 +249,6 @@ per-surface budget is not yet exposed.
 
 ---
 
-## Threat 10: Page script that answers for usabl
-
-**Attack:** a hostile page defines or replaces the functions usabl reads the page through. Two
-were reachable from page script: `window.__usablPathFor`, which names each element, and
-`window.__usablDrain`, which hands back the live-region text usabl heard. A page that returned one
-path for every element collapsed every identity, so a set difference such as "alerts minus alerts
-inside a live region" came out empty and a barrier read as fixed. A page that returned its own
-announcements passed a flow requirement on text no screen reader spoke.
-
-**Controls:**
-
-- The path function and the live-region capture run in isolated worlds over CDP, as the toast
-  ancestor walk already did. Page script shares the DOM with them but not their globals or
-  prototypes, so it cannot define, replace, or read them, and redefining `textContent`,
-  `querySelectorAll`, or `CSS.escape` in its own world does not change what they read.
-- The path function is sent with every query, so there is no installed helper to trust. The
-  capture is started at document start on a page usabl opens and at adoption on a caller's page,
-  and a document where it is not running is an error, which becomes a coverage gap.
-- An element is named by its id only when the id's selector matches exactly that element. A NUL id
-  and a literal U+FFFD id escape to one selector and now get two identities.
-
-**Not handled:** other reads still run in the page's own world, such as the focus checks
-(`activeElementIs`, `activeElementWithin`), the computed style read, and the zoom write. A page
-can change what those see by redefining DOM methods.
-
-**Status:** [x] Paths and announcements read in isolated worlds. [ ] The remaining main-world
-reads are open.
-
----
-
 ## Threat 9: Output that renders differently from what usabl found
 
 **Attack:** what a reader sees is not what the string says. Three ways in, all reproduced.
@@ -471,6 +441,36 @@ renderer forgeries, and the block-markup and autolink forms are covered by tests
 Post-render autolinks are mitigated by the code spans, as above. [ ] usabl does not report
 that a page attempted a forgery; it removes them silently. [ ] Compatibility-normalized
 markers are out of scope, as above. [ ] Credential-dense input cost is open, as above.
+
+---
+
+## Threat 10: Page script that answers for usabl
+
+**Attack:** a hostile page defines or replaces the functions usabl reads the page through. Two
+were reachable from page script: `window.__usablPathFor`, which names each element, and
+`window.__usablDrain`, which hands back the live-region text usabl heard. A page that returned one
+path for every element collapsed every identity, so a set difference such as "alerts minus alerts
+inside a live region" came out empty and a barrier read as fixed. A page that returned its own
+announcements passed a flow requirement on text no screen reader spoke.
+
+**Controls:**
+
+- The path function and the live-region capture run in isolated worlds over CDP, as the toast
+  ancestor walk already did. Page script shares the DOM with them but not their globals or
+  prototypes, so it cannot define, replace, or read them, and redefining `textContent`,
+  `querySelectorAll`, or `CSS.escape` in its own world does not change what they read.
+- The path function is sent with every query, so there is no installed helper to trust. The
+  capture is started at document start on a page usabl opens and at adoption on a caller's page,
+  and a document where it is not running is an error, which becomes a coverage gap.
+- An element is named by its id only when the id's selector matches exactly that element. A NUL id
+  and a literal U+FFFD id escape to one selector and now get two identities.
+
+**Not handled:** other reads still run in the page's own world, such as the focus checks
+(`activeElementIs`, `activeElementWithin`), the computed style read, and the zoom write. A page
+can change what those see by redefining DOM methods.
+
+**Status:** [x] Paths and announcements read in isolated worlds. [ ] The remaining main-world
+reads are open.
 
 ---
 
