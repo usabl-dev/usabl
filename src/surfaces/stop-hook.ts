@@ -207,14 +207,35 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   });
 }
 
+/** What the stop hook did with session pins before it took the receipt fast path. */
+export interface StoredReceiptPinState {
+  // True when this stop compared the session pins and found no drift.
+  pinsCompared: boolean;
+  // False when this stop did not compare pins it should have, for example because the pin store
+  // refused. The line then carries the same note a full run's allow line does.
+  sessionDriftChecked: boolean;
+}
+
 /**
  * The allow line for a stored receipt that still matches the working tree. The stop hook prints
  * it on the fast path, before any run, so no Result exists yet. The receipt was read from a file
  * in the work tree, so its source tree is a carried value and goes inside the frame.
+ *
+ * The line names what was compared and nothing more. A receipt binds the tree, the committed
+ * policy, the engine, and the scanners as they were when it was minted; it says nothing about the
+ * policy at the start of the session. Only a stop that compared the session pins says they match.
  */
-export function formatStoredReceiptAllow(sourceTree: unknown): string {
+export function formatStoredReceiptAllow(
+  sourceTree: unknown,
+  pins: StoredReceiptPinState = { pinsCompared: false, sessionDriftChecked: true },
+): string {
+  const note = pins.sessionDriftChecked ? '' : `, ${DRIFT_NOT_CHECKED}`;
+  const pinClause = pins.pinsCompared ? ' Guarded policy files match the session pins.' : '';
+  const line =
+    `VERIFIED (exit 0${note}): a stored receipt matches this tree, the committed policy, the engine, and the scanners.` +
+    `${pinClause} No new scan ran. You may stop.`;
   return assembleBoundedMessage({
-    scaffold: ['VERIFIED (exit 0): a stored receipt matches this tree. You may stop.'],
+    scaffold: [line],
     keep: 1,
     pieces: [`receipt sourceTree: ${boundField(scrubString(String(sourceTree)), 'receipt')}`],
     keepPieces: 1,
