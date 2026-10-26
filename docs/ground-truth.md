@@ -827,15 +827,17 @@ reference means needs scope analysis the reader does not do. An object with a pr
 or deleted anywhere in the module is not resolved either. A relative path is joined to its
 parent route's path, as React Router does: `settings` under `/app` is `/app/settings`, and an
 index route has its parent's path. At the top of a data router, and of a `<Routes>` element that
-is the only router in the file, a relative path is relative to `/`. A catch-all `*` segment is
-not a screen and is skipped.
+is the only router in the file, a relative path is relative to `/`. A bare `*` route is the
+not-found page, which is not a screen, and is skipped. A path that ends in `*` after other
+segments, such as `/app/*`, matches many URLs and usually mounts routes declared in another
+file, so it is reported (below) rather than scanned as the literal URL `/app/*`.
 
 **What it reports.** A route it finds but cannot read is never dropped. Each one is an
 `unreadable` entry with the router file, the line, and the reason: a path it cannot resolve (an
 import, an expression, a template with expressions, a `let`), a route that takes its props from a
 spread or a computed key, routes built by code (`routes.map(...)`, a function call), an element
 among the routes that is not a `<Route>`, and a relative path whose base it cannot tell, for
-example in a file with more than one router. A router file that does not parse is one such entry
+example in a file with more than one router, and a path such as `/app/*`. A router file that does not parse is one such entry
 for the whole file, with the line and column of the syntax error, and no routes. Then:
 
 - the planner records each entry as a `skipped` coverage gap whenever a wide-blast change would

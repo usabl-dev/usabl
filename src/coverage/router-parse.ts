@@ -182,6 +182,8 @@ const REASONS = {
   ambiguousBase:
     'This route path is relative, and this file has more than one router, so usabl cannot tell which path it is relative to.',
   strayRelative: 'This route path is relative, and no router in this file owns the route, so usabl cannot tell the full path.',
+  splat:
+    'This route path ends in "*", so it matches many URLs and usually mounts routes declared somewhere else. usabl cannot list the screens under it.',
 } as const;
 
 function nameOf(node: AstNode | null): string | null {
@@ -433,6 +435,15 @@ class RouterReader {
     return this.templateOrString(this.resolveValue(expression));
   }
 
+  // A path that ends in a `*` segment matches many URLs. A bare `*` is the catch-all page, which
+  // is not a screen and is skipped. Any other, such as `/app/*`, usually mounts routes declared
+  // somewhere this reader does not look, so it is a gap rather than a scan of a literal "*" URL.
+  private isScreenPath(own: string, at: AstNode): boolean {
+    if (lastSegment(own) !== '*') return true;
+    if (own !== '*') this.gap(at, REASONS.splat);
+    return false;
+  }
+
   private joinPath(
     parent: string | null | undefined,
     own: string,
@@ -622,7 +633,7 @@ class RouterReader {
         return;
       }
       full = joined;
-      if (lastSegment(own) !== '*') {
+      if (this.isScreenPath(own, pathAttribute)) {
         this.jsxSites.push({
           path: joined,
           component: attribute && !hasChildRoutes ? elementComponent(elementValue) : null,
@@ -737,7 +748,7 @@ class RouterReader {
       } else {
         const joined = this.joinPath(parent, own, '/', pathProperty, false);
         full = joined ?? undefined;
-        if (joined !== null && lastSegment(own) !== '*') {
+        if (joined !== null && this.isScreenPath(own, pathProperty)) {
           this.dataSites.push({
             path: joined,
             component: null,

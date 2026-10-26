@@ -21,7 +21,10 @@
   parse is such a gap for the whole file. `usabl drift routes` lists each one and exits
   2, and `usabl init` writes a `Review:` note for each. When no router owns a `<Route>`,
   init now leaves its entry file null. A layout route with child routes gets no entry
-  file, because its component also renders on each child's URL.
+  file, because its component also renders on each child's URL. A route such as
+  `/app/*`, which usually mounts routes declared in another file, is reported with its
+  line instead of being read as the one screen `/app/*`. A bare `*` route is still
+  skipped.
 
 - The Vite plugin no longer breaks a JSX element that has type arguments. It adds
   `data-source-file` and `data-source-line` to raw TSX, and it found tags by matching
