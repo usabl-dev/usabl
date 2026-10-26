@@ -14,19 +14,19 @@ describe('injectJsxSourceAttributes: native HTML elements', () => {
   it('injects on a native input with attributes and self-closing slash', () => {
     const code = ['<input type="text" />'].join('\n');
     const out = injectJsxSourceAttributes(code, FILE);
-    expect(out).toContain(`<input data-source-file="${FILE}" data-source-line="1" type="text" />`);
+    expect(out).toContain(`<input type="text" data-source-file="${FILE}" data-source-line="1" />`);
   });
 
   it('injects on a native anchor', () => {
     const code = ['', '', '<a href="x">go</a>'].join('\n');
     const out = injectJsxSourceAttributes(code, FILE);
-    expect(out).toContain(`<a data-source-file="${FILE}" data-source-line="3" href="x">go</a>`);
+    expect(out).toContain(`<a href="x" data-source-file="${FILE}" data-source-line="3">go</a>`);
   });
 
   it('injects on a self-closing native img', () => {
     const code = ['<img src="y" />'].join('\n');
     const out = injectJsxSourceAttributes(code, FILE);
-    expect(out).toContain(`<img data-source-file="${FILE}" data-source-line="1" src="y" />`);
+    expect(out).toContain(`<img src="y" data-source-file="${FILE}" data-source-line="1" />`);
   });
 });
 
@@ -64,7 +64,7 @@ describe('injectJsxSourceAttributes: existing behavior preserved', () => {
   it('still injects on capitalized component tags', () => {
     const code = ['<Button label="x" />'].join('\n');
     const out = injectJsxSourceAttributes(code, FILE);
-    expect(out).toContain(`<Button data-source-file="${FILE}" data-source-line="1" label="x" />`);
+    expect(out).toContain(`<Button label="x" data-source-file="${FILE}" data-source-line="1" />`);
   });
 
   it('is idempotent when data-source-file is already present', () => {
@@ -106,10 +106,10 @@ describe('injectJsxSourceAttributes: mixed realistic TSX', () => {
     expect(outLines[2]).toBe('  const map: Map<string, number> = new Map();');
     // native + component injected with correct line numbers
     expect(outLines[4]).toContain(`<section data-source-file="${FILE}" data-source-line="5">`);
-    expect(outLines[5]).toContain(`<Header data-source-file="${FILE}" data-source-line="6" title="hi" />`);
+    expect(outLines[5]).toContain(`<Header title="hi" data-source-file="${FILE}" data-source-line="6" />`);
     expect(outLines[6]).toContain('data-source-line="7"');
-    expect(outLines[6]).toContain(`<button data-source-file="${FILE}" data-source-line="7" onClick=`);
-    expect(outLines[7]).toContain(`<input data-source-file="${FILE}" data-source-line="8" value={name} />`);
+    expect(outLines[6]).toContain(`onClick={() => setName("x")} data-source-file="${FILE}" data-source-line="7">Save</button>`);
+    expect(outLines[7]).toContain(`<input value={name} data-source-file="${FILE}" data-source-line="8" />`);
   });
 
   it('produces output that still parses as valid TSX', () => {
@@ -234,7 +234,7 @@ describe('injectJsxSourceAttributes: elements with type arguments and other tag 
     expect(() => transformSync(out, { loader: 'tsx', jsx: 'automatic' })).not.toThrow();
   };
 
-  it('puts the attributes after the type argument list of a generic element', () => {
+  it('puts the attributes outside the type argument list of a generic element', () => {
     const code = [
       'export const W = () => (',
       '  <PageWizard<SubscriptionWizardData> title="Subscribe">',
@@ -243,7 +243,7 @@ describe('injectJsxSourceAttributes: elements with type arguments and other tag 
       ');',
     ].join('\n');
     const out = injectJsxSourceAttributes(code, TSX);
-    expect(out).toContain(`<PageWizard<SubscriptionWizardData> ${injected(2)} title="Subscribe">`);
+    expect(out).toContain(`<PageWizard<SubscriptionWizardData> title="Subscribe" ${injected(2)}>`);
     expect(out).toContain(`<p ${injected(3)}>Step</p>`);
     compiles(out);
   });
@@ -264,16 +264,16 @@ describe('injectJsxSourceAttributes: elements with type arguments and other tag 
       ');',
     ].join('\n');
     const out = injectJsxSourceAttributes(code, TSX);
-    expect(out).toContain(`<Modal<ModalProps> ${injected(3)} isOpen />`);
+    expect(out).toContain(`<Modal<ModalProps> isOpen ${injected(3)} />`);
     expect(out).toContain(`<Empty<string> ${injected(3)} />`);
     compiles(out);
   });
 
-  it('puts the attributes after the type argument list of a self-closing generic element', () => {
+  it('puts the attributes outside the type argument list of a self-closing generic element', () => {
     const code = 'export const W = () => <Select<Option> value={v} onChange={(x: Option) => set(x)} />;';
     const out = injectJsxSourceAttributes(code, TSX);
     expect(out).toBe(
-      `export const W = () => <Select<Option> ${injected(1)} value={v} onChange={(x: Option) => set(x)} />;`,
+      `export const W = () => <Select<Option> value={v} onChange={(x: Option) => set(x)} ${injected(1)} />;`,
     );
     compiles(out);
   });
@@ -291,7 +291,7 @@ describe('injectJsxSourceAttributes: elements with type arguments and other tag 
     const code = 'export const W = () => <Foo.Bar.Baz<T> label="x"><Foo.Item /></Foo.Bar.Baz>;';
     const out = injectJsxSourceAttributes(code, TSX);
     expect(out).toBe(
-      `export const W = () => <Foo.Bar.Baz<T> ${injected(1)} label="x"><Foo.Item ${injected(1)} /></Foo.Bar.Baz>;`,
+      `export const W = () => <Foo.Bar.Baz<T> label="x" ${injected(1)}><Foo.Item ${injected(1)} /></Foo.Bar.Baz>;`,
     );
     compiles(out);
   });
@@ -313,7 +313,7 @@ describe('injectJsxSourceAttributes: elements with type arguments and other tag 
     const out = injectJsxSourceAttributes(code, TSX);
     expect(out.split('\n')[0]).toBe('const id = <T,>(value: T): T => value;');
     expect(out.split('\n')[1]).toBe('const pick = <K extends keyof Props>(key: K) => key;');
-    expect(out.split('\n')[2]).toBe(`export const W = () => <Grid<Row> ${injected(3)} rows={id<Row[]>([])} />;`);
+    expect(out.split('\n')[2]).toBe(`export const W = () => <Grid<Row> rows={id<Row[]>([])} ${injected(3)} />;`);
     compiles(out);
   });
 
