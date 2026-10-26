@@ -28,6 +28,8 @@ const KEYED: RowContextRead = {
   key: 'acme-corp-backup',
   role: 'button',
   path: 'td:nth-child(2) > button:nth-child(1)',
+  otherKeys: [],
+  otherTables: [],
 };
 
 function pageAnswering(answers: Record<string, RowContextRead | Error>): Page {

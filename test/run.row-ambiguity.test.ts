@@ -29,6 +29,7 @@ const button = (path: string): Draft => ({
 
 const keyed = (key: string): RowContextRead => ({
   kind: 'keyed', table: '[["unnamed",""]]', source: 'attr:data-row-key', key, role: 'button', path: 'td:nth-child(2) > button:nth-child(1)',
+  otherKeys: [], otherTables: [],
 });
 
 function depsWith(floorJson: string, answers: Record<string, RowContextRead>): Deps {

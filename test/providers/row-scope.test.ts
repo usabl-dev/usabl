@@ -33,6 +33,8 @@ const ALPHA: Extract<RowContextRead, { kind: 'keyed' }> = {
   key: 'nightly-backup.prod.example.com',
   role: 'button',
   path: 'td:nth-child(4) > button:nth-child(1)',
+  otherKeys: [],
+  otherTables: [],
 };
 
 function rowScopeOf(d: Draft): Record<string, unknown> {
