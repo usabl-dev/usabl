@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- `checkPage` now applies a configured screen's `reachedWhen` signal when `screenId` names
+  that screen. It waits for the selector with the CLI's wait, and when the signal does not
+  hold, the result is a `not-covered` gap that names the selector or the response, and no
+  check runs. Before, it checked whatever the page showed, so a sign-in page or an
+  unmounted shell handed to it as the screen could read as verified. An adopted page does
+  not see requests sent before `checkPage` was called, so a screen that declares a
+  response is always a gap in `checkPage`.
+
 - Egress redaction now catches credential shapes it used to print: whitespace or a quote
   between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
   header segment or a JWT cut to two segments, the user name and password after `//` in

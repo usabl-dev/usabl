@@ -1849,6 +1849,17 @@ judged on it. So a page that regresses on a requirement in the CLI also regresse
 `checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
 when it is not.
 
+When `options.screenId` names a configured surface that declares `reachedWhen`, `checkPage`
+holds the page to that signal the way the CLI does, with the CLI's own wait and rule. It waits
+for the page to settle and for the selector to match, for at most `signalTimeoutMs` after the
+page first settled, within `readyTimeoutMs`. If the selector did not hold, or a declared
+response was not seen, the result is a `not-covered` gap with ref `readiness:<screenId>` that
+names the part, worded as the CLI words it, and no provider runs. Each part is measured again
+after the checks, and a part that no longer holds drops the drafts and becomes the same gap. An
+adopted page records only the requests sent after `checkPage` was called, so a response the page
+received while it loaded is not seen, and a screen that declares a response is always a gap
+here. That screen is checked with the CLI.
+
 ### 11.7 Other coding assistants (seam)
 
 The reference integration uses Claude Code's Stop lifecycle event. The architecture does not

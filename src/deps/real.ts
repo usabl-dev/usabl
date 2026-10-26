@@ -1065,13 +1065,13 @@ function wrapPage(
  * caller owns the page and its context, so adoption must never close them. Navigation and readiness
  * are the caller's job.
  *
- * The in-flight tracker starts at adoption, so it counts only requests fired after this call. The
- * one caller today, checkPage in playwright-helper.ts, never calls gotoReady, so this is inert. A
- * future caller that adopts a page mid-load and then calls gotoReady expecting the pre-adoption
- * requests to count would read idle at once and could return on a half-rendered page. Such a caller
- * must adopt before it navigates, or wait for readiness itself.
+ * The in-flight tracker starts at adoption, so it counts only requests fired after this call. A
+ * caller that adopts a page mid-load and then calls gotoReady would read the network as idle at once
+ * and lean on the DOM half of readiness alone. checkPage calls gotoReady only for a screen that
+ * declares a readiness signal, and the signal is what tells it the screen rendered. The response
+ * record starts at adoption too, so a response the page received before it was adopted is not in it.
  */
-export async function adoptPage(pw: PwPage): Promise<Page> {
+export async function adoptPage(pw: PwPage, options: { readyTimeoutMs?: number } = {}): Promise<Page> {
   const context = pw.context();
   const cdp = await context.newCDPSession(pw);
   await cdp.send('Accessibility.enable');
@@ -1083,8 +1083,8 @@ export async function adoptPage(pw: PwPage): Promise<Page> {
   // The caller already navigated, so this tracker starts counting from adoption forward. A caller
   // that then uses gotoReady gets readiness measured against requests fired after adoption.
   const network = makeNetworkActivityTracker(pw);
-  // Adoption has no operator config to read, so a caller that does use gotoReady gets the default.
-  const page = wrapPage(pw, context, cdp, readyTimeoutMsFor({}), network);
+  // A caller that read the operator config passes its readiness budget; any other gets the default.
+  const page = wrapPage(pw, context, cdp, readyTimeoutMsFor(options), network);
   return { ...page, close: async (): Promise<void> => {} };
 }
 
