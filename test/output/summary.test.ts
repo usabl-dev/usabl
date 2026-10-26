@@ -63,7 +63,11 @@ describe('formatSummary', () => {
 
   it('names the idle state distinctly', () => {
     const out = formatSummary(
-      baseResult({ verdict: null, summary: 'nothing to check (no UI-touching files)' }),
+      baseResult({
+        verdict: null,
+        summary: 'nothing to check (no UI-touching files)',
+        coverage: { ...baseResult({}).coverage, nothingToCheck: true },
+      }),
     );
     expect(out).toContain('nothing to check');
     expect(out).toContain('IDLE');
@@ -107,7 +111,12 @@ describe('formatSummary', () => {
       },
       {
         name: 'idle',
-        result: baseResult({ verdict: null, exitCode: 0, summary: 'nothing to check (no UI-touching files)' }),
+        result: baseResult({
+          verdict: null,
+          exitCode: 0,
+          summary: 'nothing to check (no UI-touching files)',
+          coverage: { ...baseResult({}).coverage, nothingToCheck: true },
+        }),
         word: 'NO VERDICT: IDLE',
         exit: 0,
       },

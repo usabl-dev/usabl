@@ -35,7 +35,12 @@ const STATES: Array<{ name: string; result: Result; word: string; exit: number }
     word: 'APPROVAL REQUIRED',
     exit: 2,
   },
-  { name: 'idle', result: baseResult({ verdict: null, exitCode: 0 }), word: 'NO VERDICT: IDLE', exit: 0 },
+  {
+    name: 'idle',
+    result: baseResult({ verdict: null, exitCode: 0, coverage: { ...baseResult({}).coverage, nothingToCheck: true } }),
+    word: 'NO VERDICT: IDLE',
+    exit: 0,
+  },
   { name: 'crash', result: baseResult({ verdict: null, exitCode: 4 }), word: 'NO VERDICT: RUN FAILED', exit: 4 },
 ];
 
