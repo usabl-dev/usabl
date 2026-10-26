@@ -263,6 +263,19 @@ function formatPartialReport(
 }
 
 /**
+ * The run's coverage without the gaps that come from comparing it with the committed floor.
+ *
+ * The gate raises a gap when the committed floor is too old to compare: a version 1 floor with
+ * placeholder counts, or a version 1 or 2 floor that predates row keys. Those gaps say "regenerate
+ * the floor", and this command is the one that does it, so they must not stop it. They are the only
+ * gaps whose ref is the floor file. Every other gap is a measurement gap, and a baseline still
+ * refuses on it, because a floor accepts debt only from a run that saw the whole application.
+ */
+function measuredCoverage(coverage: Result['coverage']): Result['coverage'] {
+  return { ...coverage, gaps: coverage.gaps.filter((gap) => gap.ref !== EVIDENCE_FLOOR_PATH) };
+}
+
+/**
  * Why a run cannot be part of a baseline, or null when it can. A run with no verdict is not
  * evidence of clean debt, and exit 4 covers both a crash and a run that never saw the
  * application, so the run's own summary says which.
@@ -335,7 +348,9 @@ export async function runBaseline(
 
   // Coverage must be complete in both scans. A screen one scan could not reach is not one the
   // floor can speak for, whichever scan missed it.
-  const incompleteRun = [first, second].find((result) => coverageIncomplete(result.coverage));
+  const incompleteRun = [first, second]
+    .map((result) => ({ ...result, coverage: measuredCoverage(result.coverage) }))
+    .find((result) => coverageIncomplete(result.coverage));
 
   // Default baseline refuses when coverage is incomplete. A floor is an acceptance of existing
   // debt, so it must not be minted from a run that admits it did not see the whole application.

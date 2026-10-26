@@ -406,22 +406,42 @@ export interface AxNode {
 export interface ElementRef {
   selector: string;
 }
-// What Page.rowContext read about the table row an element sits in. Null from rowContext means the
-// element is not in a row that has a key: no row, a header row, or a row with no key attribute that
-// is unique in its table and no row header. `text` is the raw key, page text, and must never be
-// stored: the caller hashes it at once.
-export interface RowContextRead {
-  // The stable path of the table, grid, or row group that holds the row, from the path helper.
-  table: string;
-  // Where the key came from: 'attr:<name>' for a key attribute on the row, 'header' for a row header.
-  source: string;
-  text: string;
-  // The element's role attribute, or a role implied by its tag, or its tag name.
-  role: string;
-  // Tag and child position from the row down to the element, for example 'td:nth-child(4) > button:nth-child(1)'.
-  // Empty when the element is the row itself.
-  path: string;
-}
+// Why a row an element sits in could not be told apart from other rows. See RowContextRead.
+export type RowAmbiguity =
+  // The table keys its rows, and this row has no key of the kind the table uses.
+  | 'row-key-missing'
+  // Another row of the same table has exactly the same key.
+  | 'row-key-duplicate'
+  // The key, or the table's identity, is longer than usabl reads.
+  | 'row-key-too-long'
+  // Another table on the screen has the same identity, so the two cannot be told apart.
+  | 'table-ambiguous';
+
+// What Page.rowContext read about the table row an element sits in.
+//
+// 'none': the element is not in a body row of a table whose rows carry keys. It keys the way it did
+// before row keys existed, and nothing was lost.
+// 'keyed': the element is in a row usabl can tell apart from every other row on the screen.
+// `table` and `key` are page text, exact and in full, and must never be stored: the caller hashes
+// them at once. `table` names the table without using its position: its own key attribute, its
+// accessible name, or its caption, after the identity of the row it is nested in, if any.
+// 'ambiguous': the element is in a row of a keyed table, but the row cannot be told apart. The
+// caller must not key it by row, and must disclose that it could not.
+export type RowContextRead =
+  | { kind: 'none' }
+  | {
+      kind: 'keyed';
+      table: string;
+      // Where the key came from: 'attr:<name>' for a key attribute on the row, 'header' for a row header.
+      source: string;
+      key: string;
+      // The element's role attribute, or a role implied by its tag, or its tag name.
+      role: string;
+      // Tag and child position from the row down to the element, for example
+      // 'td:nth-child(4) > button:nth-child(1)'. Empty when the element is the row itself.
+      path: string;
+    }
+  | { kind: 'ambiguous'; reason: RowAmbiguity };
 // What Page.ancestorAttributes read. 'chain' is the element and every element above it, nearest
 // first. 'not-found' means no connected element matched, for example a toast that closed between
 // two reads. 'too-deep' means the walk reached `limit` elements and had more to go, so the chain is
@@ -514,9 +534,9 @@ export interface Page {
   // null. See AncestorAttributesRead for the two results that carry no chain.
   ancestorAttributes(selector: string, names: readonly string[]): Promise<AncestorAttributesRead>;
   queryAll(selector: string): Promise<ElementRef[]>;
-  // The keyed table row the element a selector matches sits in, or null. See RowContextRead. It
-  // throws when the selector is malformed, like the other selector reads.
-  rowContext(selector: string): Promise<RowContextRead | null>;
+  // The table row the element a selector matches sits in. See RowContextRead. A selector the page
+  // cannot parse, or one that matches nothing, is 'none'. It throws when the page cannot be read.
+  rowContext(selector: string): Promise<RowContextRead>;
   close(): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;
   setZoom(percent: number): Promise<void>;

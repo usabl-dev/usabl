@@ -297,8 +297,9 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     pageCheckCapabilities(providers),
   );
   // The same row keys the CLI attaches, so a finding here carries the identity it has in usabl check.
-  const drafts = await attachRowScopeToDrafts(page, provided.drafts);
-  const gaps = provided.gaps;
+  const rows = await attachRowScopeToDrafts(page, { id: screenId, url: pwPage.url() }, provided.drafts);
+  const drafts = rows.drafts;
+  const gaps = [...provided.gaps, ...rows.gaps];
 
   const requirementGaps =
     intake.requirements === null
