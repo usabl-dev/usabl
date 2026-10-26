@@ -788,3 +788,32 @@ describe('loadConfig', () => {
     expect(warnings[0]).toContain('surfaces[0].url');
   });
 });
+
+describe('parseUsablConfig userinfo without a scheme and two slashes', () => {
+  // URL parsing reads "admin:" in "admin:secret@host" as a scheme, so it finds no password, and a
+  // shape check that needs "//" misses it too. The value is still printed as written.
+  const SECRET = 'SECRETPOISON';
+
+  function load(url: string): unknown {
+    return parseUsablConfig(configJson({ surfaces: [{ id: 'overview', url, files: ['src/Overview.tsx'] }] }));
+  }
+
+  for (const url of [`admin:${SECRET}@localhost:3000/x`, `u:${SECRET}@h`, `http:u:${SECRET}@h`, `//u${SECRET}@h`]) {
+    it(`refuses ${url.replace(SECRET, '<secret>')}`, () => {
+      let message = '';
+      try {
+        load(url);
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message).toContain('surfaces[0].url');
+      expect(message).not.toContain(SECRET);
+    });
+  }
+
+  for (const url of ['http://h/@x', 'http://h/x?q=a@b', 'http://h/#/@me']) {
+    it(`accepts ${url}`, () => {
+      expect(() => load(url)).not.toThrow();
+    });
+  }
+});

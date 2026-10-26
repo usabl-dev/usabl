@@ -11,7 +11,9 @@
   never prints the value. A URL with a query string or a fragment still loads unchanged,
   so the overlay still matches gaps to screens, and the CLI, the stop hook, and the
   dev-server plugin now print a warning that names the field and says the query or the
-  fragment is published.
+  fragment is published. A value with no `//`, such as `admin:secret@localhost:3000/x`,
+  is refused too. The stop hook loads the config, so a config with a refused URL makes
+  the stop hook fail open with "NOT verified - stop hook error" until the URL is fixed.
 
 - The stop hook now compares session pins before it allows a stop on a stored receipt.
   Before, a matching receipt allowed the stop first, so a guarded policy file weakened and

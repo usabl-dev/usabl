@@ -1148,9 +1148,12 @@ So the loader keeps the value and refuses what must not be published. A `surface
 `appBaseUrl` that carries userinfo (`https://user:pass@host/screen`, or a user name alone) is
 refused when the config is read, because every discovered route url is built from `appBaseUrl`.
 The message names the field, such as `surfaces[1].url`, and never prints the value. Userinfo is
-found the way a browser finds it, through a backslash for a slash or a tab inside the name, and a
-value URL parsing rejects is still refused when an `@` sits before its first path, query, or
-fragment.
+found three ways, and any one refuses the value. URL parsing finds it the way a browser does,
+through a backslash for a slash or a tab inside the name. Two shape checks then run on every value,
+with backslashes read as slashes: an `@` in the authority after `//`, and an `@` before the first
+`/`, `?`, or `#`. The second catches a value with no `//`, such as `admin:secret@localhost:3000/x`,
+where URL parsing reads `admin:` as a scheme and finds no password. An `@` later in the path, the
+query, or the fragment is accepted.
 
 A query string or a fragment is accepted, because applications select screens by both, and it is
 still printed as written. The CLI, the stop hook, and the dev-server plugin print a warning on

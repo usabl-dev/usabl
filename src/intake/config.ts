@@ -194,11 +194,15 @@ function parseReachedWhen(raw: unknown, index: number): string | ReachedWhenSign
 // to its screen by comparing the exact url, and a rewritten url would orphan the gap. It is
 // refused instead, and the message names the field and never the value.
 //
-// Userinfo is read two ways. URL parsing finds it in the spellings a browser accepts, such as a
-// backslash for a slash or a tab inside the name. A value URL parsing rejects is still checked for
-// an @ before the first path, query, or fragment, because a person or another parser can read that
-// as a credential too.
+// Userinfo is read three ways, and any one of them refuses the value. URL parsing finds it in the
+// spellings a browser accepts, such as a backslash for a slash or a tab inside the name. The two
+// shape checks below run on every value, with backslashes read as slashes, because a person or
+// another parser can read a credential where URL parsing finds none. The first finds an @ in the
+// authority after "//". The second finds an @ before the first slash, query, or fragment, which
+// covers a value with no "//" at all: URL parsing reads "admin:" in "admin:secret@host" as a
+// scheme and reports no password.
 const USERINFO_SHAPE = /^[^/?#]*\/\/[^/?#]*@/;
+const LEADING_USERINFO_SHAPE = /^[^/?#]*@/;
 
 function carriesUserinfo(raw: string): boolean {
   try {
@@ -207,9 +211,10 @@ function carriesUserinfo(raw: string): boolean {
       return true;
     }
   } catch {
-    // Not a URL the parser accepts. The shape check below still applies.
+    // Not a URL the parser accepts. The shape checks below still apply.
   }
-  return USERINFO_SHAPE.test(raw.replace(/\\/g, '/'));
+  const slashed = raw.replace(/\\/g, '/');
+  return USERINFO_SHAPE.test(slashed) || LEADING_USERINFO_SHAPE.test(slashed);
 }
 
 function parseConfiguredUrl(raw: unknown, label: string): string {
