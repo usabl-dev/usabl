@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- `usabl.docs.json` now refuses a `docsBaseUrl` that carries a user name or a password,
+  such as `https://user:pass@docs.local`. Before, it was printed in every docs screen
+  url, including the pull request comment. The message names the field and never the
+  value.
+
+- When the requirements files could not be loaded, the run stopped every scan and asked
+  for approval, but did not say why. The loader's reason is now a `not-covered` coverage
+  gap that names the file. Because no screen was scanned, the accessibility half of the
+  result now reads `not_covered`; before, it read `verified`.
+
 - The stop hook now blocks a stop on a verdict it does not recognize, and on a null
   verdict from a run that was neither idle nor a crash. Before, both read as NO VERDICT
   and the stop was allowed, so an unknown answer passed as a clean change. The block says
