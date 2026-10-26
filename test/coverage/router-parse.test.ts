@@ -20,9 +20,13 @@ describe('router-parse', () => {
     // place the derived id is checked. The route is kept apart, not dropped, so the planner can
     // report it. The reason names the position and code point and never repeats the id.
     const manifest = parseRouterFallback(`
-      <Route path="/clusters" element={<Clusters />} />
-      <Route path="/acct\u202eadmin" element={<Admin />} />
-      createBrowserRouter([{ path: '/docs\u2800private', element: <Docs /> }])
+      export const App = () => (
+        <Routes>
+          <Route path="/clusters" element={<Clusters />} />
+          <Route path="/acct\u202eadmin" element={<Admin />} />
+        </Routes>
+      );
+      export const router = createBrowserRouter([{ path: '/docs\u2800private', element: <Docs /> }]);
     `);
     expect(manifest.routes.map((route) => route.screenId)).toEqual(['clusters']);
     expect(manifest.unusable.map((route) => route.url)).toEqual(['/acct\u202eadmin', '/docs\u2800private']);
@@ -44,8 +48,12 @@ describe('router-parse', () => {
 
   it('parses jsx and object literal paths in router fallback', () => {
     const manifest = parseRouterFallback(`
-      <Route path="/home" element={<Home />} />
-      createBrowserRouter([{ path: '/about', element: <About /> }])
+      export const App = () => (
+        <Routes>
+          <Route path="/home" element={<Home />} />
+        </Routes>
+      );
+      export const router = createBrowserRouter([{ path: '/about', element: <About /> }]);
     `);
     expect(manifest.routes.map((route) => route.url).sort()).toEqual(['/about', '/home']);
     expect(manifest.routes.every((route) => route.entryFile === null)).toBe(true);

@@ -143,8 +143,12 @@ describe('runRoutesDrift', () => {
         ],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
-        <Route path="/about" element={<About />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/home" element={<Home />} />
+            <Route path="/about" element={<About />} />
+          </Routes>
+        );
       `,
     });
 
@@ -161,8 +165,12 @@ describe('runRoutesDrift', () => {
         routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
-        <Route path="/about" element={<About />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/home" element={<Home />} />
+            <Route path="/about" element={<About />} />
+          </Routes>
+        );
       `,
     });
 
@@ -281,8 +289,12 @@ describe('runRoutesDrift', () => {
         ],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
-        <Route path="/y\x1b[2Kspoof" element={<Y />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/home" element={<Home />} />
+            <Route path="/y\x1b[2Kspoof" element={<Y />} />
+          </Routes>
+        );
       `,
     });
 
@@ -378,8 +390,12 @@ describe('runRoutesDrift', () => {
         routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
-        <Route path="/added" element={<Added />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/home" element={<Home />} />
+            <Route path="/added" element={<Added />} />
+          </Routes>
+        );
       `,
     });
 
@@ -400,9 +416,13 @@ describe('runRoutesDrift', () => {
         ],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
-        <Route path="/home" element={<HomeDuplicate />} />
-        <Route path="/about" element={<About />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/home" element={<Home />} />
+            <Route path="/home" element={<HomeDuplicate />} />
+            <Route path="/about" element={<About />} />
+          </Routes>
+        );
       `,
     });
 

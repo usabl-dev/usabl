@@ -166,9 +166,13 @@ describe('computeCoverage', () => {
     // the refused character and never the id itself.
     const fs = fsOf({
       'src/router.tsx': `
-        <Route path="/clusters" element={<Clusters />} />
-        <Route path="/acct\u202eadmin" element={<Admin />} />
-        <Route path="/docs\u2800private" element={<Docs />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/clusters" element={<Clusters />} />
+            <Route path="/acct\u202eadmin" element={<Admin />} />
+            <Route path="/docs\u2800private" element={<Docs />} />
+          </Routes>
+        );
       `,
       'src/App.tsx': `export default function App() {}`,
     });

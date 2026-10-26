@@ -90,8 +90,12 @@ describe('parseRouteManifest', () => {
   it('falls back to regex extraction with entryFile null (no attribution invented)', async () => {
     const fs = fsOf({
       'src/router.tsx': `
-        <Route path="/alerts" element={<AlertsPage />} />
-        <Route path="/hosts"  element={<HostsPage />} />
+        export const App = () => (
+          <Routes>
+            <Route path="/alerts" element={<AlertsPage />} />
+            <Route path="/hosts"  element={<HostsPage />} />
+          </Routes>
+        );
       `,
     });
     const manifest = await parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] });
