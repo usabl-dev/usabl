@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- The pull request comment now lists waived deterministic findings. Before, a waived
+  finding was in no section of the comment, while the terminal and the overlay showed it
+  as recorded debt. The known section is now `### Known (recorded debt)` and lists carried
+  and waived findings, each with its status, and the collapsed view includes them too. A
+  collapsed group also names its screen id and rule once, in its headline, instead of
+  again on a `rule:` line under it.
+
 - The stop hook now compares session pins before it allows a stop on a stored receipt.
   Before, a matching receipt allowed the stop first, so a guarded policy file weakened and
   committed during the session, then checked with `usabl check` under the weaker policy,
