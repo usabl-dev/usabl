@@ -80,4 +80,22 @@ describe('baseline over an old floor', () => {
     expect(outcome.exitCode).toBe(3);
     expect(written).toBeNull();
   });
+
+  it('refuses on a measurement gap whose ref happens to be the floor file name', async () => {
+    // Only the gate knows which gaps come from comparing against the floor. A check runner can name
+    // any ref, so a ref equal to the floor file name must not make a measurement gap disappear.
+    const v2 = { version: 2, entries: [{ screenId: 'clusters', layer: 'pf', rule: 'pf-icon-button-name', elementKey: null, identityBasis: 'count', count: 2 }] };
+    const gap = [{ ref: '.usabl-evidence.json', state: 'not-covered' as const, reason: 'the scanner could not finish this screen' }];
+    const { outcome, written } = await baseline(depsWith(v2, [scan([buttonInRow(A)], gap)]));
+    expect(outcome.exitCode).toBe(3);
+    expect(written).toBeNull();
+  });
+
+  it('refuses on that gap with no old floor at all', async () => {
+    const gap = [{ ref: '.usabl-evidence.json', state: 'not-covered' as const, reason: 'the scanner could not finish this screen' }];
+    const { outcome, written } = await baseline(depsWith({ version: 3, entries: [] }, [scan([named], gap)]));
+    expect(outcome.exitCode).toBe(3);
+    expect(written).toBeNull();
+  });
 });
+

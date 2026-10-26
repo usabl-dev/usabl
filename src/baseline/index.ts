@@ -9,14 +9,14 @@
  * run without it, and headroom is where a new barrier can hide. It is listed instead, by screen
  * and rule, never by element key, because a key can carry page text.
  */
-import type { Deps, EvidenceFloor, FloorEntry, Finding, Result, UsablConfig } from '../contracts/index.js';
+import type { CoverageGap, Deps, EvidenceFloor, FloorEntry, Finding, Result, UsablConfig } from '../contracts/index.js';
 import { buildFindings } from '../gate/index.js';
 import { coverageIncomplete, notEvaluatedCounts } from '../coverage/completeness.js';
 import { parseDocsManifest } from '../coverage/docs-manifest.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { computeIdentity, FLOOR_VERSION, identityKey } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
-import { run } from '../run.js';
+import { runWithFloorGaps } from '../run.js';
 import { checkGuard } from '../trust/guard.js';
 
 export const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
@@ -267,12 +267,15 @@ function formatPartialReport(
  *
  * The gate raises a gap when the committed floor is too old to compare: a version 1 floor with
  * placeholder counts, or a version 1 or 2 floor that predates row keys. Those gaps say "regenerate
- * the floor", and this command is the one that does it, so they must not stop it. They are the only
- * gaps whose ref is the floor file. Every other gap is a measurement gap, and a baseline still
- * refuses on it, because a floor accepts debt only from a run that saw the whole application.
+ * the floor", and this command is the one that does it, so they must not stop it. The gate hands
+ * them over as a list of its own, and exactly those objects are dropped. A gap is never dropped for
+ * its ref or its reason: a check runner can return a gap whose ref is the floor file name. Every
+ * other gap is a measurement gap, and a baseline still refuses on it, because a floor accepts debt
+ * only from a run that saw the whole application.
  */
-function measuredCoverage(coverage: Result['coverage']): Result['coverage'] {
-  return { ...coverage, gaps: coverage.gaps.filter((gap) => gap.ref !== EVIDENCE_FLOOR_PATH) };
+function measuredCoverage(coverage: Result['coverage'], floorGaps: readonly CoverageGap[]): Result['coverage'] {
+  const gateRaised = new Set(floorGaps);
+  return { ...coverage, gaps: coverage.gaps.filter((gap) => !gateRaised.has(gap)) };
 }
 
 /**
@@ -335,12 +338,14 @@ export async function runBaseline(
     changedFiles,
   };
   // Two full scans, one after the other, on the same tree. Only what both found is recorded.
-  const first = await run(deps, config, runOptions);
+  const firstRun = await runWithFloorGaps(deps, config, runOptions);
+  const first = firstRun.result;
   const firstRefusal = refusedRun(first);
   if (firstRefusal !== null) {
     return firstRefusal;
   }
-  const second = await run(deps, config, runOptions);
+  const secondRun = await runWithFloorGaps(deps, config, runOptions);
+  const second = secondRun.result;
   const secondRefusal = refusedRun(second);
   if (secondRefusal !== null) {
     return secondRefusal;
@@ -348,8 +353,8 @@ export async function runBaseline(
 
   // Coverage must be complete in both scans. A screen one scan could not reach is not one the
   // floor can speak for, whichever scan missed it.
-  const incompleteRun = [first, second]
-    .map((result) => ({ ...result, coverage: measuredCoverage(result.coverage) }))
+  const incompleteRun = [firstRun, secondRun]
+    .map(({ result, floorGaps }) => ({ ...result, coverage: measuredCoverage(result.coverage, floorGaps) }))
     .find((result) => coverageIncomplete(result.coverage));
 
   // Default baseline refuses when coverage is incomplete. A floor is an acceptance of existing
