@@ -108,7 +108,7 @@ describe('injectJsxSourceAttributes: mixed realistic TSX', () => {
     expect(outLines[4]).toContain(`<section data-source-file="${FILE}" data-source-line="5">`);
     expect(outLines[5]).toContain(`<Header data-source-file="${FILE}" data-source-line="6" title="hi" />`);
     expect(outLines[6]).toContain('data-source-line="7"');
-    expect(outLines[6]).toContain('<button onClick=');
+    expect(outLines[6]).toContain(`<button data-source-file="${FILE}" data-source-line="7" onClick=`);
     expect(outLines[7]).toContain(`<input data-source-file="${FILE}" data-source-line="8" value={name} />`);
   });
 
