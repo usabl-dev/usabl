@@ -458,7 +458,9 @@ describe('router-parse: never drops a route-shaped thing in silence', () => {
       'export const App = () => <Routes>{extra}</Routes>;',
     ].join('\n');
     expect(urls(raw)).toEqual([]);
-    expect(lines(raw)).toEqual([7, 7, 8]);
+    // Line 6 is the <Route> pushed into the list. It is outside any router usabl read, so it is
+    // named too. The routes written in the changed lists are covered by the entries on 7 and 8.
+    expect(lines(raw)).toEqual([6, 7, 7, 8]);
   });
 
   it('names a file with route objects but no router, once', () => {
