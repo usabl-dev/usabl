@@ -293,3 +293,193 @@ describe('check-doc-links command', () => {
     expect(result.stdout).toContain('0 broken');
   });
 });
+
+// Reference-style links and autolinks were not extracted at all, so a broken one passed as if it
+// were not a link. Each form below must be read, resolved, and reported when it is broken.
+describe('check-doc-links reference-style links', () => {
+  let root = '';
+
+  afterEach(async () => {
+    if (root !== '') await rm(root, { recursive: true, force: true });
+    root = '';
+  });
+
+  async function corpus(files: Record<string, string>): Promise<string> {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-ref-'));
+    await mkdir(join(root, 'docs'), { recursive: true });
+    for (const [name, content] of Object.entries(files)) {
+      await writeFile(join(root, 'docs', name), content, 'utf8');
+    }
+    return root;
+  }
+
+  it('reports a full reference whose definition names a missing file, on the line of the link', async () => {
+    const result = await runChecker(
+      await corpus({ 'a.md': '# A\n\nSee [the guide][guide].\n\n[guide]: ./missing.md\n' }),
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toContain('docs/a.md:3: file not found: ./missing.md');
+  });
+
+  it('reports a collapsed and a shortcut reference whose definitions name missing files', async () => {
+    const result = await runChecker(
+      await corpus({
+        'a.md': [
+          '# A',
+          '',
+          'See [collapsed][] and [shortcut].',
+          '',
+          '[collapsed]: ./gone-collapsed.md',
+          '[shortcut]: ./gone-shortcut.md "A title"',
+          '',
+        ].join('\n'),
+      }),
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toContain('docs/a.md:3: file not found: ./gone-collapsed.md');
+    expect(result.stdout).toContain('docs/a.md:3: file not found: ./gone-shortcut.md');
+  });
+
+  it('reports a full or collapsed reference to a label that is never defined', async () => {
+    const result = await runChecker(
+      await corpus({ 'a.md': '# A\n\nSee [the guide][nowhere] and [absent][].\n' }),
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toContain('docs/a.md:3: undefined link reference: [nowhere]');
+    expect(result.stdout).toContain('docs/a.md:3: undefined link reference: [absent]');
+  });
+
+  it('checks a reference image and a fragment in a definition', async () => {
+    const result = await runChecker(
+      await corpus({
+        'a.md': '# A\n\n![diagram][pic] and [section][sec].\n\n[pic]: ./missing.png\n[sec]: ./b.md#no-such-heading\n',
+        'b.md': '# B\n\n## Real heading\n',
+      }),
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toContain('docs/a.md:3: file not found: ./missing.png');
+    expect(result.stdout).toContain('docs/a.md:3: missing anchor: ./b.md#no-such-heading');
+  });
+
+  it('passes when every reference resolves, matching labels without regard to case or spacing', async () => {
+    const result = await runChecker(
+      await corpus({
+        'a.md': [
+          '# A',
+          '',
+          'See [B][The  Other Page], [the other page][], [THE OTHER PAGE], and [angle][].',
+          '',
+          '[the other page]: ./b.md#real-heading',
+          '  [angle]: <./b.md>',
+          '',
+        ].join('\n'),
+        'b.md': '# B\n\n## Real heading\n',
+      }),
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('4 relative link(s) checked');
+    expect(result.stdout).toContain('0 broken');
+  });
+
+  it('leaves bracketed text that is not a reference alone', async () => {
+    // A shortcut with no definition renders as plain text, as do a task list box and a
+    // bracketed label, so none of them is a link. Text inside code spans and fenced code is an
+    // example, not a link.
+    const result = await runChecker(
+      await corpus({
+        'a.md': [
+          '# A',
+          '',
+          '- [ ] a task',
+          '- [x] a done task',
+          '[BEGIN UNTRUSTED TEXT] marks the start of page text.',
+          'Write `[text][ref]` with `[ref]: ./x.md` to make one.',
+          '',
+          '```',
+          '[guide][nowhere]',
+          '[nowhere]: ./missing.md',
+          '```',
+          '',
+        ].join('\n'),
+      }),
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('0 relative link(s) checked');
+  });
+
+  it('counts a reference to an external URL as skipped, not checked', async () => {
+    const result = await runChecker(
+      await corpus({ 'a.md': '# A\n\nSee [the site][site].\n\n[site]: https://example.test/missing\n' }),
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('1 external URL(s) skipped');
+  });
+});
+
+describe('check-doc-links autolinks', () => {
+  let root = '';
+
+  afterEach(async () => {
+    if (root !== '') await rm(root, { recursive: true, force: true });
+    root = '';
+  });
+
+  async function corpus(files: Record<string, string>): Promise<string> {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-auto-'));
+    await mkdir(join(root, 'docs'), { recursive: true });
+    for (const [name, content] of Object.entries(files)) {
+      await writeFile(join(root, 'docs', name), content, 'utf8');
+    }
+    return root;
+  }
+
+  it('reports an autolink to a missing file and a missing anchor', async () => {
+    const result = await runChecker(
+      await corpus({
+        'a.md': '# A\n\n## Here\n',
+        'b.md': '# B\n\nSee <./also-missing.md>.\n\nAnd <../docs/a.md#gone> and </usabl/missing.html>.\n',
+      }),
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toContain('docs/b.md:3: file not found: ./also-missing.md');
+    expect(result.stdout).toContain('docs/b.md:5: missing anchor: ../docs/a.md#gone');
+    expect(result.stdout).toContain('docs/b.md:5: file not found: /usabl/missing.html');
+  });
+
+  it('passes an autolink that resolves', async () => {
+    const result = await runChecker(
+      await corpus({ 'a.md': '# A\n\n## Here\n\nJump <#here>, or read <./b.md>.\n', 'b.md': '# B\n' }),
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('2 relative link(s) checked');
+  });
+
+  it('counts an absolute autolink as external and does not fetch it', async () => {
+    const result = await runChecker(
+      await corpus({ 'a.md': '# A\n\nSee <https://example.test/this/does/not/exist> or <mailto:team@example.test>.\n' }),
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('0 relative link(s) checked, 2 external URL(s) skipped');
+  });
+
+  it('does not read an HTML tag or a code span as an autolink', async () => {
+    const result = await runChecker(
+      await corpus({
+        'a.md': '# A\n\nLine<br/>break, <span>text</span>, </p>, and `<./not-a-link.md>`.\n',
+      }),
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('0 relative link(s) checked');
+  });
+});
