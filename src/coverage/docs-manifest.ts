@@ -76,6 +76,42 @@ function expectDocsPathUrl(value: unknown, field: string): string {
   return url;
 }
 
+/**
+ * True when a base URL carries a user name or password, by any of three readings.
+ *
+ * The URL parser is the first reading, and it finds userinfo where the text does not show it
+ * plainly, for example after backslashes it reads as slashes. It cannot judge a value it refuses
+ * to parse, so two plain text readings follow: an "@" inside the authority after "//", and an "@"
+ * before the first "/", "?", or "#", which catches a value written without a scheme. An "@" in a
+ * path, a query, or a fragment is none of these.
+ */
+function carriesUserinfo(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    if (parsed.username !== '' || parsed.password !== '') {
+      return true;
+    }
+  } catch {
+    // Not parseable. The text readings below still apply.
+  }
+  const slashes = value.indexOf('//');
+  if (slashes !== -1 && /^[^/?#]*@/.test(value.slice(slashes + 2))) {
+    return true;
+  }
+  return /^[^/?#]*@/.test(value);
+}
+
+function expectDocsBaseUrl(value: unknown, field: string): string {
+  const url = expectNonEmptyString(value, field);
+  // Every docs screen url is built on this value, and those urls reach every surface, a pull
+  // request comment included. A user name or password here would be printed there, so it is
+  // refused, and the message never repeats the value because the value is the secret.
+  if (carriesUserinfo(url)) {
+    throw configError`usabl.docs.json ${field} must not contain a user name or password. Every docs screen url is built on it, and those urls are printed in the results. Remove the user name and password. To reach protected docs, use a storage state, which is never committed.`;
+  }
+  return url;
+}
+
 function expectSafeRelativePath(value: unknown, field: string): string {
   // Defense-in-depth: these strings are joined against the repo root later, so reject
   // absolute paths and any ".." segment before they can escape the working tree.
@@ -133,7 +169,7 @@ function parseSidecar(raw: string): DocsManifest {
   }
 
   const format = expectNonEmptyString(parsed['format'], 'format');
-  const docsBaseUrl = expectNonEmptyString(parsed['docsBaseUrl'], 'docsBaseUrl');
+  const docsBaseUrl = expectDocsBaseUrl(parsed['docsBaseUrl'], 'docsBaseUrl');
   const builtRoot = expectSafeRelativePath(parsed['builtRoot'], 'builtRoot');
   const buildCommand = expectBuildCommand(parsed['buildCommand']);
 
