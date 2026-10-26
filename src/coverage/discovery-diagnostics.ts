@@ -13,6 +13,9 @@ export function formatUnresolvableImport(entry: UnresolvableImport): string {
   if (entry.kind === 'alias-unmapped') {
     return `could not resolve '${entry.specifier}' in ${entry.importer}: no alias mapping matches this prefix in tsconfig or vite config`;
   }
+  if (entry.kind === 'ambiguous-candidates') {
+    return `could not resolve '${entry.specifier}' in ${entry.importer}: more than one file matches (${entry.candidates.join(', ')}), and usabl does not know which one the bundler loads. Write the import with the file's extension`;
+  }
   return `could not resolve '${entry.specifier}' in ${entry.importer}: resolved path has no matching file on disk`;
 }
 
