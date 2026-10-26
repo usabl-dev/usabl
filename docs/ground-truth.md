@@ -1990,6 +1990,12 @@ printed back. Either failure is `approval_required`, returned from the loader ra
 thrown, and every reason the loader returns is scrubbed before it leaves, including the YAML
 parser's own message and the file path, because both can carry file bytes.
 
+Any loader failure stops every scan, and the run shows the loader's reason as a `not-covered`
+coverage gap whose ref is the refused file, or the configured root when the loader named none.
+So a broken requirements file is visible on every surface. When a UI file changed, the
+accessibility half of the Result reads `not_covered` rather than `verified`, because no screen
+was scanned.
+
 ---
 
 ## 14. Reports (accessible docs output)
