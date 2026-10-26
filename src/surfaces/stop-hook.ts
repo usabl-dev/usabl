@@ -8,7 +8,7 @@ import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { isBlockingBarrier } from '../output/disclosure.js';
 import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-budget.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
-import { barrierLines, guardedFileLines, notEvaluatedPieces } from './model-pieces.js';
+import { barrierLines, guardedFileLines, notEvaluatedPieces, unrecognizedRunLine } from './model-pieces.js';
 import { frameUntrustedBlock, scrubResult, scrubString } from './scrub.js';
 
 export interface HookContext {
@@ -64,6 +64,13 @@ const BLOCK_STEPS: NextSteps = {
   approvalWithGaps:
     'Next: resolve every reason under Not evaluated below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
 };
+
+// What the model should do when usabl does not recognize the run's state. A fix to the change
+// cannot clear it, because nothing was checked, so the step is to run the check again.
+const UNRECOGNIZED_BLOCK_STEP =
+  'Next: run usabl check again and stop when it reports a verdict. If it still reports none usabl knows, tell the user, and check the change by hand before you call it accessible.';
+const UNRECOGNIZED_CONTINUATION_STEP =
+  'Next: run usabl check again before you tell the user this change is accessible. If it still reports no verdict usabl knows, tell the user.';
 
 /**
  * The same guidance for the run that is let through because continuation is already active.
@@ -300,16 +307,37 @@ export function evaluateStopDecision(
     };
   }
 
+  const unrecognized = unrecognizedRunLine(safe);
+  if (unrecognized !== null) {
+    // A verdict usabl does not recognize, or a null verdict on a run that was neither idle nor a
+    // crash, can only be composed outside run(). It is not evidence that the change is clean, so
+    // the stop blocks, with the reason in usabl's own words. The carried verdict is never
+    // printed, and the gate's summary goes inside the frame. While continuation is already active
+    // the stop goes through once, marked NOT verified, as for every other blocking state, so the
+    // model is not looped.
+    const opening = `${unrecognized.word}: NOT verified. ${
+      ctx.stopHookActive ? 'usabl let this stop through without blocking again (continuation already active). ' : ''
+    }${unrecognized.meaning}`;
+    return {
+      block: !ctx.stopHookActive,
+      message: assembleBoundedMessage({
+        scaffold: [opening, ctx.stopHookActive ? UNRECOGNIZED_CONTINUATION_STEP : UNRECOGNIZED_BLOCK_STEP],
+        keep: 2,
+        pieces: [summaryPiece(safe)],
+        keepPieces: 1,
+        frame: frameUntrustedBlock,
+      }),
+    };
+  }
+
   const shouldBlock = safe.verdict !== null && BLOCKING_VERDICTS.has(safe.verdict);
   if (!shouldBlock) {
-    // A null verdict with no idle flag and no crash can only be composed outside run(). Say
-    // that usabl reached no verdict rather than guess which null state it is. The exit code goes
-    // through the shared verdict word, which prints it only when it is a whole number.
-    const noVerdict = formatVerdictWord({ ...describeVerdict(safe), word: 'NO VERDICT' });
+    // Every state that does not block was handled above. This is a guard, not a path: anything
+    // that reaches it is treated as a run that proved nothing, and the stop blocks.
     return {
-      block: false,
+      block: true,
       message: assembleBoundedMessage({
-        scaffold: [`${noVerdict}: usabl did not reach a verdict for this change.`],
+        scaffold: [`${formatVerdictWord(describeVerdict(safe))}: NOT verified. usabl did not reach a verdict for this change.`],
         keep: 1,
         pieces: [summaryPiece(safe)],
         keepPieces: 1,

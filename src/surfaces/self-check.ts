@@ -9,7 +9,7 @@ import { isBlockingBarrier } from '../output/disclosure.js';
 import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-budget.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
-import { barrierLines, guardedFileLines, notEvaluatedPieces } from './model-pieces.js';
+import { barrierLines, guardedFileLines, notEvaluatedPieces, unrecognizedRunLine } from './model-pieces.js';
 import { frameUntrustedBlock, scrubResult } from './scrub.js';
 
 // The source location goes inside the untrusted frame with the other page-derived pieces. A
@@ -45,6 +45,10 @@ export function projectSelfCheck(
   // The same verdict words the terminal and the stop hook use, so a failed run reads as RUN
   // FAILED here too and never as IDLE.
   const verdict = describeVerdict(safe);
+  // A null verdict reads as IDLE only when there was nothing to check. A null verdict on a run
+  // that had something to check, and a verdict usabl does not recognize, are runs that proved
+  // nothing, in the same words the stop hook blocks with.
+  const unrecognized = unrecognizedRunLine(safe);
 
   // The trusted engine scaffold stays outside the frame: the verdict line, the advisory line,
   // the meaning, the guarded-file lines when policy files changed, and the Barrier lines with
@@ -62,9 +66,9 @@ export function projectSelfCheck(
   // No next step is printed here. This surface is advisory; the stop hook owns the decision and
   // the instruction that goes with it.
   const scaffold = [
-    `usabl self-check: ${formatVerdictWord(verdict)}`,
+    `usabl self-check: ${unrecognized?.word ?? formatVerdictWord(verdict)}`,
     'advisory: the stop hook is the gate.',
-    verdict.meaning,
+    unrecognized?.meaning ?? verdict.meaning,
   ];
   const pieces: string[] = [`engine summary: ${boundField(safe.summary, 'summary')}`];
   if (safe.verdict === 'approval_required') {
