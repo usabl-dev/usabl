@@ -76,10 +76,12 @@ export interface UnreadableRoute {
 
 export interface RouterSourceRead {
   routes: ParsedRouteSite[];
-  // Routes read from create*Router(...) arguments only, which init and its tests still read alone.
+  // Routes read from route object lists only (router factory calls and useRoutes), which init's
+  // data-router reader and its tests read alone.
   dataRoutes: ParsedRouteSite[];
   unreadable: UnreadableRoute[];
-  // Whether the module calls create*Router(...).
+  // Whether the module calls createBrowserRouter, createHashRouter, createMemoryRouter, or a name
+  // for one of them.
   dataRouter: boolean;
   // Local names bound by relative, non-type imports, mapped to their specifiers.
   localImports: Map<string, string>;
@@ -138,7 +140,7 @@ export function isRouterSource(raw: string): boolean {
   );
 }
 
-// Discovers data-router route URLs from the create*Router(...) argument only. It never attributes
+// Discovers data-router route URLs from route object lists only. It never attributes
 // a component: a data route's element is not proof of which file renders the screen, and
 // route-manifest's rule holds here too, never invent entry-file attribution from router text.
 export function parseDataRouterRoutes(raw: string, file = 'router.tsx'): ParsedRouteSite[] {
@@ -746,7 +748,7 @@ class RouterReader {
 
   /**
    * Reads a data router route list: an array literal, or a const that holds one. `base` is what a
-   * top-level relative path is relative to: "/" for a create*Router call, and for useRoutes only
+   * top-level relative path is relative to: "/" for a router factory call, and for useRoutes only
    * when it is the one router in the file.
    */
   readDataRoutes(expression: AstNode | null, parent: string | null | undefined, at: AstNode, base: string | null): void {

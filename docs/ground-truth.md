@@ -872,7 +872,7 @@ the module defines, has no child routes, and names its component as `element={<N
 from a relative path. A layout route with children gets no entry file, because its component
 also renders on every child's URL, and a change to it must not read as covered by one screen.
 This holds for JSX passed to `createRoutesFromElements` and `createRoutesFromChildren` too. Route
-objects, in a `create*Router` call or in `useRoutes`, never get one. When two routes with the same
+objects, in a router factory call or in `useRoutes`, never get one. When two routes with the same
 path name different components, neither is attributed.
 
 **What it still does not see.** These leave no gap, so check for them:
