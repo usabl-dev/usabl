@@ -46,11 +46,7 @@ export function syntaxForFile(file: string): { typescript: boolean; jsx: boolean
   return { typescript: false, jsx: true };
 }
 
-/** Parses a module. A syntax error comes back as a failure with its position, never as a throw. */
-export function parseSource(code: string, syntax: { typescript: boolean; jsx: boolean }): ParsedSource {
-  const plugins: ParserPlugin[] = [];
-  if (syntax.jsx) plugins.push('jsx');
-  if (syntax.typescript) plugins.push('typescript');
+function parseWith(code: string, plugins: ParserPlugin[]): ParsedSource {
   try {
     const file = parse(code, { sourceType: 'module', plugins }) as unknown as { program: AstNode };
     return { ok: true, program: file.program };
@@ -60,6 +56,25 @@ export function parseSource(code: string, syntax: { typescript: boolean; jsx: bo
     const column = loc !== null && typeof loc['column'] === 'number' ? loc['column'] : null;
     return { ok: false, line, column };
   }
+}
+
+/**
+ * Parses a module. A syntax error comes back as a failure with its position, never as a throw.
+ *
+ * Decorators are accepted in the legacy form that TypeScript and Babel projects use, such as
+ * `@observer class Store {}`. A JavaScript file that does not parse is tried once more with Flow
+ * types, because React projects that use Flow keep its types in `.js` and `.jsx` files. Flow is
+ * not tried first: it reads `<T>(x) => x` differently, and most files have no Flow at all. When
+ * both attempts fail, the first attempt's position is the one reported.
+ */
+export function parseSource(code: string, syntax: { typescript: boolean; jsx: boolean }): ParsedSource {
+  const plugins: ParserPlugin[] = ['decorators-legacy'];
+  if (syntax.jsx) plugins.push('jsx');
+  if (syntax.typescript) plugins.push('typescript');
+  const first = parseWith(code, plugins);
+  if (first.ok || syntax.typescript) return first;
+  const withFlow = parseWith(code, [...plugins, 'flow']);
+  return withFlow.ok ? withFlow : first;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -15,7 +15,8 @@
  * cannot tell a tag from a generic: it put the attributes inside the type argument list of
  * <PageWizard<Data>>, and inside the type parameters of a generic arrow function such as
  * <T,>(value: T) => value, and the file no longer parsed. The tree says exactly where each opening
- * tag's name and type arguments end, and the attributes go right there, which is always valid JSX.
+ * tag's attributes, name, and type arguments end. The attributes go after the last attribute, or
+ * right after the name and type arguments when there is none, which is always valid JSX.
  * A string, a comment, or a type is never a tag in the tree, so none of them is touched.
  *
  * A file the parser cannot read is returned unchanged. The caller is told, so it can warn, but
@@ -92,12 +93,16 @@ function hasSourceAttribute(opening: AstNode): boolean {
   });
 }
 
-// Where the attributes go: right after the tag name, or after its type argument list when it has
-// one. The parser stores that list as typeParameters in this major version and as typeArguments
-// in the next, so both are read.
+// Where the attributes go: after the tag's last attribute, so they come last as text matching
+// put them. In JSX the last attribute wins, so a data-source-file carried in a spread such as
+// {...rest} cannot replace the element's own location. A tag with no attributes gets them right
+// after its name, or after its type argument list when it has one. The parser stores that list as
+// typeParameters in this major version and as typeArguments in the next, so both are read.
 function insertionPoint(opening: AstNode): number | null {
+  const attributes = children(opening, 'attributes');
+  const last = attributes[attributes.length - 1];
   const typeArguments = child(opening, 'typeArguments') ?? child(opening, 'typeParameters');
-  const end = typeArguments?.end ?? child(opening, 'name')?.end;
+  const end = last?.end ?? typeArguments?.end ?? child(opening, 'name')?.end;
   return typeof end === 'number' ? end : null;
 }
 
