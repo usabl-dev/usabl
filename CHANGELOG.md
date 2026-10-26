@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- A page can no longer choose usabl's element identities or the announcements it hears.
+  Element paths came from `window.__usablPathFor` and announcements from
+  `window.__usablDrain`, both in the page's own JavaScript world. `checkPage` kept a
+  helper the page had already defined, and page script could replace the one usabl
+  installed, so a page could give every element one identity and hide a barrier, or pass
+  a flow requirement on an announcement no screen reader spoke. Both now run in isolated
+  worlds that page script cannot reach. An element is named by its id only when the id's
+  selector matches exactly that element, so a NUL id and a U+FFFD id get two identities.
+  A document where the capture is not running is now a coverage gap, never silence.
+
 - The stop hook now compares session pins before it allows a stop on a stored receipt.
   Before, a matching receipt allowed the stop first, so a guarded policy file weakened and
   committed during the session, then checked with `usabl check` under the weaker policy,
