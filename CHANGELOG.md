@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- `usabl floor prune` now writes back every top-level field of the floor it does not
+  change. Before, it wrote only `version` and `entries`, so a floor marked
+  `scope: "partial"` came back without the marker and read as a complete floor for the
+  whole application. Fields from a newer floor are kept the same way.
+
 - Egress redaction now catches credential shapes it used to print: whitespace or a quote
   between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
   header segment or a JWT cut to two segments, the user name and password after `//` in
