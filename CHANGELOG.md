@@ -5,26 +5,30 @@
 ### Fixed
 
 - Router discovery now parses the router file instead of matching its text, and reads
-  routes only from the real router: a `<Routes>` or `<Switch>` element, the argument of a
-  `create*Router(...)` call, or the JSX passed to `createRoutesFromElements`. Before, a
-  `{ path: '/decoy' }` object or a `<Route>` anywhere in the module was read as a route,
-  and `usabl init` could write a stray `<Route>`'s component into the sidecar as the
-  entry file of a real route. A commented-out route was read. A route whose `element`
-  came before its `path`, a `>` in a JSX attribute string, a `)` in a string or comment
-  inside the router call, and a `create*Router(` in a string or comment each dropped
-  real routes. The regular expression `/[//]/`, which broke an earlier comment-blanking
-  fix, is now a test. A path written as a `const` in the same module, including
-  `ROUTES.home`, is now read, and a relative child path is joined to its parent path. A
-  route the reader finds but cannot resolve is no longer dropped in silence: it names
-  the router file and line, and the planner records it as a `skipped` gap whenever a
-  wide-blast change would have queued the router's routes. A router file that does not
-  parse is such a gap for the whole file. `usabl drift routes` lists each one and exits
-  2, and `usabl init` writes a `Review:` note for each. When no router owns a `<Route>`,
-  init now leaves its entry file null. A layout route with child routes gets no entry
-  file, because its component also renders on each child's URL. A route such as
-  `/app/*`, which usually mounts routes declared in another file, is reported with its
-  line instead of being read as the one screen `/app/*`. A bare `*` route is still
-  skipped.
+  routes only from the real router: a `<Routes>` or `<Switch>` element, the first argument
+  of `createBrowserRouter`, `createHashRouter`, or `createMemoryRouter` (or an import alias,
+  a const, or a wrapper of one), the argument of `useRoutes`, or the JSX passed to
+  `createRoutesFromElements` or `createRoutesFromChildren`. Before, a `{ path: '/decoy' }`
+  object or a `<Route>` anywhere in the module was read as a route, and `usabl init` could
+  write a stray `<Route>`'s component into the sidecar as the entry file of a real route.
+  A commented-out route was read. A route whose `element` came before its `path`, a `>` in
+  a JSX attribute string, a `)` in a string or comment inside the router call, and a
+  router call in a string or comment each dropped real routes. The regular expression
+  `/[//]/`, which broke an earlier comment-blanking fix, is now a test. A path written as a
+  `const` in the same module, including `ROUTES.home`, is now read, and a relative child
+  path is joined to its parent path. A route the reader finds but cannot read is never
+  dropped in silence: it names the router file and line, and the planner records it as a
+  `skipped` gap whenever a wide-blast change would have queued the router's routes. That
+  includes a `<Route>` outside every router that was read, a call whose name ends in
+  `Router` that is not a known factory, and a route list changed with `push` or an index.
+  A router file that does not parse, and a file with routes but no router, are each one
+  such gap for the whole file. `usabl drift routes` lists each one with an id, and
+  `usabl init` writes a `Review:` note for each. A layout route with child routes gets no entry file,
+  because its component also renders on each child's URL. A route such as `/app/*`, which
+  usually mounts routes declared in another file, is reported with its line instead of
+  being read as the one screen `/app/*`. A bare `*` route is still skipped. Route files
+  with legacy decorators, Flow types, and route objects with methods such as `loader()`
+  are read.
 
 - The Vite plugin no longer breaks a JSX element that has type arguments. It adds
   `data-source-file` and `data-source-line` to raw TSX, and it found tags by matching
@@ -32,12 +36,14 @@
   the type argument list. It did the same inside a generic arrow function such as
   `<T,>(value: T) => value`. The file then failed to parse, and the dev server answered
   500 for every module that imported it. Now the plugin parses each file and puts the
-  attributes right after the tag name and any type arguments. Nested type arguments, a
+  attributes after the tag's last attribute, or right after the tag name and any type
+  arguments when it has none, so a `data-source-file` in a spread such as `{...rest}`
+  cannot replace the element's own location. Files with legacy decorators, and `.js` and
+  `.jsx` files with Flow types, are read. Nested type arguments, a
   generic element inside a conditional, a self-closing generic element, and a
   member-expression tag such as `<Foo.Bar>` all stay valid. A fragment and a namespaced
   tag such as `<svg:rect>` get no attributes. A file the parser cannot read is served
   unchanged, with one warning in the dev server log that names the file, never a 500.
-  The attributes now come right after the tag name instead of just before the tag close.
 
 - The stop hook now compares session pins before it allows a stop on a stored receipt.
   Before, a matching receipt allowed the stop first, so a guarded policy file weakened and
@@ -128,6 +134,15 @@
   installer file exists, run it with bash and keep its exit status.
 
 ### Added
+
+- `acknowledgedUnreadable` in `usabl.routes.json`: a list of `{ "file", "id" }` for router
+  entries usabl cannot read that the sidecar's author has checked by hand. Without it, a
+  router with a `/app/*` route, a guard element among the routes, or routes built with
+  `map` made `usabl drift routes` exit 2 on every run. An acknowledged entry is still
+  listed and no longer forces exit 2. The id is a hash of the declaration's source text,
+  so it holds when other lines move and stops matching when the declaration changes. A
+  router file that does not parse, or one with routes but no router, cannot be
+  acknowledged. Only drift reads the list.
 
 - `signalTimeoutMs` in `usabl.config.json`, a positive whole number of milliseconds,
   default 15000, at most 600000 (ten minutes). It caps the wait for a `reachedWhen` selector, counted from the first
