@@ -25,7 +25,7 @@ import { loadRequirements } from '../intake/load.js';
 import { makeScanProviders } from '../providers/core-stack.js';
 import { runProviders } from '../providers/index.js';
 import { attachRowScopeToDrafts } from '../providers/row-scope.js';
-import { scrubResult, scrubString } from './scrub.js';
+import { scrubOutboundData, scrubResult, scrubString } from './scrub.js';
 
 // A single-page check outcome for a live Playwright page. It calls the same precedence function
 // as the gate, so the two can never rank a blocking failure and a coverage gap differently.
@@ -305,10 +305,12 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     intake.requirements === null
       ? []
       : requirementGapsForPage(intake.requirements, labeledScreenId, intake.knownSurfaceIds);
-  return {
+  // The projection leaves usabl here, so it is scrubbed here: page text, gap refs, and reasons. The
+  // page address is a gap ref, and a query string or a fragment in it can hold a session token.
+  return scrubOutboundData({
     ...summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]),
     project: intake.project,
-  };
+  });
 }
 
 export function assertUsablVerdict(

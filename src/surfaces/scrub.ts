@@ -390,13 +390,43 @@ export function scrubString(text: string): string {
   return removeFrameMarkers(redactSecrets(neutralize(redactSecrets(text))));
 }
 
-function scrubUnknown(value: unknown): unknown {
+// An absolute URL written in text: a scheme, "://", and everything up to white space or a quote.
+const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`]+/gi;
+
+function withoutUrlSecrets(raw: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    // Not a URL usabl can rebuild, so everything from the first query or fragment mark goes.
+    return raw.replace(/[?#].*$/s, '');
+  }
+  if (parsed.username === '' && parsed.password === '' && parsed.search === '' && parsed.hash === '') {
+    return raw;
+  }
+  parsed.username = '';
+  parsed.password = '';
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString();
+}
+
+/**
+ * Every absolute URL in the text, without its sign-in credentials, query string, and fragment.
+ * Those are where applications put session tokens and signed links, and a page address reaches
+ * output as a gap ref or inside a reason. The rest of the text is left as it is.
+ */
+export function stripUrlSecrets(text: string): string {
+  return text.replace(URL_IN_TEXT, (match) => withoutUrlSecrets(match));
+}
+
+function scrubUnknown(value: unknown, scrubText: (text: string) => string = scrubString): unknown {
   if (typeof value === 'string') {
-    return scrubString(value);
+    return scrubText(value);
   }
 
   if (Array.isArray(value)) {
-    return value.map((entry) => scrubUnknown(entry));
+    return value.map((entry) => scrubUnknown(entry, scrubText));
   }
 
   if (isPlainObject(value)) {
@@ -409,7 +439,7 @@ function scrubUnknown(value: unknown): unknown {
         scrubbed[key] = '[REDACTED]';
         continue;
       }
-      scrubbed[key] = scrubUnknown(nested);
+      scrubbed[key] = scrubUnknown(nested, scrubText);
     }
 
     return scrubbed;
@@ -420,6 +450,15 @@ function scrubUnknown(value: unknown): unknown {
 
 function scrubValue<T>(value: T): T {
   return scrubUnknown(value) as T;
+}
+
+/**
+ * A scrubbed copy of plain data that leaves usabl without passing through scrubResult, such as a
+ * page check. Every string goes through scrubString and then loses the credentials, query string,
+ * and fragment of any URL in it, and values under secret-named keys are redacted.
+ */
+export function scrubOutboundData<T>(value: T): T {
+  return scrubUnknown(value, (text) => stripUrlSecrets(scrubString(text))) as T;
 }
 
 /**

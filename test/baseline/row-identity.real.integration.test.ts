@@ -11,6 +11,7 @@
  */
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromium } from 'playwright';
 import type { Deps, Result, UsablConfig } from '../../src/contracts/index.js';
 import { runBaseline } from '../../src/baseline/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
@@ -19,6 +20,7 @@ import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { makeCoreProviders } from '../../src/providers/core-stack.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import { run } from '../../src/run.js';
+import { checkPage } from '../../src/surfaces/playwright-helper.js';
 
 const BROKEN = '<button type="button"><svg aria-hidden="true" width="12" height="12"></svg></button>';
 const NAMED = '<button type="button" aria-label="Open actions">Actions</button>';
@@ -49,7 +51,8 @@ interface Fixture {
 function makeServer(): Promise<Fixture> {
   const pages = new Map<string, string>();
   const server: Server = createServer((req, res) => {
-    const html = pages.get(req.url ?? '');
+    // The query string is not part of the page's name, so a test can load a page with one.
+    const html = pages.get((req.url ?? '').split('?')[0] ?? '');
     if (html === undefined) {
       res.writeHead(404, { 'content-type': 'text/plain' });
       res.end('not found');
@@ -230,4 +233,25 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('row identity edge cases 
     // The barrier itself was found and keyed by row, so the check above is not vacuous.
     expect(out.result.findings.some((f) => f.identityBasis === 'row' && f.rule === 'button-name')).toBe(true);
   }, 120_000);
+
+  it('returns no query string, fragment, or credential from checkPage, in gap refs or anywhere else', async () => {
+    const dupRows = table(keyedRow('same', true) + keyedRow('same', true));
+    fixture.set('/page-check', page(dupRows));
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const context = await browser.newContext();
+      const pw = await context.newPage();
+      await pw.goto(`${fixture.origin}/page-check?token=SECRETPOISON#FRAGPOISON`);
+      const result = await checkPage(pw, { keyboardWalk: false });
+      const text = JSON.stringify(result);
+      // Not vacuous: the duplicate rows raise a gap whose ref is the page address.
+      expect(result.gaps.some((g) => g.ref.includes('/page-check'))).toBe(true);
+      expect(text).not.toContain('SECRETPOISON');
+      expect(text).not.toContain('FRAGPOISON');
+      await context.close();
+    } finally {
+      await browser.close();
+    }
+  }, 120_000);
 });
+
