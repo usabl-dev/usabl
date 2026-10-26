@@ -200,9 +200,14 @@ const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: new RegExp(String.raw`(secret${KEY_TO_VALUE})\S+(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
   // JWTs are common access-token payloads and can appear as bare values.
   { pattern: /\b(eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b/g, replacement: '[REDACTED]' },
-  // One JWT segment on its own still carries claims, and "eyJ" is how base64 of a JSON object
-  // starts. A header alone, a payload alone, or a token cut to two segments is redacted too.
-  { pattern: /\beyJ[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]*)?/g, replacement: '[REDACTED]' },
+  // A JWT cut to two segments, a header and a payload. Both are JSON objects, so both open with
+  // "eyJ", which is how base64 of a JSON object starts.
+  { pattern: /\beyJ[A-Za-z0-9_-]{6,}\.eyJ[A-Za-z0-9_-]*/g, replacement: '[REDACTED]' },
+  // A lone segment only when it reads as a JWT header: base64 of an object whose first key is
+  // "alg", "typ", or "kid", at least as long as the shortest real header. Any other lone "eyJ"
+  // run is ordinary base64 JSON, such as an application's state in a query string, and rewriting
+  // it would change the screen urls and gap refs the overlay matches against the live location.
+  { pattern: /\beyJ(?:hbGci|0eXAi|raWQi)[A-Za-z0-9_-]{8,}/g, replacement: '[REDACTED]' },
   // The userinfo of a URL, such as a proxy address with a user name and password in it. The match
   // starts at the two slashes and cannot cross a slash, so each address is read once. It runs to
   // the last @ before the host, because a password can itself contain an @.

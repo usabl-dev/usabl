@@ -179,9 +179,11 @@ comments.
   when it ends in password, passwd, secret, or token after a separator or a camel-case join, such
   as `PROXY_PASSWORD` or `proxyPassword`.
 - The value patterns also cover shapes they used to miss: whitespace or a quote between a key and
-  its separator (`token = ...`, `"password": "..."`), a single JWT segment or a JWT cut to two
-  segments, the userinfo of any address (`http://user:pass@proxy:3128`, as in `HTTPS_PROXY`), and
-  GitHub tokens by their prefix. The last one matters for config errors: a token pasted into the
+  its separator (`token = ...`, `"password": "..."`), a JWT cut to two segments, a lone JWT
+  header segment (one whose base64 opens with `eyJhbGci`, `eyJ0eXAi`, or `eyJraWQi`), the userinfo
+  after `//` in an address (`http://user:pass@proxy:3128`, as in `HTTPS_PROXY`), and GitHub
+  tokens by their prefix. Any other lone base64 JSON, such as `?state=eyJ...` in a screen URL, is
+  kept as written, because the overlay matches screen URLs and gap refs against the live location. The last one matters for config errors: a token pasted into the
   wrong key used to be repeated back in full in the unknown-key message.
 
 **Status:** [x] Local-first; egress redaction and neutralization ship, with anchors matched
@@ -440,9 +442,11 @@ characters of back-to-back credentials take roughly 0.7 s to redact, and roughly
 a 100 MiB peak when a look-through character is present, against about 0.1 s before the
 value-split fix. Ordinary large text got faster. This is a denial-of-service hardening item
 for later, not a correctness defect: every span is still redacted, and the surface-level
-field caps limit what reaches an agent. Addresses with userinfo are now redacted spans too, so
-text made of nothing but such addresses costs about the same per span as back-to-back
-credentials do.
+field caps limit what reaches an agent. Addresses with userinfo are now redacted spans too.
+Measured on one machine, 2.8 million characters made of nothing but `http://u:p@h/ ` took 1.6 to
+2.8 s to scrub, about 0.6 to 1.0 microseconds per character, against 66 to 92 ms (about 0.03
+microseconds per character) before. Ordinary text with plain URLs, 2.9 million characters, took 98
+to 344 ms against 78 to 270 ms before.
 
 **Status:** [x] All three controls ship. The bidirectional controls are the full Unicode
 `Bidi_Control` set. Eleven splitters, every split position, the reordering payload, eight

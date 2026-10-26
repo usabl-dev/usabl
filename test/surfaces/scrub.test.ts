@@ -713,7 +713,12 @@ describe('egress redaction of credential shapes the patterns used to miss', () =
   const POISON = 'SECRETPOISON';
   const githubToken = ['gh', 'p_', POISON.repeat(3)].join('');
   const githubPat = ['github', '_pat_', POISON.repeat(3)].join('');
-  const jwtSegment = ['ey', 'J', POISON, POISON].join('');
+  // A JWT header names its algorithm, type, or key id first, so its base64 opens with one of three
+  // prefixes. A payload is a JSON object too, so it opens with "eyJ".
+  const jwtHeader = ['ey', 'JhbGci', POISON].join('');
+  const jwtTypHeader = ['ey', 'J0eXAi', POISON].join('');
+  const jwtKidHeader = ['ey', 'JraWQi', POISON].join('');
+  const jwtPayload = ['ey', 'J', POISON, POISON].join('');
 
   function egress(text: string): string {
     return JSON.stringify(scrubResult(baseResult({ summary: text, findings: [baseFinding({ whatUserExperiences: text })] })));
@@ -735,10 +740,41 @@ describe('egress redaction of credential shapes the patterns used to miss', () =
     }
   });
 
-  it('redacts a single JWT segment and a JWT with two segments', () => {
-    for (const text of [`id ${jwtSegment} end`, jwtSegment, `${jwtSegment}.${POISON}`, `${jwtSegment}.`]) {
+  it('redacts a lone JWT header segment and a JWT with two segments', () => {
+    for (const text of [
+      `id ${jwtHeader} end`,
+      jwtHeader,
+      jwtTypHeader,
+      jwtKidHeader,
+      `${jwtHeader}.`,
+      `${jwtPayload}.${jwtPayload}`,
+      `${jwtHeader}.${jwtPayload}`,
+    ]) {
       expect(egress(text), text).not.toContain(POISON);
     }
+  });
+
+  it('keeps ordinary base64 JSON in a URL as written, so the overlay still matches the screen', () => {
+    // scrubResult rewrites screen urls, affected urls, and gap refs, and the overlay compares them
+    // with the live location. A query or path segment that only happens to be base64 JSON is not
+    // a token, and rewriting it would orphan the screen.
+    const state = ['ey', 'JmaWx0ZXIiOiJhIn0'].join('');
+    const url = `http://127.0.0.1:5173/clusters?state=${state}`;
+    expect(scrubString(url)).toBe(url);
+    expect(scrubString(`http://127.0.0.1:5173/share/${state}`)).toBe(`http://127.0.0.1:5173/share/${state}`);
+    const scrubbed = scrubResult(
+      baseResult({
+        coverage: {
+          changedFiles: [],
+          affected: [{ screenId: 'clusters', url, provenance: 'manual' }],
+          unresolvedFiles: [],
+          gaps: [{ ref: url, state: 'not-covered', reason: 'timeout' }],
+          nothingToCheck: false,
+        },
+      }),
+    );
+    expect(scrubbed.coverage.affected[0]?.url).toBe(url);
+    expect(scrubbed.coverage.gaps[0]?.ref).toBe(url);
   });
 
   it('redacts proxy credentials in a proxy URL and in a proxy password', () => {
