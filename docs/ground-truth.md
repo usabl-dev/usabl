@@ -1645,6 +1645,15 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   carries barriers the floor recorded.
 - `regression`: block.
 - `approval_required`: block.
+- A verdict that is not one of the contract's words, or a null verdict on a run that was neither
+  idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
+  "UNRECOGNIZED VERDICT (exit 1): NOT verified. usabl does not recognize the verdict this run
+  reported, so the run proved nothing about this change." or "NO VERDICT (exit 0): NOT verified.
+  usabl did not reach a verdict for this change, so the run proved nothing about it.", followed by
+  a next step to run the check again and the gate's summary inside the untrusted frame. The
+  carried verdict is never printed. During an active continuation it allows once, marked NOT
+  verified, like every other blocking state. The self-check prints the same words, and prints IDLE
+  only when `nothingToCheck` is true.
 - `not_covered`: default block. Recalibrate from real-repo measurement
   (section 25) if this drives persistent bypass behavior.
 - Policy mismatch against git anchor: block.
