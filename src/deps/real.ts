@@ -110,6 +110,12 @@ const LIVE_CAPTURE_IMPL = `
   };
   window.__usablDrain = () => buffer.splice(0, buffer.length);
   const observer = new MutationObserver((mutations) => {
+    // Text the parser is still writing is the page being built, not an announcement, and the
+    // capture has never counted it. The check reads the document's own state, so page script
+    // cannot change it.
+    if (document.readyState === 'loading') {
+      return;
+    }
     for (const mutation of mutations) {
       const target = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
       const host = target && target.closest ? target.closest(LIVE) : null;
@@ -118,18 +124,14 @@ const LIVE_CAPTURE_IMPL = `
       }
     }
   });
-  const startObserver = () => {
-    observer.observe(document.documentElement, {
-      subtree: true,
-      childList: true,
-      characterData: true,
-    });
-  };
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startObserver);
-  } else {
-    startObserver();
-  }
+  // Observed from the document itself, at once, with no event to wait for. A page can stop an
+  // event from reaching other listeners, as with a DOMContentLoaded listener that calls
+  // stopImmediatePropagation, and an observer that waited for one would never start.
+  observer.observe(document, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+  });
 `;
 
 // The world the live-region capture runs in. Page script shares the DOM with it but not its

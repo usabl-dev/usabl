@@ -334,6 +334,28 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     }
   });
 
+  it('hears an announcement on a page that stops DOMContentLoaded from reaching other listeners', async () => {
+    // A capture that waited for DOMContentLoaded to start its observer never started on this page,
+    // and the drain returned nothing.
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title>
+      <script>window.addEventListener('DOMContentLoaded', (e) => e.stopImmediatePropagation(), true);</script>
+      </head><body>
+      <main><button type="button" id="save">Save</button><div role="status" id="message"></div></main>
+      <script>
+        document.getElementById('save').addEventListener('click', () => {
+          document.getElementById('message').textContent = 'Saved';
+        });
+      </script>
+    </body></html>`;
+    const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    try {
+      await page.click('#save');
+      expect(await page.drainAnnouncements()).toEqual(['Saved']);
+    } finally {
+      await page.close();
+    }
+  });
+
   it('adds a capability-denied gap when provider capabilities are disallowed', async () => {
     const deniedProviderRun = vi.fn(async () => []);
     const deniedProvider: Provider = {
