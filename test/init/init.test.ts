@@ -95,7 +95,7 @@ export function App() {
     expect(draft.notes.some((note) => note.includes('/lazy'))).toBe(true);
   });
 
-  it('skips nested relative route paths instead of inventing a root-absolute URL', async () => {
+  it('joins a nested relative route path to its parent instead of inventing a root-absolute URL', async () => {
     const fs = memoryFs(
       fixtureFiles({
         'src/App.tsx': `import { Route, Routes } from 'react-router-dom'
@@ -118,11 +118,17 @@ export function App() {
     );
 
     const draft = await inferInit(fs);
-    expect(draft.routes.routes.find((route) => route.url.includes('profile'))).toBeUndefined();
+    // The router nests profile under /settings, so React Router serves it at /settings/profile.
+    // The layout route has a child, and its component also renders on the child's URL, so it is
+    // not attributed: a change to the layout must not read as covered by one screen.
+    expect(draft.routes.routes).toEqual([
+      { screenId: 'settings', url: '/settings', entryFile: null },
+      { screenId: 'settings-profile', url: '/settings/profile', entryFile: 'src/pages/Profile.tsx' },
+    ]);
     expect(draft.routes.routes).not.toContainEqual(
       expect.objectContaining({ url: '/profile' }),
     );
-    expect(draft.notes.some((note) => note.includes('profile') && note.toLowerCase().includes('review'))).toBe(
+    expect(draft.notes.some((note) => note.includes('/settings') && note.includes('no proven entry file'))).toBe(
       true,
     );
   });
