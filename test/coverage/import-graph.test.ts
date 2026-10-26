@@ -58,7 +58,8 @@ describe('buildImportGraph', () => {
   it('discloses instead of guessing when several candidate files exist', async () => {
     // With both Widget.js and Widget.tsx present, which one Vite loads depends on its
     // resolve.extensions order, which usabl does not parse. Picking one could attribute a change to
-    // a screen that renders the other, so it creates no edge and discloses the ambiguity.
+    // a screen that renders the other, so it creates no edge and discloses the ambiguity, naming
+    // both files.
     const fs = fsOf({
       'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } }),
       'src/Page.tsx': `import { Widget } from '@/Widget';`,
@@ -72,7 +73,8 @@ describe('buildImportGraph', () => {
     expect(graph.unresolvable).toContainEqual({
       importer: 'src/Page.tsx',
       specifier: '@/Widget',
-      kind: 'file-not-found',
+      kind: 'ambiguous-candidates',
+      candidates: ['src/Widget.js', 'src/Widget.tsx'],
     });
   });
 
