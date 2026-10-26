@@ -1028,13 +1028,14 @@ describe('pr comment page text is sealed in code spans', () => {
       expect(markdown).toContain('- showing first 20 of 21 stops');
     });
 
-    it('keeps the collapsed rule line as a continuation of its item, not a nested item', () => {
+    it('keeps every collapsed line under the headline a continuation of its item, not a nested item', () => {
       const [, markdown] = fixtures[1]!;
 
-      expect(markdown).not.toMatch(/^\s+- rule: /m);
+      expect(markdown).not.toMatch(/^[ \t]+- /m);
       // The headline is escaped prose around sealed fields, so its brackets are character
       // references and the screen id and rule are code spans.
-      expect(markdown).toMatch(/^- &#91;`new serious`&#93; `clusters`\/`axe\/rule-0`\n  rule: `clusters` - `axe\/rule-0` · `serious`\n  \[BEGIN UNTRUSTED TEXT/m);
+      expect(markdown).toMatch(/^- &#91;`new serious`&#93; `clusters`\/`axe\/rule-0`$/m);
+      expect(markdown).toMatch(/^ {2}\[BEGIN UNTRUSTED TEXT/m);
     });
   });
 
