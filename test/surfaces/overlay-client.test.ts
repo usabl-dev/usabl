@@ -110,6 +110,9 @@ function deferred(): { promise: Promise<void>; release: () => void } {
   return { promise, release };
 }
 
+// How long mount waits for the inspector host. See mount.
+const MOUNT_TIMEOUT_MS = 15_000;
+
 async function mount(
   payload: Projection | null,
   options: MountOptions = {},
@@ -172,8 +175,11 @@ async function mount(
     });
   });
   await page.goto('http://usabl.test' + path);
+  // The host appears once the module has run, which takes far longer than usual when the machine is
+  // loaded. A two second wait failed tests whose overlay was fine. This bound only decides how long
+  // to wait before reporting that the host never came, with the page errors that explain why.
   try {
-    await page.locator(OVERLAY).waitFor({ timeout: 2000 });
+    await page.locator(OVERLAY).waitFor({ timeout: MOUNT_TIMEOUT_MS });
   } catch {
     throw new Error(`inspector host was not created: ${pageErrors.join(' | ') || 'no page error reported'}`);
   }
@@ -208,7 +214,9 @@ afterAll(async () => {
   }
 });
 
-describe('overlay badge and panel', { timeout: 30_000 }, () => {
+// The row test drives many interactions and measured close to 30 seconds on a loaded machine, so
+// this group has more room than the others.
+describe('overlay badge and panel', { timeout: 60_000 }, () => {
   it('collapses to a badge that names the state and does not block the app underneath', async () => {
     const page = await mount(projectOverlay(result()), { path: '/clusters' });
     const host = page.locator(OVERLAY);
