@@ -254,6 +254,42 @@ describe('runRoutesDrift', () => {
     expect(outcome.stdout ?? '').not.toContain('Route drift detected');
   });
 
+  it('returns exit 2 and names each route it could not read, because drift is then unconfirmed', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+      }),
+      'src/router.tsx': [
+        "import { ROUTES } from './paths';",
+        'export const router = createBrowserRouter([',
+        "  { path: '/home' },",
+        '  { path: ROUTES.settings },',
+        ']);',
+      ].join('\n'),
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toContain('src/router.tsx line 4');
+    expect(outcome.stderr).toContain('Verify');
+  });
+
+  it('returns exit 2 when the router file does not parse', async () => {
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }],
+      }),
+      'src/router.tsx': `export const App = () => <Routes><Route path="/home" ></Routes>;`,
+    });
+
+    const outcome = await runRoutesDrift(fs, 'src/router.tsx');
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toContain('src/router.tsx');
+    expect(outcome.stderr).toContain('does not parse');
+  });
+
   it('returns exit 2 when router file is unreadable', async () => {
     const throwingFs = {
       async readFile(path: string): Promise<string | null> {

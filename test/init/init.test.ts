@@ -172,6 +172,128 @@ export const router = createBrowserRouter([{ path: '/only', element: <Page /> }]
   });
 });
 
+describe('inferInit reads routes from the parsed router', () => {
+  const routerFiles = (app: string): Record<string, string> =>
+    fixtureFiles({
+      'src/App.tsx': app,
+      'src/pages/Home.tsx': 'export function Home() { return null }\n',
+      'src/pages/Account.tsx': 'export function Account() { return null }\n',
+      'src/pages/Decoy.tsx': 'export function Decoy() { return null }\n',
+    });
+
+  it('does not attribute a stray <Route> outside the router to the real route with the same path', async () => {
+    // The stray tag's component used to win the merge over the data-router entry, so init wrote
+    // the decoy's file into the sidecar as the entry file for /account.
+    const app = `import { createBrowserRouter } from 'react-router-dom'
+import { Route } from 'react-router-dom'
+import { Decoy } from './pages/Decoy'
+
+export const example = <Route path="/account" element={<Decoy />} />
+
+export const router = createBrowserRouter([
+  { path: '/account', element: <div /> },
+])
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([{ screenId: 'account', url: '/account', entryFile: null }]);
+  });
+
+  it('leaves attribution null when no router owns the route', async () => {
+    const app = `import { Route } from 'react-router-dom'
+import { Account } from './pages/Account'
+
+export const AccountRoute = () => <Route path="/account" element={<Account />} />
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([{ screenId: 'account', url: '/account', entryFile: null }]);
+  });
+
+  it('reads a route whose element comes before its path, and one with ">" in an attribute string', async () => {
+    const app = `import { Route, Routes } from 'react-router-dom'
+import { Home } from './pages/Home'
+import { Account } from './pages/Account'
+
+export function App() {
+  return (
+    <Routes>
+      <Route element={<Home />} path="/home" />
+      <Route title="a > b" path="/account" element={<Account />} />
+    </Routes>
+  )
+}
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([
+      { screenId: 'home', url: '/home', entryFile: 'src/pages/Home.tsx' },
+      { screenId: 'account', url: '/account', entryFile: 'src/pages/Account.tsx' },
+    ]);
+  });
+
+  it('ignores a commented-out route and a commented-out import', async () => {
+    const app = `import { Route, Routes } from 'react-router-dom'
+// import { Home } from './pages/Decoy'
+import { Home } from './pages/Home'
+
+export function App() {
+  return (
+    <Routes>
+      {/* <Route path="/old" element={<Home />} /> */}
+      <Route path="/home" element={<Home />} />
+    </Routes>
+  )
+}
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([{ screenId: 'home', url: '/home', entryFile: 'src/pages/Home.tsx' }]);
+  });
+
+  it('resolves path={ROUTES.home} from a const in the router module', async () => {
+    const app = `import { Route, Routes } from 'react-router-dom'
+import { Home } from './pages/Home'
+
+const ROUTES = { home: '/home' } as const
+
+export function App() {
+  return (
+    <Routes>
+      <Route path={ROUTES.home} element={<Home />} />
+    </Routes>
+  )
+}
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([{ screenId: 'home', url: '/home', entryFile: 'src/pages/Home.tsx' }]);
+  });
+
+  it('names the file and line of a route path it cannot resolve', async () => {
+    const app = `import { Route, Routes } from 'react-router-dom'
+import { ROUTES } from './paths'
+import { Home } from './pages/Home'
+
+export function App() {
+  return (
+    <Routes>
+      <Route path={ROUTES.home} element={<Home />} />
+      <Route path="/account" element={<Home />} />
+    </Routes>
+  )
+}
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes.map((route) => route.url)).toEqual(['/account']);
+    expect(draft.notes.some((note) => note.includes('src/App.tsx line 8') && note.includes('usabl.routes.json'))).toBe(
+      true,
+    );
+  });
+
+  it('names the router file when it does not parse', async () => {
+    const app = `export function App() { return <Routes><Route path="/a" ></Routes> }\n`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([]);
+    expect(draft.notes.some((note) => note.includes('src/App.tsx') && note.includes('does not parse'))).toBe(true);
+  });
+});
+
 describe('inferInit readiness signal recommendation for a login-gated application', () => {
   const loginRouter = `import { Route, Routes } from 'react-router-dom'
 import { Overview } from './pages/Overview'

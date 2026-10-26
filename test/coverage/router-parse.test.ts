@@ -142,3 +142,208 @@ describe('router-parse', () => {
     ]);
   });
 });
+
+// Router discovery reads the router from a parsed file. Each case below was read wrongly when
+// routes were matched as raw text: a decoy outside the router was read as a route, a real route
+// was missed, or a delimiter inside a string or comment ended a tag or a call early.
+describe('router-parse: reads only the real router', () => {
+  const urls = (raw: string): string[] => parseRouterFallback(raw).routes.map((route) => route.url);
+  const unreadableLines = (raw: string): Array<number | null> =>
+    (parseRouterFallback(raw).unreadable ?? []).map((gap) => gap.line);
+
+  it('ignores a path object outside the create*Router call', () => {
+    const raw = [
+      "const api = { path: '/decoy', method: 'GET' };",
+      "export const router = createBrowserRouter([{ path: '/home', element: <Home /> }]);",
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/home']);
+  });
+
+  it('ignores a <Route> written outside the router element', () => {
+    const raw = [
+      'const Decoy = () => <Route path="/account" element={<Decoy />} />;',
+      'export const App = () => (',
+      '  <Routes>',
+      '    <Route path="/home" element={<Home />} />',
+      '  </Routes>',
+      ');',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/home']);
+  });
+
+  it('does not read a commented-out route', () => {
+    const raw = [
+      'export const App = () => (',
+      '  <Routes>',
+      '    {/* <Route path="/old-jsx" element={<Old />} /> */}',
+      '    <Route path="/home" element={<Home />} />',
+      '  </Routes>',
+      ');',
+      'export const router = createBrowserRouter([',
+      "  // { path: '/old-data', element: <Old /> },",
+      "  /* { path: '/old-block' }, */",
+      "  { path: '/about', element: <About /> },",
+      ']);',
+    ].join('\n');
+    expect(urls(raw).sort()).toEqual(['/about', '/home']);
+  });
+
+  it('reads a route whose element attribute comes before its path', () => {
+    const raw = 'export const App = () => <Routes><Route element={<Home />} path="/home" /></Routes>;';
+    expect(urls(raw)).toEqual(['/home']);
+  });
+
+  it('reads a route whose JSX attribute string holds a ">"', () => {
+    const raw = [
+      'export const App = () => (',
+      '  <Routes>',
+      '    <Route title=">" path="/hidden" element={<Live />} />',
+      '    <Route path="/visible" title=">" element={<Live />} />',
+      '  </Routes>',
+      ');',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/hidden', '/visible']);
+  });
+
+  it('reads every route after a ")" inside a string or a comment in the router call', () => {
+    const raw = [
+      'export const router = createBrowserRouter([',
+      "  { path: '/first', handle: { label: 'a ) b' } },",
+      '  // a stray ) in a comment',
+      "  { path: '/second' },",
+      ']);',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/first', '/second']);
+  });
+
+  it('ignores create*Router( written in a string, a template, or a comment', () => {
+    const raw = [
+      "const docs = \"createBrowserRouter([{ path: '/in-string' }])\";",
+      "const tip = `${'createHashRouter('} [{ path: '/in-template' }]`;",
+      "// createMemoryRouter([{ path: '/in-comment' }])",
+      "export const router = createBrowserRouter([{ path: '/real' }]);",
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/real']);
+  });
+
+  it('reads every route after a regular expression that looks like a comment', () => {
+    // A comment-blanking fix read the valid regular expression /[//]/ as the start of a line
+    // comment, blanked the rest of the line, and a run with that router came back verified with
+    // a route missing. The parser reads it as a regular expression.
+    const raw = [
+      'const slashes = /[//]/; export const router = createBrowserRouter([',
+      "  { path: '/a' },",
+      "  { path: '/b' },",
+      ']);',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/a', '/b']);
+  });
+
+  it('resolves a path held in a const of the same module, including a member of a const object', () => {
+    const raw = [
+      "const HOME = '/home';",
+      'const TEMPLATE = `/template`;',
+      "export const ROUTES = { about: '/about', nested: { deep: HOME_ALIAS } } as const;",
+      'const HOME_ALIAS = HOME;',
+      'export const App = () => (',
+      '  <Routes>',
+      '    <Route path={HOME} element={<Home />} />',
+      '    <Route path={ROUTES.about} element={<About />} />',
+      "    <Route path={ROUTES['nested'].deep} element={<Deep />} />",
+      '    <Route path={TEMPLATE} element={<T />} />',
+      '    <Route path={`/inline`} element={<I />} />',
+      '  </Routes>',
+      ');',
+      "export const router = createBrowserRouter([{ path: ROUTES.about }, { path: HOME }]);",
+    ].join('\n');
+    expect(urls(raw).sort()).toEqual(['/about', '/home', '/inline', '/template']);
+    expect(unreadableLines(raw)).toEqual([]);
+  });
+
+  it('reports a path it cannot resolve as a gap with its line, not as a missing route', () => {
+    const raw = [
+      "import { ROUTES } from './paths';",
+      'let mutable = "/mutable";',
+      'export const App = () => (',
+      '  <Routes>',
+      '    <Route path={ROUTES.home} element={<Home />} />',
+      '    <Route path={`/users/${id}`} element={<User />} />',
+      '    <Route path={mutable} element={<M />} />',
+      '    <Route path="/known" element={<Known />} />',
+      '  </Routes>',
+      ');',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/known']);
+    expect(unreadableLines(raw)).toEqual([5, 6, 7]);
+    for (const gap of parseRouterFallback(raw).unreadable ?? []) {
+      expect(gap.reason).not.toBe('');
+    }
+  });
+
+  it('reports routes built by code as a gap, not as an empty router', () => {
+    const raw = [
+      "const pages = [{ path: '/a' }, { path: '/b' }];",
+      'export const App = () => (',
+      '  <Routes>',
+      '    {pages.map((page) => <Route key={page.path} path={page.path} element={<Page />} />)}',
+      '  </Routes>',
+      ');',
+      'export const router = createBrowserRouter(buildRoutes());',
+    ].join('\n');
+    expect(urls(raw)).toEqual([]);
+    expect(unreadableLines(raw)).toEqual([4, 7]);
+  });
+
+  it('joins a nested relative path to its parent path', () => {
+    const raw = [
+      'export const router = createBrowserRouter([',
+      "  { path: '/app', children: [{ index: true }, { path: 'settings' }, { path: 'users/:id' }] },",
+      "  { path: 'top' },",
+      ']);',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/app', '/app/settings', '/app/users/:id', '/top']);
+  });
+
+  it('reports a file that does not parse as a gap, never as a router with no routes', () => {
+    const result = parseRouterFallback('export const App = () => <Routes><Route path="/a" ></Routes>;');
+    expect(result.routes).toEqual([]);
+    expect(result.unreadable).toHaveLength(1);
+    expect(result.unreadable?.[0]?.line).toBe(1);
+    expect(result.unreadable?.[0]?.reason).toMatch(/does not parse/);
+  });
+});
+
+describe('router-parse: the data router reader used by init', () => {
+  const paths = (raw: string): string[] => parseDataRouterRoutes(raw).map((route) => route.path);
+
+  it('reads every entry after a ")" inside a string or a comment in the router call', () => {
+    const raw = [
+      'export const router = createBrowserRouter([',
+      "  { path: '/first', handle: { label: 'a ) b' } },",
+      '  // a stray ) in a comment',
+      "  { path: '/second' },",
+      ']);',
+    ].join('\n');
+    expect(paths(raw)).toEqual(['/first', '/second']);
+  });
+
+  it('reads the real call when create*Router( appears earlier in a string, a template, or a comment', () => {
+    const raw = [
+      "const docs = \"createBrowserRouter([{ path: '/in-string' }])\";",
+      "const tip = `${'createHashRouter('} [{ path: '/in-template' }]`;",
+      "// createMemoryRouter([{ path: '/in-comment' }])",
+      "export const router = createBrowserRouter([{ path: '/real' }]);",
+    ].join('\n');
+    expect(paths(raw)).toEqual(['/real']);
+  });
+
+  it('does not read a commented-out entry', () => {
+    const raw = [
+      'export const router = createBrowserRouter([',
+      "  // { path: '/old' },",
+      "  { path: '/new' },",
+      ']);',
+    ].join('\n');
+    expect(paths(raw)).toEqual(['/new']);
+  });
+});

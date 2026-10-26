@@ -192,6 +192,53 @@ describe('computeCoverage', () => {
     expect(cov.gaps[1]?.reason).toMatch(/usabl\.routes\.json/);
   });
 
+  it('queues every route after a regular expression that a comment blanker would misread', async () => {
+    // A reverted comment-blanking fix read /[//]/ as a line comment and dropped the route on the
+    // rest of that line, and the run came back verified with that screen never scanned.
+    const fs = fsOf({
+      'src/router.tsx': [
+        "const slashes = /[//]/; export const router = createBrowserRouter([{ path: '/first' },",
+        "  { path: '/second' }]);",
+      ].join('\n'),
+      'src/App.tsx': `export default function App() {}`,
+    });
+    const cov = await computeCoverage(fs, baseConfig, ['src/App.tsx']);
+    expect(cov.affected.map((screen) => screen.screenId).sort()).toEqual(['first', 'second']);
+    expect(cov.gaps).toEqual([]);
+  });
+
+  it('records a router file that does not parse as a gap that names the file', async () => {
+    const fs = fsOf({
+      'src/router.tsx': `export const App = () => <Routes><Route path="/a" ></Routes>;`,
+      'src/App.tsx': `export default function App() {}`,
+    });
+    const cfg: UsablConfig = { ...baseConfig, surfaces: [{ id: 'login', url: '/login', files: ['src/App.tsx'] }] };
+    const cov = await computeCoverage(fs, cfg, ['src/App.tsx']);
+    // The manual surface is still planned, but the run cannot read as complete without the router.
+    expect(cov.affected.map((screen) => screen.screenId)).toEqual(['login']);
+    expect(cov.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['src/router.tsx', 'skipped']]);
+    expect(cov.gaps[0]?.reason).toMatch(/does not parse/);
+    expect(cov.gaps[0]?.reason).toMatch(/usabl\.routes\.json/);
+  });
+
+  it('records a route path it cannot resolve as a gap with the file and line', async () => {
+    const fs = fsOf({
+      'src/router.tsx': [
+        "import { ROUTES } from './paths';",
+        'export const App = () => (',
+        '  <Routes>',
+        '    <Route path="/known" element={<Known />} />',
+        '    <Route path={ROUTES.hidden} element={<Hidden />} />',
+        '  </Routes>',
+        ');',
+      ].join('\n'),
+      'src/App.tsx': `export default function App() {}`,
+    });
+    const cov = await computeCoverage(fs, baseConfig, ['src/App.tsx']);
+    expect(cov.affected.map((screen) => screen.screenId)).toEqual(['known']);
+    expect(cov.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['src/router.tsx:5', 'skipped']]);
+  });
+
   it('reports both the skipped route and the unresolved file when the only fallback route is unusable', async () => {
     const fs = fsOf({
       'src/router.tsx': `<Route path="/acct\u202eadmin" element={<Admin />} />`,
