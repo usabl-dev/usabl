@@ -468,7 +468,10 @@ entirely. That is a worse integrity outcome than an honest unverified allow.
   this policy.
 
 **Not this decision:** `regression`, `not_covered`, and `approval_required` still
-block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`.
+block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`. A verdict the
+hook does not recognize, and a null verdict on a run that was neither idle nor exit 4, block: they
+are not a crash the operator needs to escape, and allowing them would read an unknown answer as a
+pass.
 
 **Status:** [x] Recorded. Matches the shipped Stop hook and runner error paths.
 
@@ -545,6 +548,7 @@ operator must set the engine SHA before the gate can run.
 | axe-core | MPL-2.0 | Dynamic link; surface version in output |
 | Playwright | Apache-2.0 | Browser binaries separate terms |
 | PatternFly | MIT | Rulepack data only |
+| @babel/parser | MIT | Pinned exactly. Reads JSX and TypeScript source; parser only. Brings @babel/types, @babel/helper-string-parser, and @babel/helper-validator-identifier, all MIT |
 | Guidepup (if adopted) | MIT | Optional phrasing validation |
 
 **usabl release license:** Apache-2.0 (repo `LICENSE`). MPL boundary: do not vendor
