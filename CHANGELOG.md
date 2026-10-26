@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- `usabl.config.json` now refuses a `surfaces[].url` or an `appBaseUrl` that carries a
+  user name or a password, such as `https://user:pass@host/screen`. Before, the URL was
+  printed as written in every report, including the pull request comment, so the
+  credential was published. The message names the field, such as `surfaces[1].url`, and
+  never prints the value. A URL with a query string or a fragment still loads unchanged,
+  so the overlay still matches gaps to screens, and the CLI, the stop hook, and the
+  dev-server plugin now print a warning that names the field and says the query or the
+  fragment is published.
+
 - The stop hook now compares session pins before it allows a stop on a stored receipt.
   Before, a matching receipt allowed the stop first, so a guarded policy file weakened and
   committed during the session, then checked with `usabl check` under the weaker policy,
