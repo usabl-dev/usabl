@@ -535,7 +535,7 @@ describe('computeCoverage', () => {
     expect(cov.unresolvedFiles).toEqual([]);
   });
 
-  it('names every candidate file when a changed file sits beside a .vue sibling of the same name', async () => {
+  it('maps a change to either candidate of an ambiguous import, and names both when a file is unmapped', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({
         routes: [{ screenId: 'page', url: '/page', entryFile: 'src/Page.tsx' }],
@@ -543,12 +543,18 @@ describe('computeCoverage', () => {
       'src/Page.tsx': `import { Widget } from './Widget';`,
       'src/Widget.tsx': `export const Widget = 1;`,
       'src/Widget.vue': `<template><div /></template>`,
+      'src/Orphan.tsx': `export const Orphan = 1;`,
     });
-    const cov = await computeCoverage(fs, baseConfig, ['src/Widget.tsx']);
-    expect(cov.affected).toEqual([]);
-    expect(cov.unresolvedFiles).toEqual(['src/Widget.tsx']);
-    expect(cov.gaps[0]?.reason).toContain('src/Widget.tsx, src/Widget.vue');
-    expect(cov.gaps[0]?.reason).toContain('more than one file');
+    for (const changed of ['src/Widget.tsx', 'src/Widget.vue']) {
+      const cov = await computeCoverage(fs, { ...baseConfig, uiFileGlobs: ['src/**/*.tsx', 'src/**/*.vue'] }, [changed]);
+      expect(cov.affected.map((screen) => screen.screenId)).toEqual(['page']);
+      expect(cov.unresolvedFiles).toEqual([]);
+    }
+    // The ambiguity stays disclosed in the gap of a changed file that maps to no screen.
+    const orphan = await computeCoverage(fs, baseConfig, ['src/Orphan.tsx']);
+    expect(orphan.unresolvedFiles).toEqual(['src/Orphan.tsx']);
+    expect(orphan.gaps[0]?.reason).toContain('src/Widget.tsx, src/Widget.vue');
+    expect(orphan.gaps[0]?.reason).toContain('more than one file');
   });
 
   it('includes alias diagnostics when an unresolved file imports through a broken alias', async () => {
