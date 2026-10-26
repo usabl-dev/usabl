@@ -106,7 +106,7 @@ describe('parseRouteManifest', () => {
   it('maps nested fallback URLs to dash-joined screen ids', async () => {
     const fs = fsOf({
       'src/router.tsx': `
-        <Route path="/settings/profile" element={<ProfilePage />} />
+        export const App = () => <Routes><Route path="/settings/profile" element={<ProfilePage />} /></Routes>;
       `,
     });
     const manifest = await parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] });
@@ -116,7 +116,7 @@ describe('parseRouteManifest', () => {
   it('maps fallback root path to screen id root', async () => {
     const fs = fsOf({
       'src/router.tsx': `
-        <Route path="/" element={<HomePage />} />
+        export const App = () => <Routes><Route path="/" element={<HomePage />} /></Routes>;
       `,
     });
     const manifest = await parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] });

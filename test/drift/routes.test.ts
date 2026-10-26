@@ -191,7 +191,7 @@ describe('runRoutesDrift', () => {
         ],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
+        export const App = () => <Routes><Route path="/home" element={<Home />} /></Routes>;
       `,
     });
 
@@ -406,7 +406,7 @@ describe('runRoutesDrift', () => {
         ],
       }),
       'src/router.tsx': `
-        <Route path="/home" element={<Home />} />
+        export const App = () => <Routes><Route path="/home" element={<Home />} /></Routes>;
       `,
     });
 
