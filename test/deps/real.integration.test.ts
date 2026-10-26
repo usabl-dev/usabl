@@ -2,9 +2,11 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { Provider, SurfaceConfig } from '../../src/contracts/index.js';
+import { chromium, type Browser } from 'playwright';
+import type { Page as UsablPage, Provider, SurfaceConfig } from '../../src/contracts/index.js';
 import { buildDeps } from '../../src/deps/build.js';
-import { makeRealBrowserDriver } from '../../src/deps/real.js';
+import { LIVE_WORLD, adoptPage, makeRealBrowserDriver } from '../../src/deps/real.js';
+import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
 import { axeProvider } from '../../src/providers/axe/index.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { markUnseenScreens } from '../../src/coverage/unseen.js';
@@ -354,6 +356,85 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     } finally {
       await page.close();
     }
+  });
+
+  describe('a document without the announcement capture', () => {
+    // Silence from a document where the capture is not running would read as a page that
+    // announced nothing, and a flow requirement would fail or pass on no evidence. The drain throws
+    // instead, and the check runner turns the throw into a coverage gap.
+    const SAVE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title></head><body>
+      <main><button type="button" id="save">Save</button><div role="status" id="message"></div></main>
+      <script>
+        document.getElementById('save').addEventListener('click', () => {
+          document.getElementById('message').textContent = 'Saved';
+        });
+      </script>
+    </body></html>`;
+
+    let browser: Browser;
+    beforeAll(async () => {
+      browser = await chromium.launch({ headless: true });
+    });
+    afterAll(async () => {
+      await browser.close();
+    });
+
+    // An adopted page whose capture was then removed from the live world, which is what a document
+    // the capture never reached looks like to the drain.
+    async function pageWithoutCapture(): Promise<{ usablPage: UsablPage; close: () => Promise<void> }> {
+      const context = await browser.newContext();
+      const pw = await context.newPage();
+      await pw.setContent(SAVE_PAGE, { waitUntil: 'domcontentloaded' });
+      const usablPage = await adoptPage(pw);
+      const cdp = await context.newCDPSession(pw);
+      const tree = await cdp.send('Page.getFrameTree');
+      const world = await cdp.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: LIVE_WORLD });
+      await cdp.send('Runtime.evaluate', { expression: 'delete window.__usablDrain', contextId: world.executionContextId });
+      return { usablPage, close: () => context.close() };
+    }
+
+    it('throws on a drain instead of reporting silence', async () => {
+      const { usablPage, close } = await pageWithoutCapture();
+      try {
+        await expect(usablPage.drainAnnouncements()).rejects.toThrow(/announcement capture is not running/);
+      } finally {
+        await close();
+      }
+    });
+
+    it('turns a flow requirement whose drain throws into a coverage gap, never a pass', async () => {
+      const { usablPage, close } = await pageWithoutCapture();
+      try {
+        const runner = makeCheckRunner({
+          browser: { open: async () => usablPage, close: async () => {} },
+          providers: mapRequirementsToProviders({
+            version: 1,
+            requirements: [
+              {
+                id: 'save-announces',
+                kind: 'flow',
+                surface: 'clusters',
+                description: 'Saving announces that the change was saved.',
+                assertion: { type: 'flow', steps: [{ do: 'click', selector: '#save' }], expectedAnnouncement: 'Saved' },
+                approved: true,
+              },
+            ],
+          }),
+          config: testConfig(),
+          allowedCapabilities: ['live'],
+          stepRunner: makeStepRunner(),
+        });
+        const scan = await runner.scan({ id: 'clusters', url: 'http://127.0.0.1:5173/clusters' });
+        // The keyboard walk drains at its first stop, so the whole screen is the gap.
+        expect(scan.drafts).toEqual([]);
+        expect(scan.gaps).toHaveLength(1);
+        expect(scan.gaps[0]?.state).toBe('not-covered');
+        expect(scan.gaps[0]?.reason).toContain('announcement capture is not running');
+        expect(scan.gaps[0]?.reason).not.toContain('<anonymous>');
+      } finally {
+        await close();
+      }
+    });
   });
 
   it('adds a capability-denied gap when provider capabilities are disallowed', async () => {

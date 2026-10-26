@@ -139,7 +139,7 @@ const LIVE_CAPTURE_IMPL = `
 // announcements no screen reader spoke, or redefine textContent so the capture records text the
 // region never held. A flow requirement that expects an announcement would then pass on the
 // page's word.
-const LIVE_WORLD = 'usabl-live';
+export const LIVE_WORLD = 'usabl-live';
 
 // The capture, run in the live world. The browser keeps one world per name and frame, so the guard
 // keeps one observer and one buffer per document however many times the script runs there: once
@@ -444,7 +444,9 @@ async function callInWorld(
   });
   const exception = getProp(evaluated, 'exceptionDetails');
   if (exception !== undefined) {
-    const description = readString(getProp(getProp(exception, 'exception'), 'description'));
+    // The description carries a stack of page-world frames after its first line, which says
+    // nothing to a reader of the gap, so only the first line is kept.
+    const description = readString(getProp(getProp(exception, 'exception'), 'description'))?.split('\n')[0];
     throw new Error(`the browser could not ${purpose}: ${description ?? readString(getProp(exception, 'text')) ?? 'unknown error'}`);
   }
   return getProp(getProp(evaluated, 'result'), 'value');
