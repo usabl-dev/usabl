@@ -204,14 +204,17 @@ export const router = createBrowserRouter([
     expect(draft.routes.routes).toEqual([{ screenId: 'account', url: '/account', entryFile: null }]);
   });
 
-  it('leaves attribution null when no router owns the route', async () => {
+  it('writes no route and names the file when it has routes but no router', async () => {
+    // With no router in the file, usabl cannot tell which routes are real, so it reads none of
+    // them and says so once for the file, instead of guessing.
     const app = `import { Route } from 'react-router-dom'
 import { Account } from './pages/Account'
 
 export const AccountRoute = () => <Route path="/account" element={<Account />} />
 `;
     const draft = await inferInit(memoryFs(routerFiles(app)));
-    expect(draft.routes.routes).toEqual([{ screenId: 'account', url: '/account', entryFile: null }]);
+    expect(draft.routes.routes).toEqual([]);
+    expect(draft.notes.some((note) => note.startsWith('Review: src/App.tsx:') && note.includes('no router'))).toBe(true);
   });
 
   it('reads a route whose element comes before its path, and one with ">" in an attribute string', async () => {

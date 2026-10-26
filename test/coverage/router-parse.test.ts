@@ -158,7 +158,9 @@ describe('router-parse: reads only the real router', () => {
     expect(urls(raw)).toEqual(['/home']);
   });
 
-  it('ignores a <Route> written outside the router element', () => {
+  it('keeps a <Route> outside the router out of the scan, and names it with its line', () => {
+    // The stray route is not scanned, because no router that usabl read owns it. It is not
+    // dropped in silence either: it may be a real route mounted in a way usabl does not read.
     const raw = [
       'const Decoy = () => <Route path="/account" element={<Decoy />} />;',
       'export const App = () => (',
@@ -168,6 +170,7 @@ describe('router-parse: reads only the real router', () => {
       ');',
     ].join('\n');
     expect(urls(raw)).toEqual(['/home']);
+    expect(unreadableLines(raw)).toEqual([1]);
   });
 
   it('does not read a commented-out route', () => {
