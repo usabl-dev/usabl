@@ -173,22 +173,50 @@ export function removeFrameMarkers(text: string): string {
 const SECRET_KEY_PATTERN =
   /^(storageState|authorization|password|secret|token|cookie|cookies|apiKey|accessToken|refreshToken|idToken|api_key|api-key|session|credentials|privateKey|private_key|clientSecret|client_secret|bearer)$/i;
 
+// A key that ends in one of the secret words after a separator or a camel-case join is a secret
+// too: PROXY_PASSWORD, proxy-secret, proxyPassword, githubToken. The exact list above never
+// matched them, so their values left the Result whenever they did not look like a token.
+const SECRET_KEY_SUFFIX_PATTERN = /[_.-](?:password|passwd|secret|token)$/i;
+const SECRET_KEY_CAMEL_SUFFIX_PATTERN = /[a-z0-9](?:Password|Passwd|Secret|Token)$/;
+
+function isSecretKey(key: string): boolean {
+  return SECRET_KEY_PATTERN.test(key) || SECRET_KEY_SUFFIX_PATTERN.test(key) || SECRET_KEY_CAMEL_SUFFIX_PATTERN.test(key);
+}
+
+// What may sit between a credential key and its value. A closing quote and spaces or tabs can
+// come before the separator, as in JSON ("token": "...") and in shell and config files
+// (token = ...). Whitespace and an opening quote, and whitespace inside that quote, can come after
+// it. Each run of whitespace is its own bounded piece, and the optional quote is matched together
+// with the whitespace after it, so no two runs compete for the same characters and a long run of
+// spaces costs one pass, not one per split.
+const KEY_TO_VALUE = String.raw`["']?[ \t]*[=:]\s*(?:["']\s*)?`;
+
 const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   // Authorization headers often carry bearer credentials that should never leave the raw Result.
   { pattern: /(authorization:\s*bearer\s+)\S+/gi, replacement: '$1[REDACTED]' },
   { pattern: /(authorization:\s*)\S+/gi, replacement: '$1[REDACTED]' },
-  { pattern: /(token[=:]\s*["']?)[A-Za-z0-9+/=_.-]{8,}(["']?)/gi, replacement: '$1[REDACTED]$2' },
-  { pattern: /(password[=:]\s*["']?)\S+(["']?)/gi, replacement: '$1[REDACTED]$2' },
-  { pattern: /(secret[=:]\s*["']?)\S+(["']?)/gi, replacement: '$1[REDACTED]$2' },
+  { pattern: new RegExp(String.raw`(token${KEY_TO_VALUE})[A-Za-z0-9+/=_.-]{8,}(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
+  { pattern: new RegExp(String.raw`(password${KEY_TO_VALUE})\S+(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
+  { pattern: new RegExp(String.raw`(secret${KEY_TO_VALUE})\S+(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
   // JWTs are common access-token payloads and can appear as bare values.
   { pattern: /\b(eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b/g, replacement: '[REDACTED]' },
+  // One JWT segment on its own still carries claims, and "eyJ" is how base64 of a JSON object
+  // starts. A header alone, a payload alone, or a token cut to two segments is redacted too.
+  { pattern: /\beyJ[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]*)?/g, replacement: '[REDACTED]' },
+  // The userinfo of a URL, such as a proxy address with a user name and password in it. The match
+  // starts at the two slashes and cannot cross a slash, so each address is read once. It runs to
+  // the last @ before the host, because a password can itself contain an @.
+  { pattern: /(\/\/)[^\s/?#]+@/g, replacement: '$1[REDACTED]@' },
+  // GitHub tokens, classic and fine-grained. A token pasted into the wrong config key is repeated
+  // back in the unknown-key message, so it has to be recognised by its shape alone.
+  { pattern: /gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}/g, replacement: '[REDACTED]' },
   { pattern: /(storage[sS]tate:?\s*)\S.*/g, replacement: '$1[REDACTED]' },
 ];
 
 // A cheap first question before the work below: is any credential anchor even present. Every
-// pattern above needs one of these words, or the opening of a JWT, so text without them cannot
-// match and does not need a second look.
-const ANCHOR_HINT = /authorization|token|password|secret|storagestate|eyJ/i;
+// pattern above needs one of these words, the opening of a JWT, a GitHub token prefix, or an @
+// after two slashes, so text without them cannot match and does not need a second look.
+const ANCHOR_HINT = /authorization|token|password|secret|storagestate|eyJ|gh[pousr]_|github_pat_|\/\/[^\s/?#]*@/i;
 
 function expandReplacement(template: string, match: RegExpExecArray): string {
   return template.replace(/\$(\d)/g, (_whole, digit: string) => match[Number(digit)] ?? '');
@@ -404,7 +432,7 @@ function scrubUnknown(value: unknown): unknown {
 
     // Walk the object graph as data so nested fields are scrubbed without text-surgery on JSON blobs.
     for (const [key, nested] of Object.entries(value)) {
-      if (SECRET_KEY_PATTERN.test(key)) {
+      if (isSecretKey(key)) {
         // Key-based redaction catches secrets even when values do not look token-shaped.
         scrubbed[key] = '[REDACTED]';
         continue;

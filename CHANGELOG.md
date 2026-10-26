@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- Egress redaction now catches credential shapes it used to print: whitespace or a quote
+  between a key and its separator (`token = ...`, `"password": "..."`), a single JWT
+  segment or a JWT cut to two segments, the user name and password in any address, such
+  as an `HTTPS_PROXY` value, a key such as `PROXY_PASSWORD` or `proxyPassword`, and
+  GitHub tokens. A GitHub token pasted into the wrong key of `usabl.config.json` is no
+  longer repeated back in full in the unknown-key message.
+
 - The stop hook now compares session pins before it allows a stop on a stored receipt.
   Before, a matching receipt allowed the stop first, so a guarded policy file weakened and
   committed during the session, then checked with `usabl check` under the weaker policy,
