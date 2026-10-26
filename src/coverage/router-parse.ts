@@ -1,22 +1,32 @@
 /**
  * Shared router source parsing for route manifest discovery and init.
  *
- * The router file is parsed, and routes are read only from the real router: the route tree under
- * a `<Routes>` or `<Switch>` element, the argument of a `create*Router(...)` call, or the JSX passed
- * to `createRoutesFromElements(...)`. Strings, comments, and regular expressions are not code in the
+ * The router file is parsed, and routes are read only from the real router. That is the route
+ * tree under a `<Routes>` or `<Switch>` element; the first argument of a call to
+ * `createBrowserRouter`, `createHashRouter`, or `createMemoryRouter` (or a local name for one of
+ * them: an import alias, a const that holds one, or a const made by a wrapper call that takes
+ * one); the argument of `useRoutes`; and the JSX passed to `createRoutesFromElements` or
+ * `createRoutesFromChildren`. Strings, comments, and regular expressions are not code in the
  * syntax tree, so a commented-out route, a stray delimiter in a string, or a router call written in
- * a string is never read as part of the router. A path object or a `<Route>` elsewhere in the
- * module is not part of the router either, and is not read when the module has one.
+ * a string is never read as part of the router.
+ *
+ * Nothing route-shaped is dropped in silence. A `<Route>` outside every router that was read, a
+ * call whose name ends in "Router" that is not a known factory, a wrapper call that cannot be
+ * followed, and a route list changed in place are each an `unreadable` entry with a line. A file
+ * with `<Route>` elements or `path:` objects but no router is one entry for the file, and none of
+ * its routes are read, because nothing shows which of them are real.
  *
  * A route path is read when it is a string, a template with no expressions, or a reference to a
  * `const` in the same module whose value is one of those, including a member of a const object
- * such as `ROUTES.home`. A route the reader finds but cannot resolve is never dropped: it comes
- * back in `unreadable` with its line, so the planner, init, and drift can each say so. A file that
- * does not parse comes back the same way, as one unreadable entry, never as a router with no routes.
+ * such as `ROUTES.home`. A route the reader finds but cannot resolve comes back in `unreadable`
+ * with its line, so the planner, init, and drift can each say so. A file that does not parse comes
+ * back the same way, as one unreadable entry, never as a router with no routes.
  *
  * It must never invent entry files. A component is attributed only to a JSX route that has no child
- * routes and that sits in a router this module defines.
+ * routes and that sits in a router this module defines, including JSX passed to
+ * `createRoutesFromElements`. Route objects are never attributed.
  */
+import { createHash } from 'node:crypto';
 import { describeIdProblem } from '../intake/id-grammar.js';
 import { child, children, lineOf, parseSource, syntaxForFile, walk, type AstNode } from '../primitives/source-ast.js';
 
@@ -54,9 +64,14 @@ export interface UnusableRoute {
 export interface UnreadableRoute {
   line: number | null;
   reason: string;
-  // True when the whole file could not be read because it does not parse. The line is then where
-  // the syntax error is, and the gap is about the file, not about one route.
+  // True when the gap is about the whole file: it does not parse, or it has route paths but no
+  // router. The line, when there is one, is where the syntax error is.
   wholeFile?: true;
+  // A short hash of the declaration's source text and the reason, for one route declaration. It
+  // stays the same when other lines move, and changes when the declaration itself changes, so
+  // usabl.routes.json can acknowledge this entry by id. A whole-file gap has none: a file that does
+  // not parse, or has no router, is never acknowledged.
+  id?: string;
 }
 
 export interface RouterSourceRead {
@@ -153,8 +168,14 @@ export function mergeParsedRoutes(
   }));
 }
 
-// The calls whose first argument is the application's route list.
+// The calls whose first argument is the application's route list. A local name imported as one of
+// these, a const that holds one, and a const made by a call that takes one (a wrapper such as an
+// error reporter's) count as the same function.
 const DATA_ROUTER_FUNCTIONS = new Set(['createBrowserRouter', 'createHashRouter', 'createMemoryRouter']);
+// The hook whose argument is a route list, read like a <Routes> element.
+const ROUTES_HOOK = 'useRoutes';
+// Array methods that change the array they are called on.
+const MUTATING_METHODS = new Set(['push', 'unshift', 'splice', 'pop', 'shift', 'fill', 'copyWithin']);
 // The calls that turn a JSX route tree into a route list.
 const ROUTES_FROM_ELEMENTS_FUNCTIONS = new Set(['createRoutesFromElements', 'createRoutesFromChildren']);
 // The JSX elements whose children are the route tree.
@@ -184,6 +205,15 @@ const REASONS = {
   strayRelative: 'This route path is relative, and no router in this file owns the route, so usabl cannot tell the full path.',
   splat:
     'This route path ends in "*", so it matches many URLs and usually mounts routes declared somewhere else. usabl cannot list the screens under it.',
+  looseRoute:
+    'This <Route> is not inside a router usabl reads, so usabl does not scan it. It may still be a real route, for example one rendered beside a <Switch>.',
+  mutatedList:
+    'This route list is changed elsewhere in the file, for example with push or an index assignment, so usabl cannot tell which routes it holds.',
+  unknownFactory:
+    'This call looks like it creates a router, but usabl does not know the function, so it does not read the routes it creates.',
+  wrappedFactory: 'This call wraps a router factory in a way usabl cannot follow, so it does not read the routes it creates.',
+  noRouter:
+    'This file has route paths but no router usabl reads (createBrowserRouter, createHashRouter, createMemoryRouter, createRoutesFromElements, createRoutesFromChildren, useRoutes, <Routes>, or <Switch>), so usabl cannot tell which of them are real and reads none.',
 } as const;
 
 function nameOf(node: AstNode | null): string | null {
@@ -265,12 +295,19 @@ function memberRoot(node: AstNode | null): string | null {
  * A name resolves only when the module binds it exactly once and that binding is a `const` with an
  * initializer. A name bound twice, for example a module const shadowed by a parameter, is not
  * resolved, because telling which binding a reference means needs scope analysis this reader does
- * not do. An object whose properties are assigned or deleted anywhere in the module is not read.
+ * not do. An object or array that is changed anywhere in the module, by assigning or deleting a
+ * property or an index, or by calling push, unshift, splice, pop, shift, fill, or copyWithin on
+ * it, is not read either.
  */
 class ModuleBindings {
   private readonly counts = new Map<string, number>();
   private readonly consts = new Map<string, AstNode>();
   private readonly mutated = new Set<string>();
+  // Local import names mapped to the name they were imported as, such as makeRouter to
+  // createBrowserRouter in `import { createBrowserRouter as makeRouter }`.
+  readonly importedAs = new Map<string, string>();
+  // Every const name with its initializer, for following aliases of a router factory.
+  readonly constEntries: Array<[string, AstNode]> = [];
 
   constructor(program: AstNode) {
     walk(program, (node, ancestors) => {
@@ -284,6 +321,7 @@ class ModuleBindings {
           const name = id?.type === 'Identifier' ? nameOf(id) : null;
           if (declaration?.['kind'] === 'const' && name !== null && init !== null) {
             this.consts.set(name, init);
+            this.constEntries.push([name, init]);
           }
           break;
         }
@@ -303,11 +341,31 @@ class ModuleBindings {
         case 'TSImportEqualsDeclaration':
           patternNames(child(node, 'id'), names);
           break;
-        case 'ImportSpecifier':
+        case 'ImportSpecifier': {
+          patternNames(child(node, 'local'), names);
+          const local = nameOf(child(node, 'local'));
+          const imported = child(node, 'imported');
+          const importedName = nameOf(imported) ?? stringValue(imported);
+          if (local !== null && importedName !== null) this.importedAs.set(local, importedName);
+          break;
+        }
         case 'ImportDefaultSpecifier':
         case 'ImportNamespaceSpecifier':
           patternNames(child(node, 'local'), names);
           break;
+        case 'CallExpression': {
+          // routes.push(...), routes.splice(...), and the like change the array in place.
+          const callee = unwrap(child(node, 'callee'));
+          if (
+            (callee?.type === 'MemberExpression' || callee?.type === 'OptionalMemberExpression') &&
+            callee['computed'] !== true &&
+            MUTATING_METHODS.has(nameOf(child(callee, 'property')) ?? '')
+          ) {
+            const root = memberRoot(child(callee, 'object'));
+            if (root !== null) this.mutated.add(root);
+          }
+          break;
+        }
         case 'CatchClause':
           patternNames(child(node, 'param'), names);
           break;
@@ -348,11 +406,39 @@ class RouterReader {
   readonly unreadable: Array<UnreadableRoute & { offset: number }> = [];
   // Expressions already being followed, so a const that refers to itself cannot loop.
   private readonly following = new Set<AstNode>();
+  // Nodes reported as unreadable, so a <Route> inside one is not reported a second time.
+  readonly gapped = new Set<AstNode>();
+  // <Route> elements this reader read as part of a router.
+  readonly visitedRoutes = new Set<AstNode>();
 
-  constructor(private readonly bindings: ModuleBindings) {}
+  constructor(
+    private readonly bindings: ModuleBindings,
+    private readonly raw: string,
+  ) {}
 
   gap(node: AstNode, reason: string): void {
-    this.unreadable.push({ line: lineOf(node), reason, offset: typeof node.start === 'number' ? node.start : 0 });
+    const start = typeof node.start === 'number' ? node.start : 0;
+    const end = typeof node.end === 'number' ? node.end : start;
+    // Whitespace is collapsed so reformatting the declaration keeps its id.
+    const text = this.raw.slice(start, end).replace(/\s+/g, ' ').trim();
+    const id = createHash('sha256').update(`${reason}\u0000${text}`).digest('hex').slice(0, 12);
+    this.gapped.add(node);
+    this.unreadable.push({ line: lineOf(node), reason, id, offset: start });
+  }
+
+  // The initializer of a const route list or route tree, or null with a gap when the list is
+  // changed somewhere in the module and so cannot be read as written.
+  private followList(node: AstNode): AstNode | null {
+    const name = nameOf(node);
+    const init = name === null ? null : this.bindings.constInit(name);
+    if (init === null || this.following.has(init)) return null;
+    if (name !== null && this.bindings.isMutated(name)) {
+      this.gap(node, REASONS.mutatedList);
+      // The routes written in the list are covered by this one entry.
+      this.gapped.add(init);
+      return null;
+    }
+    return init;
   }
 
   // Resolves an expression to the const value it names, following identifiers and members.
@@ -548,10 +634,10 @@ class RouterReader {
         }
         return;
       case 'Identifier': {
-        const name = nameOf(node);
-        const init = name === null ? null : this.bindings.constInit(name);
-        if (init === null || this.following.has(init)) {
-          this.gap(node, REASONS.computedRoutes);
+        const mutated = this.gapped.size;
+        const init = this.followList(node);
+        if (init === null) {
+          if (this.gapped.size === mutated) this.gap(node, REASONS.computedRoutes);
           return;
         }
         this.following.add(init);
@@ -574,6 +660,7 @@ class RouterReader {
     attribute: boolean,
     strayReason: boolean,
   ): void {
+    this.visitedRoutes.add(element);
     const opening = child(element, 'openingElement');
     const attributes = opening === null ? [] : children(opening, 'attributes');
     let pathAttribute: AstNode | null = null;
@@ -657,8 +744,12 @@ class RouterReader {
     this.readJsxChildren(routeChildren, full, base, attribute, strayReason);
   }
 
-  /** Reads a data router route list: an array literal, or a const that holds one. */
-  readDataRoutes(expression: AstNode | null, parent: string | null | undefined, at: AstNode): void {
+  /**
+   * Reads a data router route list: an array literal, or a const that holds one. `base` is what a
+   * top-level relative path is relative to: "/" for a create*Router call, and for useRoutes only
+   * when it is the one router in the file.
+   */
+  readDataRoutes(expression: AstNode | null, parent: string | null | undefined, at: AstNode, base: string | null): void {
     const node = unwrap(expression);
     if (node === null) {
       this.gap(at, REASONS.computedRoutes);
@@ -667,49 +758,51 @@ class RouterReader {
     if (node.type === 'ArrayExpression') {
       for (const element of children(node, 'elements')) {
         if (element.type === 'SpreadElement') {
-          this.readDataRoutes(child(element, 'argument'), parent, element);
+          this.readDataRoutes(child(element, 'argument'), parent, element, base);
         } else {
-          this.readDataEntry(element, parent);
+          this.readDataEntry(element, parent, base);
         }
       }
       return;
     }
     if (node.type === 'CallExpression' && ROUTES_FROM_ELEMENTS_FUNCTIONS.has(calleeName(node) ?? '')) {
       // createRoutesFromElements(<Route ... />) is read as a JSX route tree with the router's base.
-      this.readJsxChildren(children(node, 'arguments'), parent, '/', true);
+      this.readJsxChildren(children(node, 'arguments'), parent, base, true);
       return;
     }
     if (node.type === 'Identifier') {
-      const name = nameOf(node);
-      const init = name === null ? null : this.bindings.constInit(name);
-      if (init !== null && !this.following.has(init)) {
+      const gapsBefore = this.gapped.size;
+      const init = this.followList(node);
+      if (init !== null) {
         this.following.add(init);
         try {
-          this.readDataRoutes(init, parent, node);
+          this.readDataRoutes(init, parent, node, base);
         } finally {
           this.following.delete(init);
         }
         return;
       }
+      if (this.gapped.size !== gapsBefore) return;
     }
     this.gap(node, REASONS.computedRoutes);
   }
 
-  private readDataEntry(entry: AstNode, parent: string | null | undefined): void {
+  private readDataEntry(entry: AstNode, parent: string | null | undefined, base: string | null): void {
     const node = unwrap(entry);
     if (node === null) return;
     if (node.type === 'Identifier') {
-      const name = nameOf(node);
-      const init = name === null ? null : this.bindings.constInit(name);
-      if (init !== null && !this.following.has(init)) {
+      const gapsBefore = this.gapped.size;
+      const init = this.followList(node);
+      if (init !== null) {
         this.following.add(init);
         try {
-          this.readDataEntry(init, parent);
+          this.readDataEntry(init, parent, base);
         } finally {
           this.following.delete(init);
         }
         return;
       }
+      if (this.gapped.size !== gapsBefore) return;
     }
     if (node.type !== 'ObjectExpression') {
       this.gap(node, REASONS.computedRoutes);
@@ -718,25 +811,54 @@ class RouterReader {
     let pathProperty: AstNode | null = null;
     let indexTrue = false;
     let childList: AstNode | null = null;
-    for (const property of children(node, 'properties')) {
-      const key = property.type === 'ObjectProperty' ? child(property, 'key') : null;
+    // Where the last spread, the path, and the child routes sit among the properties. A later
+    // property replaces an earlier one, so a spread can only supply what is written before it or
+    // not written at all.
+    let lastSpread = -1;
+    let pathAt = -1;
+    let childrenAt = -1;
+    const properties = children(node, 'properties');
+    for (let i = 0; i < properties.length; i += 1) {
+      const property = properties[i];
+      if (property === undefined) continue;
+      if (property.type === 'SpreadElement') {
+        lastSpread = i;
+        continue;
+      }
+      const key = child(property, 'key');
       const keyName =
-        property.type !== 'ObjectProperty'
-          ? null
-          : property['computed'] === true
-            ? this.templateOrString(key)
-            : (nameOf(key) ?? stringValue(key));
+        property['computed'] === true ? this.templateOrString(key) : (nameOf(key) ?? stringValue(key));
       if (keyName === null) {
-        // A spread, a method, or a computed key could supply the path or the child routes.
+        // A computed key could be path or children.
         this.gap(node, REASONS.spreadRoute);
         return;
       }
-      if (keyName === 'path') pathProperty = property;
+      if (property.type === 'ObjectMethod') {
+        // A method such as loader() or action() is not a path. A method or getter named path or
+        // children could supply one, which this reader cannot evaluate.
+        if (keyName === 'path' || keyName === 'children') {
+          this.gap(node, REASONS.spreadRoute);
+          return;
+        }
+        continue;
+      }
+      if (property.type !== 'ObjectProperty') continue;
+      if (keyName === 'path') {
+        pathProperty = property;
+        pathAt = i;
+      }
       if (keyName === 'index') {
         const value = unwrap(child(property, 'value'));
         indexTrue = value?.type === 'BooleanLiteral' && value['value'] === true;
       }
-      if (keyName === 'children') childList = child(property, 'value');
+      if (keyName === 'children') {
+        childList = child(property, 'value');
+        childrenAt = i;
+      }
+    }
+    if (lastSpread >= 0 && (pathAt < lastSpread || childrenAt < lastSpread)) {
+      this.gap(node, REASONS.spreadRoute);
+      return;
     }
 
     let full: string | null | undefined = parent;
@@ -746,7 +868,7 @@ class RouterReader {
         this.gap(pathProperty, REASONS.unresolvedPath);
         full = undefined;
       } else {
-        const joined = this.joinPath(parent, own, '/', pathProperty, false);
+        const joined = this.joinPath(parent, own, base, pathProperty, false);
         full = joined ?? undefined;
         if (joined !== null && this.isScreenPath(own, pathProperty)) {
           this.dataSites.push({
@@ -757,14 +879,15 @@ class RouterReader {
         }
       }
     } else if (indexTrue) {
-      if (parent === undefined) {
-        this.gap(node, REASONS.unknownParent);
+      const indexPath = parent === undefined ? undefined : (parent ?? base);
+      if (indexPath === undefined || indexPath === null) {
+        this.gap(node, parent === undefined ? REASONS.unknownParent : REASONS.ambiguousBase);
       } else {
-        this.dataSites.push({ path: parent ?? '/', component: null, offset: typeof node.start === 'number' ? node.start : 0 });
+        this.dataSites.push({ path: indexPath, component: null, offset: typeof node.start === 'number' ? node.start : 0 });
       }
     }
     if (childList !== null) {
-      this.readDataRoutes(childList, full, node);
+      this.readDataRoutes(childList, full, node, base);
     }
   }
 }
@@ -800,6 +923,40 @@ function readLocalImports(program: AstNode): Map<string, string> {
   return imports;
 }
 
+// Every local name that refers to a known router factory: the factory names themselves, a name
+// imported as one, a const that holds one, and a const made by a call that takes one, such as
+// `const sentryCreateBrowserRouter = Sentry.wrapCreateBrowserRouterV6(createBrowserRouter)`.
+function routerFactoryNames(bindings: ModuleBindings): Set<string> {
+  const names = new Set(DATA_ROUTER_FUNCTIONS);
+  for (const [local, imported] of bindings.importedAs) {
+    if (DATA_ROUTER_FUNCTIONS.has(imported)) names.add(local);
+  }
+  const refersToFactory = (expression: AstNode | null): boolean => {
+    const node = unwrap(expression);
+    if (node?.type === 'Identifier') return names.has(nameOf(node) ?? '');
+    if ((node?.type === 'MemberExpression' || node?.type === 'OptionalMemberExpression') && node['computed'] !== true) {
+      return DATA_ROUTER_FUNCTIONS.has(nameOf(child(node, 'property')) ?? '');
+    }
+    return false;
+  };
+  // Repeat until nothing new is found, so an alias of an alias is followed too.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [name, init] of bindings.constEntries) {
+      if (names.has(name) || bindings.constInit(name) === null) continue;
+      const value = unwrap(init);
+      const isAlias = refersToFactory(value);
+      const isWrapper = value?.type === 'CallExpression' && children(value, 'arguments').some(refersToFactory);
+      if (isAlias || isWrapper) {
+        names.add(name);
+        grew = true;
+      }
+    }
+  }
+  return names;
+}
+
 /**
  * Reads the routes a router module declares.
  *
@@ -823,46 +980,102 @@ export function readRouterSource(raw: string, file = 'router.tsx'): RouterSource
     };
   }
   const program = parsed.program;
-  const reader = new RouterReader(new ModuleBindings(program));
+  const bindings = new ModuleBindings(program);
+  const reader = new RouterReader(bindings, raw);
+  const factories = routerFactoryNames(bindings);
+  const isFactoryReference = (expression: AstNode | null): boolean => {
+    const node = unwrap(expression);
+    if (node?.type === 'Identifier') return factories.has(nameOf(node) ?? '');
+    if ((node?.type === 'MemberExpression' || node?.type === 'OptionalMemberExpression') && node['computed'] !== true) {
+      return DATA_ROUTER_FUNCTIONS.has(nameOf(child(node, 'property')) ?? '');
+    }
+    return false;
+  };
+  // A call that takes a router factory, such as wrap(createBrowserRouter), returns a router factory.
+  const wrapsFactory = (call: AstNode): boolean => children(call, 'arguments').some(isFactoryReference);
+  const isFactoryCall = (call: AstNode): boolean => {
+    const callee = unwrap(child(call, 'callee'));
+    if (callee === null) return false;
+    if (callee.type === 'CallExpression') return wrapsFactory(callee);
+    return isFactoryReference(callee);
+  };
 
   const dataCalls: AstNode[] = [];
+  const hookCalls: AstNode[] = [];
   const elementCalls: AstNode[] = [];
   const jsxRoots: AstNode[] = [];
-  const looseRoutes: AstNode[] = [];
+  const allRoutes: Array<{ node: AstNode; ancestors: readonly AstNode[] }> = [];
+  let hasPathObject = false;
   walk(program, (node, ancestors) => {
     if (node.type === 'CallExpression') {
       const name = calleeName(node);
-      if (name !== null && DATA_ROUTER_FUNCTIONS.has(name)) dataCalls.push(node);
-      if (name !== null && ROUTES_FROM_ELEMENTS_FUNCTIONS.has(name)) {
-        // One passed straight to create*Router(...) is read with that call.
-        const inside = ancestors.some((ancestor) => dataCalls.includes(ancestor));
+      const parent = ancestors[ancestors.length - 1];
+      if (isFactoryCall(node)) {
+        dataCalls.push(node);
+      } else if (name === ROUTES_HOOK) {
+        hookCalls.push(node);
+      } else if (name !== null && ROUTES_FROM_ELEMENTS_FUNCTIONS.has(name)) {
+        // One passed straight to a router call is read with that call.
+        const inside = ancestors.some((ancestor) => dataCalls.includes(ancestor) || hookCalls.includes(ancestor));
         if (!inside) elementCalls.push(node);
+      } else if (wrapsFactory(node)) {
+        // A wrapper that is stored in a const, or called right away, is followed. Any other use of
+        // one cannot be followed, and is named so its routes are not lost in silence.
+        const stored = parent?.type === 'VariableDeclarator' && child(parent, 'init') === node;
+        const calledNow = parent?.type === 'CallExpression' && unwrap(child(parent, 'callee')) === node;
+        if (!stored && !calledNow) reader.gap(node, REASONS.wrappedFactory);
+      } else if (name !== null && name.endsWith('Router')) {
+        reader.gap(node, REASONS.unknownFactory);
       }
     } else if (node.type === 'JSXElement') {
       const name = jsxElementName(node);
       if (name !== null && JSX_ROUTER_ELEMENTS.has(name)) jsxRoots.push(node);
-      if (name === 'Route' && !ancestors.some((ancestor) => ancestor.type === 'JSXElement' && jsxElementName(ancestor) === 'Route')) {
-        looseRoutes.push(node);
-      }
+      if (name === 'Route') allRoutes.push({ node, ancestors });
+    } else if (node.type === 'ObjectProperty' && node['computed'] !== true) {
+      const key = child(node, 'key');
+      if ((nameOf(key) ?? stringValue(key)) === 'path') hasPathObject = true;
     }
   });
 
   for (const call of dataCalls) {
-    reader.readDataRoutes(children(call, 'arguments')[0] ?? null, null, call);
+    reader.readDataRoutes(children(call, 'arguments')[0] ?? null, null, call, '/');
   }
   for (const call of elementCalls) {
     reader.readJsxChildren(children(call, 'arguments'), null, '/', true);
   }
-  // A top-level relative path in a <Routes> element is relative to "/" only when that element is
-  // the one router in the file. Otherwise it may be a descendant router mounted under a route.
-  const onlyRouter = jsxRoots.length === 1 && dataCalls.length === 0 && elementCalls.length === 0;
+  // A top-level relative path in a <Routes> element or a useRoutes call is relative to "/" only
+  // when it is the one router in the file. Otherwise it may be a descendant router mounted under a
+  // route somewhere else.
+  const onlyRouter =
+    jsxRoots.length + hookCalls.length === 1 && dataCalls.length === 0 && elementCalls.length === 0;
+  for (const call of hookCalls) {
+    reader.readDataRoutes(children(call, 'arguments')[0] ?? null, null, call, onlyRouter ? '/' : null);
+  }
   for (const root of jsxRoots) {
     reader.readJsxChildren(children(root, 'children'), null, onlyRouter ? '/' : null, true);
   }
-  const routerFound = dataCalls.length > 0 || elementCalls.length > 0 || jsxRoots.length > 0;
-  if (!routerFound) {
-    // No router owns these routes, so none is attributed and a relative path has nothing to join.
-    reader.readJsxChildren(looseRoutes, null, null, false, true);
+  const routerFound = dataCalls.length + hookCalls.length + elementCalls.length + jsxRoots.length > 0;
+  if (routerFound) {
+    // A <Route> that no router read owns is kept out of the scan, because it may be a decoy, and
+    // named, because it may be real. One inside a node already named is not named again, and
+    // neither is one nested in another unread <Route>.
+    for (const { node, ancestors } of allRoutes) {
+      if (reader.visitedRoutes.has(node)) continue;
+      if (ancestors.some((ancestor) => reader.gapped.has(ancestor))) continue;
+      if (ancestors.some((ancestor) => ancestor.type === 'JSXElement' && jsxElementName(ancestor) === 'Route' && !reader.visitedRoutes.has(ancestor))) {
+        continue;
+      }
+      reader.gap(node, REASONS.looseRoute);
+    }
+  } else if (allRoutes.length > 0 || hasPathObject) {
+    // No router, so no way to tell which routes are real. One gap for the file, and none read.
+    return {
+      routes: [],
+      dataRoutes: [],
+      unreadable: [{ line: null, reason: REASONS.noRouter, wholeFile: true }],
+      dataRouter: false,
+      localImports: readLocalImports(program),
+    };
   }
 
   // Routes stay in the order the router declares them, which the syntax tree fixes for a given
@@ -876,7 +1089,7 @@ export function readRouterSource(raw: string, file = 'router.tsx'): RouterSource
       seenGaps.add(key);
       return true;
     })
-    .map(({ line, reason }) => ({ line, reason }));
+    .map(({ line, reason, id }) => (id === undefined ? { line, reason } : { line, reason, id }));
   return {
     routes: mergeParsedRoutes(reader.jsxSites, reader.dataSites),
     dataRoutes: mergeParsedRoutes([], reader.dataSites),

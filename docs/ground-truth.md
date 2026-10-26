@@ -798,7 +798,8 @@ what the router reader reads, what it reports, and what it still does not see.
 #### Reading routes out of router source
 
 With no `usabl.routes.json`, usabl reads routes from `discovery.routerFile`. It parses the file
-with `@babel/parser` (TypeScript and JSX by the file's extension) and walks the syntax tree. It
+with `@babel/parser` (TypeScript and JSX by the file's extension, legacy decorators always, and
+Flow types for a `.js` or `.jsx` file that does not parse without them) and walks the syntax tree. It
 does not run the file and it does not follow imports. Strings, comments, and regular expressions
 are not code in the tree, so a commented-out route, a `>` or `)` inside a string, a regular
 expression such as `/[//]/`, and a `createBrowserRouter(` written in a string or a comment are
@@ -811,12 +812,18 @@ never read as router code.
   module that holds JSX;
 - the first argument of a real call to `createBrowserRouter`, `createHashRouter`, or
   `createMemoryRouter`: an array of route objects, a `const` that holds one, a spread of such a
-  `const`, and nested `children`;
+  `const`, and nested `children`. A local name for one of these counts too: an import alias such
+  as `import { createBrowserRouter as makeRouter }`, a `const` that holds one, and a `const` made
+  by a call that takes one, such as `Sentry.wrapCreateBrowserRouterV6(createBrowserRouter)`;
+- the argument of `useRoutes`, read the same way as a route object list;
 - the JSX passed to `createRoutesFromElements` or `createRoutesFromChildren`.
 
-A path object or a `<Route>` anywhere else in the module is not part of the router and is not
-read when the module has a router. When the module has no router at all, every `<Route>` in it
-is read as a URL with no entry file, because no router can be shown to own it.
+A path object anywhere else in the module is not part of the router and is not read. A `<Route>`
+anywhere else is not scanned either, because it may be a decoy, but it is named as an unreadable
+entry with its line, because it may be real: the older pattern of a `<Route>` beside a `<Switch>`
+for a modal is one example. When the module has `<Route>` elements or `path:` objects but no
+router at all, usabl cannot tell which of them are real, so it reads none and reports one
+unreadable entry for the whole file.
 
 **What counts as a path.** A path is read when it is a string, a template with no expressions, or
 a reference to a `const` in the same module whose value is one of those. A member of a `const`
@@ -824,7 +831,13 @@ object counts, such as `ROUTES.home` or `ROUTES['admin'].users`, including an ob
 `as const`, `satisfies`, or `Object.freeze`. A name bound more than once in the module, such as a
 module `const` shadowed by a parameter, is not resolved, because telling which binding a
 reference means needs scope analysis the reader does not do. An object with a property assigned
-or deleted anywhere in the module is not resolved either. A relative path is joined to its
+or deleted anywhere in the module is not resolved either. A `const` route list or route tree that
+is changed in place anywhere in the module, by an index assignment or by `push`, `unshift`,
+`splice`, `pop`, `shift`, `fill`, or `copyWithin`, is not read: it is one unreadable entry where
+the router uses it, not a partial read. In a route object, a method such as `loader()` or
+`action()` is not a path and is skipped. A spread, or a method named `path` or `children`, makes
+the route unreadable when it could supply the path or the child routes, that is, unless `path`
+and `children` are both written after the last spread. A relative path is joined to its
 parent route's path, as React Router does: `settings` under `/app` is `/app/settings`, and an
 index route has its parent's path. At the top of a data router, and of a `<Routes>` element that
 is the only router in the file, a relative path is relative to `/`. A bare `*` route is the
@@ -836,9 +849,12 @@ file, so it is reported (below) rather than scanned as the literal URL `/app/*`.
 `unreadable` entry with the router file, the line, and the reason: a path it cannot resolve (an
 import, an expression, a template with expressions, a `let`), a route that takes its props from a
 spread or a computed key, routes built by code (`routes.map(...)`, a function call), an element
-among the routes that is not a `<Route>`, and a relative path whose base it cannot tell, for
-example in a file with more than one router, and a path such as `/app/*`. A router file that does not parse is one such entry
-for the whole file, with the line and column of the syntax error, and no routes. Then:
+among the routes that is not a `<Route>`, a relative path whose base it cannot tell (for
+example in a file with more than one router), a path such as `/app/*`, a `<Route>` outside every
+router it read, a route list changed in place, a call whose name ends in `Router` that is not one
+of the known factories or a name for one, and a wrapper of a known factory that it cannot follow.
+A router file that does not parse is one entry for the whole file, with the line and column of
+the syntax error, and no routes. So is a file with routes but no router. Then:
 
 - the planner records each entry as a `skipped` coverage gap whenever a wide-blast change would
   have queued the router's routes, so the gate reads the run as not covered. Router routes have
@@ -853,18 +869,22 @@ for the whole file, with the line and column of the syntax error, and no routes.
 the module defines, has no child routes, and names its component as `element={<Name />}` imported
 from a relative path. A layout route with children gets no entry file, because its component
 also renders on every child's URL, and a change to it must not read as covered by one screen.
-Data-router routes never get one. When two routes with the same path name different components,
-neither is attributed.
+This holds for JSX passed to `createRoutesFromElements` and `createRoutesFromChildren` too. Route
+objects, in a `create*Router` call or in `useRoutes`, never get one. When two routes with the same
+path name different components, neither is attributed.
 
 **What it still does not see.** These leave no gap, so check for them:
 
 - routes kept in another module, such as an imported route array. The router file's reference
   to it is reported, but the routes inside are not read;
 - a descendant `<Routes>` element in another file, which only exists at run time;
-- a router file with no router at all: no `<Routes>`, no `create*Router` call, and no `<Route>`.
-  It reads as no routes, the same as a missing router file;
-- an object changed by a function call, such as `Object.assign(ROUTES, extra)`. Only direct
-  assignment and `delete` are noticed.
+- a router file with no router and nothing route-shaped: no `<Routes>`, no router call, no
+  `<Route>`, and no `path:` object. It reads as no routes, the same as a missing router file;
+- a router factory with a name that does not end in `Router` and that is not an alias or a
+  wrapper of a known factory, such as `makeApp([...])`. Its routes are not read and not named;
+- an object or a route list changed by passing it to a function, such as
+  `Object.assign(ROUTES, extra)` or `addRoutes(routes)`. Only assignment, `delete`, and the array
+  methods listed above are noticed.
 
 What an operator can do. Write the routes into `usabl.routes.json`. An authored sidecar takes
 precedence over router-source discovery, so the manifest is exactly what that file says and none
