@@ -76,6 +76,52 @@ describe('buildImportGraph', () => {
     });
   });
 
+  it('discloses a .vue sibling next to a .ts file instead of picking the .ts file', async () => {
+    // A project whose bundler resolves .vue can load Widget.vue for './Widget'. Probing only JS and
+    // TS suffixes saw one candidate, Widget.ts, and attributed the import to it.
+    const fs = fsOf({
+      'src/Page.tsx': `import { Widget } from './Widget';`,
+      'src/Widget.ts': `export const Widget = 1;`,
+      'src/Widget.vue': `<template><div /></template>`,
+    });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.get('src/Page.tsx')).toEqual([]);
+    expect(graph.unresolvable).toContainEqual({
+      importer: 'src/Page.tsx',
+      specifier: './Widget',
+      kind: 'ambiguous-candidates',
+      candidates: ['src/Widget.ts', 'src/Widget.vue'],
+    });
+  });
+
+  it('discloses a .svelte sibling next to a .tsx file', async () => {
+    const fs = fsOf({
+      'src/Page.tsx': `import Widget from './Widget';`,
+      'src/Widget.tsx': `export default 1;`,
+      'src/Widget.svelte': `<div />`,
+    });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.get('src/Page.tsx')).toEqual([]);
+    expect(graph.unresolvable).toContainEqual({
+      importer: 'src/Page.tsx',
+      specifier: './Widget',
+      kind: 'ambiguous-candidates',
+      candidates: ['src/Widget.svelte', 'src/Widget.tsx'],
+    });
+  });
+
+  it('resolves an extensionless import to a lone .vue or .svelte file', async () => {
+    const fs = fsOf({
+      'src/Page.tsx': `import A from './A';\nimport B from './B';\nimport C from './widgets';`,
+      'src/A.vue': `<template><div /></template>`,
+      'src/B.svelte': `<div />`,
+      'src/widgets/index.vue': `<template><div /></template>`,
+    });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.get('src/Page.tsx')).toEqual(['src/A.vue', 'src/B.svelte', 'src/widgets/index.vue']);
+    expect(graph.unresolvable).toEqual([]);
+  });
+
   it('ignores scoped npm packages instead of disclosing them as unresolved aliases', async () => {
     const fs = fsOf({
       'src/Page.tsx': `import { Button } from '@patternfly/react-core';`,
