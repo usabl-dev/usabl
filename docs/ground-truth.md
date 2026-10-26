@@ -1996,6 +1996,15 @@ add content and flow assertions that the engine enforces alongside the default s
   keyboard walk probes).
 - `doc` requirements are not runtime checks; they feed the output module.
 
+A `content` or `flow` requirement runs only on a screen whose id is its surface. When a run
+scans anything, each such requirement whose surface matches no configured surface, no screen
+in the route manifest, and no page in the docs manifest becomes a `not-covered` gap with ref
+`requirement:<id>` that names the surface. No run would ever plan that screen, so nothing
+checks the requirement, and a misspelled surface would otherwise turn it off while the run
+read as verified. A requirement on a known screen that the change did not touch is out of
+scope for that run, not a gap. The surfaces are read through the same trusted view the run
+plans coverage with. `checkPage` applies the same rule through the same code.
+
 All intake-derived Drafts carry `evidenceClass: 'deterministic'` (the assertion is
 hard and repeatable). `mapRequirementsToProviders` emits deterministic drafts with rule
 id `intake:<id>` for content and flow requirements; there is no code path in v0.2.0 that

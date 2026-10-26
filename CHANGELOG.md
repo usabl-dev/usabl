@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- A `content` or `flow` requirement whose surface matches no configured surface, no
+  route manifest screen, and no docs manifest page is now a `not-covered` gap on the CLI
+  run, with ref `requirement:<id>` and a reason that names the surface. Before, no run
+  ever planned that screen, so the requirement was never checked and the run said
+  nothing, and a misspelled surface could read as verified. `checkPage` already gapped
+  it; both now use one rule.
+
 - Egress redaction now catches credential shapes it used to print: whitespace or a quote
   between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
   header segment or a JWT cut to two segments, the user name and password after `//` in
