@@ -111,8 +111,10 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const scanConfigResolution = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
     const scanConfig = scanConfigResolution.config;
     const coverageFs = overlayUntrustedManifests(deps, guardDivergedPaths, opts.trustedRef);
-    const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed);
+    // Parsed once and handed to both planners, so the screen id check and the docs plan read the
+    // same manifest and the file is read once per run.
     const docsManifest = await parseDocsManifest(coverageFs);
+    const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed, docsManifest);
     const docsCoverage = computeDocsCoverage(docsManifest, changed);
     const affected = [...discoveredCoverage.affected, ...docsCoverage.affected];
     // Idle means nothing UI-touching changed. A run whose scan configuration could not be read
