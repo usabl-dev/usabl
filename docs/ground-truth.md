@@ -1680,8 +1680,11 @@ In `vite serve` only, the plugin adds `data-source-file` and `data-source-line` 
 and HTML element opening tag in the application's `.tsx` and `.jsx` files, so a finding can name
 the line that rendered the element. The plugin runs before the host's JSX transform
 (`enforce: 'pre'`), so it reads raw TSX. It parses each file with `@babel/parser` and puts the
-attributes right after the tag name and any type arguments, so an element such as
-`<PageWizard<Data>>` stays valid. Strings, comments, types, and generic arrow functions are not
+attributes after the tag's last attribute, or right after the tag name and any type arguments
+when the tag has none, so an element such as `<PageWizard<Data>>` stays valid and a
+`data-source-file` carried in a spread such as `{...rest}` cannot replace the element's own
+location. Legacy decorators are read, and a `.js` or `.jsx` file that does not parse is tried
+again with Flow types. Strings, comments, types, and generic arrow functions are not
 tags in the syntax tree and are never touched. A namespaced tag such as `<svg:rect>` is left as
 written. A file the parser cannot read is served unchanged, with one warning in the dev server log
 that names the file. Its elements carry no source line, and the application still runs.
