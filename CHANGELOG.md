@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- The stop hook now blocks a stop on a verdict it does not recognize, and on a null
+  verdict from a run that was neither idle nor a crash. Before, both read as NO VERDICT
+  and the stop was allowed, so an unknown answer passed as a clean change. The block says
+  the run proved nothing and tells the model to run the check again. The self-check
+  printed IDLE for such a null verdict; it now prints IDLE only when there was nothing to
+  check, and names both states the way the stop hook does. A failed run (exit 4) still
+  fails open, as before.
+
 - The stop hook now compares session pins before it allows a stop on a stored receipt.
   Before, a matching receipt allowed the stop first, so a guarded policy file weakened and
   committed during the session, then checked with `usabl check` under the weaker policy,
