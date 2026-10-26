@@ -860,8 +860,10 @@ the syntax error, and no routes. So is a file with routes but no router. Then:
   have queued the router's routes, so the gate reads the run as not covered. Router routes have
   no entry file, so wide blast is the only way they are scanned, and a run with no wide-blast
   change never depended on them;
-- `usabl drift routes` lists each entry with its file and line and exits 2, because neither "no
-  drift" nor a removal can be confirmed;
+- `usabl drift routes` lists each entry with its file, line, and id, and exits 2, because
+  neither "no drift" nor a removal can be confirmed. Once the sidecar's author has checked an
+  entry by hand, they can acknowledge it in `usabl.routes.json` (below). An acknowledged entry is
+  still listed and no longer forces exit 2;
 - `usabl init` writes a `Review:` note for each entry with its file and line, because the draft
   sidecar does not list that route and usabl never scans a route the sidecar leaves out.
 
@@ -885,6 +887,26 @@ path name different components, neither is attributed.
 - an object or a route list changed by passing it to a function, such as
   `Object.assign(ROUTES, extra)` or `addRoutes(routes)`. Only assignment, `delete`, and the array
   methods listed above are noticed.
+
+**Acknowledging an entry in drift.** A common router has entries usabl cannot read, such as a
+`/app/*` route, a guard element like `<RequireAuth>` among the routes, or routes built with
+`map`, so `usabl drift routes` would refuse on every run. Each entry that is one declaration
+carries an `id`: a 12-character hash of that declaration's source text and the reason. It stays
+the same when other lines move and changes when the declaration changes. To acknowledge entries,
+list them in the sidecar:
+
+```json
+{
+  "routes": [ ... ],
+  "acknowledgedUnreadable": [{ "file": "src/App.tsx", "id": "3f2a9c1b0d4e" }]
+}
+```
+
+Only `usabl drift routes` reads this list. Coverage planning never does, because with a sidecar
+present it does not read the router at all. A whole-file entry (a router file that does not
+parse, or one with routes but no router) has no id and is never acknowledged. An acknowledgement
+that matches nothing is listed so it can be removed. `usabl.routes.json` is a guarded file, so
+adding an acknowledgement needs the same owner review as adding a route.
 
 What an operator can do. Write the routes into `usabl.routes.json`. An authored sidecar takes
 precedence over router-source discovery, so the manifest is exactly what that file says and none

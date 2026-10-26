@@ -34,6 +34,16 @@ export interface RouteManifest {
   // reports each as a gap when wide blast would otherwise have queued the router's routes, so a
   // route usabl could not read is never silently absent from a run that looks complete.
   unreadable?: RouteFileGap[];
+  // Router routes usabl cannot read that the sidecar's author has checked by hand, by router file
+  // and entry id. Only an authored sidecar carries these. `usabl drift routes` still lists an
+  // acknowledged entry, and it no longer refuses on it. Coverage planning never reads them: with a
+  // sidecar present the router is not read at all.
+  acknowledgedUnreadable?: AcknowledgedUnreadable[];
+}
+
+export interface AcknowledgedUnreadable {
+  file: string;
+  id: string;
 }
 
 export interface RouteFileGap extends UnreadableRoute {
@@ -89,6 +99,28 @@ function expectEntryFile(value: unknown): string | null {
   throw configError`usabl.routes.json routes[].entryFile must be a string or null`;
 }
 
+function parseAcknowledged(value: unknown): AcknowledgedUnreadable[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw configError`usabl.routes.json acknowledgedUnreadable must be an array`;
+  }
+  return value.map((entry, index): AcknowledgedUnreadable => {
+    if (!isRecord(entry)) {
+      throw configError`usabl.routes.json acknowledgedUnreadable[${index}] must be an object`;
+    }
+    const file = entry['file'];
+    const id = entry['id'];
+    if (typeof file !== 'string' || file.length === 0) {
+      throw configError`usabl.routes.json acknowledgedUnreadable[${index}].file must be the router file path`;
+    }
+    // The id is the one usabl drift routes prints. Anything else can never match an entry.
+    if (typeof id !== 'string' || !/^[0-9a-f]{12}$/.test(id)) {
+      throw configError`usabl.routes.json acknowledgedUnreadable[${index}].id must be the 12-character id that usabl drift routes prints`;
+    }
+    return { file, id };
+  });
+}
+
 function parseSidecar(raw: string): RouteManifest {
   // Corrupt sidecar data is a hard failure here so callers can fail open later.
   // Pretending parse failures mean "no routes" would silently rewrite the story.
@@ -102,8 +134,10 @@ function parseSidecar(raw: string): RouteManifest {
     throw configError`usabl.routes.json routes must be an array`;
   }
 
+  const acknowledgedUnreadable = parseAcknowledged(parsed['acknowledgedUnreadable']);
   return {
     source: 'sidecar',
+    ...(acknowledgedUnreadable === undefined ? {} : { acknowledgedUnreadable }),
     routes: routes.map((entry, index): RouteEntry => {
       if (!isRecord(entry)) {
         throw configError`usabl.routes.json routes[${index}] must be an object`;

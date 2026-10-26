@@ -6,7 +6,7 @@
  */
 import type { FsGlob } from '../contracts/index.js';
 import { parseConfiguredManifest, parseDiscoveredManifest } from '../coverage/route-manifest.js';
-import type { RouteManifest } from '../coverage/route-manifest.js';
+import type { RouteFileGap, RouteManifest } from '../coverage/route-manifest.js';
 import { neutralize } from '../primitives/neutralize.js';
 
 export interface RoutesDrift {
@@ -107,34 +107,62 @@ export async function runRoutesDrift(fs: FsGlob, routerFile: string): Promise<Ro
 
   // A route usabl could not read, or a router file that does not parse, leaves the discovered list
   // incomplete, so neither "no drift" nor a removal can be confirmed. Each one is named with its
-  // file and line, and the run refuses with exit 2 after printing the comparison it could make.
+  // file, line, and id. The sidecar can acknowledge an entry by file and id once its author has
+  // checked it by hand: an acknowledged entry is still listed and no longer refuses. A whole-file
+  // entry has no id and always refuses.
   const unreadable = discovered.unreadable ?? [];
-  const unreadableLines = unreadable.map(
-    (gap) => `  ${neutralize(gap.file)}${gap.line === null || gap.wholeFile === true ? '' : ` line ${gap.line}`}: ${gap.reason}`,
+  const acknowledgements = configured.acknowledgedUnreadable ?? [];
+  const isAcknowledged = (gap: RouteFileGap): boolean =>
+    gap.id !== undefined && acknowledgements.some((ack) => ack.file === gap.file && ack.id === gap.id);
+  const describe = (gap: RouteFileGap): string =>
+    `  ${neutralize(gap.file)}${gap.line === null || gap.wholeFile === true ? '' : ` line ${gap.line}`}` +
+    `${gap.id === undefined ? '' : ` [id ${gap.id}]`}: ${gap.reason}`;
+  const open = unreadable.filter((gap) => !isAcknowledged(gap));
+  const acknowledged = unreadable.filter(isAcknowledged);
+  const stale = acknowledgements.filter(
+    (ack) => !unreadable.some((gap) => gap.file === ack.file && gap.id === ack.id),
   );
+  const acknowledgedSection =
+    acknowledged.length === 0 && stale.length === 0
+      ? ''
+      : [
+          ...(acknowledged.length === 0
+            ? []
+            : ['\nRoutes usabl could not read, acknowledged in usabl.routes.json:', ...acknowledged.map(describe)]),
+          ...(stale.length === 0
+            ? []
+            : [
+                '\nAcknowledgements in usabl.routes.json that match nothing usabl could not read (remove them):',
+                ...stale.map((ack) => `  ${neutralize(ack.file)} [id ${neutralize(ack.id)}]`),
+              ]),
+          '',
+        ].join('\n');
 
   if (discovered.routes.length === 0 && configured.routes.length > 0) {
     return {
       exitCode: 2,
       stderr:
-        `usabl: discovered no routes in ${neutralize(routerFile)}. usabl reads routes from a <Routes> element or a create*Router call in this file, so routes built by code or kept in another file are not found. Verify the router file and usabl.routes.json manually; usabl will not report drift it cannot confirm.\n` +
-        (unreadableLines.length > 0 ? `${unreadableLines.join('\n')}\n` : ''),
+        `usabl: discovered no routes in ${neutralize(routerFile)}. usabl reads routes from <Routes> and <Switch> elements and from createBrowserRouter, createHashRouter, createMemoryRouter, createRoutesFromElements, createRoutesFromChildren, and useRoutes calls in this file, so routes built by code or kept in another file are not found. Verify the router file and usabl.routes.json manually; usabl will not report drift it cannot confirm.\n` +
+        (unreadable.length > 0 ? `${unreadable.map(describe).join('\n')}\n` : ''),
     };
   }
 
   const drift = computeRoutesDrift(configured, discovered);
-  if (unreadableLines.length > 0) {
+  const report = `${formatDriftReport(drift)}${acknowledgedSection}`;
+  if (open.length > 0) {
     return {
       exitCode: 2,
-      stdout: formatDriftReport(drift),
+      stdout: report,
       stderr:
-        `usabl: could not read ${unreadable.length} route declaration(s) in ${neutralize(routerFile)}, so this drift report may be incomplete:\n` +
-        `${unreadableLines.join('\n')}\n` +
-        'Verify these routes against usabl.routes.json by hand; usabl will not report drift it cannot confirm.\n',
+        `usabl: could not read ${open.length} route declaration(s) in ${neutralize(routerFile)}, so this drift report may be incomplete:\n` +
+        `${open.map(describe).join('\n')}\n` +
+        'Verify these routes against usabl.routes.json by hand; usabl will not report drift it cannot confirm. ' +
+        'Once you have, add each one to "acknowledgedUnreadable" in usabl.routes.json as { "file": ..., "id": ... } ' +
+        'to stop this refusal. An entry without an id cannot be acknowledged.\n',
     };
   }
   return {
     exitCode: drift.hasDrift ? 1 : 0,
-    stdout: formatDriftReport(drift),
+    stdout: report,
   };
 }
