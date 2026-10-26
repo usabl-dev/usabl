@@ -92,6 +92,21 @@
   there could fail offline. `prepare` now reads as a plain condition: if the
   installer file exists, run it with bash and keep its exit status.
 
+- Import resolution now probes `.vue` and `.svelte` as well as the JS and TS
+  extensions for an import with no extension. Before, `./Widget` beside `Widget.ts` and
+  `Widget.vue` resolved to `Widget.ts` without a word, while a bundler that resolves
+  `.vue` could load `Widget.vue`, so a change could be attributed to a screen that does
+  not render it. Now an import with more than one candidate links every candidate, so a
+  change to any of them maps to the screen. That can scan a screen that does not render
+  the changed file, and never leaves one out. The ambiguity is still disclosed: an
+  unmapped file's gap names every candidate and says to write the import with its
+  extension. Before, an import with two JS or TS candidates made no edge, so a screen
+  behind it could go unscanned with no gap, and its disclosure said no file matched on
+  disk. A lone `.vue` or `.svelte` file
+  resolves. usabl does not
+  read `resolve.extensions` from the Vite config, so the probed list is fixed, and an
+  extension outside it is not seen. The ground truth says so.
+
 ### Added
 
 - `signalTimeoutMs` in `usabl.config.json`, a positive whole number of milliseconds,
