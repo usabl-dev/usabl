@@ -98,4 +98,3 @@ describe('baseline over an old floor', () => {
     expect(written).toBeNull();
   });
 });
-
