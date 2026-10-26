@@ -32,12 +32,15 @@ const SETTLE_SAMPLES_REQUIRED = 4;
 // after that first idle.
 const NETWORK_QUIET_WINDOW_MS = 500;
 
-// Browser-side path helper used by both document-start injection and adoptPage install.
-// Keep this the only implementation: a uniqueness (or any path) fix that lands in one
-// copy and misses the other recreates the duplicate-id false green (#182).
+// Browser-side path helper. Keep this the only implementation: a uniqueness (or any path) fix
+// that lands in one copy and misses another recreates the duplicate-id false green.
 // Paths use nth-child ancestry so selectors stay valid and comparable across calls.
-// An id is only used as a selector when it is unique in the document; duplicate ids
-// fall back to the structural path so set ops keyed on element identity cannot collide.
+// An id is used as a selector only when that selector matches exactly one element and that
+// element is the one in hand. Counting matches is not enough, because two different ids can
+// escape to one selector: a NUL escapes to U+FFFD, so "#" plus an escaped NUL id is the selector
+// for a literal U+FFFD id. A selector the engine refuses falls back to the structural path too.
+// Every other case falls back to the structural path, so set ops keyed on element identity
+// cannot collide.
 const PATH_FOR_IMPL = `
   const escapeCss = (value) => {
     if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
@@ -45,18 +48,26 @@ const PATH_FOR_IMPL = `
     }
     return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => '\\\\' + ch);
   };
-  const isUniqueId = (id) => document.querySelectorAll('#' + escapeCss(id)).length === 1;
+  const idNamesOnly = (element) => {
+    let matches;
+    try {
+      matches = document.querySelectorAll('#' + escapeCss(element.id));
+    } catch (_error) {
+      return false;
+    }
+    return matches.length === 1 && matches[0] === element;
+  };
   const pathFor = (element) => {
     if (!(element instanceof Element)) {
       return '';
     }
-    if (element.id && isUniqueId(element.id)) {
+    if (element.id && idNamesOnly(element)) {
       return '#' + escapeCss(element.id);
     }
     const segments = [];
     let current = element;
     while (current instanceof Element) {
-      if (current.id && isUniqueId(current.id)) {
+      if (current.id && idNamesOnly(current)) {
         segments.unshift('#' + escapeCss(current.id));
         break;
       }
@@ -79,7 +90,7 @@ const PATH_FOR_IMPL = `
 `;
 
 // Browser-side live-region capture used by both document-start injection and adoptPage install.
-// Keep this the only implementation, for the same reason as PATH_FOR_IMPL: the CLI and checkPage
+// Keep this the only implementation: the CLI and checkPage
 // must hear the same announcements, so a fix to what counts as a live region has to land in both
 // at once. It records the text of a live region each time something inside it changes, and
 // window.__usablDrain hands back what it recorded since the last drain.
@@ -122,28 +133,32 @@ const LIVE_CAPTURE_IMPL = `
 
 // Inject before app scripts run so the first live update is observable and not lost.
 // Late injection would under-report announcements and create a false sense of coverage.
-// Each helper sits in its own block so their names cannot collide.
-export const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
-  {
-    ${LIVE_CAPTURE_IMPL}
-  }
-  {
-    ${PATH_FOR_IMPL}
-    window.__usablPathFor = pathFor;
-  }
+export const LIVE_CAPTURE_INIT_SCRIPT = `(() => {
+  ${LIVE_CAPTURE_IMPL}
 })();`;
 
-// Evaluated after adoptPage attaches to a caller-owned page that already navigated.
-// Same PATH_FOR_IMPL as the init script; guarded so re-adopting the same page is a no-op.
-export const INSTALL_PATH_HELPER_SCRIPT = `(() => {
-  if (typeof window.__usablPathFor === 'function') {
-    return;
-  }
+// The world element paths are computed in. Page script shares the DOM with it but not its globals
+// or prototypes, so a page cannot hand back its own paths, and it cannot change the
+// querySelectorAll, CSS.escape, or sibling reads a path is built from. Nothing is installed there:
+// the path function is sent with every query, so there is no global to find or replace.
+const PATH_WORLD = 'usabl-paths';
+
+/**
+ * The paths of every element a selector matches, as a function declaration to call in the path
+ * world. Exported so the path rules can be tested on their own.
+ */
+export const PATHS_FOR_SELECTOR_FUNCTION = `function (query) {
   ${PATH_FOR_IMPL}
-  window.__usablPathFor = pathFor;
-})();`;
+  return Array.from(document.querySelectorAll(query), (element) => pathFor(element));
+}`;
 
-// Evaluated by adoptPage next to the path helper. Same LIVE_CAPTURE_IMPL as the init script, and
+// The path of the focused element, or the empty string when there is none.
+const ACTIVE_PATH_FUNCTION = `function () {
+  ${PATH_FOR_IMPL}
+  return pathFor(document.activeElement instanceof Element ? document.activeElement : null);
+}`;
+
+// Evaluated by adoptPage. Same LIVE_CAPTURE_IMPL as the init script, and
 // guarded the same way, so a page usabl opened, or one adopted twice, keeps its one observer and
 // its buffer. It hears only changes made after adoption, which is when a caller's checks start.
 export const INSTALL_LIVE_CAPTURE_SCRIPT = `(() => {
@@ -339,17 +354,6 @@ async function axFromBackendId(cdp: CDPSession, backendNodeId: number): Promise<
   };
 }
 
-async function stablePathForActiveElement(pw: PwPage): Promise<string> {
-  return pw.evaluate(() => {
-    const pathFor = Reflect.get(window, '__usablPathFor');
-    if (typeof pathFor !== 'function') {
-      return '';
-    }
-    const active = document.activeElement instanceof Element ? document.activeElement : null;
-    return pathFor(active);
-  });
-}
-
 /** The most elements the ancestor walk reads for one element before it stops and says so. */
 export const ANCESTOR_DEPTH_LIMIT = 512;
 
@@ -368,18 +372,56 @@ const FLAT_PARENT_FUNCTION = `function () {
   return null;
 }`;
 
-async function ancestorWorldContextId(cdp: CDPSession): Promise<number> {
+// The execution context of a named isolated world in the main frame's current document. The browser
+// keeps one world per name and frame, so asking again returns the same context until the frame
+// navigates, and the first ask after a navigation makes one for the new document.
+async function isolatedWorldContextId(cdp: CDPSession, worldName: string, purpose: string): Promise<number> {
   const tree: unknown = await cdp.send('Page.getFrameTree');
   const frameId = readString(getProp(getProp(getProp(tree, 'frameTree'), 'frame'), 'id'));
   if (frameId === null) {
-    throw new Error('the page has no main frame to read ancestors in');
+    throw new Error(`the page has no main frame to ${purpose} in`);
   }
-  const world: unknown = await cdp.send('Page.createIsolatedWorld', { frameId, worldName: ANCESTOR_WORLD });
+  const world: unknown = await cdp.send('Page.createIsolatedWorld', { frameId, worldName });
   const contextId = readNumber(getProp(world, 'executionContextId'));
   if (contextId === null) {
-    throw new Error('the browser did not create a world to read ancestors in');
+    throw new Error(`the browser did not create a world to ${purpose} in`);
   }
   return contextId;
+}
+
+async function ancestorWorldContextId(cdp: CDPSession): Promise<number> {
+  return isolatedWorldContextId(cdp, ANCESTOR_WORLD, 'read ancestors');
+}
+
+/**
+ * Calls a function declaration in a named isolated world and returns its value. Arguments are
+ * passed as JSON, never spliced in as code. A function that throws becomes a rejected promise,
+ * the same as a failed page evaluation.
+ */
+async function callInWorld(
+  cdp: CDPSession,
+  worldName: string,
+  purpose: string,
+  functionDeclaration: string,
+  args: readonly unknown[] = [],
+): Promise<unknown> {
+  const contextId = await isolatedWorldContextId(cdp, worldName, purpose);
+  const evaluated: unknown = await cdp.send('Runtime.evaluate', {
+    expression: `(${functionDeclaration})(${args.map((arg) => JSON.stringify(arg)).join(', ')})`,
+    contextId,
+    returnByValue: true,
+  });
+  const exception = getProp(evaluated, 'exceptionDetails');
+  if (exception !== undefined) {
+    const description = readString(getProp(getProp(exception, 'exception'), 'description'));
+    throw new Error(`the browser could not ${purpose}: ${description ?? readString(getProp(exception, 'text')) ?? 'unknown error'}`);
+  }
+  return getProp(getProp(evaluated, 'result'), 'value');
+}
+
+async function stablePathForActiveElement(cdp: CDPSession): Promise<string> {
+  const path = await callInWorld(cdp, PATH_WORLD, 'read the focused element path', ACTIVE_PATH_FUNCTION);
+  return typeof path === 'string' ? path : '';
 }
 
 function pickAttributes(flat: unknown, names: readonly string[]): Record<string, string | null> {
@@ -477,14 +519,12 @@ export async function readAncestorAttributes(
   }
 }
 
-async function stablePathsForSelector(pw: PwPage, selector: string): Promise<string[]> {
-  return pw.evaluate((query) => {
-    const pathFor = Reflect.get(window, '__usablPathFor');
-    if (typeof pathFor !== 'function') {
-      return [];
-    }
-    return Array.from(document.querySelectorAll(query)).map((element) => pathFor(element));
-  }, selector);
+async function stablePathsForSelector(cdp: CDPSession, selector: string): Promise<string[]> {
+  const paths = await callInWorld(cdp, PATH_WORLD, 'read element paths', PATHS_FOR_SELECTOR_FUNCTION, [selector]);
+  if (!Array.isArray(paths)) {
+    throw new Error('the browser returned no list of element paths');
+  }
+  return paths.map((path) => (typeof path === 'string' ? path : ''));
 }
 
 // The readiness surface of a Playwright page. Narrow on purpose so the wait can be driven by a
@@ -935,7 +975,7 @@ function wrapPage(
       return axFromBackendId(cdp, backendNodeId);
     },
     async activePath(): Promise<string> {
-      return stablePathForActiveElement(pw);
+      return stablePathForActiveElement(cdp);
     },
     async axAt(selector: string): Promise<AxNode | null> {
       const backendNodeId = await backendNodeIdForSelector(cdp, selector);
@@ -951,7 +991,7 @@ function wrapPage(
       return readAncestorAttributes(cdp, selector, names);
     },
     async queryAll(selector: string): Promise<Array<{ selector: string }>> {
-      const paths = await stablePathsForSelector(pw, selector);
+      const paths = await stablePathsForSelector(cdp, selector);
       return paths.map((path) => ({ selector: path }));
     },
     async close(): Promise<void> {
@@ -996,8 +1036,8 @@ function wrapPage(
 
 /**
  * Adopts a Playwright page a caller already created and navigated, so usabl can run providers on it
- * (for example from a Playwright test suite). It attaches a CDP session for AX reads and installs the
- * path helper and the live-region capture, then returns a usabl Page whose close() is a no-op: the
+ * (for example from a Playwright test suite). It attaches a CDP session for AX reads and element
+ * paths and installs the live-region capture, then returns a usabl Page whose close() is a no-op: the
  * caller owns the page and its context, so adoption must never close them. Navigation and readiness
  * are the caller's job.
  *
@@ -1011,7 +1051,6 @@ export async function adoptPage(pw: PwPage): Promise<Page> {
   const context = pw.context();
   const cdp = await context.newCDPSession(pw);
   await cdp.send('Accessibility.enable');
-  await pw.evaluate(INSTALL_PATH_HELPER_SCRIPT);
   // Without this, armAnnouncementCapture and drainAnnouncements hear nothing on an adopted page, and
   // a flow requirement that expects an announcement fails here while the CLI passes it.
   await pw.evaluate(INSTALL_LIVE_CAPTURE_SCRIPT);
@@ -1177,7 +1216,7 @@ export function makeSharedBrowser(
     // from the run's storage state stays alive with nothing holding it.
     try {
       const page = await context.newPage();
-      await page.addInitScript(LIVE_AND_PATH_INIT_SCRIPT);
+      await page.addInitScript(LIVE_CAPTURE_INIT_SCRIPT);
       // Attach the in-flight tracker before navigating, so the navigation's own requests are
       // counted and readiness cannot read idle off a page whose first responses have not landed.
       const network = makeNetworkActivityTracker(page);

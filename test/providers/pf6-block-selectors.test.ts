@@ -21,7 +21,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type CDPSession, type Page as PwPage } from 'playwright';
 import type { AxNode, Draft, Page, ProviderContext } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
-import { adoptPage, makeRealBrowserDriver, readAncestorAttributes } from '../../src/deps/real.js';
+import {
+  PATHS_FOR_SELECTOR_FUNCTION,
+  adoptPage,
+  makeRealBrowserDriver,
+  readAncestorAttributes,
+} from '../../src/deps/real.js';
 import { checkPfToastLiveRegion } from '../../src/providers/rulepack/pf-toast-live-region.js';
 import { checkPfToolbarLabeledWhenRepeated } from '../../src/providers/rulepack/pf-toolbar-labeled-when-repeated.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
@@ -588,6 +593,143 @@ describe('adoptPage path also rejects duplicate ids', () => {
       expect(drafts.length).toBe(1);
       expect(drafts[0]?.rule).toBe('pf-toast-live-region');
       expect(drafts[0]?.elementName).toContain('Loose');
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+/**
+ * A page cannot choose usabl's element identities.
+ *
+ * Paths used to come from window.__usablPathFor, a function in the page's own JavaScript world.
+ * adoptPage kept one the page had already defined, and page script could replace the one usabl
+ * installed, so a page could hand back one selector for every element and collapse every set
+ * operation keyed on identity. Paths are now computed in a world page script cannot reach.
+ */
+describe('a page cannot collapse element path identities', () => {
+  const driver = makeRealBrowserDriver();
+
+  afterAll(async () => {
+    await driver.close();
+  });
+
+  const TWO_BUTTONS = `<!doctype html><html lang="en"><head><meta charset="utf-8" /></head><body>
+    <button type="button">One</button>
+    <button type="button">Two</button>
+  </body></html>`;
+
+  it('ignores a path helper the page defined before adoption', async () => {
+    const page = await openFixture(TWO_BUTTONS);
+    try {
+      await page.evaluate(() => {
+        Reflect.set(window, '__usablPathFor', () => '#dup');
+      });
+      const paths = await adoptedPaths(page, 'button');
+      expect(paths).toHaveLength(2);
+      expect(paths[0]).not.toBe(paths[1]);
+      expect(paths).not.toContain('#dup');
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('ignores a path helper the page defines after adoption', async () => {
+    const page = await openFixture(TWO_BUTTONS);
+    try {
+      const usablPage = await adoptedPageFor(page);
+      await page.evaluate(() => {
+        Reflect.set(window, '__usablPathFor', () => '#dup');
+      });
+      const paths = await pathsOn(usablPage, 'button');
+      expect(paths[0]).not.toBe(paths[1]);
+      expect(paths).not.toContain('#dup');
+      await page.locator('button').first().focus();
+      expect(await usablPage.activePath()).not.toBe('#dup');
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('ignores a path helper the page replaces after the driver opened it', async () => {
+    const page = await driver.open(
+      htmlUrl(`${TWO_BUTTONS}<script>window.__usablPathFor = () => '#dup';</script>`),
+    );
+    try {
+      const paths = await pathsOn(page, 'button');
+      expect(paths).toHaveLength(2);
+      expect(paths[0]).not.toBe(paths[1]);
+      expect(paths).not.toContain('#dup');
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('ignores page changes to the DOM methods the path is built from', async () => {
+    // A page that replaces querySelectorAll or CSS.escape in its own world would steer the id
+    // check. The path is computed in a world that has its own copies.
+    const page = await driver.open(
+      htmlUrl(`${TWO_BUTTONS}<script>
+        Document.prototype.querySelectorAll = function () { return [document.body]; };
+        CSS.escape = () => 'dup';
+        Object.defineProperty(Element.prototype, 'previousElementSibling', { get() { return null; } });
+      </script>`),
+    );
+    try {
+      const paths = await pathsOn(page, 'button');
+      expect(paths).toHaveLength(2);
+      expect(paths[0]).not.toBe(paths[1]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  // A NUL in an id escapes to U+FFFD, so "#" plus the escaped NUL id is the selector for a literal
+  // U+FFFD id, and matches that other element. Counting matches is not enough: the one match has to
+  // be the element in hand.
+  const NUL_AND_REPLACEMENT_IDS = `<!doctype html><html lang="en"><head><meta charset="utf-8" /></head><body>
+    <div class="target">nul</div>
+    <div class="target">replacement</div>
+    <script>
+      const [nul, replacement] = document.querySelectorAll('.target');
+      nul.id = String.fromCharCode(0);
+      replacement.id = String.fromCharCode(0xfffd);
+    </script>
+  </body></html>`;
+
+  it('gives a NUL id and a U+FFFD id two identities on a page the driver opened', async () => {
+    const page = await driver.open(htmlUrl(NUL_AND_REPLACEMENT_IDS));
+    try {
+      const paths = await pathsOn(page, '.target');
+      expect(paths).toHaveLength(2);
+      expect(paths[0]).not.toBe(paths[1]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('gives a NUL id and a U+FFFD id two identities on an adopted page', async () => {
+    const page = await openFixture(NUL_AND_REPLACEMENT_IDS);
+    try {
+      const paths = await adoptedPaths(page, '.target');
+      expect(paths).toHaveLength(2);
+      expect(paths[0]).not.toBe(paths[1]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('falls back to the structural path when an id selector is not valid', async () => {
+    // Without CSS.escape the fallback escape leaves a leading digit alone, and "#1a" is not a
+    // valid selector. The path function must not throw on it.
+    const page = await openFixture(`<!doctype html><html lang="en"><head><meta charset="utf-8" /></head><body>
+      <div id="1a" class="target">digit</div>
+    </body></html>`);
+    try {
+      const path = await page.evaluate(
+        `(() => { CSS.escape = undefined; return (${PATHS_FOR_SELECTOR_FUNCTION})('.target'); })()`,
+      );
+      expect(path).toEqual([expect.stringContaining('nth-child')]);
     } finally {
       await page.close();
     }
