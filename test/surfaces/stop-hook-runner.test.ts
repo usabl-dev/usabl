@@ -260,7 +260,9 @@ describe('stop-hook-runner protocol', () => {
       return baseResult({ verdict: 'verified', receipt: null });
     };
 
-    expect(await runStopHookFromStdin('{}', ports)).toBe(0);
+    // A session id, so the line is about the receipt alone. A stop with no session id compares no
+    // pins and says so on the line, which another test holds.
+    expect(await runStopHookFromStdin(JSON.stringify({ session_id: 'session-frame' }), ports)).toBe(0);
     expect(runEngineCalled).toBe(false);
     const text = stderr.join('');
     const open = text.indexOf('[BEGIN UNTRUSTED TEXT');
