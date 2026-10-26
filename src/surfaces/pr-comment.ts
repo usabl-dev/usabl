@@ -350,23 +350,27 @@ function listItem(marker: string, first: string, continuation: string[]): string
   return [`${marker} ${first}`, ...continuation.map((line) => `${indent}${line}`)];
 }
 
-function formatFinding(finding: Finding): string[] {
+// The known section holds two statuses, carried and waived, so each of its items names its own
+// status beside the severity, in the one span the collapsed headline uses. The other sections hold
+// one status each, which the heading already names.
+function formatFinding(finding: Finding, withStatus: boolean): string[] {
   const rule = neutralize(finding.rule);
   const layer = neutralize(finding.layer);
   const screenId = neutralize(finding.screenId);
   const severity = neutralize(finding.severity);
+  const label = withStatus ? `${neutralize(finding.status)} ${severity}` : severity;
   return listItem(
     '-',
-    `${OPEN_BRACKET}${inlineCode(severity)}${CLOSE_BRACKET} ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)}`,
+    `${OPEN_BRACKET}${inlineCode(label)}${CLOSE_BRACKET} ${inlineCode(screenId)} - ${inlineCode(`${layer}/${rule}`)}`,
     framedMarkdownLines(findingPieces(finding)),
   );
 }
 
-function renderFindingGroup(title: string, findings: Finding[]): string[] {
+function renderFindingGroup(title: string, findings: Finding[], withStatus = false): string[] {
   if (findings.length === 0) {
     return [`### ${title}`, '- none'];
   }
-  return [`### ${title}`, ...findings.flatMap((finding) => formatFinding(finding))];
+  return [`### ${title}`, ...findings.flatMap((finding) => formatFinding(finding, withStatus))];
 }
 
 // The headline is built from the group's fields rather than from one formatted string, so every
@@ -517,23 +521,31 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
   const deterministicNew = safe.findings.filter(
     (finding) => finding.evidenceClass === 'deterministic' && finding.status === 'new',
   );
-  const deterministicCarried = safe.findings.filter(
-    (finding) => finding.evidenceClass === 'deterministic' && finding.status === 'carried',
+  // Recorded debt is what the gate already accepted: carried against the evidence floor, or
+  // waived. Both are listed, the way the terminal and the overlay list them. A waived finding was
+  // once in no lane at all, because the lanes were new, carried, and advisory, so it vanished
+  // from this comment while the other surfaces showed it. Fixed findings stay out, as they do on
+  // the other surfaces, because the run proved them gone.
+  const deterministicRecorded = safe.findings.filter(
+    (finding) =>
+      finding.evidenceClass === 'deterministic' &&
+      (finding.status === 'carried' || finding.status === 'waived'),
   );
   const advisory = safe.findings.filter(
     (finding) => finding.evidenceClass === 'preview' || finding.evidenceClass === 'model-judgment',
   );
-  // Collapse only the gating (deterministic) lane. Advisory findings never gate, so they keep their
-  // own labeled section and are never mixed into the collapsed barrier list.
-  const gating = [...deterministicNew, ...deterministicCarried];
-  const collapsedGating = renderCollapsedFindings(gating, config);
+  // Collapse only the deterministic lane. Advisory findings never gate, so they keep their own
+  // labeled section and are never mixed into the collapsed barrier list. Each collapsed group
+  // names its status, so recorded debt in it still reads as recorded.
+  const deterministic = [...deterministicNew, ...deterministicRecorded];
+  const collapsedGating = renderCollapsedFindings(deterministic, config);
   const findingSections =
     collapsedGating.length > 0
       ? [...collapsedGating, '', ...renderFindingGroup('Advisory (non-gating)', advisory)]
       : [
           ...renderFindingGroup('New barriers', deterministicNew),
           '',
-          ...renderFindingGroup('Known (carried)', deterministicCarried),
+          ...renderFindingGroup('Known (recorded debt)', deterministicRecorded, true),
           '',
           ...renderFindingGroup('Advisory (non-gating)', advisory),
         ];
