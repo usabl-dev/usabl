@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- `npm run docs:linkcheck` now reads reference-style links and autolinks in markdown.
+  Before, it read only inline links and HTML attributes, so a broken `[text][ref]` link
+  or `<./page.md>` autolink passed unseen. Full, collapsed (`[ref][]`), and shortcut
+  (`[ref]`) references resolve through their `[ref]: url` definitions, a full or
+  collapsed reference to a label with no definition is reported, relative autolinks are
+  checked, and absolute autolinks are counted as external, as other external links are.
+
 - The stop hook now blocks a stop on a verdict it does not recognize, and on a null
   verdict from a run that was neither idle nor a crash. Before, both read as NO VERDICT
   and the stop was allowed, so an unknown answer passed as a clean change. The block says
