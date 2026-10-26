@@ -241,7 +241,7 @@ describe('computeCoverage', () => {
 
   it('reports both the skipped route and the unresolved file when the only fallback route is unusable', async () => {
     const fs = fsOf({
-      'src/router.tsx': `<Route path="/acct\u202eadmin" element={<Admin />} />`,
+      'src/router.tsx': `export const App = () => <Routes><Route path="/acct\u202eadmin" element={<Admin />} /></Routes>;`,
       'src/App.tsx': `export default function App() {}`,
     });
     const cov = await computeCoverage(fs, baseConfig, ['src/App.tsx']);
@@ -255,7 +255,7 @@ describe('computeCoverage', () => {
     // Fallback routes have no entry file, so only wide blast can queue them. A change that does
     // not touch a wide-blast file would never have scanned the route, so there is nothing to gap.
     const fs = fsOf({
-      'src/router.tsx': `<Route path="/acct\u202eadmin" element={<Admin />} />`,
+      'src/router.tsx': `export const App = () => <Routes><Route path="/acct\u202eadmin" element={<Admin />} /></Routes>;`,
       'src/pages/Other.tsx': `export default function Other() {}`,
     });
     const cov = await computeCoverage(fs, baseConfig, ['src/pages/Other.tsx']);
@@ -308,7 +308,7 @@ describe('computeCoverage', () => {
 
   it('does not infer route-graph attribution from router-fallback routes', async () => {
     const fs = fsOf({
-      'src/router.tsx': `<Route path="/clusters" element={<ClustersPage />} />`,
+      'src/router.tsx': `export const App = () => <Routes><Route path="/clusters" element={<ClustersPage />} /></Routes>;`,
       'src/Child.tsx': `export default function Child() {}`,
     });
     const cov = await computeCoverage(fs, baseConfig, ['src/Child.tsx']);
@@ -475,7 +475,7 @@ describe('computeCoverage', () => {
       ],
     };
     const fs = fsOf({
-      'src/router.tsx': `<Route path="/unrelated" element={<Unrelated />} />`,
+      'src/router.tsx': `export const App = () => <Routes><Route path="/unrelated" element={<Unrelated />} /></Routes>;`,
       'src/LoginPage.tsx': `export default function LoginPage() {}`,
     });
     const cov = await computeCoverage(fs, cfg, ['src/LoginPage.tsx']);
