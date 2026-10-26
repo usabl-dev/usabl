@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- Egress redaction now catches credential shapes it used to print: whitespace or a quote
+  between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
+  header segment or a JWT cut to two segments, the user name and password after `//` in
+  an address, such as an `HTTPS_PROXY` value, a key such as `PROXY_PASSWORD` or
+  `proxyPassword`, and GitHub tokens. A GitHub token pasted into the wrong key of
+  `usabl.config.json` is no longer repeated back in full in the unknown-key message.
+  Other base64 JSON, such as `?state=eyJ...` in a screen URL, is kept as written.
+
 - A page can no longer choose usabl's element identities or the announcements it hears.
   Element paths came from `window.__usablPathFor` and announcements from
   `window.__usablDrain`, both in the page's own JavaScript world. `checkPage` kept a
