@@ -1822,10 +1822,20 @@ the only verdict authority. It also acts on the caller's page: the keyboard walk
 the PatternFly probes open and close dialogs and menus, and each flow requirement on the page's
 surface runs its authored steps, clicks and key presses, on that page.
 
-`adoptPage` installs the same live-region capture the CLI's init script installs, from one
-shared source in `src/deps/real.ts`, guarded so a page that already has it keeps its one
-observer. So a flow requirement that expects an announcement hears the same text in both. On an
-adopted page the capture starts at adoption, not at document start.
+`adoptPage` installs the same live-region capture the CLI installs, from one shared source in
+`src/deps/real.ts`. So a flow requirement that expects an announcement hears the same text in both.
+On an adopted page the capture starts at adoption, not at document start, and it also starts in
+any document the page navigates to afterwards.
+
+The capture and the element path function run in isolated worlds, which share the DOM with the
+page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
+page that defines `window.__usablDrain` or `window.__usablPathFor` before adoption, or replaces
+them after load, changes nothing usabl reads, and neither does a page that redefines
+`textContent`, `querySelectorAll`, or `CSS.escape` in its own world. A document where the capture
+is not running is an error, which the check runner turns into a coverage gap, never an empty list
+of announcements. An element is named by its id only when that id's selector matches exactly the
+element in hand, so two ids that escape to one selector, such as a NUL and a literal U+FFFD, give
+two identities.
 
 A requirement is matched to the page by `options.screenId`, the surface id the page is. Each
 runtime requirement is checked on the page when its surface is the page's surface, and is out
