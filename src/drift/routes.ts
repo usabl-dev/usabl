@@ -67,7 +67,7 @@ export function formatDriftReport(drift: RoutesDrift): string {
       lines.push(`  ${neutralize(url)}`);
     }
     lines.push(
-      `\nNote: object properties named "path" that are not routes (for example an HTTP client or build config sharing the key) can appear as false additions. Verify before acting.`,
+      `\nNote: usabl reads every route the router declares, including one behind a condition or one only some users reach, so a route the app never serves to you can appear as a false addition. Verify before acting.`,
     );
   }
 
@@ -77,7 +77,7 @@ export function formatDriftReport(drift: RoutesDrift): string {
       lines.push(`  ${neutralize(url)}`);
     }
     lines.push(
-      `\nNote: routes written in styles usabl cannot parse (for example computed paths or variable paths) can appear as false removals. Verify before acting.`,
+      `\nNote: a route whose path usabl cannot read (for example a computed path or a path imported from another module) can appear as a false removal. usabl names each such route when it finds one. Verify before acting.`,
     );
   }
 
@@ -86,9 +86,9 @@ export function formatDriftReport(drift: RoutesDrift): string {
 }
 
 export async function runRoutesDrift(fs: FsGlob, routerFile: string): Promise<RoutesDriftOutcome> {
-  // Note: an empty sidecar plus an app whose routes are all unparseable produces
+  // Note: an empty sidecar plus a router file that declares no router at all produces
   // empty-versus-empty and reports exit 0 no drift, which is a known limitation
-  // of URL-only discovery.
+  // of URL-only discovery. A route usabl found but could not read refuses below instead.
   const configured = await parseConfiguredManifest(fs);
   if (configured === null) {
     return {
@@ -105,14 +105,34 @@ export async function runRoutesDrift(fs: FsGlob, routerFile: string): Promise<Ro
     };
   }
 
+  // A route usabl could not read, or a router file that does not parse, leaves the discovered list
+  // incomplete, so neither "no drift" nor a removal can be confirmed. Each one is named with its
+  // file and line, and the run refuses with exit 2 after printing the comparison it could make.
+  const unreadable = discovered.unreadable ?? [];
+  const unreadableLines = unreadable.map(
+    (gap) => `  ${neutralize(gap.file)}${gap.line === null || gap.wholeFile === true ? '' : ` line ${gap.line}`}: ${gap.reason}`,
+  );
+
   if (discovered.routes.length === 0 && configured.routes.length > 0) {
     return {
       exitCode: 2,
-      stderr: `usabl: discovered no routes in ${neutralize(routerFile)}. This usually means the router uses a style usabl cannot parse (for example computed paths or variable paths). Verify the router file and usabl.routes.json manually; usabl will not report drift it cannot confirm.\n`,
+      stderr:
+        `usabl: discovered no routes in ${neutralize(routerFile)}. usabl reads routes from a <Routes> element or a create*Router call in this file, so routes built by code or kept in another file are not found. Verify the router file and usabl.routes.json manually; usabl will not report drift it cannot confirm.\n` +
+        (unreadableLines.length > 0 ? `${unreadableLines.join('\n')}\n` : ''),
     };
   }
 
   const drift = computeRoutesDrift(configured, discovered);
+  if (unreadableLines.length > 0) {
+    return {
+      exitCode: 2,
+      stdout: formatDriftReport(drift),
+      stderr:
+        `usabl: could not read ${unreadable.length} route declaration(s) in ${neutralize(routerFile)}, so this drift report may be incomplete:\n` +
+        `${unreadableLines.join('\n')}\n` +
+        'Verify these routes against usabl.routes.json by hand; usabl will not report drift it cannot confirm.\n',
+    };
+  }
   return {
     exitCode: drift.hasDrift ? 1 : 0,
     stdout: formatDriftReport(drift),

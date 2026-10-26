@@ -521,11 +521,9 @@ export const router =
     _label,
     routerSource,
   ) => {
-    // The line comes from the offset the parser recorded for the path literal it matched. A search
-    // of the file for the path text would have found the prose comment on line 2 first and sent
-    // the operator to a line that declares nothing. This does not make the parser comment-aware: a
-    // commented-out route written in route syntax is matched like any other, which is listed under
-    // the documented limits of coverage and discovery in the ground truth.
+    // The line comes from the offset the parser recorded for the path it read. A search of the
+    // file for the path text would have found the prose comment on line 2 first and sent the
+    // operator to a line that declares nothing.
     const fs = memoryFs(fixtureFiles({ 'src/App.tsx': routerSource }));
 
     const message = await refusalOf(fs);

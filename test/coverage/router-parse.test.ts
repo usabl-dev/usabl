@@ -83,9 +83,8 @@ describe('router-parse', () => {
 
   it('records where each route was matched, not where its path text first appears', () => {
     // Prose that names a route path is the case an offset guards against: a caller that searched
-    // the file for the path text would report that line instead. The offset does not make the
-    // parser comment-aware, and a commented-out route written in route syntax is still matched
-    // like any other. See the documented limits of coverage and discovery in the ground truth.
+    // the file for the path text would report that line instead. The router file is parsed, so a
+    // comment is never read as a route either.
     const source = `
       // Example route: /home
       createBrowserRouter([{ path: '/home', element: <Home /> }])

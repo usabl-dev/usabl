@@ -87,7 +87,7 @@ describe('parseRouteManifest', () => {
     expect(manifest.routes[0]!.entryFile).toBe('src/ClustersPage.tsx');
   });
 
-  it('falls back to regex extraction with entryFile null (no attribution invented)', async () => {
+  it('falls back to the router file with entryFile null (no attribution invented)', async () => {
     const fs = fsOf({
       'src/router.tsx': `
         export const App = () => (

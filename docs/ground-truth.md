@@ -789,69 +789,85 @@ this PR. Coverage grows as the team works, not as a boil-the-ocean inventory.
 
 - Bundler aliases (`@/`, `~/`) are not resolved. They become `unresolvedFiles`.
 - Computed import specifiers (`import(variable)`) are not resolved.
-- Comment stripping is regex-based and imperfect.
-- Routes not parseable from the router source must be configured or stay unmapped.
+- Comment stripping in the import graph is regex-based and imperfect.
+- A route the router reader cannot resolve is a named gap with its file and line (see below).
 
-Those four are honest `not_covered` outcomes, not silent passes. The next section is not, and has
-to be read differently.
+Those four are honest `not_covered` outcomes, not silent passes. The next section says exactly
+what the router reader reads, what it reports, and what it still does not see.
 
-#### Limits of reading routes out of router source
+#### Reading routes out of router source
 
-Routes are recovered from router source with regular expressions, not with a parser. That buys a
-route manifest with no build step and no dependency on the application's toolchain, and the price
-is that some declarations are read wrongly and some are not read at all.
+With no `usabl.routes.json`, usabl reads routes from `discovery.routerFile`. It parses the file
+with `@babel/parser` (TypeScript and JSX by the file's extension) and walks the syntax tree. It
+does not run the file and it does not follow imports. Strings, comments, and regular expressions
+are not code in the tree, so a commented-out route, a `>` or `)` inside a string, a regular
+expression such as `/[//]/`, and a `createBrowserRouter(` written in a string or a comment are
+never read as router code.
 
-A route the parser never sees is not a `not_covered` outcome. The planner records a gap only for
-routes it knows about, so a route that was never recovered leaves no gap behind: a change to that
-screen's entry file, or to a wide-blast file, can read as fully checked while the screen is never
-scanned.
+**What counts as the router.** Routes are read only from:
 
-**The mechanism.** These patterns match raw text. They do not know which characters are code,
-which are inside a string, and which are inside a comment. So a delimiter that appears anywhere
-in the text is treated as a delimiter: a `>` ends a JSX tag, a `)` closes the `create*Router(...)`
-call argument, and a quote opens or closes a path literal. One stray delimiter inside a string or
-a comment can therefore end a tag or a call argument early and drop the declarations after it.
-The reverse also holds: text that is not code, such as a commented-out route, is matched as
-though it were.
+- the children of a `<Routes>` or `<Switch>` element, through nested `<Route>` elements,
+  fragments, `cond && <Route />`, `a ? <Route /> : <Route />`, arrays, and a `const` in the same
+  module that holds JSX;
+- the first argument of a real call to `createBrowserRouter`, `createHashRouter`, or
+  `createMemoryRouter`: an array of route objects, a `const` that holds one, a spread of such a
+  `const`, and nested `children`;
+- the JSX passed to `createRoutesFromElements` or `createRoutesFromChildren`.
 
-The cases below are examples of that mechanism, not a complete list. Anything that puts a
-delimiter where the pattern does not expect one can produce another.
+A path object or a `<Route>` anywhere else in the module is not part of the router and is not
+read when the module has a router. When the module has no router at all, every `<Route>` in it
+is read as a URL with no entry file, because no router can be shown to own it.
 
-- **A commented-out route is read as a route.** Commented text is matched like any other text. The
-  route is added to the manifest, so usabl plans a scan of a screen the application does not
-  serve. When a commented-out declaration and a live one carry the same path, which one survives
-  depends on the path: the router fallback and the data-router reader keep the first match, so the
-  commented one wins and a message that names a line names the commented line; `usabl init`'s JSX
-  pass keys routes by path as it merges, so the last match replaces the earlier ones and the live
-  route wins there.
-- **A route whose `element` attribute is written before its `path` is not read at all.** The JSX
-  pattern ends the tag at the first `/>`, which is the nested element's own self-close, so every
-  attribute after the element is invisible and no path is found. Attribute order carries no
-  meaning in JSX, so this is ordinary source. A file that writes every route this way yields no
-  routes and no complaint.
-- **A path written as an expression is not read.** Only a quoted literal is matched, so
-  `path={ROUTES.home}` or `path={base + '/x'}` is skipped and that route is absent from the
-  manifest.
-- **A `>` anywhere in a JSX attribute string drops the whole route.** It ends the attribute run
-  before the pattern reaches the tag's own close, and the tag stops matching. Both
-  `<Route title=">" path="/hidden" element={<Live />} />` and
-  `<Route path="/visible" title=">" element={<Live />} />` yield no routes. Putting the path first
-  does not help.
-- **A `)` anywhere inside the router call drops every route after it.** The call argument is found
-  by counting raw parentheses, so an unmatched `)` in a comment or in an ordinary string, such as
-  `{ path: '/first', label: 'a ) b' }`, closes the argument early and the entries that follow are
-  never seen.
-- **The first `create*Router(` in the file wins, wherever it is.** One written inside a string or
-  a template interpolation is taken as the router call, and the real one below it is never read.
+**What counts as a path.** A path is read when it is a string, a template with no expressions, or
+a reference to a `const` in the same module whose value is one of those. A member of a `const`
+object counts, such as `ROUTES.home` or `ROUTES['admin'].users`, including an object wrapped in
+`as const`, `satisfies`, or `Object.freeze`. A name bound more than once in the module, such as a
+module `const` shadowed by a parameter, is not resolved, because telling which binding a
+reference means needs scope analysis the reader does not do. An object with a property assigned
+or deleted anywhere in the module is not resolved either. A relative path is joined to its
+parent route's path, as React Router does: `settings` under `/app` is `/app/settings`, and an
+index route has its parent's path. At the top of a data router, and of a `<Routes>` element that
+is the only router in the file, a relative path is relative to `/`. A catch-all `*` segment is
+not a screen and is skipped.
+
+**What it reports.** A route it finds but cannot read is never dropped. Each one is an
+`unreadable` entry with the router file, the line, and the reason: a path it cannot resolve (an
+import, an expression, a template with expressions, a `let`), a route that takes its props from a
+spread or a computed key, routes built by code (`routes.map(...)`, a function call), an element
+among the routes that is not a `<Route>`, and a relative path whose base it cannot tell, for
+example in a file with more than one router. A router file that does not parse is one such entry
+for the whole file, with the line and column of the syntax error, and no routes. Then:
+
+- the planner records each entry as a `skipped` coverage gap whenever a wide-blast change would
+  have queued the router's routes, so the gate reads the run as not covered. Router routes have
+  no entry file, so wide blast is the only way they are scanned, and a run with no wide-blast
+  change never depended on them;
+- `usabl drift routes` lists each entry with its file and line and exits 2, because neither "no
+  drift" nor a removal can be confirmed;
+- `usabl init` writes a `Review:` note for each entry with its file and line, because the draft
+  sidecar does not list that route and usabl never scans a route the sidecar leaves out.
+
+**Entry files.** `usabl init` attributes an entry file only to a JSX route that sits in a router
+the module defines, has no child routes, and names its component as `element={<Name />}` imported
+from a relative path. A layout route with children gets no entry file, because its component
+also renders on every child's URL, and a change to it must not read as covered by one screen.
+Data-router routes never get one. When two routes with the same path name different components,
+neither is attributed.
+
+**What it still does not see.** These leave no gap, so check for them:
+
+- routes kept in another module, such as an imported route array. The router file's reference
+  to it is reported, but the routes inside are not read;
+- a descendant `<Routes>` element in another file, which only exists at run time;
+- a router file with no router at all: no `<Routes>`, no `create*Router` call, and no `<Route>`.
+  It reads as no routes, the same as a missing router file;
+- an object changed by a function call, such as `Object.assign(ROUTES, extra)`. Only direct
+  assignment and `delete` are noticed.
 
 What an operator can do. Write the routes into `usabl.routes.json`. An authored sidecar takes
 precedence over router-source discovery, so the manifest is exactly what that file says and none
-of this applies. That is the reliable answer, and it is the only one that holds against every case
-above. `usabl init` drafts the sidecar from these same patterns, so read the draft against the
-router before merging it and add any route it missed. Changing the router source can also work,
-by writing a quoted `path` literal outside any comment and keeping stray `>` and `)` characters
-out of the strings in and around the declaration, but that depends on the whole file rather than
-on the one route, so check the result instead of assuming it.
+of this applies. `usabl init` drafts the sidecar with this same reader, so read the draft and its
+`Review:` notes against the router before merging it, and add any route it names.
 
 #### Limits of detecting that a screen was not reached signed in
 
@@ -2228,11 +2244,11 @@ which must be normalized), and the fix, never the id or the path it came from, a
 nothing.
 
 What that covers, and what it does not. The grammar holds for every id these commands actually
-derive, and the line in a route refusal is the line of the match the parser made. It says nothing
-about a route the parser never recovered from the router source: no id is derived for it, so
-nothing refuses it, and it is simply absent from the draft. Router source is matched by pattern,
-not parsed, and the cases it reads wrongly or not at all are listed under the documented limits in
-section 8.
+derive, and the line in a route refusal is the line of the path the parser read. It says nothing
+about a route the parser found but could not read: no id is derived for it, so nothing refuses
+it. `usabl init` names it in a `Review:` note with its file and line, and it is absent from the
+draft until the operator adds it. What the router reader reads, reports, and still does not see is
+listed under the documented limits in section 8.
 
 The boundary, stated exactly. Ids already present in the evidence floor (`.usabl-evidence.json`)
 and in waiver files (`.usabl-waivers.json`), and the inputs a caller passes directly to the
@@ -2398,8 +2414,9 @@ The five focus/interaction rules (1-5) carry the proof loop. The three structura
 - Only relative import paths are followed.
 - Bundler aliases (`@/`, `~/`, tsconfig paths) are not resolved.
 - Computed import specifiers (`import(variable)`) are not resolved.
-- Routes built from a data table or registered dynamically are not extracted.
-- Comment stripping is regex-based and imperfect.
+- Routes built from a data table or registered dynamically are not extracted. Each is named
+  as a gap with its file and line when it sits in the router file (section 8).
+- Comment stripping in the import graph is regex-based and imperfect.
 
 These produce honest `not_covered`, never silent passes.
 

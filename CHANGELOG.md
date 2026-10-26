@@ -4,6 +4,25 @@
 
 ### Fixed
 
+- Router discovery now parses the router file instead of matching its text, and reads
+  routes only from the real router: a `<Routes>` or `<Switch>` element, the argument of a
+  `create*Router(...)` call, or the JSX passed to `createRoutesFromElements`. Before, a
+  `{ path: '/decoy' }` object or a `<Route>` anywhere in the module was read as a route,
+  and `usabl init` could write a stray `<Route>`'s component into the sidecar as the
+  entry file of a real route. A commented-out route was read. A route whose `element`
+  came before its `path`, a `>` in a JSX attribute string, a `)` in a string or comment
+  inside the router call, and a `create*Router(` in a string or comment each dropped
+  real routes. The regular expression `/[//]/`, which broke an earlier comment-blanking
+  fix, is now a test. A path written as a `const` in the same module, including
+  `ROUTES.home`, is now read, and a relative child path is joined to its parent path. A
+  route the reader finds but cannot resolve is no longer dropped in silence: it names
+  the router file and line, and the planner records it as a `skipped` gap whenever a
+  wide-blast change would have queued the router's routes. A router file that does not
+  parse is such a gap for the whole file. `usabl drift routes` lists each one and exits
+  2, and `usabl init` writes a `Review:` note for each. When no router owns a `<Route>`,
+  init now leaves its entry file null. A layout route with child routes gets no entry
+  file, because its component also renders on each child's URL.
+
 - The Vite plugin no longer breaks a JSX element that has type arguments. It adds
   `data-source-file` and `data-source-line` to raw TSX, and it found tags by matching
   text, so in `<PageWizard<SubscriptionWizardData> ...>` it put the attributes inside
@@ -118,9 +137,10 @@
 ### Changed
 
 - usabl now has one more runtime dependency, `@babel/parser`, pinned to exactly
-  7.29.11 (MIT). The Vite plugin's source attribute injector uses it to read JSX and
-  TypeScript, including type arguments and comments, instead of matching text. Only the
-  parser is used. It brings three small packages with it: `@babel/types`,
+  7.29.11 (MIT). Router discovery (`usabl init`, `usabl drift routes`, and the route
+  manifest the planner reads) and the Vite plugin's source attribute injector use it to
+  read JSX and TypeScript, including type arguments, comments, and regular expressions,
+  instead of matching text. Only the parser is used. It brings three small packages with it: `@babel/types`,
   `@babel/helper-string-parser`, and `@babel/helper-validator-identifier`, all MIT. The
   7.x line is used because 8.x requires Node.js 22.18 or later, and usabl supports every
   Node.js 22 release.

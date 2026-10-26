@@ -306,7 +306,7 @@ describe('computeCoverage', () => {
     expect(cov.affected.some((s) => s.screenId === 'login' && s.provenance === 'manual')).toBe(true);
   });
 
-  it('does not infer route-graph attribution from regex-fallback routes', async () => {
+  it('does not infer route-graph attribution from router-fallback routes', async () => {
     const fs = fsOf({
       'src/router.tsx': `<Route path="/clusters" element={<ClustersPage />} />`,
       'src/Child.tsx': `export default function Child() {}`,
