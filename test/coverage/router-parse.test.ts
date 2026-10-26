@@ -346,3 +346,23 @@ describe('router-parse: the data router reader used by init', () => {
     expect(paths(raw)).toEqual(['/new']);
   });
 });
+
+describe('router-parse: routes that match many URLs', () => {
+  it('skips a bare catch-all and reports a splat that mounts other routes', () => {
+    // A bare "*" is the not-found page. A path such as "/app/*" usually mounts routes declared in
+    // another file, so the screens under it are unknown here. Scanning the literal URL "/app/*"
+    // would check a page nobody visits and read as if those screens were covered.
+    const raw = [
+      'export const App = () => (',
+      '  <Routes>',
+      '    <Route path="/home" element={<Home />} />',
+      '    <Route path="/app/*" element={<AppRoutes />} />',
+      '    <Route path="*" element={<NotFound />} />',
+      '  </Routes>',
+      ');',
+    ].join('\n');
+    const result = parseRouterFallback(raw);
+    expect(result.routes.map((route) => route.url)).toEqual(['/home']);
+    expect(result.unreadable.map((gap) => gap.line)).toEqual([4]);
+  });
+});
