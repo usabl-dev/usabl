@@ -54,7 +54,11 @@ describe('projectSelfCheck', () => {
   it('prints the verdict keyword and maps null to IDLE', () => {
     const regression = projectSelfCheck(baseResult({ verdict: 'regression', exitCode: 1 }));
     const idle = projectSelfCheck(
-      baseResult({ verdict: null, summary: 'nothing to check (no UI-touching files)' }),
+      baseResult({
+        verdict: null,
+        summary: 'nothing to check (no UI-touching files)',
+        coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true },
+      }),
     );
 
     expect(regression.message.split('\n')[0]).toBe('usabl self-check: REGRESSION (exit 1)');
