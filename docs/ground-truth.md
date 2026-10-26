@@ -1261,7 +1261,12 @@ the operator say which happened.
 #### Row keys
 
 After the providers run, the check runner reads, on the same live page, the table row each
-finding's element sits in (`Page.rowContext`). A table is a `table` or an element with role
+finding's element sits in (`Page.rowContext`). The finding's selector must name exactly one element.
+A selector the page cannot parse, one that matches no element (the element left the page after the
+scanner saw it), and one that matches more than one element are unreadable, and are handled like a
+row that cannot be told apart, below. Only an element that was found, outside every body row of a
+keyed table, keeps its old key with no gap. A finding with no selector at all is about the page or
+the walk, not an element, and has no row. A table is a `table` or an element with role
 `table`, `grid`, or `treegrid`. Its rows are the `tr` and `role="row"` elements whose nearest table
 is that table, so a row of a nested table is never one of the outer table's rows. Header and footer
 rows (inside `thead` or `tfoot`, or holding a column header) are not body rows.
@@ -1280,14 +1285,26 @@ of the table holds. Values are compared exactly, as they are hashed: the full st
 spaces. A row's position is never used: rows move when a list is sorted or grows.
 
 **How a table is named.** By its own key attribute (`id`, `data-ouia-component-id`,
-`data-table-key`), its accessible name (`aria-label`, `aria-labelledby`), or its caption, after the
-identity of the table and row it is nested in, if any. Its position is never used. An unnamed table
-is fine when it is the only table on the screen with its identity.
+`data-table-key`), else its accessible name in the order a browser uses (`aria-labelledby`, then
+`aria-label`, then the caption), with white space collapsed, after the identity of the table and row
+it is nested in, if any. Its position is never used. An unnamed table is fine when it is the only
+table on the screen with its identity. Two tables whose names are the same once white space is
+collapsed cannot be told apart. A name that holds live data, such as a count or a time ("Jobs (12)"
+or "Updated 10:42"), changes between scans, so the table's rows key differently each time and their
+barriers come and go: a baseline lists them as intermittent and floors none of them. Give such a
+table a stable `id` or `data-table-key`.
+
+A nested table's identity is valid only when the row and the table it sits in are valid. So a table
+inside a row that cannot be told apart, inside a table that cannot be told apart, or inside a row
+of a table that keys none of its rows, is ambiguous, and so is every row under it. It is never keyed
+with an empty part in place of the identity it is missing.
 
 **Rows that cannot be told apart.** A row in a keyed table that has no key of the table's kind, a
 key another row of the table holds exactly, a key or a table identity over 65,536 characters, or a
-table whose identity another table on the screen shares, is ambiguous. So is a row the page could
-not be read for. Such a finding keeps its old key and is marked unverified, and the scan adds a
+table whose identity another table on the screen shares, is ambiguous. So is a row under an
+ambiguous nested identity, a row whose hash another row of its table or another table on the screen
+shares (see What is kept), a row the page could not be read for, and an element whose selector is
+unreadable. Such a finding keeps its old key and is marked unverified, and the scan adds a
 not-covered gap for the screen that names the screen and the rule, never a key, and says why and
 what to change. Under the old key a new barrier in one row could fill a count accepted for another
 and read as carried, so the run cannot prove it is not hiding there. Calling the finding new would
@@ -1298,7 +1315,12 @@ body row of a keyed table is not ambiguous: it keeps the old key with no gap, as
 host or user name, and a nested table's identity includes the key of the row around it. Each is
 hashed with SHA-256, exactly and in full, at once, and only the first 16 hex characters are kept,
 in `evidence.extra.rowScope`. Hashing the exact value is what keeps two rows the page reader told
-apart from sharing a hash; folding case or cutting a long key did not. So no row key or table name
+apart from sharing a hash; folding case or cutting a long key did not. Sixteen hex characters can
+still collide, so the page reader also returns the keys of the table's other rows and the identities
+of the screen's other tables, which are hashed and dropped at once. When a row's token matches
+another row's, or its table's token matches another table's, the row is ambiguous. To bound what one
+read carries, a table whose other keys and the screen's other table identities add up to more than
+4 MiB is treated as too long to read. So no row key or table name
 reaches a finding's identity or the committed floor. The rest of the row scope is the control's
 role folded to a token and the tag and child-position path from the row down to the control. The
 child positions are kept inside the row, so two unnamed buttons in one row stay apart, and they do
@@ -1415,7 +1437,10 @@ it, check the screen against fixed data, or waive the rule on that screen with a
 must be complete in both scans; a partial baseline floors only the screens both scans saw cleanly.
 The gaps the gate raises because the committed floor is old, the version 1 placeholder counts and
 the version 1 or 2 floor that predates row keys, do not count against completeness here: they say
-to regenerate the floor, and this is the command that does it. Every other gap still does.
+to regenerate the floor, and this is the command that does it. The gate hands those gaps to
+baseline as a list of its own, and baseline drops exactly those. It never drops a gap for its ref or
+its reason, because a check runner can return a gap whose ref is the floor file name. Every other
+gap still counts.
 
 The file carries a `version`. Version 1 wrote a placeholder count of 1 for every name and
 structural entry, so those counts are not observations and the gate must not compare them.
@@ -1798,6 +1823,10 @@ that is present and cannot be read is a gap.
 the only verdict authority. It also acts on the caller's page: the keyboard walk presses Tab,
 the PatternFly probes open and close dialogs and menus, and each flow requirement on the page's
 surface runs its authored steps, clicks and key presses, on that page.
+
+`checkPage` scrubs its result before it returns it, because the result leaves usabl there. Every
+string passes through the scrubber, and every URL in it, the page address in a gap ref included,
+loses its sign-in credentials, query string, and fragment.
 
 `adoptPage` installs the same live-region capture the CLI's init script installs, from one
 shared source in `src/deps/real.ts`, guarded so a page that already has it keeps its one

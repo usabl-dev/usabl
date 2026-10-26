@@ -99,9 +99,17 @@ that, and what to do.
   with a value no other row of that table holds, and give each table an `id`, a caption, or an
   accessible name that no other table on the screen shares. A table whose rows have no key at all
   falls back to one identity for the whole column, whose count follows how many rows the page shows.
+- **Keep table names stable.** A table name that holds live data, such as a row count or a time,
+  changes between scans, so the rows under it key differently each time and `usabl baseline` lists
+  their barriers as intermittent. Give such a table a stable `id` or `data-table-key`.
+- **Key the rows around a nested table.** A table inside a row of another table is keyed only when
+  that outer row has a key of its own. Inside an outer table whose rows have no key, or inside an
+  outer row that shares its key, the nested rows are a coverage gap.
 - **Rows usabl cannot tell apart are a gap.** If a keyed table has a row without a key, two rows
   with the same key, or two tables on a screen look the same, the run reports a coverage gap that
-  names the screen and the rule, and the run is `not_covered`. Fix the keys and run again.
+  names the screen and the rule, and the run is `not_covered`. Fix the keys and run again. The
+  same gap appears when an element the scanner found has left the page before usabl reads its row,
+  for example a toast that closed. Let the screen settle before usabl checks it.
 - **Fewer rows is never a block.** A recorded row the page does not show today is reported as
   fixed and as a floor entry ahead of the run. The verdict does not move, and the row is carried
   again when it comes back. Do not run `usabl floor prune` only because a list came back shorter:

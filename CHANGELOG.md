@@ -16,8 +16,12 @@
   or its caption, after the row it is nested in, never by its position, and only the rows
   it owns count. Row keys and table names are hashed at once, so no row text or table name
   reaches a finding's identity or the floor. A row that cannot be told apart (a missing or
-  shared key in a keyed table, two tables that look the same) or cannot be read is a
-  not-covered gap for its screen and rule. A row the page does not show today is reported
+  shared key in a keyed table, two tables that look the same, a table nested under either,
+  or two rows or tables whose short hashes match) or cannot be read is a not-covered gap
+  for its screen and rule. So is a finding whose selector no longer names exactly one
+  element, for example one that left the page before its row was read. Table names follow
+  the accessible-name order (aria-labelledby, aria-label, caption) with white space
+  collapsed. A row the page does not show today is reported
   as fixed and as headroom and does not move the verdict. Controls outside a keyed table
   keep their old keys.
 
@@ -116,7 +120,8 @@
   coverage; `--partial` floors only the screens both scans saw cleanly. A default
   `usabl baseline` no longer refuses on the gaps an old floor raises against itself (the
   version 1 placeholder counts and the version 2 row-key gap), so it can replace that floor
-  with a complete one.
+  with a complete one. It drops only the gaps the gate itself raised, so a measurement gap
+  that names the floor file as its ref still refuses.
 - `usabl baseline` writes floor version 3, which keys controls in table rows per row. A
   version 1 or 2 floor is still compared with the keys it was written with, so nothing
   reads as new or fixed only because the keys changed. When a run finds barriers in keyed
@@ -135,6 +140,10 @@
 
 ### Security
 
+- `checkPage` scrubs its whole result before it returns it. A page address with a token in
+  its query string or fragment used to come back as a coverage gap ref. Now every string is
+  scrubbed, and every URL in the result loses its sign-in credentials, query string, and
+  fragment.
 - The stop hook and the self-check now seal by carrier, as the pull request comment
   already did. Every value a Result carries is printed inside the untrusted frame or is
   type-checked first, whoever wrote it. A barrier's rule and layer, the guarded file
