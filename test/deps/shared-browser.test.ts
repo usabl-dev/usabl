@@ -319,6 +319,159 @@ describe('makeSharedBrowser', () => {
   });
 });
 
+/**
+ * A process whose newContext calls wait until the test settles them, one by one in call order, so
+ * a test can make an old process answer after the shared browser has already replaced it.
+ */
+function heldProcess(): {
+  browser: LaunchedBrowser;
+  succeed(index: number): void;
+  fail(index: number, error: Error): void;
+  calls: () => number;
+} {
+  const inner = fakeLaunched();
+  const pending: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void }> = [];
+  const browser = {
+    newContext: () =>
+      new Promise((resolve, reject) => {
+        pending.push({ resolve, reject });
+      }),
+    isConnected: () => inner.browser.isConnected(),
+    close: () => inner.browser.close(),
+  } as unknown as LaunchedBrowser;
+  return {
+    browser,
+    succeed: (index) => {
+      void inner.browser.newContext().then((context) => pending[index]?.resolve(context));
+    },
+    fail: (index, error) => pending[index]?.reject(error),
+    calls: () => pending.length,
+  };
+}
+
+describe('makeSharedBrowser counts context failures per process', () => {
+  // A launch port that hands out the held process first and ordinary processes after it.
+  function ports(): {
+    launch: () => Promise<LaunchedBrowser>;
+    held: ReturnType<typeof heldProcess>;
+    later: ReturnType<typeof fakeLaunched>[];
+    launches: () => number;
+  } {
+    const held = heldProcess();
+    const later: ReturnType<typeof fakeLaunched>[] = [];
+    let launches = 0;
+    return {
+      launch: async () => {
+        launches += 1;
+        if (launches === 1) {
+          return held.browser;
+        }
+        const next = fakeLaunched();
+        later.push(next);
+        return next.browser;
+      },
+      held,
+      later,
+      launches: () => launches,
+    };
+  }
+
+  // The held process gets three opens in flight, two of them fail, and it is replaced. The first
+  // open is still waiting on it, so the test can settle it after the new process is in use.
+  async function replaceHeldProcess() {
+    const launch = ports();
+    const shared = makeSharedBrowser({ launch: launch.launch, maxContextFailures: 2 });
+    const driver = shared.driver({});
+    const early = driver.open('http://127.0.0.1:1/early').then(
+      () => 'opened',
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    const first = driver.open('http://127.0.0.1:1/a');
+    const second = driver.open('http://127.0.0.1:1/b');
+    while (launch.held.calls() < 3) {
+      await tick();
+    }
+    launch.held.fail(1, new Error('context refused'));
+    await expect(first).rejects.toThrow('context refused');
+    launch.held.fail(2, new Error('context refused'));
+    await expect(second).rejects.toThrow('context refused');
+    // Two failures in a row on the held process: it is gone, and the next open launches another.
+    await driver.open('http://127.0.0.1:1/c');
+    expect(launch.launches()).toBe(2);
+    return { launch, driver, early };
+  }
+
+  it('does not charge a late failure from a replaced process to the new one', async () => {
+    const { launch, driver, early } = await replaceHeldProcess();
+
+    launch.held.fail(0, new Error('late refusal from the old process'));
+    expect(await early).toBe('late refusal from the old process');
+
+    // One failure on the new process is one, not two, so it is kept.
+    launch.later[0]?.failNextContext(new Error('context refused'));
+    await expect(driver.open('http://127.0.0.1:1/d')).rejects.toThrow('context refused');
+    await driver.open('http://127.0.0.1:1/e');
+    expect(launch.launches()).toBe(2);
+    expect(launch.later[0]?.closeCalls()).toBe(0);
+  });
+
+  it('does not let a late success from a replaced process reset the new one', async () => {
+    const { launch, driver, early } = await replaceHeldProcess();
+
+    launch.later[0]?.failNextContext(new Error('context refused'));
+    await expect(driver.open('http://127.0.0.1:1/d')).rejects.toThrow('context refused');
+    launch.held.succeed(0);
+    expect(await early).toBe('opened');
+
+    // The new process has now failed twice in a row, so it is replaced.
+    launch.later[0]?.failNextContext(new Error('context refused'));
+    await expect(driver.open('http://127.0.0.1:1/e')).rejects.toThrow('context refused');
+    expect(launch.later[0]?.closeCalls()).toBe(1);
+    await driver.open('http://127.0.0.1:1/f');
+    expect(launch.launches()).toBe(3);
+  });
+});
+
+describe('makeSharedBrowser close', () => {
+  it('shares one close between two concurrent close requests', async () => {
+    // Two plugin instances, or a close event and the bundle backstop, can both ask to close. The
+    // second request must not report closed while the process is still closing.
+    let finishClose: () => void = () => {};
+    let closeCalls = 0;
+    let closeFinished = false;
+    const inner = fakeLaunched();
+    const browser = {
+      newContext: (options?: unknown) => inner.browser.newContext(options as never),
+      isConnected: () => !closeFinished,
+      close: () => {
+        closeCalls += 1;
+        return new Promise<void>((resolve) => {
+          finishClose = () => {
+            closeFinished = true;
+            resolve();
+          };
+        });
+      },
+    } as unknown as LaunchedBrowser;
+    const shared = makeSharedBrowser({ launch: async () => browser });
+    await shared.driver({}).open('http://127.0.0.1:1/first');
+
+    let secondDone = false;
+    const first = shared.close();
+    const second = shared.close().then(() => {
+      secondDone = true;
+    });
+    await tick();
+    await tick();
+    expect(secondDone).toBe(false);
+
+    finishClose();
+    await Promise.all([first, second]);
+    expect(closeFinished).toBe(true);
+    expect(closeCalls).toBe(1);
+  });
+});
+
 describe('makeRealBrowserDriver', () => {
   it('is the one-shot shape: same open path, and its close ends the process', async () => {
     const launched = fakeLaunched();

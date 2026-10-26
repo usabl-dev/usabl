@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- The dev overlay's shared browser now counts failed context opens per browser process.
+  Before, one count served every process, so a late failure or success from a process
+  that had already been replaced was charged to the new one, and could retire a healthy
+  process or keep a wedged one. Two close requests that arrive together now share one
+  close, so the second no longer returns while the process is still closing.
+
 - Egress redaction now catches credential shapes it used to print: whitespace or a quote
   between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
   header segment or a JWT cut to two segments, the user name and password after `//` in
