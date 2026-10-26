@@ -119,8 +119,15 @@ passing bundle from another run.
   re-checks the stored receipt the same way before it trusts a green.
 - A receipt minted under a weakened policy matches that policy. If the weakening was
   committed during a session, the only binding that sees it is the session pins, so the stop
-  hook compares pins before it reads the stored receipt. Drift blocks the stop whether or not
-  a receipt matches.
+  hook compares pins before it reads the stored receipt. Detected drift prevents a VERIFIED
+  fast allow: the stop blocks on drift whether or not a receipt matches. During an active
+  continuation the hook allows once, marked NOT verified, and keeps the pins. When pins are
+  unavailable or refused, or the hook input carries no usable session id, a receipt allow says
+  `session drift not checked` and a notice says why.
+- The pin notices and the drift message print every carried value inside the untrusted frame:
+  drifted file paths, the session id from the hook input, the pin store's reasons and fixes
+  (which name directories from the environment), and error text. A guarded file name with a
+  line break and an instruction in it is printed as data, never as usabl's own words.
 - Future: signed attestation on the receipt (engineering §7).
 
 **Status:** Receipt bindings ship and re-verify; cross-run signing is still open.

@@ -1410,9 +1410,18 @@ included, as the baseline. The stop then goes on without the drift comparison. I
 not block, because a block would trap the session behind a file another user may
 control; this is the same fail-open choice as the exit 4 decision in the threat model.
 It is never silent. The decision line carries a note, for example `VERIFIED (exit 0,
-session drift not checked): ...`, and stderr ends with the reason and the fix:
-`NOT verified - usabl did not use session pins for this stop because ... To fix: delete
-<path>. The next stop records new pins for this session.`
+session drift not checked): ...`, and stderr ends with a notice: `NOT verified - usabl did
+not use session pins for this stop because the pin store refused to read them ... To fix:
+see "pin fix" in the untrusted text below.`, then an untrusted frame with `pin reason:` and
+`pin fix:`. The reason and fix name directories and files from the environment, so they are
+carried values and are printed only inside the frame. The same note and notice appear when
+the hook input has no session id, or one usabl cannot use as a file name; that id is printed
+only inside the frame too.
+
+Drift blocks with `NOT verified - guarded policy drift during this session: N guarded file(s)
+changed ...`, a next step, and the paths under `drifted files:` inside the frame, because a
+file name under a guarded directory is chosen by whoever adds the file. A hook error prints
+fixed text outside the frame and the error message inside it.
 
 What this does not cover:
 
@@ -1552,6 +1561,8 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   compared the pins and found no drift, "Guarded policy files match the session pins." comes
   before "No new scan ran." When the pins were not used, the line carries the
   `session drift not checked` note and the pin notice follows on stderr, as on a full run.
+  Detected drift prevents the fast allow: the stop blocks whether or not a receipt matches,
+  and during an active continuation it allows once, marked NOT verified, with the pins kept.
   The receipt's `sourceTree` follows inside the untrusted frame, because it was read from a
   file in the work tree.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected

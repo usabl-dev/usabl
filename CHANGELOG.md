@@ -7,9 +7,12 @@
 - The stop hook now compares session pins before it allows a stop on a stored receipt.
   Before, a matching receipt allowed the stop first, so a guarded policy file weakened and
   committed during the session, then checked with `usabl check` under the weaker policy,
-  produced a receipt that matched and a VERIFIED stop with no drift check. Now drift
-  blocks whether or not a receipt matches, and the fast path records and replaces pins as
-  a full run does. The fast-path line now names what the receipt matched (the tree, the
+  produced a receipt that matched and a VERIFIED stop with no drift check. Now detected
+  drift prevents a VERIFIED fast allow: the stop blocks on drift whether or not a receipt
+  matches. During an active continuation it allows once, marked NOT verified, and keeps
+  the pins. The fast path records and replaces pins as a full run does. A stop whose hook
+  input has no usable session id compares no pins, and its allow now says session drift
+  was not checked, on the fast path and on a full run. The fast-path line now names what the receipt matched (the tree, the
   committed policy, the engine, and the scanners), says no new scan ran, says the guarded
   files match the session pins only when this stop compared them, and carries the
   `session drift not checked` note and the pin notice when pins were not used.
@@ -111,6 +114,11 @@
 
 ### Security
 
+- The stop hook's pin notices and drift message now print carried values only inside
+  the untrusted frame: drifted file paths, the session id from the hook input, the pin
+  store's reasons and fixes, which name directories from the environment, and error text.
+  A file under a guarded directory whose name holds a line break and an instruction used
+  to print that instruction as a line of usabl's own output.
 - The stop hook and the self-check now seal by carrier, as the pull request comment
   already did. Every value a Result carries is printed inside the untrusted frame or is
   type-checked first, whoever wrote it. A barrier's rule and layer, the guarded file
