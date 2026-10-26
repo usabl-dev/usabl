@@ -93,7 +93,8 @@ const PATH_FOR_IMPL = `
 // Keep this the only implementation: the CLI and checkPage
 // must hear the same announcements, so a fix to what counts as a live region has to land in both
 // at once. It records the text of a live region each time something inside it changes, and
-// window.__usablDrain hands back what it recorded since the last drain.
+// window.__usablDrain hands back what it recorded since the last drain. It runs in the live world
+// below, so window here is that world's global, never the page's.
 const LIVE_CAPTURE_IMPL = `
   const LIVE = '[aria-live],[role="status"],[role="alert"],[role="log"]';
   const buffer = [];
@@ -131,11 +132,48 @@ const LIVE_CAPTURE_IMPL = `
   }
 `;
 
-// Inject before app scripts run so the first live update is observable and not lost.
-// Late injection would under-report announcements and create a false sense of coverage.
-export const LIVE_CAPTURE_INIT_SCRIPT = `(() => {
+// The world the live-region capture runs in. Page script shares the DOM with it but not its
+// globals or prototypes. A page could otherwise define or replace the drain and hand usabl
+// announcements no screen reader spoke, or redefine textContent so the capture records text the
+// region never held. A flow requirement that expects an announcement would then pass on the
+// page's word.
+const LIVE_WORLD = 'usabl-live';
+
+// The capture, run in the live world. The browser keeps one world per name and frame, so the guard
+// keeps one observer and one buffer per document however many times the script runs there: once
+// at document start on a page usabl opens, and once more when a caller adopts that page. Page
+// script cannot reach the guard, so it cannot stop the capture from installing.
+const LIVE_CAPTURE_SCRIPT = `(() => {
+  if (typeof window.__usablDrain === 'function') {
+    return;
+  }
   ${LIVE_CAPTURE_IMPL}
 })();`;
+
+// Reads and clears what the capture recorded. A document without the capture throws rather than
+// reporting silence, because silence would read as a page that announced nothing.
+const DRAIN_FUNCTION = `function () {
+  const drain = window.__usablDrain;
+  if (typeof drain !== 'function') {
+    throw new Error('the announcement capture is not running in this document');
+  }
+  const drained = drain();
+  return Array.isArray(drained) ? drained.filter((entry) => typeof entry === 'string') : [];
+}`;
+
+/**
+ * Starts the live-region capture in the live world: in every document the page loads from now on,
+ * at document start, and in the document it holds now. A page usabl opens has no document yet, so
+ * only the first applies.
+ */
+async function installLiveCapture(cdp: CDPSession, current: boolean): Promise<void> {
+  // The browser runs a new-document script only for a session that enabled the page domain.
+  await cdp.send('Page.enable');
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: LIVE_CAPTURE_SCRIPT, worldName: LIVE_WORLD });
+  if (current) {
+    await callInWorld(cdp, LIVE_WORLD, 'start the announcement capture', `function () { ${LIVE_CAPTURE_SCRIPT} }`);
+  }
+}
 
 // The world element paths are computed in. Page script shares the DOM with it but not its globals
 // or prototypes, so a page cannot hand back its own paths, and it cannot change the
@@ -158,15 +196,6 @@ const ACTIVE_PATH_FUNCTION = `function () {
   return pathFor(document.activeElement instanceof Element ? document.activeElement : null);
 }`;
 
-// Evaluated by adoptPage. Same LIVE_CAPTURE_IMPL as the init script, and
-// guarded the same way, so a page usabl opened, or one adopted twice, keeps its one observer and
-// its buffer. It hears only changes made after adoption, which is when a caller's checks start.
-export const INSTALL_LIVE_CAPTURE_SCRIPT = `(() => {
-  if (typeof window.__usablDrain === 'function') {
-    return;
-  }
-  ${LIVE_CAPTURE_IMPL}
-})();`;
 
 interface AxeResult {
   violations: AxeIssue[];
@@ -950,22 +979,13 @@ function wrapPage(
       }, selector);
     },
     async armAnnouncementCapture(): Promise<void> {
-      // The observer is already running: the init script installs it at document start on a page
-      // usabl opens, and adoptPage installs it on a page a caller hands in. Arming has nothing to do.
+      // The observer is already running: it starts at document start on a page usabl opens, and
+      // adoptPage starts it on a page a caller hands in. Arming has nothing to do.
       return Promise.resolve();
     },
     async drainAnnouncements(): Promise<string[]> {
-      return pw.evaluate(() => {
-        const drain = Reflect.get(window, '__usablDrain');
-        if (typeof drain !== 'function') {
-          return [];
-        }
-        const drained = drain();
-        if (!Array.isArray(drained)) {
-          return [];
-        }
-        return drained.filter((entry) => typeof entry === 'string');
-      });
+      const drained = await callInWorld(cdp, LIVE_WORLD, 'read announcements', DRAIN_FUNCTION);
+      return Array.isArray(drained) ? drained.filter((entry): entry is string => typeof entry === 'string') : [];
     },
     async activeNode(): Promise<AxNode | null> {
       const backendNodeId = await backendNodeIdForActiveElement(cdp);
@@ -1052,8 +1072,10 @@ export async function adoptPage(pw: PwPage): Promise<Page> {
   const cdp = await context.newCDPSession(pw);
   await cdp.send('Accessibility.enable');
   // Without this, armAnnouncementCapture and drainAnnouncements hear nothing on an adopted page, and
-  // a flow requirement that expects an announcement fails here while the CLI passes it.
-  await pw.evaluate(INSTALL_LIVE_CAPTURE_SCRIPT);
+  // a flow requirement that expects an announcement fails here while the CLI passes it. It hears
+  // only changes made after adoption, which is when a caller's checks start, and it also starts in
+  // any document the page navigates to afterwards.
+  await installLiveCapture(cdp, true);
   // The caller already navigated, so this tracker starts counting from adoption forward. A caller
   // that then uses gotoReady gets readiness measured against requests fired after adoption.
   const network = makeNetworkActivityTracker(pw);
@@ -1216,12 +1238,14 @@ export function makeSharedBrowser(
     // from the run's storage state stays alive with nothing holding it.
     try {
       const page = await context.newPage();
-      await page.addInitScript(LIVE_CAPTURE_INIT_SCRIPT);
       // Attach the in-flight tracker before navigating, so the navigation's own requests are
       // counted and readiness cannot read idle off a page whose first responses have not landed.
       const network = makeNetworkActivityTracker(page);
       const cdp = await context.newCDPSession(page);
       await cdp.send('Accessibility.enable');
+      // Before navigating, so the first live update the screen makes is heard. Late injection would
+      // under-report announcements and create a false sense of coverage.
+      await installLiveCapture(cdp, false);
       // open() owns navigation and gotoReady() only waits for readiness. Navigation takes the same
       // budget, so one config number covers the whole cost of reaching a screen.
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });

@@ -306,6 +306,34 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     }
   });
 
+  // The capture reads a live region's text. Page script that redefines textContent, or replaces
+  // the drain usabl reads, in its own world must not change what usabl hears.
+  const SPOOFING_SAVE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title></head><body>
+    <main><button type="button" id="save">Save</button><div role="status" id="message"></div></main>
+    <script>
+      Object.defineProperty(Node.prototype, 'textContent', {
+        get() { return 'Saved'; },
+        set(value) { this.replaceChildren(document.createTextNode(String(value))); },
+      });
+      window.__usablDrain = () => ['Saved'];
+      document.getElementById('save').addEventListener('click', () => {
+        document.getElementById('message').textContent = 'Not saved';
+        window.__usablDrain = () => ['Saved'];
+      });
+    </script>
+  </body></html>`;
+
+  it('hears what the live region says, not what page script reports', async () => {
+    const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(SPOOFING_SAVE_PAGE)}`);
+    try {
+      await page.click('#save');
+      const announcements = await page.drainAnnouncements();
+      expect(announcements).toEqual(['Not saved']);
+    } finally {
+      await page.close();
+    }
+  });
+
   it('adds a capability-denied gap when provider capabilities are disallowed', async () => {
     const deniedProviderRun = vi.fn(async () => []);
     const deniedProvider: Provider = {
