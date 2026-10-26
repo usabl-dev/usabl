@@ -1127,6 +1127,29 @@ describe('usablVitePlugin', () => {
     // Dependencies under node_modules are never annotated.
     expect(plugin.transform?.(raw, '/repo/node_modules/pkg/A.tsx')).toBeNull();
   });
+
+  it('serves a file it cannot parse unchanged and warns once, naming the file', () => {
+    // A file the injector cannot read must never turn into a dev server error. It is served as
+    // written, without source attributes, and the developer is told once which file that was.
+    const warnings: string[] = [];
+    const plugin = usablVitePlugin({
+      workspaceRoot: '/repo',
+      run: async () => baseResult({ findings: [] }),
+      logWarning: (message) => warnings.push(message),
+    });
+    plugin.configResolved?.({ command: 'serve' });
+    const broken = 'export const A = () => <div>unclosed;\n';
+
+    expect(plugin.transform?.(broken, '/repo/src/Broken.tsx')).toBeNull();
+    expect(plugin.transform?.(broken, '/repo/src/Broken.tsx')).toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('src/Broken.tsx');
+
+    // A file that parses is still annotated by the same plugin.
+    const fine = plugin.transform?.('export const B = () => <button>Go</button>;\n', '/repo/src/B.tsx');
+    expect(fine?.code).toContain('data-source-file="src/B.tsx"');
+    expect(warnings).toHaveLength(1);
+  });
 });
 
 describe('usablVitePluginFromConfig', () => {

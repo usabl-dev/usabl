@@ -223,3 +223,105 @@ describe('shouldInjectJsxSource', () => {
     expect(shouldInjectJsxSource('/app/src/Widget.ts')).toBe(false);
   });
 });
+
+describe('injectJsxSourceAttributes: elements with type arguments and other tag shapes', () => {
+  // The plugin runs before the host JSX transform, so it sees raw TSX. A component used with a type
+  // argument, such as <PageWizard<Data>>, used to get the attributes inside the type argument list.
+  // The file then failed to parse and the dev server answered 500 for every module importing it.
+  const TSX = 'src/pages/Wizard.tsx';
+  const injected = (line: number): string => `data-source-file="${TSX}" data-source-line="${line}"`;
+  const compiles = (out: string): void => {
+    expect(() => transformSync(out, { loader: 'tsx', jsx: 'automatic' })).not.toThrow();
+  };
+
+  it('puts the attributes after the type argument list of a generic element', () => {
+    const code = [
+      'export const W = () => (',
+      '  <PageWizard<SubscriptionWizardData> title="Subscribe">',
+      '    <p>Step</p>',
+      '  </PageWizard>',
+      ');',
+    ].join('\n');
+    const out = injectJsxSourceAttributes(code, TSX);
+    expect(out).toContain(`<PageWizard<SubscriptionWizardData> ${injected(2)} title="Subscribe">`);
+    expect(out).toContain(`<p ${injected(3)}>Step</p>`);
+    compiles(out);
+  });
+
+  it('puts the attributes after nested type arguments', () => {
+    const code = 'export const W = () => <A<B<C>>>text</A>;';
+    const out = injectJsxSourceAttributes(code, TSX);
+    expect(out).toBe(`export const W = () => <A<B<C>> ${injected(1)}>text</A>;`);
+    compiles(out);
+  });
+
+  it('handles a generic element inside a conditional expression', () => {
+    const code = [
+      'export const W = ({ open }: { open: boolean }) => (',
+      '  <div>',
+      '    {open ? <Modal<ModalProps> isOpen /> : <Empty<string> />}',
+      '  </div>',
+      ');',
+    ].join('\n');
+    const out = injectJsxSourceAttributes(code, TSX);
+    expect(out).toContain(`<Modal<ModalProps> ${injected(3)} isOpen />`);
+    expect(out).toContain(`<Empty<string> ${injected(3)} />`);
+    compiles(out);
+  });
+
+  it('puts the attributes after the type argument list of a self-closing generic element', () => {
+    const code = 'export const W = () => <Select<Option> value={v} onChange={(x: Option) => set(x)} />;';
+    const out = injectJsxSourceAttributes(code, TSX);
+    expect(out).toBe(
+      `export const W = () => <Select<Option> ${injected(1)} value={v} onChange={(x: Option) => set(x)} />;`,
+    );
+    compiles(out);
+  });
+
+  it('leaves a fragment alone and injects the elements inside it', () => {
+    const code = 'export const W = () => (<><Header<Item> /><span>x</span></>);';
+    const out = injectJsxSourceAttributes(code, TSX);
+    expect(out).toBe(
+      `export const W = () => (<><Header<Item> ${injected(1)} /><span ${injected(1)}>x</span></>);`,
+    );
+    compiles(out);
+  });
+
+  it('injects on a member-expression tag after the full name', () => {
+    const code = 'export const W = () => <Foo.Bar.Baz<T> label="x"><Foo.Item /></Foo.Bar.Baz>;';
+    const out = injectJsxSourceAttributes(code, TSX);
+    expect(out).toBe(
+      `export const W = () => <Foo.Bar.Baz<T> ${injected(1)} label="x"><Foo.Item ${injected(1)} /></Foo.Bar.Baz>;`,
+    );
+    compiles(out);
+  });
+
+  it('leaves a namespaced tag unchanged and still injects its neighbors', () => {
+    // A namespaced name such as svg:rect is neither a component nor a known HTML element.
+    const code = 'export const W = () => <svg><svg:rect width="1" /></svg>;';
+    const out = injectJsxSourceAttributes(code, TSX);
+    expect(out).toBe(`export const W = () => <svg ${injected(1)}><svg:rect width="1" /></svg>;`);
+    compiles(out);
+  });
+
+  it('does not treat a generic arrow function or a type assertion as a tag', () => {
+    const code = [
+      'const id = <T,>(value: T): T => value;',
+      'const pick = <K extends keyof Props>(key: K) => key;',
+      'export const W = () => <Grid<Row> rows={id<Row[]>([])} />;',
+    ].join('\n');
+    const out = injectJsxSourceAttributes(code, TSX);
+    expect(out.split('\n')[0]).toBe('const id = <T,>(value: T): T => value;');
+    expect(out.split('\n')[1]).toBe('const pick = <K extends keyof Props>(key: K) => key;');
+    expect(out.split('\n')[2]).toBe(`export const W = () => <Grid<Row> ${injected(3)} rows={id<Row[]>([])} />;`);
+    compiles(out);
+  });
+
+  it('passes a file it cannot parse through unchanged and reports it', () => {
+    const code = 'export const W = () => <div>unclosed;\n';
+    const reported: string[] = [];
+    const out = injectJsxSourceAttributes(code, TSX, (file) => reported.push(file));
+    expect(out).toBe(code);
+    expect(reported).toEqual([TSX]);
+  });
+});
