@@ -11,8 +11,37 @@
 
 - When the requirements files could not be loaded, the run stopped every scan and asked
   for approval, but did not say why. The loader's reason is now a `not-covered` coverage
-  gap that names the file. Because no screen was scanned, the accessibility half of the
-  result now reads `not_covered`; before, it read `verified`.
+  gap that names the file. When UI files changed, no screen was scanned, so the
+  accessibility half of the result now reads `not_covered`; before, it read `verified`.
+
+- Egress redaction now catches credential shapes it used to print: whitespace or a quote
+  between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
+  header segment or a JWT cut to two segments, the user name and password after `//` in
+  an address, such as an `HTTPS_PROXY` value, a key such as `PROXY_PASSWORD` or
+  `proxyPassword`, and GitHub tokens. A GitHub token pasted into the wrong key of
+  `usabl.config.json` is no longer repeated back in full in the unknown-key message.
+  Other base64 JSON, such as `?state=eyJ...` in a screen URL, is kept as written.
+
+- A page can no longer choose usabl's element identities or the announcements it hears.
+  Element paths came from `window.__usablPathFor` and announcements from
+  `window.__usablDrain`, both in the page's own JavaScript world. `checkPage` kept a
+  helper the page had already defined, and page script could replace the one usabl
+  installed, so a page could give every element one identity and hide a barrier, or pass
+  a flow requirement on an announcement no screen reader spoke. Both now run in isolated
+  worlds that page script cannot reach. An element is named by its id only when the id's
+  selector matches exactly that element, so a NUL id and a U+FFFD id get two identities.
+  A document where the capture is not running is now a coverage gap, never silence.
+
+- `usabl.config.json` now refuses a `surfaces[].url` or an `appBaseUrl` that carries a
+  user name or a password, such as `https://user:pass@host/screen`. Before, the URL was
+  printed as written in every report, including the pull request comment, so the
+  credential was published. The message names the field, such as `surfaces[1].url`, and
+  never prints the value. A URL with a query string or a fragment still loads unchanged,
+  so the overlay still matches gaps to screens, and the CLI, the stop hook, and the
+  dev-server plugin now print a warning that names the field and says the query or the
+  fragment is published. A value with no `//`, such as `admin:secret@localhost:3000/x`,
+  is refused too. The stop hook loads the config, so a config with a refused URL makes
+  the stop hook fail open with "NOT verified - stop hook error" until the URL is fixed.
 
 - The stop hook now blocks a stop on a verdict it does not recognize, and on a null
   verdict from a run that was neither idle nor a crash. Before, both read as NO VERDICT

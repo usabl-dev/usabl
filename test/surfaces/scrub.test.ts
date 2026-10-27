@@ -8,6 +8,7 @@ import {
   redactSecrets,
   removeFrameMarkers,
   scrubResult,
+  scrubString,
 } from '../../src/surfaces/scrub.js';
 
 function buildJwtLikeValue(): string {
@@ -703,5 +704,118 @@ describe('secret redaction through invisible characters inside a value', () => {
     // Two patterns cover an authorization header. They are one credential seen two ways, so the
     // widest match is what gets written, rather than one redaction inside another.
     expect(redactSecrets('Authorization: Bearer secret123')).toBe('Authorization: Bearer [REDACTED]');
+  });
+});
+
+describe('egress redaction of credential shapes the patterns used to miss', () => {
+  // Every credential-shaped fixture here is low entropy, and the token-shaped ones are assembled
+  // at run time from parts, so no complete token appears in the source.
+  const POISON = 'SECRETPOISON';
+  const githubToken = ['gh', 'p_', POISON.repeat(3)].join('');
+  const githubPat = ['github', '_pat_', POISON.repeat(3)].join('');
+  // A JWT header names its algorithm, type, or key id first, so its base64 opens with one of three
+  // prefixes. A payload is a JSON object too, so it opens with "eyJ".
+  const jwtHeader = ['ey', 'JhbGci', POISON].join('');
+  const jwtTypHeader = ['ey', 'J0eXAi', POISON].join('');
+  const jwtKidHeader = ['ey', 'JraWQi', POISON].join('');
+  const jwtPayload = ['ey', 'J', POISON, POISON].join('');
+
+  function egress(text: string): string {
+    return JSON.stringify(scrubResult(baseResult({ summary: text, findings: [baseFinding({ whatUserExperiences: text })] })));
+  }
+
+  it('redacts a credential with whitespace or a quote between its key and its separator', () => {
+    for (const text of [
+      `token = ${POISON}`,
+      `token : ${POISON}`,
+      `"token": "${POISON}"`,
+      `'token' : '${POISON}'`,
+      `token= " ${POISON}"`,
+      `TOKEN\t=\t${POISON}`,
+      `password = ${POISON}`,
+      `"password": "${POISON}"`,
+      `secret : ${POISON}`,
+    ]) {
+      expect(egress(text), text).not.toContain(POISON);
+    }
+  });
+
+  it('redacts a lone JWT header segment and a JWT with two segments', () => {
+    for (const text of [
+      `id ${jwtHeader} end`,
+      jwtHeader,
+      jwtTypHeader,
+      jwtKidHeader,
+      `${jwtHeader}.`,
+      `${jwtPayload}.${jwtPayload}`,
+      `${jwtHeader}.${jwtPayload}`,
+    ]) {
+      expect(egress(text), text).not.toContain(POISON);
+    }
+  });
+
+  it('keeps ordinary base64 JSON in a URL as written, so the overlay still matches the screen', () => {
+    // scrubResult rewrites screen urls, affected urls, and gap refs, and the overlay compares them
+    // with the live location. A query or path segment that only happens to be base64 JSON is not
+    // a token, and rewriting it would orphan the screen.
+    const state = ['ey', 'JmaWx0ZXIiOiJhIn0'].join('');
+    const url = `http://127.0.0.1:5173/clusters?state=${state}`;
+    expect(scrubString(url)).toBe(url);
+    expect(scrubString(`http://127.0.0.1:5173/share/${state}`)).toBe(`http://127.0.0.1:5173/share/${state}`);
+    const scrubbed = scrubResult(
+      baseResult({
+        coverage: {
+          changedFiles: [],
+          affected: [{ screenId: 'clusters', url, provenance: 'manual' }],
+          unresolvedFiles: [],
+          gaps: [{ ref: url, state: 'not-covered', reason: 'timeout' }],
+          nothingToCheck: false,
+        },
+      }),
+    );
+    expect(scrubbed.coverage.affected[0]?.url).toBe(url);
+    expect(scrubbed.coverage.gaps[0]?.ref).toBe(url);
+  });
+
+  it('redacts proxy credentials in a proxy URL and in a proxy password', () => {
+    for (const text of [
+      `HTTPS_PROXY=http://user:${POISON}@proxy.local:3128`,
+      `https_proxy=http://${POISON}@proxy.local:3128`,
+      `proxy at http://us@er:${POISON}@proxy.local:3128 refused`,
+      `PROXY_PASSWORD = ${POISON}`,
+      `PROXY_PASSWORD=${POISON}`,
+    ]) {
+      expect(egress(text), text).not.toContain(POISON);
+    }
+  });
+
+  it('redacts a proxy password carried under its own key', () => {
+    const raw = baseResult({
+      findings: [
+        baseFinding({
+          evidence: { extra: { PROXY_PASSWORD: POISON, proxyPassword: POISON, proxy_secret: POISON, requiredTokens: ['name'] } },
+        }),
+      ],
+    });
+    const json = JSON.stringify(scrubResult(raw));
+    expect(json).not.toContain(POISON);
+    expect(json).toContain('"requiredTokens":["name"]');
+  });
+
+  it('redacts GitHub tokens', () => {
+    for (const text of [`key ${githubToken}`, githubToken, `pat=${githubPat}`]) {
+      expect(egress(text), text).not.toContain(POISON);
+    }
+  });
+
+  it('leaves an @ outside a URL authority, and a URL with no credentials, alone', () => {
+    for (const text of [
+      'https://app.local/users/@alice',
+      'mail ops@app.local about it',
+      'https://app.local:8443/clusters?q=a@b',
+      'see // the note by @alice',
+    ]) {
+      expect(scrubString(text), text).toBe(text);
+    }
   });
 });

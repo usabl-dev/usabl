@@ -1192,7 +1192,7 @@ for a screen Rule B fires on wrongly, and for a screen whose identity call is re
 token refresh. It is only as good as what it names: see the paragraphs above on what a shell
 selector and a public shell cost.
 
-#### A credential in a configured surface URL is echoed everywhere
+#### A credential in a configured surface URL is refused, and a query is echoed
 
 Text that comes off the page is sanitized before it is published. A coverage gap reason strips the
 userinfo, the query, and the fragment from every address it names, and shortens a refused request
@@ -1212,13 +1212,26 @@ position is protected.
 Configured surface URLs are not page text and are not sanitized. `gap.ref`, `ScreenScan.url`, and
 `coverage.affected[].url` carry the operator's own `usabl.config.json` value verbatim into the
 Result, and from there into the CLI output, the overlay, and the pull request comment. That is
-deliberate and predates the sanitizing above: the overlay attributes a gap to a screen by comparing
-these values exactly, so rewriting one would silently orphan the gap it belongs to.
+deliberate: the overlay attributes a gap to a screen by comparing these values exactly, so
+rewriting one would silently orphan the gap it belongs to.
 
-The consequence is a residual an operator has to know about. A credential written into a surface
-URL, whether HTTP basic userinfo (`https://user:pass@host/screen`), a preview token in the query,
-or anything in the fragment, will be echoed by every surface that renders a Result, including a
-comment posted to a public pull request. Do not put one in `usabl.config.json`. Reach a protected
+So the loader keeps the value and refuses what must not be published. A `surfaces[].url` or an
+`appBaseUrl` that carries userinfo (`https://user:pass@host/screen`, or a user name alone) is
+refused when the config is read, because every discovered route url is built from `appBaseUrl`.
+The message names the field, such as `surfaces[1].url`, and never prints the value. Userinfo is
+found three ways, and any one refuses the value. URL parsing finds it the way a browser does,
+through a backslash for a slash or a tab inside the name. Two shape checks then run on every value,
+with backslashes read as slashes: an `@` in the authority after `//`, and an `@` before the first
+`/`, `?`, or `#`. The second catches a value with no `//`, such as `admin:secret@localhost:3000/x`,
+where URL parsing reads `admin:` as a scheme and finds no password. An `@` later in the path, the
+query, or the fragment is accepted.
+
+A query string or a fragment is accepted, because applications select screens by both, and it is
+still printed as written. The CLI, the stop hook, and the dev-server plugin print a warning on
+stderr each time they load the config. It names the field, never the value, and says that anything
+in the query or the fragment is published. The residual an operator has to know about: a preview token in the query, or anything
+in the fragment, is still echoed by every surface that renders a Result, including a comment
+posted to a public pull request. Do not put one in `usabl.config.json`. Reach a protected
 environment with a storage state, which never enters committed config, instead.
 
 ### Documentation coverage
@@ -1813,10 +1826,20 @@ the only verdict authority. It also acts on the caller's page: the keyboard walk
 the PatternFly probes open and close dialogs and menus, and each flow requirement on the page's
 surface runs its authored steps, clicks and key presses, on that page.
 
-`adoptPage` installs the same live-region capture the CLI's init script installs, from one
-shared source in `src/deps/real.ts`, guarded so a page that already has it keeps its one
-observer. So a flow requirement that expects an announcement hears the same text in both. On an
-adopted page the capture starts at adoption, not at document start.
+`adoptPage` installs the same live-region capture the CLI installs, from one shared source in
+`src/deps/real.ts`. So a flow requirement that expects an announcement hears the same text in both.
+On an adopted page the capture starts at adoption, not at document start, and it also starts in
+any document the page navigates to afterwards.
+
+The capture and the element path function run in isolated worlds, which share the DOM with the
+page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
+page that defines `window.__usablDrain` or `window.__usablPathFor` before adoption, or replaces
+them after load, changes nothing usabl reads, and neither does a page that redefines
+`textContent`, `querySelectorAll`, or `CSS.escape` in its own world. A document where the capture
+is not running is an error, which the check runner turns into a coverage gap, never an empty list
+of announcements. An element is named by its id only when that id's selector matches exactly the
+element in hand, so two ids that escape to one selector, such as a NUL and a literal U+FFFD, give
+two identities.
 
 A requirement is matched to the page by `options.screenId`, the surface id the page is. Each
 runtime requirement is checked on the page when its surface is the page's surface, and is out
