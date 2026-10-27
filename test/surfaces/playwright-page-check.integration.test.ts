@@ -332,6 +332,40 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage runs the desig
     }
   });
 
+  // Announcements used to be read through window.__usablDrain, a function in the page's own world.
+  // A page could define one before adoption, or replace usabl's after load, and hand usabl an
+  // announcement no screen reader spoke. Neither may pass a flow requirement.
+  it('does not pass a flow requirement on announcements from a drain the page defined before adoption', async () => {
+    html = silentSavePage(`window.__usablDrain = () => ['Saved'];`);
+    const { dir } = await makeProject({ 'save.yaml': SAVE_REQUIREMENT });
+    const { context, page } = await openUrl(`${baseUrl}/clusters`);
+    try {
+      const result = await checkPage(page, { screenId: 'clusters', projectRoot: dir, tabCap: 10 });
+      expect(result.verdict).not.toBe('verified');
+      expect(result.failures.map((f) => f.rule)).toContain('intake:save-announces');
+    } finally {
+      await context.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not pass a flow requirement on announcements from a drain the page replaced after load', async () => {
+    html = silentSavePage(`window.addEventListener('load', () => { window.__usablDrain = () => ['Saved']; });`);
+    const { dir, config } = await makeProject({ 'save.yaml': SAVE_REQUIREMENT });
+    try {
+      const deps = await buildDeps(config, { cwd: dir, env: {} });
+      try {
+        const scan = await deps.checkRunner.scan({ id: 'clusters', url: `${baseUrl}/clusters` });
+        const failures = scan.drafts.filter((d) => d.confidence === 'fail').map((d) => d.rule);
+        expect(failures).toContain('intake:save-announces');
+      } finally {
+        await deps.browser.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('is not_covered, and names the root, when the caller passes a projectRoot with no usabl.config.json', async () => {
     html = headingPage('Clusters');
     const empty = await mkdtemp(join(tmpdir(), 'usabl-checkpage-empty-'));
@@ -400,6 +434,14 @@ const SAVE_PAGE = `<!doctype html>
     </script>
   </body>
 </html>`;
+
+// The save page with a Save button that announces nothing, and a script of the page's own.
+function silentSavePage(script: string): string {
+  return SAVE_PAGE.replace("document.getElementById('message').textContent = 'Saved';", '').replace(
+    '</body>',
+    `<script>${script}</script></body>`,
+  );
+}
 
 const SAVE_REQUIREMENT = `version: 1
 requirements:

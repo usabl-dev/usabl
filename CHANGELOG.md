@@ -10,6 +10,24 @@
   usabl did not reach a verdict, so the run proved nothing about the change, the same
   reading the stop hook and the self-check give that state.
 
+- Egress redaction now catches credential shapes it used to print: whitespace or a quote
+  between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
+  header segment or a JWT cut to two segments, the user name and password after `//` in
+  an address, such as an `HTTPS_PROXY` value, a key such as `PROXY_PASSWORD` or
+  `proxyPassword`, and GitHub tokens. A GitHub token pasted into the wrong key of
+  `usabl.config.json` is no longer repeated back in full in the unknown-key message.
+  Other base64 JSON, such as `?state=eyJ...` in a screen URL, is kept as written.
+
+- A page can no longer choose usabl's element identities or the announcements it hears.
+  Element paths came from `window.__usablPathFor` and announcements from
+  `window.__usablDrain`, both in the page's own JavaScript world. `checkPage` kept a
+  helper the page had already defined, and page script could replace the one usabl
+  installed, so a page could give every element one identity and hide a barrier, or pass
+  a flow requirement on an announcement no screen reader spoke. Both now run in isolated
+  worlds that page script cannot reach. An element is named by its id only when the id's
+  selector matches exactly that element, so a NUL id and a U+FFFD id get two identities.
+  A document where the capture is not running is now a coverage gap, never silence.
+
 - `usabl.config.json` now refuses a `surfaces[].url` or an `appBaseUrl` that carries a
   user name or a password, such as `https://user:pass@host/screen`. Before, the URL was
   printed as written in every report, including the pull request comment, so the

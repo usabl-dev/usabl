@@ -640,6 +640,27 @@ describe('parseUsablConfig noiseBudget', () => {
   });
 });
 
+describe('parseUsablConfig unknown key message', () => {
+  it('does not repeat a key name shaped like a GitHub token', () => {
+    // A misspelled key is repeated back so the operator can find it. A key that is a token, pasted
+    // into the wrong place, must not be printed in full.
+    const POISON = 'SECRETPOISON';
+    const tokenKey = ['gh', 'p_', POISON.repeat(3)].join('');
+    let message = '';
+    try {
+      parseUsablConfig(
+        configJson({
+          surfaces: [{ id: 'overview', url: 'http://127.0.0.1:5173/overview', files: ['src/Overview.tsx'], reachedWhen: { [tokenKey]: 'main' } }],
+        }),
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('unknown key');
+    expect(message).not.toContain(POISON);
+  });
+});
+
 describe('parseUsablConfig configured URL credentials', () => {
   // A surface URL is printed as written in every report: gap refs, screen urls, and affected
   // urls all carry it, and the pull request comment publishes them. A credential written into one
