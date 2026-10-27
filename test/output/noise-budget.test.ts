@@ -55,6 +55,23 @@ describe('collapseFindingsByRule', () => {
 
     expect(groups[0]?.rule).toBe('new');
   });
+
+  it('never puts findings of different status in one group', () => {
+    // A group prints one status. A new and a waived finding on one rule shared a group, so the
+    // waived one was counted as a second new barrier.
+    const groups = collapseFindingsByRule([
+      finding({ rule: 'a', status: 'new', elementKey: 'k1' }),
+      finding({ rule: 'a', status: 'waived', elementKey: 'k2' }),
+      finding({ rule: 'a', status: 'carried', elementKey: 'k3' }),
+      finding({ rule: 'a', status: 'carried', elementKey: 'k4' }),
+    ]);
+
+    expect(groups.map((group) => [group.status, group.count])).toEqual([
+      ['new', 1],
+      ['carried', 2],
+      ['waived', 1],
+    ]);
+  });
 });
 
 describe('applyNoiseBudget', () => {

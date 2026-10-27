@@ -1150,3 +1150,48 @@ describe('pr comment collapsed headline', () => {
     expect(lines.some((line) => line.trimStart().startsWith('rule: '))).toBe(false);
   });
 });
+
+describe('pr comment collapse never mixes statuses', () => {
+  // A collapsed group prints one status, taken from its first finding. A new finding and a waived
+  // one on the same screen and rule used to share a group, so the waived finding was counted inside
+  // "[new serious] … (×2)" and in "2 gating findings", and read as a second barrier that blocks.
+  const noGaps = { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false };
+
+  it('keeps a new and a waived finding on one rule apart', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        findings: [
+          baseFinding({ rule: 'link-name', elementKey: 'k-new' }),
+          baseFinding({ rule: 'link-name', status: 'waived', elementKey: 'k-waived' }),
+        ],
+        coverage: noGaps,
+      }),
+    );
+
+    expect(markdown).not.toContain('(×2)');
+    expect(markdown).not.toContain('2 gating findings');
+    expect(markdown).not.toContain('### Findings (collapsed by rule)');
+    const lines = markdown.split('\n');
+    const newStart = lines.indexOf('### New barriers');
+    const knownStart = lines.indexOf('### Known (recorded debt)');
+    const items = (from: number) =>
+      lines.slice(from + 1, lines.findIndex((line, index) => index > from && line.startsWith('### '))).filter((line) => line.startsWith('- '));
+    expect(items(newStart)).toEqual(['- &#91;`serious`&#93; `clusters` - `axe/link-name`']);
+    expect(items(knownStart)).toEqual(['- &#91;`waived serious`&#93; `clusters` - `axe/link-name`']);
+  });
+
+  it('counts only findings that gate as gating in the collapsed view', () => {
+    const findings = [
+      ...Array.from({ length: 6 }, (_, index) => baseFinding({ rule: `rule-${index}`, elementKey: `k-${index}` })),
+      baseFinding({ rule: 'rule-0', status: 'carried', elementKey: 'k-carried-a' }),
+      baseFinding({ rule: 'rule-0', status: 'carried', elementKey: 'k-carried-b' }),
+    ];
+    const markdown = projectPrComment(baseResult({ findings, coverage: noGaps }));
+
+    expect(markdown).toContain('### Findings (collapsed by rule)');
+    expect(markdown).not.toContain('8 gating findings');
+    expect(markdown).toContain('Of these, 6 gate this run and 2 are recorded debt that does not block it.');
+    expect(markdown).toContain('- &#91;`new serious`&#93; `clusters`/`axe/rule-0`');
+    expect(markdown).not.toContain('`axe/rule-0` (×3)');
+  });
+});

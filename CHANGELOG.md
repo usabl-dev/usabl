@@ -9,7 +9,9 @@
   as recorded debt. The known section is now `### Known (recorded debt)` and lists carried
   and waived findings, each with its status, and the collapsed view includes them too. A
   collapsed group also names its screen id and rule once, in its headline, instead of
-  again on a `rule:` line under it.
+  again on a `rule:` line under it. A collapsed group never mixes findings of different
+  status, so a carried or waived finding is never counted inside a new one, and the hint
+  counts as gating only the findings that gate.
 
 - The stop hook now compares session pins before it allows a stop on a stored receipt.
   Before, a matching receipt allowed the stop first, so a guarded policy file weakened and

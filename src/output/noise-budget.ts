@@ -69,8 +69,10 @@ const EVIDENCE_RANK: Record<Finding['evidenceClass'], number> = {
 // Injective key: JSON-encode the tuple so a '|' inside a screenId, layer, or rule cannot collide
 // two distinct groups into one (the same delimiter trap the identity key avoids). evidenceClass is
 // part of the key so a deterministic finding and an advisory finding of the same rule never merge.
+// status is part of it because a group prints one status: a new and a waived finding on one rule
+// would otherwise read as two new barriers.
 function groupKey(finding: Finding): string {
-  return JSON.stringify([finding.screenId, finding.layer, finding.rule, finding.evidenceClass]);
+  return JSON.stringify([finding.screenId, finding.layer, finding.rule, finding.evidenceClass, finding.status]);
 }
 
 function groupRank(group: CollapsedFindingGroup): string {

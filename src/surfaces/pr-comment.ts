@@ -16,7 +16,7 @@ import type {
 import { neutralize } from '../primitives/neutralize.js';
 import { NOT_A_LIST, ownEntry, wholeNumberText } from '../output/carried.js';
 import { computeConformance } from '../output/conformance.js';
-import { fixOrAbsence } from '../output/disclosure.js';
+import { fixOrAbsence, isBlockingBarrier } from '../output/disclosure.js';
 import {
   applyNoiseBudget,
   formatCollapsedGroupCount,
@@ -395,7 +395,13 @@ function formatCollapsedFinding(group: CollapsedFindingGroup): string[] {
 }
 
 function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): string[] {
-  const view = applyNoiseBudget(findings, resolveNoiseBudgetDefault(config), 'gating findings');
+  // The collapsed list holds new findings and recorded debt. Only the findings the gate blocks on
+  // are called gating, so the hint says "gating" only when every finding in it gates, and
+  // otherwise names the deterministic total and then how many of them gate.
+  const gatingCount = findings.filter(isBlockingBarrier).length;
+  const recordedCount = findings.length - gatingCount;
+  const noun = recordedCount === 0 ? 'gating findings' : 'deterministic findings';
+  const view = applyNoiseBudget(findings, resolveNoiseBudgetDefault(config), noun);
   // Render the collapsed view whenever the shown groups do not map one to one to findings, whether
   // that is from grouping repeated rules or from the budget hiding groups. Checking only collapsed
   // dropped the grouped-but-not-truncated case back to a raw, hint-less list.
@@ -407,6 +413,12 @@ function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): str
     ...view.groups.flatMap((group) => formatCollapsedFinding(group)),
     '',
     `_${view.showAllHint ?? ''}_`,
+    ...(recordedCount === 0
+      ? []
+      : [
+          '',
+          `_Of these, ${wholeNumber(gatingCount)} gate this run and ${wholeNumber(recordedCount)} are recorded debt that does not block it._`,
+        ]),
   ];
 }
 
@@ -521,8 +533,9 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
   // Recorded debt is what the gate already accepted: carried against the evidence floor, or
   // waived. Both are listed, the way the terminal and the overlay list them. A waived finding was
   // once in no lane at all, because the lanes were new, carried, and advisory, so it vanished
-  // from this comment while the other surfaces showed it. Fixed findings stay out, as they do on
-  // the other surfaces, because the run proved them gone.
+  // from this comment while the other surfaces showed it. Fixed findings are not listed here, as
+  // they are not in the terminal report, because this run did not observe them. The overlay does
+  // list them, and this comment counts them on the conformance summary's deterministic line.
   const deterministicRecorded = safe.findings.filter(
     (finding) =>
       finding.evidenceClass === 'deterministic' &&
