@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- The terminal report printed `NO VERDICT: IDLE` for a null verdict on a run that had
+  something to check, which is the shape of a failed run, not an idle one. It now prints
+  IDLE only when there was nothing to check. Otherwise it prints `NO VERDICT` and says
+  usabl did not reach a verdict, so the run proved nothing about the change, the same
+  reading the stop hook and the self-check give that state.
+
 - Egress redaction now catches credential shapes it used to print: whitespace or a quote
   between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
   header segment or a JWT cut to two segments, the user name and password after `//` in
