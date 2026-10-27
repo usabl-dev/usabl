@@ -175,7 +175,16 @@ comments.
   unjoined form as well because the bare-JWT pattern depends on a word boundary that stripping
   can remove.
 - Key-based redaction of Result fields is the structural layer and does not depend on the text
-  at all. Value patterns are a heuristic over the printed text.
+  at all. Value patterns are a heuristic over the printed text. A key also counts as a secret
+  when it ends in password, passwd, secret, or token after a separator or a camel-case join, such
+  as `PROXY_PASSWORD` or `proxyPassword`.
+- The value patterns also cover shapes they used to miss: whitespace or a quote between a key and
+  its separator (`token = ...`, `"password": "..."`), a JWT cut to two segments, a lone JWT
+  header segment (one whose base64 opens with `eyJhbGci`, `eyJ0eXAi`, or `eyJraWQi`), the userinfo
+  after `//` in an address (`http://user:pass@proxy:3128`, as in `HTTPS_PROXY`), and GitHub
+  tokens by their prefix. Any other lone base64 JSON, such as `?state=eyJ...` in a screen URL, is
+  kept as written, because the overlay matches screen URLs and gap refs against the live location. The last one matters for config errors: a token pasted into the
+  wrong key used to be repeated back in full in the unknown-key message.
 
 **Status:** [x] Local-first; egress redaction and neutralization ship, with anchors matched
 through invisible characters and redaction on both sides of the strip. [ ] Telemetry decision
@@ -433,7 +442,11 @@ characters of back-to-back credentials take roughly 0.7 s to redact, and roughly
 a 100 MiB peak when a look-through character is present, against about 0.1 s before the
 value-split fix. Ordinary large text got faster. This is a denial-of-service hardening item
 for later, not a correctness defect: every span is still redacted, and the surface-level
-field caps limit what reaches an agent.
+field caps limit what reaches an agent. Addresses with userinfo are now redacted spans too.
+Measured on one machine, 2.8 million characters made of nothing but `http://u:p@h/ ` took 1.6 to
+2.8 s to scrub, about 0.6 to 1.0 microseconds per character, against 66 to 92 ms (about 0.03
+microseconds per character) before. Ordinary text with plain URLs, 2.9 million characters, took 98
+to 344 ms against 78 to 270 ms before.
 
 **Status:** [x] All three controls ship. The bidirectional controls are the full Unicode
 `Bidi_Control` set. Eleven splitters, every split position, the reordering payload, eight
@@ -441,6 +454,36 @@ renderer forgeries, and the block-markup and autolink forms are covered by tests
 Post-render autolinks are mitigated by the code spans, as above. [ ] usabl does not report
 that a page attempted a forgery; it removes them silently. [ ] Compatibility-normalized
 markers are out of scope, as above. [ ] Credential-dense input cost is open, as above.
+
+---
+
+## Threat 10: Page script that answers for usabl
+
+**Attack:** a hostile page defines or replaces the functions usabl reads the page through. Two
+were reachable from page script: `window.__usablPathFor`, which names each element, and
+`window.__usablDrain`, which hands back the live-region text usabl heard. A page that returned one
+path for every element collapsed every identity, so a set difference such as "alerts minus alerts
+inside a live region" came out empty and a barrier read as fixed. A page that returned its own
+announcements passed a flow requirement on text no screen reader spoke.
+
+**Controls:**
+
+- The path function and the live-region capture run in isolated worlds over CDP, as the toast
+  ancestor walk already did. Page script shares the DOM with them but not their globals or
+  prototypes, so it cannot define, replace, or read them, and redefining `textContent`,
+  `querySelectorAll`, or `CSS.escape` in its own world does not change what they read.
+- The path function is sent with every query, so there is no installed helper to trust. The
+  capture is started at document start on a page usabl opens and at adoption on a caller's page,
+  and a document where it is not running is an error, which becomes a coverage gap.
+- An element is named by its id only when the id's selector matches exactly that element. A NUL id
+  and a literal U+FFFD id escape to one selector and now get two identities.
+
+**Not handled:** other reads still run in the page's own world, such as the focus checks
+(`activeElementIs`, `activeElementWithin`), the computed style read, and the zoom write. A page
+can change what those see by redefining DOM methods.
+
+**Status:** [x] Paths and announcements read in isolated worlds. [ ] The remaining main-world
+reads are open.
 
 ---
 
@@ -468,7 +511,10 @@ entirely. That is a worse integrity outcome than an honest unverified allow.
   this policy.
 
 **Not this decision:** `regression`, `not_covered`, and `approval_required` still
-block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`.
+block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`. A verdict the
+hook does not recognize, and a null verdict on a run that was neither idle nor exit 4, block: they
+are not a crash the operator needs to escape, and allowing them would read an unknown answer as a
+pass.
 
 **Status:** [x] Recorded. Matches the shipped Stop hook and runner error paths.
 
@@ -545,6 +591,7 @@ operator must set the engine SHA before the gate can run.
 | axe-core | MPL-2.0 | Dynamic link; surface version in output |
 | Playwright | Apache-2.0 | Browser binaries separate terms |
 | PatternFly | MIT | Rulepack data only |
+| @babel/parser | MIT | Pinned exactly. Reads JSX and TypeScript source; parser only. Brings @babel/types, @babel/helper-string-parser, and @babel/helper-validator-identifier, all MIT |
 | Guidepup (if adopted) | MIT | Optional phrasing validation |
 
 **usabl release license:** Apache-2.0 (repo `LICENSE`). MPL boundary: do not vendor

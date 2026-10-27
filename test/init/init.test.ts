@@ -95,7 +95,7 @@ export function App() {
     expect(draft.notes.some((note) => note.includes('/lazy'))).toBe(true);
   });
 
-  it('skips nested relative route paths instead of inventing a root-absolute URL', async () => {
+  it('joins a nested relative route path to its parent instead of inventing a root-absolute URL', async () => {
     const fs = memoryFs(
       fixtureFiles({
         'src/App.tsx': `import { Route, Routes } from 'react-router-dom'
@@ -118,11 +118,17 @@ export function App() {
     );
 
     const draft = await inferInit(fs);
-    expect(draft.routes.routes.find((route) => route.url.includes('profile'))).toBeUndefined();
+    // The router nests profile under /settings, so React Router serves it at /settings/profile.
+    // The layout route has a child, and its component also renders on the child's URL, so it is
+    // not attributed: a change to the layout must not read as covered by one screen.
+    expect(draft.routes.routes).toEqual([
+      { screenId: 'settings', url: '/settings', entryFile: null },
+      { screenId: 'settings-profile', url: '/settings/profile', entryFile: 'src/pages/Profile.tsx' },
+    ]);
     expect(draft.routes.routes).not.toContainEqual(
       expect.objectContaining({ url: '/profile' }),
     );
-    expect(draft.notes.some((note) => note.includes('profile') && note.toLowerCase().includes('review'))).toBe(
+    expect(draft.notes.some((note) => note.includes('/settings') && note.includes('no proven entry file'))).toBe(
       true,
     );
   });
@@ -169,6 +175,151 @@ export const router = createBrowserRouter([{ path: '/only', element: <Page /> }]
     const draft = await inferInit(fs);
     expect(draft.config.discovery.routerFile).toBe('src/router.tsx');
     expect(draft.routes.routes.some((route) => route.url === '/only')).toBe(true);
+  });
+});
+
+describe('inferInit reads routes from the parsed router', () => {
+  const routerFiles = (app: string): Record<string, string> =>
+    fixtureFiles({
+      'src/App.tsx': app,
+      'src/pages/Home.tsx': 'export function Home() { return null }\n',
+      'src/pages/Account.tsx': 'export function Account() { return null }\n',
+      'src/pages/Decoy.tsx': 'export function Decoy() { return null }\n',
+    });
+
+  it('does not attribute a stray <Route> outside the router to the real route with the same path', async () => {
+    // The stray tag's component used to win the merge over the data-router entry, so init wrote
+    // the decoy's file into the sidecar as the entry file for /account.
+    const app = `import { createBrowserRouter } from 'react-router-dom'
+import { Route } from 'react-router-dom'
+import { Decoy } from './pages/Decoy'
+
+export const example = <Route path="/account" element={<Decoy />} />
+
+export const router = createBrowserRouter([
+  { path: '/account', element: <div /> },
+])
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([{ screenId: 'account', url: '/account', entryFile: null }]);
+  });
+
+  it('names a route outside the router in a Review note, with its line', async () => {
+    const app = `import { Route, Routes } from 'react-router-dom'
+import { Home } from './pages/Home'
+import { Account } from './pages/Account'
+
+export const Modal = () => <Route path="/account" element={<Account />} />
+
+export function App() {
+  return (
+    <Routes>
+      <Route path="/home" element={<Home />} />
+    </Routes>
+  )
+}
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([{ screenId: 'home', url: '/home', entryFile: 'src/pages/Home.tsx' }]);
+    expect(draft.notes.some((note) => note.startsWith('Review: src/App.tsx line 5:'))).toBe(true);
+  });
+
+  it('writes no route and names the file when it has routes but no router', async () => {
+    // With no router in the file, usabl cannot tell which routes are real, so it reads none of
+    // them and says so once for the file, instead of guessing.
+    const app = `import { Route } from 'react-router-dom'
+import { Account } from './pages/Account'
+
+export const AccountRoute = () => <Route path="/account" element={<Account />} />
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([]);
+    expect(draft.notes.some((note) => note.startsWith('Review: src/App.tsx:') && note.includes('no router'))).toBe(true);
+  });
+
+  it('reads a route whose element comes before its path, and one with ">" in an attribute string', async () => {
+    const app = `import { Route, Routes } from 'react-router-dom'
+import { Home } from './pages/Home'
+import { Account } from './pages/Account'
+
+export function App() {
+  return (
+    <Routes>
+      <Route element={<Home />} path="/home" />
+      <Route title="a > b" path="/account" element={<Account />} />
+    </Routes>
+  )
+}
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([
+      { screenId: 'home', url: '/home', entryFile: 'src/pages/Home.tsx' },
+      { screenId: 'account', url: '/account', entryFile: 'src/pages/Account.tsx' },
+    ]);
+  });
+
+  it('ignores a commented-out route and a commented-out import', async () => {
+    const app = `import { Route, Routes } from 'react-router-dom'
+// import { Home } from './pages/Decoy'
+import { Home } from './pages/Home'
+
+export function App() {
+  return (
+    <Routes>
+      {/* <Route path="/old" element={<Home />} /> */}
+      <Route path="/home" element={<Home />} />
+    </Routes>
+  )
+}
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([{ screenId: 'home', url: '/home', entryFile: 'src/pages/Home.tsx' }]);
+  });
+
+  it('resolves path={ROUTES.home} from a const in the router module', async () => {
+    const app = `import { Route, Routes } from 'react-router-dom'
+import { Home } from './pages/Home'
+
+const ROUTES = { home: '/home' } as const
+
+export function App() {
+  return (
+    <Routes>
+      <Route path={ROUTES.home} element={<Home />} />
+    </Routes>
+  )
+}
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([{ screenId: 'home', url: '/home', entryFile: 'src/pages/Home.tsx' }]);
+  });
+
+  it('names the file and line of a route path it cannot resolve', async () => {
+    const app = `import { Route, Routes } from 'react-router-dom'
+import { ROUTES } from './paths'
+import { Home } from './pages/Home'
+
+export function App() {
+  return (
+    <Routes>
+      <Route path={ROUTES.home} element={<Home />} />
+      <Route path="/account" element={<Home />} />
+    </Routes>
+  )
+}
+`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes.map((route) => route.url)).toEqual(['/account']);
+    expect(draft.notes.some((note) => note.includes('src/App.tsx line 8') && note.includes('usabl.routes.json'))).toBe(
+      true,
+    );
+  });
+
+  it('names the router file when it does not parse', async () => {
+    const app = `export function App() { return <Routes><Route path="/a" ></Routes> }\n`;
+    const draft = await inferInit(memoryFs(routerFiles(app)));
+    expect(draft.routes.routes).toEqual([]);
+    expect(draft.notes.some((note) => note.includes('src/App.tsx') && note.includes('does not parse'))).toBe(true);
   });
 });
 
@@ -393,11 +544,9 @@ export const router =
     _label,
     routerSource,
   ) => {
-    // The line comes from the offset the parser recorded for the path literal it matched. A search
-    // of the file for the path text would have found the prose comment on line 2 first and sent
-    // the operator to a line that declares nothing. This does not make the parser comment-aware: a
-    // commented-out route written in route syntax is matched like any other, which is listed under
-    // the documented limits of coverage and discovery in the ground truth.
+    // The line comes from the offset the parser recorded for the path it read. A search of the
+    // file for the path text would have found the prose comment on line 2 first and sent the
+    // operator to a line that declares nothing.
     const fs = memoryFs(fixtureFiles({ 'src/App.tsx': routerSource }));
 
     const message = await refusalOf(fs);

@@ -13,6 +13,90 @@
   status, so a carried or waived finding is never counted inside a new one, and the hint
   counts as gating only the findings that gate.
 
+- The terminal report printed `NO VERDICT: IDLE` for a null verdict on a run that had
+  something to check, which is the shape of a failed run, not an idle one. It now prints
+  IDLE only when there was nothing to check. Otherwise it prints `NO VERDICT` and says
+  usabl did not reach a verdict, so the run proved nothing about the change, the same
+  reading the stop hook and the self-check give that state.
+
+- Egress redaction now catches credential shapes it used to print: whitespace or a quote
+  between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
+  header segment or a JWT cut to two segments, the user name and password after `//` in
+  an address, such as an `HTTPS_PROXY` value, a key such as `PROXY_PASSWORD` or
+  `proxyPassword`, and GitHub tokens. A GitHub token pasted into the wrong key of
+  `usabl.config.json` is no longer repeated back in full in the unknown-key message.
+  Other base64 JSON, such as `?state=eyJ...` in a screen URL, is kept as written.
+
+- A page can no longer choose usabl's element identities or the announcements it hears.
+  Element paths came from `window.__usablPathFor` and announcements from
+  `window.__usablDrain`, both in the page's own JavaScript world. `checkPage` kept a
+  helper the page had already defined, and page script could replace the one usabl
+  installed, so a page could give every element one identity and hide a barrier, or pass
+  a flow requirement on an announcement no screen reader spoke. Both now run in isolated
+  worlds that page script cannot reach. An element is named by its id only when the id's
+  selector matches exactly that element, so a NUL id and a U+FFFD id get two identities.
+  A document where the capture is not running is now a coverage gap, never silence.
+
+- `usabl.config.json` now refuses a `surfaces[].url` or an `appBaseUrl` that carries a
+  user name or a password, such as `https://user:pass@host/screen`. Before, the URL was
+  printed as written in every report, including the pull request comment, so the
+  credential was published. The message names the field, such as `surfaces[1].url`, and
+  never prints the value. A URL with a query string or a fragment still loads unchanged,
+  so the overlay still matches gaps to screens, and the CLI, the stop hook, and the
+  dev-server plugin now print a warning that names the field and says the query or the
+  fragment is published. A value with no `//`, such as `admin:secret@localhost:3000/x`,
+  is refused too. The stop hook loads the config, so a config with a refused URL makes
+  the stop hook fail open with "NOT verified - stop hook error" until the URL is fixed.
+
+- The stop hook now blocks a stop on a verdict it does not recognize, and on a null
+  verdict from a run that was neither idle nor a crash. Before, both read as NO VERDICT
+  and the stop was allowed, so an unknown answer passed as a clean change. The block says
+  the run proved nothing and tells the model to run the check again. The self-check
+  printed IDLE for such a null verdict; it now prints IDLE only when there was nothing to
+  check, and names both states the way the stop hook does. A failed run (exit 4) still
+  fails open, as before.
+
+- Router discovery now parses the router file instead of matching its text, and reads
+  routes only from the real router: a `<Routes>` or `<Switch>` element, the first argument
+  of `createBrowserRouter`, `createHashRouter`, or `createMemoryRouter` (or an import alias,
+  a const, or a wrapper of one), the argument of `useRoutes`, or the JSX passed to
+  `createRoutesFromElements` or `createRoutesFromChildren`. Before, a `{ path: '/decoy' }`
+  object or a `<Route>` anywhere in the module was read as a route, and `usabl init` could
+  write a stray `<Route>`'s component into the sidecar as the entry file of a real route.
+  A commented-out route was read. A route whose `element` came before its `path`, a `>` in
+  a JSX attribute string, a `)` in a string or comment inside the router call, and a
+  router call in a string or comment each dropped real routes. The regular expression
+  `/[//]/`, which broke an earlier comment-blanking fix, is now a test. A path written as a
+  `const` in the same module, including `ROUTES.home`, is now read, and a relative child
+  path is joined to its parent path. A route the reader finds but cannot read is never
+  dropped in silence: it names the router file and line, and the planner records it as a
+  `skipped` gap whenever a wide-blast change would have queued the router's routes. That
+  includes a `<Route>` outside every router that was read, a call whose name ends in
+  `Router` that is not a known factory, and a route list changed with `push` or an index.
+  A router file that does not parse, and a file with routes but no router, are each one
+  such gap for the whole file. `usabl drift routes` lists each one with an id, and
+  `usabl init` writes a `Review:` note for each. A layout route with child routes gets no entry file,
+  because its component also renders on each child's URL. A route such as `/app/*`, which
+  usually mounts routes declared in another file, is reported with its line instead of
+  being read as the one screen `/app/*`. A bare `*` route is still skipped. Route files
+  with legacy decorators, Flow types, and route objects with methods such as `loader()`
+  are read.
+
+- The Vite plugin no longer breaks a JSX element that has type arguments. It adds
+  `data-source-file` and `data-source-line` to raw TSX, and it found tags by matching
+  text, so in `<PageWizard<SubscriptionWizardData> ...>` it put the attributes inside
+  the type argument list. It did the same inside a generic arrow function such as
+  `<T,>(value: T) => value`. The file then failed to parse, and the dev server answered
+  500 for every module that imported it. Now the plugin parses each file and puts the
+  attributes after the tag's last attribute, or right after the tag name and any type
+  arguments when it has none, so a `data-source-file` in a spread such as `{...rest}`
+  cannot replace the element's own location. Files with legacy decorators, and `.js` and
+  `.jsx` files with Flow types, are read. Nested type arguments, a
+  generic element inside a conditional, a self-closing generic element, and a
+  member-expression tag such as `<Foo.Bar>` all stay valid. A fragment and a namespaced
+  tag such as `<svg:rect>` get no attributes. A file the parser cannot read is served
+  unchanged, with one warning in the dev server log that names the file, never a 500.
+
 - The stop hook now compares session pins before it allows a stop on a stored receipt.
   Before, a matching receipt allowed the stop first, so a guarded policy file weakened and
   committed during the session, then checked with `usabl check` under the weaker policy,
@@ -118,6 +202,15 @@
 
 ### Added
 
+- `acknowledgedUnreadable` in `usabl.routes.json`: a list of `{ "file", "id" }` for router
+  entries usabl cannot read that the sidecar's author has checked by hand. Without it, a
+  router with a `/app/*` route, a guard element among the routes, or routes built with
+  `map` made `usabl drift routes` exit 2 on every run. An acknowledged entry is still
+  listed and no longer forces exit 2. The id is a hash of the declaration's source text,
+  so it holds when other lines move and stops matching when the declaration changes. A
+  router file that does not parse, or one with routes but no router, cannot be
+  acknowledged. Only drift reads the list.
+
 - `signalTimeoutMs` in `usabl.config.json`, a positive whole number of milliseconds,
   default 15000, at most 600000 (ten minutes). It caps the wait for a `reachedWhen` selector, counted from the first
   moment the page settled and inside `readyTimeoutMs`. A screen whose selector does not
@@ -128,6 +221,14 @@
 
 ### Changed
 
+- usabl now has one more runtime dependency, `@babel/parser`, pinned to exactly
+  7.29.11 (MIT). Router discovery (`usabl init`, `usabl drift routes`, and the route
+  manifest the planner reads) and the Vite plugin's source attribute injector use it to
+  read JSX and TypeScript, including type arguments, comments, and regular expressions,
+  instead of matching text. Only the parser is used. It brings three small packages with it: `@babel/types`,
+  `@babel/helper-string-parser`, and `@babel/helper-validator-identifier`, all MIT. The
+  7.x line is used because 8.x requires Node.js 22.18 or later, and usabl supports every
+  Node.js 22 release.
 - `checkPage` called without a `screenId` returns `not_covered` in a project that has
   content or flow design requirements: the unlabeled page counts as no surface, so
   each requirement is a `not-covered` gap until the call passes the page's surface id.
