@@ -11,7 +11,14 @@ import { SITE_BASE_PATH } from './stage-public-pages.mjs';
 // reported as skipped, not fetched, so the check stays deterministic and does
 // not touch the network. In markdown it reads inline links, reference-style
 // links resolved through their definitions, and autolinks; in every file it
-// reads HTML URL attributes and CSS url() references.
+// reads HTML URL attributes and CSS url() references. Reference links and
+// autolinks are not read inside fenced code, indented code blocks, inline code
+// spans, or HTML comments, and footnotes (labels that start with "^") are not
+// links. Three cases are not handled. A definition inside a blockquote, and
+// every definition in a file with CRLF line endings, is not found, so a full
+// or collapsed reference to it is reported as undefined. A reference in a list
+// item indented four or more columns is read as an indented code block and is
+// not checked.
 //
 // The docs:linkcheck command runs this pass and then the staged pass in
 // check-staged-links.mjs, and both must pass. They check different properties.
@@ -283,38 +290,79 @@ function maskCodeSpans(line) {
 // no definition renders as plain text, a task box or a bracketed word, so it is
 // not a link and is not reported. A definition that nothing uses renders nothing
 // and is not checked.
-function markdownReferences(content) {
-  const lines = content.split('\n');
-  const definitions = new Map();
+// The same text with every closed HTML comment blanked out, newlines kept, so
+// offsets and line numbers still line up. Text in a comment is not rendered.
+function maskHtmlComments(content) {
+  return content.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, ' '));
+}
+
+// Which lines are prose that can hold a reference: not fenced code, and not an
+// indented code block. An indented code block is a run of lines indented four
+// or more columns that starts after a blank line, a heading, or the start of
+// the file; an indented line right after a paragraph line continues that
+// paragraph instead. Blank lines inside the run keep it open.
+function proseLines(lines) {
+  const prose = [];
   let inFence = false;
+  let inIndentedCode = false;
+  let previousBlankOrHeading = true;
   for (const line of lines) {
+    const blank = line.trim() === '';
     if (stripFence(line)) {
       inFence = !inFence;
+      inIndentedCode = false;
+      prose.push(false);
+      previousBlankOrHeading = false;
       continue;
     }
-    if (inFence) continue;
+    if (inFence) {
+      prose.push(false);
+      continue;
+    }
+    const indented = /^(?: {4}|\t| {0,3}\t)/.test(line) && !blank;
+    if (indented && (inIndentedCode || previousBlankOrHeading)) {
+      inIndentedCode = true;
+      prose.push(false);
+      continue;
+    }
+    if (!blank) inIndentedCode = false;
+    prose.push(!blank);
+    previousBlankOrHeading = blank || /^ {0,3}#{1,6}(?:\s|$)/.test(line);
+  }
+  return prose;
+}
+
+// A label that starts with "^" is a footnote, not a link reference.
+function isFootnoteLabel(label) {
+  return label.trimStart().startsWith('^');
+}
+
+function markdownReferences(content) {
+  const lines = maskHtmlComments(content).split('\n');
+  const prose = proseLines(lines);
+  const definitions = new Map();
+  lines.forEach((line, index) => {
+    if (!prose[index]) return;
     const definition = REFERENCE_DEFINITION.exec(line);
-    if (definition) {
+    if (definition && !isFootnoteLabel(definition[1])) {
       const label = normalizeLabel(definition[1]);
       // The first definition of a label wins, as it does in CommonMark.
       if (label !== '' && !definitions.has(label)) {
         definitions.set(label, definition[2] ?? definition[3] ?? '');
       }
     }
-  }
+  });
 
   const links = [];
   const undefinedReferences = [];
-  inFence = false;
   let offset = 0;
-  for (const line of lines) {
-    if (stripFence(line)) {
-      inFence = !inFence;
-    } else if (!inFence && !REFERENCE_DEFINITION.test(line)) {
+  for (const [index, line] of lines.entries()) {
+    if (prose[index] && !REFERENCE_DEFINITION.test(line)) {
       const masked = maskCodeSpans(line);
       for (const match of masked.matchAll(REFERENCE_USE)) {
         const written = match[2] === undefined || match[2] === '' ? match[1] : match[2];
         const explicit = match[2] !== undefined;
+        if (isFootnoteLabel(written)) continue;
         const target = definitions.get(normalizeLabel(written));
         if (target !== undefined) {
           links.push({ url: target, offset: offset + match.index });

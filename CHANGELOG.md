@@ -10,6 +10,7 @@
   (`[ref]`) references resolve through their `[ref]: url` definitions, a full or
   collapsed reference to a label with no definition is reported, relative autolinks are
   checked, and absolute autolinks are counted as external, as other external links are.
+  Footnotes, indented code blocks, and HTML comments are not read as links.
 
 - The stop hook now blocks a stop on a verdict it does not recognize, and on a null
   verdict from a run that was neither idle nor a crash. Before, both read as NO VERDICT

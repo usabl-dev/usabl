@@ -483,3 +483,57 @@ describe('check-doc-links autolinks', () => {
     expect(result.stdout).toContain('0 relative link(s) checked');
   });
 });
+
+// Valid markdown that holds no reference link. Each case below was read as one and reported.
+describe('check-doc-links leaves non-references alone', () => {
+  let root = '';
+
+  afterEach(async () => {
+    if (root !== '') await rm(root, { recursive: true, force: true });
+    root = '';
+  });
+
+  async function corpus(content: string): Promise<RunResult> {
+    root = await mkdtemp(join(tmpdir(), 'usabl-linkcheck-nonref-'));
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(join(root, 'docs', 'a.md'), content, 'utf8');
+    return runChecker(root);
+  }
+
+  it('does not read a footnote definition as a link reference', async () => {
+    const result = await corpus('# A\n\nA claim.[^1]\n\n[^1]: Notes.\n');
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).not.toContain('Notes.');
+    expect(result.stdout).toContain('0 broken');
+  });
+
+  it('skips an indented code block', async () => {
+    const result = await corpus('# A\n\nExample:\n\n    value = arr[i][j]\n\nDone.\n');
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).not.toContain('[j]');
+    expect(result.stdout).toContain('0 broken');
+  });
+
+  it('skips an HTML comment, on one line or across lines', async () => {
+    const result = await corpus('# A\n\n<!-- see [c][d] -->\n\n<!--\n[e][f] and <./gone.md>\n-->\n\nText.\n');
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).not.toContain('[d]');
+    expect(result.stdout).not.toContain('[f]');
+    expect(result.stdout).toContain('0 broken');
+  });
+
+  it('still reports a broken reference next to a comment and after an indented block', async () => {
+    const result = await corpus(
+      '# A\n\n    code [x][y]\n\nSee [guide][g]. <!-- [c][d] --> and [other][missing].\n\n[g]: ./gone.md\n',
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toContain('docs/a.md:5: file not found: ./gone.md');
+    expect(result.stdout).toContain('docs/a.md:5: undefined link reference: [missing]');
+    expect(result.stdout).not.toContain('[y]');
+    expect(result.stdout).not.toContain('[d]');
+  });
+});
