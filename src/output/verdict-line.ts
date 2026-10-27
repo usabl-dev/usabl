@@ -20,8 +20,9 @@ export interface VerdictLine {
   word: string;
   exitCode: number;
   meaning: string;
-  // True for the two states that carry no verdict: idle and a failed run. Both leave
-  // `verdict` null, and they are opposite facts, so each is named on its own.
+  // True for the states that carry no verdict: idle, a failed run, and a run that had something
+  // to check and reached no verdict. All leave `verdict` null, and they are different facts, so
+  // each is named on its own.
   noVerdict: boolean;
 }
 
@@ -54,6 +55,7 @@ const VERDICT_MEANINGS: Record<string, string> = {
 
 const IDLE_SYMBOL = '○'; // white circle: nothing happened
 const FAILED_SYMBOL = '!';
+const NO_VERDICT_SYMBOL = '?';
 
 /**
  * The word for a verdict usabl has no word for.
@@ -82,10 +84,14 @@ function formatExitCode(exitCode: number): string {
 /**
  * Names the state of a Result for a reader who sees this line first.
  *
- * `verdict` null with exit 4 is a run usabl could not finish. `verdict` null with any other
- * exit is idle: nothing to check. Both say NO VERDICT so neither can be mistaken for a pass,
- * and the word after it tells them apart. Neither state names the word "verified" in any form,
- * so neither can be skimmed as a pass.
+ * `verdict` null with exit 4 is a run usabl could not finish. `verdict` null with
+ * `nothingToCheck` true is idle: nothing to check. Any other null verdict is a run that had
+ * something to check and reached no verdict, which only a Result composed outside run() can
+ * carry; it proved nothing about the change, in the words the stop hook and the self-check use
+ * for it. Reading it as idle told the reader nothing UI-touching changed, the opposite of what
+ * happened. All three say NO VERDICT so none can be mistaken for a pass, and the word after it
+ * tells the first two apart. None names the word "verified" in any form, so none can be skimmed
+ * as a pass.
  */
 export function describeVerdict(result: Result): VerdictLine {
   if (result.exitCode === 4) {
@@ -94,6 +100,17 @@ export function describeVerdict(result: Result): VerdictLine {
       word: 'NO VERDICT: RUN FAILED',
       exitCode: result.exitCode,
       meaning: 'usabl could not finish the run, so it proved nothing about this change.',
+      noVerdict: true,
+    };
+  }
+  if (result.verdict === null && result.coverage?.nothingToCheck !== true) {
+    // The stop hook and the self-check say this in a longer sentence. This one keeps the same
+    // words inside the 80 columns the terminal report holds its own lines to.
+    return {
+      symbol: NO_VERDICT_SYMBOL,
+      word: 'NO VERDICT',
+      exitCode: result.exitCode,
+      meaning: 'usabl did not reach a verdict, so the run proved nothing about this change.',
       noVerdict: true,
     };
   }
