@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- The announcement capture now hears a region only when its effective live value is
+  polite or assertive, resolved the way `pf-toast-live-region` resolves it. Before, it
+  heard any element with an `aria-live` attribute, including `aria-live="off"`, an
+  uppercase or unknown token, and text inside an off wrapper within a polite region. A
+  flow requirement could then pass on an announcement no screen reader spoke. The rule
+  and the capture now share one resolver source. A `role="STATUS"` region, which the
+  capture used to miss, is now heard, as the rule already treated it. A change slotted
+  into a live region inside a shadow root is not recorded, because that region's own
+  text is not what the change made speakable.
+
 - `checkPage` now applies a configured screen's `reachedWhen` signal when `screenId` names
   that screen. It waits for the selector with the CLI's wait, and when the signal does not
   hold, the result is a `not-covered` gap that names the selector or the response, and no
