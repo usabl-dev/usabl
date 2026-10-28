@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- Readiness could report a declared `reachedWhen` selector as held on a page that changed
+  while the selector was being checked. The check runs after the settled sample, so content
+  that mounted during it was walked and checked before the page held still. A screen whose
+  barrier mounted after the selector, from a request sent in the same moment, could come
+  out clean with no gap. A match now ends the wait only when the element count is the same
+  and the network is still quiet after the check. Otherwise readiness keeps waiting, inside
+  the same signal cap and readiness budget.
+
 - The announcement capture now hears a region only when its effective live value is
   polite or assertive, resolved the way `pf-toast-live-region` resolves it. Before, it
   heard any element with an `aria-live` attribute, including `aria-live="off"`, an

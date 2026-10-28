@@ -394,6 +394,149 @@ describe('waitForRendered', () => {
     expect(result).toEqual({ signal: 'timed-out' });
   });
 
+  describe('a page that changes while the probe runs', () => {
+    // A page whose element count and network the test sets by hand. The probe below changes them
+    // while it runs, which is what a page does when it mounts between the settled sample and the
+    // probe's answer.
+    interface ScriptedPage {
+      elements: number;
+      // The clock time until which a request is in flight, or null when none was ever sent.
+      requestOpenUntil: number | null;
+      networkQuietFor(windowMs: number): boolean;
+      evaluate(fn: () => number): Promise<number>;
+    }
+
+    function scriptedPage(elements: number): ScriptedPage {
+      const page: ScriptedPage = {
+        elements,
+        requestOpenUntil: null,
+        networkQuietFor(windowMs: number): boolean {
+          if (page.requestOpenUntil === null) {
+            return true;
+          }
+          return Date.now() - page.requestOpenUntil >= windowMs;
+        },
+        async evaluate(): Promise<number> {
+          return page.elements;
+        },
+      };
+      return page;
+    }
+
+    it('does not report held when the page mounted more content while the probe ran', async () => {
+      // The shell settles at 11 elements. The first probe finds the selector because the content
+      // mounted while it ran, so the page now has 20 elements. The sample that started the probe
+      // read the shell, so that answer is about a page that has since changed. The wait goes on
+      // until the new page holds still for a full window and the probe answers again.
+      const page = scriptedPage(11);
+      const start = Date.now();
+      const askedAtMs: number[] = [];
+      const outcome = { readyAtMs: -1, signal: '' };
+      const done = waitForRendered(
+        page,
+        TEST_BUDGET_MS,
+        probe(async () => {
+          askedAtMs.push(Date.now() - start);
+          page.elements = 20;
+          return true;
+        }),
+      ).then((result) => {
+        outcome.readyAtMs = Date.now() - start;
+        outcome.signal = result.signal;
+      });
+
+      await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+      await done;
+      expect(outcome.signal).toBe('held');
+      expect(askedAtMs).toHaveLength(2);
+      // The first probe at the first settled moment, about 1500ms, and the second only after the
+      // 20-element page has read the same four times in a row.
+      expect(askedAtMs[1]! - askedAtMs[0]!).toBeGreaterThanOrEqual(1_500);
+      expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_000);
+    });
+
+    it('does not report held when a request started while the probe ran', async () => {
+      // The probe answers true, and while it ran the page sent a request that stays out for two
+      // seconds. Its answer can still mount content, so the wait goes on until the network has
+      // been quiet for a full window after it.
+      const page = scriptedPage(20);
+      const start = Date.now();
+      let requestClearsAtMs = -1;
+      const outcome = { readyAtMs: -1, signal: '' };
+      const done = waitForRendered(
+        page,
+        TEST_BUDGET_MS,
+        probe(async () => {
+          if (page.requestOpenUntil === null) {
+            page.requestOpenUntil = Date.now() + 2_000;
+            requestClearsAtMs = page.requestOpenUntil - start;
+          }
+          return true;
+        }),
+      ).then((result) => {
+        outcome.readyAtMs = Date.now() - start;
+        outcome.signal = result.signal;
+      });
+
+      await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+      await done;
+      expect(outcome.signal).toBe('held');
+      expect(requestClearsAtMs).toBeGreaterThan(0);
+      expect(outcome.readyAtMs).toBeGreaterThanOrEqual(requestClearsAtMs + 500);
+    });
+
+    it('still ends at the signal cap when the page changes during every probe', async () => {
+      // Every probe answers true and every probe moves the page, so no answer is ever about a
+      // page that stayed settled. The cap, counted from the first settled moment at about 1500ms,
+      // ends the wait as timed-out rather than held.
+      const page = scriptedPage(11);
+      const start = Date.now();
+      const outcome = { readyAtMs: -1, signal: '' };
+      const done = waitForRendered(
+        page,
+        TEST_BUDGET_MS,
+        probe(async () => {
+          page.elements += 1;
+          return true;
+        }, 2_000),
+      ).then((result) => {
+        outcome.readyAtMs = Date.now() - start;
+        outcome.signal = result.signal;
+      });
+
+      await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+      await done;
+      expect(outcome.signal).toBe('timed-out');
+      expect(outcome.readyAtMs).toBeGreaterThanOrEqual(3_500);
+      expect(outcome.readyAtMs).toBeLessThanOrEqual(3_600);
+    });
+
+    it('reports held when the page is unchanged after the probe answers', async () => {
+      // The ordinary case keeps its timing: one settled window and one probe.
+      const page = scriptedPage(20);
+      const start = Date.now();
+      let asked = 0;
+      const outcome = { readyAtMs: -1, signal: '' };
+      const done = waitForRendered(
+        page,
+        TEST_BUDGET_MS,
+        probe(async () => {
+          asked += 1;
+          return true;
+        }),
+      ).then((result) => {
+        outcome.readyAtMs = Date.now() - start;
+        outcome.signal = result.signal;
+      });
+
+      await vi.advanceTimersByTimeAsync(TEST_BUDGET_MS);
+      await done;
+      expect(outcome.signal).toBe('held');
+      expect(asked).toBe(1);
+      expect(outcome.readyAtMs).toBeLessThanOrEqual(2_000);
+    });
+  });
+
   it('passes a page failure out of evaluate through unchanged', async () => {
     // A closed context or a detached frame throws from evaluate, not as a TimeoutError. Readiness
     // must surface that as-is, so the caller can tell a broken page from a slow one. Nothing here

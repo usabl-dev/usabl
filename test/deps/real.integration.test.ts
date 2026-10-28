@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import type { Page as UsablPage, Provider, SurfaceConfig } from '../../src/contracts/index.js';
+import type { BrowserDriver, Page as UsablPage, Provider, SurfaceConfig } from '../../src/contracts/index.js';
 import { buildDeps } from '../../src/deps/build.js';
 import { LIVE_WORLD, adoptPage, makeRealBrowserDriver } from '../../src/deps/real.js';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
@@ -59,12 +59,19 @@ interface FixtureServer {
   // A shell that pauses, mounts the orders table from a 200 JSON answer, and 800 ms later replaces
   // itself with a magic-link sign-in form. The table never holds still; the sign-in form does.
   swapToSignInUrl: string;
+  // A shell that pauses, mounts table#orders, and in the same task asks for details the server
+  // answers slowly. The answer mounts a button with no accessible name.
+  detailsAfterSignalUrl: string;
   close: () => Promise<void>;
 }
 
 async function readFixture(name: string): Promise<string> {
   return readFile(fileURLToPath(new URL(`../../fixtures/live/${name}`, import.meta.url)), 'utf8');
 }
+
+// How long the server takes to answer /api/slow/. Far longer than a walk and the checks of a small
+// page, so a scan that starts before the answer lands finishes before it too.
+const SLOW_ANSWER_MS = 4_000;
 
 async function makeFixtureServer(): Promise<FixtureServer> {
   const html = await readFixture('labelledby.html');
@@ -83,6 +90,7 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/fetch-on-focus.html': await readFixture('fetch-on-focus.html'),
     '/frozen-pause.html': await readFixture('frozen-pause.html'),
     '/swap-to-sign-in.html': await readFixture('swap-to-sign-in.html'),
+    '/details-after-signal.html': await readFixture('details-after-signal.html'),
   };
   const spaFallback = await readFixture('spa-fallback.html');
   const authWall = await readFixture('auth-wall.html');
@@ -142,6 +150,14 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     if (reqUrl.pathname.startsWith('/spa/')) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(spaFallback);
+      return;
+    }
+    // Data the server takes a while to answer, long enough for a scan to finish before it lands.
+    if (reqUrl.pathname.startsWith('/api/slow/')) {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end('{"details":"ready"}');
+      }, SLOW_ANSWER_MS);
       return;
     }
     // An authentication wall: every address under it answers 200 with the same landing page.
@@ -214,6 +230,7 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     fetchOnFocusUrl: `http://127.0.0.1:${address.port}/fetch-on-focus.html`,
     frozenPauseUrl: `http://127.0.0.1:${address.port}/frozen-pause.html`,
     swapToSignInUrl: `http://127.0.0.1:${address.port}/swap-to-sign-in.html`,
+    detailsAfterSignalUrl: `http://127.0.0.1:${address.port}/details-after-signal.html`,
     close: async () =>
       new Promise<void>((resolve, reject) => {
         // The hang route leaves a socket open, and server.close() waits for it forever.
@@ -257,6 +274,48 @@ function alwaysFiringProvider(screenId: string): Provider {
       },
     ],
   };
+}
+
+// A probe is several reads of the live page, and on a loaded machine it can take long enough for
+// the page to change under it. This driver wraps a real one so that the first probe of each page
+// waits until the page has mounted the selector before it answers, which makes that timing certain
+// rather than a matter of load. Everything else, readiness included, is the real driver.
+function slowProbeDriver(real: BrowserDriver, selector: string): BrowserDriver {
+  return {
+    open: async (url: string): Promise<UsablPage> => {
+      const page = await real.open(url);
+      let firstProbe = true;
+      return {
+        ...page,
+        gotoReady: (readyWhen) =>
+          page.gotoReady(
+            readyWhen === undefined
+              ? undefined
+              : {
+                  timeoutMs: readyWhen.timeoutMs,
+                  holds: async () => {
+                    if (firstProbe) {
+                      firstProbe = false;
+                      await untilPresent(page, selector);
+                    }
+                    return readyWhen.holds();
+                  },
+                },
+          ),
+      };
+    },
+    close: async () => undefined,
+  };
+}
+
+// Polls until the selector is in the page, for at most ten seconds.
+async function untilPresent(page: UsablPage, selector: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if ((await page.countEverywhere(selector)) > 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
 }
 
 describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver integration', () => {
@@ -1150,10 +1209,11 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       async function scanSwap(
         reachedWhen: SurfaceConfig['reachedWhen'],
         signalTimeoutMs?: number,
+        browser: BrowserDriver = driver,
       ): Promise<{ stops: number; drafts: number; gaps: string[]; elapsedMs: number }> {
         const url = fixture.swapToSignInUrl;
         const runner = makeCheckRunner({
-          browser: driver,
+          browser,
           providers: [alwaysFiringProvider('orders')],
           config: testConfig({
             appBaseUrl: fixture.url,
@@ -1194,6 +1254,17 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
         // cap would fail here.
         expect(result.elapsedMs).toBeLessThan(7_000);
       }, 30_000);
+
+      it('ends the wait at the signal cap when the table mounts while the probe runs', async () => {
+        // The run that made the test above flaky, made certain. The first probe is asked on the
+        // shell and answers only after the table has mounted. That answer is about a page that
+        // changed after its settled sample, so it cannot end the wait. The page swaps to the
+        // sign-in form, the cap runs out, and no walk runs.
+        const result = await scanSwap('table#orders', 3_000, slowProbeDriver(driver, 'table#orders'));
+        expect(result.stops).toBe(0);
+        expect(result.drafts).toBe(0);
+        expect(result.gaps.some((reason) => reason.includes('table#orders') && reason.includes('3000'))).toBe(true);
+      }, 30_000);
     });
 
     for (const pauseMs of PAUSES_MS) {
@@ -1216,6 +1287,33 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
         }
       }, 30_000);
     }
+  });
+
+  describe('a selector that mounts while the readiness probe runs', () => {
+    it('reports the barrier that mounts after the selector, from a request the selector started', async () => {
+      // The table mounts while the probe runs, and in the same task the page asks for details the
+      // server answers four seconds later. The answer mounts a button with no accessible name. A
+      // wait that reported held on the probe alone handed the scan a page still loading: the walk
+      // and the checks ran before the button existed, the table was still there after them, and
+      // the screen came out clean with no gap.
+      const url = fixture.detailsAfterSignalUrl;
+      const runner = makeCheckRunner({
+        browser: slowProbeDriver(driver, 'table#orders'),
+        providers: [axeProvider],
+        config: testConfig({
+          appBaseUrl: fixture.url,
+          surfaces: [{ id: 'orders', url, files: [], reachedWhen: 'table#orders' }],
+        }),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+        transcriptTabCap: 5,
+      });
+      const pass = markUnseenScreens([await runner.scan({ id: 'orders', url })]);
+      const screen = pass.screens[0];
+      expect(pass.unseenScreenIds).toEqual([]);
+      expect(screen?.gaps ?? []).toEqual([]);
+      expect((screen?.drafts ?? []).map((draft) => draft.rule)).toContain('button-name');
+    }, 30_000);
   });
 
   it('returns null for ignored or missing AX nodes', async () => {
