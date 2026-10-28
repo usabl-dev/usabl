@@ -37,6 +37,7 @@ import { parseWaiver } from './evidence/waivers.js';
 import { parseUsablConfig } from './intake/config.js';
 import { loadRequirements } from './intake/load.js';
 import { overlayRequirementsFs } from './intake/overlay-fs.js';
+import { unknownSurfaceGapsForRun } from './intake/requirement-surfaces.js';
 import { checkGuard } from './trust/guard.js';
 
 // Declared here rather than imported from baseline/, which imports run() and would cycle.
@@ -126,6 +127,15 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     // rules on the blank document it got. Those drafts are removed here, before the gate sees
     // them, because a finding about a page nobody rendered is not evidence at all.
     const { screens, unseenScreenIds } = markUnseenScreens(scanned);
+    // A requirement whose surface names no screen is never scanned, so nothing checked it.
+    const requirementGaps = canScan
+      ? await unknownSurfaceGapsForRun(
+          loadedRequirements.bundle,
+          coverageFs,
+          scanConfig,
+          (docsManifest?.pages ?? []).map((page) => page.pageId),
+        )
+      : [];
     const drafts = screens.flatMap((s) => s.drafts);
 
     const policyUntrusted = policyDivergedPaths.length > 0;
@@ -157,6 +167,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
         ...discoveredCoverage.gaps,
         ...docsCoverage.gaps,
         ...screens.flatMap((screen) => screen.gaps),
+        ...requirementGaps,
       ],
     };
 

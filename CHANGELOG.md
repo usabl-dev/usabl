@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- A `content` or `flow` requirement whose surface matches no configured surface, no
+  route manifest screen, and no docs manifest page is now a `not-covered` gap on the CLI
+  run, with ref `requirement:<id>` and a reason that names the surface. Before, no run
+  ever planned that screen, so the requirement was never checked and the run said
+  nothing, and a misspelled surface could read as verified. `checkPage` already gapped
+  it; both now use one rule.
+
 - `usabl.docs.json` now refuses a `docsBaseUrl` that carries a user name or a password,
   such as `https://user:pass@docs.local`. Before, it was printed in every docs screen
   url, including the pull request comment. The message names the field and never the
