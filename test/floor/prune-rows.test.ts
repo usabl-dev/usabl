@@ -84,4 +84,37 @@ describe('floor prune with row keys', () => {
     expect(written.version).toBe(2);
     expect(written.entries).toEqual([{ ...floor.entries[0], count: 2 }]);
   });
+
+  it('changes only the entries of a version 3 floor, keeping its scope and a field it does not know', async () => {
+    const entry = (row: string) => {
+      const identity = computeIdentity(buttonInRow(row));
+      return { screenId: 'clusters', layer: 'pf', rule: 'pf-icon-button-name', elementKey: identity.elementKey, identityBasis: identity.identityBasis, count: 1 };
+    };
+    const document = { version: 3, scope: 'partial', observedAt: 'kept as written', entries: [entry(ROW_A), entry(ROW_B)] };
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(depsWith(JSON.stringify(document), [buttonInRow(ROW_B)]), testConfig(), writer);
+
+    expect(outcome.prunedCount).toBe(1);
+    const written = JSON.parse(writer.read('.usabl-evidence.json') ?? '') as Record<string, unknown>;
+    expect(Object.keys(written)).toEqual(['version', 'scope', 'observedAt', 'entries']);
+    expect(written).toEqual({ ...document, entries: [entry(ROW_B)] });
+  });
+
+  it('still counts a version 2 floor the old way when it carries a field it does not know', async () => {
+    const legacy = computeIdentity(buttonInRow(ROW_A), 'legacy');
+    const document = {
+      version: 2,
+      observedAt: 'kept as written',
+      entries: [{ screenId: 'clusters', layer: 'pf', rule: 'pf-icon-button-name', elementKey: legacy.elementKey, identityBasis: legacy.identityBasis, count: 3 }],
+    };
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(depsWith(JSON.stringify(document), [buttonInRow(ROW_A), buttonInRow(ROW_B)]), testConfig(), writer);
+
+    expect(outcome.loweredCount).toBe(1);
+    const written = JSON.parse(writer.read('.usabl-evidence.json') ?? '') as Record<string, unknown>;
+    expect(written).toEqual({ ...document, entries: [{ ...document.entries[0], count: 2 }] });
+  });
 });
+
