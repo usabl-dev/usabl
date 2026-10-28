@@ -206,6 +206,18 @@ export interface FloorHeadroom {
  *
  * Screen id, rule names and a count. Never an element key, because a key carries page text.
  */
+/**
+ * Why automatic debt tracking was off on a run. A code, not a sentence, so a surface writes its own
+ * words and the only text a Result carries here is `detail`, which a surface prints as a value.
+ *
+ * - `no-reader`: the caller passed no history reader (a library call).
+ * - `no-history`: there is no history branch to read.
+ * - `unreadable`: the history branch exists and could not be read. `detail` says where and why.
+ * - `old-floor`: the evidence floor predates row keys, so history records cannot be matched to it.
+ * - `no-base`: the base commit could not be resolved, so usabl cannot tell which records apply.
+ */
+export type DebtTrackingOff = 'no-reader' | 'no-history' | 'unreadable' | 'old-floor' | 'no-base';
+
 export interface FloorUnconfirmed {
   screenId: string;
   rules: string[]; // sorted, each rule once
@@ -609,10 +621,30 @@ export interface CheckRunner {
   // profile picks the per-surface provider configuration for this scan target. Absent means 'app'.
   scan(screen: { id: string; url: string; profile?: ProfileName }): Promise<ScreenScan>;
 }
+/**
+ * Reads the debt history branch as git objects, never from a working tree. See src/history/.
+ * The history can only lower the debt a run accepts, so a reader that returns nothing, or that a
+ * caller leaves out, gives exactly the verdicts a run without history gives.
+ */
+export interface HistoryReader {
+  // The ref the history is read from, for disclosures, for example "origin/usabl/history".
+  readonly ref: string;
+  // The commit a ref names, or null when there is no such ref.
+  resolveCommit(ref: string): Promise<string | null>;
+  // The file names at the top of a history commit.
+  listFiles(commit: string): Promise<string[]>;
+  // One file at a history commit, or null when it is not there.
+  readFile(commit: string, path: string): Promise<string | null>;
+  // Whether `commit` is `of` or one of its ancestors.
+  isAncestor(commit: string, of: string): Promise<boolean>;
+}
+
 export interface Deps {
   clock: () => string;
   browser: BrowserDriver;
   git: GitReader;
+  // The debt history reader. Absent means automatic tracking is off for this run, and it says so.
+  history?: HistoryReader;
   fs: FsGlob;
   checkRunner: CheckRunner;
   runnerVersion: string;
