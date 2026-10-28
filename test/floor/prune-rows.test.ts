@@ -32,20 +32,22 @@ function buttonInRow(row: string): Draft {
   };
 }
 
-function scan(drafts: Draft[]): ScreenScan {
+// A screen whose declared readiness signal held, unless told otherwise. A row entry names no
+// element the walk can meet, so only the signal shows that an absent row's part of the page rendered.
+function scan(drafts: Draft[], signalHeld = true): ScreenScan {
   return {
     screenId: 'clusters', url: 'http://127.0.0.1:5173/clusters', stops: [], drafts, gaps: [],
-    applicability: [], reachedSelectorPresent: null,
+    applicability: [], reachedSelectorPresent: signalHeld ? true : null,
   };
 }
 
-function depsWith(floorJson: string, drafts: Draft[]) {
+function depsWith(floorJson: string, drafts: Draft[], signalHeld = true) {
   const files = {
     'usabl.config.json': '{}',
     'fixtures/app/src/ClustersPage.tsx': 'export {};\n',
     '.usabl-evidence.json': floorJson,
   };
-  return makeFakeDeps({ files, headContents: files, scans: { clusters: scan(drafts) } });
+  return makeFakeDeps({ files, headContents: files, scans: { clusters: scan(drafts, signalHeld) } });
 }
 
 const ROW_A = 'aaaaaaaaaaaaaaaa';
@@ -115,5 +117,19 @@ describe('floor prune with row keys', () => {
     expect(outcome.loweredCount).toBe(1);
     const written = JSON.parse(writer.read('.usabl-evidence.json') ?? '') as Record<string, unknown>;
     expect(written).toEqual({ ...document, entries: [{ ...document.entries[0], count: 2 }] });
+  });
+
+  it('keeps the entry for an absent row when nothing shows its part of the page rendered', async () => {
+    const entry = (row: string) => {
+      const identity = computeIdentity(buttonInRow(row));
+      return { screenId: 'clusters', layer: 'pf', rule: 'pf-icon-button-name', elementKey: identity.elementKey, identityBasis: identity.identityBasis, count: 1 };
+    };
+    const floor: EvidenceFloor = { version: 3, entries: [entry(ROW_A), entry(ROW_B)] };
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(depsWith(JSON.stringify(floor), [buttonInRow(ROW_B)], false), testConfig(), writer);
+
+    expect(outcome.prunedCount).toBe(0);
+    expect(outcome.keptUnconfirmedCount).toBe(1);
   });
 });

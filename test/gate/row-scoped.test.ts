@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest';
 import { gate } from '../../src/gate/index.js';
 import { computeIdentity } from '../../src/primitives/identity.js';
-import type { Coverage, Draft, EvidenceFloor, FloorEntry, GateInput } from '../../src/contracts/index.js';
+import type { Coverage, Draft, EvidenceFloor, FloorEntry, GateInput, RenderEvidence } from '../../src/contracts/index.js';
 
 function buttonInRow(row: string, screenId = 'jobs'): Draft {
   return {
@@ -49,6 +49,10 @@ const base: Omit<GateInput, 'drafts' | 'floor'> = {
   cleanlyScannedScreens: new Set(['jobs', 'users']),
 };
 
+// The jobs screen's readiness signal held, so an absent row there may be called fixed. A row entry
+// names no element the walk can meet, so the signal is the only evidence that confirms it.
+const rendered: Map<string, RenderEvidence> = new Map([['jobs', { signalHeld: true, elementSlots: new Set<string>() }]]);
+
 function entryFor(draft: Draft, count = 1): FloorEntry {
   const identity = computeIdentity(draft);
   return {
@@ -62,7 +66,7 @@ describe('row-scoped identities in the gate', () => {
     const floor: EvidenceFloor = { version: 3, entries: [entryFor(buttonInRow(ROW_A)), entryFor(buttonInRow(ROW_B))] };
 
     // Row A was fixed. Row B is unchanged. Row C is new and broken. Two barriers, as before.
-    const out = gate({ ...base, floor, drafts: [buttonInRow(ROW_B), buttonInRow(ROW_C)] });
+    const out = gate({ ...base, floor, drafts: [buttonInRow(ROW_B), buttonInRow(ROW_C)], renderEvidence: rendered });
 
     expect(out.accessibilityVerdict).toBe('regression');
     const statuses = out.findings.map((f) => f.status).sort();
@@ -72,10 +76,21 @@ describe('row-scoped identities in the gate', () => {
   it('stays verified when a recorded row is simply not on the page today', () => {
     const floor: EvidenceFloor = { version: 3, entries: [entryFor(buttonInRow(ROW_A)), entryFor(buttonInRow(ROW_B))] };
 
-    const out = gate({ ...base, floor, drafts: [buttonInRow(ROW_B)] });
+    const out = gate({ ...base, floor, drafts: [buttonInRow(ROW_B)], renderEvidence: rendered });
 
     expect(out.accessibilityVerdict).toBe('verified');
     expect(out.floorHeadroom).toEqual([{ screenId: 'jobs', rule: 'pf-icon-button-name', recorded: 1, observed: 0 }]);
+  });
+
+  it('does not call an absent row fixed when nothing shows its part of the page rendered', () => {
+    const floor: EvidenceFloor = { version: 3, entries: [entryFor(buttonInRow(ROW_A)), entryFor(buttonInRow(ROW_B))] };
+
+    const out = gate({ ...base, floor, drafts: [buttonInRow(ROW_B)] });
+
+    // Still verified, and still not a pay-down: the row entry stays on the floor and is disclosed.
+    expect(out.accessibilityVerdict).toBe('verified');
+    expect(out.findings.map((f) => f.status)).toEqual(['carried']);
+    expect(out.floorUnconfirmed).toEqual([{ screenId: 'jobs', rules: ['pf-icon-button-name'], barriers: 1 }]);
   });
 
   it('compares a version 2 floor with its own keys and discloses that it predates row keys', () => {
