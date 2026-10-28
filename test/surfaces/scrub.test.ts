@@ -460,7 +460,9 @@ describe('removeFrameMarkers on its own', () => {
     expect(removeFrameMarkers(forged)).toBe('[[REDACTED FRAME MARKER]');
   });
 
-  it('completes quickly on a long adversarial input', () => {
+  // The per-test timeout matches the budget below. Without it the 5000 ms default fails the test
+  // first, and the wider bound never takes effect.
+  it('completes quickly on a long adversarial input', { timeout: 60_000 }, () => {
     // Sized so rescanning the tail for every match, which is the shape of this defense done
     // naively, takes minutes while a single forward pass takes about a second. The budget is a
     // blowup detector, not a measurement. It is set far above the forward pass, which measured
