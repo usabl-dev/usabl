@@ -608,7 +608,8 @@ const ROW_CONTEXT_TEXT_LIMIT = 4 * 1024 * 1024;
 const TABLE_NESTING_LIMIT = 32;
 
 /**
- * The table row an element sits in, read in the page. See RowContextRead.
+ * The table row an element sits in, read in the page in usabl's own world (see ROW_WORLD). See
+ * RowContextRead.
  *
  * The selector must name exactly one element. One the page cannot parse, one that matches nothing
  * (the element went away after the scanner saw it), and one that matches more than one element are
@@ -635,255 +636,271 @@ const TABLE_NESTING_LIMIT = 32;
  * it are valid too. Anything under a row or table that cannot be told apart, or under a row of a
  * table that keys no rows, is ambiguous. It is never keyed with an empty part.
  */
-async function rowContextForSelector(pw: PwPage, selector: string): Promise<RowContextRead> {
-  return pw.evaluate(
-    ({ query, limit, textLimit, nestingLimit }) => {
-      const TABLE = 'table, [role="table"], [role="grid"], [role="treegrid"]';
-      const ROW = 'tr, [role="row"]';
-      const GENERATED = /^OUIA-Generated-|pf-random-id-|:r[0-9a-z]+:|«r[0-9a-z]+»|_r_[0-9a-z]+_/i;
-      const ROW_ATTRIBUTES = ['data-row-key', 'data-key', 'data-id', 'data-ouia-component-id', 'id'];
-      const TABLE_ATTRIBUTES = ['id', 'data-ouia-component-id', 'data-table-key'];
-      type Ambiguity = 'row-key-missing' | 'row-key-duplicate' | 'row-key-too-long' | 'table-ambiguous' | 'enclosing-row-unkeyed';
+interface RowReadArgs {
+  query: string;
+  limit: number;
+  textLimit: number;
+  nestingLimit: number;
+}
 
-      let matches: Element[];
-      try {
-        matches = Array.from(document.querySelectorAll(query));
-      } catch {
-        return { kind: 'unreadable' as const, reason: 'selector-invalid' as const };
+// The row read, as a function sent to the row world with each call. It must use nothing from
+// outside its own body: it runs in the browser from its source text.
+const READ_ROW_CONTEXT = ({ query, limit, textLimit, nestingLimit }: RowReadArgs) => {
+  const TABLE = 'table, [role="table"], [role="grid"], [role="treegrid"]';
+  const ROW = 'tr, [role="row"]';
+  const GENERATED = /^OUIA-Generated-|pf-random-id-|:r[0-9a-z]+:|«r[0-9a-z]+»|_r_[0-9a-z]+_/i;
+  const ROW_ATTRIBUTES = ['data-row-key', 'data-key', 'data-id', 'data-ouia-component-id', 'id'];
+  const TABLE_ATTRIBUTES = ['id', 'data-ouia-component-id', 'data-table-key'];
+  type Ambiguity = 'row-key-missing' | 'row-key-duplicate' | 'row-key-too-long' | 'table-ambiguous' | 'enclosing-row-unkeyed';
+
+  let matches: Element[];
+  try {
+    matches = Array.from(document.querySelectorAll(query));
+  } catch {
+    return { kind: 'unreadable' as const, reason: 'selector-invalid' as const };
+  }
+  if (matches.length === 0) {
+    return { kind: 'unreadable' as const, reason: 'element-missing' as const };
+  }
+  if (matches.length > 1) {
+    return { kind: 'unreadable' as const, reason: 'element-multiple' as const };
+  }
+  const element = matches[0] as Element;
+
+  const tableOf = (row: Element): Element | null => row.closest(TABLE);
+  const isBodyRow = (row: Element, table: Element): boolean => {
+    const section = row.closest('thead, tfoot');
+    if (section !== null && section.closest(TABLE) === table) return false;
+    return !Array.from(row.children).some((cell) =>
+      cell.matches('th[scope="col"], th[scope="colgroup"], [role="columnheader"]'),
+    );
+  };
+  const bodyRows = (table: Element): Element[] =>
+    Array.from(table.querySelectorAll(ROW)).filter((row) => tableOf(row) === table && isBodyRow(row, table));
+  const usable = (value: string | null): string | null =>
+    value === null || value.trim() === '' || GENERATED.test(value) ? null : value;
+  const rowHeader = (row: Element): string | null => {
+    const header = Array.from(row.children).find((cell) =>
+      cell.matches('th:not([scope="col"]):not([scope="colgroup"]), [role="rowheader"]'),
+    );
+    if (header === undefined) return null;
+    const text = header.textContent ?? '';
+    return text.trim() === '' ? null : text;
+  };
+  const SOURCES: Array<[string, (row: Element) => string | null]> = [
+    ...ROW_ATTRIBUTES.map((name): [string, (row: Element) => string | null] => [
+      `attr:${name}`,
+      (row) => usable(row.getAttribute(name)),
+    ]),
+    ['header', rowHeader],
+  ];
+
+  // A row's key: keyed, ambiguous, or null when its table keys no rows (or it is not a body row).
+  type RowKey = { source: string; key: string } | { ambiguous: Ambiguity } | null;
+  type TableRows = { rows: Map<Element, RowKey>; keys: string[] };
+  const rowKeyCache = new Map<Element, TableRows>();
+  const tableRows = (table: Element): TableRows => {
+    const cached = rowKeyCache.get(table);
+    if (cached !== undefined) return cached;
+    const rowsOut = new Map<Element, RowKey>();
+    const keys: string[] = [];
+    const rows = bodyRows(table);
+    const source = SOURCES.find(([, read]) => rows.some((other) => read(other) !== null));
+    const counts = new Map<string, number>();
+    if (source !== undefined) {
+      for (const other of rows) {
+        const value = source[1](other);
+        if (value !== null) counts.set(value, (counts.get(value) ?? 0) + 1);
       }
-      if (matches.length === 0) {
-        return { kind: 'unreadable' as const, reason: 'element-missing' as const };
+    }
+    for (const other of rows) {
+      if (source === undefined) {
+        rowsOut.set(other, null);
+        continue;
       }
-      if (matches.length > 1) {
-        return { kind: 'unreadable' as const, reason: 'element-multiple' as const };
+      const value = source[1](other);
+      if (value === null) {
+        rowsOut.set(other, { ambiguous: 'row-key-missing' });
+      } else if (value.length > limit) {
+        rowsOut.set(other, { ambiguous: 'row-key-too-long' });
+      } else if (counts.get(value) !== 1) {
+        rowsOut.set(other, { ambiguous: 'row-key-duplicate' });
+      } else {
+        rowsOut.set(other, { source: source[0], key: value });
+        keys.push(value);
       }
-      const element = matches[0] as Element;
+    }
+    const out = { rows: rowsOut, keys };
+    rowKeyCache.set(table, out);
+    return out;
+  };
+  const rowKey = (table: Element, row: Element): RowKey => tableRows(table).rows.get(row) ?? null;
 
-      const tableOf = (row: Element): Element | null => row.closest(TABLE);
-      const isBodyRow = (row: Element, table: Element): boolean => {
-        const section = row.closest('thead, tfoot');
-        if (section !== null && section.closest(TABLE) === table) return false;
-        return !Array.from(row.children).some((cell) =>
-          cell.matches('th[scope="col"], th[scope="colgroup"], [role="columnheader"]'),
-        );
-      };
-      const bodyRows = (table: Element): Element[] =>
-        Array.from(table.querySelectorAll(ROW)).filter((row) => tableOf(row) === table && isBodyRow(row, table));
-      const usable = (value: string | null): string | null =>
-        value === null || value.trim() === '' || GENERATED.test(value) ? null : value;
-      const rowHeader = (row: Element): string | null => {
-        const header = Array.from(row.children).find((cell) =>
-          cell.matches('th:not([scope="col"]):not([scope="colgroup"]), [role="rowheader"]'),
-        );
-        if (header === undefined) return null;
-        const text = header.textContent ?? '';
-        return text.trim() === '' ? null : text;
-      };
-      const SOURCES: Array<[string, (row: Element) => string | null]> = [
-        ...ROW_ATTRIBUTES.map((name): [string, (row: Element) => string | null] => [
-          `attr:${name}`,
-          (row) => usable(row.getAttribute(name)),
-        ]),
-        ['header', rowHeader],
-      ];
+  // Collapsed so the same words always name the same table, however the markup wraps them.
+  const collapse = (text: string): string => text.replace(/\s+/g, ' ').trim();
+  const ownName = (table: Element): [string, string] => {
+    for (const name of TABLE_ATTRIBUTES) {
+      const value = usable(table.getAttribute(name));
+      if (value !== null) return [`attr:${name}`, value];
+    }
+    // The accessible-name order: aria-labelledby wins over aria-label, which wins over a caption.
+    const labelledBy = table.getAttribute('aria-labelledby');
+    if (labelledBy !== null) {
+      const text = collapse(
+        labelledBy
+          .split(/\s+/)
+          .filter((id) => id !== '')
+          .map((id) => document.getElementById(id)?.textContent ?? '')
+          .join(' '),
+      );
+      if (text !== '') return ['labelledby', text];
+    }
+    const label = collapse(table.getAttribute('aria-label') ?? '');
+    if (label !== '') return ['label', label];
+    const caption = Array.from(table.children).find((child) => child.tagName.toLowerCase() === 'caption');
+    const captionText = collapse(caption?.textContent ?? '');
+    if (captionText !== '') return ['caption', captionText];
+    return ['unnamed', ''];
+  };
 
-      // A row's key: keyed, ambiguous, or null when its table keys no rows (or it is not a body row).
-      type RowKey = { source: string; key: string } | { ambiguous: Ambiguity } | null;
-      type TableRows = { rows: Map<Element, RowKey>; keys: string[] };
-      const rowKeyCache = new Map<Element, TableRows>();
-      const tableRows = (table: Element): TableRows => {
-        const cached = rowKeyCache.get(table);
-        if (cached !== undefined) return cached;
-        const rowsOut = new Map<Element, RowKey>();
-        const keys: string[] = [];
-        const rows = bodyRows(table);
-        const source = SOURCES.find(([, read]) => rows.some((other) => read(other) !== null));
-        const counts = new Map<string, number>();
-        if (source !== undefined) {
-          for (const other of rows) {
-            const value = source[1](other);
-            if (value !== null) counts.set(value, (counts.get(value) ?? 0) + 1);
-          }
-        }
-        for (const other of rows) {
-          if (source === undefined) {
-            rowsOut.set(other, null);
-            continue;
-          }
-          const value = source[1](other);
-          if (value === null) {
-            rowsOut.set(other, { ambiguous: 'row-key-missing' });
-          } else if (value.length > limit) {
-            rowsOut.set(other, { ambiguous: 'row-key-too-long' });
-          } else if (counts.get(value) !== 1) {
-            rowsOut.set(other, { ambiguous: 'row-key-duplicate' });
-          } else {
-            rowsOut.set(other, { source: source[0], key: value });
-            keys.push(value);
-          }
-        }
-        const out = { rows: rowsOut, keys };
-        rowKeyCache.set(table, out);
-        return out;
-      };
-      const rowKey = (table: Element, row: Element): RowKey => tableRows(table).rows.get(row) ?? null;
-
-      // Collapsed so the same words always name the same table, however the markup wraps them.
-      const collapse = (text: string): string => text.replace(/\s+/g, ' ').trim();
-      const ownName = (table: Element): [string, string] => {
-        for (const name of TABLE_ATTRIBUTES) {
-          const value = usable(table.getAttribute(name));
-          if (value !== null) return [`attr:${name}`, value];
-        }
-        // The accessible-name order: aria-labelledby wins over aria-label, which wins over a caption.
-        const labelledBy = table.getAttribute('aria-labelledby');
-        if (labelledBy !== null) {
-          const text = collapse(
-            labelledBy
-              .split(/\s+/)
-              .filter((id) => id !== '')
-              .map((id) => document.getElementById(id)?.textContent ?? '')
-              .join(' '),
-          );
-          if (text !== '') return ['labelledby', text];
-        }
-        const label = collapse(table.getAttribute('aria-label') ?? '');
-        if (label !== '') return ['label', label];
-        const caption = Array.from(table.children).find((child) => child.tagName.toLowerCase() === 'caption');
-        const captionText = collapse(caption?.textContent ?? '');
-        if (captionText !== '') return ['caption', captionText];
-        return ['unnamed', ''];
-      };
-
-      // A table's identity text, and why it is not valid, or null when it is. Invalidity is passed
-      // down: a table nested under a row or a table that cannot be told apart cannot be either.
-      type Identity = { value: string; problem: Ambiguity | null };
-      const enclosing = (table: Element): { row: Element; table: Element } | null => {
-        const outerRow = table.parentElement?.closest(ROW) ?? null;
-        const outerTable = outerRow === null ? null : tableOf(outerRow);
-        return outerRow === null || outerTable === null ? null : { row: outerRow, table: outerTable };
-      };
-      const valueCache = new Map<Element, string>();
-      const valueOf = (table: Element, depth: number): string => {
-        const cached = valueCache.get(table);
-        if (cached !== undefined) return cached;
-        const parts: Array<[string, string]> = [];
-        const outer = depth < nestingLimit ? enclosing(table) : null;
-        if (outer !== null) {
-          parts.push(['table', valueOf(outer.table, depth + 1)]);
-          const key = rowKey(outer.table, outer.row);
-          // A placeholder only: an identity built with it is never valid, see identityOf.
-          parts.push(['row', key !== null && 'key' in key ? JSON.stringify([key.source, key.key]) : '']);
-        }
-        parts.push(ownName(table));
-        const value = JSON.stringify(parts);
-        valueCache.set(table, value);
-        return value;
-      };
-      const allTables = Array.from(document.querySelectorAll(TABLE));
-      const sameValue = new Map<string, number>();
-      for (const table of allTables) {
-        const value = valueOf(table, 0);
-        sameValue.set(value, (sameValue.get(value) ?? 0) + 1);
-      }
-      const identityCache = new Map<Element, Identity>();
-      const identityOf = (table: Element, depth: number): Identity => {
-        const cached = identityCache.get(table);
-        if (cached !== undefined) return cached;
-        const value = valueOf(table, 0);
-        let problem: Ambiguity | null = null;
-        if (value.length > limit) {
+  // A table's identity text, and why it is not valid, or null when it is. Invalidity is passed
+  // down: a table nested under a row or a table that cannot be told apart cannot be either.
+  type Identity = { value: string; problem: Ambiguity | null };
+  const enclosing = (table: Element): { row: Element; table: Element } | null => {
+    const outerRow = table.parentElement?.closest(ROW) ?? null;
+    const outerTable = outerRow === null ? null : tableOf(outerRow);
+    return outerRow === null || outerTable === null ? null : { row: outerRow, table: outerTable };
+  };
+  const valueCache = new Map<Element, string>();
+  const valueOf = (table: Element, depth: number): string => {
+    const cached = valueCache.get(table);
+    if (cached !== undefined) return cached;
+    const parts: Array<[string, string]> = [];
+    const outer = depth < nestingLimit ? enclosing(table) : null;
+    if (outer !== null) {
+      parts.push(['table', valueOf(outer.table, depth + 1)]);
+      const key = rowKey(outer.table, outer.row);
+      // A placeholder only: an identity built with it is never valid, see identityOf.
+      parts.push(['row', key !== null && 'key' in key ? JSON.stringify([key.source, key.key]) : '']);
+    }
+    parts.push(ownName(table));
+    const value = JSON.stringify(parts);
+    valueCache.set(table, value);
+    return value;
+  };
+  const allTables = Array.from(document.querySelectorAll(TABLE));
+  const sameValue = new Map<string, number>();
+  for (const table of allTables) {
+    const value = valueOf(table, 0);
+    sameValue.set(value, (sameValue.get(value) ?? 0) + 1);
+  }
+  const identityCache = new Map<Element, Identity>();
+  const identityOf = (table: Element, depth: number): Identity => {
+    const cached = identityCache.get(table);
+    if (cached !== undefined) return cached;
+    const value = valueOf(table, 0);
+    let problem: Ambiguity | null = null;
+    if (value.length > limit) {
+      problem = 'row-key-too-long';
+    } else if (sameValue.get(value) !== 1) {
+      problem = 'table-ambiguous';
+    } else {
+      const outer = enclosing(table);
+      if (outer !== null) {
+        if (depth >= nestingLimit) {
           problem = 'row-key-too-long';
-        } else if (sameValue.get(value) !== 1) {
-          problem = 'table-ambiguous';
         } else {
-          const outer = enclosing(table);
-          if (outer !== null) {
-            if (depth >= nestingLimit) {
-              problem = 'row-key-too-long';
-            } else {
-              problem = identityOf(outer.table, depth + 1).problem;
-              if (problem === null) {
-                const key = rowKey(outer.table, outer.row);
-                if (key === null) problem = 'enclosing-row-unkeyed';
-                else if ('ambiguous' in key) problem = key.ambiguous;
-              }
-            }
+          problem = identityOf(outer.table, depth + 1).problem;
+          if (problem === null) {
+            const key = rowKey(outer.table, outer.row);
+            if (key === null) problem = 'enclosing-row-unkeyed';
+            else if ('ambiguous' in key) problem = key.ambiguous;
           }
         }
-        const identity = { value, problem };
-        identityCache.set(table, identity);
-        return identity;
-      };
+      }
+    }
+    const identity = { value, problem };
+    identityCache.set(table, identity);
+    return identity;
+  };
 
-      const row = element.closest(ROW);
-      const table = row === null ? null : tableOf(row);
-      if (row === null || table === null || !isBodyRow(row, table)) {
-        return { kind: 'none' as const };
-      }
-      const key = rowKey(table, row);
-      if (key === null) {
-        return { kind: 'none' as const };
-      }
-      if ('ambiguous' in key) {
-        return { kind: 'ambiguous' as const, reason: key.ambiguous };
-      }
-      const tableIdentity = identityOf(table, 0);
-      if (tableIdentity.problem !== null) {
-        return { kind: 'ambiguous' as const, reason: tableIdentity.problem };
-      }
-      const otherKeys = tableRows(table).keys.filter((other) => other !== key.key);
-      const otherTables = allTables
-        .filter((other) => other !== table)
-        .map((other) => valueOf(other, 0))
-        .filter((value) => value.length <= limit);
-      const carried = [...otherKeys, ...otherTables].reduce((sum, text) => sum + text.length, 0);
-      if (carried > textLimit) {
-        return { kind: 'ambiguous' as const, reason: 'row-key-too-long' as const };
-      }
+  const row = element.closest(ROW);
+  const table = row === null ? null : tableOf(row);
+  if (row === null || table === null || !isBodyRow(row, table)) {
+    return { kind: 'none' as const };
+  }
+  const key = rowKey(table, row);
+  if (key === null) {
+    return { kind: 'none' as const };
+  }
+  if ('ambiguous' in key) {
+    return { kind: 'ambiguous' as const, reason: key.ambiguous };
+  }
+  const tableIdentity = identityOf(table, 0);
+  if (tableIdentity.problem !== null) {
+    return { kind: 'ambiguous' as const, reason: tableIdentity.problem };
+  }
+  const otherKeys = tableRows(table).keys.filter((other) => other !== key.key);
+  const otherTables = allTables
+    .filter((other) => other !== table)
+    .map((other) => valueOf(other, 0))
+    .filter((value) => value.length <= limit);
+  const carried = [...otherKeys, ...otherTables].reduce((sum, text) => sum + text.length, 0);
+  if (carried > textLimit) {
+    return { kind: 'ambiguous' as const, reason: 'row-key-too-long' as const };
+  }
 
-      const steps: string[] = [];
-      let current: Element | null = element;
-      while (current !== null && current !== row) {
-        const parent: Element | null = current.parentElement;
-        let index = 1;
-        let sibling = current.previousElementSibling;
-        while (sibling !== null) {
-          index += 1;
-          sibling = sibling.previousElementSibling;
-        }
-        steps.unshift(`${current.tagName.toLowerCase()}:nth-child(${String(index)})`);
-        current = parent;
-      }
+  const steps: string[] = [];
+  let current: Element | null = element;
+  while (current !== null && current !== row) {
+    const parent: Element | null = current.parentElement;
+    let index = 1;
+    let sibling = current.previousElementSibling;
+    while (sibling !== null) {
+      index += 1;
+      sibling = sibling.previousElementSibling;
+    }
+    steps.unshift(`${current.tagName.toLowerCase()}:nth-child(${String(index)})`);
+    current = parent;
+  }
 
-      const tag = element.tagName.toLowerCase();
-      const explicitRole = element.getAttribute('role')?.trim() ?? '';
-      const inputType = (element.getAttribute('type') ?? 'text').toLowerCase();
-      const implicitRole =
-        tag === 'button' ? 'button'
-        : tag === 'a' && element.hasAttribute('href') ? 'link'
-        : tag === 'select' ? 'combobox'
-        : tag === 'textarea' ? 'textbox'
-        : tag === 'img' ? 'img'
-        : tag === 'input'
-          ? ['button', 'submit', 'reset', 'image'].includes(inputType) ? 'button'
-            : inputType === 'checkbox' || inputType === 'radio' ? inputType
-            : 'textbox'
-        : tag;
+  const tag = element.tagName.toLowerCase();
+  const explicitRole = element.getAttribute('role')?.trim() ?? '';
+  const inputType = (element.getAttribute('type') ?? 'text').toLowerCase();
+  const implicitRole =
+    tag === 'button' ? 'button'
+    : tag === 'a' && element.hasAttribute('href') ? 'link'
+    : tag === 'select' ? 'combobox'
+    : tag === 'textarea' ? 'textbox'
+    : tag === 'img' ? 'img'
+    : tag === 'input'
+      ? ['button', 'submit', 'reset', 'image'].includes(inputType) ? 'button'
+        : inputType === 'checkbox' || inputType === 'radio' ? inputType
+        : 'textbox'
+    : tag;
 
-      return {
-        kind: 'keyed' as const,
-        table: tableIdentity.value,
-        source: key.source,
-        key: key.key,
-        role: explicitRole.length > 0 ? explicitRole : implicitRole,
-        path: steps.join(' > '),
-        otherKeys,
-        otherTables,
-      };
-    },
-    { query: selector, limit: ROW_KEY_LIMIT, textLimit: ROW_CONTEXT_TEXT_LIMIT, nestingLimit: TABLE_NESTING_LIMIT },
-  ) as Promise<RowContextRead>;
+  return {
+    kind: 'keyed' as const,
+    table: tableIdentity.value,
+    source: key.source,
+    key: key.key,
+    role: explicitRole.length > 0 ? explicitRole : implicitRole,
+    path: steps.join(' > '),
+    otherKeys,
+    otherTables,
+  };
+};
+
+// The world the row read runs in. It shares the DOM with the page but not its globals or
+// prototypes, so page script cannot change the getAttribute, closest, parentElement, or
+// querySelectorAll calls a row key is read through, and cannot move a key from one row to another
+// or put an element outside a table into a row. Nothing is installed there: the read is sent with
+// every call.
+const ROW_WORLD = 'usabl-rows';
+
+async function rowContextForSelector(cdp: CDPSession, selector: string): Promise<RowContextRead> {
+  const args: RowReadArgs = { query: selector, limit: ROW_KEY_LIMIT, textLimit: ROW_CONTEXT_TEXT_LIMIT, nestingLimit: TABLE_NESTING_LIMIT };
+  return (await callInWorld(cdp, ROW_WORLD, 'read the table row', READ_ROW_CONTEXT.toString(), [args])) as RowContextRead;
 }
 
 async function stablePathsForSelector(cdp: CDPSession, selector: string): Promise<string[]> {
@@ -1373,7 +1390,7 @@ function wrapPage(
       return paths.map((path) => ({ selector: path }));
     },
     async rowContext(selector: string): Promise<RowContextRead> {
-      return rowContextForSelector(pw, selector);
+      return rowContextForSelector(cdp, selector);
     },
     async close(): Promise<void> {
       await context.close();

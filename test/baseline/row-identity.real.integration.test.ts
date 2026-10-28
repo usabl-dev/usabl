@@ -25,10 +25,10 @@ import { checkPage } from '../../src/surfaces/playwright-helper.js';
 const BROKEN = '<button type="button"><svg aria-hidden="true" width="12" height="12"></svg></button>';
 const NAMED = '<button type="button" aria-label="Open actions">Actions</button>';
 
-function page(body: string): string {
+function page(body: string, headScript = ''): string {
   return `<!doctype html>
 <html lang="en">
-  <head><meta charset="utf-8"><title>Rows</title></head>
+  <head><meta charset="utf-8"><title>Rows</title>${headScript === '' ? '' : `<script>${headScript}</script>`}</head>
   <body><main><h1>Rows</h1>${body}</main></body>
 </html>`;
 }
@@ -93,12 +93,12 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('row identity edge cases 
     await fixture.close();
   });
 
-  function configFor(url: string): UsablConfig {
+  function configFor(url: string, reachedSelector?: string): UsablConfig {
     return {
       appBaseUrl: fixture.origin,
       uiFileGlobs: ['src/**'],
       discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
-      surfaces: [{ id: 'rows', url, files: [PAGE_FILE] }],
+      surfaces: [{ id: 'rows', url, files: [PAGE_FILE], ...(reachedSelector === undefined ? {} : { reachedWhen: { selector: reachedSelector } }) }],
       guardedPaths: ['usabl.config.json'],
     };
   }
@@ -376,4 +376,105 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('row identity edge cases 
       await browser.close();
     }
   }, 120_000);
+
+  // A page whose own script lies about the DOM. usabl reads the row in a world of its own, which
+  // shares the DOM with the page but not its prototypes, so these patches change nothing it reads.
+  describe('when page script patches the DOM accessors the row read uses', () => {
+    // Each named button has its own name, so no other rule fires on the rows.
+    const row = (key: string, broken: boolean): string =>
+      `<tr data-row-key="${key}"><td>job</td><td>${broken ? BROKEN : `<button type="button" aria-label="Open job ${key}">Open</button>`}</td></tr>`;
+    const jobs = (a: boolean, b: boolean, extra = ''): string =>
+      `${table(row('A', a) + row('B', b), ' id="jobs"')}${extra}`;
+
+    async function baselineThenCheck(path: string, check: string): Promise<{ baselineExit: number; result: Result }> {
+      const url = fixture.set(path, page(jobs(true, false)));
+      const config = configFor(url, '#jobs');
+      let floorJson: string | null = null;
+      const outcome = await runBaseline(depsFor(config, null), config, {
+        writeFile: async (_path, contents) => {
+          floorJson = contents;
+        },
+      });
+      fixture.set(path, check);
+      return { baselineExit: outcome.exitCode, result: await run(depsFor(config, floorJson), config) };
+    }
+
+    it('does not let a patched getAttribute move row keys between rows', async () => {
+      // Row A is fixed and row B is broken. The patch makes row B read as row A, and row A as Z.
+      const patch =
+        'const read = Element.prototype.getAttribute;' +
+        'Element.prototype.getAttribute = function (name) {' +
+        '  const value = read.call(this, name);' +
+        '  if (name === "data-row-key" && value === "B") return "A";' +
+        '  if (name === "data-row-key" && value === "A") return "Z";' +
+        '  return value;' +
+        '};';
+      const out = await baselineThenCheck('/patched-attr', page(jobs(false, true), patch));
+      expect(out.baselineExit).toBe(0);
+      expect(out.result.verdict).not.toBe('verified');
+      expect(out.result.verdict).toBe('regression');
+      expect(out.result.receipt).toBeNull();
+    }, 180_000);
+
+    it('does not let a patched closest and parentElement put a button outside the table into a row', async () => {
+      // Both rows are named. The broken button sits outside the table, and the patch reports it as
+      // the button in row A's second cell.
+      const patch =
+        'const closest = Element.prototype.closest;' +
+        'Element.prototype.closest = function (selector) {' +
+        '  if (this.id === "stray" && /tr/.test(selector)) return document.querySelector(\'tr[data-row-key="A"]\');' +
+        '  return closest.call(this, selector);' +
+        '};' +
+        'const parent = Object.getOwnPropertyDescriptor(Node.prototype, "parentElement");' +
+        'Object.defineProperty(Node.prototype, "parentElement", { configurable: true, get() {' +
+        '  if (this.id === "stray") return document.querySelector(\'tr[data-row-key="A"] > td:nth-child(2)\');' +
+        '  return parent.get.call(this);' +
+        '} });';
+      const stray = '<div id="outside"><button id="stray" type="button"><svg aria-hidden="true" width="12" height="12"></svg></button></div>';
+      const out = await baselineThenCheck('/patched-tree', page(jobs(false, false, stray), patch));
+      expect(out.baselineExit).toBe(0);
+      expect(out.result.verdict).not.toBe('verified');
+      expect(out.result.verdict).toBe('regression');
+      expect(out.result.receipt).toBeNull();
+      // The rulepack names the button by its own selector, so its draft is keyed outside any row.
+      expect(out.result.findings.some((f) => f.rule === 'pf-icon-button-name' && f.status === 'new')).toBe(true);
+    }, 180_000);
+
+    it('reads the same row on a page checkPage adopts as on the same page unpatched', async () => {
+      // Only row B is broken. The patch makes row B read as A and row A as Z, so a row read through
+      // page script would name a different row.
+      const patch =
+        'const read = Element.prototype.getAttribute;' +
+        'Element.prototype.getAttribute = function (name) {' +
+        '  const value = read.call(this, name);' +
+        '  if (name === "data-row-key" && value === "B") return "A";' +
+        '  if (name === "data-row-key" && value === "A") return "Z";' +
+        '  return value;' +
+        '};';
+      fixture.set('/adopted-plain', page(jobs(false, true)));
+      fixture.set('/adopted-patched', page(jobs(false, true), patch));
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const rowScopes = async (path: string): Promise<unknown[]> => {
+          const context = await browser.newContext();
+          try {
+            const pw = await context.newPage();
+            await pw.goto(`${fixture.origin}${path}`);
+            const result = await checkPage(pw, { keyboardWalk: false });
+            return result.drafts
+              .filter((d) => d.rule === 'button-name')
+              .map((d) => d.evidence.extra?.['rowScope'] ?? null);
+          } finally {
+            await context.close();
+          }
+        };
+        const plain = await rowScopes('/adopted-plain');
+        expect(plain).toHaveLength(1);
+        expect(plain[0]).not.toBeNull();
+        expect(await rowScopes('/adopted-patched')).toEqual(plain);
+      } finally {
+        await browser.close();
+      }
+    }, 180_000);
+  });
 });
