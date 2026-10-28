@@ -4,8 +4,9 @@
  * Only `run()` calls this inside usabl, and only after the gate returned verified. It is also
  * exported, so it checks the ids it is handed (see checkReceiptInput).
  *
- * Four bindings: sourceTree (current Git working tree), policyHash (guarded-path
- * blobs at HEAD), runnerVersion, and scannerVersions (axe-core, Playwright, Chromium).
+ * Five bindings: sourceTree (current Git working tree), policyHash (guarded-path
+ * blobs at HEAD), runnerVersion, scannerVersions (axe-core, Playwright, Chromium), and
+ * historyHead (the debt history commit, which can lower the debt a run accepts).
  * Lists are sorted so the same inputs hash the same way.
  */
 import type { Deps, Receipt, ScreenScan, UsablConfig } from "../contracts/index.js";
@@ -22,6 +23,8 @@ export interface ReceiptArgs {
   findingsSummary: Receipt["findingsSummary"];
   activeWaivers: number;
   baseRevision?: string | null;
+  // The debt history commit the run read, or null when it read none. See currentHistoryHead.
+  historyHead?: string | null;
 }
 
 /**
@@ -176,9 +179,10 @@ export async function mintReceipt(
     computePolicyHash(deps, expandedGuardedPaths),
   ]);
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceTree,
     baseRevision: args.baseRevision ?? null,
+    historyHead: args.historyHead ?? null,
     policyHash: policy,
     runnerVersion: deps.runnerVersion,
     scannerVersions: deps.scannerVersions,
@@ -197,6 +201,20 @@ export async function mintReceipt(
     activeWaivers: args.activeWaivers,
     mintedAt: deps.clock(),
   };
+}
+
+/**
+ * The debt history commit as it is now, for comparing with a receipt. Null when the caller passed
+ * no history reader or there is no history branch. A read that fails is a value no receipt holds,
+ * so the receipt does not verify and the Stop hook runs a full check, which is the safe side.
+ */
+export async function currentHistoryHead(deps: Deps): Promise<string | null> {
+  if (deps.history === undefined) return null;
+  try {
+    return await deps.history.resolveCommit(deps.history.ref);
+  } catch {
+    return "unreadable";
+  }
 }
 
 export interface ReceiptVerification {
@@ -230,6 +248,11 @@ export async function verifyReceipt(
   }
   if (receipt.runnerVersion !== deps.runnerVersion) {
     failedFields.push("runnerVersion");
+  }
+  // The history lowers what a run accepts. A receipt minted before it moved was judged against
+  // more accepted debt than a run now would be, so it no longer stands for this tree.
+  if (receipt.historyHead !== (await currentHistoryHead(deps))) {
+    failedFields.push("historyHead");
   }
   // scannerVersions is what actually decides the verdict (axe-core et al.). It is minted
   // into the receipt, so verify must compare it too; a swapped scanner is a different engine.

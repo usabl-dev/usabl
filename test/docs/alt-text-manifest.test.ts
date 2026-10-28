@@ -3,7 +3,8 @@ import type { Receipt, RequirementBundle, Result } from '../../src/contracts/ind
 import { generateAltTextManifest } from '../../src/docs/alt-text-manifest.js';
 
 const receiptFixture: Receipt = {
-  schemaVersion: 1,
+  schemaVersion: 2,
+  historyHead: null,
   sourceTree: 'tree-123',
   baseRevision: null,
   policyHash: 'policy-1',

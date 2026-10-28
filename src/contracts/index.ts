@@ -263,9 +263,14 @@ export interface Coverage {
 // ---- receipt (re-checkable proof of a verified run) ----
 // Receipts exist only for verified deterministic outcomes. Preview and model-judgment never mint one.
 export interface Receipt {
-  schemaVersion: 1;
+  // Version 2 added historyHead. A version 1 receipt is not read, so it triggers one full run.
+  schemaVersion: 2;
   sourceTree: string;
   baseRevision: string | null;
+  // The commit of the debt history branch when this receipt was minted, or null when there was
+  // none. The history lowers the debt a run accepts, so a receipt minted before the history moved
+  // must not stand for a run after it. See src/history/.
+  historyHead: string | null;
   policyHash: string;
   runnerVersion: string;
   scannerVersions: { axeCore: string; playwright: string; chromium: string };
@@ -318,6 +323,11 @@ export interface Result {
   // were rendered, so they are not claimed fixed. Required for the same reason as floorHeadroom.
   // Projection only. The gate never consumes it and it never influences a verdict.
   floorUnconfirmed: FloorUnconfirmed[];
+  // What the debt history did on this run: whether automatic tracking was on, and the counts the
+  // pull request comment reports. Projection only. The gate never reads it. Optional because a
+  // Result from an older engine, or one a library caller composed, has none, and a surface then
+  // says nothing about tracking.
+  debt?: DebtStatus;
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);

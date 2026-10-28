@@ -523,6 +523,31 @@ export function scrubResult(result: Result): Result {
       barriers: entry.barriers,
     })),
     paidDownCount: result.paidDownCount,
+    // Counts, a cause from a closed set, and a history commit id. The detail names a history file,
+    // a line, and a field, and the head is read from git, so both strings are scrubbed like every
+    // other one. Copied field by field for the same reason as above.
+    ...(result.debt === undefined
+      ? {}
+      : {
+          debt: {
+            tracking: result.debt.tracking,
+            off:
+              result.debt.off === null
+                ? null
+                : {
+                    cause: result.debt.off.cause,
+                    detail: result.debt.off.detail === null ? null : scrubString(result.debt.off.detail),
+                  },
+            historyHead: result.debt.historyHead === null ? null : scrubString(result.debt.historyHead),
+            floorBarriers: result.debt.floorBarriers,
+            acceptedBarriers: result.debt.acceptedBarriers,
+            confirmedFixed: result.debt.confirmedFixed,
+            fixedThisRun: result.debt.fixedThisRun,
+            remaining: result.debt.remaining,
+            oldestOpenDays: result.debt.oldestOpenDays,
+            intermittent: result.debt.intermittent,
+          },
+        }),
   };
 }
 

@@ -19,6 +19,7 @@ import { overlayRequirementsFs } from "../intake/overlay-fs.js";
 import { resolveIntakeConfig } from "../intake/trusted-config.js";
 import { makeRealBrowserDriver, type RealBrowserOptions } from "./real.js";
 import { makeGitReader } from "./git.js";
+import { makeHistoryGit } from "../history/git.js";
 import { makeFsGlob } from "./fs.js";
 import { resolveStorageStatePath, type EnvReader } from "./session.js";
 
@@ -235,6 +236,8 @@ export async function buildDeps(
     },
     browser,
     git,
+    // Read as git objects at the fetched history branch, never from the working tree.
+    history: makeHistoryGit({ cwd }),
     fs,
     // Expose the same bundle the providers were built from. Failed intake yields the empty
     // bundle here so the docs surface renders transcript artifacts without inventing content.

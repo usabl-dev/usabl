@@ -45,9 +45,11 @@ function isReceipt(value: unknown): value is Receipt {
   const findingsSummary = value['findingsSummary'];
 
   return (
-    value['schemaVersion'] === 1 &&
+    // A version 1 receipt has no history binding. Reading it as not found triggers one full run.
+    value['schemaVersion'] === 2 &&
     typeof value['sourceTree'] === 'string' &&
     (value['baseRevision'] === null || typeof value['baseRevision'] === 'string') &&
+    (value['historyHead'] === null || typeof value['historyHead'] === 'string') &&
     typeof value['policyHash'] === 'string' &&
     typeof value['runnerVersion'] === 'string' &&
     isRecord(scannerVersions) &&

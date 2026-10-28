@@ -29,7 +29,8 @@ class MemoryReceiptFs {
 }
 
 const receiptFixture: Receipt = {
-  schemaVersion: 1,
+  schemaVersion: 2,
+  historyHead: null,
   sourceTree: 'tree-123',
   baseRevision: null,
   policyHash: 'hash-abc',

@@ -213,7 +213,8 @@ describe('scrubResult', () => {
   it('keeps receipt policyHash and sourceTree unchanged', () => {
     const raw = baseResult({
       receipt: {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        historyHead: null,
         sourceTree: 'tree-fixed',
         baseRevision: null,
         policyHash: '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
