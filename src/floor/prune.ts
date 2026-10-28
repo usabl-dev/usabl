@@ -127,7 +127,8 @@ export async function runFloorPrune(
     if (rawFloor === null || rawFloor.trim().length === 0) {
       return { exitCode: 0, wrote: false, message: formatNoopReport(), prunedCount: 0, loweredCount: 0 };
     }
-    const floor = parseEvidenceFloor(JSON.parse(rawFloor));
+    const floorDocument: unknown = JSON.parse(rawFloor);
+    const floor = parseEvidenceFloor(floorDocument);
     if (floor.entries.length === 0) {
       return { exitCode: 0, wrote: false, message: formatNoopReport(), prunedCount: 0, loweredCount: 0 };
     }
@@ -211,7 +212,16 @@ export async function runFloorPrune(
     // Prune removes entries and lowers counts. It never raises one and never adds an identity, so
     // it must keep the version it read. Claiming version 2 over version 1 counts would present
     // placeholder counts as observed debt.
-    const nextFloor = { version: floor.version, entries: sortBy(keptEntries, floorEntrySortKey) };
+    //
+    // Every other top-level field is written back as it was read, in its place. Prune changes only
+    // the entries. A floor marked scope "partial" covers only some screens, and writing it back
+    // without the marker would make it read as a complete floor. A newer floor can carry fields
+    // this code does not know, and those are kept the same way.
+    const nextFloor = {
+      ...(floorDocument as Record<string, unknown>),
+      version: floor.version,
+      entries: sortBy(keptEntries, floorEntrySortKey),
+    };
     await floorFs.writeFile(EVIDENCE_FLOOR_PATH, `${JSON.stringify(nextFloor, null, 2)}\n`);
     return {
       exitCode: 0,
