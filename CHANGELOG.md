@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- The focus and style reads now run in an isolated world, the way element paths and the
+  announcement capture already did. These are `focusBody`, `activeElementIs`,
+  `activeElementWithin`, the focused element `activeNode` reads, and `getComputedStyle`.
+  Before, they ran in the page's own world, so a page that redefined `querySelector`, the
+  `activeElement` getter, `contains`, `focus`, or `getComputedStyle` could make a keyboard
+  or focus check report what the page wanted and pass a check it fails.
+
 - A `content` or `flow` requirement whose surface matches no configured surface, no
   route manifest screen, and no docs manifest page is now a `not-covered` gap on the CLI
   run, with ref `requirement:<id>` and a reason that names the surface. Before, no run
