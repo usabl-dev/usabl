@@ -128,6 +128,7 @@ function validResult(): Record<string, unknown> {
     accessibilityExitCode: 1,
     paidDownCount: 0,
     floorHeadroom: [{ screenId: 'clusters', rule: 'button-name', recorded: 3, observed: 1 }],
+    floorUnconfirmed: [{ screenId: 'clusters', rules: ['button-name', 'image-alt'], barriers: 2 }],
   };
 }
 
@@ -224,6 +225,13 @@ describe('parseResultJson validates the whole Result against the contract', () =
     { field: 'receipt.applicability[0].applied', doc: () => withValue(['receipt', 'applicability', 0, 'applied'], LEAK) },
     { field: 'floorHeadroom[0].recorded', doc: () => withValue(['floorHeadroom', 0, 'recorded'], LEAK) },
     { field: 'floorHeadroom', doc: () => without(['floorHeadroom']) },
+    { field: 'floorUnconfirmed', doc: () => without(['floorUnconfirmed']) },
+    { field: 'floorUnconfirmed', doc: () => withValue(['floorUnconfirmed'], { length: LEAK }) },
+    { field: 'floorUnconfirmed[0].screenId', doc: () => withValue(['floorUnconfirmed', 0, 'screenId'], 7) },
+    { field: 'floorUnconfirmed[0].rules', doc: () => withValue(['floorUnconfirmed', 0, 'rules'], LEAK) },
+    { field: 'floorUnconfirmed[0].rules[1]', doc: () => withValue(['floorUnconfirmed', 0, 'rules', 1], { rule: LEAK }) },
+    { field: 'floorUnconfirmed[0].barriers', doc: () => withValue(['floorUnconfirmed', 0, 'barriers'], 1.5) },
+    { field: 'floorUnconfirmed[0].barriers', doc: () => withValue(['floorUnconfirmed', 0, 'barriers'], LEAK) },
   ];
 
   for (const { field, doc } of cases) {
@@ -293,6 +301,11 @@ describe('usabl comment and usabl enforce refuse a malformed Result', () => {
       restore();
     }
   }
+
+  it('comment keeps the notice for floored barriers the run could not confirm', async () => {
+    const out = await runWith(['comment'], JSON.stringify(validResult()));
+    expect(out.stdout).toContain('2 recorded barriers on screen clusters (button-name, image-alt)');
+  });
 
   it('comment exits 4 with a plain reason that names the field', async () => {
     const out = await runWith(['comment'], JSON.stringify(withValue(['findings', 0, 'severity'], LEAK)));

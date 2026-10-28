@@ -120,6 +120,7 @@ describe('engine summary stays inside the frame', () => {
         accessibilityExitCode: 1,
         paidDownCount: 0,
         floorHeadroom: [],
+        floorUnconfirmed: [],
       });
 
       assertOnlyInsideFrame(text, 'engine summary: regression: 1 gating finding(s)');

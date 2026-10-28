@@ -99,6 +99,9 @@ function pageWith(spec: PageSpec = {}): Page {
     // A real focusable stop, so the body-only unseen detector has nothing to say. Without it every
     // case here would be unseen for that separate reason and would prove nothing about sessions.
     activePath: async () => 'html > body > main > button#save',
+    // The stop is the Save button the floored barrier is on, so a run that reached the screen shows
+    // that element rendered and can call the absent barrier fixed.
+    activeNode: async () => ({ name: 'Save', role: 'button', states: {} }),
   });
 }
 

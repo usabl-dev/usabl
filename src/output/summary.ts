@@ -13,6 +13,7 @@ import {
   isBlockingBarrier,
 } from './disclosure.js';
 import { boundField } from './bounded-text.js';
+import { UNCONFIRMED_HEADING, unconfirmedNotice } from './floor-notice.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from './source-location.js';
 import { describeVerdict, formatVerdictLine } from './verdict-line.js';
 
@@ -142,6 +143,25 @@ function renderFloorHeadroom(result: Result): string[] {
 }
 
 /**
+ * The floored barriers this run did not see on a screen it cannot show rendered, one notice per
+ * screen, printed after the floor headroom because both are about the floor file.
+ *
+ * This never blocks and never changes the verdict, so it appears under a verified run. The notice
+ * is the shared sentence every surface prints. Its screen id can come from a route literal, so the
+ * line is neutralized like every other printed value, and it is a data line printed whole.
+ */
+function renderFloorUnconfirmed(result: Result): string[] {
+  const screens = result.floorUnconfirmed ?? [];
+  if (screens.length === 0) {
+    return [];
+  }
+  return [
+    `  ${UNCONFIRMED_HEADING}: ${screens.length} screen${screens.length === 1 ? '' : 's'}`,
+    ...screens.map((entry) => `    ${neutralizePrintedText(unconfirmedNotice(entry))}`),
+  ];
+}
+
+/**
  * One finding, with its source mapping and its fix.
  *
  * Every free-text field is neutralized, then bounded on its own, so a huge page string prints its
@@ -234,6 +254,7 @@ export function formatSummary(result: Result): string {
     }
   }
   lines.push(...renderFloorHeadroom(result));
+  lines.push(...renderFloorUnconfirmed(result));
   lines.push(...renderNotEvaluated(result));
   if (result.dirtyGuardedPaths.length > 0) {
     lines.push(`  guarded paths changed: ${result.dirtyGuardedPaths.join(', ')}`);

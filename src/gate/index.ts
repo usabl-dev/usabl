@@ -11,10 +11,10 @@
  * `not_covered` means there was something to prove and we could not.
  * Dirty guarded paths are `approval_required` and still carry accessibility findings.
  */
-import type { AccessibilityExitCode, AccessibilityVerdict, Coverage, CoverageGap, Draft, EvidenceFacts, EvidenceFloor, Finding, FloorEntry, FloorHeadroom, GateInput, GateOutput, Waiver } from '../contracts/index.js';
+import type { AccessibilityExitCode, AccessibilityVerdict, Coverage, CoverageGap, Draft, EvidenceFacts, EvidenceFloor, Finding, FloorEntry, FloorHeadroom, FloorUnconfirmed, GateInput, GateOutput, RenderEvidence, ScreenScan, Waiver } from '../contracts/index.js';
 import { coverageIncomplete, decideAccessibilityVerdict, notEvaluatedCounts } from '../coverage/completeness.js';
 import { sortBy } from '../primitives/sortKey.js';
-import { computeIdentity, identityKey, identitySchemeFor, readRowScope } from '../primitives/identity.js';
+import { computeIdentity, elementSlots, identityKey, identitySchemeFor, identitySlot, readRowScope, type IdentityScheme } from '../primitives/identity.js';
 import { canonicalize } from '../primitives/canonical.js';
 import { checkGateInput } from './input.js';
 
@@ -44,6 +44,7 @@ export function gate(raw: GateInput): GateOutput {
       // blocked on approval still needs to know the floor needs re-arming before the next run.
       floorGaps: accessibility.floorGaps,
       floorHeadroom: accessibility.floorHeadroom,
+      floorUnconfirmed: accessibility.floorUnconfirmed,
     };
   }
   return {
@@ -60,18 +61,22 @@ function accessibilityOutcome(input: GateInput): {
   summary: string;
   floorGaps: CoverageGap[];
   floorHeadroom: FloorHeadroom[];
+  floorUnconfirmed: FloorUnconfirmed[];
 } {
   // Idle is not a fifth verdict and not not_covered. A run with no UI-touching file measured
   // nothing, so it makes no claim the floor could be stale against and discloses none.
   if (input.coverage.nothingToCheck) {
-    return { verdict: null, findings: [], exitCode: 0, summary: 'nothing to check (no UI-touching files)', floorGaps: [], floorHeadroom: [] };
+    return { verdict: null, findings: [], exitCode: 0, summary: 'nothing to check (no UI-touching files)', floorGaps: [], floorHeadroom: [], floorUnconfirmed: [] };
   }
 
-  const { findings, staleIdentities } = differential(input);
+  const { findings, staleIdentities, unconfirmed } = differential(input);
 
   // A floor that predates barrier counting cannot be compared at all, so it is a coverage gap and
   // the run is not covered. Headroom is different and is deliberately not a gap: see floorHeadroom.
+  // So is a floored barrier that is absent on a screen this run cannot show rendered: see
+  // unconfirmedByScreen.
   const floorGaps = [...staleFloorGaps(input.floor), ...rowKeyFloorGaps(input.floor, input.drafts)];
+  const floorUnconfirmed = unconfirmedByScreen(unconfirmed);
 
   // The gate weighs and reports its own gaps. Handing the caller a gap it did not count would let
   // the Result show a gap the summary never mentioned, which is the same line-against-surface
@@ -96,11 +101,13 @@ function accessibilityOutcome(input: GateInput): {
     exitCode,
     floorGaps,
     floorHeadroom: staleIdentities,
+    floorUnconfirmed,
     summary: verdictSummary(
       verdict,
       blocking.length,
       findings.filter(RECORDED).length,
       staleIdentities.length,
+      floorUnconfirmed.reduce((total, screen) => total + screen.barriers, 0),
       coverage,
     ),
   };
@@ -171,6 +178,41 @@ function rowKeyFloorGaps(floor: EvidenceFloor, drafts: Draft[]): CoverageGap[] {
       'another row leave that count unchanged, so this run cannot prove no new barrier is hiding behind an ' +
       'accepted one. Run "usabl baseline" to regenerate the floor at version 3, then review and merge the diff.',
   }];
+}
+
+/**
+ * The disclosure owed for floored barriers that are absent on a screen this run cannot show
+ * rendered, one entry per screen.
+ *
+ * A floored barrier missing from the drafts is either fixed or was never on the page this run. A
+ * screen whose header and navigation mount and whose content fails to mount has a real control to
+ * walk, no provider error, and so no gap, and every floored barrier in the missing content is
+ * absent. Calling those fixed was a false green on the floor: the run claimed debt paid down on
+ * content nobody saw. So the gate makes no claim about them. They get no finding, which is what a
+ * floor entry on a screen the run did not scan gets, so they are not paid down, not counted fixed
+ * in the receipt, and stay on the floor at their full count.
+ *
+ * It is not a coverage gap, and the verdict does not move. The rest of the screen was scanned, and
+ * a screen with no floored debt whose content fails to mount reads verified in exactly the same
+ * way. Turning debt into a gap would make the floor punish the screens that hold it and nothing
+ * else. What the run owes the reader is the plain fact, so every surface shows this notice.
+ *
+ * Barriers, not entries: an entry records how many barriers the floor accepted at one identity, so
+ * one entry at count 2 is two barriers the run did not see. Screen ids and rule names only. They
+ * come from the floor and the operator's config, never from an element key, which carries page text.
+ */
+function unconfirmedByScreen(unconfirmed: UnconfirmedPaydown[]): FloorUnconfirmed[] {
+  const byScreen = new Map<string, { rules: Set<string>; barriers: number }>();
+  for (const entry of unconfirmed) {
+    const screen = byScreen.get(entry.screenId) ?? { rules: new Set<string>(), barriers: 0 };
+    screen.rules.add(entry.rule);
+    screen.barriers += entry.count;
+    byScreen.set(entry.screenId, screen);
+  }
+  return [...byScreen.keys()].sort().map((screenId) => {
+    const screen = byScreen.get(screenId)!;
+    return { screenId, rules: [...screen.rules].sort(), barriers: screen.barriers };
+  });
 }
 
 /**
@@ -355,10 +397,50 @@ function applyWaivers(findings: Finding[], waivers: Waiver[], now: string): Find
   });
 }
 
-/** The findings for a run, plus the floored identities whose recorded count this run cannot account for. */
+/** A floored identity absent this run on a cleanly scanned screen that showed no sign it rendered. */
+interface UnconfirmedPaydown {
+  screenId: string;
+  rule: string;
+  elementKey: string | null;
+  count: number;
+}
+
+/**
+ * The findings for a run, the floored identities whose recorded count this run cannot account for,
+ * and the absent floored identities this run cannot call fixed.
+ */
 interface Differential {
   findings: Finding[];
   staleIdentities: FloorHeadroom[];
+  unconfirmed: UnconfirmedPaydown[];
+}
+
+/**
+ * What each scanned screen showed of itself, for GateInput.renderEvidence. Kept here, beside the
+ * rule that reads it, so the gate decides what counts as evidence and a caller only passes scans.
+ *
+ * The signal held when at least one part was declared and every declared part held. The element
+ * slots are every keyboard stop and every draft on the screen, by path and by accessible name.
+ */
+export function renderEvidenceOf(screens: readonly ScreenScan[]): Map<string, RenderEvidence> {
+  const evidence = new Map<string, { signalHeld: boolean; elementSlots: Set<string> }>();
+  for (const screen of screens) {
+    const parts = [screen.reachedSelectorPresent, screen.reachedResponseSeen ?? null].filter((part) => part !== null);
+    const signalHeld = parts.length > 0 && parts.every((part) => part === true);
+    const entry = evidence.get(screen.screenId) ?? { signalHeld: false, elementSlots: new Set<string>() };
+    // A screen scanned twice keeps a held signal only if every scan of it held one.
+    entry.signalHeld = evidence.has(screen.screenId) ? entry.signalHeld && signalHeld : signalHeld;
+    for (const stop of screen.stops) {
+      const name = stop.announcement.find((token) => token.kind === 'name')?.text ?? null;
+      for (const slot of elementSlots({ elementPath: stop.elementPath, name })) entry.elementSlots.add(slot);
+    }
+    for (const draft of screen.drafts) {
+      const name = draft.evidence.name?.value ?? null;
+      for (const slot of elementSlots({ elementPath: draft.elementPath, name })) entry.elementSlots.add(slot);
+    }
+    evidence.set(screen.screenId, entry);
+  }
+  return evidence;
 }
 
 export function buildFindings(input: GateInput): Finding[] {
@@ -383,12 +465,9 @@ function differential(input: GateInput): Differential {
   // mixed tally against a deterministic-only floor, so one preview draft sharing an identity with
   // a deterministic one read as growth and reported a barrier that was not there.
   const groups = new Map<string, Finding[]>();
-  const countByGroup = new Map<string, number>();
+  const countByGroup = deterministicCountsByIdentity(input.drafts, scheme);
   for (const f of raw) {
     const key = identityKey(f);
-    if (GATES(f.evidenceClass)) {
-      countByGroup.set(key, (countByGroup.get(key) ?? 0) + 1);
-    }
     const group = groups.get(key);
     if (group) group.push(f);
     else groups.set(key, [f]);
@@ -407,6 +486,7 @@ function differential(input: GateInput): Differential {
 
   const findings: Finding[] = [];
   const staleIdentities: Differential['staleIdentities'] = [];
+  const unconfirmed: UnconfirmedPaydown[] = [];
   for (const [key, f] of byIdentity) {
     const floor = floorByKey.get(key);
     if (!floor) { findings.push({ ...f, status: 'new' }); continue; }
@@ -435,7 +515,9 @@ function differential(input: GateInput): Differential {
       // So the finding stays carried, the verdict is untouched, and every surface says the floor
       // is ahead of what is here and names the command that re-arms it. The operator, not the row
       // count, decides when to close it.
-      if (now < floor.count) {
+      // None at all is absence, decided below with the other absent identities: an advisory
+      // draft at a floored identity is not one of the barriers the floor counts.
+      if (now > 0 && now < floor.count) {
         staleIdentities.push({ screenId: f.screenId, rule: f.rule, recorded: floor.count, observed: now });
       }
     } else {
@@ -446,19 +528,28 @@ function differential(input: GateInput): Differential {
   // Disappeared identities are `fixed`: shown, never gating, never a silent pass. But only when the
   // screen was actually measured this run. A floored identity is absent from the drafts either
   // because the barrier is gone or because nobody scanned its screen, and those are opposite facts.
-  // cleanlyScannedScreens is the only signal that separates them, so an identity whose screen is not
+  // cleanlyScannedScreens is the first signal that separates them, so an identity whose screen is not
   // in it is omitted rather than claimed fixed: making no claim about a screen you did not measure is
   // the honest default, and it matches the rule that silence is not evidence. Omitting cannot
   // manufacture a green. A scanned-but-gapped screen already carries its gap into the verdict, and an
   // out-of-scope screen is one the receipt makes no claim about at all, so neither reads as clean.
-  // One residual remains, tracked in #186: a screen whose chrome mounts but whose content silently
-  // fails to mount has no gap, so it enters cleanlyScannedScreens and a floored identity there is
-  // still claimed fixed. Catching a partial render needs a signal this gate does not have; membership
-  // in cleanlyScannedScreens is not a guarantee the screen was fully measured, only that nothing
-  // flagged it.
-  for (const [key, e] of floorByKey) {
-    if (byIdentity.has(key)) continue;
+  //
+  // A clean scan is still not enough on its own. A screen whose header mounts and whose content
+  // silently fails to mount has no gap, so it is in cleanlyScannedScreens, and every floored
+  // identity in the missing content is absent. So an absent identity is `fixed` only when the run
+  // shows its part of the page rendered: the screen's readiness signal held, or the identity's own
+  // element, by path or by accessible name, was met by the walk or by a check. A counted identity
+  // names no element, so only the signal can confirm it. Without that evidence the identity is not
+  // claimed fixed: it gets no finding, as on a screen nobody scanned, keeps its place on the floor,
+  // and is disclosed in floorUnconfirmed. Both tests are presence tests on sets, so the result does
+  // not depend on order.
+  for (const e of floorByKey.values()) {
+    if (!floorEntryAbsent(e, countByGroup)) continue;
     if (!input.cleanlyScannedScreens.has(e.screenId)) continue;
+    if (!paydownConfirmed(e, input.renderEvidence?.get(e.screenId))) {
+      unconfirmed.push({ screenId: e.screenId, rule: e.rule, elementKey: e.elementKey, count: e.count });
+      continue;
+    }
     // Absent is the largest headroom there is, not the absence of headroom. The entry still holds
     // capacity for every barrier it recorded until a prune removes it, so a barrier arriving here
     // before that lands at a tally at or under the accepted count and is marked carried, which is
@@ -483,7 +574,52 @@ function differential(input: GateInput): Differential {
   return {
     findings: sortBy(applyWaivers(findings, input.waivers, input.now), findingKey),
     staleIdentities: sortBy(staleIdentities, (s) => `${s.screenId}|${s.rule}`),
+    // Sorted by the whole identity, so no two entries tie and the per-screen sums below always add
+    // in the same order, even where a sum is past the range a number holds exactly.
+    unconfirmed: sortBy(unconfirmed, (u) => identityKey(u)),
   };
+}
+
+/**
+ * How many deterministic drafts landed on each identity this run.
+ *
+ * The floor counts deterministic barriers only, because that is what `usabl baseline` writes, so
+ * this is the tally a floor entry is compared against, and absence is read off it too. The gate,
+ * prune, and baseline all count this way, so they cannot disagree about whether an identity is
+ * still there. An advisory draft at a floored identity does not count: it is not one of the
+ * barriers the floor recorded.
+ */
+export function deterministicCountsByIdentity(
+  drafts: readonly Draft[],
+  scheme: IdentityScheme = 'row-scoped',
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const draft of drafts) {
+    if (!GATES(draft.evidenceClass)) continue;
+    // Keyed with the scheme of the floor the counts are compared with, as the findings are.
+    const key = identityKey({ screenId: draft.screenId, rule: draft.rule, elementKey: computeIdentity(draft, scheme).elementKey });
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** A floor entry is absent when this run saw no deterministic barrier at its identity. */
+export function floorEntryAbsent(entry: FloorEntry, counts: ReadonlyMap<string, number>): boolean {
+  return (counts.get(identityKey(entry)) ?? 0) === 0;
+}
+
+/**
+ * Whether this run shows the part of the page that held a floored identity rendered.
+ *
+ * The one rule for what counts as confirmed. The gate reads it to decide `fixed`, and `usabl floor
+ * prune` and `usabl baseline` read it to decide which absent entries they may drop, so the floor a
+ * command writes and the claim a run makes cannot disagree.
+ */
+export function paydownConfirmed(entry: FloorEntry, evidence: RenderEvidence | undefined): boolean {
+  if (evidence === undefined) return false;
+  if (evidence.signalHeld) return true;
+  const slot = identitySlot(entry);
+  return slot !== null && evidence.elementSlots.has(slot);
 }
 
 export function findingKey(f: Finding): string {
@@ -559,6 +695,7 @@ function verdictSummary(
   blocking: number,
   recorded: number,
   headroom: number,
+  unconfirmed: number,
   coverage: Coverage,
 ): string {
   const notEvaluated = notEvaluatedCounts(coverage);
@@ -574,6 +711,11 @@ function verdictSummary(
   // is when the floor drifts ahead of the application and nothing else would say so.
   if (headroom > 0) {
     clauses.push(`${headroom} floor entr${headroom === 1 ? 'y' : 'ies'} ahead of this run`);
+  }
+  // Barriers the floor records that this run did not see on a screen it cannot show rendered. Like
+  // headroom, it does not move the verdict and appears on a verified run, which is where it matters.
+  if (unconfirmed > 0) {
+    clauses.push(`${unconfirmed} recorded barrier${unconfirmed === 1 ? '' : 's'} not seen, not claimed fixed`);
   }
   if (notEvaluated.gaps > 0) {
     clauses.push(`${notEvaluated.gaps} gap(s)`);

@@ -3,8 +3,17 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import type { Page as UsablPage, Provider, SurfaceConfig } from '../../src/contracts/index.js';
+import type {
+  EvidenceFloor,
+  GateOutput,
+  Page as UsablPage,
+  Provider,
+  ScreenScan,
+  SurfaceConfig,
+} from '../../src/contracts/index.js';
 import { buildDeps } from '../../src/deps/build.js';
+import { gate, renderEvidenceOf } from '../../src/gate/index.js';
+import { computeIdentity, identityKey } from '../../src/primitives/identity.js';
 import { LIVE_WORLD, adoptPage, makeRealBrowserDriver } from '../../src/deps/real.js';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
 import { axeProvider } from '../../src/providers/axe/index.js';
@@ -59,6 +68,9 @@ interface FixtureServer {
   // A shell that pauses, mounts the orders table from a 200 JSON answer, and 800 ms later replaces
   // itself with a magic-link sign-in form. The table never holds still; the sign-in form does.
   swapToSignInUrl: string;
+  // A header, a navigation, and a heading that always mount, and a table of orders that mounts only
+  // with ?content=ok or ?content=broken. With ?content=fail its mount throws and nothing replaces it.
+  partialRenderUrl: string;
   close: () => Promise<void>;
 }
 
@@ -83,6 +95,7 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/fetch-on-focus.html': await readFixture('fetch-on-focus.html'),
     '/frozen-pause.html': await readFixture('frozen-pause.html'),
     '/swap-to-sign-in.html': await readFixture('swap-to-sign-in.html'),
+    '/partial-render.html': await readFixture('partial-render.html'),
   };
   const spaFallback = await readFixture('spa-fallback.html');
   const authWall = await readFixture('auth-wall.html');
@@ -214,6 +227,7 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     fetchOnFocusUrl: `http://127.0.0.1:${address.port}/fetch-on-focus.html`,
     frozenPauseUrl: `http://127.0.0.1:${address.port}/frozen-pause.html`,
     swapToSignInUrl: `http://127.0.0.1:${address.port}/swap-to-sign-in.html`,
+    partialRenderUrl: `http://127.0.0.1:${address.port}/partial-render.html`,
     close: async () =>
       new Promise<void>((resolve, reject) => {
         // The hang route leaves a socket open, and server.close() waits for it forever.
@@ -1216,6 +1230,108 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
         }
       }, 30_000);
     }
+  });
+
+  describe('a screen whose header mounted and whose content did not', () => {
+    // The floor is what a real axe scan of the broken screen records, built the way baseline builds
+    // it: one entry per identity, with the count of deterministic drafts behind it. The broken
+    // screen's buttons, links, and images have no name. The fixed screen names them all. The failed
+    // screen never renders the table at all.
+    type Content = 'ok' | 'broken' | 'fail';
+
+    async function scanOrders(content: Content, reachedWhen: SurfaceConfig['reachedWhen']): Promise<ScreenScan[]> {
+      const url = `${fixture.partialRenderUrl}?content=${content}`;
+      const runner = makeCheckRunner({
+        browser: driver,
+        providers: [axeProvider],
+        config: testConfig({
+          appBaseUrl: fixture.url,
+          surfaces: [{ id: 'orders', url, files: [], ...(reachedWhen === undefined ? {} : { reachedWhen }) }],
+        }),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+        transcriptTabCap: 5,
+      });
+      return markUnseenScreens([await runner.scan({ id: 'orders', url })]).screens;
+    }
+
+    function floorFrom(screens: ScreenScan[]): EvidenceFloor {
+      const entries = new Map<string, EvidenceFloor['entries'][number]>();
+      for (const draft of screens.flatMap((screen) => screen.drafts)) {
+        if (draft.evidenceClass !== 'deterministic') continue;
+        const { elementKey, identityBasis } = computeIdentity(draft);
+        const key = identityKey({ screenId: draft.screenId, rule: draft.rule, elementKey });
+        const entry = entries.get(key) ?? { screenId: draft.screenId, layer: draft.layer, rule: draft.rule, elementKey, identityBasis, count: 0 };
+        entry.count += 1;
+        entries.set(key, entry);
+      }
+      return { version: 2, entries: [...entries.values()] };
+    }
+
+    function gateOn(screens: ScreenScan[], floor: EvidenceFloor): GateOutput {
+      const url = screens[0]!.url;
+      return gate({
+        coverage: {
+          changedFiles: ['src/OrdersPage.tsx'],
+          affected: [{ screenId: 'orders', url, provenance: 'manual' }],
+          unresolvedFiles: [],
+          gaps: screens.flatMap((screen) => screen.gaps),
+          nothingToCheck: false,
+        },
+        guardDivergedPaths: [],
+        drafts: screens.flatMap((screen) => screen.drafts),
+        floor,
+        waivers: [],
+        now: '2026-01-01T00:00:00.000Z',
+        cleanlyScannedScreens: new Set(screens.filter((s) => s.gaps.length === 0).map((s) => s.screenId)),
+        renderEvidence: renderEvidenceOf(screens),
+      });
+    }
+
+    let floor: EvidenceFloor;
+    beforeAll(async () => {
+      floor = floorFrom(await scanOrders('broken', undefined));
+    }, 30_000);
+
+    it('records the barriers a real axe scan finds in the table', () => {
+      const rules = floor.entries.map((entry) => entry.rule);
+      expect(rules).toContain('button-name');
+      expect(rules).toContain('image-alt');
+      expect(rules).toContain('link-name');
+      // A real axe key, never a hand-written one: the image entry names its element by path.
+      const image = floor.entries.find((entry) => entry.rule === 'image-alt');
+      expect(image?.identityBasis).toBe('structural');
+    });
+
+    it('claims nothing fixed when the content did not mount, keeps the verdict, and gives the notice', async () => {
+      const out = gateOn(await scanOrders('fail', undefined), floor);
+      expect(out.findings.filter((finding) => finding.status === 'fixed')).toEqual([]);
+      expect(out.floorGaps).toEqual([]);
+      expect(out.accessibilityVerdict).toBe('verified');
+      expect(out.floorUnconfirmed).toHaveLength(1);
+      expect(out.floorUnconfirmed[0]!.rules).toEqual([...new Set(floor.entries.map((e) => e.rule))].sort());
+      expect(out.floorUnconfirmed[0]!.barriers).toBe(floor.entries.reduce((total, e) => total + e.count, 0));
+    }, 30_000);
+
+    it('does not claim a genuinely fixed image barrier fixed with no signal, and gives the notice', async () => {
+      // The image is not focusable and the fixed page raises no draft on it, so nothing in the run
+      // meets that element. Fixed and never mounted look the same here, so it is not paid down.
+      const out = gateOn(await scanOrders('ok', undefined), floor);
+      expect(out.findings.some((finding) => finding.status === 'fixed' && finding.rule === 'image-alt')).toBe(false);
+      expect(out.accessibilityVerdict).toBe('verified');
+      expect(out.floorUnconfirmed.flatMap((u) => u.rules)).toContain('image-alt');
+      expect(out.floorUnconfirmed.flatMap((u) => u.rules)).toContain('button-name');
+      expect(out.summary).toContain('not seen, not claimed fixed');
+    }, 30_000);
+
+    it('pays down every barrier on the fixed screen when its signal held', async () => {
+      const out = gateOn(await scanOrders('ok', 'table#orders'), floor);
+      expect(out.floorUnconfirmed).toEqual([]);
+      expect(out.findings.filter((finding) => finding.status === 'fixed').map((f) => f.rule).sort()).toEqual(
+        floor.entries.map((entry) => entry.rule).sort(),
+      );
+      expect(out.accessibilityVerdict).toBe('verified');
+    }, 30_000);
   });
 
   it('returns null for ignored or missing AX nodes', async () => {

@@ -21,6 +21,7 @@ import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
+import { parseDocsManifest } from '../coverage/docs-manifest.js';
 import { parseWaiverLedger } from '../run.js';
 import {
   isStorageStateExpired,
@@ -29,6 +30,7 @@ import {
   type EnvReader,
 } from '../deps/session.js';
 import { neutralize } from '../primitives/neutralize.js';
+import { scrubString } from '../surfaces/scrub.js';
 import { buildGuardedSet } from '../trust/guard.js';
 import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
 
@@ -68,6 +70,7 @@ const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
 const BRANCH_RULE_LABEL = `branch protection (main requires ${REQUIRED_CHECK})`;
 const PLAYWRIGHT_CHROMIUM_LABEL = 'playwright chromium (headless browser)';
 const POLICY_SCOPE_LABEL = 'policy scope (guardedPaths covers CODEOWNERS)';
+const READINESS_SIGNALS_LABEL = 'readiness signals (reachedWhen on screens with floored debt)';
 
 // Four states, and unknown is first class. wired is a positive confirmation. missing is a
 // confident absence. drifted is present-but-not-what-usabl-expects. unknown is "cannot
@@ -284,6 +287,94 @@ async function collectEvidenceFloor(deps: DoctorDeps): Promise<SurfaceReport> {
     };
   }
   return { id: 'evidence-floor', label: EVIDENCE_FLOOR_LABEL, state: 'wired', nextStep: '' };
+}
+
+/**
+ * Screens that hold floored debt and declare no reachedWhen signal.
+ *
+ * On such a screen a floored barrier the run does not see is claimed fixed only if the run sees a
+ * matching element, because a fixed barrier and content that never mounted otherwise look the same.
+ * The debt stays on the floor and every run says so. A signal that names content only that screen has is what lets usabl tell the
+ * two apart, so doctor names the screens. Screen ids come from the floor and the config, and the
+ * id grammar allows text shaped like a credential, so each one goes through the scrubber the Result
+ * surfaces use, and the line is neutralized at print time like every other next step.
+ */
+async function collectReadinessSignals(deps: DoctorDeps): Promise<SurfaceReport> {
+  const id = 'readiness-signals';
+  const label = READINESS_SIGNALS_LABEL;
+  const rawConfig = await deps.fs.readFile(deps.configPath);
+  if (rawConfig === null) {
+    return {
+      id,
+      label,
+      state: 'missing',
+      nextStep: `No usabl config, so doctor cannot tell which screens need a reachedWhen signal. Run "usabl init" to create ${deps.configPath}.`,
+    };
+  }
+  let surfaces;
+  try {
+    surfaces = parseUsablConfig(rawConfig).surfaces;
+  } catch {
+    return { id, label, state: 'unknown', nextStep: `${deps.configPath} does not parse, so doctor cannot read which screens declare a reachedWhen signal.` };
+  }
+  const rawFloor = await deps.fs.readFile(EVIDENCE_FLOOR_PATH);
+  if (rawFloor === null) {
+    return { id, label, state: 'wired', nextStep: '' };
+  }
+  let entries;
+  try {
+    entries = parseEvidenceFloor(JSON.parse(rawFloor)).entries;
+  } catch {
+    return { id, label, state: 'unknown', nextStep: `${EVIDENCE_FLOOR_PATH} does not parse, so doctor cannot tell which screens hold floored debt.` };
+  }
+  // Docs pages are screens too, but a docs page cannot declare a reachedWhen signal, and a
+  // surfaces entry with the same id is refused by the planner, because a docs page and an app
+  // screen are never the same screen. So docs pages get their own guidance.
+  let docsPageIds: Set<string>;
+  try {
+    const manifest = await parseDocsManifest(deps.fs);
+    docsPageIds = new Set(manifest === null ? [] : manifest.pages.map((page) => page.pageId));
+  } catch (error) {
+    if (isFsReadError(error)) throw error;
+    return { id, label, state: 'unknown', nextStep: 'usabl.docs.json does not parse, so doctor cannot tell docs pages from app screens.' };
+  }
+  const signalled = new Set(surfaces.filter((surface) => surface.reachedWhen !== undefined).map((surface) => surface.id));
+  const withDebt = [...new Set(entries.filter((entry) => entry.count > 0).map((entry) => entry.screenId))].sort();
+  const appScreens = withDebt.filter((screenId) => !docsPageIds.has(screenId) && !signalled.has(screenId));
+  const docsPages = withDebt.filter((screenId) => docsPageIds.has(screenId));
+  const listed = (ids: string[]): string => ids.map((screenId) => scrubString(screenId)).join(', ');
+
+  // A floored barrier the run does not see is claimed fixed only with evidence its part of the page
+  // rendered: a readiness signal that held, or a matching element seen on the run. A signal is the
+  // one an operator can add. The other depends on what the walk and the checks happen to meet.
+  const steps: string[] = [];
+  if (appScreens.length > 0) {
+    const one = appScreens.length === 1;
+    steps.push(
+      `${one ? 'Screen' : 'Screens'} ${listed(appScreens)} ${one ? 'holds' : 'hold'} floored debt and ` +
+        `${one ? 'declares' : 'declare'} no reachedWhen signal. A barrier there that the run does not see is ` +
+        'claimed fixed only if the run sees a matching element, because usabl cannot otherwise tell a fixed ' +
+        'barrier from content that never mounted. A readiness signal is the other way to confirm it. Add a ' +
+        `reachedWhen signal to each in ${deps.configPath}, naming content only that screen has, such as its own ` +
+        'table or a data request only it makes. A screen found from routes needs a surfaces entry with the same ' +
+        'id to carry one.',
+    );
+  }
+  if (docsPages.length > 0) {
+    const one = docsPages.length === 1;
+    steps.push(
+      `Docs ${one ? 'page' : 'pages'} ${listed(docsPages)} ${one ? 'holds' : 'hold'} floored debt. A docs page ` +
+        'cannot declare a reachedWhen signal, so a barrier there that the run does not see is claimed fixed only ' +
+        'if the run sees a matching element. If you know such a barrier is fixed, check the page, then remove it ' +
+        'with usabl floor prune --unconfirmed and review the diff.',
+    );
+  }
+  if (steps.length === 0) {
+    return { id, label, state: 'wired', nextStep: '' };
+  }
+  // Only app screens can be fixed by adding a signal, so docs pages alone leave the row wired with
+  // the note, which doctor prints under a wired row as it does for the route manifest.
+  return { id, label, state: appScreens.length > 0 ? 'missing' : 'wired', nextStep: steps.join(' ') };
 }
 
 async function collectWaivers(deps: DoctorDeps): Promise<SurfaceReport> {
@@ -636,7 +727,7 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
 
 export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceReport[]> {
   // Order mirrors the slice: config, authenticated session, playwright chromium, routes,
-  // evidence floor, waivers, overlay, stop hook, usabl-check skill, cursor assistant, ci
+  // evidence floor, readiness signals for the screens it holds debt on, waivers, overlay, stop hook, usabl-check skill, cursor assistant, ci
   // workflow, branch rule. The session sits second because it decides what every later scan
   // actually measures. Each
   // collector is self-contained health logic with no printing,
@@ -657,6 +748,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     await guardRead('playwright-chromium', PLAYWRIGHT_CHROMIUM_LABEL, () => collectPlaywrightChromium(deps)),
     await guardRead('routes', ROUTES_LABEL, () => collectRoutes(deps)),
     await guardRead('evidence-floor', EVIDENCE_FLOOR_LABEL, () => collectEvidenceFloor(deps)),
+    await guardRead('readiness-signals', READINESS_SIGNALS_LABEL, () => collectReadinessSignals(deps)),
     await guardRead('waivers', WAIVERS_LABEL, () => collectWaivers(deps)),
     await guardRead('overlay', OVERLAY_LABEL, () => collectOverlay(deps)),
     await guardRead('stop-hook', STOP_HOOK_LABEL, () => collectStopHook(deps)),

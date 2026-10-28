@@ -144,3 +144,44 @@ export function computeIdentity(
   const role = draft.role ?? 'unknown';
   return { elementKey: `${base}|struct:${role}:${neutralizePath(draft.elementPath)}`, identityBasis: 'structural' };
 }
+
+/**
+ * The element an identity is about, without the rule: "path:<neutralized path>" for a structural
+ * key and "name:<slug>" for a name key. Null for a counted identity, which names no element, and
+ * for a key that does not have the shape computeIdentity writes.
+ *
+ * Read off the key itself, so a floor entry needs no extra field. A key this cannot read returns
+ * null, and a caller that needs an element to be present then treats it as absent.
+ */
+export function identitySlot(value: {
+  screenId: string;
+  rule: string;
+  elementKey: string | null;
+  identityBasis: IdentityBasis;
+}): string | null {
+  if (value.elementKey === null || value.identityBasis === 'count') return null;
+  const prefix = `${value.screenId}|${value.rule}|`;
+  if (!value.elementKey.startsWith(prefix)) return null;
+  const rest = value.elementKey.slice(prefix.length);
+  if (value.identityBasis === 'name') {
+    return rest.startsWith('name:') ? rest : null;
+  }
+  if (!rest.startsWith('struct:')) return null;
+  // struct:<role>:<path>. A role never holds a colon, and a path can, so split at the first one.
+  const roleAndPath = rest.slice('struct:'.length);
+  const colon = roleAndPath.indexOf(':');
+  return colon < 0 ? null : `path:${roleAndPath.slice(colon + 1)}`;
+}
+
+/**
+ * The slots one observed element fills: its neutralized path, and its accessible name when it has
+ * one. The same encoding identitySlot reads off a key, so an element this run saw and a floored
+ * identity about that element compare equal.
+ */
+export function elementSlots(element: { elementPath: string; name: string | null }): string[] {
+  const slots = [`path:${neutralizePath(element.elementPath)}`];
+  if (element.name !== null && element.name.length > 0) {
+    slots.push(`name:${slug(element.name)}`);
+  }
+  return slots;
+}

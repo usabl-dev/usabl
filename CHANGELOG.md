@@ -25,6 +25,36 @@
   as fixed and as headroom and does not move the verdict. Controls outside a keyed table
   keep their old keys.
 
+- A floored barrier is no longer reported paid down on a screen whose content never
+  rendered. When a screen's header and navigation mounted and its content failed to
+  mount, the walk found a real control and no check failed, so the screen had no gap,
+  every floored barrier in the missing content was absent, and the run marked those
+  barriers `fixed`. Now an absent floored barrier is `fixed` only when the screen's
+  `reachedWhen` signal held, or when the walk or a check met the barrier's own element,
+  by its path or its accessible name. Otherwise it is not claimed fixed and the floor
+  keeps it at its full count. The verdict does not change. The run shows a notice that
+  names the screen, the rules, and the number of barriers, and gives the fix, on the
+  terminal, the pull request comment, the Stop hook, the self-check, and the overlay,
+  and the summary line gains a `N recorded barriers not seen, not claimed fixed`
+  clause. The Result gains `floorUnconfirmed`. The blind spot: a screen whose content
+  fails to mount reads `verified`, with the notice when it holds floored debt, until it
+  declares a `reachedWhen` signal. That is the same as a screen with no debt.
+
+- `usabl floor prune` and `usabl baseline` keep a floored entry the run cannot confirm
+  was fixed, by the same rule the gate uses. `usabl floor prune --unconfirmed` removes
+  those entries on purpose and says how many it removed and why. Prune no longer says it
+  kept entries on unscanned screens when it kept none. Prune now scans docs pages too, as
+  baseline does, so a fixed docs barrier no longer stays on the floor for good. Baseline
+  refuses, writing nothing, when such an entry is a version 1 placeholder count it would
+  otherwise write into a version 2 floor (exit 3), and when the floor it would replace
+  exists and does not parse (exit 4).
+
+- The gate, `usabl floor prune`, and `usabl baseline` read a floored identity as absent the
+  same way: no deterministic draft at it. An identity with only an advisory draft left was
+  headroom in the gate and an unconfirmed absence in the commands; the verdict is unchanged.
+  The floor parser refuses a floor whose counts add up past the largest exact whole
+  number, and baseline, prune, and doctor scrub the screen ids and rules they print.
+
 - The announcement capture now hears a region only when its effective live value is
   polite or assertive, resolved the way `pf-toast-live-region` resolves it. Before, it
   heard any element with an `aria-live` attribute, including `aria-live="off"`, an
@@ -259,6 +289,14 @@
   extension outside it is not seen. The ground truth says so.
 
 ### Added
+
+- `usabl doctor` reports a readiness signals surface. It is missing when a screen holds
+  floored debt and declares no `reachedWhen` signal, and its next step names those
+  screens. A floored barrier the run does not see is claimed fixed only with evidence its
+  part of the page rendered: a readiness signal that held is one way, and a matching
+  element seen on the run is the other. A docs page cannot declare a signal, so doctor
+  names docs pages with floored debt separately and points to
+  `usabl floor prune --unconfirmed` for a barrier known to be fixed.
 
 - `acknowledgedUnreadable` in `usabl.routes.json`: a list of `{ "file", "id" }` for router
   entries usabl cannot read that the sidecar's author has checked by hand. Without it, a
