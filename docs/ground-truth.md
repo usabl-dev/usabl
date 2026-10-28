@@ -1260,7 +1260,11 @@ The source closure is built by following real `include::` transclusions
 rather than guessing narrow, and it ignores includes shown as code blocks or comments.
 Manifest paths are validated: a page `url` must start with `/`, reject `@` and
 percent-encoded traversal, and `assemblyFile`/`sources` are `..`-rejecting repo-relative
-paths.
+paths. `docsBaseUrl` is refused when it carries a user name or password, found by URL parsing,
+by an `@` in the authority after `//`, or by an `@` before the first `/`, `?`, or `#`, with
+backslashes read as slashes for the last two, the same readings `usabl.config.json` URLs get. Every
+docs screen url is built on it and printed in the results, so the refusal names the field and
+never the value.
 
 ### Source-aware findings
 
@@ -2306,6 +2310,15 @@ add content and flow assertions that the engine enforces alongside the default s
   keyboard walk probes).
 - `doc` requirements are not runtime checks; they feed the output module.
 
+A `content` or `flow` requirement runs only on a screen whose id is its surface. When a run
+scans anything, each such requirement whose surface matches no configured surface, no screen
+in the route manifest, and no page in the docs manifest becomes a `not-covered` gap with ref
+`requirement:<id>` that names the surface. No run would ever plan that screen, so nothing
+checks the requirement, and a misspelled surface would otherwise turn it off while the run
+read as verified. A requirement on a known screen that the change did not touch is out of
+scope for that run, not a gap. The surfaces are read through the same trusted view the run
+plans coverage with. `checkPage` applies the same rule through the same code.
+
 All intake-derived Drafts carry `evidenceClass: 'deterministic'` (the assertion is
 hard and repeatable). `mapRequirementsToProviders` emits deterministic drafts with rule
 id `intake:<id>` for content and flow requirements; there is no code path in v0.2.0 that
@@ -2322,6 +2335,12 @@ surface id (section 22). A refused character is reported by position and code po
 printed back. Either failure is `approval_required`, returned from the loader rather than
 thrown, and every reason the loader returns is scrubbed before it leaves, including the YAML
 parser's own message and the file path, because both can carry file bytes.
+
+Any loader failure stops every scan, and the run shows the loader's reason as a `not-covered`
+coverage gap whose ref is the refused file, or the configured root when the loader named none.
+So a broken requirements file is visible on every surface. When a UI file changed, the
+accessibility half of the Result reads `not_covered` rather than `verified`, because no screen
+was scanned.
 
 ---
 

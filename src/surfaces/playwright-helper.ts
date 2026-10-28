@@ -21,11 +21,11 @@ import type {
 } from '../contracts/index.js';
 import { decideAccessibilityVerdict } from '../coverage/completeness.js';
 import { markUnseenScreens } from '../coverage/unseen.js';
-import { parseRouteManifest } from '../coverage/route-manifest.js';
 import { makeFsGlob } from '../deps/fs.js';
 import { adoptPage } from '../deps/real.js';
 import { parseUsablConfig } from '../intake/config.js';
 import { loadRequirements } from '../intake/load.js';
+import { knownSurfaceIds, unknownSurfaceRequirementGaps } from '../intake/requirement-surfaces.js';
 import { makeScanProviders } from '../providers/core-stack.js';
 import { runProviders } from '../providers/index.js';
 import {
@@ -197,15 +197,7 @@ export async function loadProjectIntake(projectRoot: string, rootWasPassed: bool
     };
   }
 
-  const known = new Set(config.surfaces.map((surface) => surface.id));
-  try {
-    for (const route of (await parseRouteManifest(fs, config.discovery)).routes) {
-      known.add(route.screenId);
-    }
-  } catch {
-    // An unreadable route manifest names no extra surfaces. That can only turn a requirement into
-    // a gap, never let one through unchecked.
-  }
+  const known = await knownSurfaceIds(fs, config);
 
   const project: PageCheckProject = { root, configFound: true };
   const loaded = await loadRequirements(fs, config);
@@ -255,17 +247,19 @@ export function requirementGapsForPage(
     screenId !== null &&
     (knownSurfaceIds.has(screenId) || runtime.some((requirement) => requirement.surface === screenId));
 
+  if (pageIsKnown) {
+    // This page's own surface is checked here, and every other known surface is out of scope, so
+    // only a requirement for a surface nothing names is left. The CLI run uses the same rule.
+    return unknownSurfaceRequirementGaps(requirements, new Set([...knownSurfaceIds, screenId]));
+  }
+
   const gaps: CoverageGap[] = [];
   for (const requirement of runtime) {
     if (screenId !== null && requirement.surface === screenId) {
       continue;
     }
-    if (pageIsKnown && knownSurfaceIds.has(requirement.surface)) {
-      continue;
-    }
-    const reason = pageIsKnown
-      ? `requirement ${requirement.id} names surface ${requirement.surface}, which matches no configured or discovered surface, so it was not checked`
-      : screenId === null
+    const reason =
+      screenId === null
         ? `this page is not labeled with a surface, so requirement ${requirement.id} for surface ${requirement.surface} was not checked; pass the page's surface id as screenId`
         : `this page is labeled ${screenId}, which matches no surface, so requirement ${requirement.id} for surface ${requirement.surface} was not checked; pass the page's surface id as screenId`;
     gaps.push({ ref: `requirement:${requirement.id}`, state: 'not-covered', reason: scrubString(reason) });

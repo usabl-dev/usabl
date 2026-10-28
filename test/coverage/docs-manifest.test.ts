@@ -184,3 +184,53 @@ describe('parseDocsManifest', () => {
     expect(manifest?.sharedGlobs).toEqual([]);
   });
 });
+
+describe('parseDocsManifest refuses a user name or password in docsBaseUrl', () => {
+  // docsBaseUrl is joined into every docs screen url, and those urls reach every surface,
+  // including a pull request comment. A user name or password written into it would be echoed
+  // there. The refusal names the field and never the value, because the value is the secret.
+  const messageFor = async (docsBaseUrl: string): Promise<string> => {
+    try {
+      await parseDocsManifest(fsOf({ 'usabl.docs.json': JSON.stringify({ ...validManifest, docsBaseUrl }) }));
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    return '';
+  };
+
+  const refused: ReadonlyArray<readonly [string, string]> = [
+    ['a user name and password', 'https://docuser:SECRETPOISON@docs.local/docs'],
+    ['a user name alone', 'https://docuser@docs.local/docs'],
+    ['an empty user name with a password', 'https://:SECRETPOISON@docs.local'],
+    ['backslashes the URL parser reads as slashes', 'https:\\\\docuser:SECRETPOISON@docs.local'],
+    ['an authority the URL parser refuses', 'http://docuser:SECRETPOISON@[docs/'],
+    ['no scheme', 'docuser:SECRETPOISON@docs.local/docs'],
+    // URL parsing reads this as a path, but a reader, or another parser that takes a backslash
+    // for a slash, reads a user name and password in it.
+    ['a backslash that reads as a second slash', 'foo:/\\docuser:SECRETPOISON@docs.local'],
+  ];
+
+  for (const [name, docsBaseUrl] of refused) {
+    it(`refuses ${name} and never repeats the value`, async () => {
+      const message = await messageFor(docsBaseUrl);
+
+      expect(message).toContain('docsBaseUrl');
+      expect(message).toMatch(/user name or password/);
+      expect(message).not.toContain('SECRETPOISON');
+      expect(message).not.toContain('docuser');
+    });
+  }
+
+  it('accepts an "@" in the path, the query, or the fragment', async () => {
+    for (const docsBaseUrl of [
+      'http://127.0.0.1:0/docs/@scope',
+      'http://127.0.0.1:0/docs?owner=@team',
+      'http://127.0.0.1:0#@section',
+    ]) {
+      const manifest = await parseDocsManifest(
+        fsOf({ 'usabl.docs.json': JSON.stringify({ ...validManifest, docsBaseUrl }) }),
+      );
+      expect(manifest?.docsBaseUrl).toBe(docsBaseUrl);
+    }
+  });
+});
