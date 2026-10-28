@@ -43,6 +43,11 @@ export interface CliOptions {
   // nothing shows their part of the page rendered. Every other command ignores this.
   unconfirmed: boolean;
   driftSubcommand: 'routes' | null;
+  // `usabl history record` scans main and writes a record to --out; `usabl history append <file>`
+  // adds that record to the local history branch. Every other command ignores these three.
+  historySubcommand: 'record' | 'append' | null;
+  historyFile: string | null;
+  outPath: string | null;
   // The single install target for `usabl install`, or null when this is not an install
   // run or when zero or several target flags were given (installRefusal handles those).
   installTarget: InstallTarget | null;
@@ -107,6 +112,9 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let partial = false;
   let unconfirmed = false;
   let driftSubcommand: 'routes' | null = null;
+  let historySubcommand: 'record' | 'append' | null = null;
+  let historyFile: string | null = null;
+  let outPath: string | null = null;
   // Install target flags are tracked separately from the command so the exactly-one rule
   // can be enforced after parsing. --ci reuses the existing `ci` boolean below.
   let overlay = false;
@@ -135,6 +143,14 @@ export function parseCliArgs(argv: string[]): CliOptions {
         driftSubcommand = 'routes';
         continue;
       }
+      if (command === 'history' && historySubcommand === null && (token === 'record' || token === 'append')) {
+        historySubcommand = token;
+        continue;
+      }
+      if (command === 'history' && historySubcommand === 'append' && historyFile === null) {
+        historyFile = token;
+        continue;
+      }
       command = token;
       if (command !== 'enforce') {
         enforceCheck = null;
@@ -144,6 +160,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
       }
       if (command !== 'drift') {
         driftSubcommand = null;
+      }
+      if (command !== 'history') {
+        historySubcommand = null;
+        historyFile = null;
       }
       continue;
     }
@@ -224,6 +244,15 @@ export function parseCliArgs(argv: string[]): CliOptions {
       index += 1;
       continue;
     }
+    if (token === '--out') {
+      const value = argv[index + 1];
+      if (value === undefined || isFlag(value)) {
+        throw new Error('--out requires a value');
+      }
+      outPath = value;
+      index += 1;
+      continue;
+    }
     if (token === '--config') {
       const value = argv[index + 1];
       if (value === undefined || isFlag(value)) {
@@ -239,7 +268,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   // target flag and cursorStopHook stays false so the two uses never collide.
   const cursorStopHook = command === 'stop-hook' && cursor;
 
-  return { command, staticOnly, html, docs, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, partial, unconfirmed, driftSubcommand, installTarget, cursorStopHook };
+  return { command, staticOnly, html, docs, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, partial, unconfirmed, driftSubcommand, historySubcommand, historyFile, outPath, installTarget, cursorStopHook };
 }
 
 export function installRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {
