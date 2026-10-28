@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -36,6 +36,17 @@ const baseResult = (over: Partial<Result>): Result => ({
   floorHeadroom: [],
   ...over,
 });
+
+// The refresh notification waits this long after the last watcher event. Tests that drive the
+// debounce move a fake clock by it instead of sleeping on the real one. A real sleep of a few
+// milliseconds can take far longer on a loaded machine, which split one burst into two waves and
+// failed tests that had nothing wrong with them.
+const REFRESH_DEBOUNCE_MS = 80;
+
+// Only the timer functions are faked, so promises and the plugin's own awaits still run as they do.
+function useFakeClock(): void {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+}
 
 describe('projectOverlay', () => {
   it('projects advisory payload with display exit code 0', () => {
@@ -472,6 +483,10 @@ describe('makeResultCache', () => {
 });
 
 describe('usablVitePlugin', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('injects a guarded overlay loader into HTML', async () => {
     const plugin = usablVitePlugin({ run: async () => baseResult({}) });
     const html = '<html><body><main>app</main></body></html>';
@@ -489,6 +504,7 @@ describe('usablVitePlugin', () => {
   });
 
   it('registers middleware handlers for client and result endpoints', async () => {
+    useFakeClock();
     let runCount = 0;
     const plugin = usablVitePlugin({
       run: async () => {
@@ -559,7 +575,7 @@ describe('usablVitePlugin', () => {
     for (const handler of changeHandlers) {
       handler();
     }
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await vi.advanceTimersByTimeAsync(REFRESH_DEBOUNCE_MS);
 
     const secondResult = await callMiddleware(middleware, '/__usabl/result');
     expect(JSON.parse(secondResult.body).summary).toContain('run 2');
@@ -588,6 +604,7 @@ describe('usablVitePlugin', () => {
   });
 
   it('re-runs the engine after the watcher invalidates the cache', async () => {
+    useFakeClock();
     let runCount = 0;
     const plugin = usablVitePlugin({
       run: async () => {
@@ -631,7 +648,7 @@ describe('usablVitePlugin', () => {
       for (const handler of watcherHandlers.get(event) ?? []) {
         handler();
       }
-      await new Promise((resolve) => setTimeout(resolve, 120));
+      await vi.advanceTimersByTimeAsync(REFRESH_DEBOUNCE_MS);
       const after = await callMiddleware(middleware, '/__usabl/result');
       expect(JSON.parse(after.body).summary).toBe(`run ${runCount}`);
     }
@@ -740,6 +757,7 @@ describe('usablVitePlugin', () => {
     // The notification to the browser is debounced. The cache must not be. A read that lands between
     // the file event and the debounce timer used to get the result of the tree before the change,
     // and a fresh read in that window started a second engine run for one save.
+    useFakeClock();
     let runCount = 0;
     const plugin = usablVitePlugin({
       run: async () => {
@@ -797,14 +815,20 @@ describe('usablVitePlugin', () => {
       for (const handler of watcherHandlers.get(event) ?? []) {
         handler();
       }
-      // No timer has fired yet: the notification is still pending.
+      // No timer has fired yet: the notification is still pending. The read in the window waits for
+      // the wave to close, so it is started here and answered once the clock reaches the debounce.
       expect(sentEvents.length).toBe(notified);
-      const inWindow = await callMiddleware(middleware, path);
+      const inWindowRead = callMiddleware(middleware, path);
+      await vi.advanceTimersByTimeAsync(REFRESH_DEBOUNCE_MS - 1);
+      expect(sentEvents.length).toBe(notified);
+      expect(runCount).toBe(before);
+
+      // The debounce settles and the browser is told. The read in the window gets the new run, and
+      // the browser's read after the notification must not start another one.
+      await vi.advanceTimersByTimeAsync(1);
+      const inWindow = await inWindowRead;
       expect(JSON.parse(inWindow.body).summary).toBe(`run ${before + 1}`);
       expect(runCount).toBe(before + 1);
-
-      // The debounce settles and the browser is told. Its read must not start another run.
-      await new Promise((resolve) => setTimeout(resolve, 120));
       expect(sentEvents.length).toBe(notified + 1);
       const afterNotification = await callMiddleware(middleware, '/__usabl/result');
       expect(JSON.parse(afterNotification.body).summary).toBe(`run ${before + 1}`);
@@ -816,6 +840,7 @@ describe('usablVitePlugin', () => {
     // change, add, and unlink land a few milliseconds apart with reads, one of them fresh, between
     // them. That is one save as the file system reports it. It must cost one engine run, every
     // reader in the burst must receive that run, and one notification goes out when it settles.
+    useFakeClock();
     let runCount = 0;
     const plugin = usablVitePlugin({
       run: async () => {
@@ -860,7 +885,7 @@ describe('usablVitePlugin', () => {
         handler();
       }
     };
-    const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+    const pause = (ms: number): Promise<void> => vi.advanceTimersByTimeAsync(ms).then(() => undefined);
 
     await callMiddleware(middleware, '/__usabl/result');
     expect(runCount).toBe(1);
@@ -878,6 +903,8 @@ describe('usablVitePlugin', () => {
     expect(runCount).toBe(1);
     expect(sentEvents.length).toBe(0);
 
+    // The last event was 20 ms ago, so the wave closes when the clock reaches the debounce after it.
+    await pause(REFRESH_DEBOUNCE_MS - 20);
     const responses = await Promise.all([afterChange, afterAdd, afterUnlink]);
     expect(runCount).toBe(2);
     expect(responses.map((response) => JSON.parse(response.body).summary)).toEqual(['run 2', 'run 2', 'run 2']);
@@ -1126,6 +1153,29 @@ describe('usablVitePlugin', () => {
 
     // Dependencies under node_modules are never annotated.
     expect(plugin.transform?.(raw, '/repo/node_modules/pkg/A.tsx')).toBeNull();
+  });
+
+  it('serves a file it cannot parse unchanged and warns once, naming the file', () => {
+    // A file the injector cannot read must never turn into a dev server error. It is served as
+    // written, without source attributes, and the developer is told once which file that was.
+    const warnings: string[] = [];
+    const plugin = usablVitePlugin({
+      workspaceRoot: '/repo',
+      run: async () => baseResult({ findings: [] }),
+      logWarning: (message) => warnings.push(message),
+    });
+    plugin.configResolved?.({ command: 'serve' });
+    const broken = 'export const A = () => <div>unclosed;\n';
+
+    expect(plugin.transform?.(broken, '/repo/src/Broken.tsx')).toBeNull();
+    expect(plugin.transform?.(broken, '/repo/src/Broken.tsx')).toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('src/Broken.tsx');
+
+    // A file that parses is still annotated by the same plugin.
+    const fine = plugin.transform?.('export const B = () => <button>Go</button>;\n', '/repo/src/B.tsx');
+    expect(fine?.code).toContain('data-source-file="src/B.tsx"');
+    expect(warnings).toHaveLength(1);
   });
 });
 

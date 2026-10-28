@@ -8,6 +8,7 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
 import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page, ReadinessOutcome, ReadinessProbe } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
+import { createLiveResolver } from '../providers/rulepack/live-value.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
 // Ansible Automation Platform screen measured 12.4 s to network idle plus 13.3 s to a DOM that
@@ -32,12 +33,15 @@ const SETTLE_SAMPLES_REQUIRED = 4;
 // after that first idle.
 const NETWORK_QUIET_WINDOW_MS = 500;
 
-// Browser-side path helper used by both document-start injection and adoptPage install.
-// Keep this the only implementation: a uniqueness (or any path) fix that lands in one
-// copy and misses the other recreates the duplicate-id false green (#182).
+// Browser-side path helper. Keep this the only implementation: a uniqueness (or any path) fix
+// that lands in one copy and misses another recreates the duplicate-id false green.
 // Paths use nth-child ancestry so selectors stay valid and comparable across calls.
-// An id is only used as a selector when it is unique in the document; duplicate ids
-// fall back to the structural path so set ops keyed on element identity cannot collide.
+// An id is used as a selector only when that selector matches exactly one element and that
+// element is the one in hand. Counting matches is not enough, because two different ids can
+// escape to one selector: a NUL escapes to U+FFFD, so "#" plus an escaped NUL id is the selector
+// for a literal U+FFFD id. A selector the engine refuses falls back to the structural path too.
+// Every other case falls back to the structural path, so set ops keyed on element identity
+// cannot collide.
 const PATH_FOR_IMPL = `
   const escapeCss = (value) => {
     if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
@@ -45,18 +49,26 @@ const PATH_FOR_IMPL = `
     }
     return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => '\\\\' + ch);
   };
-  const isUniqueId = (id) => document.querySelectorAll('#' + escapeCss(id)).length === 1;
+  const idNamesOnly = (element) => {
+    let matches;
+    try {
+      matches = document.querySelectorAll('#' + escapeCss(element.id));
+    } catch (_error) {
+      return false;
+    }
+    return matches.length === 1 && matches[0] === element;
+  };
   const pathFor = (element) => {
     if (!(element instanceof Element)) {
       return '';
     }
-    if (element.id && isUniqueId(element.id)) {
+    if (element.id && idNamesOnly(element)) {
       return '#' + escapeCss(element.id);
     }
     const segments = [];
     let current = element;
     while (current instanceof Element) {
-      if (current.id && isUniqueId(current.id)) {
+      if (current.id && idNamesOnly(current)) {
         segments.unshift('#' + escapeCss(current.id));
         break;
       }
@@ -79,12 +91,48 @@ const PATH_FOR_IMPL = `
 `;
 
 // Browser-side live-region capture used by both document-start injection and adoptPage install.
-// Keep this the only implementation, for the same reason as PATH_FOR_IMPL: the CLI and checkPage
+// Keep this the only implementation: the CLI and checkPage
 // must hear the same announcements, so a fix to what counts as a live region has to land in both
 // at once. It records the text of a live region each time something inside it changes, and
-// window.__usablDrain hands back what it recorded since the last drain.
+// window.__usablDrain hands back what it recorded since the last drain. It runs in the live world
+// below, so window here is that world's global, never the page's.
+//
+// What counts as live comes from the resolver pf-toast-live-region uses, carried in as its own
+// source. A CSS selector for live regions cannot do this: it matches aria-live="off" and any odd
+// token, and it cannot see an off wrapper between a polite region and the text that changed. The
+// capture used one, so it recorded text no screen reader would speak, and a flow requirement that
+// expected that text passed. The walk follows the flat tree the way the rule's walk does, so a
+// slotted element climbs through its slot. A change whose live region sits in a different tree
+// from it is not recorded; see the observer below.
 const LIVE_CAPTURE_IMPL = `
-  const LIVE = '[aria-live],[role="status"],[role="alert"],[role="log"]';
+  const liveResolver = (${createLiveResolver.toString()})();
+  const flatParent = (element) => {
+    if (element.assignedSlot) {
+      return element.assignedSlot;
+    }
+    const parent = element.parentNode;
+    if (parent instanceof Element) {
+      return parent;
+    }
+    if (parent instanceof ShadowRoot) {
+      return parent.host;
+    }
+    return null;
+  };
+  // The element whose region the change belongs to: the nearest one that sets a live value, when
+  // that value is polite or assertive. Null when the change is not live.
+  const liveHost = (start) => {
+    const elements = [];
+    const chain = [];
+    for (let current = start; current instanceof Element; current = flatParent(current)) {
+      elements.push(current);
+      chain.push({ ariaLive: current.getAttribute('aria-live'), role: current.getAttribute('role') });
+    }
+    if (liveResolver.effectiveLiveValue(chain) === 'off') {
+      return null;
+    }
+    return elements[liveResolver.nearestLiveSetter(chain)] ?? null;
+  };
   const buffer = [];
   const toText = (value) => {
     const normalized = (value ?? '').trim();
@@ -98,60 +146,100 @@ const LIVE_CAPTURE_IMPL = `
   };
   window.__usablDrain = () => buffer.splice(0, buffer.length);
   const observer = new MutationObserver((mutations) => {
+    // Text the parser is still writing is the page being built, not an announcement, and the
+    // capture has never counted it. The check reads the document's own state, so page script
+    // cannot change it.
+    if (document.readyState === 'loading') {
+      return;
+    }
     for (const mutation of mutations) {
       const target = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
-      const host = target && target.closest ? target.closest(LIVE) : null;
-      if (host) {
+      const host = target ? liveHost(target) : null;
+      // A host in another tree is a live region inside a shadow root that the changed element is
+      // slotted into. Its own text leaves out the slotted text that changed and holds text the
+      // change did not make speakable, such as slot fallback text and shadow-only text. A flow
+      // requirement matches the text exactly, so recording it could pass on words no screen
+      // reader spoke for this change. The change is dropped instead: hearing less can only fail a
+      // requirement, never pass one.
+      if (host && host.getRootNode() === target.getRootNode()) {
         push(host.textContent);
       }
     }
   });
-  const startObserver = () => {
-    observer.observe(document.documentElement, {
-      subtree: true,
-      childList: true,
-      characterData: true,
-    });
-  };
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startObserver);
-  } else {
-    startObserver();
-  }
+  // Observed from the document itself, at once, with no event to wait for. A page can stop an
+  // event from reaching other listeners, as with a DOMContentLoaded listener that calls
+  // stopImmediatePropagation, and an observer that waited for one would never start.
+  observer.observe(document, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+  });
 `;
 
-// Inject before app scripts run so the first live update is observable and not lost.
-// Late injection would under-report announcements and create a false sense of coverage.
-// Each helper sits in its own block so their names cannot collide.
-export const LIVE_AND_PATH_INIT_SCRIPT = `(() => {
-  {
-    ${LIVE_CAPTURE_IMPL}
-  }
-  {
-    ${PATH_FOR_IMPL}
-    window.__usablPathFor = pathFor;
-  }
-})();`;
+// The world the live-region capture runs in. Page script shares the DOM with it but not its
+// globals or prototypes. A page could otherwise define or replace the drain and hand usabl
+// announcements no screen reader spoke, or redefine textContent so the capture records text the
+// region never held. A flow requirement that expects an announcement would then pass on the
+// page's word.
+export const LIVE_WORLD = 'usabl-live';
 
-// Evaluated after adoptPage attaches to a caller-owned page that already navigated.
-// Same PATH_FOR_IMPL as the init script; guarded so re-adopting the same page is a no-op.
-export const INSTALL_PATH_HELPER_SCRIPT = `(() => {
-  if (typeof window.__usablPathFor === 'function') {
-    return;
-  }
-  ${PATH_FOR_IMPL}
-  window.__usablPathFor = pathFor;
-})();`;
-
-// Evaluated by adoptPage next to the path helper. Same LIVE_CAPTURE_IMPL as the init script, and
-// guarded the same way, so a page usabl opened, or one adopted twice, keeps its one observer and
-// its buffer. It hears only changes made after adoption, which is when a caller's checks start.
-export const INSTALL_LIVE_CAPTURE_SCRIPT = `(() => {
+// The capture, run in the live world. The browser keeps one world per name and frame, so the guard
+// keeps one observer and one buffer per document however many times the script runs there: once
+// at document start on a page usabl opens, and once more when a caller adopts that page. Page
+// script cannot reach the guard, so it cannot stop the capture from installing.
+const LIVE_CAPTURE_SCRIPT = `(() => {
   if (typeof window.__usablDrain === 'function') {
     return;
   }
   ${LIVE_CAPTURE_IMPL}
 })();`;
+
+// Reads and clears what the capture recorded. A document without the capture throws rather than
+// reporting silence, because silence would read as a page that announced nothing.
+const DRAIN_FUNCTION = `function () {
+  const drain = window.__usablDrain;
+  if (typeof drain !== 'function') {
+    throw new Error('the announcement capture is not running in this document');
+  }
+  const drained = drain();
+  return Array.isArray(drained) ? drained.filter((entry) => typeof entry === 'string') : [];
+}`;
+
+/**
+ * Starts the live-region capture in the live world: in every document the page loads from now on,
+ * at document start, and in the document it holds now. A page usabl opens has no document yet, so
+ * only the first applies.
+ */
+async function installLiveCapture(cdp: CDPSession, current: boolean): Promise<void> {
+  // The browser runs a new-document script only for a session that enabled the page domain.
+  await cdp.send('Page.enable');
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: LIVE_CAPTURE_SCRIPT, worldName: LIVE_WORLD });
+  if (current) {
+    await callInWorld(cdp, LIVE_WORLD, 'start the announcement capture', `function () { ${LIVE_CAPTURE_SCRIPT} }`);
+  }
+}
+
+// The world element paths are computed in. Page script shares the DOM with it but not its globals
+// or prototypes, so a page cannot hand back its own paths, and it cannot change the
+// querySelectorAll, CSS.escape, or sibling reads a path is built from. Nothing is installed there:
+// the path function is sent with every query, so there is no global to find or replace.
+const PATH_WORLD = 'usabl-paths';
+
+/**
+ * The paths of every element a selector matches, as a function declaration to call in the path
+ * world. Exported so the path rules can be tested on their own.
+ */
+export const PATHS_FOR_SELECTOR_FUNCTION = `function (query) {
+  ${PATH_FOR_IMPL}
+  return Array.from(document.querySelectorAll(query), (element) => pathFor(element));
+}`;
+
+// The path of the focused element, or the empty string when there is none.
+const ACTIVE_PATH_FUNCTION = `function () {
+  ${PATH_FOR_IMPL}
+  return pathFor(document.activeElement instanceof Element ? document.activeElement : null);
+}`;
+
 
 interface AxeResult {
   violations: AxeIssue[];
@@ -339,17 +427,6 @@ async function axFromBackendId(cdp: CDPSession, backendNodeId: number): Promise<
   };
 }
 
-async function stablePathForActiveElement(pw: PwPage): Promise<string> {
-  return pw.evaluate(() => {
-    const pathFor = Reflect.get(window, '__usablPathFor');
-    if (typeof pathFor !== 'function') {
-      return '';
-    }
-    const active = document.activeElement instanceof Element ? document.activeElement : null;
-    return pathFor(active);
-  });
-}
-
 /** The most elements the ancestor walk reads for one element before it stops and says so. */
 export const ANCESTOR_DEPTH_LIMIT = 512;
 
@@ -368,18 +445,58 @@ const FLAT_PARENT_FUNCTION = `function () {
   return null;
 }`;
 
-async function ancestorWorldContextId(cdp: CDPSession): Promise<number> {
+// The execution context of a named isolated world in the main frame's current document. The browser
+// keeps one world per name and frame, so asking again returns the same context until the frame
+// navigates, and the first ask after a navigation makes one for the new document.
+async function isolatedWorldContextId(cdp: CDPSession, worldName: string, purpose: string): Promise<number> {
   const tree: unknown = await cdp.send('Page.getFrameTree');
   const frameId = readString(getProp(getProp(getProp(tree, 'frameTree'), 'frame'), 'id'));
   if (frameId === null) {
-    throw new Error('the page has no main frame to read ancestors in');
+    throw new Error(`the page has no main frame to ${purpose} in`);
   }
-  const world: unknown = await cdp.send('Page.createIsolatedWorld', { frameId, worldName: ANCESTOR_WORLD });
+  const world: unknown = await cdp.send('Page.createIsolatedWorld', { frameId, worldName });
   const contextId = readNumber(getProp(world, 'executionContextId'));
   if (contextId === null) {
-    throw new Error('the browser did not create a world to read ancestors in');
+    throw new Error(`the browser did not create a world to ${purpose} in`);
   }
   return contextId;
+}
+
+async function ancestorWorldContextId(cdp: CDPSession): Promise<number> {
+  return isolatedWorldContextId(cdp, ANCESTOR_WORLD, 'read ancestors');
+}
+
+/**
+ * Calls a function declaration in a named isolated world and returns its value. Arguments are
+ * passed as JSON, never spliced in as code. A function that throws becomes a rejected promise,
+ * the same as a failed page evaluation.
+ */
+async function callInWorld(
+  cdp: CDPSession,
+  worldName: string,
+  purpose: string,
+  functionDeclaration: string,
+  args: readonly unknown[] = [],
+): Promise<unknown> {
+  const contextId = await isolatedWorldContextId(cdp, worldName, purpose);
+  const evaluated: unknown = await cdp.send('Runtime.evaluate', {
+    expression: `(${functionDeclaration})(${args.map((arg) => JSON.stringify(arg)).join(', ')})`,
+    contextId,
+    returnByValue: true,
+  });
+  const exception = getProp(evaluated, 'exceptionDetails');
+  if (exception !== undefined) {
+    // The description carries a stack of page-world frames after its first line, which says
+    // nothing to a reader of the gap, so only the first line is kept.
+    const description = readString(getProp(getProp(exception, 'exception'), 'description'))?.split('\n')[0];
+    throw new Error(`the browser could not ${purpose}: ${description ?? readString(getProp(exception, 'text')) ?? 'unknown error'}`);
+  }
+  return getProp(getProp(evaluated, 'result'), 'value');
+}
+
+async function stablePathForActiveElement(cdp: CDPSession): Promise<string> {
+  const path = await callInWorld(cdp, PATH_WORLD, 'read the focused element path', ACTIVE_PATH_FUNCTION);
+  return typeof path === 'string' ? path : '';
 }
 
 function pickAttributes(flat: unknown, names: readonly string[]): Record<string, string | null> {
@@ -477,14 +594,12 @@ export async function readAncestorAttributes(
   }
 }
 
-async function stablePathsForSelector(pw: PwPage, selector: string): Promise<string[]> {
-  return pw.evaluate((query) => {
-    const pathFor = Reflect.get(window, '__usablPathFor');
-    if (typeof pathFor !== 'function') {
-      return [];
-    }
-    return Array.from(document.querySelectorAll(query)).map((element) => pathFor(element));
-  }, selector);
+async function stablePathsForSelector(cdp: CDPSession, selector: string): Promise<string[]> {
+  const paths = await callInWorld(cdp, PATH_WORLD, 'read element paths', PATHS_FOR_SELECTOR_FUNCTION, [selector]);
+  if (!Array.isArray(paths)) {
+    throw new Error('the browser returned no list of element paths');
+  }
+  return paths.map((path) => (typeof path === 'string' ? path : ''));
 }
 
 // The readiness surface of a Playwright page. Narrow on purpose so the wait can be driven by a
@@ -910,22 +1025,13 @@ function wrapPage(
       }, selector);
     },
     async armAnnouncementCapture(): Promise<void> {
-      // The observer is already running: the init script installs it at document start on a page
-      // usabl opens, and adoptPage installs it on a page a caller hands in. Arming has nothing to do.
+      // The observer is already running: it starts at document start on a page usabl opens, and
+      // adoptPage starts it on a page a caller hands in. Arming has nothing to do.
       return Promise.resolve();
     },
     async drainAnnouncements(): Promise<string[]> {
-      return pw.evaluate(() => {
-        const drain = Reflect.get(window, '__usablDrain');
-        if (typeof drain !== 'function') {
-          return [];
-        }
-        const drained = drain();
-        if (!Array.isArray(drained)) {
-          return [];
-        }
-        return drained.filter((entry) => typeof entry === 'string');
-      });
+      const drained = await callInWorld(cdp, LIVE_WORLD, 'read announcements', DRAIN_FUNCTION);
+      return Array.isArray(drained) ? drained.filter((entry): entry is string => typeof entry === 'string') : [];
     },
     async activeNode(): Promise<AxNode | null> {
       const backendNodeId = await backendNodeIdForActiveElement(cdp);
@@ -935,7 +1041,7 @@ function wrapPage(
       return axFromBackendId(cdp, backendNodeId);
     },
     async activePath(): Promise<string> {
-      return stablePathForActiveElement(pw);
+      return stablePathForActiveElement(cdp);
     },
     async axAt(selector: string): Promise<AxNode | null> {
       const backendNodeId = await backendNodeIdForSelector(cdp, selector);
@@ -951,7 +1057,7 @@ function wrapPage(
       return readAncestorAttributes(cdp, selector, names);
     },
     async queryAll(selector: string): Promise<Array<{ selector: string }>> {
-      const paths = await stablePathsForSelector(pw, selector);
+      const paths = await stablePathsForSelector(cdp, selector);
       return paths.map((path) => ({ selector: path }));
     },
     async close(): Promise<void> {
@@ -996,30 +1102,31 @@ function wrapPage(
 
 /**
  * Adopts a Playwright page a caller already created and navigated, so usabl can run providers on it
- * (for example from a Playwright test suite). It attaches a CDP session for AX reads and installs the
- * path helper and the live-region capture, then returns a usabl Page whose close() is a no-op: the
+ * (for example from a Playwright test suite). It attaches a CDP session for AX reads and element
+ * paths and installs the live-region capture, then returns a usabl Page whose close() is a no-op: the
  * caller owns the page and its context, so adoption must never close them. Navigation and readiness
  * are the caller's job.
  *
- * The in-flight tracker starts at adoption, so it counts only requests fired after this call. The
- * one caller today, checkPage in playwright-helper.ts, never calls gotoReady, so this is inert. A
- * future caller that adopts a page mid-load and then calls gotoReady expecting the pre-adoption
- * requests to count would read idle at once and could return on a half-rendered page. Such a caller
- * must adopt before it navigates, or wait for readiness itself.
+ * The in-flight tracker starts at adoption, so it counts only requests fired after this call. A
+ * caller that adopts a page mid-load and then calls gotoReady would read the network as idle at once
+ * and lean on the DOM half of readiness alone. checkPage calls gotoReady only for a screen that
+ * declares a readiness signal, and the signal is what tells it the screen rendered. The response
+ * record starts at adoption too, so a response the page received before it was adopted is not in it.
  */
-export async function adoptPage(pw: PwPage): Promise<Page> {
+export async function adoptPage(pw: PwPage, options: { readyTimeoutMs?: number } = {}): Promise<Page> {
   const context = pw.context();
   const cdp = await context.newCDPSession(pw);
   await cdp.send('Accessibility.enable');
-  await pw.evaluate(INSTALL_PATH_HELPER_SCRIPT);
   // Without this, armAnnouncementCapture and drainAnnouncements hear nothing on an adopted page, and
-  // a flow requirement that expects an announcement fails here while the CLI passes it.
-  await pw.evaluate(INSTALL_LIVE_CAPTURE_SCRIPT);
+  // a flow requirement that expects an announcement fails here while the CLI passes it. It hears
+  // only changes made after adoption, which is when a caller's checks start, and it also starts in
+  // any document the page navigates to afterwards.
+  await installLiveCapture(cdp, true);
   // The caller already navigated, so this tracker starts counting from adoption forward. A caller
   // that then uses gotoReady gets readiness measured against requests fired after adoption.
   const network = makeNetworkActivityTracker(pw);
-  // Adoption has no operator config to read, so a caller that does use gotoReady gets the default.
-  const page = wrapPage(pw, context, cdp, readyTimeoutMsFor({}), network);
+  // A caller that read the operator config passes its readiness budget; any other gets the default.
+  const page = wrapPage(pw, context, cdp, readyTimeoutMsFor(options), network);
   return { ...page, close: async (): Promise<void> => {} };
 }
 
@@ -1089,6 +1196,12 @@ export function redactStorageStatePath(error: unknown, storageStatePath: string 
   );
 }
 
+// One launched process and the newContext failures in a row it has had.
+interface ProcessHandle {
+  process: LaunchedBrowser;
+  contextFailures: number;
+}
+
 export function makeSharedBrowser(
   ports: { launch?: () => Promise<LaunchedBrowser>; maxContextFailures?: number } = {},
 ): SharedBrowser {
@@ -1099,46 +1212,53 @@ export function makeSharedBrowser(
   // later scan in the dev session.
   const maxContextFailures = ports.maxContextFailures ?? 3;
 
-  let browser: LaunchedBrowser | null = null;
+  // The process in use, with its own count of newContext failures in a row. The count lives on the
+  // handle, not beside it, so it always describes one process. An open that was waiting on a
+  // process when that process was replaced still settles later, and its failure or success must
+  // land on the process it asked, not on the one that replaced it. A relaunch starts at zero
+  // because it is a new handle.
+  let current: ProcessHandle | null = null;
   // One launch at a time. Two opens that both find no process share this promise rather than each
   // launching a process, which would leave one of them running with nothing holding it.
-  let launching: Promise<LaunchedBrowser> | null = null;
+  let launching: Promise<ProcessHandle> | null = null;
   // Once closed, stays closed. An open after close rejects rather than launching a new process that
   // nothing would ever close.
   let closed = false;
-  let contextFailures = 0;
+  // One close for every caller. Two close requests can arrive together, such as the dev server's
+  // close event and the bundle backstop, and the second must not resolve before the process is
+  // closed.
+  let closing: Promise<void> | null = null;
 
   const closedError = (): Error =>
     new Error('usabl shared browser is closed; the dev server has shut down and no scan can open a page');
 
-  // Drop a process reference, but only the one the caller saw. A concurrent open may already have
-  // replaced it, and that replacement must not be dropped by mistake.
-  const discard = async (which: LaunchedBrowser): Promise<void> => {
-    if (browser !== which) {
+  // Drop a process, but only the one the caller saw. A concurrent open may already have replaced
+  // it, and that replacement must not be dropped by mistake.
+  const discard = async (which: ProcessHandle): Promise<void> => {
+    if (current !== which) {
       return;
     }
-    browser = null;
-    contextFailures = 0;
+    current = null;
     // The process may already be gone. close() only releases what is left on this side.
-    await which.close().catch(() => undefined);
+    await which.process.close().catch(() => undefined);
   };
 
-  const acquire = async (): Promise<LaunchedBrowser> => {
+  const acquire = async (): Promise<ProcessHandle> => {
     if (closed) {
       throw closedError();
     }
-    if (browser !== null && !browser.isConnected()) {
-      await discard(browser);
+    if (current !== null && !current.process.isConnected()) {
+      await discard(current);
     }
-    if (browser !== null) {
-      return browser;
+    if (current !== null) {
+      return current;
     }
     if (launching === null) {
       launching = launch()
         .then((launched) => {
-          browser = launched;
-          contextFailures = 0;
-          return launched;
+          const handle: ProcessHandle = { process: launched, contextFailures: 0 };
+          current = handle;
+          return handle;
         })
         .finally(() => {
           launching = null;
@@ -1154,7 +1274,8 @@ export function makeSharedBrowser(
   };
 
   const openPage = async (url: string, options: RealBrowserOptions): Promise<Page> => {
-    const launched = await acquire();
+    const handle = await acquire();
+    const launched = handle.process;
     const readyTimeoutMs = readyTimeoutMsFor(options);
 
     let context: Awaited<ReturnType<LaunchedBrowser['newContext']>>;
@@ -1163,26 +1284,28 @@ export function makeSharedBrowser(
         options.storageStatePath === undefined ? {} : { storageState: options.storageStatePath },
       );
     } catch (error) {
-      contextFailures += 1;
+      handle.contextFailures += 1;
       // A process that has died, or one that stays connected but cannot make a context any more,
       // is forgotten so the next open launches a fresh one instead of failing forever.
-      if (!launched.isConnected() || contextFailures >= maxContextFailures) {
-        await discard(launched);
+      if (!launched.isConnected() || handle.contextFailures >= maxContextFailures) {
+        await discard(handle);
       }
       throw redactStorageStatePath(error, options.storageStatePath);
     }
-    contextFailures = 0;
+    handle.contextFailures = 0;
 
     // From here a context exists. Any failure below must close it, or an authenticated page opened
     // from the run's storage state stays alive with nothing holding it.
     try {
       const page = await context.newPage();
-      await page.addInitScript(LIVE_AND_PATH_INIT_SCRIPT);
       // Attach the in-flight tracker before navigating, so the navigation's own requests are
       // counted and readiness cannot read idle off a page whose first responses have not landed.
       const network = makeNetworkActivityTracker(page);
       const cdp = await context.newCDPSession(page);
       await cdp.send('Accessibility.enable');
+      // Before navigating, so the first live update the screen makes is heard. Late injection would
+      // under-report announcements and create a false sense of coverage.
+      await installLiveCapture(cdp, false);
       // open() owns navigation and gotoReady() only waits for readiness. Navigation takes the same
       // budget, so one config number covers the whole cost of reaching a screen.
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });
@@ -1193,7 +1316,7 @@ export function makeSharedBrowser(
       // open relaunches instead of failing against a dead reference. A failure with the process
       // still connected is the page's own problem and the process stays.
       if (!launched.isConnected()) {
-        await discard(launched);
+        await discard(handle);
       }
       // Belt and braces. Nothing below newContext reads the storage state file, so no error here
       // should carry the path, but this is the last point before the message becomes a coverage
@@ -1210,18 +1333,21 @@ export function makeSharedBrowser(
         close: async () => {},
       };
     },
-    async close(): Promise<void> {
+    close(): Promise<void> {
       closed = true;
-      if (launching !== null) {
-        // A launch is in flight. Wait for it so the process it produces is the one closed here,
-        // rather than left running because close() looked before it existed.
-        await launching.catch(() => undefined);
-      }
-      const open = browser;
-      browser = null;
-      if (open !== null) {
-        await open.close();
-      }
+      closing ??= (async (): Promise<void> => {
+        if (launching !== null) {
+          // A launch is in flight. Wait for it so the process it produces is the one closed here,
+          // rather than left running because close() looked before it existed.
+          await launching.catch(() => undefined);
+        }
+        const open = current;
+        current = null;
+        if (open !== null) {
+          await open.process.close();
+        }
+      })();
+      return closing;
     },
   };
 }

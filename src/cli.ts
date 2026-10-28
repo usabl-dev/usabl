@@ -29,7 +29,7 @@ import {
 import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
-import { parseUsablConfig } from './intake/config.js';
+import { configUrlWarnings, parseUsablConfig } from './intake/config.js';
 import { ciRefusal, installRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
 import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
@@ -49,9 +49,19 @@ import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
 
-export async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
+export async function loadConfig(
+  path = 'usabl.config.json',
+  warn: (line: string) => void = (line) => {
+    process.stderr.write(`${line}\n`);
+  },
+): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
-  return parseUsablConfig(await readFile(path, 'utf8'));
+  const config = parseUsablConfig(await readFile(path, 'utf8'));
+  // A configured URL with a query or a fragment loads, and the operator is told it is published.
+  for (const warning of configUrlWarnings(config)) {
+    warn(warning);
+  }
+  return config;
 }
 
 async function readStdin(): Promise<string> {

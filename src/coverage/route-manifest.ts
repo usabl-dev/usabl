@@ -1,11 +1,11 @@
 /**
  * Route manifest discovery for coverage planning.
  * Sidecar metadata is preferred because only authored entry files can be
- * attributed honestly. Router text fallback can recover paths, not ownership.
- * It must never invent entry-file attribution from router text.
+ * attributed honestly. The router fallback parses the router file and recovers paths,
+ * not ownership. It must never invent entry-file attribution from router source.
  */
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
-import { parseRouterFallback, type UnusableRoute } from './router-parse.js';
+import { parseRouterFallback, type UnreadableRoute, type UnusableRoute } from './router-parse.js';
 import { configError } from '../intake/config-error.js';
 import { describeIdProblem } from '../intake/id-grammar.js';
 
@@ -19,8 +19,8 @@ export interface RouteManifest {
   routes: RouteEntry[];
   // Where the route list came from, so a caller can tell a complete list from a partial one.
   // 'sidecar' is the authored usabl.routes.json and is the only source that is complete enough to
-  // prove a screen id is absent. 'router' is the regex fallback, which recovers paths but is
-  // documented as incomplete, so absence there proves nothing. 'none' means no source was
+  // prove a screen id is absent. 'router' is the parsed router fallback, which recovers paths but
+  // can leave routes unread, so absence there proves nothing. 'none' means no source was
   // readable at all, which is also what the trust overlay produces when it suppresses a diverged
   // manifest and no router file can be read.
   source: 'sidecar' | 'router' | 'none';
@@ -29,6 +29,35 @@ export interface RouteManifest {
   // id at parse, and init never writes one. The planner reports each as a gap when wide blast
   // would otherwise have queued it, so a route that cannot be scanned is not silently absent.
   unusable?: UnusableRoute[];
+  // Routes the router fallback found but could not read, such as a path built by code, and a router
+  // file that does not parse. Each names the router file and, when known, the line. The planner
+  // reports each as a gap when wide blast would otherwise have queued the router's routes, so a
+  // route usabl could not read is never silently absent from a run that looks complete.
+  unreadable?: RouteFileGap[];
+  // Router routes usabl cannot read that the sidecar's author has checked by hand, by router file
+  // and entry id. Only an authored sidecar carries these. `usabl drift routes` still lists an
+  // acknowledged entry, and it no longer refuses on it. Coverage planning never reads them: with a
+  // sidecar present the router is not read at all.
+  acknowledgedUnreadable?: AcknowledgedUnreadable[];
+}
+
+export interface AcknowledgedUnreadable {
+  file: string;
+  id: string;
+}
+
+export interface RouteFileGap extends UnreadableRoute {
+  file: string;
+}
+
+function routerManifest(router: string, routerFile: string): RouteManifest {
+  const parsed = parseRouterFallback(router, routerFile);
+  return {
+    routes: parsed.routes,
+    unusable: parsed.unusable,
+    unreadable: parsed.unreadable.map((gap) => ({ file: routerFile, ...gap })),
+    source: 'router',
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -70,6 +99,28 @@ function expectEntryFile(value: unknown): string | null {
   throw configError`usabl.routes.json routes[].entryFile must be a string or null`;
 }
 
+function parseAcknowledged(value: unknown): AcknowledgedUnreadable[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw configError`usabl.routes.json acknowledgedUnreadable must be an array`;
+  }
+  return value.map((entry, index): AcknowledgedUnreadable => {
+    if (!isRecord(entry)) {
+      throw configError`usabl.routes.json acknowledgedUnreadable[${index}] must be an object`;
+    }
+    const file = entry['file'];
+    const id = entry['id'];
+    if (typeof file !== 'string' || file.length === 0) {
+      throw configError`usabl.routes.json acknowledgedUnreadable[${index}].file must be the router file path`;
+    }
+    // The id is the one usabl drift routes prints. Anything else can never match an entry.
+    if (typeof id !== 'string' || !/^[0-9a-f]{12}$/.test(id)) {
+      throw configError`usabl.routes.json acknowledgedUnreadable[${index}].id must be the 12-character id that usabl drift routes prints`;
+    }
+    return { file, id };
+  });
+}
+
 function parseSidecar(raw: string): RouteManifest {
   // Corrupt sidecar data is a hard failure here so callers can fail open later.
   // Pretending parse failures mean "no routes" would silently rewrite the story.
@@ -83,8 +134,10 @@ function parseSidecar(raw: string): RouteManifest {
     throw configError`usabl.routes.json routes must be an array`;
   }
 
+  const acknowledgedUnreadable = parseAcknowledged(parsed['acknowledgedUnreadable']);
   return {
     source: 'sidecar',
+    ...(acknowledgedUnreadable === undefined ? {} : { acknowledgedUnreadable }),
     routes: routes.map((entry, index): RouteEntry => {
       if (!isRecord(entry)) {
         throw configError`usabl.routes.json routes[${index}] must be an object`;
@@ -114,7 +167,7 @@ export async function parseRouteManifest(
 ): Promise<RouteManifest> {
   const sidecar = await fs.readFile('usabl.routes.json');
   // Sidecar wins whenever present, even if routes is intentionally empty.
-  // Do not fall through to regex and invent a second incompatible manifest.
+  // Do not fall through to the router and invent a second incompatible manifest.
   if (sidecar !== null) {
     const manifest = parseSidecar(sidecar);
     // screenId is the planner's scan identity. Duplicate ids on different URLs
@@ -128,7 +181,7 @@ export async function parseRouteManifest(
     return { routes: [], source: 'none' };
   }
 
-  const manifest = { ...parseRouterFallback(router), source: 'router' as const };
+  const manifest = routerManifest(router, discovery.routerFile);
   assertUniqueScreenIds(manifest.routes);
   return manifest;
 }
@@ -164,5 +217,5 @@ export async function parseDiscoveredManifest(
   if (router === null) {
     return null;
   }
-  return { ...parseRouterFallback(router), source: 'router' };
+  return routerManifest(router, routerFile);
 }

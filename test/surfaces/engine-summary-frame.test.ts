@@ -41,7 +41,7 @@ async function hostileUnseenRun(): Promise<Result> {
   const deps = makeFakeDeps({
     files: {
       'usabl.config.json': '{}',
-      'src/router.tsx': `<Route path="/${HOSTILE}" element={<Page />} />`,
+      'src/router.tsx': `export const App = () => <Routes><Route path="/${HOSTILE}" element={<Page />} /></Routes>;`,
       'src/App.tsx': 'export default function App() {}',
     },
     headContents: { 'usabl.config.json': '{}' },

@@ -761,6 +761,17 @@ Given a set of changed files, discover which surfaces they affect:
 5. Manual surface globs in config are an additive fallback, never a replacement.
 6. Anything resolving to nothing stays in `unresolvedFiles` and forces `not_covered`.
 
+An import with no extension is probed against a fixed list: `.mjs`, `.js`, `.mts`, `.ts`, `.jsx`,
+`.tsx`, `.vue`, and `.svelte`, then the same names as `index` files in a directory. usabl does not
+read `resolve.extensions` from the Vite config, because it cannot run the config. When more than
+one candidate exists, for example `Widget.vue` beside `Widget.tsx`, usabl does not pick one: the
+import links every candidate, so a change to any of them maps to the screen. That can scan a
+screen that does not render the changed file, and never leaves out one that does. The ambiguity
+is still disclosed: the gap of a changed file that maps to no screen names every candidate of an
+ambiguous import on its way. Write the import with its extension to resolve it. One case is not disclosed: an extension outside
+the list, such as `.web.tsx` added through `resolve.extensions`, is never probed, so a sibling
+with that extension is not seen and the file usabl did find is attributed.
+
 ### Nothing to check vs not covered
 
 Coverage answers two different questions.
@@ -789,69 +800,129 @@ this PR. Coverage grows as the team works, not as a boil-the-ocean inventory.
 
 - Bundler aliases (`@/`, `~/`) are not resolved. They become `unresolvedFiles`.
 - Computed import specifiers (`import(variable)`) are not resolved.
-- Comment stripping is regex-based and imperfect.
-- Routes not parseable from the router source must be configured or stay unmapped.
+- Comment stripping in the import graph is regex-based and imperfect.
+- A route the router reader cannot resolve is a named gap with its file and line (see below).
 
-Those four are honest `not_covered` outcomes, not silent passes. The next section is not, and has
-to be read differently.
+Those four are honest `not_covered` outcomes, not silent passes. The next section says exactly
+what the router reader reads, what it reports, and what it still does not see.
 
-#### Limits of reading routes out of router source
+#### Reading routes out of router source
 
-Routes are recovered from router source with regular expressions, not with a parser. That buys a
-route manifest with no build step and no dependency on the application's toolchain, and the price
-is that some declarations are read wrongly and some are not read at all.
+With no `usabl.routes.json`, usabl reads routes from `discovery.routerFile`. It parses the file
+with `@babel/parser` (TypeScript and JSX by the file's extension, legacy decorators always, and
+Flow types for a `.js` or `.jsx` file that does not parse without them) and walks the syntax tree. It
+does not run the file and it does not follow imports. Strings, comments, and regular expressions
+are not code in the tree, so a commented-out route, a `>` or `)` inside a string, a regular
+expression such as `/[//]/`, and a `createBrowserRouter(` written in a string or a comment are
+never read as router code.
 
-A route the parser never sees is not a `not_covered` outcome. The planner records a gap only for
-routes it knows about, so a route that was never recovered leaves no gap behind: a change to that
-screen's entry file, or to a wide-blast file, can read as fully checked while the screen is never
-scanned.
+**What counts as the router.** Routes are read only from:
 
-**The mechanism.** These patterns match raw text. They do not know which characters are code,
-which are inside a string, and which are inside a comment. So a delimiter that appears anywhere
-in the text is treated as a delimiter: a `>` ends a JSX tag, a `)` closes the `create*Router(...)`
-call argument, and a quote opens or closes a path literal. One stray delimiter inside a string or
-a comment can therefore end a tag or a call argument early and drop the declarations after it.
-The reverse also holds: text that is not code, such as a commented-out route, is matched as
-though it were.
+- the children of a `<Routes>` or `<Switch>` element, through nested `<Route>` elements,
+  fragments, `cond && <Route />`, `a ? <Route /> : <Route />`, arrays, and a `const` in the same
+  module that holds JSX;
+- the first argument of a real call to `createBrowserRouter`, `createHashRouter`, or
+  `createMemoryRouter`: an array of route objects, a `const` that holds one, a spread of such a
+  `const`, and nested `children`. A local name for one of these counts too: an import alias such
+  as `import { createBrowserRouter as makeRouter }`, a `const` that holds one, and a `const` made
+  by a call that takes one, such as `Sentry.wrapCreateBrowserRouterV6(createBrowserRouter)`;
+- the argument of `useRoutes`, read the same way as a route object list;
+- the JSX passed to `createRoutesFromElements` or `createRoutesFromChildren`.
 
-The cases below are examples of that mechanism, not a complete list. Anything that puts a
-delimiter where the pattern does not expect one can produce another.
+A path object anywhere else in the module is not part of the router and is not read. A `<Route>`
+anywhere else is not scanned either, because it may be a decoy, but it is named as an unreadable
+entry with its line, because it may be real: the older pattern of a `<Route>` beside a `<Switch>`
+for a modal is one example. When the module has `<Route>` elements or `path:` objects but no
+router at all, usabl cannot tell which of them are real, so it reads none and reports one
+unreadable entry for the whole file.
 
-- **A commented-out route is read as a route.** Commented text is matched like any other text. The
-  route is added to the manifest, so usabl plans a scan of a screen the application does not
-  serve. When a commented-out declaration and a live one carry the same path, which one survives
-  depends on the path: the router fallback and the data-router reader keep the first match, so the
-  commented one wins and a message that names a line names the commented line; `usabl init`'s JSX
-  pass keys routes by path as it merges, so the last match replaces the earlier ones and the live
-  route wins there.
-- **A route whose `element` attribute is written before its `path` is not read at all.** The JSX
-  pattern ends the tag at the first `/>`, which is the nested element's own self-close, so every
-  attribute after the element is invisible and no path is found. Attribute order carries no
-  meaning in JSX, so this is ordinary source. A file that writes every route this way yields no
-  routes and no complaint.
-- **A path written as an expression is not read.** Only a quoted literal is matched, so
-  `path={ROUTES.home}` or `path={base + '/x'}` is skipped and that route is absent from the
-  manifest.
-- **A `>` anywhere in a JSX attribute string drops the whole route.** It ends the attribute run
-  before the pattern reaches the tag's own close, and the tag stops matching. Both
-  `<Route title=">" path="/hidden" element={<Live />} />` and
-  `<Route path="/visible" title=">" element={<Live />} />` yield no routes. Putting the path first
-  does not help.
-- **A `)` anywhere inside the router call drops every route after it.** The call argument is found
-  by counting raw parentheses, so an unmatched `)` in a comment or in an ordinary string, such as
-  `{ path: '/first', label: 'a ) b' }`, closes the argument early and the entries that follow are
-  never seen.
-- **The first `create*Router(` in the file wins, wherever it is.** One written inside a string or
-  a template interpolation is taken as the router call, and the real one below it is never read.
+**What counts as a path.** A path is read when it is a string, a template with no expressions, or
+a reference to a `const` in the same module whose value is one of those. A member of a `const`
+object counts, such as `ROUTES.home` or `ROUTES['admin'].users`, including an object wrapped in
+`as const`, `satisfies`, or `Object.freeze`. A name bound more than once in the module, such as a
+module `const` shadowed by a parameter, is not resolved, because telling which binding a
+reference means needs scope analysis the reader does not do. An object with a property assigned
+or deleted anywhere in the module is not resolved either. A `const` route list or route tree that
+is changed in place anywhere in the module, by an index assignment or by `push`, `unshift`,
+`splice`, `pop`, `shift`, `fill`, or `copyWithin`, is not read: it is one unreadable entry where
+the router uses it, not a partial read. In a route object, a method such as `loader()` or
+`action()` is not a path and is skipped. A spread, or a method named `path` or `children`, makes
+the route unreadable when it could supply the path or the child routes, that is, unless `path`
+and `children` are both written after the last spread. A relative path is joined to its
+parent route's path, as React Router does: `settings` under `/app` is `/app/settings`, and an
+index route has its parent's path. At the top of a data router, and of a `<Routes>` element that
+is the only router in the file, a relative path is relative to `/`. A bare `*` route is the
+not-found page, which is not a screen, and is skipped. A path that ends in `*` after other
+segments, such as `/app/*`, matches many URLs and usually mounts routes declared in another
+file, so it is reported (below) rather than scanned as the literal URL `/app/*`.
+
+**What it reports.** A route it finds but cannot read is never dropped. Each one is an
+`unreadable` entry with the router file, the line, and the reason: a path it cannot resolve (an
+import, an expression, a template with expressions, a `let`), a route that takes its props from a
+spread or a computed key, routes built by code (`routes.map(...)`, a function call), an element
+among the routes that is not a `<Route>`, a relative path whose base it cannot tell (for
+example in a file with more than one router), a path such as `/app/*`, a `<Route>` outside every
+router it read, a route list changed in place, a call whose name ends in `Router` that is not one
+of the known factories or a name for one, and a wrapper of a known factory that it cannot follow.
+A router file that does not parse is one entry for the whole file, with the line and column of
+the syntax error, and no routes. So is a file with routes but no router. Then:
+
+- the planner records each entry as a `skipped` coverage gap whenever a wide-blast change would
+  have queued the router's routes, so the gate reads the run as not covered. Router routes have
+  no entry file, so wide blast is the only way they are scanned, and a run with no wide-blast
+  change never depended on them;
+- `usabl drift routes` lists each entry with its file, line, and id, and exits 2, because
+  neither "no drift" nor a removal can be confirmed. Once the sidecar's author has checked an
+  entry by hand, they can acknowledge it in `usabl.routes.json` (below). An acknowledged entry is
+  still listed and no longer forces exit 2;
+- `usabl init` writes a `Review:` note for each entry with its file and line, because the draft
+  sidecar does not list that route and usabl never scans a route the sidecar leaves out.
+
+**Entry files.** `usabl init` attributes an entry file only to a JSX route that sits in a router
+the module defines, has no child routes, and names its component as `element={<Name />}` imported
+from a relative path. A layout route with children gets no entry file, because its component
+also renders on every child's URL, and a change to it must not read as covered by one screen.
+This holds for JSX passed to `createRoutesFromElements` and `createRoutesFromChildren` too. Route
+objects, in a router factory call or in `useRoutes`, never get one. When two routes with the same
+path name different components, neither is attributed.
+
+**What it still does not see.** These leave no gap, so check for them:
+
+- routes kept in another module, such as an imported route array. The router file's reference
+  to it is reported, but the routes inside are not read;
+- a descendant `<Routes>` element in another file, which only exists at run time;
+- a router file with no router and nothing route-shaped: no `<Routes>`, no router call, no
+  `<Route>`, and no `path:` object. It reads as no routes, the same as a missing router file;
+- a router factory with a name that does not end in `Router` and that is not an alias or a
+  wrapper of a known factory, such as `makeApp([...])`. Its routes are not read and not named;
+- an object or a route list changed by passing it to a function, such as
+  `Object.assign(ROUTES, extra)` or `addRoutes(routes)`. Only assignment, `delete`, and the array
+  methods listed above are noticed.
+
+**Acknowledging an entry in drift.** A common router has entries usabl cannot read, such as a
+`/app/*` route, a guard element like `<RequireAuth>` among the routes, or routes built with
+`map`, so `usabl drift routes` would refuse on every run. Each entry that is one declaration
+carries an `id`: a 12-character hash of that declaration's source text and the reason. It stays
+the same when other lines move and changes when the declaration changes. To acknowledge entries,
+list them in the sidecar:
+
+```json
+{
+  "routes": [ ... ],
+  "acknowledgedUnreadable": [{ "file": "src/App.tsx", "id": "3f2a9c1b0d4e" }]
+}
+```
+
+Only `usabl drift routes` reads this list. Coverage planning never does, because with a sidecar
+present it does not read the router at all. A whole-file entry (a router file that does not
+parse, or one with routes but no router) has no id and is never acknowledged. An acknowledgement
+that matches nothing is listed so it can be removed. `usabl.routes.json` is a guarded file, so
+adding an acknowledgement needs the same owner review as adding a route.
 
 What an operator can do. Write the routes into `usabl.routes.json`. An authored sidecar takes
 precedence over router-source discovery, so the manifest is exactly what that file says and none
-of this applies. That is the reliable answer, and it is the only one that holds against every case
-above. `usabl init` drafts the sidecar from these same patterns, so read the draft against the
-router before merging it and add any route it missed. Changing the router source can also work,
-by writing a quoted `path` literal outside any comment and keeping stray `>` and `)` characters
-out of the strings in and around the declaration, but that depends on the whole file rather than
-on the one route, so check the result instead of assuming it.
+of this applies. `usabl init` drafts the sidecar with this same reader, so read the draft and its
+`Review:` notes against the router before merging it, and add any route it names.
 
 #### Limits of detecting that a screen was not reached signed in
 
@@ -1121,7 +1192,7 @@ for a screen Rule B fires on wrongly, and for a screen whose identity call is re
 token refresh. It is only as good as what it names: see the paragraphs above on what a shell
 selector and a public shell cost.
 
-#### A credential in a configured surface URL is echoed everywhere
+#### A credential in a configured surface URL is refused, and a query is echoed
 
 Text that comes off the page is sanitized before it is published. A coverage gap reason strips the
 userinfo, the query, and the fragment from every address it names, and shortens a refused request
@@ -1141,13 +1212,26 @@ position is protected.
 Configured surface URLs are not page text and are not sanitized. `gap.ref`, `ScreenScan.url`, and
 `coverage.affected[].url` carry the operator's own `usabl.config.json` value verbatim into the
 Result, and from there into the CLI output, the overlay, and the pull request comment. That is
-deliberate and predates the sanitizing above: the overlay attributes a gap to a screen by comparing
-these values exactly, so rewriting one would silently orphan the gap it belongs to.
+deliberate: the overlay attributes a gap to a screen by comparing these values exactly, so
+rewriting one would silently orphan the gap it belongs to.
 
-The consequence is a residual an operator has to know about. A credential written into a surface
-URL, whether HTTP basic userinfo (`https://user:pass@host/screen`), a preview token in the query,
-or anything in the fragment, will be echoed by every surface that renders a Result, including a
-comment posted to a public pull request. Do not put one in `usabl.config.json`. Reach a protected
+So the loader keeps the value and refuses what must not be published. A `surfaces[].url` or an
+`appBaseUrl` that carries userinfo (`https://user:pass@host/screen`, or a user name alone) is
+refused when the config is read, because every discovered route url is built from `appBaseUrl`.
+The message names the field, such as `surfaces[1].url`, and never prints the value. Userinfo is
+found three ways, and any one refuses the value. URL parsing finds it the way a browser does,
+through a backslash for a slash or a tab inside the name. Two shape checks then run on every value,
+with backslashes read as slashes: an `@` in the authority after `//`, and an `@` before the first
+`/`, `?`, or `#`. The second catches a value with no `//`, such as `admin:secret@localhost:3000/x`,
+where URL parsing reads `admin:` as a scheme and finds no password. An `@` later in the path, the
+query, or the fragment is accepted.
+
+A query string or a fragment is accepted, because applications select screens by both, and it is
+still printed as written. The CLI, the stop hook, and the dev-server plugin print a warning on
+stderr each time they load the config. It names the field, never the value, and says that anything
+in the query or the fragment is published. The residual an operator has to know about: a preview token in the query, or anything
+in the fragment, is still echoed by every surface that renders a Result, including a comment
+posted to a public pull request. Do not put one in `usabl.config.json`. Reach a protected
 environment with a storage state, which never enters committed config, instead.
 
 ### Documentation coverage
@@ -1442,9 +1526,18 @@ included, as the baseline. The stop then goes on without the drift comparison. I
 not block, because a block would trap the session behind a file another user may
 control; this is the same fail-open choice as the exit 4 decision in the threat model.
 It is never silent. The decision line carries a note, for example `VERIFIED (exit 0,
-session drift not checked): ...`, and stderr ends with the reason and the fix:
-`NOT verified - usabl did not use session pins for this stop because ... To fix: delete
-<path>. The next stop records new pins for this session.`
+session drift not checked): ...`, and stderr ends with a notice: `NOT verified - usabl did
+not use session pins for this stop because the pin store refused to read them ... To fix:
+see "pin fix" in the untrusted text below.`, then an untrusted frame with `pin reason:` and
+`pin fix:`. The reason and fix name directories and files from the environment, so they are
+carried values and are printed only inside the frame. The same note and notice appear when
+the hook input has no session id, or one usabl cannot use as a file name; that id is printed
+only inside the frame too.
+
+Drift blocks with `NOT verified - guarded policy drift during this session: N guarded file(s)
+changed ...`, a next step, and the paths under `drifted files:` inside the frame, because a
+file name under a guarded directory is chosen by whoever adds the file. A hook error prints
+fixed text outside the frame and the error message inside it.
 
 What this does not cover:
 
@@ -1544,7 +1637,9 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   still present but now holds fewer barriers. It never raises a count and never adds an
   identity: accepting new debt is what `usabl baseline` does, under review. It leaves version 1
   name and structural counts alone, because those are placeholders the gate does not compare and
-  writing a real number under them would present a placeholder as an observation. `prune` is the
+  writing a real number under them would present a placeholder as an observation. It keeps the
+  version it read and writes every other top-level field back as it was, in its place, so a
+  `scope: "partial"` floor stays partial and a field from a newer floor survives. `prune` is the
   only subcommand; anything else exits 2.
 - Routes drift: `usabl drift routes` compares `usabl.routes.json` against the app router.
   `routes` is the only subcommand; anything else exits 2.
@@ -1582,10 +1677,21 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 - Unconfigured repo or unreadable input: loud fail-open. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. A run that started and failed prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
 - Nothing to check (no UI files in the diff): allow with explicit "nothing to check"
   message. Not `not_covered`.
-- Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser. The line reads
-  "VERIFIED (exit 0): a stored receipt matches this tree. You may stop.", and the receipt's
-  `sourceTree` follows inside the untrusted frame, because it was read from a file in the
-  work tree.
+- Valid receipt on an unchanged tree: fast allow in under 20 ms, no browser. The session
+  pins are read and compared first, with every refusal described under Session pinning, so a
+  stored receipt never allows a stop that the pin comparison would block. A receipt binds the
+  committed policy as it was when the receipt was minted. A policy weakened and committed
+  during the session, then checked under the weaker policy, mints a receipt that matches, and
+  only the pins see that drift. The fast path records or replaces pins exactly as a full run
+  does. The line reads "VERIFIED (exit 0): a stored receipt matches this tree, the committed
+  policy, the engine, and the scanners. No new scan ran. You may stop." When this stop
+  compared the pins and found no drift, "Guarded policy files match the session pins." comes
+  before "No new scan ran." When the pins were not used, the line carries the
+  `session drift not checked` note and the pin notice follows on stderr, as on a full run.
+  Detected drift prevents the fast allow: the stop blocks whether or not a receipt matches,
+  and during an active continuation it allows once, marked NOT verified, with the pins kept.
+  The receipt's `sourceTree` follows inside the untrusted frame, because it was read from a
+  file in the work tree.
 - `verified` on a fresh scan: mint receipt and allow. Mint only after every affected
   surface was scanned. Never mint on a sample. The meaning line on every surface is
   "No new barrier blocks this change. It can proceed." and the stop hook allows with
@@ -1595,6 +1701,15 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   carries barriers the floor recorded.
 - `regression`: block.
 - `approval_required`: block.
+- A verdict that is not one of the contract's words, or a null verdict on a run that was neither
+  idle (`nothingToCheck`) nor a crash (exit 4): block. The line reads, for example,
+  "UNRECOGNIZED VERDICT (exit 1): NOT verified. usabl does not recognize the verdict this run
+  reported, so the run proved nothing about this change." or "NO VERDICT (exit 0): NOT verified.
+  usabl did not reach a verdict for this change, so the run proved nothing about it.", followed by
+  a next step to run the check again and the gate's summary inside the untrusted frame. The
+  carried verdict is never printed. During an active continuation it allows once, marked NOT
+  verified, like every other blocking state. The self-check prints the same words, and prints IDLE
+  only when `nothingToCheck` is true.
 - `not_covered`: default block. Recalibrate from real-repo measurement
   (section 25) if this drives persistent bypass behavior.
 - Policy mismatch against git anchor: block.
@@ -1637,6 +1752,19 @@ client runs inside the tested page's own JavaScript realm, so the page can inter
 what the overlay shows; the gate computes the verdict and the CLI and CI enforce it. Oracle-preserving:
 mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
 
+In `vite serve` only, the plugin adds `data-source-file` and `data-source-line` to each component
+and HTML element opening tag in the application's `.tsx` and `.jsx` files, so a finding can name
+the line that rendered the element. The plugin runs before the host's JSX transform
+(`enforce: 'pre'`), so it reads raw TSX. It parses each file with `@babel/parser` and puts the
+attributes after the tag's last attribute, or right after the tag name and any type arguments
+when the tag has none, so an element such as `<PageWizard<Data>>` stays valid and a
+`data-source-file` carried in a spread such as `{...rest}` cannot replace the element's own
+location. Legacy decorators are read, and a `.js` or `.jsx` file that does not parse is tried
+again with Flow types. Strings, comments, types, and generic arrow functions are not
+tags in the syntax tree and are never touched. A namespaced tag such as `<svg:rect>` is left as
+written. A file the parser cannot read is served unchanged, with one warning in the dev server log
+that names the file. Its elements carry no source line, and the application still runs.
+
 ### 11.4 CI/PR comment (trusted-ref policy read)
 
 Reads policy from the protected branch (or the trusted ref), never the working tree.
@@ -1644,10 +1772,13 @@ Refuses to run without a base ref. The comment leads with the headline
 (`## usabl report: <VERDICT>`), then on approval required the policy split line, then the
 receipt (`_No receipt: run was not verified._` when none), then `### Conformance summary`
 (whose `deterministic:` entry splits new into failing and unconfirmed when any is new),
-then the finding sections `### New barriers`, `### Known (carried)`, and
-`### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the gating lane
+then the finding sections `### New barriers`, `### Known (recorded debt)`, and
+`### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
 when the noise budget collapses it, then `### Coverage gaps` and
-`### Announcements (current run)`. All page-derived text passes through `neutralize()`. Sticky comment
+`### Announcements (current run)`. The known section lists carried and waived deterministic
+findings, each with its status, the same recorded debt the terminal and the overlay list. A
+collapsed group holds findings of one status, and names its screen id and rule once, in its
+headline. Its hint calls the findings gating only when every one of them gates. All page-derived text passes through `neutralize()`. Sticky comment
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
 
@@ -1737,10 +1868,32 @@ the only verdict authority. It also acts on the caller's page: the keyboard walk
 the PatternFly probes open and close dialogs and menus, and each flow requirement on the page's
 surface runs its authored steps, clicks and key presses, on that page.
 
-`adoptPage` installs the same live-region capture the CLI's init script installs, from one
-shared source in `src/deps/real.ts`, guarded so a page that already has it keeps its one
-observer. So a flow requirement that expects an announcement hears the same text in both. On an
-adopted page the capture starts at adoption, not at document start.
+`adoptPage` installs the same live-region capture the CLI installs, from one shared source in
+`src/deps/real.ts`. So a flow requirement that expects an announcement hears the same text in both.
+On an adopted page the capture starts at adoption, not at document start, and it also starts in
+any document the page navigates to afterwards.
+
+The capture hears a change only when the region it falls in is live. It resolves the effective
+live value with the same resolver `pf-toast-live-region` uses, carried into the browser as that
+resolver's own source, so the two cannot disagree: the nearest element that sets a value wins,
+an explicit `aria-live` beats the role, only the exact tokens `polite` and `assertive` are live,
+and roles match without regard to case. A change inside `aria-live="off"`, inside an off wrapper
+within a polite region, or inside a region whose token is `POLITE` or `banana` is not heard. The
+walk climbs through a slot the way the rule's walk does, but it runs in page script, so it sees
+only slots in open shadow roots. When the live region it reaches sits inside a shadow root and the
+changed element is slotted into it from outside, the change is not recorded. That region's own text
+leaves out the slotted text that changed and holds text the change did not make speakable, such as
+slot fallback text, so recording it could pass a flow requirement on words no screen reader spoke.
+
+The capture and the element path function run in isolated worlds, which share the DOM with the
+page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
+page that defines `window.__usablDrain` or `window.__usablPathFor` before adoption, or replaces
+them after load, changes nothing usabl reads, and neither does a page that redefines
+`textContent`, `querySelectorAll`, or `CSS.escape` in its own world. A document where the capture
+is not running is an error, which the check runner turns into a coverage gap, never an empty list
+of announcements. An element is named by its id only when that id's selector matches exactly the
+element in hand, so two ids that escape to one selector, such as a NUL and a literal U+FFFD, give
+two identities.
 
 A requirement is matched to the page by `options.screenId`, the surface id the page is. Each
 runtime requirement is checked on the page when its surface is the page's surface, and is out
@@ -1753,6 +1906,17 @@ project that has a surface named `page`, so every runtime requirement is a gap a
 judged on it. So a page that regresses on a requirement in the CLI also regresses in
 `checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
 when it is not.
+
+When `options.screenId` names a configured surface that declares `reachedWhen`, `checkPage`
+holds the page to that signal the way the CLI does, with the CLI's own wait and rule. It waits
+for the page to settle and for the selector to match, for at most `signalTimeoutMs` after the
+page first settled, within `readyTimeoutMs`. If the selector did not hold, or a declared
+response was not seen, the result is a `not-covered` gap with ref `readiness:<screenId>` that
+names the part, worded as the CLI words it, and no provider runs. Each part is measured again
+after the checks, and a part that no longer holds drops the drafts and becomes the same gap. An
+adopted page records only the requests sent after `checkPage` was called, so a response the page
+received while it loaded is not seen, and a screen that declares a response is always a gap
+here. That screen is checked with the CLI.
 
 ### 11.7 Other coding assistants (seam)
 
@@ -2239,11 +2403,11 @@ which must be normalized), and the fix, never the id or the path it came from, a
 nothing.
 
 What that covers, and what it does not. The grammar holds for every id these commands actually
-derive, and the line in a route refusal is the line of the match the parser made. It says nothing
-about a route the parser never recovered from the router source: no id is derived for it, so
-nothing refuses it, and it is simply absent from the draft. Router source is matched by pattern,
-not parsed, and the cases it reads wrongly or not at all are listed under the documented limits in
-section 8.
+derive, and the line in a route refusal is the line of the path the parser read. It says nothing
+about a route the parser found but could not read: no id is derived for it, so nothing refuses
+it. `usabl init` names it in a `Review:` note with its file and line, and it is absent from the
+draft until the operator adds it. What the router reader reads, reports, and still does not see is
+listed under the documented limits in section 8.
 
 The boundary, stated exactly. The grammar is also checked on the evidence floor, the waiver
 ledger, and the inputs of the two exported functions that take ids, so it holds whichever door a
@@ -2407,8 +2571,9 @@ The five focus/interaction rules (1-5) carry the proof loop. The three structura
 - Only relative import paths are followed.
 - Bundler aliases (`@/`, `~/`, tsconfig paths) are not resolved.
 - Computed import specifiers (`import(variable)`) are not resolved.
-- Routes built from a data table or registered dynamically are not extracted.
-- Comment stripping is regex-based and imperfect.
+- Routes built from a data table or registered dynamically are not extracted. Each is named
+  as a gap with its file and line when it sits in the router file (section 8).
+- Comment stripping in the import graph is regex-based and imperfect.
 
 These produce honest `not_covered`, never silent passes.
 

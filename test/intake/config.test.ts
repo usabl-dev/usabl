@@ -3,8 +3,12 @@
  * so the readiness budget is operator config. A bad value has to be refused while parsing, which
  * is before the run builds deps or opens a browser.
  */
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseSignalTimeoutMs, parseUsablConfig } from '../../src/intake/config.js';
+import { loadConfig } from '../../src/cli.js';
+import { configUrlWarnings, parseSignalTimeoutMs, parseUsablConfig } from '../../src/intake/config.js';
 import { UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
 import { describeSurfaceIdProblem } from '../../src/intake/surface-ids.js';
 import { screenIdFromUrl } from '../../src/coverage/router-parse.js';
@@ -634,4 +638,203 @@ describe('parseUsablConfig noiseBudget', () => {
     );
     expect(config.noiseBudget?.perSurface).toEqual({ 'user-settings': 8, 'users-:id': 3 });
   });
+});
+
+describe('parseUsablConfig unknown key message', () => {
+  it('does not repeat a key name shaped like a GitHub token', () => {
+    // A misspelled key is repeated back so the operator can find it. A key that is a token, pasted
+    // into the wrong place, must not be printed in full.
+    const POISON = 'SECRETPOISON';
+    const tokenKey = ['gh', 'p_', POISON.repeat(3)].join('');
+    let message = '';
+    try {
+      parseUsablConfig(
+        configJson({
+          surfaces: [{ id: 'overview', url: 'http://127.0.0.1:5173/overview', files: ['src/Overview.tsx'], reachedWhen: { [tokenKey]: 'main' } }],
+        }),
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain('unknown key');
+    expect(message).not.toContain(POISON);
+  });
+});
+
+describe('parseUsablConfig configured URL credentials', () => {
+  // A surface URL is printed as written in every report: gap refs, screen urls, and affected
+  // urls all carry it, and the pull request comment publishes them. A credential written into one
+  // would be published with it, so the loader refuses it and never repeats the value.
+  const SECRET = 'SECRETPOISON';
+
+  function refusalFor(extra: Record<string, unknown>): string {
+    try {
+      parseUsablConfig(configJson(extra));
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    throw new Error('expected the config to be refused');
+  }
+
+  it('refuses a surface url with a user name and password, naming the field and not the value', () => {
+    const message = refusalFor({
+      surfaces: [{ id: 'overview', url: `https://user:${SECRET}@host/x`, files: ['src/Overview.tsx'] }],
+    });
+    expect(message).toContain('surfaces[0].url');
+    expect(message).not.toContain(SECRET);
+    expect(message).not.toContain('user:');
+    expect(message).not.toContain('host/x');
+  });
+
+  it('refuses a surface url with a user name alone', () => {
+    const message = refusalFor({
+      surfaces: [{ id: 'overview', url: `https://${SECRET}@host/x`, files: ['src/Overview.tsx'] }],
+    });
+    expect(message).toContain('surfaces[0].url');
+    expect(message).not.toContain(SECRET);
+  });
+
+  it('refuses userinfo in the spellings URL parsing accepts', () => {
+    // A backslash reads as a slash, and tabs and line breaks are dropped, so each of these still
+    // carries a password once the browser parses it.
+    for (const url of [
+      `https:\\\\user:${SECRET}@host/x`,
+      `https://us\ter:${SECRET}@host/x`,
+      `HTTPS://user:${SECRET}@host/x`,
+    ]) {
+      const message = refusalFor({ surfaces: [{ id: 'overview', url, files: ['src/Overview.tsx'] }] });
+      expect(message, url).toContain('surfaces[0].url');
+      expect(message, url).not.toContain(SECRET);
+    }
+  });
+
+  it('refuses userinfo in a url that URL parsing rejects', () => {
+    const message = refusalFor({
+      surfaces: [{ id: 'overview', url: `https://user:${SECRET}@[bad/x`, files: ['src/Overview.tsx'] }],
+    });
+    expect(message).toContain('surfaces[0].url');
+    expect(message).not.toContain(SECRET);
+  });
+
+  it('names the index of the surface that carries the credential', () => {
+    const message = refusalFor({
+      surfaces: [
+        { id: 'overview', url: 'http://127.0.0.1:5173/overview', files: ['src/Overview.tsx'] },
+        { id: 'settings', url: `https://user:${SECRET}@host/settings`, files: ['src/Settings.tsx'] },
+      ],
+    });
+    expect(message).toContain('surfaces[1].url');
+    expect(message).not.toContain(SECRET);
+  });
+
+  it('refuses an appBaseUrl with userinfo, because every discovered route url is built from it', () => {
+    const message = refusalFor({ appBaseUrl: `http://user:${SECRET}@127.0.0.1:5173` });
+    expect(message).toContain('appBaseUrl');
+    expect(message).not.toContain(SECRET);
+  });
+
+  it('still reads an @ that sits in the path, the query, or the fragment', () => {
+    const urls = [
+      'http://127.0.0.1:5173/users/@alice',
+      'http://127.0.0.1:5173/search?q=a@b',
+      'http://127.0.0.1:5173/#/users/@alice',
+    ];
+    for (const url of urls) {
+      const config = parseUsablConfig(configJson({ surfaces: [{ id: 'overview', url, files: ['src/Overview.tsx'] }] }));
+      expect(config.surfaces[0]?.url, url).toBe(url);
+    }
+  });
+
+  it('keeps a surface url exactly as written, so the overlay can match a gap to its screen', () => {
+    // The overlay attributes a gap to a screen by comparing the url the Result carries with the
+    // url it was configured with, query and fragment included. Rewriting the url here would
+    // orphan the gap.
+    const url = 'http://127.0.0.1:5173/report?view=a#top';
+    const config = parseUsablConfig(configJson({ surfaces: [{ id: 'overview', url, files: ['src/Overview.tsx'] }] }));
+    expect(config.surfaces[0]?.url).toBe(url);
+  });
+});
+
+describe('configUrlWarnings', () => {
+  const SECRET = 'SECRETPOISON';
+
+  it('warns about a query string in a surface url, naming the field and not the value', () => {
+    const config = parseUsablConfig(
+      configJson({ surfaces: [{ id: 'overview', url: `http://127.0.0.1:5173/x?token=${SECRET}`, files: ['src/Overview.tsx'] }] }),
+    );
+    const warnings = configUrlWarnings(config);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('surfaces[0].url');
+    expect(warnings[0]).toContain('query');
+    expect(warnings.join('\n')).not.toContain(SECRET);
+    expect(warnings.join('\n')).not.toContain('token=');
+  });
+
+  it('warns about a fragment in a surface url', () => {
+    const config = parseUsablConfig(
+      configJson({ surfaces: [{ id: 'overview', url: `http://127.0.0.1:5173/x#access_token=${SECRET}`, files: ['src/Overview.tsx'] }] }),
+    );
+    const warnings = configUrlWarnings(config);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('surfaces[0].url');
+    expect(warnings.join('\n')).not.toContain(SECRET);
+  });
+
+  it('warns about a query string in appBaseUrl', () => {
+    const config = parseUsablConfig(configJson({ appBaseUrl: `http://127.0.0.1:5173/?preview=${SECRET}` }));
+    const warnings = configUrlWarnings(config);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('appBaseUrl');
+    expect(warnings.join('\n')).not.toContain(SECRET);
+  });
+
+  it('says nothing about a plain url', () => {
+    expect(configUrlWarnings(parseUsablConfig(configJson()))).toEqual([]);
+  });
+});
+
+describe('loadConfig', () => {
+  it('passes each configured url warning to the warning sink, and still returns the config', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+    const path = join(dir, 'usabl.config.json');
+    await writeFile(
+      path,
+      configJson({ surfaces: [{ id: 'overview', url: 'http://127.0.0.1:5173/x?view=a', files: ['src/Overview.tsx'] }] }),
+      'utf8',
+    );
+    const warnings: string[] = [];
+    const config = await loadConfig(path, (line) => warnings.push(line));
+    expect(config.surfaces[0]?.url).toBe('http://127.0.0.1:5173/x?view=a');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('surfaces[0].url');
+  });
+});
+
+describe('parseUsablConfig userinfo without a scheme and two slashes', () => {
+  // URL parsing reads "admin:" in "admin:secret@host" as a scheme, so it finds no password, and a
+  // shape check that needs "//" misses it too. The value is still printed as written.
+  const SECRET = 'SECRETPOISON';
+
+  function load(url: string): unknown {
+    return parseUsablConfig(configJson({ surfaces: [{ id: 'overview', url, files: ['src/Overview.tsx'] }] }));
+  }
+
+  for (const url of [`admin:${SECRET}@localhost:3000/x`, `u:${SECRET}@h`, `http:u:${SECRET}@h`, `//u${SECRET}@h`]) {
+    it(`refuses ${url.replace(SECRET, '<secret>')}`, () => {
+      let message = '';
+      try {
+        load(url);
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message).toContain('surfaces[0].url');
+      expect(message).not.toContain(SECRET);
+    });
+  }
+
+  for (const url of ['http://h/@x', 'http://h/x?q=a@b', 'http://h/#/@me']) {
+    it(`accepts ${url}`, () => {
+      expect(() => load(url)).not.toThrow();
+    });
+  }
 });

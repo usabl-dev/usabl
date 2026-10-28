@@ -187,10 +187,20 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
         reason: `${route.reason} Name this route in usabl.routes.json with a visible screen id, or change the route path.`,
       });
     }
+    // The same holds for a route the router fallback could not read, and for a router file that
+    // does not parse: wide blast would have queued those routes, so the blast is not covered. The
+    // ref names the router file and the line, which is where the operator looks.
+    for (const route of manifest.unreadable ?? []) {
+      gaps.push({
+        ref: route.line === null || route.wholeFile === true ? route.file : `${route.file}:${route.line}`,
+        state: 'skipped',
+        reason: `${route.reason} Write the routes into usabl.routes.json, which usabl reads instead of the router file.`,
+      });
+    }
   }
 
   const attributedRoutes = manifest.routes.filter(
-    // Regex fallback routes have entryFile: null, so they cannot truthfully
+    // Router fallback routes have entryFile: null, so they cannot truthfully
     // participate in route-graph closure matching.
     (route): route is { screenId: string; url: string; entryFile: string } => route.entryFile !== null,
   );
