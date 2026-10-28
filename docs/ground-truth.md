@@ -1419,6 +1419,38 @@ exported and CI, the overlay and the page helper reach it directly. A check that
 gaps and names them in its summary; `run()` appends them to the Result's coverage so the gaps a
 reader sees are the gaps the verdict was reached from.
 
+Two floor entries may not share an identity (the same `screenId`, `rule`, and `elementKey`; the
+layer is not part of it). The gate indexes the floor by that identity, so a second entry would
+replace the first, and which one survived would decide whether a barrier reads as new or carried.
+The floor is refused instead, with both entries named by position and never by key, because a key
+carries page text. One parser reads the floor everywhere: in `usabl check`, in `usabl floor
+prune`, in `usabl doctor`, and, again, inside `gate()` on the floor it is handed, so a library
+caller that builds a floor by hand gets every check the file gets: the version, each entry's
+fields and count, the screen id grammar, and the duplicate check. A refusal is an
+`InputRefusedError` naming the field, for example `floor.entries[1]`.
+
+`gate()` checks every other input it reads the same way, because a field of the wrong type is
+read in a way that looks like a pass. A `nothingToCheck` of "false" is truthy and read as idle,
+an `evidenceClass` of "Deterministic" never gates, and a `gaps` value with no length reads as no
+gaps. So the gate reads each input field once, checks what it read, and decides the verdict from
+that checked copy only. A getter that returned one value to the check and another to the gate
+would otherwise put an unchecked value in the verdict. What it checks:
+
+- `coverage` and every draft against the Result contract, with the reader `usabl comment`
+  uses: `nothingToCheck` is a boolean, every list is a list, every closed set holds one of its
+  values (evidence class, confidence, severity, gap state, provenance, profile), every text
+  field is a string, and a draft's evidence has the shape the contract gives it. A layer only has
+  to be a string, because the contract leaves layers open.
+- The floor with the floor parser, and every waiver with the waiver parser the ledger file goes
+  through, so a waiver's `created` and `expires` must be ISO-8601 UTC. The gate compares
+  `expires` with its clock as text, which is only a date comparison in that format.
+- `guardDivergedPaths` is a list of strings, and `now` is an ISO-8601 UTC timestamp.
+- `cleanlyScannedScreens` is a real `Set`. Its members are read through `Set`'s own iterator
+  and copied into a new set, and only that copy decides which floored identities may be marked
+  `fixed`, so an object or a subclass that answers `has` for screens it does not hold cannot
+  mark a barrier fixed on a screen nobody scanned.
+- Every screen and surface id against the id grammar, as above.
+
 ### Failure taxonomy
 
 - No UI-touching files: nothing to check (`verdict: null`, exit 0). Not `not_covered`.
@@ -1621,6 +1653,15 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
 - Enforce: `usabl enforce accessibility` and `usabl enforce policy --trusted-ref` read
   Result JSON from stdin. They project CI status. They never call the gate and never mint a
   verdict. GitHub stays out of `run()`.
+- Both read the Result as a document someone else wrote, so both check the whole document against
+  the Result contract before they use any of it: every list is a list, every count is a whole
+  number, every enum value is one of its values, and every nested object has the fields the
+  contract gives it. A field the contract does not name is dropped. A document that does not
+  match, or text that is not JSON, exits 4 with a plain reason on stderr that names the field by
+  its path, for example `findings[0].severity`, and never repeats the value. `usabl comment`
+  prints no comment in that case. The check is of shape only. It does not test whether the values
+  agree with each other, so a well-formed document is still only as true as whoever wrote it, and
+  the receipt, not the document, is what proves a run happened.
 - Library: the stop hook, overlay, and an optional MCP wrapper import `run()` directly.
   No MCP surface is built today (section 11.5).
 
@@ -2368,14 +2409,32 @@ it. `usabl init` names it in a `Review:` note with its file and line, and it is 
 draft until the operator adds it. What the router reader reads, reports, and still does not see is
 listed under the documented limits in section 8.
 
-The boundary, stated exactly. Ids already present in the evidence floor (`.usabl-evidence.json`)
-and in waiver files (`.usabl-waivers.json`), and the inputs a caller passes directly to the
-exported library functions (`gate()` and `mintReceipt()` from the package entry), are not
-re-validated against the grammar. On the command path every id in those files was minted from, or
-matched against, an id that had already passed the grammar at parse, so the command path is
-covered end to end. A library caller that builds its own floor, waiver, or receipt input bypasses
-that parse, and nothing downstream checks the grammar again. Closing that boundary is listed
-under "After the freeze" at the end of this section.
+The boundary, stated exactly. The grammar is also checked on the evidence floor, the waiver
+ledger, and the inputs of the two exported functions that take ids, so it holds whichever door a
+caller comes through:
+
+- Reading `.usabl-evidence.json` checks `entries[].screenId`. Reading `.usabl-waivers.json`
+  checks `waivers[].surface`.
+- `gate()` checks `coverage.affected[].screenId`, `drafts[].screenId`,
+  `floor.entries[].screenId`, `waivers[].surface`, and every member of `cleanlyScannedScreens`.
+  A member of the set is named by its position in the order the set yields it, counting from 0.
+- `mintReceipt()` checks `args.checked[]`, `args.applicability[].screenId`, and the id fields of
+  the `UsablConfig` it is handed, `surfaces[].id` and the keys of `noiseBudget.perSurface`. A key
+  is named by its position, counting from 1, in the order the config parser counts them.
+
+A refusal is an `InputRefusedError`, exported from the package entry. Its `field` is the path of
+the refused value with its position, for example `floor.entries[2].screenId`, and its message
+names the same path, the grammar's reason, and the position and code point of a refused
+character. Neither ever contains the id. On the command path every one of these ids already
+passed a reader, so nothing that was accepted before is refused now, with one exception: a floor
+entry or waiver whose id the grammar refuses used to be read and match nothing, and now the file
+is refused by every command that reads it, because they share one parser. `usabl check` ends as
+an unhandled error (exit 4) whose summary names the entry by position. `usabl floor prune`
+refuses with exit 4 and writes nothing. `usabl doctor` reports the evidence floor or the waiver
+ledger as drifted.
+The grammar governs screen and surface ids only. It does not govern rule ids, element keys,
+waiver scopes, receipt `notCovered` entries (file references), or receipt `surfaces` (output
+channels).
 
 A blank or repeated id is refused when the config is read. Left in, it would collapse two
 screens into one entry: the second screen is dropped from the scan while its changed files
@@ -2461,26 +2520,6 @@ opens a browser.
 
 There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 (nothing to check) is an explicit informational allow. That is code, not a config dial.
-
-### After the freeze
-
-Work on this section that is known and deferred until after the freeze.
-
-- Re-validate every screen or surface id field a caller can pass directly to the exported
-  library functions, so the id grammar holds for `gate()` and `mintReceipt()` callers and not
-  only for the `usabl` command path. For `gate()` those fields of `GateInput` are
-  `coverage.affected[].screenId`, `drafts[].screenId`, `floor.entries[].screenId`,
-  `waivers[].surface`, and every member of `cleanlyScannedScreens`. For `mintReceipt()` they are
-  `checked`, `applicability[].screenId`, and the id fields of the `UsablConfig` it is handed:
-  `surfaces[].id` and the keys of `noiseBudget.perSurface`. `mintReceipt()` is exported from the
-  package entry and takes any structurally valid `UsablConfig`; it never calls `parseUsablConfig`,
-  so a library caller can hand it ids the grammar would refuse. On the `usabl` command path the
-  config is parsed before it reaches the receipt, so those two fields arrive validated there, but
-  that is a property of the path, not of the function, and it is the function this item is about.
-  None of these is checked today on the library path.
-  The grammar governs screen and surface ids only. It does not govern rule ids, element keys,
-  waiver scopes, receipt `notCovered` entries (file references), or receipt `surfaces` (output
-  channels), and this item makes no claim about them.
 
 ---
 

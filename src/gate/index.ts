@@ -16,6 +16,7 @@ import { coverageIncomplete, decideAccessibilityVerdict, notEvaluatedCounts } fr
 import { sortBy } from '../primitives/sortKey.js';
 import { computeIdentity, identityKey } from '../primitives/identity.js';
 import { canonicalize } from '../primitives/canonical.js';
+import { checkGateInput } from './input.js';
 
 const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
 
@@ -23,7 +24,11 @@ const GATES = (c: Draft['evidenceClass']): boolean => c === 'deterministic';
 // this one. run.ts keeps its own copy for the same reason.
 const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
 
-export function gate(input: GateInput): GateOutput {
+export function gate(raw: GateInput): GateOutput {
+  // The gate checks its own input, because it is exported and a library caller can build one by
+  // hand. It reads the caller's input once and from then on reads only the checked copy. See
+  // ./input.ts.
+  const input = checkGateInput(raw);
   const accessibility = accessibilityOutcome(input);
   if (input.guardDivergedPaths.length > 0) {
     // Policy divergence is a human approval problem, not an accessibility skip.
@@ -320,7 +325,7 @@ interface Differential {
 }
 
 export function buildFindings(input: GateInput): Finding[] {
-  return differential(input).findings;
+  return differential(checkGateInput(input)).findings;
 }
 
 function differential(input: GateInput): Differential {

@@ -1,0 +1,331 @@
+/**
+ * A Result read from standard input is a document someone else wrote. `usabl comment` and
+ * `usabl enforce` both read one, and both trust it only after it matches the Result contract
+ * field by field. These tests take a complete, valid Result, break one field at a time, and expect
+ * a refusal that names the field by its path and never repeats the value it found there.
+ */
+import { readFile, readdir } from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { main } from '../../src/cli.js';
+import { InputRefusedError } from '../../src/intake/input-refusal.js';
+import { parseResultJson } from '../../src/surfaces/policy-enforce.js';
+
+// Text that would render as a live mention if it reached the comment outside a code span. Every
+// bad value below carries it, and no refusal may repeat it.
+const LEAK = '@leak-me';
+
+function validResult(): Record<string, unknown> {
+  return {
+    schemaVersion: 'usabl.result.v1',
+    verdict: 'regression',
+    summary: 'regression: 1 blocking finding(s)',
+    screens: [
+      {
+        screenId: 'clusters',
+        url: 'http://127.0.0.1:5173/clusters',
+        stops: [
+          {
+            index: 0,
+            elementPath: 'button',
+            announcement: [{ kind: 'name', text: 'Save', fromTree: true, source: 'ax-tree' }],
+          },
+        ],
+        drafts: [],
+        gaps: [{ ref: 'clusters', state: 'not-covered', reason: 'dialog did not open' }],
+        applicability: [{ screenId: 'clusters', layer: 'axe', rule: 'button-name', outcome: 'passed', elementCount: 2 }],
+        reachedSelectorPresent: true,
+        reachedWhenSelector: '#clusters-table',
+        reachedResponseSeen: null,
+        reachedWhenResponse: null,
+      },
+    ],
+    coverage: {
+      changedFiles: ['src/Clusters.tsx'],
+      affected: [
+        {
+          screenId: 'clusters',
+          url: 'http://127.0.0.1:5173/clusters',
+          provenance: 'route-graph',
+          importChain: ['src/App.tsx', 'src/Clusters.tsx'],
+          profile: 'app',
+        },
+      ],
+      unresolvedFiles: [],
+      gaps: [],
+      nothingToCheck: false,
+    },
+    findings: [
+      {
+        rule: 'color-contrast',
+        layer: 'axe',
+        severity: 'serious',
+        evidenceClass: 'deterministic',
+        screenId: 'clusters',
+        elementPath: 'button',
+        elementName: 'Save',
+        role: 'button',
+        whatUserExperiences: 'Low contrast',
+        why: 'ratio 2:1',
+        fix: 'Raise to 4.5:1',
+        evidence: {
+          name: { value: 'Save', source: 'ax-tree', fromTree: true },
+          role: { value: null, source: 'attribute', fromTree: false },
+          state: { expanded: { value: false, source: 'ax-tree', fromTree: true } },
+          extra: { ratio: 2 },
+        },
+        confidence: 'fail',
+        elementKey: 'clusters|color-contrast|name:save',
+        identityBasis: 'name',
+        status: 'new',
+        appSource: { tier: 'renderer', file: 'src/Clusters.tsx', line: 12, candidates: [] },
+      },
+      {
+        rule: 'image-alt',
+        layer: 'docs',
+        severity: 'critical',
+        evidenceClass: 'preview',
+        screenId: 'guide',
+        elementPath: 'img',
+        elementName: null,
+        role: null,
+        whatUserExperiences: 'No text',
+        why: 'missing alt',
+        fix: 'Add alt',
+        evidence: {},
+        confidence: 'unverified',
+        elementKey: null,
+        identityBasis: 'count',
+        status: 'carried',
+        docsSource: {
+          tier: 'content',
+          file: 'guide.adoc',
+          candidates: ['guide.adoc'],
+          construct: 'image::x.png[]',
+          line: null,
+          fix: 'image::x.png[Diagram]',
+        },
+      },
+    ],
+    receipt: {
+      schemaVersion: 1,
+      sourceTree: 'tree',
+      baseRevision: null,
+      policyHash: 'hash',
+      runnerVersion: '0.2.2',
+      scannerVersions: { axeCore: '4', playwright: '1', chromium: '1' },
+      surfaces: ['cli'],
+      coverage: { checked: ['clusters'], notCovered: [] },
+      applicability: [{ screenId: 'clusters', applied: 1, abstained: 0 }],
+      verdict: 'verified',
+      findingsSummary: { new: 0, carried: 1, fixed: 0, unverified: 0 },
+      activeWaivers: 0,
+      mintedAt: '2026-01-01T00:00:00.000Z',
+    },
+    dirtyGuardedPaths: ['usabl.config.json'],
+    exitCode: 1,
+    accessibilityVerdict: 'regression',
+    accessibilityExitCode: 1,
+    paidDownCount: 0,
+    floorHeadroom: [{ screenId: 'clusters', rule: 'button-name', recorded: 3, observed: 1 }],
+  };
+}
+
+type Path = (string | number)[];
+
+function withValue(path: Path, value: unknown): Record<string, unknown> {
+  const doc = validResult();
+  let cursor: Record<string | number, unknown> = doc;
+  for (const key of path.slice(0, -1)) {
+    cursor = cursor[key] as Record<string | number, unknown>;
+  }
+  cursor[path[path.length - 1]!] = value;
+  return doc;
+}
+
+function without(path: Path): Record<string, unknown> {
+  const doc = validResult();
+  let cursor: Record<string | number, unknown> = doc;
+  for (const key of path.slice(0, -1)) {
+    cursor = cursor[key] as Record<string | number, unknown>;
+  }
+  delete cursor[path[path.length - 1]!];
+  return doc;
+}
+
+function refusal(doc: unknown): InputRefusedError {
+  try {
+    parseResultJson(doc);
+  } catch (err) {
+    expect(err).toBeInstanceOf(InputRefusedError);
+    return err as InputRefusedError;
+  }
+  throw new Error('expected the Result to be refused');
+}
+
+describe('parseResultJson validates the whole Result against the contract', () => {
+  it('accepts a complete valid Result and returns the same content', () => {
+    expect(parseResultJson(validResult())).toEqual(validResult());
+  });
+
+  it('accepts every golden Result the engine wrote', async () => {
+    const dir = new URL('../../fixtures/golden/', import.meta.url);
+    for (const name of await readdir(dir)) {
+      const doc: unknown = JSON.parse(await readFile(new URL(name, dir), 'utf8'));
+      expect(() => parseResultJson(doc), name).not.toThrow();
+    }
+  });
+
+  // One case per kind of shape: a count that is text, a list that is not a list, an enum value
+  // outside its set, a nested object missing a field, a nullable field holding the wrong type,
+  // and an optional field present with the wrong type.
+  const cases: { field: string; doc: () => Record<string, unknown> }[] = [
+    { field: 'verdict', doc: () => withValue(['verdict'], LEAK) },
+    { field: 'summary', doc: () => withValue(['summary'], { text: LEAK }) },
+    { field: 'exitCode', doc: () => withValue(['exitCode'], LEAK) },
+    { field: 'exitCode', doc: () => withValue(['exitCode'], 7) },
+    { field: 'paidDownCount', doc: () => withValue(['paidDownCount'], 1.5) },
+    { field: 'paidDownCount', doc: () => withValue(['paidDownCount'], LEAK) },
+    { field: 'dirtyGuardedPaths', doc: () => withValue(['dirtyGuardedPaths'], { length: LEAK }) },
+    { field: 'dirtyGuardedPaths[0]', doc: () => withValue(['dirtyGuardedPaths', 0], 5) },
+    { field: 'screens', doc: () => withValue(['screens'], { length: LEAK }) },
+    { field: 'screens[0].stops[0].index', doc: () => withValue(['screens', 0, 'stops', 0, 'index'], LEAK) },
+    { field: 'screens[0].stops[0].announcement[0].kind', doc: () => withValue(['screens', 0, 'stops', 0, 'announcement', 0, 'kind'], LEAK) },
+    { field: 'screens[0].gaps[0].state', doc: () => withValue(['screens', 0, 'gaps', 0, 'state'], LEAK) },
+    { field: 'screens[0].applicability[0].outcome', doc: () => withValue(['screens', 0, 'applicability', 0, 'outcome'], LEAK) },
+    { field: 'screens[0].applicability[0].elementCount', doc: () => withValue(['screens', 0, 'applicability', 0, 'elementCount'], -1) },
+    { field: 'screens[0].reachedSelectorPresent', doc: () => withValue(['screens', 0, 'reachedSelectorPresent'], LEAK) },
+    { field: 'screens[0].reachedWhenSelector', doc: () => withValue(['screens', 0, 'reachedWhenSelector'], 3) },
+    { field: 'coverage', doc: () => withValue(['coverage'], LEAK) },
+    { field: 'coverage.nothingToCheck', doc: () => without(['coverage', 'nothingToCheck']) },
+    { field: 'coverage.affected[0].provenance', doc: () => withValue(['coverage', 'affected', 0, 'provenance'], LEAK) },
+    { field: 'coverage.affected[0].importChain', doc: () => withValue(['coverage', 'affected', 0, 'importChain'], LEAK) },
+    { field: 'coverage.affected[0].profile', doc: () => withValue(['coverage', 'affected', 0, 'profile'], LEAK) },
+    { field: 'coverage.gaps', doc: () => withValue(['coverage', 'gaps'], { length: LEAK }) },
+    { field: 'findings[0].severity', doc: () => withValue(['findings', 0, 'severity'], LEAK) },
+    { field: 'findings[0].status', doc: () => withValue(['findings', 0, 'status'], LEAK) },
+    { field: 'findings[0].evidenceClass', doc: () => withValue(['findings', 0, 'evidenceClass'], LEAK) },
+    { field: 'findings[0].confidence', doc: () => withValue(['findings', 0, 'confidence'], LEAK) },
+    { field: 'findings[0].identityBasis', doc: () => withValue(['findings', 0, 'identityBasis'], LEAK) },
+    { field: 'findings[0].rule', doc: () => without(['findings', 0, 'rule']) },
+    { field: 'findings[0].elementName', doc: () => withValue(['findings', 0, 'elementName'], 4) },
+    { field: 'findings[0].elementKey', doc: () => withValue(['findings', 0, 'elementKey'], ['k']) },
+    { field: 'findings[0].evidence', doc: () => withValue(['findings', 0, 'evidence'], LEAK) },
+    { field: 'findings[0].evidence.name.source', doc: () => withValue(['findings', 0, 'evidence', 'name', 'source'], LEAK) },
+    { field: 'findings[0].evidence.state entry 1', doc: () => withValue(['findings', 0, 'evidence', 'state', 'expanded'], LEAK) },
+    { field: 'findings[0].evidence.extra', doc: () => withValue(['findings', 0, 'evidence', 'extra'], [LEAK]) },
+    { field: 'findings[0].appSource.tier', doc: () => withValue(['findings', 0, 'appSource', 'tier'], LEAK) },
+    { field: 'findings[0].appSource.line', doc: () => withValue(['findings', 0, 'appSource', 'line'], LEAK) },
+    { field: 'findings[1].docsSource.candidates', doc: () => withValue(['findings', 1, 'docsSource', 'candidates'], LEAK) },
+    { field: 'receipt', doc: () => withValue(['receipt'], LEAK) },
+    { field: 'receipt.verdict', doc: () => withValue(['receipt', 'verdict'], 'regression') },
+    { field: 'receipt.findingsSummary.new', doc: () => withValue(['receipt', 'findingsSummary', 'new'], LEAK) },
+    { field: 'receipt.scannerVersions.axeCore', doc: () => without(['receipt', 'scannerVersions', 'axeCore']) },
+    { field: 'receipt.applicability[0].applied', doc: () => withValue(['receipt', 'applicability', 0, 'applied'], LEAK) },
+    { field: 'floorHeadroom[0].recorded', doc: () => withValue(['floorHeadroom', 0, 'recorded'], LEAK) },
+    { field: 'floorHeadroom', doc: () => without(['floorHeadroom']) },
+  ];
+
+  for (const { field, doc } of cases) {
+    it(`refuses a malformed ${field}, naming the field and never the value`, () => {
+      const err = refusal(doc());
+      expect(err.field).toBe(field);
+      expect(err.message).toContain(field);
+      expect(err.message).not.toContain(LEAK);
+      expect(err.message).not.toContain('leak-me');
+    });
+  }
+
+  it('never repeats a record key, which is page text, when it names a bad state entry', () => {
+    const doc = validResult();
+    const finding = (doc['findings'] as Record<string, unknown>[])[0]!;
+    (finding['evidence'] as Record<string, unknown>)['state'] = { [LEAK]: { value: 1, source: LEAK, fromTree: true } };
+    const err = refusal(doc);
+    expect(err.field).toBe('findings[0].evidence.state entry 1.source');
+    expect(err.message).not.toContain('leak-me');
+  });
+
+  it('keeps an own key named __proto__ as data and does not change the prototype', () => {
+    const doc: unknown = JSON.parse(
+      JSON.stringify(validResult()).replace('"extra":{"ratio":2}', '"extra":{"__proto__":{"polluted":true}}'),
+    );
+    const parsed = parseResultJson(doc);
+    const extra = parsed.findings[0]!.evidence.extra!;
+    expect(Object.getPrototypeOf(extra)).toBe(Object.prototype);
+    expect(Object.hasOwn(extra, '__proto__')).toBe(true);
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+  });
+
+  it('drops fields the contract does not name, so no projector reads them', () => {
+    const doc = validResult();
+    doc['injected'] = LEAK;
+    expect(Object.hasOwn(parseResultJson(doc), 'injected')).toBe(false);
+  });
+});
+
+function withStdin(text: string): () => void {
+  const original = Object.getOwnPropertyDescriptor(process, 'stdin');
+  Object.defineProperty(process, 'stdin', { value: Readable.from([text]), configurable: true });
+  return () => {
+    if (original !== undefined) {
+      Object.defineProperty(process, 'stdin', original);
+    }
+  };
+}
+
+describe('usabl comment and usabl enforce refuse a malformed Result', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function runWith(argv: string[], text: string): Promise<{ code: number; stdout: string; stderr: string }> {
+    const restore = withStdin(text);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = await main(argv);
+      return {
+        code,
+        stdout: stdout.mock.calls.map((call) => String(call[0])).join(''),
+        stderr: stderr.mock.calls.map((call) => String(call[0])).join(''),
+      };
+    } finally {
+      restore();
+    }
+  }
+
+  it('comment exits 4 with a plain reason that names the field', async () => {
+    const out = await runWith(['comment'], JSON.stringify(withValue(['findings', 0, 'severity'], LEAK)));
+    expect(out.code).toBe(4);
+    expect(out.stdout).toBe('');
+    expect(out.stderr).toContain('findings[0].severity');
+    expect(out.stderr).not.toContain('leak-me');
+  });
+
+  it('comment exits 4 on text that is not JSON and does not repeat it', async () => {
+    const out = await runWith(['comment'], `{"summary": "${LEAK}"`);
+    expect(out.code).toBe(4);
+    expect(out.stdout).toBe('');
+    expect(out.stderr).toMatch(/not valid JSON/);
+    expect(out.stderr).not.toContain('leak-me');
+  });
+
+  it('comment still renders a valid Result and exits with its exit code', async () => {
+    const out = await runWith(['comment', '--config', 'does-not-exist.json'], JSON.stringify(validResult()));
+    expect(out.code).toBe(1);
+    expect(out.stdout).toContain('<!-- usabl-report -->');
+  });
+
+  it('enforce accessibility exits 4 with the same reason', async () => {
+    const out = await runWith(['enforce', 'accessibility'], JSON.stringify(withValue(['exitCode'], LEAK)));
+    expect(out.code).toBe(4);
+    expect(out.stderr).toContain('exitCode');
+    expect(out.stderr).not.toContain('leak-me');
+  });
+
+  it('enforce exits 4 on text that is not JSON and does not repeat it', async () => {
+    const out = await runWith(['enforce', 'accessibility'], `${LEAK}`);
+    expect(out.code).toBe(4);
+    expect(out.stderr).not.toContain('leak-me');
+  });
+});

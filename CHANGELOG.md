@@ -311,6 +311,41 @@
 - A coverage gap list or a guarded path list that is not a list is now reported as
   unreadable on both surfaces. Walking it used to throw, which the stop hook reported
   as a hook error and let the stop through.
+- The exported `gate()` now refuses a floor with two entries at one identity. It
+  indexed the floor last-wins, so which entry survived decided whether a barrier read
+  as new or carried, and one order was a false green. The gate now parses the floor it
+  is handed with the same parser the floor file goes through, and reads only what that
+  parser returns, so a hand-built floor gets every check a file gets.
+- `gate()` and `mintReceipt()` now check every screen and surface id they are handed
+  against the shared id grammar: `coverage.affected[].screenId`, `drafts[].screenId`,
+  `floor.entries[].screenId`, `waivers[].surface`, and `cleanlyScannedScreens` on the
+  gate, and `checked`, `applicability[].screenId`, and the config's `surfaces[].id` and
+  `noiseBudget.perSurface` keys on the receipt. Reading `.usabl-evidence.json` and
+  `.usabl-waivers.json` now checks their screen ids too. A floor entry or waiver whose
+  id the grammar refuses used to match nothing; now the file is refused. `usabl check`
+  ends with exit 4, naming the entry by position, `usabl floor prune` refuses with exit 4,
+  and `usabl doctor` reports the file as drifted.
+- `gate()` now checks every other input field the verdict depends on, reads each one once,
+  and decides from the checked copy only. A JavaScript caller with a type slip used to get a
+  false green: a `nothingToCheck` of "false" read as idle with a failing barrier, and an
+  `evidenceClass` of "Deterministic" returned `verified`. Coverage and drafts are checked
+  against the Result contract, so every closed set must hold one of its values. Waivers go
+  through the ledger's waiver parser, so their dates must be ISO-8601 UTC. `now` must be
+  ISO-8601 UTC, and `guardDivergedPaths` a list of strings. `cleanlyScannedScreens` must be a
+  real `Set`, and its members are copied before use, so an object that answers `has` for
+  every screen can no longer mark a barrier fixed on a screen nobody scanned.
+- Every refusal above is an `InputRefusedError`, now exported from the package entry.
+  Its `field` names the refused value by path and position, for example
+  `floor.entries[2].screenId`. The message never contains the value. A duplicate floor
+  entry used to be reported with its identity, which carries page text; it is now
+  named by position.
+- `usabl comment` and `usabl enforce` now check the whole Result they read from
+  standard input against the contract: every list is a list, every count is a whole
+  number, every enum value is one of its values, and every nested object has its
+  fields. Fields the contract does not name are dropped. A document that does not
+  match exits 4 with a reason that names the field and never repeats the value, and
+  `usabl comment` prints no comment. Text that is not JSON exits 4 the same way. The
+  JSON parser's own message, which quoted the input back, is no longer printed.
 
 ## 0.2.2 - 2026-10-21
 

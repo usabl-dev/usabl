@@ -33,10 +33,10 @@ import { enrichAppFindings } from './app/source-map.js';
 import { gate } from './gate/index.js';
 import { mintReceipt, summarizeApplicability } from './evidence/receipt.js';
 import { parseEvidenceFloor } from './evidence/floor.js';
+import { parseWaiver } from './evidence/waivers.js';
 import { parseUsablConfig } from './intake/config.js';
 import { loadRequirements } from './intake/load.js';
 import { overlayRequirementsFs } from './intake/overlay-fs.js';
-import { assertIso8601Utc } from './primitives/iso8601.js';
 import { checkGuard } from './trust/guard.js';
 
 // Declared here rather than imported from baseline/, which imports run() and would cycle.
@@ -54,34 +54,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function parseWaiver(value: unknown): Waiver {
-  if (!isRecord(value)) {
-    throw new Error('waiver entry must be an object');
-  }
-
-  const rule = value['rule'];
-  const surface = value['surface'];
-  const scope = value['scope'];
-  const reason = value['reason'];
-  const owner = value['owner'];
-  const approvedBy = value['approvedBy'];
-  const created = value['created'];
-  const expires = value['expires'];
-
-  if (typeof rule !== 'string') throw new Error('waiver rule must be a string');
-  if (typeof surface !== 'string') throw new Error('waiver surface must be a string');
-  if (typeof scope !== 'string') throw new Error('waiver scope must be a string');
-  if (typeof reason !== 'string') throw new Error('waiver reason must be a string');
-  if (typeof owner !== 'string') throw new Error('waiver owner must be a string');
-  if (typeof approvedBy !== 'string') throw new Error('waiver approvedBy must be a string');
-  if (typeof created !== 'string') throw new Error('waiver created must be a string');
-  if (typeof expires !== 'string') throw new Error('waiver expires must be a string');
-  assertIso8601Utc(created, 'waiver created');
-  assertIso8601Utc(expires, 'waiver expires');
-
-  return { rule, surface, scope, reason, owner, approvedBy, created, expires };
-}
-
 // Exported so the read-only doctor projection can report waiver-ledger parse health without
 // re-implementing a weaker validator. run() stays the only caller that acts on the result.
 export function parseWaiverLedger(value: unknown): WaiverLedger {
@@ -95,7 +67,7 @@ export function parseWaiverLedger(value: unknown): WaiverLedger {
   if (!Array.isArray(waiversRaw)) {
     throw new Error('waiver ledger waivers must be an array');
   }
-  return { version: 1, waivers: waiversRaw.map((waiver) => parseWaiver(waiver)) };
+  return { version: 1, waivers: waiversRaw.map((waiver, index) => parseWaiver(waiver, index)) };
 }
 
 async function readJson(read: (path: string) => Promise<string | null>, path: string): Promise<unknown | null> {
