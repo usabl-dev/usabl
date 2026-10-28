@@ -2,9 +2,11 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { Provider, SurfaceConfig } from '../../src/contracts/index.js';
+import { chromium, type Browser } from 'playwright';
+import type { Page as UsablPage, Provider, SurfaceConfig } from '../../src/contracts/index.js';
 import { buildDeps } from '../../src/deps/build.js';
-import { makeRealBrowserDriver } from '../../src/deps/real.js';
+import { LIVE_WORLD, adoptPage, makeRealBrowserDriver } from '../../src/deps/real.js';
+import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
 import { axeProvider } from '../../src/providers/axe/index.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { markUnseenScreens } from '../../src/coverage/unseen.js';
@@ -304,6 +306,258 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     } finally {
       await page.close();
     }
+  });
+
+  // The capture reads a live region's text. Page script that redefines textContent, or replaces
+  // the drain usabl reads, in its own world must not change what usabl hears.
+  const SPOOFING_SAVE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title></head><body>
+    <main><button type="button" id="save">Save</button><div role="status" id="message"></div></main>
+    <script>
+      Object.defineProperty(Node.prototype, 'textContent', {
+        get() { return 'Saved'; },
+        set(value) { this.replaceChildren(document.createTextNode(String(value))); },
+      });
+      window.__usablDrain = () => ['Saved'];
+      document.getElementById('save').addEventListener('click', () => {
+        document.getElementById('message').textContent = 'Not saved';
+        window.__usablDrain = () => ['Saved'];
+      });
+    </script>
+  </body></html>`;
+
+  it('hears what the live region says, not what page script reports', async () => {
+    const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(SPOOFING_SAVE_PAGE)}`);
+    try {
+      await page.click('#save');
+      const announcements = await page.drainAnnouncements();
+      expect(announcements).toEqual(['Not saved']);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('hears an announcement on a page that stops DOMContentLoaded from reaching other listeners', async () => {
+    // A capture that waited for DOMContentLoaded to start its observer never started on this page,
+    // and the drain returned nothing.
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title>
+      <script>window.addEventListener('DOMContentLoaded', (e) => e.stopImmediatePropagation(), true);</script>
+      </head><body>
+      <main><button type="button" id="save">Save</button><div role="status" id="message"></div></main>
+      <script>
+        document.getElementById('save').addEventListener('click', () => {
+          document.getElementById('message').textContent = 'Saved';
+        });
+      </script>
+    </body></html>`;
+    const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    try {
+      await page.click('#save');
+      expect(await page.drainAnnouncements()).toEqual(['Saved']);
+    } finally {
+      await page.close();
+    }
+  });
+
+  describe('which regions the capture hears', () => {
+    // The capture hears a region only when its effective live value is polite or assertive, the
+    // same way pf-toast-live-region resolves it: the nearest element that sets a value wins, an
+    // explicit aria-live beats the role, and every other aria-live token is off. Each page also
+    // writes "Heard" to a polite region, so an empty list cannot pass by the capture not running.
+    function regionPage(region: string): string {
+      return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title></head><body>
+        <main><button type="button" id="save">Save</button>
+        <div aria-live="polite" id="control"></div>
+        ${region}
+        </main>
+        <script>
+          document.getElementById('save').addEventListener('click', () => {
+            document.getElementById('message').textContent = 'Message';
+            document.getElementById('control').textContent = 'Heard';
+          });
+        </script>
+      </body></html>`;
+    }
+
+    const cases: Array<[string, string]> = [
+      ['an aria-live="off" region', '<div aria-live="off" id="message"></div>'],
+      [
+        'an aria-live="off" wrapper inside a polite region',
+        '<div aria-live="polite"><div aria-live="off"><span id="message"></span></div></div>',
+      ],
+      ['an uppercase aria-live="POLITE" token', '<div aria-live="POLITE" id="message"></div>'],
+      ['an unknown aria-live="banana" token', '<div aria-live="banana" id="message"></div>'],
+      ['an aria-live="off" on a role="status" element', '<div role="status" aria-live="off" id="message"></div>'],
+      [
+        'a role="timer" inside an assertive region',
+        '<div aria-live="assertive"><div role="timer"><span id="message"></span></div></div>',
+      ],
+      [
+        'an off wrapper inside a polite shadow host slot',
+        '<div aria-live="polite"><x-off-slot><span id="message"></span></x-off-slot></div>' +
+          "<script>customElements.define('x-off-slot', class extends HTMLElement { constructor() { super();" +
+          " this.attachShadow({ mode: 'open' }).innerHTML = '<div aria-live=\"off\"><slot></slot></div>'; } });</script>",
+      ],
+    ];
+
+    for (const [name, region] of cases) {
+      it(`does not hear ${name}`, async () => {
+        const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(regionPage(region))}`);
+        try {
+          await page.click('#save');
+          expect(await page.drainAnnouncements()).toEqual(['Heard']);
+        } finally {
+          await page.close();
+        }
+      });
+    }
+
+    const heard: Array<[string, string]> = [
+      ['a role="alert" region with no aria-live', '<div role="alert" id="message"></div>'],
+      ['a role="log" region with no aria-live', '<div role="log" id="message"></div>'],
+      ['a role="STATUS" region, matched without regard to case', '<div role="STATUS" id="message"></div>'],
+      ['an empty aria-live on a role="status" element', '<div role="status" aria-live="" id="message"></div>'],
+      [
+        'a polite region inside an off wrapper',
+        '<div aria-live="off"><div aria-live="polite" id="message"></div></div>',
+      ],
+    ];
+
+    // A light element slotted into a live region inside a shadow root. The region's own text in the
+    // shadow tree leaves out the slotted text that changed and holds text the change did not make
+    // speakable: slot fallback text, and shadow-only text. Recording it would let a flow
+    // requirement pass on text no screen reader speaks for the change, so "Saved" must never be
+    // heard here.
+    const shadowRegions: Array<[string, string]> = [
+      ['slot fallback text', '<div aria-live="polite"><slot>Saved</slot></div>'],
+      ['shadow-only text beside the slot', '<div aria-live="polite"><span>Saved</span><slot></slot></div>'],
+    ];
+    for (const [name, shadowHtml] of shadowRegions) {
+      it(`never hears ${name} of a live region in a shadow root when slotted text changes`, async () => {
+        const region =
+          '<x-live-slot><span id="message"></span></x-live-slot>' +
+          "<script>customElements.define('x-live-slot', class extends HTMLElement { constructor() { super();" +
+          ` this.attachShadow({ mode: 'open' }).innerHTML = ${JSON.stringify(shadowHtml)}; } });</script>`;
+        const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(regionPage(region))}`);
+        try {
+          await page.click('#save');
+          const drained = await page.drainAnnouncements();
+          expect(drained).not.toContain('Saved');
+          expect(drained.some((entry) => entry.includes('Saved'))).toBe(false);
+          expect(drained).toContain('Heard');
+        } finally {
+          await page.close();
+        }
+      });
+    }
+
+    // checkPage adopts a page the caller opened, and the capture it installs there must make the
+    // same call as the one the CLI installs at document start.
+    it('does not hear an off wrapper inside a polite region on an adopted page', async () => {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const pw = await browser.newPage();
+        await pw.setContent(
+          regionPage('<div aria-live="polite"><div aria-live="off"><span id="message"></span></div></div>'),
+          { waitUntil: 'domcontentloaded' },
+        );
+        const page = await adoptPage(pw);
+        await page.click('#save');
+        expect(await page.drainAnnouncements()).toEqual(['Heard']);
+      } finally {
+        await browser.close();
+      }
+    });
+
+    for (const [name, region] of heard) {
+      it(`hears ${name}`, async () => {
+        const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(regionPage(region))}`);
+        try {
+          await page.click('#save');
+          expect([...(await page.drainAnnouncements())].sort()).toEqual(['Heard', 'Message']);
+        } finally {
+          await page.close();
+        }
+      });
+    }
+  });
+
+  describe('a document without the announcement capture', () => {
+    // Silence from a document where the capture is not running would read as a page that
+    // announced nothing, and a flow requirement would fail or pass on no evidence. The drain throws
+    // instead, and the check runner turns the throw into a coverage gap.
+    const SAVE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title></head><body>
+      <main><button type="button" id="save">Save</button><div role="status" id="message"></div></main>
+      <script>
+        document.getElementById('save').addEventListener('click', () => {
+          document.getElementById('message').textContent = 'Saved';
+        });
+      </script>
+    </body></html>`;
+
+    let browser: Browser;
+    beforeAll(async () => {
+      browser = await chromium.launch({ headless: true });
+    });
+    afterAll(async () => {
+      await browser.close();
+    });
+
+    // An adopted page whose capture was then removed from the live world, which is what a document
+    // the capture never reached looks like to the drain.
+    async function pageWithoutCapture(): Promise<{ usablPage: UsablPage; close: () => Promise<void> }> {
+      const context = await browser.newContext();
+      const pw = await context.newPage();
+      await pw.setContent(SAVE_PAGE, { waitUntil: 'domcontentloaded' });
+      const usablPage = await adoptPage(pw);
+      const cdp = await context.newCDPSession(pw);
+      const tree = await cdp.send('Page.getFrameTree');
+      const world = await cdp.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: LIVE_WORLD });
+      await cdp.send('Runtime.evaluate', { expression: 'delete window.__usablDrain', contextId: world.executionContextId });
+      return { usablPage, close: () => context.close() };
+    }
+
+    it('throws on a drain instead of reporting silence', async () => {
+      const { usablPage, close } = await pageWithoutCapture();
+      try {
+        await expect(usablPage.drainAnnouncements()).rejects.toThrow(/announcement capture is not running/);
+      } finally {
+        await close();
+      }
+    });
+
+    it('turns a flow requirement whose drain throws into a coverage gap, never a pass', async () => {
+      const { usablPage, close } = await pageWithoutCapture();
+      try {
+        const runner = makeCheckRunner({
+          browser: { open: async () => usablPage, close: async () => {} },
+          providers: mapRequirementsToProviders({
+            version: 1,
+            requirements: [
+              {
+                id: 'save-announces',
+                kind: 'flow',
+                surface: 'clusters',
+                description: 'Saving announces that the change was saved.',
+                assertion: { type: 'flow', steps: [{ do: 'click', selector: '#save' }], expectedAnnouncement: 'Saved' },
+                approved: true,
+              },
+            ],
+          }),
+          config: testConfig(),
+          allowedCapabilities: ['live'],
+          stepRunner: makeStepRunner(),
+        });
+        const scan = await runner.scan({ id: 'clusters', url: 'http://127.0.0.1:5173/clusters' });
+        // The keyboard walk drains at its first stop, so the whole screen is the gap.
+        expect(scan.drafts).toEqual([]);
+        expect(scan.gaps).toHaveLength(1);
+        expect(scan.gaps[0]?.state).toBe('not-covered');
+        expect(scan.gaps[0]?.reason).toContain('announcement capture is not running');
+        expect(scan.gaps[0]?.reason).not.toContain('<anonymous>');
+      } finally {
+        await close();
+      }
+    });
   });
 
   it('adds a capability-denied gap when provider capabilities are disallowed', async () => {

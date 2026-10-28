@@ -277,7 +277,7 @@ describe('projectPrComment', () => {
         baseResult({ verdict: 'verified', summary: 'verified: 0 gating finding(s)', findings: [], screens: [], coverage: { ...baseResult({}).coverage, gaps: [] } }),
       );
 
-      for (const heading of ['### Receipt', '### Conformance summary', '### New barriers', '### Known (carried)', '### Advisory (non-gating)', '### Coverage gaps', '### Announcements (current run)']) {
+      for (const heading of ['### Receipt', '### Conformance summary', '### New barriers', '### Known (recorded debt)', '### Advisory (non-gating)', '### Coverage gaps', '### Announcements (current run)']) {
         expect(markdown).toContain(heading);
       }
       expect(markdown).toContain('- none');
@@ -288,7 +288,7 @@ describe('projectPrComment', () => {
     const markdown = projectPrComment(baseResult({}));
 
     expect(markdown).toContain('### New barriers');
-    expect(markdown).toContain('### Known (carried)');
+    expect(markdown).toContain('### Known (recorded debt)');
     expect(markdown).toContain('### Advisory (non-gating)');
   });
 
@@ -668,7 +668,7 @@ describe('pr comment page text is sealed in code spans', () => {
       );
 
     for (const [name, screenId] of hostile) {
-      it(`seals ${name} in a code span, in the headline as well as the rule line`, () => {
+      it(`seals ${name} in a code span wherever it appears`, () => {
         const markdown = collapsedFor(screenId);
         const lines = markdown.split('\n');
         const headline = lines.find((line) => line.startsWith('- &#91;'));
@@ -754,7 +754,7 @@ describe('pr comment page text is sealed in code spans', () => {
 
     it('seals a status, and prints no finding whose status it does not recognize', () => {
       // A status reaches the page only through a lane, and the lanes are chosen by an exact
-      // match on new, carried, or an advisory evidence class, so the word printed is one of
+      // match on new, carried, waived, or an advisory evidence class, so the word printed is one of
       // usabl's own. It is sealed anyway rather than trusted by that argument, because the lane
       // check and the line that prints it are free to drift apart.
       const carriedStatus = projectPrComment(
@@ -1028,13 +1028,14 @@ describe('pr comment page text is sealed in code spans', () => {
       expect(markdown).toContain('- showing first 20 of 21 stops');
     });
 
-    it('keeps the collapsed rule line as a continuation of its item, not a nested item', () => {
+    it('keeps every collapsed line under the headline a continuation of its item, not a nested item', () => {
       const [, markdown] = fixtures[1]!;
 
-      expect(markdown).not.toMatch(/^\s+- rule: /m);
+      expect(markdown).not.toMatch(/^[ \t]+- /m);
       // The headline is escaped prose around sealed fields, so its brackets are character
       // references and the screen id and rule are code spans.
-      expect(markdown).toMatch(/^- &#91;`new serious`&#93; `clusters`\/`axe\/rule-0`\n  rule: `clusters` - `axe\/rule-0` · `serious`\n  \[BEGIN UNTRUSTED TEXT/m);
+      expect(markdown).toMatch(/^- &#91;`new serious`&#93; `clusters`\/`axe\/rule-0`$/m);
+      expect(markdown).toMatch(/^ {2}\[BEGIN UNTRUSTED TEXT/m);
     });
   });
 
@@ -1057,5 +1058,140 @@ describe('pr comment page text is sealed in code spans', () => {
     expect(line).toBeDefined();
     // The fence is longer than the run inside it, so the span holds the whole value.
     expect(line).toContain('``axe/a`b <!--x-->``');
+  });
+});
+
+describe('pr comment recorded debt', () => {
+  // A waived deterministic finding is neither new nor carried, and it is not advisory. The lanes
+  // used to be chosen from those three only, so a waived finding was in none of them and the
+  // comment never mentioned it. The terminal and the overlay list it as recorded debt, so a
+  // reviewer reading only the comment could not see a waiver that the other surfaces showed.
+  const noGaps = { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false };
+
+  const sectionLines = (markdown: string, heading: string): string[] => {
+    const lines = markdown.split('\n');
+    const start = lines.indexOf(heading);
+    if (start === -1) {
+      return [];
+    }
+    const rest = lines.slice(start + 1);
+    const end = rest.findIndex((line) => line.startsWith('### '));
+    return rest.slice(0, end === -1 ? rest.length : end);
+  };
+
+  it('lists a waived finding under the known section with its status', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'verified',
+        exitCode: 0,
+        findings: [
+          baseFinding({ rule: 'link-name', status: 'waived', whatUserExperiences: 'Waived link text' }),
+          baseFinding({ rule: 'label', status: 'carried', elementKey: 'k-label', whatUserExperiences: 'Carried label text' }),
+        ],
+        coverage: noGaps,
+      }),
+    );
+    const known = sectionLines(markdown, '### Known (recorded debt)');
+
+    expect(known).toContain('- &#91;`waived serious`&#93; `clusters` - `axe/link-name`');
+    expect(known).toContain('- &#91;`carried serious`&#93; `clusters` - `axe/label`');
+    expect(known.join('\n')).toContain('Waived link text');
+    expect(sectionLines(markdown, '### New barriers')).toEqual(['- none', '']);
+  });
+
+  it('keeps the waived finding text inside the untrusted frame', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'verified',
+        exitCode: 0,
+        findings: [baseFinding({ status: 'waived', whatUserExperiences: 'Waived page text' })],
+        coverage: noGaps,
+      }),
+    );
+    const at = markdown.indexOf('Waived page text');
+
+    expect(at).toBeGreaterThan(-1);
+    expect(markdown.lastIndexOf(UNTRUSTED_FRAME_START, at)).toBeGreaterThan(
+      markdown.lastIndexOf(UNTRUSTED_FRAME_END, at),
+    );
+    expect(markdown.slice(markdown.lastIndexOf('\n', at), at)).toContain('`');
+  });
+
+  it('keeps a waived finding in the collapsed view', () => {
+    // Two findings on one rule force the collapsed path, and the waived finding is a group of its
+    // own inside the budget, so only a lane that drops it can leave it out.
+    const findings = [
+      baseFinding({ elementKey: 'k1' }),
+      baseFinding({ elementKey: 'k2' }),
+      baseFinding({ rule: 'link-name', status: 'waived', elementKey: 'k-waived' }),
+    ];
+    const markdown = projectPrComment(baseResult({ findings, coverage: noGaps }));
+
+    expect(markdown).toContain('### Findings (collapsed by rule)');
+    expect(markdown).toContain('- &#91;`waived serious`&#93; `clusters`/`axe/link-name`');
+  });
+});
+
+describe('pr comment collapsed headline', () => {
+  // The collapsed headline already names the screen id, the layer, the rule, and the severity, all
+  // sealed. A second line under it named the same four values again, so every group printed them
+  // twice.
+  it('names the screen and rule once per group', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        findings: Array.from({ length: 6 }, (_, index) => baseFinding({ rule: `rule-${index}`, elementKey: `k-${index}` })),
+      }),
+    );
+    const lines = markdown.split('\n');
+    const headline = lines.indexOf('- &#91;`new serious`&#93; `clusters`/`axe/rule-0`');
+
+    expect(headline).toBeGreaterThan(-1);
+    expect(lines[headline + 1]).toBe(`  ${UNTRUSTED_FRAME_START}`);
+    expect(lines.some((line) => line.trimStart().startsWith('rule: '))).toBe(false);
+  });
+});
+
+describe('pr comment collapse never mixes statuses', () => {
+  // A collapsed group prints one status, taken from its first finding. A new finding and a waived
+  // one on the same screen and rule used to share a group, so the waived finding was counted inside
+  // "[new serious] … (×2)" and in "2 gating findings", and read as a second barrier that blocks.
+  const noGaps = { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: false };
+
+  it('keeps a new and a waived finding on one rule apart', () => {
+    const markdown = projectPrComment(
+      baseResult({
+        findings: [
+          baseFinding({ rule: 'link-name', elementKey: 'k-new' }),
+          baseFinding({ rule: 'link-name', status: 'waived', elementKey: 'k-waived' }),
+        ],
+        coverage: noGaps,
+      }),
+    );
+
+    expect(markdown).not.toContain('(×2)');
+    expect(markdown).not.toContain('2 gating findings');
+    expect(markdown).not.toContain('### Findings (collapsed by rule)');
+    const lines = markdown.split('\n');
+    const newStart = lines.indexOf('### New barriers');
+    const knownStart = lines.indexOf('### Known (recorded debt)');
+    const items = (from: number) =>
+      lines.slice(from + 1, lines.findIndex((line, index) => index > from && line.startsWith('### '))).filter((line) => line.startsWith('- '));
+    expect(items(newStart)).toEqual(['- &#91;`serious`&#93; `clusters` - `axe/link-name`']);
+    expect(items(knownStart)).toEqual(['- &#91;`waived serious`&#93; `clusters` - `axe/link-name`']);
+  });
+
+  it('counts only findings that gate as gating in the collapsed view', () => {
+    const findings = [
+      ...Array.from({ length: 6 }, (_, index) => baseFinding({ rule: `rule-${index}`, elementKey: `k-${index}` })),
+      baseFinding({ rule: 'rule-0', status: 'carried', elementKey: 'k-carried-a' }),
+      baseFinding({ rule: 'rule-0', status: 'carried', elementKey: 'k-carried-b' }),
+    ];
+    const markdown = projectPrComment(baseResult({ findings, coverage: noGaps }));
+
+    expect(markdown).toContain('### Findings (collapsed by rule)');
+    expect(markdown).not.toContain('8 gating findings');
+    expect(markdown).toContain('Of these, 6 gate this run and 2 are recorded debt that does not block it.');
+    expect(markdown).toContain('- &#91;`new serious`&#93; `clusters`/`axe/rule-0`');
+    expect(markdown).not.toContain('`axe/rule-0` (×3)');
   });
 });

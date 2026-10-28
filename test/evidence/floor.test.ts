@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseEvidenceFloor } from '../../src/evidence/floor.js';
+import { InputRefusedError } from '../../src/intake/input-refusal.js';
 
 const entry = {
   screenId: 'clusters',
@@ -76,5 +77,33 @@ describe('parseEvidenceFloor', () => {
       count: 1,
     };
     expect(parseEvidenceFloor({ version: 2, entries: [entry, other] }).entries).toHaveLength(2);
+  });
+
+  it('names the duplicate entries by position and never repeats the identity', () => {
+    const duplicateLayer = { ...entry, layer: 'pf' };
+    let message = '';
+    try {
+      parseEvidenceFloor({ version: 2, entries: [entry, duplicateLayer] });
+    } catch (err) {
+      expect(err).toBeInstanceOf(InputRefusedError);
+      expect((err as InputRefusedError).field).toBe('entries[1]');
+      message = (err as Error).message;
+    }
+    expect(message).toContain('entries[0]');
+    expect(message).not.toContain('name:save');
+    expect(message).not.toContain('clusters|');
+  });
+
+  it('refuses an entry screen id the id grammar refuses, by position, without repeating it', () => {
+    let refused: unknown;
+    try {
+      parseEvidenceFloor({ version: 2, entries: [entry, { ...entry, rule: 'other', screenId: 'leak-me\u200bnow' }] });
+    } catch (err) {
+      refused = err;
+    }
+    expect(refused).toBeInstanceOf(InputRefusedError);
+    expect((refused as InputRefusedError).field).toBe('entries[1].screenId');
+    expect((refused as Error).message).toContain('U+200B');
+    expect((refused as Error).message).not.toContain('leak-me');
   });
 });

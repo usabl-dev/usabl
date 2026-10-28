@@ -59,6 +59,19 @@ re-baseline to green.
   the per-user temp directory is the boundary. Deleting the pin file as the same
   user resets the baseline with no message, so pins are best-effort against an
   agent with a shell.
+- The exported `gate()` and `mintReceipt()` check their own input, because a library caller can
+  build it by hand and skip every file reader. The gate reads each input field once and decides
+  the verdict from the checked copy only. It parses the floor with the floor file parser, so two
+  entries at one identity are refused; before, they were indexed last-wins, so entry order
+  decided whether a barrier read as new or carried, and one order was a false green. It checks
+  `coverage` and every draft against the Result contract (a boolean `nothingToCheck`, real
+  lists, every closed set such as evidence class, confidence, and severity, and string text
+  fields; a layer is any string, as the contract leaves layers open), every waiver with the
+  ledger's waiver parser (including ISO-8601 UTC dates), `guardDivergedPaths` as a list of
+  strings, `now` as an ISO-8601 UTC timestamp, and `cleanlyScannedScreens` as a real `Set`,
+  copied before use. `mintReceipt()` checks the screen and surface ids it is handed. Both check
+  every screen and surface id against the shared id grammar. A refusal is a typed
+  `InputRefusedError` that names the field and its position and never repeats the value.
 
 **Status:** [x] Documented in ground-truth.
 
@@ -117,6 +130,17 @@ passing bundle from another run.
   and compares all four bindings. A bundle lifted from another run fails because its
   bindings do not match this tree, policy, runner, and scanners. The stop-hook fast path
   re-checks the stored receipt the same way before it trusts a green.
+- A receipt minted under a weakened policy matches that policy. If the weakening was
+  committed during a session, the only binding that sees it is the session pins, so the stop
+  hook compares pins before it reads the stored receipt. Detected drift prevents a VERIFIED
+  fast allow: the stop blocks on drift whether or not a receipt matches. During an active
+  continuation the hook allows once, marked NOT verified, and keeps the pins. When pins are
+  unavailable or refused, or the hook input carries no usable session id, a receipt allow says
+  `session drift not checked` and a notice says why.
+- The pin notices and the drift message print every carried value inside the untrusted frame:
+  drifted file paths, the session id from the hook input, the pin store's reasons and fixes
+  (which name directories from the environment), and error text. A guarded file name with a
+  line break and an instruction in it is printed as data, never as usabl's own words.
 - Future: signed attestation on the receipt (engineering §7).
 
 **Status:** Receipt bindings ship and re-verify; cross-run signing is still open.
@@ -164,7 +188,16 @@ comments.
   unjoined form as well because the bare-JWT pattern depends on a word boundary that stripping
   can remove.
 - Key-based redaction of Result fields is the structural layer and does not depend on the text
-  at all. Value patterns are a heuristic over the printed text.
+  at all. Value patterns are a heuristic over the printed text. A key also counts as a secret
+  when it ends in password, passwd, secret, or token after a separator or a camel-case join, such
+  as `PROXY_PASSWORD` or `proxyPassword`.
+- The value patterns also cover shapes they used to miss: whitespace or a quote between a key and
+  its separator (`token = ...`, `"password": "..."`), a JWT cut to two segments, a lone JWT
+  header segment (one whose base64 opens with `eyJhbGci`, `eyJ0eXAi`, or `eyJraWQi`), the userinfo
+  after `//` in an address (`http://user:pass@proxy:3128`, as in `HTTPS_PROXY`), and GitHub
+  tokens by their prefix. Any other lone base64 JSON, such as `?state=eyJ...` in a screen URL, is
+  kept as written, because the overlay matches screen URLs and gap refs against the live location. The last one matters for config errors: a token pasted into the
+  wrong key used to be repeated back in full in the unknown-key message.
 
 **Status:** [x] Local-first; egress redaction and neutralization ship, with anchors matched
 through invisible characters and redaction on both sides of the strip. [ ] Telemetry decision
@@ -343,13 +376,12 @@ is by carrier: a value the Result carried is sealed, and only text usabl itself 
 left as prose.
 
 Sealing by carrier covers every string. It does not reach a number, and a number was the
-way through. `usabl comment` does not structurally validate the document it reads:
-`parseResultJson` checks the schema version, the accessibility exit code, and one forbidden
-accessibility verdict, and takes every other field on trust. A field typed as a number is
-therefore whatever the document said, and it does not even have to be a field. A list
-supplied as `{"length": "@user"}` is never iterated by the coverage counts, so nothing
-throws and that text was printed as a count, outside every span, where the post-render
-filters reached it.
+way through. `usabl comment` used to take most of the document on trust:
+`parseResultJson` checked the schema version, the accessibility exit code, and one forbidden
+accessibility verdict, and nothing else. A field typed as a number was therefore whatever the
+document said, and it did not even have to be a field. A list supplied as
+`{"length": "@user"}` is never iterated by the coverage counts, so nothing threw and that text
+was printed as a count, outside every span, where the post-render filters reached it.
 
 So the rule for numbers is the one already used for the exit code: every value this
 document prints as a bare number is checked where it is printed, and a value that is not a
@@ -377,13 +409,23 @@ is no use, because a list marker has to be literal digits to work at all, so the
 counts the stops this list prints, from the iteration itself, and is never built from the
 stop index the Result carried.
 
-**Not handled:** `usabl comment` still does not validate the shape of the document it is
-given. Sealing every string and checking every printed number bounds what a malformed or
-hostile document can put on the page, and it does not make the document trustworthy: the
-counts, the sections, and the verdict shown are only as true as the file that supplied
-them. Full structural validation of an externally supplied Result is not implemented. A
-consumer that pipes a Result from an untrusted source into `usabl comment` is reporting
-that source's claims, and the receipt, not the comment, is what proves a run happened.
+**Handled:** `usabl comment` and `usabl enforce` now check the whole document against the
+Result contract before they use any of it (`src/intake/result-document.ts`). Every list must
+be a list, every count a whole number, every enum value one of its values, and every nested
+object must have the fields the contract gives it. A field the contract does not name is
+dropped, and a record key named `__proto__` is kept as data. A document that does not match
+exits 4 and names the field by its path, never the value, because the value may be a mention
+or a link written for the renderer. Text that is not JSON exits 4 the same way, without the
+JSON parser's own message, which quotes the input back. The per-number checks and the sealing
+above stay in place behind it, so a projector called from inside the process with a Result
+that skipped this check is still bounded.
+
+**Not handled:** the check is of shape, not of truth. A well-formed document can still say
+anything the contract allows: a verdict that its findings do not support, counts that do not
+add up, or a receipt for a run that never happened. The counts, the sections, and the verdict
+shown are only as true as the file that supplied them. A consumer that pipes a Result from an
+untrusted source into `usabl comment` is reporting that source's claims, and the receipt, not
+the comment, is what proves a run happened.
 
 The stop hook and the self-check are held to the same rule, by carrier, through their own
 mechanism. They print plain text to a language model with no renderer involved, so the seal
@@ -422,7 +464,11 @@ characters of back-to-back credentials take roughly 0.7 s to redact, and roughly
 a 100 MiB peak when a look-through character is present, against about 0.1 s before the
 value-split fix. Ordinary large text got faster. This is a denial-of-service hardening item
 for later, not a correctness defect: every span is still redacted, and the surface-level
-field caps limit what reaches an agent.
+field caps limit what reaches an agent. Addresses with userinfo are now redacted spans too.
+Measured on one machine, 2.8 million characters made of nothing but `http://u:p@h/ ` took 1.6 to
+2.8 s to scrub, about 0.6 to 1.0 microseconds per character, against 66 to 92 ms (about 0.03
+microseconds per character) before. Ordinary text with plain URLs, 2.9 million characters, took 98
+to 344 ms against 78 to 270 ms before.
 
 **Status:** [x] All three controls ship. The bidirectional controls are the full Unicode
 `Bidi_Control` set. Eleven splitters, every split position, the reordering payload, eight
@@ -430,6 +476,36 @@ renderer forgeries, and the block-markup and autolink forms are covered by tests
 Post-render autolinks are mitigated by the code spans, as above. [ ] usabl does not report
 that a page attempted a forgery; it removes them silently. [ ] Compatibility-normalized
 markers are out of scope, as above. [ ] Credential-dense input cost is open, as above.
+
+---
+
+## Threat 10: Page script that answers for usabl
+
+**Attack:** a hostile page defines or replaces the functions usabl reads the page through. Two
+were reachable from page script: `window.__usablPathFor`, which names each element, and
+`window.__usablDrain`, which hands back the live-region text usabl heard. A page that returned one
+path for every element collapsed every identity, so a set difference such as "alerts minus alerts
+inside a live region" came out empty and a barrier read as fixed. A page that returned its own
+announcements passed a flow requirement on text no screen reader spoke.
+
+**Controls:**
+
+- The path function and the live-region capture run in isolated worlds over CDP, as the toast
+  ancestor walk already did. Page script shares the DOM with them but not their globals or
+  prototypes, so it cannot define, replace, or read them, and redefining `textContent`,
+  `querySelectorAll`, or `CSS.escape` in its own world does not change what they read.
+- The path function is sent with every query, so there is no installed helper to trust. The
+  capture is started at document start on a page usabl opens and at adoption on a caller's page,
+  and a document where it is not running is an error, which becomes a coverage gap.
+- An element is named by its id only when the id's selector matches exactly that element. A NUL id
+  and a literal U+FFFD id escape to one selector and now get two identities.
+
+**Not handled:** other reads still run in the page's own world, such as the focus checks
+(`activeElementIs`, `activeElementWithin`), the computed style read, and the zoom write. A page
+can change what those see by redefining DOM methods.
+
+**Status:** [x] Paths and announcements read in isolated worlds. [ ] The remaining main-world
+reads are open.
 
 ---
 
@@ -457,7 +533,10 @@ entirely. That is a worse integrity outcome than an honest unverified allow.
   this policy.
 
 **Not this decision:** `regression`, `not_covered`, and `approval_required` still
-block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`.
+block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`. A verdict the
+hook does not recognize, and a null verdict on a run that was neither idle nor exit 4, block: they
+are not a crash the operator needs to escape, and allowing them would read an unknown answer as a
+pass.
 
 **Status:** [x] Recorded. Matches the shipped Stop hook and runner error paths.
 
@@ -534,6 +613,7 @@ operator must set the engine SHA before the gate can run.
 | axe-core | MPL-2.0 | Dynamic link; surface version in output |
 | Playwright | Apache-2.0 | Browser binaries separate terms |
 | PatternFly | MIT | Rulepack data only |
+| @babel/parser | MIT | Pinned exactly. Reads JSX and TypeScript source; parser only. Brings @babel/types, @babel/helper-string-parser, and @babel/helper-validator-identifier, all MIT |
 | Guidepup (if adopted) | MIT | Optional phrasing validation |
 
 **usabl release license:** Apache-2.0 (repo `LICENSE`). MPL boundary: do not vendor

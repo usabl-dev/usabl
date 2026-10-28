@@ -1,7 +1,8 @@
 /**
  * A receipt is re-checkable proof that this tree, this policy, and this runner
  * produced `verified`. `verdict` is the literal `'verified'` (a type, not a decision).
- * Only `run()` calls this, and only after the gate returned verified.
+ * Only `run()` calls this inside usabl, and only after the gate returned verified. It is also
+ * exported, so it checks the ids it is handed (see checkReceiptInput).
  *
  * Four bindings: sourceTree (current Git working tree), policyHash (guarded-path
  * blobs at HEAD), runnerVersion, and scannerVersions (axe-core, Playwright, Chromium).
@@ -11,6 +12,7 @@ import type { Deps, Receipt, ScreenScan, UsablConfig } from "../contracts/index.
 import { sortBy } from "../primitives/sortKey.js";
 import { canonicalHash } from "../primitives/canonical.js";
 import { buildGuardedSet, expandGuardedSet } from "../trust/guard.js";
+import { assertIdField, InputRefusedError } from "../intake/input-refusal.js";
 
 export interface ReceiptArgs {
   surfaces: string[];
@@ -104,11 +106,65 @@ export async function computePolicyHash(
   return canonicalHash(pairs);
 }
 
+const MINT_SOURCE = "mintReceipt() input";
+
+function assertList(field: string, value: unknown): asserts value is unknown[] {
+  if (!Array.isArray(value)) {
+    throw new InputRefusedError(field, `${MINT_SOURCE} ${field} must be an array.`);
+  }
+}
+
+/**
+ * mintReceipt() is exported, so a library caller can hand it a config that never went through
+ * the config parser and receipt arguments that never came from the gate. Every screen and surface
+ * id it is handed is checked against the shared id grammar here, so the receipt never records an
+ * id the rest of usabl would refuse. A refusal names the field and its position and never repeats
+ * the id. On the command path these ids already passed the parser, so this refuses nothing there.
+ *
+ * The grammar governs screen and surface ids only. Receipt `surfaces` are output channels such as
+ * "cli" and `notCovered` holds file paths, so neither is checked here.
+ */
+function checkReceiptInput(config: UsablConfig, args: ReceiptArgs): void {
+  const checked: unknown = args.checked;
+  assertList("args.checked", checked);
+  checked.forEach((id, index) => assertIdField(MINT_SOURCE, `args.checked[${index}]`, id));
+
+  const applicability: unknown = args.applicability;
+  assertList("args.applicability", applicability);
+  applicability.forEach((row, index) => {
+    const field = `args.applicability[${index}]`;
+    if (typeof row !== "object" || row === null) {
+      throw new InputRefusedError(field, `${MINT_SOURCE} ${field} must be an object.`);
+    }
+    assertIdField(MINT_SOURCE, `${field}.screenId`, (row as Record<string, unknown>)["screenId"]);
+  });
+
+  const surfaces: unknown = config.surfaces;
+  assertList("config.surfaces", surfaces);
+  surfaces.forEach((surface, index) => {
+    const field = `config.surfaces[${index}]`;
+    if (typeof surface !== "object" || surface === null) {
+      throw new InputRefusedError(field, `${MINT_SOURCE} ${field} must be an object.`);
+    }
+    assertIdField(MINT_SOURCE, `${field}.id`, (surface as Record<string, unknown>)["id"]);
+  });
+
+  // Keys are named by position, counted from one in the order Object.keys returns them, as the
+  // config parser names them. A key is never printed, for the same reason an id is not.
+  const perSurface = config.noiseBudget?.perSurface;
+  if (perSurface !== undefined) {
+    Object.keys(perSurface).forEach((key, index) =>
+      assertIdField(MINT_SOURCE, `config.noiseBudget.perSurface key ${index + 1}`, key),
+    );
+  }
+}
+
 export async function mintReceipt(
   deps: Deps,
   config: UsablConfig,
   args: ReceiptArgs,
 ): Promise<Receipt> {
+  checkReceiptInput(config, args);
   // Mint uses the same expanded guarded input as verify so an engine-minted receipt
   // can re-verify without relying on caller-side pre-expansion conventions.
   const expandedGuardedPaths = await expandGuardedSet(

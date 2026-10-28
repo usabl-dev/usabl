@@ -2,6 +2,7 @@
 export * from './contracts/index.js';
 export { run } from './run.js';
 export { gate } from './gate/index.js';
+export { InputRefusedError } from './intake/input-refusal.js';
 export { computePolicyHash, mintReceipt, verifyReceipt } from './evidence/receipt.js';
 export { computeIdentity, IDENTITY_WEAK } from './primitives/identity.js';
 export { canonicalize, sha256, canonicalHash } from './primitives/canonical.js';

@@ -8,13 +8,7 @@ import { posix } from 'node:path';
 import type { SurfaceConfig, UsablConfig } from '../contracts/index.js';
 import { operatorText } from '../intake/config-error.js';
 import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
-import {
-  isRouterSource,
-  mergeParsedRoutes,
-  parseDataRouterRoutes,
-  screenIdFromUrl,
-  type ParsedRouteSite,
-} from '../coverage/router-parse.js';
+import { isRouterSource, readRouterSource, screenIdFromUrl } from '../coverage/router-parse.js';
 import { validateId } from '../intake/id-grammar.js';
 import { STORAGE_STATE_ENV_VAR } from '../deps/session.js';
 import { APP_INIT_REFUSAL, unusableIdsError, type UnusableId } from './unusable-ids.js';
@@ -69,79 +63,11 @@ function parseVitePort(raw: string): number | null {
   return Number(match[1]);
 }
 
-function parseLocalImports(raw: string): Map<string, string> {
-  // Only relative specifiers (starting with ".") can prove a local entry file.
-  // Package imports are left unmapped so init cannot guess across dependencies.
-  const imports = new Map<string, string>();
-  const named = /import\s+\{([^}]+)\}\s+from\s+['"](\.[^'"]+)['"]/g;
-  for (const match of raw.matchAll(named)) {
-    const names = match[1];
-    const specifier = match[2];
-    if (typeof names !== 'string' || typeof specifier !== 'string') {
-      continue;
-    }
-    for (const part of names.split(',')) {
-      const trimmed = part.trim();
-      if (trimmed.length === 0 || trimmed.startsWith('type ')) {
-        continue;
-      }
-      const aliased = trimmed.split(/\s+as\s+/);
-      const local = aliased[aliased.length - 1]?.trim();
-      if (local !== undefined && local.length > 0) {
-        imports.set(local, specifier);
-      }
-    }
-  }
-  const defaults = /import\s+([A-Za-z_$][\w$]*)\s+from\s+['"](\.[^'"]+)['"]/g;
-  for (const match of raw.matchAll(defaults)) {
-    const local = match[1];
-    const specifier = match[2];
-    if (typeof local === 'string' && typeof specifier === 'string') {
-      imports.set(local, specifier);
-    }
-  }
-  return imports;
-}
-
 function isProvenRoutePath(path: string): boolean {
-  // Root-absolute app paths only. Relative nested paths would be rewritten as
-  // /child instead of /parent/child. Protocol-relative and @ URLs can leave
+  // Root-absolute app paths only. The router reader joins a nested path to its parent, so a
+  // path that is still relative here was not proven. Protocol-relative and @ URLs can leave
   // the operator origin. Catch-alls are not screens.
   return path.startsWith('/') && !path.startsWith('//') && !path.includes('@') && path !== '*';
-}
-
-// The tag name the route regex below matches. The attribute group starts immediately after it,
-// which is what turns an offset inside the attributes into an offset in the file.
-const ROUTE_TAG_PREFIX = '<Route';
-
-function parseRouteTags(raw: string): ParsedRouteSite[] {
-  const routes: ParsedRouteSite[] = [];
-  // Self-closing tags only. Opening <Route> parents are layouts; inferring
-  // their children would require a nesting walk this draft does not claim.
-  const tags = /<Route\b([^>]*?)\/>/g;
-  for (const match of raw.matchAll(tags)) {
-    const attrs = match[1];
-    if (typeof attrs !== 'string' || match.index === undefined) {
-      continue;
-    }
-    const pathMatch = attrs.match(/\bpath\s*=\s*['"`]([^'"`]+)['"`]/);
-    if (pathMatch === null || pathMatch[1] === undefined || pathMatch.index === undefined) {
-      continue;
-    }
-    const path = pathMatch[1];
-    if (path === '*') {
-      continue;
-    }
-    const elementMatch = attrs.match(/\belement\s*=\s*\{\s*<\s*([A-Za-z_$][\w$]*)/);
-    // Point at the path attribute, not at the start of the tag, so a tag spread over several
-    // lines is reported at the line that carries the path.
-    routes.push({
-      path,
-      component: elementMatch?.[1] ?? null,
-      offset: match.index + ROUTE_TAG_PREFIX.length + pathMatch.index,
-    });
-  }
-  return routes;
 }
 
 // One-based line number of a source offset, the way an editor numbers lines.
@@ -280,10 +206,22 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
   const routes: RouteEntry[] = [];
   const unusable: UnusableId[] = [];
   if (routerRaw !== null) {
-    const imports = parseLocalImports(routerRaw);
-    const parsed = mergeParsedRoutes(parseRouteTags(routerRaw), parseDataRouterRoutes(routerRaw));
-    if (routerRaw.includes('createBrowserRouter')) {
+    const read = readRouterSource(routerRaw, routerFile);
+    const imports = read.localImports;
+    const parsed = read.routes;
+    if (read.dataRouter) {
       notes.push('Review: data-router routes detected; verify entry file attribution.');
+    }
+    // A route the parser found but could not read is not in the draft. A written sidecar takes
+    // precedence over the router, and usabl never scans a route the sidecar leaves out, so each one
+    // is named here by file and line for the operator to add by hand. A router file that does not
+    // parse comes back as one such entry.
+    for (const gap of read.unreadable) {
+      const where = gap.line === null || gap.wholeFile === true ? routerFile : `${routerFile} line ${gap.line}`;
+      notes.push(
+        `Review: ${where}: ${gap.reason} The draft usabl.routes.json does not list it, and usabl never ` +
+          'scans a route that usabl.routes.json leaves out. Add the route by hand before you merge.',
+      );
     }
     let attributed = 0;
     for (const route of parsed) {
@@ -309,10 +247,8 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
       // the route is never scanned. Every such route is collected so the whole draft can be
       // refused at once. The route is named by file and line, never by its path, because the
       // path is what carries the refused character. The line comes from the offset the parser
-      // recorded for the path literal it matched, so it is the line of that match and not the
-      // first place the same text appears in the file. The parser does not strip comments, so a
-      // commented-out route is matched like any other and the line can name a commented
-      // declaration. The operator still gets the file and a line to open.
+      // recorded for the path it read, so it is the line of that declaration and not the first
+      // place the same text appears in the file, such as a comment.
       const screenId = screenIdFromUrl(route.path);
       const refusal = validateId(screenId);
       if (!refusal.ok) {

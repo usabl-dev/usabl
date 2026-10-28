@@ -23,11 +23,13 @@ import type {
 import { attachDomSourceToDrafts } from './dom-source.js';
 import { attachRowScopeToDrafts } from './row-scope.js';
 import {
+  heldThroughout,
   measureReadiness,
   readApiResponses,
   readinessSignalOf,
+  selectorHeldBeforeWalk,
   signalTimeoutMsFor,
-  type ReadinessMeasurement,
+  signalWait,
   type ReadinessSignal,
 } from './reachability.js';
 import { observeLanding, readRefusedRequests, redirectedAwayGap } from './redirected.js';
@@ -116,19 +118,6 @@ function responseFields(
   return { reachedResponseSeen: seen, reachedWhenResponse: signal.response };
 }
 
-/**
- * Each part of the signal as measured twice, before the walk and after the checks. A part that was
- * not declared stays null. A declared part holds only if both measurements held.
- */
-function heldThroughout(beforeWalk: ReadinessMeasurement, afterChecks: ReadinessMeasurement): ReadinessMeasurement {
-  const both = (before: boolean | null, after: boolean | null): boolean | null =>
-    before === null && after === null ? null : before === true && after === true;
-  return {
-    selectorPresent: both(beforeWalk.selectorPresent, afterChecks.selectorPresent),
-    responseSeen: both(beforeWalk.responseSeen, afterChecks.responseSeen),
-  };
-}
-
 function makeTabSteps(tabCap: number): Step[] {
   return Array.from({ length: tabCap }, (): Step => ({ do: 'tab' }));
 }
@@ -181,28 +170,14 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           sessionConfigured: deps.sessionConfigured === true,
           ...(reachedWhen === undefined ? { reachedWhen: undefined } : { reachedWhen }),
         };
-        // A page can settle on a small shell, pause with nothing in flight, and only then fetch and
-        // mount its content. A screen that declares a readiness selector says what its content
-        // looks like, so readiness waits until that selector matches at a settled moment, for at
-        // most signalTimeoutMs after the page first settled. It also stops waiting as soon as the
-        // page is plainly not this screen, so a sign-in page the rules below can see costs no more
-        // than it did before.
-        //
-        // Only the selector can end the wait. A response stays seen once it arrived, so it cannot
-        // tell the screen's content from a page that replaced it a moment later, and waiting on it
-        // would end the wait on whatever settled last. A screen that declares only a response
-        // waits exactly as it did without a signal.
+        // Readiness waits for the declared selector; see signalWait. It also stops waiting as soon
+        // as the page is plainly not this screen, so a sign-in page the rules below can see costs
+        // no more than it did before.
         const signalWaitMs = signalTimeoutMsFor(deps.config);
-        const readyWhen: ReadinessProbe | undefined =
-          signal === null || signal.selector === null
-            ? undefined
-            : {
-                timeoutMs: signalWaitMs,
-                holds: async (): Promise<boolean> => {
-                  const seen = await observeLanding(page, landingOptions);
-                  return seen.reachedSelectorPresent === true || redirectedAwayGap(screen.id, seen) !== null;
-                },
-              };
+        const readyWhen: ReadinessProbe | undefined = signalWait(signal, signalWaitMs, async (): Promise<boolean> => {
+          const seen = await observeLanding(page, landingOptions);
+          return seen.reachedSelectorPresent === true || redirectedAwayGap(screen.id, seen) !== null;
+        });
         const readiness = await page.gotoReady(readyWhen);
 
         // Whether this is the requested screen, signed in. The address and the password count are
@@ -218,19 +193,11 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // them at all invites a later change to keep them. Nothing is claimed about
           // reachability either, because this page is not the one the assertion describes.
           result = notReachedScan(screen, notReached, signal);
-        } else if (
-          readyWhen !== undefined &&
-          (readiness?.signal !== 'held' || landing.reachedSelectorPresent !== true)
-        ) {
+        } else if (readyWhen !== undefined && !selectorHeldBeforeWalk(readiness, landing.reachedSelectorPresent)) {
           // The declared selector did not hold at a settled moment before the cap ran out, or it
           // held and is gone now. Either way the page usabl would walk is not known to show the
           // screen's settled content, so the walk and the checks are skipped and the unseen pass
           // turns this into a gap that names the selector and the cap.
-          //
-          // The readiness outcome decides, whatever the landing read says. The selector can
-          // appear after the cap ran out and before that read, on a page still changing, and a
-          // walk then would grade a page that had not settled. A page that reports no outcome is
-          // read the same way, because nothing says the signal held.
           result = {
             screenId: screen.id,
             url: screen.url,
@@ -276,11 +243,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
           // later over collected scans and cannot query it. The response part counts only requests
           // sent before the walk began, so one a key press or a provider caused does not count. The
           // selector part sees the page as the checks left it, so a walk that navigated away fails.
-          //
-          // A part holds only when it held both here and before the walk. The walk and the checks
-          // are only evidence about the screen if its content was there when they began, so a part
-          // that first holds during them, because the content arrived late or a check caused it,
-          // does not count.
+          // A part holds only when it held both here and before the walk; see heldThroughout.
           const readiness = heldThroughout(
             { selectorPresent: landing.reachedSelectorPresent, responseSeen: landing.reachedResponseSeen ?? null },
             await measureReadiness(page, signal, deps.config.appBaseUrl),

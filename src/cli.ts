@@ -15,7 +15,7 @@ import { dirname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { run } from './run.js';
-import type { UsablConfig } from './contracts/index.js';
+import type { Result, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
 import { makeFsGlob } from './deps/fs.js';
 import { readStorageStateEnv } from './deps/session.js';
@@ -29,7 +29,7 @@ import {
 import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
-import { parseUsablConfig } from './intake/config.js';
+import { configUrlWarnings, parseUsablConfig } from './intake/config.js';
 import { ciRefusal, installRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
 import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
@@ -42,16 +42,26 @@ import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { projectDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
-import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultJson } from './surfaces/policy-enforce.js';
+import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultText } from './surfaces/policy-enforce.js';
 import { projectSelfCheck } from './surfaces/self-check.js';
 import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './surfaces/receipt-store.js';
 import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
 
-export async function loadConfig(path = 'usabl.config.json'): Promise<UsablConfig> {
+export async function loadConfig(
+  path = 'usabl.config.json',
+  warn: (line: string) => void = (line) => {
+    process.stderr.write(`${line}\n`);
+  },
+): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
-  return parseUsablConfig(await readFile(path, 'utf8'));
+  const config = parseUsablConfig(await readFile(path, 'utf8'));
+  // A configured URL with a query or a fragment loads, and the operator is told it is published.
+  for (const warning of configUrlWarnings(config)) {
+    warn(warning);
+  }
+  return config;
 }
 
 async function readStdin(): Promise<string> {
@@ -72,8 +82,7 @@ async function runEnforce(opts: CliOptions): Promise<number> {
       process.stderr.write('usabl: enforce requires accessibility or policy\n');
       return 2;
     }
-    const parsed: unknown = JSON.parse(await readStdin());
-    const result = parseResultJson(parsed);
+    const result = parseResultText(await readStdin());
     if (opts.enforceCheck === 'accessibility') {
       const outcome = enforceAccessibility(result);
       process.stdout.write(`${outcome.message}\n`);
@@ -443,9 +452,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   if (opts.command === 'comment') {
-    // Comment mode is a pure projection from stdin so CI does not import package internals.
-    const parsed: unknown = JSON.parse(await readStdin());
-    const result = parseResultJson(parsed);
+    // Comment mode is a pure projection from stdin so CI does not import package internals. The
+    // Result is a document someone else wrote, so it is checked against the contract first. One
+    // that does not match exits 4 with the reason, and no comment is printed.
+    let result: Result;
+    try {
+      result = parseResultText(await readStdin());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`usabl: comment did not render. ${message}\n`);
+      return 4;
+    }
     // Load config best-effort so a repo's noiseBudget applies to the comment. Absent config falls
     // back to the default budget rather than failing the projection.
     let commentConfig: UsablConfig | undefined;

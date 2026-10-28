@@ -443,6 +443,61 @@ describe('runFloorPrune lowers counts', () => {
   });
 });
 
+describe('runFloorPrune keeps the floor document it does not change', () => {
+  // Two entries on the cleanly scanned screen, one paid down and one still observed, so prune
+  // writes a diff and the rest of the document has to survive it.
+  const entries = [
+    {
+      screenId: 'clusters', layer: 'axe', rule: 'aria-input-field-name',
+      elementKey: 'clusters|aria-input-field-name|name:search', identityBasis: 'name', count: 1,
+    },
+    {
+      screenId: 'clusters', layer: 'axe', rule: 'color-contrast',
+      elementKey: 'clusters|color-contrast|name:save', identityBasis: 'name', count: 1,
+    },
+  ];
+
+  async function pruneDocument(document: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': JSON.stringify(document) }),
+      scans: { clusters: scanWith([draft()]) },
+    });
+    const writer = new MemoryFloorFs();
+    const outcome = await runFloorPrune(deps, testConfig(), writer);
+    expect(outcome.wrote).toBe(true);
+    expect(outcome.prunedCount).toBe(1);
+    const raw = writer.read('.usabl-evidence.json');
+    if (raw === null) {
+      throw new Error('expected .usabl-evidence.json to be written');
+    }
+    return JSON.parse(raw) as Record<string, unknown>;
+  }
+
+  it('keeps the partial scope marker', async () => {
+    // A partial floor covers only some screens. Dropping the marker would make it read as a
+    // complete floor for the whole application.
+    const written = await pruneDocument({ version: 2, scope: 'partial', entries });
+
+    expect(written['scope']).toBe('partial');
+    expect(written['version']).toBe(2);
+    expect(written['entries']).toEqual([entries[1]]);
+  });
+
+  it('keeps a top-level field it does not know, in its place', async () => {
+    // A newer floor can carry fields this prune does not read. Prune changes only the entries.
+    const written = await pruneDocument({ version: 2, scope: 'partial', observedAt: 'kept as written', entries });
+
+    expect(Object.keys(written)).toEqual(['version', 'scope', 'observedAt', 'entries']);
+    expect(written['observedAt']).toBe('kept as written');
+  });
+
+  it('still writes no scope on a complete floor', async () => {
+    const written = await pruneDocument({ version: 2, entries });
+
+    expect(Object.keys(written)).toEqual(['version', 'entries']);
+  });
+});
+
 describe('floor command parsing', () => {
   it('parses floor prune and refuses floor without prune', async () => {
     const parsed = parseCliArgs(['floor', 'prune']);
@@ -464,5 +519,25 @@ describe('floor command parsing', () => {
     } finally {
       writeSpy.mockRestore();
     }
+  });
+});
+
+describe('floor prune with a floor entry the id grammar refuses', () => {
+  it('refuses with exit 4, writes nothing, and never repeats the id', async () => {
+    const config: UsablConfig = testConfig();
+    const bad = JSON.stringify({
+      version: 2,
+      entries: [{ screenId: 'leak-me​now', layer: 'axe', rule: 'color-contrast', elementKey: null, identityBasis: 'count', count: 1 }],
+    });
+    const deps = makeFakeDeps({ ...withPolicyFiles({ '.usabl-evidence.json': bad }), scans: { clusters: scanWith([]) } });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, config, writer);
+
+    expect(outcome.exitCode).toBe(4);
+    expect(outcome.wrote).toBe(false);
+    expect(writer.writes).toHaveLength(0);
+    expect(outcome.message).toContain('entries[0].screenId');
+    expect(outcome.message).not.toContain('leak-me');
   });
 });

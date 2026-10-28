@@ -55,10 +55,11 @@ describe('buildImportGraph', () => {
     });
   });
 
-  it('discloses instead of guessing when several candidate files exist', async () => {
+  it('links every candidate and discloses them when several candidate files exist', async () => {
     // With both Widget.js and Widget.tsx present, which one Vite loads depends on its
     // resolve.extensions order, which usabl does not parse. Picking one could attribute a change to
-    // a screen that renders the other, so it creates no edge and discloses the ambiguity.
+    // a screen that renders the other, so it links both, which can over-scan but never misses a
+    // screen, and discloses the ambiguity, naming both files.
     const fs = fsOf({
       'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } }),
       'src/Page.tsx': `import { Widget } from '@/Widget';`,
@@ -67,13 +68,59 @@ describe('buildImportGraph', () => {
     });
     const aliasConfig = await loadAliasConfig(fs);
     const graph = await buildImportGraph(fs, ['src/Page.tsx'], aliasConfig);
-    expect(graph.get('src/Page.tsx')).not.toContain('src/Widget.js');
-    expect(graph.get('src/Page.tsx')).not.toContain('src/Widget.tsx');
+    expect(graph.get('src/Page.tsx')).toEqual(['src/Widget.js', 'src/Widget.tsx']);
     expect(graph.unresolvable).toContainEqual({
       importer: 'src/Page.tsx',
       specifier: '@/Widget',
-      kind: 'file-not-found',
+      kind: 'ambiguous-candidates',
+      candidates: ['src/Widget.js', 'src/Widget.tsx'],
     });
+  });
+
+  it('discloses a .vue sibling next to a .ts file and links both', async () => {
+    // A project whose bundler resolves .vue can load Widget.vue for './Widget'. Probing only JS and
+    // TS suffixes saw one candidate, Widget.ts, and attributed the import to it without a word.
+    const fs = fsOf({
+      'src/Page.tsx': `import { Widget } from './Widget';`,
+      'src/Widget.ts': `export const Widget = 1;`,
+      'src/Widget.vue': `<template><div /></template>`,
+    });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.get('src/Page.tsx')).toEqual(['src/Widget.ts', 'src/Widget.vue']);
+    expect(graph.unresolvable).toContainEqual({
+      importer: 'src/Page.tsx',
+      specifier: './Widget',
+      kind: 'ambiguous-candidates',
+      candidates: ['src/Widget.ts', 'src/Widget.vue'],
+    });
+  });
+
+  it('discloses a .svelte sibling next to a .tsx file and links both', async () => {
+    const fs = fsOf({
+      'src/Page.tsx': `import Widget from './Widget';`,
+      'src/Widget.tsx': `export default 1;`,
+      'src/Widget.svelte': `<div />`,
+    });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.get('src/Page.tsx')).toEqual(['src/Widget.svelte', 'src/Widget.tsx']);
+    expect(graph.unresolvable).toContainEqual({
+      importer: 'src/Page.tsx',
+      specifier: './Widget',
+      kind: 'ambiguous-candidates',
+      candidates: ['src/Widget.svelte', 'src/Widget.tsx'],
+    });
+  });
+
+  it('resolves an extensionless import to a lone .vue or .svelte file', async () => {
+    const fs = fsOf({
+      'src/Page.tsx': `import A from './A';\nimport B from './B';\nimport C from './widgets';`,
+      'src/A.vue': `<template><div /></template>`,
+      'src/B.svelte': `<div />`,
+      'src/widgets/index.vue': `<template><div /></template>`,
+    });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.get('src/Page.tsx')).toEqual(['src/A.vue', 'src/B.svelte', 'src/widgets/index.vue']);
+    expect(graph.unresolvable).toEqual([]);
   });
 
   it('ignores scoped npm packages instead of disclosing them as unresolved aliases', async () => {
