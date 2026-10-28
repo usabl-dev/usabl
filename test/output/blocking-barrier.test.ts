@@ -122,7 +122,13 @@ const CASES: ReadonlyArray<{
   },
   {
     name: 'a floored finding that is gone from a cleanly scanned screen',
-    input: { ...base, drafts: [], floor: flooredOnce },
+    // The screen's readiness signal held, so the absence is a fix and not content that never mounted.
+    input: {
+      ...base,
+      drafts: [],
+      floor: flooredOnce,
+      renderEvidence: new Map([['clusters', { signalHeld: true, elementSlots: new Set<string>() }]]),
+    },
     status: 'fixed',
     verified: true,
   },

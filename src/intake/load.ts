@@ -114,10 +114,8 @@ export async function loadRequirements(fs: FsGlob, config: UsablConfig): Promise
   // Each file on its own is valid in that case, so only the assembled bundle can see it.
   //
   // This returns a failure rather than throwing one. The dependency builder calls this loader
-  // outside any try and keeps building so the run can fail closed through the gate, and the run
-  // itself reads only `ok` and `path` from this result. The reason is therefore recorded here
-  // but is not yet shown to the operator; surfacing it is the run's job and is not done in this
-  // unit.
+  // outside any try and keeps building so the run can fail closed through the gate. The run shows
+  // the returned reason to the operator as a not-covered coverage gap on the refused file.
   const duplicate = findDuplicateRequirementId(idSites);
   if (duplicate !== null) {
     return pathFailure(duplicate.path, duplicate.reason);

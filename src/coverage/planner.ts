@@ -9,7 +9,7 @@ import { loadAliasConfig } from './alias-config.js';
 import { buildUnresolvedReason } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
 import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
-import { parseDocsManifest } from './docs-manifest.js';
+import { parseDocsManifest, type DocsManifest } from './docs-manifest.js';
 import { assertSurfaceIds } from '../intake/surface-ids.js';
 import { configError } from '../intake/config-error.js';
 import { matchGlob } from '../primitives/match-glob.js';
@@ -135,7 +135,17 @@ function importClosure(graph: { get(file: string): string[] }, entryFile: string
   return seen;
 }
 
-export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFiles: string[]): Promise<Coverage> {
+/**
+ * `docsManifest` is the parsed usabl.docs.json, when the caller has already read it. run() reads
+ * it once and passes it here and to the docs planner, so the file is parsed once per run and both
+ * planners see the same manifest. Leave it out and this planner reads it from `fs` itself.
+ */
+export async function computeCoverage(
+  fs: FsGlob,
+  config: UsablConfig,
+  changedFiles: string[],
+  docsManifest?: DocsManifest | null,
+): Promise<Coverage> {
   // affectedByScreen below is keyed by surface id, so a blank or repeated id silently drops a
   // screen while its changed files still read as mapped. Config parsing refuses that document,
   // but this planner takes a UsablConfig value from any caller, so it checks the invariant it
@@ -147,8 +157,8 @@ export async function computeCoverage(fs: FsGlob, config: UsablConfig, changedFi
   // still scan docs pages, and a floor entry keyed by an id shared with an app screen absorbs a
   // docs finding whether or not this planner found anything to do.
   const manifest = await parseRouteManifest(fs, config.discovery);
-  const docsManifest = await parseDocsManifest(fs);
-  assertScreenIdsAreUnambiguous(config, manifest, (docsManifest?.pages ?? []).map((page) => page.pageId));
+  const docs = docsManifest === undefined ? await parseDocsManifest(fs) : docsManifest;
+  assertScreenIdsAreUnambiguous(config, manifest, (docs?.pages ?? []).map((page) => page.pageId));
 
   const uiFiles = changedFiles.filter(
     (file) => !isTestFile(file) && config.uiFileGlobs.some((glob) => matchGlob(glob, file)),

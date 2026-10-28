@@ -17,6 +17,7 @@ import { neutralize } from '../primitives/neutralize.js';
 import { NOT_A_LIST, ownEntry, wholeNumberText } from '../output/carried.js';
 import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence, isBlockingBarrier } from '../output/disclosure.js';
+import { unconfirmedNotice } from '../output/floor-notice.js';
 import {
   applyNoiseBudget,
   formatCollapsedGroupCount,
@@ -422,6 +423,22 @@ function renderCollapsedFindings(findings: Finding[], config?: UsablConfig): str
   ];
 }
 
+// The floored barriers this run did not see on a screen it cannot show rendered, one notice per
+// screen. Printed only when there is one, because the notice is about debt and a "none" under a
+// heading nobody needs would teach readers to skip it. The sentence names a screen id, which can
+// come from a route literal in the application, so it is framed with the other untrusted text.
+function renderFloorUnconfirmed(result: Result): string[] {
+  const screens = Array.isArray(result.floorUnconfirmed) ? result.floorUnconfirmed : [];
+  if (screens.length === 0) {
+    return [];
+  }
+  return [
+    '### Recorded barriers not seen',
+    ...framedMarkdownLines(screens.map((entry) => ({ label: 'notice', value: unconfirmedNotice(entry) }))),
+    '',
+  ];
+}
+
 function renderCoverageGaps(result: Result): string[] {
   if (!Array.isArray(result.coverage.gaps)) {
     return ['### Coverage gaps', NOT_A_LIST];
@@ -573,6 +590,7 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
     '',
     ...findingSections,
     '',
+    ...renderFloorUnconfirmed(safe),
     ...renderCoverageGaps(safe),
     '',
     ...renderAnnouncements(safe),

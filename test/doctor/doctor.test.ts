@@ -367,6 +367,100 @@ describe('collectDoctorReport', () => {
   });
 });
 
+/**
+ * A screen that holds floored debt and declares no reachedWhen signal can never have that debt
+ * claimed fixed: a fixed barrier and content that never mounted look the same to the run. Doctor
+ * says which screens those are and what to add, so the operator does not learn it one notice at a
+ * time.
+ */
+describe('readiness signals for screens with floored debt', () => {
+  const entry = (screenId: string, rule: string, count = 1): object => ({
+    screenId, layer: 'axe', rule, elementKey: null, identityBasis: 'count', count,
+  });
+  const floorWith = (...entries: object[]): string => JSON.stringify({ version: 2, entries });
+  const configWithSurfaces = (surfaces: object[]): string =>
+    JSON.stringify({ ...(JSON.parse(VALID_CONFIG) as object), surfaces });
+  const surface = (id: string, reachedWhen?: unknown): object => ({
+    id, url: `http://127.0.0.1:5173/${id}`, files: [`fixtures/app/src/${id}.tsx`],
+    ...(reachedWhen === undefined ? {} : { reachedWhen }),
+  });
+  const report = async (files: Record<string, string>): Promise<SurfaceReport> =>
+    byId(
+      await collectDoctorReport(doctorDeps({ fs: readOnlyFs(files), gh: GH_VERIFIED, configPath: 'usabl.config.json' })),
+      'readiness-signals',
+    );
+
+  it('recommends a signal for every screen that holds floored debt and declares none', async () => {
+    const found = await report({
+      'usabl.config.json': configWithSurfaces([surface('orders'), surface('users', '#users-table'), surface('jobs')]),
+      // home comes from routes, not from a surface, so it has nowhere to declare one yet.
+      '.usabl-evidence.json': floorWith(entry('orders', 'button-name', 2), entry('users', 'link-name'), entry('home', 'image-alt')),
+    });
+    expect(found.state).toBe('missing');
+    expect(found.nextStep).toContain('home, orders');
+    expect(found.nextStep).not.toContain('users');
+    expect(found.nextStep).not.toContain('jobs');
+    expect(found.nextStep).toContain('reachedWhen');
+    expect(found.nextStep).toContain('usabl.config.json');
+  });
+
+  it('is wired when every screen with floored debt declares a signal', async () => {
+    const found = await report({
+      'usabl.config.json': configWithSurfaces([surface('orders', { response: '/api/orders' })]),
+      '.usabl-evidence.json': floorWith(entry('orders', 'button-name')),
+    });
+    expect(found.state).toBe('wired');
+    expect(found.nextStep).toBe('');
+  });
+
+  it('is wired when the floor holds no debt', async () => {
+    const found = await report({ 'usabl.config.json': configWithSurfaces([surface('orders')]), '.usabl-evidence.json': floorWith() });
+    expect(found.state).toBe('wired');
+  });
+
+  it('redacts a token-shaped screen id', async () => {
+    const found = await report({
+      'usabl.config.json': configWithSurfaces([surface('orders')]),
+      '.usabl-evidence.json': floorWith(entry('orders?token=SECRETPOISON', 'button-name')),
+    });
+    expect(found.nextStep).toContain('[REDACTED]');
+    expect(found.nextStep).not.toContain('SECRETPOISON');
+  });
+
+  it('says a signal is one way to confirm a fix and a matching element seen on the run is the other', async () => {
+    const found = await report({
+      'usabl.config.json': configWithSurfaces([surface('orders')]),
+      '.usabl-evidence.json': floorWith(entry('orders', 'button-name')),
+    });
+    expect(found.nextStep).not.toMatch(/never (be )?claimed fixed/);
+    expect(found.nextStep).toContain('readiness signal is the other way to confirm');
+    expect(found.nextStep).toContain('matching element');
+  });
+
+  it('gives docs pages guidance that works for them, since a docs page cannot declare a signal', async () => {
+    const docs = JSON.stringify({
+      format: 'asciidoc-modular', docsBaseUrl: 'http://localhost:8080/docs', builtRoot: 'build/html', buildCommand: null,
+      pages: [{ pageId: 'install-guide', url: '/install.html', assemblyFile: 'modules/install.adoc', sources: ['modules/install.adoc'] }],
+      sharedGlobs: [],
+    });
+    const found = await report({
+      'usabl.config.json': configWithSurfaces([surface('orders', '#orders')]),
+      'usabl.docs.json': docs,
+      'modules/install.adoc': '= Install\n',
+      '.usabl-evidence.json': floorWith(entry('install-guide', 'image-alt')),
+    });
+    // No surfaces entry for a docs page: the planner refuses a docs page id that is also a surface id.
+    expect(found.nextStep).not.toContain('surfaces entry');
+    expect(found.nextStep).toContain('install-guide');
+    expect(found.nextStep).toContain('usabl floor prune --unconfirmed');
+  });
+
+  it('cannot confirm anything when the floor does not parse', async () => {
+    const found = await report({ 'usabl.config.json': VALID_CONFIG, '.usabl-evidence.json': '{not json' });
+    expect(found.state).toBe('unknown');
+  });
+});
+
 describe('authenticated session surface', () => {
   it('reports a readable storage state as wired', async () => {
     const reports = await collectDoctorReport(
@@ -767,6 +861,30 @@ export default defineConfig({
       configPath: 'usabl.config.json',
       }),
     );
+    expect(stateOf(reports, 'waivers')).toBe('drifted');
+  });
+
+  it('reports an evidence floor and a waiver ledger whose screen ids the id grammar refuses as drifted', async () => {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+      fs: readOnlyFs({
+        '.usabl-evidence.json': JSON.stringify({
+          version: 2,
+          entries: [{ screenId: 'a\u200bb', layer: 'axe', rule: 'r', elementKey: null, identityBasis: 'count', count: 1 }],
+        }),
+        '.usabl-waivers.json': JSON.stringify({
+          version: 1,
+          waivers: [{
+            rule: 'r', surface: 'a\u200bb', scope: '*', reason: 'x', owner: 'o', approvedBy: 'p',
+            created: '2026-01-01T00:00:00.000Z', expires: '2027-01-01T00:00:00.000Z',
+          }],
+        }),
+      }),
+      gh: GH_UNAVAILABLE,
+      configPath: 'usabl.config.json',
+      }),
+    );
+    expect(stateOf(reports, 'evidence-floor')).toBe('drifted');
     expect(stateOf(reports, 'waivers')).toBe('drifted');
   });
 

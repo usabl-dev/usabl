@@ -8,6 +8,7 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
 import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page, ReadinessOutcome, ReadinessProbe } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
+import { createLiveResolver } from '../providers/rulepack/live-value.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
 // Ansible Automation Platform screen measured 12.4 s to network idle plus 13.3 s to a DOM that
@@ -95,8 +96,43 @@ const PATH_FOR_IMPL = `
 // at once. It records the text of a live region each time something inside it changes, and
 // window.__usablDrain hands back what it recorded since the last drain. It runs in the live world
 // below, so window here is that world's global, never the page's.
+//
+// What counts as live comes from the resolver pf-toast-live-region uses, carried in as its own
+// source. A CSS selector for live regions cannot do this: it matches aria-live="off" and any odd
+// token, and it cannot see an off wrapper between a polite region and the text that changed. The
+// capture used one, so it recorded text no screen reader would speak, and a flow requirement that
+// expected that text passed. The walk follows the flat tree the way the rule's walk does, so a
+// slotted element climbs through its slot. A change whose live region sits in a different tree
+// from it is not recorded; see the observer below.
 const LIVE_CAPTURE_IMPL = `
-  const LIVE = '[aria-live],[role="status"],[role="alert"],[role="log"]';
+  const liveResolver = (${createLiveResolver.toString()})();
+  const flatParent = (element) => {
+    if (element.assignedSlot) {
+      return element.assignedSlot;
+    }
+    const parent = element.parentNode;
+    if (parent instanceof Element) {
+      return parent;
+    }
+    if (parent instanceof ShadowRoot) {
+      return parent.host;
+    }
+    return null;
+  };
+  // The element whose region the change belongs to: the nearest one that sets a live value, when
+  // that value is polite or assertive. Null when the change is not live.
+  const liveHost = (start) => {
+    const elements = [];
+    const chain = [];
+    for (let current = start; current instanceof Element; current = flatParent(current)) {
+      elements.push(current);
+      chain.push({ ariaLive: current.getAttribute('aria-live'), role: current.getAttribute('role') });
+    }
+    if (liveResolver.effectiveLiveValue(chain) === 'off') {
+      return null;
+    }
+    return elements[liveResolver.nearestLiveSetter(chain)] ?? null;
+  };
   const buffer = [];
   const toText = (value) => {
     const normalized = (value ?? '').trim();
@@ -118,8 +154,14 @@ const LIVE_CAPTURE_IMPL = `
     }
     for (const mutation of mutations) {
       const target = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
-      const host = target && target.closest ? target.closest(LIVE) : null;
-      if (host) {
+      const host = target ? liveHost(target) : null;
+      // A host in another tree is a live region inside a shadow root that the changed element is
+      // slotted into. Its own text leaves out the slotted text that changed and holds text the
+      // change did not make speakable, such as slot fallback text and shadow-only text. A flow
+      // requirement matches the text exactly, so recording it could pass on words no screen
+      // reader spoke for this change. The change is dropped instead: hearing less can only fail a
+      // requirement, never pass one.
+      if (host && host.getRootNode() === target.getRootNode()) {
         push(host.textContent);
       }
     }
@@ -805,7 +847,10 @@ function readinessTimeout(phase: string, timeoutMs: number, detail: string): str
  * readyWhen closes that pause for a screen that declares a readiness selector. Its probe is asked
  * only at a moment when the DOM is stable and the network is quiet, and the loop keeps waiting
  * until it answers true, until readyWhen.timeoutMs has passed since the first such moment, or until
- * the budget runs out, whichever comes first. The cap is counted from the first settled moment,
+ * the budget runs out, whichever comes first. A true answer only ends the wait when the page reads
+ * the same after the probe as before it: the same element count and a network still quiet. A page
+ * that mounted its content while the probe ran was not settled when the probe looked, so the wait
+ * goes on, inside the same cap and budget. The cap is counted from the first settled moment,
  * never restarts, and is checked on every pass whether or not the page is settled, and no sleep
  * runs past it, so a page that keeps changing cannot stretch it. A probe that throws reads as false.
  *
@@ -835,21 +880,38 @@ export async function waitForRendered(
   let previous: number | null = null;
   let repeats = 0;
   for (;;) {
-    const elements = await pw.evaluate(() => document.getElementsByTagName('*').length);
+    let elements = await pw.evaluate(() => document.getElementsByTagName('*').length);
     repeats = elements === previous ? repeats + 1 : 1;
     previous = elements;
 
-    const domStable = repeats >= SETTLE_SAMPLES_REQUIRED;
+    let domStable = repeats >= SETTLE_SAMPLES_REQUIRED;
     // Read live every pass, so a request that started since the last read resets the window.
-    const networkQuiet = pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS);
-    const settled = domStable && networkQuiet;
+    let networkQuiet = pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS);
+    let settled = domStable && networkQuiet;
     if (settled) {
       if (readyWhen === undefined) {
         return { signal: 'not-declared' };
       }
       signalDeadline ??= Date.now() + readyWhen.timeoutMs;
       if (await signalHolds(readyWhen.holds)) {
-        return { signal: 'held' };
+        // The probe takes time, and the page can mount its content while it runs. The sample
+        // before the probe then describes a page that is gone, so the answer only counts when the
+        // page reads the same after it: the same element count, with the network still quiet.
+        // Otherwise the wait goes on. A changed count starts a new run of equal reads, and a busy
+        // network has to go quiet again.
+        const after = await pw.evaluate(() => document.getElementsByTagName('*').length);
+        const quietAfter = pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS);
+        if (after === elements && quietAfter) {
+          return { signal: 'held' };
+        }
+        if (after !== elements) {
+          repeats = 1;
+          previous = after;
+          elements = after;
+          domStable = false;
+        }
+        networkQuiet = quietAfter;
+        settled = false;
       }
     }
     // Checked on every pass, settled or not, so DOM changes after the first settled moment cannot
@@ -1065,13 +1127,13 @@ function wrapPage(
  * caller owns the page and its context, so adoption must never close them. Navigation and readiness
  * are the caller's job.
  *
- * The in-flight tracker starts at adoption, so it counts only requests fired after this call. The
- * one caller today, checkPage in playwright-helper.ts, never calls gotoReady, so this is inert. A
- * future caller that adopts a page mid-load and then calls gotoReady expecting the pre-adoption
- * requests to count would read idle at once and could return on a half-rendered page. Such a caller
- * must adopt before it navigates, or wait for readiness itself.
+ * The in-flight tracker starts at adoption, so it counts only requests fired after this call. A
+ * caller that adopts a page mid-load and then calls gotoReady would read the network as idle at once
+ * and lean on the DOM half of readiness alone. checkPage calls gotoReady only for a screen that
+ * declares a readiness signal, and the signal is what tells it the screen rendered. The response
+ * record starts at adoption too, so a response the page received before it was adopted is not in it.
  */
-export async function adoptPage(pw: PwPage): Promise<Page> {
+export async function adoptPage(pw: PwPage, options: { readyTimeoutMs?: number } = {}): Promise<Page> {
   const context = pw.context();
   const cdp = await context.newCDPSession(pw);
   await cdp.send('Accessibility.enable');
@@ -1083,8 +1145,8 @@ export async function adoptPage(pw: PwPage): Promise<Page> {
   // The caller already navigated, so this tracker starts counting from adoption forward. A caller
   // that then uses gotoReady gets readiness measured against requests fired after adoption.
   const network = makeNetworkActivityTracker(pw);
-  // Adoption has no operator config to read, so a caller that does use gotoReady gets the default.
-  const page = wrapPage(pw, context, cdp, readyTimeoutMsFor({}), network);
+  // A caller that read the operator config passes its readiness budget; any other gets the default.
+  const page = wrapPage(pw, context, cdp, readyTimeoutMsFor(options), network);
   return { ...page, close: async (): Promise<void> => {} };
 }
 
@@ -1154,6 +1216,12 @@ export function redactStorageStatePath(error: unknown, storageStatePath: string 
   );
 }
 
+// One launched process and the newContext failures in a row it has had.
+interface ProcessHandle {
+  process: LaunchedBrowser;
+  contextFailures: number;
+}
+
 export function makeSharedBrowser(
   ports: { launch?: () => Promise<LaunchedBrowser>; maxContextFailures?: number } = {},
 ): SharedBrowser {
@@ -1164,46 +1232,53 @@ export function makeSharedBrowser(
   // later scan in the dev session.
   const maxContextFailures = ports.maxContextFailures ?? 3;
 
-  let browser: LaunchedBrowser | null = null;
+  // The process in use, with its own count of newContext failures in a row. The count lives on the
+  // handle, not beside it, so it always describes one process. An open that was waiting on a
+  // process when that process was replaced still settles later, and its failure or success must
+  // land on the process it asked, not on the one that replaced it. A relaunch starts at zero
+  // because it is a new handle.
+  let current: ProcessHandle | null = null;
   // One launch at a time. Two opens that both find no process share this promise rather than each
   // launching a process, which would leave one of them running with nothing holding it.
-  let launching: Promise<LaunchedBrowser> | null = null;
+  let launching: Promise<ProcessHandle> | null = null;
   // Once closed, stays closed. An open after close rejects rather than launching a new process that
   // nothing would ever close.
   let closed = false;
-  let contextFailures = 0;
+  // One close for every caller. Two close requests can arrive together, such as the dev server's
+  // close event and the bundle backstop, and the second must not resolve before the process is
+  // closed.
+  let closing: Promise<void> | null = null;
 
   const closedError = (): Error =>
     new Error('usabl shared browser is closed; the dev server has shut down and no scan can open a page');
 
-  // Drop a process reference, but only the one the caller saw. A concurrent open may already have
-  // replaced it, and that replacement must not be dropped by mistake.
-  const discard = async (which: LaunchedBrowser): Promise<void> => {
-    if (browser !== which) {
+  // Drop a process, but only the one the caller saw. A concurrent open may already have replaced
+  // it, and that replacement must not be dropped by mistake.
+  const discard = async (which: ProcessHandle): Promise<void> => {
+    if (current !== which) {
       return;
     }
-    browser = null;
-    contextFailures = 0;
+    current = null;
     // The process may already be gone. close() only releases what is left on this side.
-    await which.close().catch(() => undefined);
+    await which.process.close().catch(() => undefined);
   };
 
-  const acquire = async (): Promise<LaunchedBrowser> => {
+  const acquire = async (): Promise<ProcessHandle> => {
     if (closed) {
       throw closedError();
     }
-    if (browser !== null && !browser.isConnected()) {
-      await discard(browser);
+    if (current !== null && !current.process.isConnected()) {
+      await discard(current);
     }
-    if (browser !== null) {
-      return browser;
+    if (current !== null) {
+      return current;
     }
     if (launching === null) {
       launching = launch()
         .then((launched) => {
-          browser = launched;
-          contextFailures = 0;
-          return launched;
+          const handle: ProcessHandle = { process: launched, contextFailures: 0 };
+          current = handle;
+          return handle;
         })
         .finally(() => {
           launching = null;
@@ -1219,7 +1294,8 @@ export function makeSharedBrowser(
   };
 
   const openPage = async (url: string, options: RealBrowserOptions): Promise<Page> => {
-    const launched = await acquire();
+    const handle = await acquire();
+    const launched = handle.process;
     const readyTimeoutMs = readyTimeoutMsFor(options);
 
     let context: Awaited<ReturnType<LaunchedBrowser['newContext']>>;
@@ -1228,15 +1304,15 @@ export function makeSharedBrowser(
         options.storageStatePath === undefined ? {} : { storageState: options.storageStatePath },
       );
     } catch (error) {
-      contextFailures += 1;
+      handle.contextFailures += 1;
       // A process that has died, or one that stays connected but cannot make a context any more,
       // is forgotten so the next open launches a fresh one instead of failing forever.
-      if (!launched.isConnected() || contextFailures >= maxContextFailures) {
-        await discard(launched);
+      if (!launched.isConnected() || handle.contextFailures >= maxContextFailures) {
+        await discard(handle);
       }
       throw redactStorageStatePath(error, options.storageStatePath);
     }
-    contextFailures = 0;
+    handle.contextFailures = 0;
 
     // From here a context exists. Any failure below must close it, or an authenticated page opened
     // from the run's storage state stays alive with nothing holding it.
@@ -1260,7 +1336,7 @@ export function makeSharedBrowser(
       // open relaunches instead of failing against a dead reference. A failure with the process
       // still connected is the page's own problem and the process stays.
       if (!launched.isConnected()) {
-        await discard(launched);
+        await discard(handle);
       }
       // Belt and braces. Nothing below newContext reads the storage state file, so no error here
       // should carry the path, but this is the last point before the message becomes a coverage
@@ -1277,18 +1353,21 @@ export function makeSharedBrowser(
         close: async () => {},
       };
     },
-    async close(): Promise<void> {
+    close(): Promise<void> {
       closed = true;
-      if (launching !== null) {
-        // A launch is in flight. Wait for it so the process it produces is the one closed here,
-        // rather than left running because close() looked before it existed.
-        await launching.catch(() => undefined);
-      }
-      const open = browser;
-      browser = null;
-      if (open !== null) {
-        await open.close();
-      }
+      closing ??= (async (): Promise<void> => {
+        if (launching !== null) {
+          // A launch is in flight. Wait for it so the process it produces is the one closed here,
+          // rather than left running because close() looked before it existed.
+          await launching.catch(() => undefined);
+        }
+        const open = current;
+        current = null;
+        if (open !== null) {
+          await open.process.close();
+        }
+      })();
+      return closing;
     },
   };
 }

@@ -269,3 +269,70 @@ requirements:
     ]);
   });
 });
+
+describe('run with a requirements file it cannot load', () => {
+  // A requirements file that does not load stops every scan, because policy cannot be half
+  // applied. The loader returns why, and the run used to drop that reason: the operator saw a
+  // guarded path and an approval request, and nothing said the file was broken or how.
+  const configJson = JSON.stringify({
+    appBaseUrl: config.appBaseUrl,
+    uiFileGlobs: config.uiFileGlobs,
+    discovery: config.discovery,
+    surfaces: config.surfaces,
+    requirements: 'requirements/',
+    guardedPaths: config.guardedPaths,
+  });
+  // The note line carries a low-entropy token so the test can see whether the parser's quote of
+  // the file reaches the gap.
+  const brokenYaml = [
+    'version: 1',
+    'requirements:',
+    '  - id: welcome-heading',
+    '    note: token=SECRETPOISON',
+    '  broken: [1, 2',
+    '',
+  ].join('\n');
+
+  function depsWith(changed: string[]) {
+    const files = { 'usabl.config.json': configJson, 'requirements/bad.yaml': brokenYaml };
+    return makeFakeDeps({
+      files,
+      headContents: { ...files },
+      changed: changed.map((path) => ({ code: 'M', path })),
+      scans: { clusters: emptyScan() },
+    });
+  }
+
+  it('reports the loader reason as a not-covered gap that names the file', async () => {
+    const result = await run(depsWith(['fixtures/app/src/ClustersPage.tsx']), config);
+    const gap = result.coverage.gaps.find((entry) => entry.ref === 'requirements/bad.yaml');
+
+    expect(result.verdict).toBe('approval_required');
+    expect(gap?.state).toBe('not-covered');
+    expect(gap?.reason).toContain('requirements/bad.yaml');
+    expect(gap?.reason).toContain('intake YAML is invalid');
+    expect(gap?.reason).toMatch(/no screen was scanned/i);
+  });
+
+  it('never reads as verified accessibility when nothing was scanned', async () => {
+    const result = await run(depsWith(['fixtures/app/src/ClustersPage.tsx']), config);
+
+    expect(result.screens).toEqual([]);
+    expect(result.accessibilityVerdict).toBe('not_covered');
+    expect(result.accessibilityExitCode).toBe(3);
+  });
+
+  it('never quotes a secret from the file in the gap', async () => {
+    const result = await run(depsWith(['fixtures/app/src/ClustersPage.tsx']), config);
+
+    expect(JSON.stringify(result.coverage.gaps)).not.toContain('SECRETPOISON');
+    expect(result.coverage.gaps.some((entry) => entry.ref === 'requirements/bad.yaml')).toBe(true);
+  });
+
+  it('shows the reason even when no UI file changed', async () => {
+    const result = await run(depsWith(['README.md']), config);
+
+    expect(result.verdict).toBe('approval_required');
+    expect(result.coverage.gaps.map((entry) => entry.ref)).toContain('requirements/bad.yaml');
+  });
+});

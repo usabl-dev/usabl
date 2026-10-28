@@ -3,8 +3,18 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import type { Page as UsablPage, Provider, SurfaceConfig } from '../../src/contracts/index.js';
+import type {
+  BrowserDriver,
+  EvidenceFloor,
+  GateOutput,
+  Page as UsablPage,
+  Provider,
+  ScreenScan,
+  SurfaceConfig,
+} from '../../src/contracts/index.js';
 import { buildDeps } from '../../src/deps/build.js';
+import { gate, renderEvidenceOf } from '../../src/gate/index.js';
+import { computeIdentity, identityKey } from '../../src/primitives/identity.js';
 import { LIVE_WORLD, adoptPage, makeRealBrowserDriver } from '../../src/deps/real.js';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
 import { axeProvider } from '../../src/providers/axe/index.js';
@@ -59,12 +69,22 @@ interface FixtureServer {
   // A shell that pauses, mounts the orders table from a 200 JSON answer, and 800 ms later replaces
   // itself with a magic-link sign-in form. The table never holds still; the sign-in form does.
   swapToSignInUrl: string;
+  // A header, a navigation, and a heading that always mount, and a table of orders that mounts only
+  // with ?content=ok or ?content=broken. With ?content=fail its mount throws and nothing replaces it.
+  partialRenderUrl: string;
+  // A shell that pauses, mounts table#orders, and in the same task asks for details the server
+  // answers slowly. The answer mounts a button with no accessible name.
+  detailsAfterSignalUrl: string;
   close: () => Promise<void>;
 }
 
 async function readFixture(name: string): Promise<string> {
   return readFile(fileURLToPath(new URL(`../../fixtures/live/${name}`, import.meta.url)), 'utf8');
 }
+
+// How long the server takes to answer /api/slow/. Far longer than a walk and the checks of a small
+// page, so a scan that starts before the answer lands finishes before it too.
+const SLOW_ANSWER_MS = 4_000;
 
 async function makeFixtureServer(): Promise<FixtureServer> {
   const html = await readFixture('labelledby.html');
@@ -83,6 +103,8 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     '/fetch-on-focus.html': await readFixture('fetch-on-focus.html'),
     '/frozen-pause.html': await readFixture('frozen-pause.html'),
     '/swap-to-sign-in.html': await readFixture('swap-to-sign-in.html'),
+    '/partial-render.html': await readFixture('partial-render.html'),
+    '/details-after-signal.html': await readFixture('details-after-signal.html'),
   };
   const spaFallback = await readFixture('spa-fallback.html');
   const authWall = await readFixture('auth-wall.html');
@@ -142,6 +164,14 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     if (reqUrl.pathname.startsWith('/spa/')) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(spaFallback);
+      return;
+    }
+    // Data the server takes a while to answer, long enough for a scan to finish before it lands.
+    if (reqUrl.pathname.startsWith('/api/slow/')) {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end('{"details":"ready"}');
+      }, SLOW_ANSWER_MS);
       return;
     }
     // An authentication wall: every address under it answers 200 with the same landing page.
@@ -214,6 +244,8 @@ async function makeFixtureServer(): Promise<FixtureServer> {
     fetchOnFocusUrl: `http://127.0.0.1:${address.port}/fetch-on-focus.html`,
     frozenPauseUrl: `http://127.0.0.1:${address.port}/frozen-pause.html`,
     swapToSignInUrl: `http://127.0.0.1:${address.port}/swap-to-sign-in.html`,
+    partialRenderUrl: `http://127.0.0.1:${address.port}/partial-render.html`,
+    detailsAfterSignalUrl: `http://127.0.0.1:${address.port}/details-after-signal.html`,
     close: async () =>
       new Promise<void>((resolve, reject) => {
         // The hang route leaves a socket open, and server.close() waits for it forever.
@@ -257,6 +289,48 @@ function alwaysFiringProvider(screenId: string): Provider {
       },
     ],
   };
+}
+
+// A probe is several reads of the live page, and on a loaded machine it can take long enough for
+// the page to change under it. This driver wraps a real one so that the first probe of each page
+// waits until the page has mounted the selector before it answers, which makes that timing certain
+// rather than a matter of load. Everything else, readiness included, is the real driver.
+function slowProbeDriver(real: BrowserDriver, selector: string): BrowserDriver {
+  return {
+    open: async (url: string): Promise<UsablPage> => {
+      const page = await real.open(url);
+      let firstProbe = true;
+      return {
+        ...page,
+        gotoReady: (readyWhen) =>
+          page.gotoReady(
+            readyWhen === undefined
+              ? undefined
+              : {
+                  timeoutMs: readyWhen.timeoutMs,
+                  holds: async () => {
+                    if (firstProbe) {
+                      firstProbe = false;
+                      await untilPresent(page, selector);
+                    }
+                    return readyWhen.holds();
+                  },
+                },
+          ),
+      };
+    },
+    close: async () => undefined,
+  };
+}
+
+// Polls until the selector is in the page, for at most ten seconds.
+async function untilPresent(page: UsablPage, selector: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if ((await page.countEverywhere(selector)) > 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
 }
 
 describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver integration', () => {
@@ -355,6 +429,129 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       expect(await page.drainAnnouncements()).toEqual(['Saved']);
     } finally {
       await page.close();
+    }
+  });
+
+  describe('which regions the capture hears', () => {
+    // The capture hears a region only when its effective live value is polite or assertive, the
+    // same way pf-toast-live-region resolves it: the nearest element that sets a value wins, an
+    // explicit aria-live beats the role, and every other aria-live token is off. Each page also
+    // writes "Heard" to a polite region, so an empty list cannot pass by the capture not running.
+    function regionPage(region: string): string {
+      return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title></head><body>
+        <main><button type="button" id="save">Save</button>
+        <div aria-live="polite" id="control"></div>
+        ${region}
+        </main>
+        <script>
+          document.getElementById('save').addEventListener('click', () => {
+            document.getElementById('message').textContent = 'Message';
+            document.getElementById('control').textContent = 'Heard';
+          });
+        </script>
+      </body></html>`;
+    }
+
+    const cases: Array<[string, string]> = [
+      ['an aria-live="off" region', '<div aria-live="off" id="message"></div>'],
+      [
+        'an aria-live="off" wrapper inside a polite region',
+        '<div aria-live="polite"><div aria-live="off"><span id="message"></span></div></div>',
+      ],
+      ['an uppercase aria-live="POLITE" token', '<div aria-live="POLITE" id="message"></div>'],
+      ['an unknown aria-live="banana" token', '<div aria-live="banana" id="message"></div>'],
+      ['an aria-live="off" on a role="status" element', '<div role="status" aria-live="off" id="message"></div>'],
+      [
+        'a role="timer" inside an assertive region',
+        '<div aria-live="assertive"><div role="timer"><span id="message"></span></div></div>',
+      ],
+      [
+        'an off wrapper inside a polite shadow host slot',
+        '<div aria-live="polite"><x-off-slot><span id="message"></span></x-off-slot></div>' +
+          "<script>customElements.define('x-off-slot', class extends HTMLElement { constructor() { super();" +
+          " this.attachShadow({ mode: 'open' }).innerHTML = '<div aria-live=\"off\"><slot></slot></div>'; } });</script>",
+      ],
+    ];
+
+    for (const [name, region] of cases) {
+      it(`does not hear ${name}`, async () => {
+        const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(regionPage(region))}`);
+        try {
+          await page.click('#save');
+          expect(await page.drainAnnouncements()).toEqual(['Heard']);
+        } finally {
+          await page.close();
+        }
+      });
+    }
+
+    const heard: Array<[string, string]> = [
+      ['a role="alert" region with no aria-live', '<div role="alert" id="message"></div>'],
+      ['a role="log" region with no aria-live', '<div role="log" id="message"></div>'],
+      ['a role="STATUS" region, matched without regard to case', '<div role="STATUS" id="message"></div>'],
+      ['an empty aria-live on a role="status" element', '<div role="status" aria-live="" id="message"></div>'],
+      [
+        'a polite region inside an off wrapper',
+        '<div aria-live="off"><div aria-live="polite" id="message"></div></div>',
+      ],
+    ];
+
+    // A light element slotted into a live region inside a shadow root. The region's own text in the
+    // shadow tree leaves out the slotted text that changed and holds text the change did not make
+    // speakable: slot fallback text, and shadow-only text. Recording it would let a flow
+    // requirement pass on text no screen reader speaks for the change, so "Saved" must never be
+    // heard here.
+    const shadowRegions: Array<[string, string]> = [
+      ['slot fallback text', '<div aria-live="polite"><slot>Saved</slot></div>'],
+      ['shadow-only text beside the slot', '<div aria-live="polite"><span>Saved</span><slot></slot></div>'],
+    ];
+    for (const [name, shadowHtml] of shadowRegions) {
+      it(`never hears ${name} of a live region in a shadow root when slotted text changes`, async () => {
+        const region =
+          '<x-live-slot><span id="message"></span></x-live-slot>' +
+          "<script>customElements.define('x-live-slot', class extends HTMLElement { constructor() { super();" +
+          ` this.attachShadow({ mode: 'open' }).innerHTML = ${JSON.stringify(shadowHtml)}; } });</script>`;
+        const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(regionPage(region))}`);
+        try {
+          await page.click('#save');
+          const drained = await page.drainAnnouncements();
+          expect(drained).not.toContain('Saved');
+          expect(drained.some((entry) => entry.includes('Saved'))).toBe(false);
+          expect(drained).toContain('Heard');
+        } finally {
+          await page.close();
+        }
+      });
+    }
+
+    // checkPage adopts a page the caller opened, and the capture it installs there must make the
+    // same call as the one the CLI installs at document start.
+    it('does not hear an off wrapper inside a polite region on an adopted page', async () => {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const pw = await browser.newPage();
+        await pw.setContent(
+          regionPage('<div aria-live="polite"><div aria-live="off"><span id="message"></span></div></div>'),
+          { waitUntil: 'domcontentloaded' },
+        );
+        const page = await adoptPage(pw);
+        await page.click('#save');
+        expect(await page.drainAnnouncements()).toEqual(['Heard']);
+      } finally {
+        await browser.close();
+      }
+    });
+
+    for (const [name, region] of heard) {
+      it(`hears ${name}`, async () => {
+        const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(regionPage(region))}`);
+        try {
+          await page.click('#save');
+          expect([...(await page.drainAnnouncements())].sort()).toEqual(['Heard', 'Message']);
+        } finally {
+          await page.close();
+        }
+      });
     }
   });
 
@@ -1027,10 +1224,11 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       async function scanSwap(
         reachedWhen: SurfaceConfig['reachedWhen'],
         signalTimeoutMs?: number,
+        browser: BrowserDriver = driver,
       ): Promise<{ stops: number; drafts: number; gaps: string[]; elapsedMs: number }> {
         const url = fixture.swapToSignInUrl;
         const runner = makeCheckRunner({
-          browser: driver,
+          browser,
           providers: [alwaysFiringProvider('orders')],
           config: testConfig({
             appBaseUrl: fixture.url,
@@ -1071,6 +1269,17 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
         // cap would fail here.
         expect(result.elapsedMs).toBeLessThan(7_000);
       }, 30_000);
+
+      it('ends the wait at the signal cap when the table mounts while the probe runs', async () => {
+        // The run that made the test above flaky, made certain. The first probe is asked on the
+        // shell and answers only after the table has mounted. That answer is about a page that
+        // changed after its settled sample, so it cannot end the wait. The page swaps to the
+        // sign-in form, the cap runs out, and no walk runs.
+        const result = await scanSwap('table#orders', 3_000, slowProbeDriver(driver, 'table#orders'));
+        expect(result.stops).toBe(0);
+        expect(result.drafts).toBe(0);
+        expect(result.gaps.some((reason) => reason.includes('table#orders') && reason.includes('3000'))).toBe(true);
+      }, 30_000);
     });
 
     for (const pauseMs of PAUSES_MS) {
@@ -1093,6 +1302,135 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
         }
       }, 30_000);
     }
+  });
+
+  describe('a screen whose header mounted and whose content did not', () => {
+    // The floor is what a real axe scan of the broken screen records, built the way baseline builds
+    // it: one entry per identity, with the count of deterministic drafts behind it. The broken
+    // screen's buttons, links, and images have no name. The fixed screen names them all. The failed
+    // screen never renders the table at all.
+    type Content = 'ok' | 'broken' | 'fail';
+
+    async function scanOrders(content: Content, reachedWhen: SurfaceConfig['reachedWhen']): Promise<ScreenScan[]> {
+      const url = `${fixture.partialRenderUrl}?content=${content}`;
+      const runner = makeCheckRunner({
+        browser: driver,
+        providers: [axeProvider],
+        config: testConfig({
+          appBaseUrl: fixture.url,
+          surfaces: [{ id: 'orders', url, files: [], ...(reachedWhen === undefined ? {} : { reachedWhen }) }],
+        }),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+        transcriptTabCap: 5,
+      });
+      return markUnseenScreens([await runner.scan({ id: 'orders', url })]).screens;
+    }
+
+    function floorFrom(screens: ScreenScan[]): EvidenceFloor {
+      const entries = new Map<string, EvidenceFloor['entries'][number]>();
+      for (const draft of screens.flatMap((screen) => screen.drafts)) {
+        if (draft.evidenceClass !== 'deterministic') continue;
+        const { elementKey, identityBasis } = computeIdentity(draft);
+        const key = identityKey({ screenId: draft.screenId, rule: draft.rule, elementKey });
+        const entry = entries.get(key) ?? { screenId: draft.screenId, layer: draft.layer, rule: draft.rule, elementKey, identityBasis, count: 0 };
+        entry.count += 1;
+        entries.set(key, entry);
+      }
+      return { version: 2, entries: [...entries.values()] };
+    }
+
+    function gateOn(screens: ScreenScan[], floor: EvidenceFloor): GateOutput {
+      const url = screens[0]!.url;
+      return gate({
+        coverage: {
+          changedFiles: ['src/OrdersPage.tsx'],
+          affected: [{ screenId: 'orders', url, provenance: 'manual' }],
+          unresolvedFiles: [],
+          gaps: screens.flatMap((screen) => screen.gaps),
+          nothingToCheck: false,
+        },
+        guardDivergedPaths: [],
+        drafts: screens.flatMap((screen) => screen.drafts),
+        floor,
+        waivers: [],
+        now: '2026-01-01T00:00:00.000Z',
+        cleanlyScannedScreens: new Set(screens.filter((s) => s.gaps.length === 0).map((s) => s.screenId)),
+        renderEvidence: renderEvidenceOf(screens),
+      });
+    }
+
+    let floor: EvidenceFloor;
+    beforeAll(async () => {
+      floor = floorFrom(await scanOrders('broken', undefined));
+    }, 30_000);
+
+    it('records the barriers a real axe scan finds in the table', () => {
+      const rules = floor.entries.map((entry) => entry.rule);
+      expect(rules).toContain('button-name');
+      expect(rules).toContain('image-alt');
+      expect(rules).toContain('link-name');
+      // A real axe key, never a hand-written one: the image entry names its element by path.
+      const image = floor.entries.find((entry) => entry.rule === 'image-alt');
+      expect(image?.identityBasis).toBe('structural');
+    });
+
+    it('claims nothing fixed when the content did not mount, keeps the verdict, and gives the notice', async () => {
+      const out = gateOn(await scanOrders('fail', undefined), floor);
+      expect(out.findings.filter((finding) => finding.status === 'fixed')).toEqual([]);
+      expect(out.floorGaps).toEqual([]);
+      expect(out.accessibilityVerdict).toBe('verified');
+      expect(out.floorUnconfirmed).toHaveLength(1);
+      expect(out.floorUnconfirmed[0]!.rules).toEqual([...new Set(floor.entries.map((e) => e.rule))].sort());
+      expect(out.floorUnconfirmed[0]!.barriers).toBe(floor.entries.reduce((total, e) => total + e.count, 0));
+    }, 30_000);
+
+    it('does not claim a genuinely fixed image barrier fixed with no signal, and gives the notice', async () => {
+      // The image is not focusable and the fixed page raises no draft on it, so nothing in the run
+      // meets that element. Fixed and never mounted look the same here, so it is not paid down.
+      const out = gateOn(await scanOrders('ok', undefined), floor);
+      expect(out.findings.some((finding) => finding.status === 'fixed' && finding.rule === 'image-alt')).toBe(false);
+      expect(out.accessibilityVerdict).toBe('verified');
+      expect(out.floorUnconfirmed.flatMap((u) => u.rules)).toContain('image-alt');
+      expect(out.floorUnconfirmed.flatMap((u) => u.rules)).toContain('button-name');
+      expect(out.summary).toContain('not seen, not claimed fixed');
+    }, 30_000);
+
+    it('pays down every barrier on the fixed screen when its signal held', async () => {
+      const out = gateOn(await scanOrders('ok', 'table#orders'), floor);
+      expect(out.floorUnconfirmed).toEqual([]);
+      expect(out.findings.filter((finding) => finding.status === 'fixed').map((f) => f.rule).sort()).toEqual(
+        floor.entries.map((entry) => entry.rule).sort(),
+      );
+      expect(out.accessibilityVerdict).toBe('verified');
+    }, 30_000);
+  });
+
+  describe('a selector that mounts while the readiness probe runs', () => {
+    it('reports the barrier that mounts after the selector, from a request the selector started', async () => {
+      // The table mounts while the probe runs, and in the same task the page asks for details the
+      // server answers four seconds later. The answer mounts a button with no accessible name. A
+      // wait that reported held on the probe alone handed the scan a page still loading: the walk
+      // and the checks ran before the button existed, the table was still there after them, and
+      // the screen came out clean with no gap.
+      const url = fixture.detailsAfterSignalUrl;
+      const runner = makeCheckRunner({
+        browser: slowProbeDriver(driver, 'table#orders'),
+        providers: [axeProvider],
+        config: testConfig({
+          appBaseUrl: fixture.url,
+          surfaces: [{ id: 'orders', url, files: [], reachedWhen: 'table#orders' }],
+        }),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+        transcriptTabCap: 5,
+      });
+      const pass = markUnseenScreens([await runner.scan({ id: 'orders', url })]);
+      const screen = pass.screens[0];
+      expect(pass.unseenScreenIds).toEqual([]);
+      expect(screen?.gaps ?? []).toEqual([]);
+      expect((screen?.drafts ?? []).map((draft) => draft.rule)).toContain('button-name');
+    }, 30_000);
   });
 
   it('returns null for ignored or missing AX nodes', async () => {

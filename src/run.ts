@@ -30,14 +30,14 @@ import { computeDocsCoverage } from './coverage/docs-planner.js';
 import { markUnseenScreens } from './coverage/unseen.js';
 import { mapFindingToSource, type DocsPageClosure } from './docs/source-map.js';
 import { enrichAppFindings } from './app/source-map.js';
-import { gate } from './gate/index.js';
+import { gate, renderEvidenceOf } from './gate/index.js';
 import { mintReceipt, summarizeApplicability } from './evidence/receipt.js';
 import { parseEvidenceFloor } from './evidence/floor.js';
+import { parseWaiver } from './evidence/waivers.js';
 import { parseUsablConfig } from './intake/config.js';
 import { loadRequirements } from './intake/load.js';
 import { overlayRequirementsFs } from './intake/overlay-fs.js';
 import { unknownSurfaceGapsForRun } from './intake/requirement-surfaces.js';
-import { assertIso8601Utc } from './primitives/iso8601.js';
 import { checkGuard } from './trust/guard.js';
 
 // Declared here rather than imported from baseline/, which imports run() and would cycle.
@@ -55,34 +55,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function parseWaiver(value: unknown): Waiver {
-  if (!isRecord(value)) {
-    throw new Error('waiver entry must be an object');
-  }
-
-  const rule = value['rule'];
-  const surface = value['surface'];
-  const scope = value['scope'];
-  const reason = value['reason'];
-  const owner = value['owner'];
-  const approvedBy = value['approvedBy'];
-  const created = value['created'];
-  const expires = value['expires'];
-
-  if (typeof rule !== 'string') throw new Error('waiver rule must be a string');
-  if (typeof surface !== 'string') throw new Error('waiver surface must be a string');
-  if (typeof scope !== 'string') throw new Error('waiver scope must be a string');
-  if (typeof reason !== 'string') throw new Error('waiver reason must be a string');
-  if (typeof owner !== 'string') throw new Error('waiver owner must be a string');
-  if (typeof approvedBy !== 'string') throw new Error('waiver approvedBy must be a string');
-  if (typeof created !== 'string') throw new Error('waiver created must be a string');
-  if (typeof expires !== 'string') throw new Error('waiver expires must be a string');
-  assertIso8601Utc(created, 'waiver created');
-  assertIso8601Utc(expires, 'waiver expires');
-
-  return { rule, surface, scope, reason, owner, approvedBy, created, expires };
-}
-
 // Exported so the read-only doctor projection can report waiver-ledger parse health without
 // re-implementing a weaker validator. run() stays the only caller that acts on the result.
 export function parseWaiverLedger(value: unknown): WaiverLedger {
@@ -96,7 +68,7 @@ export function parseWaiverLedger(value: unknown): WaiverLedger {
   if (!Array.isArray(waiversRaw)) {
     throw new Error('waiver ledger waivers must be an array');
   }
-  return { version: 1, waivers: waiversRaw.map((waiver) => parseWaiver(waiver)) };
+  return { version: 1, waivers: waiversRaw.map((waiver, index) => parseWaiver(waiver, index)) };
 }
 
 async function readJson(read: (path: string) => Promise<string | null>, path: string): Promise<unknown | null> {
@@ -112,8 +84,10 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const scanConfigResolution = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
     const scanConfig = scanConfigResolution.config;
     const coverageFs = overlayUntrustedManifests(deps, guardDivergedPaths, opts.trustedRef);
-    const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed);
+    // Parsed once and handed to both planners, so the screen id check and the docs plan read the
+    // same manifest and the file is read once per run.
     const docsManifest = await parseDocsManifest(coverageFs);
+    const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed, docsManifest);
     const docsCoverage = computeDocsCoverage(docsManifest, changed);
     const affected = [...discoveredCoverage.affected, ...docsCoverage.affected];
     // Idle means nothing UI-touching changed. A run whose scan configuration could not be read
@@ -130,7 +104,10 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const intakePolicyPaths =
       loadedRequirements.ok
         ? []
-        : [loadedRequirements.path ?? config.requirements ?? 'requirements'].filter((path) => path.length > 0);
+        : [intakeFailurePath(loadedRequirements.path, config)].filter((path) => path.length > 0);
+    const intakeGap = loadedRequirements.ok
+      ? null
+      : unloadableRequirementsGap(intakeFailurePath(loadedRequirements.path, config), loadedRequirements.reason);
     const policyDivergedPaths = [...new Set([...guardDivergedPaths, ...intakePolicyPaths])].sort();
 
     // Malformed intake cannot self-grade. The harness stays closed until policy is valid.
@@ -185,6 +162,8 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
         // First, so the surfaces that name one example per gap state name this one. It explains
         // why no app screen appears on this run. Docs screens can still appear below it.
         ...(scanConfigResolution.unreadable === null ? [] : [scanConfigResolution.unreadable]),
+        // Next, because it explains why no screen at all was scanned on this run.
+        ...(intakeGap === null ? [] : [intakeGap]),
         ...discoveredCoverage.gaps,
         ...docsCoverage.gaps,
         ...screens.flatMap((screen) => screen.gaps),
@@ -212,6 +191,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
         accessibilityExitCode: 4,
         paidDownCount: 0,
         floorHeadroom: [],
+        floorUnconfirmed: [],
       };
     }
 
@@ -232,6 +212,9 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       waivers,
       now: deps.clock(),
       cleanlyScannedScreens,
+      // What each screen showed of itself, so the gate can tell a fixed floored barrier from one in
+      // content that never mounted. See GateInput.renderEvidence.
+      renderEvidence: renderEvidenceOf(screens),
     });
 
     // The gate is the only unit that counts the evidence floor, so it is the only one that can see
@@ -265,8 +248,8 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
         : null;
 
     // Count the floored barriers this run did not observe. The gate marks an identity `fixed` only
-    // when its screen was scanned cleanly and the barrier was not seen, so every `fixed` finding
-    // here is an observed absence. Whether it was fixed is not knowable from here, because a screen
+    // when its screen was scanned cleanly, the run shows the barrier's part of the page rendered,
+    // and the barrier was not seen, so every `fixed` finding here is an observed absence. Whether it was fixed is not knowable from here, because a screen
     // rendering fewer rows produces the same absence, and the surfaces word it that way. Counting
     // the status directly keeps this on
     // the same single definition the gate used, rather than re-deriving the cleanly-scanned filter.
@@ -286,6 +269,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       accessibilityExitCode: gated.accessibilityExitCode,
       paidDownCount,
       floorHeadroom: gated.floorHeadroom,
+      floorUnconfirmed: gated.floorUnconfirmed,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -305,6 +289,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
       accessibilityExitCode: 4,
       paidDownCount: 0,
       floorHeadroom: [],
+      floorUnconfirmed: [],
     };
   }
 }
@@ -416,6 +401,35 @@ async function scanConfigForCoverage(
       unreadable: unreadableScanConfigGap(trustedRef, message),
     };
   }
+}
+
+// The file the loader refused, or the configured root when it named none. The same value is the
+// guarded path this run reports as changed, so the gap and that list name one file.
+function intakeFailurePath(loaderPath: string | undefined, config: UsablConfig): string {
+  return loaderPath ?? config.requirements ?? 'requirements';
+}
+
+/**
+ * The disclosure owed when the requirements could not be loaded.
+ *
+ * A requirements file that does not load stops every scan, because policy cannot be half applied,
+ * and the run already asks for approval on that path. Without this the reason the loader returned
+ * was dropped, so the operator saw a guarded path and no word on what was wrong with it. The gap
+ * also keeps the accessibility half honest: no screen was scanned, so it is not covered, never
+ * verified.
+ *
+ * The loader reason names the file and is already scrubbed. It can quote a line of the YAML file
+ * when the parser reports one, never page text, because no page was opened.
+ */
+function unloadableRequirementsGap(path: string, loaderReason: string): CoverageGap {
+  return {
+    ref: path,
+    state: 'not-covered',
+    reason:
+      `usabl could not load the design requirements: ${loaderReason}. Requirements are policy, and ` +
+      'policy is never applied in part, so no screen was scanned on this run and it cannot verify ' +
+      'accessibility. Fix the requirements file, then run usabl again.',
+  };
 }
 
 function overlayUntrustedManifests(

@@ -139,7 +139,14 @@ describe('stale floor headroom', () => {
     // before. The floor entry still holds capacity for both barriers until a prune removes it,
     // which is the whole re-arm window, so it is the largest headroom there is and not the
     // absence of headroom. Omitting it hid the widest case.
-    const out = gate({ ...base, floor: dialogFloor(2), drafts: [] });
+    // The screen's readiness signal held, so the absence is a fix and not a dialog that never
+    // mounted.
+    const out = gate({
+      ...base,
+      floor: dialogFloor(2),
+      drafts: [],
+      renderEvidence: new Map([['clusters', { signalHeld: true, elementSlots: new Set<string>() }]]),
+    });
 
     expect(out.findings).toHaveLength(1);
     expect(out.findings[0]!.status).toBe('fixed');
