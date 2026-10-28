@@ -35,8 +35,16 @@ const STATES: Array<{ name: string; result: Result; word: string; exit: number }
     word: 'APPROVAL REQUIRED',
     exit: 2,
   },
-  { name: 'idle', result: baseResult({ verdict: null, exitCode: 0 }), word: 'NO VERDICT: IDLE', exit: 0 },
+  {
+    name: 'idle',
+    result: baseResult({ verdict: null, exitCode: 0, coverage: { ...baseResult({}).coverage, nothingToCheck: true } }),
+    word: 'NO VERDICT: IDLE',
+    exit: 0,
+  },
   { name: 'crash', result: baseResult({ verdict: null, exitCode: 4 }), word: 'NO VERDICT: RUN FAILED', exit: 4 },
+  // A null verdict on a run that had something to check and did not crash. Only a Result composed
+  // outside run() has this shape, and it proved nothing, so it is neither idle nor a pass.
+  { name: 'no verdict', result: baseResult({ verdict: null, exitCode: 0 }), word: 'NO VERDICT', exit: 0 },
 ];
 
 describe('describeVerdict', () => {
@@ -63,8 +71,8 @@ describe('describeVerdict', () => {
     expect(new Set(lines.map((line) => line.symbol)).size).toBe(STATES.length);
   });
 
-  it('never lets idle or a failed run name the word verified', () => {
-    for (const name of ['idle', 'crash']) {
+  it('never lets idle, a failed run, or a run with no verdict name the word verified', () => {
+    for (const name of ['idle', 'crash', 'no verdict']) {
       const state = STATES.find((entry) => entry.name === name)!;
       const line = describeVerdict(state.result);
       const text = `${formatVerdictLine(line)} ${line.meaning}`.toLowerCase();
@@ -84,6 +92,20 @@ describe('describeVerdict', () => {
     expect(idle.word).toContain('IDLE');
     expect(idle.word).not.toContain('FAILED');
     expect(crash.meaning).not.toBe(idle.meaning);
+  });
+
+  it('reads idle only when there was nothing to check', () => {
+    // A null verdict with nothingToCheck false is a run that had something to check and reached no
+    // verdict. Printing IDLE there told the reader nothing UI-touching changed, which is the
+    // opposite of what happened.
+    for (const exitCode of [0, 1, 2, 3] as const) {
+      const line = describeVerdict(baseResult({ verdict: null, exitCode }));
+
+      expect(line.word).toBe('NO VERDICT');
+      expect(line.word).not.toContain('IDLE');
+      expect(line.meaning).toBe('usabl did not reach a verdict, so the run proved nothing about this change.');
+      expect(line.noVerdict).toBe(true);
+    }
   });
 
   it('reads the exit code before the verdict so a crash with any verdict shape is a failed run', () => {
