@@ -1154,6 +1154,12 @@ export function redactStorageStatePath(error: unknown, storageStatePath: string 
   );
 }
 
+// One launched process and the newContext failures in a row it has had.
+interface ProcessHandle {
+  process: LaunchedBrowser;
+  contextFailures: number;
+}
+
 export function makeSharedBrowser(
   ports: { launch?: () => Promise<LaunchedBrowser>; maxContextFailures?: number } = {},
 ): SharedBrowser {
@@ -1164,46 +1170,53 @@ export function makeSharedBrowser(
   // later scan in the dev session.
   const maxContextFailures = ports.maxContextFailures ?? 3;
 
-  let browser: LaunchedBrowser | null = null;
+  // The process in use, with its own count of newContext failures in a row. The count lives on the
+  // handle, not beside it, so it always describes one process. An open that was waiting on a
+  // process when that process was replaced still settles later, and its failure or success must
+  // land on the process it asked, not on the one that replaced it. A relaunch starts at zero
+  // because it is a new handle.
+  let current: ProcessHandle | null = null;
   // One launch at a time. Two opens that both find no process share this promise rather than each
   // launching a process, which would leave one of them running with nothing holding it.
-  let launching: Promise<LaunchedBrowser> | null = null;
+  let launching: Promise<ProcessHandle> | null = null;
   // Once closed, stays closed. An open after close rejects rather than launching a new process that
   // nothing would ever close.
   let closed = false;
-  let contextFailures = 0;
+  // One close for every caller. Two close requests can arrive together, such as the dev server's
+  // close event and the bundle backstop, and the second must not resolve before the process is
+  // closed.
+  let closing: Promise<void> | null = null;
 
   const closedError = (): Error =>
     new Error('usabl shared browser is closed; the dev server has shut down and no scan can open a page');
 
-  // Drop a process reference, but only the one the caller saw. A concurrent open may already have
-  // replaced it, and that replacement must not be dropped by mistake.
-  const discard = async (which: LaunchedBrowser): Promise<void> => {
-    if (browser !== which) {
+  // Drop a process, but only the one the caller saw. A concurrent open may already have replaced
+  // it, and that replacement must not be dropped by mistake.
+  const discard = async (which: ProcessHandle): Promise<void> => {
+    if (current !== which) {
       return;
     }
-    browser = null;
-    contextFailures = 0;
+    current = null;
     // The process may already be gone. close() only releases what is left on this side.
-    await which.close().catch(() => undefined);
+    await which.process.close().catch(() => undefined);
   };
 
-  const acquire = async (): Promise<LaunchedBrowser> => {
+  const acquire = async (): Promise<ProcessHandle> => {
     if (closed) {
       throw closedError();
     }
-    if (browser !== null && !browser.isConnected()) {
-      await discard(browser);
+    if (current !== null && !current.process.isConnected()) {
+      await discard(current);
     }
-    if (browser !== null) {
-      return browser;
+    if (current !== null) {
+      return current;
     }
     if (launching === null) {
       launching = launch()
         .then((launched) => {
-          browser = launched;
-          contextFailures = 0;
-          return launched;
+          const handle: ProcessHandle = { process: launched, contextFailures: 0 };
+          current = handle;
+          return handle;
         })
         .finally(() => {
           launching = null;
@@ -1219,7 +1232,8 @@ export function makeSharedBrowser(
   };
 
   const openPage = async (url: string, options: RealBrowserOptions): Promise<Page> => {
-    const launched = await acquire();
+    const handle = await acquire();
+    const launched = handle.process;
     const readyTimeoutMs = readyTimeoutMsFor(options);
 
     let context: Awaited<ReturnType<LaunchedBrowser['newContext']>>;
@@ -1228,15 +1242,15 @@ export function makeSharedBrowser(
         options.storageStatePath === undefined ? {} : { storageState: options.storageStatePath },
       );
     } catch (error) {
-      contextFailures += 1;
+      handle.contextFailures += 1;
       // A process that has died, or one that stays connected but cannot make a context any more,
       // is forgotten so the next open launches a fresh one instead of failing forever.
-      if (!launched.isConnected() || contextFailures >= maxContextFailures) {
-        await discard(launched);
+      if (!launched.isConnected() || handle.contextFailures >= maxContextFailures) {
+        await discard(handle);
       }
       throw redactStorageStatePath(error, options.storageStatePath);
     }
-    contextFailures = 0;
+    handle.contextFailures = 0;
 
     // From here a context exists. Any failure below must close it, or an authenticated page opened
     // from the run's storage state stays alive with nothing holding it.
@@ -1260,7 +1274,7 @@ export function makeSharedBrowser(
       // open relaunches instead of failing against a dead reference. A failure with the process
       // still connected is the page's own problem and the process stays.
       if (!launched.isConnected()) {
-        await discard(launched);
+        await discard(handle);
       }
       // Belt and braces. Nothing below newContext reads the storage state file, so no error here
       // should carry the path, but this is the last point before the message becomes a coverage
@@ -1277,18 +1291,21 @@ export function makeSharedBrowser(
         close: async () => {},
       };
     },
-    async close(): Promise<void> {
+    close(): Promise<void> {
       closed = true;
-      if (launching !== null) {
-        // A launch is in flight. Wait for it so the process it produces is the one closed here,
-        // rather than left running because close() looked before it existed.
-        await launching.catch(() => undefined);
-      }
-      const open = browser;
-      browser = null;
-      if (open !== null) {
-        await open.close();
-      }
+      closing ??= (async (): Promise<void> => {
+        if (launching !== null) {
+          // A launch is in flight. Wait for it so the process it produces is the one closed here,
+          // rather than left running because close() looked before it existed.
+          await launching.catch(() => undefined);
+        }
+        const open = current;
+        current = null;
+        if (open !== null) {
+          await open.process.close();
+        }
+      })();
+      return closing;
     },
   };
 }

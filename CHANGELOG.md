@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- The dev overlay's shared browser now counts failed context opens per browser process.
+  Before, one count served every process, so a late failure or success from a process
+  that had already been replaced was charged to the new one, and could retire a healthy
+  process or keep a wedged one. Two close requests that arrive together now share one
+  close, so the second no longer returns while the process is still closing.
+
 - `usabl floor prune` now writes back every top-level field of the floor it does not
   change. Before, it wrote only `version` and `entries`, so a floor marked
   `scope: "partial"` came back without the marker and read as a complete floor for the
