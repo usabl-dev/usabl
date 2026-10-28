@@ -99,6 +99,9 @@ that, and what to do.
   with a value no other row of that table holds, and give each table an `id`, a caption, or an
   accessible name that no other table on the screen shares. A table whose rows have no key at all
   falls back to one identity for the whole column, whose count follows how many rows the page shows.
+- **Declare `reachedWhen` on screens with keyed tables.** A fixed barrier in a table row is paid
+  down only when the screen's readiness signal held, because a row identity names no element the
+  walk can meet.
 - **Keep table names stable.** A table name that holds live data, such as a row count or a time,
   changes between scans, so the rows under it key differently each time and `usabl baseline` lists
   their barriers as intermittent. Give such a table a stable `id` or `data-table-key`.

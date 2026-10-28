@@ -1426,6 +1426,13 @@ The element key is `screenId|rule|row:` followed by the JSON encoding of those f
 separator inside one cannot make two rows share a key. A row scope on a draft that is not four
 strings is ignored, because a library caller can hand the gate any draft.
 
+The row read runs in an isolated world, so page script cannot change the DOM reads a row key or a
+table identity comes from (see Threat 10 in the threat model).
+
+Declare `reachedWhen` on a screen with keyed tables. A row identity names no element a keyboard stop
+or element path can meet, so a fixed row barrier is paid down only when the screen's readiness
+signal held.
+
 What row keys do not cover: a control outside any table row, a control in a table none of whose
 rows has a key, and a grid built without row roles. Those keep the name, structural, or count key
 and the residual described under Evidence floor.
