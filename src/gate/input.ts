@@ -19,6 +19,10 @@
  * - `guardDivergedPaths` must be a list of strings and `now` an ISO-8601 UTC timestamp.
  * - `cleanlyScannedScreens` must be a real Set. Its members are copied into a new Set, so the
  *   gate asks only that copy, never a `has` the caller supplied.
+ * - `renderEvidence` is optional. When present it must be a real Map from screen id to an object
+ *   with a boolean `signalHeld` and a real Set of string `elementSlots`. It is copied the same way,
+ *   so the gate asks only its own Map and Sets. Dropping it would be quiet: every absent floored
+ *   barrier would read as unconfirmed, and a library caller's pay-down would never happen.
  *
  * Reading once is the point of the copy. A getter that returned a checked value to the check and
  * a different value to the gate would otherwise put an unchecked value in the verdict.
@@ -29,7 +33,7 @@
  *
  * This unit validates input only. It must never decide a verdict.
  */
-import type { GateInput } from '../contracts/index.js';
+import type { GateInput, RenderEvidence } from '../contracts/index.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { parseWaiver, type WaiverOrigin } from '../evidence/waivers.js';
 import { assertIdField, InputRefusedError } from '../intake/input-refusal.js';
@@ -64,6 +68,7 @@ export function checkGateInput(input: GateInput): GateInput {
   const rawWaivers: unknown = input.waivers;
   const rawNow: unknown = input.now;
   const rawScreens: unknown = input.cleanlyScannedScreens;
+  const rawEvidence: unknown = input.renderEvidence;
 
   const floor = parseEvidenceFloor(rawFloor, { source: SOURCE, path: 'floor' });
 
@@ -111,5 +116,53 @@ export function checkGateInput(input: GateInput): GateInput {
     position += 1;
   }
 
-  return { coverage, guardDivergedPaths, drafts, floor, waivers, now: rawNow, cleanlyScannedScreens };
+  const renderEvidence = rawEvidence === undefined ? undefined : checkRenderEvidence(rawEvidence);
+
+  const checked: GateInput = { coverage, guardDivergedPaths, drafts, floor, waivers, now: rawNow, cleanlyScannedScreens };
+  if (renderEvidence !== undefined) checked.renderEvidence = renderEvidence;
+  return checked;
+}
+
+/**
+ * Checks render evidence and returns a copy built from what the Map and its Sets really hold, read
+ * through Map's and Set's own iterators, so an overridden get(), has(), or iterator cannot answer
+ * for entries they do not hold. A position counts from zero in the order the Map yields its
+ * entries. A field is named by position, never by its key or slot, because a slot carries page
+ * text.
+ */
+function checkRenderEvidence(raw: unknown): Map<string, RenderEvidence> {
+  if (!(raw instanceof Map)) {
+    throw new InputRefusedError('renderEvidence', `${SOURCE} renderEvidence must be a Map from screen id to render evidence.`);
+  }
+  const copy = new Map<string, RenderEvidence>();
+  let position = 0;
+  for (const [screenId, value] of Map.prototype.entries.call(raw) as IterableIterator<[unknown, unknown]>) {
+    const at = `renderEvidence[${position}]`;
+    assertIdField(SOURCE, `${at}.key`, screenId);
+    if (typeof value !== 'object' || value === null) {
+      throw new InputRefusedError(`${at}.value`, `${SOURCE} ${at}.value must be an object.`);
+    }
+    const record = value as Record<string, unknown>;
+    const signalHeld = record['signalHeld'];
+    const rawSlots = record['elementSlots'];
+    if (typeof signalHeld !== 'boolean') {
+      throw new InputRefusedError(`${at}.value.signalHeld`, `${SOURCE} ${at}.value.signalHeld must be a boolean.`);
+    }
+    if (!(rawSlots instanceof Set)) {
+      throw new InputRefusedError(`${at}.value.elementSlots`, `${SOURCE} ${at}.value.elementSlots must be a Set of strings.`);
+    }
+    const elementSlots = new Set<string>();
+    let slotPosition = 0;
+    for (const slot of Set.prototype.values.call(rawSlots) as IterableIterator<unknown>) {
+      if (typeof slot !== 'string') {
+        const field = `${at}.value.elementSlots[${slotPosition}]`;
+        throw new InputRefusedError(field, `${SOURCE} ${field} must be a string.`);
+      }
+      elementSlots.add(slot);
+      slotPosition += 1;
+    }
+    copy.set(screenId, { signalHeld, elementSlots });
+    position += 1;
+  }
+  return copy;
 }
