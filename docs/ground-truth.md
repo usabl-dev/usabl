@@ -1605,7 +1605,9 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   still present but now holds fewer barriers. It never raises a count and never adds an
   identity: accepting new debt is what `usabl baseline` does, under review. It leaves version 1
   name and structural counts alone, because those are placeholders the gate does not compare and
-  writing a real number under them would present a placeholder as an observation. `prune` is the
+  writing a real number under them would present a placeholder as an observation. It keeps the
+  version it read and writes every other top-level field back as it was, in its place, so a
+  `scope: "partial"` floor stays partial and a field from a newer floor survives. `prune` is the
   only subcommand; anything else exits 2.
 - Routes drift: `usabl drift routes` compares `usabl.routes.json` against the app router.
   `routes` is the only subcommand; anything else exits 2.
