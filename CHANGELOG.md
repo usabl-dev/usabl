@@ -14,6 +14,25 @@
   into a live region inside a shadow root is not recorded, because that region's own
   text is not what the change made speakable.
 
+- `checkPage` now applies a configured screen's `reachedWhen` signal when `screenId` names
+  that screen. It waits for the selector with the CLI's wait, and when the signal does not
+  hold, the result is a `not-covered` gap that names the selector or the response, and no
+  check runs. Before, it checked whatever the page showed, so a sign-in page or an
+  unmounted shell handed to it as the screen could read as verified. An adopted page does
+  not see requests sent before `checkPage` was called, so a screen that declares a
+  response is always a gap in `checkPage`.
+
+- The dev overlay's shared browser now counts failed context opens per browser process.
+  Before, one count served every process, so a late failure or success from a process
+  that had already been replaced was charged to the new one, and could retire a healthy
+  process or keep a wedged one. Two close requests that arrive together now share one
+  close, so the second no longer returns while the process is still closing.
+
+- `usabl floor prune` now writes back every top-level field of the floor it does not
+  change. Before, it wrote only `version` and `entries`, so a floor marked
+  `scope: "partial"` came back without the marker and read as a complete floor for the
+  whole application. Fields from a newer floor are kept the same way.
+
 - `npm run docs:linkcheck` now reads reference-style links and autolinks in markdown.
   Before, it read only inline links and HTML attributes, so a broken `[text][ref]` link
   or `<./page.md>` autolink passed unseen. Full, collapsed (`[ref][]`), and shortcut
