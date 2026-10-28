@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- `npm run docs:linkcheck` now reads reference-style links and autolinks in markdown.
+  Before, it read only inline links and HTML attributes, so a broken `[text][ref]` link
+  or `<./page.md>` autolink passed unseen. Full, collapsed (`[ref][]`), and shortcut
+  (`[ref]`) references resolve through their `[ref]: url` definitions, a full or
+  collapsed reference to a label with no definition is reported, relative autolinks are
+  checked, and absolute autolinks are counted as external, as other external links are.
+  Footnotes, indented code blocks, and HTML comments are not read as links.
+
 - The pull request comment now lists waived deterministic findings. Before, a waived
   finding was in no section of the comment, while the terminal and the overlay showed it
   as recorded debt. The known section is now `### Known (recorded debt)` and lists carried
