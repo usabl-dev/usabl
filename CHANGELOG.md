@@ -12,6 +12,29 @@
   not see requests sent before `checkPage` was called, so a screen that declares a
   response is always a gap in `checkPage`.
 
+- `npm run docs:linkcheck` now reads reference-style links and autolinks in markdown.
+  Before, it read only inline links and HTML attributes, so a broken `[text][ref]` link
+  or `<./page.md>` autolink passed unseen. Full, collapsed (`[ref][]`), and shortcut
+  (`[ref]`) references resolve through their `[ref]: url` definitions, a full or
+  collapsed reference to a label with no definition is reported, relative autolinks are
+  checked, and absolute autolinks are counted as external, as other external links are.
+  Footnotes, indented code blocks, and HTML comments are not read as links.
+
+- The pull request comment now lists waived deterministic findings. Before, a waived
+  finding was in no section of the comment, while the terminal and the overlay showed it
+  as recorded debt. The known section is now `### Known (recorded debt)` and lists carried
+  and waived findings, each with its status, and the collapsed view includes them too. A
+  collapsed group also names its screen id and rule once, in its headline, instead of
+  again on a `rule:` line under it. A collapsed group never mixes findings of different
+  status, so a carried or waived finding is never counted inside a new one, and the hint
+  counts as gating only the findings that gate.
+
+- The terminal report printed `NO VERDICT: IDLE` for a null verdict on a run that had
+  something to check, which is the shape of a failed run, not an idle one. It now prints
+  IDLE only when there was nothing to check. Otherwise it prints `NO VERDICT` and says
+  usabl did not reach a verdict, so the run proved nothing about the change, the same
+  reading the stop hook and the self-check give that state.
+
 - Egress redaction now catches credential shapes it used to print: whitespace or a quote
   between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
   header segment or a JWT cut to two segments, the user name and password after `//` in
