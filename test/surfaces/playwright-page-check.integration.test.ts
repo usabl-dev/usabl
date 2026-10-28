@@ -332,6 +332,40 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage runs the desig
     }
   });
 
+  // Announcements used to be read through window.__usablDrain, a function in the page's own world.
+  // A page could define one before adoption, or replace usabl's after load, and hand usabl an
+  // announcement no screen reader spoke. Neither may pass a flow requirement.
+  it('does not pass a flow requirement on announcements from a drain the page defined before adoption', async () => {
+    html = silentSavePage(`window.__usablDrain = () => ['Saved'];`);
+    const { dir } = await makeProject({ 'save.yaml': SAVE_REQUIREMENT });
+    const { context, page } = await openUrl(`${baseUrl}/clusters`);
+    try {
+      const result = await checkPage(page, { screenId: 'clusters', projectRoot: dir, tabCap: 10 });
+      expect(result.verdict).not.toBe('verified');
+      expect(result.failures.map((f) => f.rule)).toContain('intake:save-announces');
+    } finally {
+      await context.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not pass a flow requirement on announcements from a drain the page replaced after load', async () => {
+    html = silentSavePage(`window.addEventListener('load', () => { window.__usablDrain = () => ['Saved']; });`);
+    const { dir, config } = await makeProject({ 'save.yaml': SAVE_REQUIREMENT });
+    try {
+      const deps = await buildDeps(config, { cwd: dir, env: {} });
+      try {
+        const scan = await deps.checkRunner.scan({ id: 'clusters', url: `${baseUrl}/clusters` });
+        const failures = scan.drafts.filter((d) => d.confidence === 'fail').map((d) => d.rule);
+        expect(failures).toContain('intake:save-announces');
+      } finally {
+        await deps.browser.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('is not_covered, and names the root, when the caller passes a projectRoot with no usabl.config.json', async () => {
     html = headingPage('Clusters');
     const empty = await mkdtemp(join(tmpdir(), 'usabl-checkpage-empty-'));
@@ -401,6 +435,14 @@ const SAVE_PAGE = `<!doctype html>
   </body>
 </html>`;
 
+// The save page with a Save button that announces nothing, and a script of the page's own.
+function silentSavePage(script: string): string {
+  return SAVE_PAGE.replace("document.getElementById('message').textContent = 'Saved';", '').replace(
+    '</body>',
+    `<script>${script}</script></body>`,
+  );
+}
+
 const SAVE_REQUIREMENT = `version: 1
 requirements:
   - id: save-announces
@@ -428,3 +470,108 @@ requirements:
       expectedText: Page
     approved: true
 `;
+
+// A screen in usabl.config.json can declare a readiness signal: a selector that must match, and a
+// data response that must have been answered, before usabl will check it. The CLI waits for it and
+// gaps the screen when it does not hold. checkPage used to ignore it and check whatever the page
+// showed, so a sign-in page or a half-mounted shell handed to it as the clusters screen could pass.
+describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage applies a declared readiness signal', { timeout: 60_000 }, () => {
+  let browser: Browser;
+
+  beforeAll(async () => {
+    browser = await chromium.launch({ headless: true });
+  });
+
+  afterAll(async () => {
+    await browser.close();
+  });
+
+  // The page has an image with no alt text, so a check that ran its providers reports a failure.
+  function ordersPage(mountScript: string): string {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Clusters</title>
+  </head>
+  <body>
+    <main id="main">
+      <h1>Clusters</h1>
+      <img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" />
+    </main>
+    <script>${mountScript}</script>
+  </body>
+</html>`;
+  }
+
+  const MOUNT_NOW = `document.getElementById('main').insertAdjacentHTML('beforeend', '<table id="orders"><tr><th>Order</th></tr></table>');`;
+  // The late content carries the only barrier on its page: a second image with no alt text, with
+  // its own id so its path differs from the first image's.
+  const LATE_PAGE = ordersPage(
+    `setTimeout(() => { document.getElementById('main').innerHTML = '<h1>Clusters</h1><table id="orders"><tr><th>Order</th></tr></table><img id="late" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" />'; }, 4000);`,
+  ).replace(/<img src=[^>]*>/, '');
+
+  async function makeSignalProject(reachedWhen: unknown): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-checkpage-ready-'));
+    const config = {
+      appBaseUrl: 'http://127.0.0.1:5173',
+      uiFileGlobs: ['src/**'],
+      discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
+      surfaces: [{ id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['src/clusters.tsx'], reachedWhen }],
+      guardedPaths: [],
+      signalTimeoutMs: 10000,
+    };
+    await writeFile(join(dir, 'usabl.config.json'), JSON.stringify(config, null, 2));
+    return dir;
+  }
+
+  async function check(html: string, reachedWhen: unknown) {
+    const dir = await makeSignalProject(reachedWhen);
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.setContent(html, { waitUntil: 'domcontentloaded' });
+      return await checkPage(page, { screenId: 'clusters', projectRoot: dir, tabCap: 5 });
+    } finally {
+      await context.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('is not_covered, names the selector, and runs no checks when the selector never matches', async () => {
+    const result = await check(ordersPage(''), '#orders');
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.failures).toEqual([]);
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0]?.state).toBe('not-covered');
+    expect(result.gaps[0]?.reason).toContain('#orders');
+  });
+
+  it('checks the page when the declared selector matches', async () => {
+    const result = await check(ordersPage(MOUNT_NOW), '#orders');
+
+    expect(result.gaps).toEqual([]);
+    expect(result.verdict).toBe('regression');
+    expect(result.failures.map((failure) => failure.rule)).toContain('image-alt');
+  });
+
+  it('waits for a selector that mounts after the page first settled, as the CLI does', async () => {
+    const result = await check(LATE_PAGE, { selector: '#orders' });
+
+    expect(result.gaps).toEqual([]);
+    expect(result.failures.map((failure) => failure.elementPath)).toContain('#late');
+  });
+
+  it('is not_covered and runs no checks when the screen declares a response checkPage cannot see', async () => {
+    // checkPage sees only the requests sent after it adopted the page, and this page sent none, so
+    // the declared response cannot be shown to have been answered.
+    const result = await check(ordersPage(MOUNT_NOW), { selector: '#orders', response: '/api/orders' });
+
+    expect(result.verdict).toBe('not_covered');
+    expect(result.drafts).toEqual([]);
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0]?.reason).toContain('/api/orders');
+  });
+});

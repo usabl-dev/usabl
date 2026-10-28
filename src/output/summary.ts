@@ -215,8 +215,9 @@ function renderFinding(finding: Finding, fixLabel: string): string[] {
  *
  * The first line is the verdict: a symbol, the verdict word, and the exit code. The second is
  * one sentence saying what that means for the change. Everything else is labelled and indented
- * under it. `verdict === null` prints NO VERDICT: IDLE (nothing to check) or NO VERDICT: RUN
- * FAILED (exit 4), never NOT COVERED and never anything that reads as a pass.
+ * under it. `verdict === null` prints NO VERDICT: IDLE (nothing to check), NO VERDICT: RUN
+ * FAILED (exit 4), or NO VERDICT (something to check and no verdict reached), never NOT COVERED
+ * and never anything that reads as a pass.
  *
  * Data lines (findings, gaps, paths) are printed whole rather than wrapped to 80 columns, so an
  * operator can grep the output for a rule, a URL, or a file and copy a line in one piece. The

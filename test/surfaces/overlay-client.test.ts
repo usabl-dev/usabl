@@ -95,6 +95,11 @@ interface MountOptions {
    * releases cannot.
    */
   holdResults?: Array<Promise<void> | undefined>;
+  /**
+   * Counts the result requests the page has sent, as the route receives them. A test that must show
+   * nothing was read uses this count as its signal instead of sleeping and looking.
+   */
+  reads?: { count: number };
 }
 
 /** A promise and the function that settles it, so a test can hold a response and release it. */
@@ -105,6 +110,9 @@ function deferred(): { promise: Promise<void>; release: () => void } {
   });
   return { promise, release };
 }
+
+// How long mount waits for the inspector host. See mount.
+const MOUNT_TIMEOUT_MS = 15_000;
 
 async function mount(
   payload: Projection | null,
@@ -135,6 +143,9 @@ async function mount(
       const current = payloads[Math.min(served, payloads.length - 1)] ?? null;
       const gate = options.holdResults?.[served];
       served += 1;
+      if (options.reads !== undefined) {
+        options.reads.count = served;
+      }
       if (gate) {
         await gate;
       }
@@ -165,8 +176,11 @@ async function mount(
     });
   });
   await page.goto('http://usabl.test' + path);
+  // The host appears once the module has run, which takes far longer than usual when the machine is
+  // loaded. A two second wait failed tests whose overlay was fine. This bound only decides how long
+  // to wait before reporting that the host never came, with the page errors that explain why.
   try {
-    await page.locator(OVERLAY).waitFor({ timeout: 2000 });
+    await page.locator(OVERLAY).waitFor({ timeout: MOUNT_TIMEOUT_MS });
   } catch {
     throw new Error(`inspector host was not created: ${pageErrors.join(' | ') || 'no page error reported'}`);
   }
@@ -201,7 +215,9 @@ afterAll(async () => {
   }
 });
 
-describe('overlay badge and panel', { timeout: 30_000 }, () => {
+// The row test drives many interactions and measured close to 30 seconds on a loaded machine, so
+// this group has more room than the others.
+describe('overlay badge and panel', { timeout: 60_000 }, () => {
   it('collapses to a badge that names the state and does not block the app underneath', async () => {
     const page = await mount(projectOverlay(result()), { path: '/clusters' });
     const host = page.locator(OVERLAY);
@@ -2165,6 +2181,9 @@ describe('the overlay never shows a stale result', { timeout: 40_000 }, () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     let served = 0;
+    // The slow response is held until the test releases it, so it lands after the newer refresh
+    // was requested on every machine, however loaded.
+    const slow = deferred();
     await page.route('http://usabl.test/**', async (route) => {
       const url = new URL(route.request().url());
       if (url.pathname === '/__usabl/result') {
@@ -2176,7 +2195,7 @@ describe('the overlay never shows a stale result', { timeout: 40_000 }, () => {
         }
         if (served === 2) {
           // The first refresh: slow and verified, the response we must NOT let win.
-          await new Promise((resolve) => setTimeout(resolve, 900));
+          await slow.promise;
           await route.fulfill({ contentType: 'application/json', body: JSON.stringify(staleVerified) });
           return;
         }
@@ -2205,15 +2224,27 @@ describe('the overlay never shows a stale result', { timeout: 40_000 }, () => {
     const recheck = panel.getByRole('button', { name: 'Check again' });
     // Fire both refreshes back to back. dispatchEvent does not wait for the control to be enabled, so
     // the second click lands while the first slow request is still in flight.
+    // Every verdict the banner shows from here on is recorded, so a stale verified result that was
+    // drawn for a moment and then replaced is still caught.
+    await page.locator(OVERLAY).evaluate((host) => {
+      const root = (host as HTMLElement).shadowRoot;
+      const seen: string[] = [];
+      (window as unknown as { __bannerSeen: string[] }).__bannerSeen = seen;
+      new MutationObserver(() => {
+        seen.push(root?.querySelector('.banner-verdict')?.textContent?.trim() ?? '');
+      }).observe(root as ShadowRoot, { subtree: true, childList: true, characterData: true });
+    });
     await recheck.dispatchEvent('click');
     await recheck.dispatchEvent('click');
 
-    // The fast regression lands first and shows. Then wait well past the slow verified response so a
-    // late overwrite would have had every chance to land. It must stay regression.
+    // The slow verified response lands only now, after the newer refresh was requested. The newer
+    // read waits behind it and is sent only once the overlay has finished with it, so the third
+    // request reaching the route is the signal that the slow response was handled.
+    slow.release();
+    await expect.poll(() => served).toBe(3);
     await expect.poll(async () => bannerWord(page), { timeout: 10_000 }).toBe('✕Regression');
-    await expect
-      .poll(async () => bannerWord(page), { timeout: 4000, interval: 250 })
-      .toBe('✕Regression');
+    const seen = await page.evaluate(() => (window as unknown as { __bannerSeen: string[] }).__bannerSeen);
+    expect(seen.some((word) => word.includes('Verified'))).toBe(false);
     expect(await panel.locator('.banner-exit').textContent()).toBe('exit code 1');
 
     await context.close();
@@ -2257,7 +2288,8 @@ describe('the overlay never shows a stale result', { timeout: 40_000 }, () => {
 
 describe('the overlay does not hand the page easy levers', { timeout: 40_000 }, () => {
   it('captures fetch at load so a later swap cannot feed it a forged result', async () => {
-    const page = await mount(projectOverlay(result()), { path: '/clusters' });
+    const reads = { count: 0 };
+    const page = await mount(projectOverlay(result()), { path: '/clusters', reads });
     // Replace fetch AFTER the overlay has loaded, then make it re-read.
     await page.evaluate(() => {
       (window as unknown as { __usablForged: number }).__usablForged = 0;
@@ -2267,8 +2299,13 @@ describe('the overlay does not hand the page easy levers', { timeout: 40_000 }, 
       };
     });
     const panel = await openPanel(page);
+    await expect.poll(async () => bannerWord(page)).toBe('✕Regression');
+    const before = reads.count;
     await panel.getByRole('button', { name: 'Check again' }).click();
-    await page.waitForTimeout(400);
+    // The re-read reached the server, so it went through the overlay's own fetch, and it has been
+    // answered and drawn once the control is enabled again.
+    await expect.poll(() => reads.count).toBe(before + 1);
+    await expect.poll(async () => panel.getByRole('button', { name: 'Check again' }).isEnabled()).toBe(true);
 
     // The overlay used its own reference, so the forged fetch never ran and the verdict is unchanged.
     expect(await bannerWord(page)).toBe('✕Regression');
@@ -2315,8 +2352,10 @@ describe('the overlay does not hand the page easy levers', { timeout: 40_000 }, 
   });
 
   it('has no window event that lets the page force a re-read', async () => {
+    const reads = { count: 0 };
     const page = await mount(null, {
       path: '/clusters',
+      reads,
       payloads: [
         projectOverlay(result()),
         projectOverlay(result({ verdict: 'verified', findings: [], exitCode: 0 })),
@@ -2324,6 +2363,7 @@ describe('the overlay does not hand the page easy levers', { timeout: 40_000 }, 
     });
     const panel = await openPanel(page);
     await expect.poll(async () => bannerWord(page)).toBe('✕Regression');
+    const before = reads.count;
 
     // The old testability hook. Dispatching it must do nothing at all.
     await page.evaluate(() => {
@@ -2331,12 +2371,14 @@ describe('the overlay does not hand the page easy levers', { timeout: 40_000 }, 
         window.dispatchEvent(new Event(name));
       }
     });
-    await page.waitForTimeout(300);
     expect(await bannerWord(page)).toBe('✕Regression');
 
-    // The control in the panel is the path that does work, and it is user driven.
+    // The control in the panel is the path that does work, and it is user driven. A read the events
+    // had started would have been sent before this one, so once this one is answered the count
+    // shows whether the events read anything. It must be exactly one more read.
     await panel.getByRole('button', { name: 'Check again' }).click();
     await expect.poll(async () => bannerWord(page)).toBe('✓Verified');
+    expect(reads.count).toBe(before + 1);
 
     await page.context().close();
   });

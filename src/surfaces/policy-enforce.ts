@@ -7,6 +7,8 @@
 import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
 import type { Result } from '../contracts/index.js';
 import { listDivergedGuardedPathsAtRefs } from '../trust/guard.js';
+import { InputRefusedError } from '../intake/input-refusal.js';
+import { parseResultDocument } from '../intake/result-document.js';
 
 export interface PolicyReview {
   userLogin: string;
@@ -45,29 +47,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Stdin Result is untrusted JSON. Validate the honesty fields CI will exit on
- * so a hand-edited artifact cannot put `approval_required` on the accessibility check.
+ * Stdin Result is untrusted JSON. It is checked against the whole Result contract, not only the
+ * honesty fields CI exits on, so a hand-edited artifact cannot put `approval_required` on the
+ * accessibility check and cannot hand a projector text where the contract says a count or an
+ * enum value goes. See src/intake/result-document.ts.
  */
 export function parseResultJson(value: unknown): Result {
-  if (!isRecord(value)) {
-    throw new Error('input must be a Result object');
+  return parseResultDocument(value);
+}
+
+/**
+ * Parses standard input text as a Result. Text that is not JSON is refused without the parser's
+ * own message, because that message quotes the input back.
+ */
+export function parseResultText(text: string): Result {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new InputRefusedError(
+      '',
+      'The Result on standard input is not valid JSON. Pass the Result JSON that "usabl check --json" wrote, unchanged.',
+    );
   }
-  if (value['schemaVersion'] !== 'usabl.result.v1') {
-    throw new Error('input must have schemaVersion usabl.result.v1');
-  }
-  const accessibilityExitCode = value['accessibilityExitCode'];
-  if (
-    accessibilityExitCode !== 0 &&
-    accessibilityExitCode !== 1 &&
-    accessibilityExitCode !== 3 &&
-    accessibilityExitCode !== 4
-  ) {
-    throw new Error('accessibilityExitCode must be 0, 1, 3, or 4');
-  }
-  if (value['accessibilityVerdict'] === 'approval_required') {
-    throw new Error('accessibilityVerdict must not be approval_required');
-  }
-  return value as unknown as Result;
+  return parseResultJson(parsed);
 }
 
 export function parsePullRequestEvent(

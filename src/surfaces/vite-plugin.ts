@@ -11,6 +11,7 @@ import { makeSharedBrowser, type RealBrowserOptions, type SharedBrowser } from '
 import { run } from '../run.js';
 import { unconfirmedNotice } from '../output/floor-notice.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
+import { neutralize } from '../primitives/neutralize.js';
 import { overlayClientSource } from './overlay-client.js';
 import { injectJsxSourceAttributes, shouldInjectJsxSource } from './vite-jsx-source.js';
 
@@ -555,6 +556,9 @@ export function usablVitePlugin(opts: {
   // of writing to the suite's own output, and so the reason has one destination: the dev server's
   // console, which is where the panel tells the user to look when it cannot load a result.
   logError?: (error: unknown) => void;
+  // Where a warning for the developer goes, such as a file the source injector could not parse.
+  // A port for the same reason as logError.
+  logWarning?: (message: string) => void;
 }): UsablVitePlugin {
   // The open invalidation wave, if any. It opens on the first watcher event and closes when the
   // debounce timer fires. The cache does not start a run while it is open.
@@ -571,6 +575,21 @@ export function usablVitePlugin(opts: {
   let closed = false;
   const workspaceRoot = opts.workspaceRoot ?? '';
   const logError = opts.logError ?? ((error: unknown) => console.error('[usabl]', error));
+  const logWarning = opts.logWarning ?? ((message: string) => console.warn(`[usabl] ${message}`));
+  // Files the source injector could not parse and has already warned about. One warning per file is
+  // enough: the dev server transforms a file again on every change, and the reason does not change.
+  const unreadableWarned = new Set<string>();
+  const warnUnreadable = (file: string): void => {
+    if (unreadableWarned.has(file)) {
+      return;
+    }
+    unreadableWarned.add(file);
+    logWarning(
+      `could not parse ${neutralize(file)}, so it added no source location attributes to it and served it ` +
+        'unchanged. The app is not affected, but findings on elements from this file will not point to a ' +
+        'source line. If the file has a syntax error, fixing it brings the source line back.',
+    );
+  };
 
   // The one invalidation point. The file watcher calls this on change, add, and unlink, which are
   // the only events that make a completed result stale.
@@ -737,10 +756,9 @@ export function usablVitePlugin(opts: {
       if (!injectSourceAttributes || !shouldInjectJsxSource(id)) {
         return null;
       }
-      return {
-        code: injectJsxSourceAttributes(code, toRepoRelativeSourcePath(workspaceRoot, id)),
-        map: null,
-      };
+      const injected = injectJsxSourceAttributes(code, toRepoRelativeSourcePath(workspaceRoot, id), warnUnreadable);
+      // An unchanged file is passed on as it came, so the host's own transform sees the original.
+      return injected === code ? null : { code: injected, map: null };
     },
     async closeBundle() {
       await closeOnce();

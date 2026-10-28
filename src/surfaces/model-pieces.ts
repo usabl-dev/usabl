@@ -13,6 +13,7 @@ import type { Finding, Result } from '../contracts/index.js';
 import { boundField, type BoundedGroup } from '../output/bounded-text.js';
 import { NOT_A_LIST, wholeNumberText } from '../output/carried.js';
 import { unconfirmedNotice } from '../output/floor-notice.js';
+import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
 import {
   APPROVAL_REQUIRED_HOW_IT_CLEARS,
   APPROVAL_REQUIRED_HUMAN_LEVER,
@@ -190,4 +191,49 @@ export function barrierLines(
     };
   });
   return { groupHeading: 'Barriers:', groups, groupFooter };
+}
+
+/** The verdicts the contract names. Anything else a Result carries is unrecognized. */
+const KNOWN_VERDICTS: readonly string[] = ['verified', 'regression', 'not_covered', 'approval_required'];
+
+/** The opening of a message for a run whose state usabl does not recognize. */
+export interface UnrecognizedRunLine {
+  // The verdict word and the exit code, checked to be a whole number. Never the carried verdict.
+  word: string;
+  // What the state means for the change, in usabl's own words.
+  meaning: string;
+}
+
+/**
+ * The opening words for a run that reached no verdict usabl recognizes, or null for every state
+ * it does recognize.
+ *
+ * A null verdict means idle only when the coverage says there was nothing to check, and a failed
+ * run only on exit 4. A null verdict with neither, and a verdict string that is not one of the
+ * contract's words, are not evidence that the change is clean. The stop hook blocks on both and
+ * the self-check names both as a run that proved nothing, so neither can be read as a pass or as
+ * idle. A failed run is left to its own handling, because the stop hook fails open on exit 4 by
+ * a recorded decision. The carried verdict is never printed: an unrecognized one is named with a
+ * fixed word.
+ */
+export function unrecognizedRunLine(result: Result): UnrecognizedRunLine | null {
+  if (result.exitCode === 4) {
+    return null;
+  }
+  if (result.verdict === null) {
+    if (result.coverage?.nothingToCheck === true) {
+      return null;
+    }
+    return {
+      word: formatVerdictWord({ ...describeVerdict(result), word: 'NO VERDICT' }),
+      meaning: 'usabl did not reach a verdict for this change, so the run proved nothing about it.',
+    };
+  }
+  if (typeof result.verdict === 'string' && KNOWN_VERDICTS.includes(result.verdict)) {
+    return null;
+  }
+  return {
+    word: formatVerdictWord(describeVerdict(result)),
+    meaning: 'usabl does not recognize the verdict this run reported, so the run proved nothing about this change.',
+  };
 }

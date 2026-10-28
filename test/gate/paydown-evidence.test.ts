@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { gate, paydownConfirmed, renderEvidenceOf } from '../../src/gate/index.js';
+import { InputRefusedError } from '../../src/intake/input-refusal.js';
 import { unconfirmedNotice } from '../../src/output/floor-notice.js';
 import { computeIdentity, elementSlots, identitySlot } from '../../src/primitives/identity.js';
 import type { Coverage, Draft, EvidenceFloor, FloorEntry, GateInput, ScreenScan } from '../../src/contracts/index.js';
@@ -247,14 +248,24 @@ describe('one absence rule for the gate', () => {
 });
 
 describe('totals that do not depend on order', () => {
-  it('gives the same barrier total for the same floor in either order, even past the safe range', () => {
-    const entries: FloorEntry[] = [Number.MAX_SAFE_INTEGER, 2, 1].map((count, index) => ({
+  const floorOf = (counts: number[]): FloorEntry[] =>
+    counts.map((count, index) => ({
       screenId: 'orders', layer: 'axe', rule: 'link-name', elementKey: `orders|link-name|struct:link:#row${index}`,
       identityBasis: 'structural', count,
     }));
+
+  it('gives the same barrier total for the same floor in either order, up to the safe range', () => {
+    const entries = floorOf([Number.MAX_SAFE_INTEGER - 3, 2, 1]);
     const forward = gate(input({ version: 2, entries }, [scan({})]));
     const reversed = gate(input({ version: 2, entries: [...entries].reverse() }, [scan({})]));
     expect(reversed.floorUnconfirmed).toEqual(forward.floorUnconfirmed);
     expect(reversed.summary).toBe(forward.summary);
+  });
+
+  it('refuses a floor whose total passes the safe range, in either order', () => {
+    const entries = floorOf([Number.MAX_SAFE_INTEGER, 2, 1]);
+    for (const order of [entries, [...entries].reverse()]) {
+      expect(() => gate(input({ version: 2, entries: order }, [scan({})]))).toThrow(InputRefusedError);
+    }
   });
 });

@@ -4,29 +4,31 @@
  * back to src/pages/Deployments.tsx:142 without guessing from import chains alone.
  *
  * Two kinds of tags get the source attributes:
- *  - Capitalized component tags, for example <Button>.
+ *  - Component tags: a capitalized name such as <Button>, or a member name such as <Foo.Bar>.
  *  - Native HTML element tags, for example <button>, <input>, <a>, <img>.
  *
  * Native elements carry the source location so a barrier on a plain DOM element resolves to
  * the exact line, not just the file. Most barriers land on native elements, so this is where
  * jump-to-source pays off.
  *
- * The hard part is not corrupting TypeScript generics. A lowercase name inside a generic, for
- * example the "string" in useState<string>() or the "number" in Map<string, number>, must never
- * receive attributes. A capitalized name inside a generic, for example the "Foo" in Array<Foo>,
- * must not either. Two guards keep generics safe:
- *  1. The "<" must not sit right after an identifier character or a dot. A JSX opening tag starts
- *     after whitespace, "(", "{", ">", ",", or the start of a line, never right after a name.
- *     A generic like Array<Foo> always has an identifier letter right before the "<". This guard
- *     alone rejects every generic form.
- *  2. For lowercase tag names, the name must be a known HTML element. Generic type names such as
- *     string, number, boolean, or a user type are not HTML element names, so they are rejected.
+ * The file is parsed, and tags are taken from the syntax tree, not from the text. Text matching
+ * cannot tell a tag from a generic: it put the attributes inside the type argument list of
+ * <PageWizard<Data>>, and inside the type parameters of a generic arrow function such as
+ * <T,>(value: T) => value, and the file no longer parsed. The tree says exactly where each opening
+ * tag's attributes, name, and type arguments end. The attributes go after the last attribute, or
+ * right after the name and type arguments when there is none, which is always valid JSX.
+ * A string, a comment, or a type is never a tag in the tree, so none of them is touched.
+ *
+ * A file the parser cannot read is returned unchanged. The caller is told, so it can warn, but
+ * the file is served as written: a missing source hint is a small loss, and a dev server error on
+ * every module that imports the file is not.
  */
+import { child, children, lineOf, parseSource, syntaxForFile, walk, type AstNode } from '../primitives/source-ast.js';
 
 // Standard HTML element tag names. Lowercase JSX tags only get source attributes when the name is
-// in this set. This is what keeps lowercase generic type names untouched: they are never HTML
-// element names. script and style are deliberately left out; a data attribute on them does nothing
-// useful and they never host a rendered barrier.
+// in this set, so a custom element or an unknown lowercase name is left as written. script and
+// style are deliberately left out; a data attribute on them does nothing useful and they never
+// host a rendered barrier.
 const HTML_ELEMENTS = new Set<string>([
   'a', 'abbr', 'address', 'area', 'article', 'aside', 'audio',
   'b', 'base', 'bdi', 'bdo', 'blockquote', 'body', 'br', 'button',
@@ -53,10 +55,6 @@ const HTML_ELEMENTS = new Set<string>([
   'wbr',
 ]);
 
-function isIdentifierChar(ch: string): boolean {
-  return /[A-Za-z0-9_$]/.test(ch);
-}
-
 // Escape a path before it goes into a double-quoted HTML attribute value. The repo-relative path
 // is not trusted: a file name may contain a double quote, which would otherwise close the value
 // and let following text become live attributes. Escaping the four characters below keeps the path
@@ -69,207 +67,90 @@ function escapeHtmlAttribute(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function isInjectableTag(tag: string): boolean {
-  const first = tag.charAt(0);
-  if (first >= 'A' && first <= 'Z') {
-    // Capitalized name: a component tag. Guard 1 (the preceding-character check) already rejected
-    // generics like Array<Foo>, so any tag reaching here is a real JSX component.
+// Whether an opening tag's name gets the attributes. A namespaced name such as svg:rect is neither
+// a component nor an HTML element, so it is left alone.
+function isInjectableName(name: AstNode): boolean {
+  if (name.type === 'JSXMemberExpression') {
+    // <Foo.Bar> is always a component reference.
     return true;
   }
-  // Lowercase name: inject only for known HTML elements. This rejects lowercase generic type
-  // names such as string, number, and boolean.
+  if (name.type !== 'JSXIdentifier' || typeof name['name'] !== 'string') {
+    return false;
+  }
+  const tag = name['name'];
+  const first = tag.charAt(0);
+  if (first >= 'A' && first <= 'Z') {
+    return true;
+  }
+  // Lowercase name: inject only for known HTML elements, not for custom elements or other names.
   return HTML_ELEMENTS.has(tag);
 }
 
-// Read the tag name that starts right after a "<" at position start (start points at the first
-// name character). Returns the name and the index just past it, or null when the following text is
-// not a plain tag name.
-function readTagName(code: string, start: number): { name: string; end: number } | null {
-  if (start >= code.length || !/[A-Za-z]/.test(code[start] ?? '')) {
-    return null;
-  }
-  let end = start + 1;
-  while (end < code.length && /[A-Za-z0-9]/.test(code[end] ?? '')) {
-    end += 1;
-  }
-  return { name: code.slice(start, end), end };
+function hasSourceAttribute(opening: AstNode): boolean {
+  return children(opening, 'attributes').some((attribute) => {
+    const name = attribute.type === 'JSXAttribute' ? child(attribute, 'name') : null;
+    return name?.type === 'JSXIdentifier' && name['name'] === 'data-source-file';
+  });
 }
 
-// Find the ">" that ends an opening tag whose attribute text starts at position attrStart. Strings
-// and JSX expression containers ("{ ... }") are treated as opaque, so a ">" inside an arrow
-// handler like onClick={() => go()} or inside a quoted value does not end the tag. Returns the
-// index of the closing ">" and whether the tag is self-closing, or null when no close is found
-// (an unterminated tag, which is left untouched).
-function findTagClose(code: string, attrStart: number): { closeIndex: number; selfClosing: boolean } | null {
-  let braceDepth = 0;
-  let quote: string | null = null;
-  for (let i = attrStart; i < code.length; i += 1) {
-    const ch = code[i] ?? '';
-    if (quote !== null) {
-      if (ch === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === '`') {
-      quote = ch;
-      continue;
-    }
-    if (ch === '{') {
-      braceDepth += 1;
-      continue;
-    }
-    if (ch === '}') {
-      if (braceDepth > 0) {
-        braceDepth -= 1;
-      }
-      continue;
-    }
-    if (ch === '>' && braceDepth === 0) {
-      const selfClosing = code[i - 1] === '/';
-      return { closeIndex: i, selfClosing };
-    }
-  }
-  return null;
+// Where the attributes go: after the tag's last attribute, so they come last as text matching
+// put them. In JSX the last attribute wins, so a data-source-file carried in a spread such as
+// {...rest} cannot replace the element's own location. A tag with no attributes gets them right
+// after its name, or after its type argument list when it has one. The parser stores that list as
+// typeParameters in this major version and as typeArguments in the next, so both are read.
+function insertionPoint(opening: AstNode): number | null {
+  const attributes = children(opening, 'attributes');
+  const last = attributes[attributes.length - 1];
+  const typeArguments = child(opening, 'typeArguments') ?? child(opening, 'typeParameters');
+  const end = last?.end ?? typeArguments?.end ?? child(opening, 'name')?.end;
+  return typeof end === 'number' ? end : null;
 }
 
-export function injectJsxSourceAttributes(code: string, file: string): string {
-  const normalized = escapeHtmlAttribute(file.replace(/\\/g, "/"));
-  let out = '';
-  let scanFrom = 0;
+/**
+ * Returns the code with source attributes on every component and HTML element opening tag.
+ *
+ * `file` is the repo-relative path written into the attribute. Its extension also decides whether
+ * the file is parsed as TypeScript. When the code does not parse, it is returned unchanged and
+ * `onUnreadable` is called with the file.
+ */
+export function injectJsxSourceAttributes(
+  code: string,
+  file: string,
+  onUnreadable?: (file: string) => void,
+): string {
+  const parsed = parseSource(code, syntaxForFile(file));
+  if (!parsed.ok) {
+    onUnreadable?.(file);
+    return code;
+  }
+  const normalized = escapeHtmlAttribute(file.replace(/\\/g, '/'));
+  const insertions: Array<{ at: number; line: number }> = [];
+  walk(parsed.program, (node) => {
+    if (node.type !== 'JSXOpeningElement') {
+      return;
+    }
+    const name = child(node, 'name');
+    if (name === null || !isInjectableName(name) || hasSourceAttribute(node)) {
+      // Already injected tags are left as they are, so repeated transforms stay stable.
+      return;
+    }
+    const at = insertionPoint(node);
+    const line = lineOf(node);
+    if (at !== null && line !== null) {
+      insertions.push({ at, line });
+    }
+  });
+  // Every offset points into the original code, so the output is built from slices of that code,
+  // in offset order. No insertion shifts another one, and the cost stays linear in the file size.
+  insertions.sort((a, b) => a.at - b.at);
+  const pieces: string[] = [];
   let cursor = 0;
-  let lineNumber = 1;
-  // Count newlines between the last emitted point and index target to keep line numbers exact.
-  const advanceLine = (target: number): void => {
-    for (let i = cursor; i < target; i += 1) {
-      if (code[i] === '\n') {
-        lineNumber += 1;
-      }
-    }
-    cursor = target;
-  };
-
-  // Track lexical context so a "<" inside a string, template literal, or comment is never treated
-  // as a tag. A "<button>" written inside a string or a comment is text, not JSX; injecting there
-  // corrupts the module. Template literals push a context so a "${ ... }" interpolation returns to
-  // normal code, where a real tag can still be injected. quote holds the active string delimiter
-  // ('\'', '"', or '`'); commentMode is 'line' or 'block'; templateStack counts open "${" inside
-  // each active template literal.
-  let quote: string | null = null;
-  let commentMode: 'line' | 'block' | null = null;
-  const templateStack: number[] = [];
-
-  for (let i = 0; i < code.length; i += 1) {
-    const ch = code[i] ?? '';
-    const next = code[i + 1] ?? '';
-
-    if (commentMode === 'line') {
-      if (ch === '\n') {
-        commentMode = null;
-      }
-      continue;
-    }
-    if (commentMode === 'block') {
-      if (ch === '*' && next === '/') {
-        commentMode = null;
-        i += 1;
-      }
-      continue;
-    }
-    if (quote !== null) {
-      if (ch === '\\') {
-        // Skip the escaped character so an escaped delimiter does not end the string.
-        i += 1;
-        continue;
-      }
-      if (quote === '`' && ch === '$' && next === '{') {
-        // Enter a template interpolation: code context resumes until the matching "}".
-        templateStack.push(0);
-        quote = null;
-        i += 1;
-        continue;
-      }
-      if (ch === quote) {
-        quote = null;
-      }
-      continue;
-    }
-
-    // In code context (this includes inside a template interpolation).
-    if (ch === '/' && next === '/') {
-      commentMode = 'line';
-      i += 1;
-      continue;
-    }
-    if (ch === '/' && next === '*') {
-      commentMode = 'block';
-      i += 1;
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === '`') {
-      quote = ch;
-      continue;
-    }
-    if (templateStack.length > 0) {
-      // Balance braces so the interpolation ends at the right "}" and returns to the template.
-      const top = templateStack.length - 1;
-      const depth = templateStack[top] ?? 0;
-      if (ch === '{') {
-        templateStack[top] = depth + 1;
-        continue;
-      }
-      if (ch === '}') {
-        if (depth === 0) {
-          templateStack.pop();
-          quote = '`';
-        } else {
-          templateStack[top] = depth - 1;
-        }
-        continue;
-      }
-    }
-    if (ch !== '<') {
-      continue;
-    }
-
-    // Guard 1: a JSX opening tag never sits right after an identifier character or a dot. A
-    // generic such as Array<Foo> or useState<string> always does, so this rejects them all.
-    const prev = i > 0 ? (code[i - 1] ?? '') : '';
-    if (prev !== '' && (isIdentifierChar(prev) || prev === '.')) {
-      continue;
-    }
-    const named = readTagName(code, i + 1);
-    if (named === null) {
-      // Closing tags ("</div>"), fragments ("<>", "</>"), and non-tag "<" fall here.
-      continue;
-    }
-    if (!isInjectableTag(named.name)) {
-      continue;
-    }
-    const close = findTagClose(code, named.end);
-    if (close === null) {
-      continue;
-    }
-    const tagText = code.slice(i, close.closeIndex + 1);
-    if (tagText.includes('data-source-file=')) {
-      // Already injected; leave it untouched so repeated transforms stay stable.
-      i = close.closeIndex;
-      continue;
-    }
-    advanceLine(i);
-    const tagLine = lineNumber;
-    // Insert the attribute right before the closing ">" (or the "/" of "/>"). Keep exactly one
-    // space between the last attribute and the injected one: if a space already sits there, for
-    // example "<img src=\"y\" />", do not add a second.
-    const insertAt = close.selfClosing ? close.closeIndex - 1 : close.closeIndex;
-    const leadingSpace = code[insertAt - 1] === ' ' ? '' : ' ';
-    out += code.slice(scanFrom, insertAt);
-    out += `${leadingSpace}data-source-file="${normalized}" data-source-line="${tagLine}"`;
-    scanFrom = insertAt;
-    i = close.closeIndex;
+  for (const { at, line } of insertions) {
+    pieces.push(code.slice(cursor, at), ` data-source-file="${normalized}" data-source-line="${line}"`);
+    cursor = at;
   }
-  out += code.slice(scanFrom);
-  return out;
+  pieces.push(code.slice(cursor));
+  return pieces.join('');
 }
 
 export function shouldInjectJsxSource(id: string): boolean {

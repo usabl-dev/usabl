@@ -34,6 +34,149 @@
   The floor parser refuses a floor whose counts add up past the largest exact whole
   number, and baseline, prune, and doctor scrub the screen ids and rules they print.
 
+- The announcement capture now hears a region only when its effective live value is
+  polite or assertive, resolved the way `pf-toast-live-region` resolves it. Before, it
+  heard any element with an `aria-live` attribute, including `aria-live="off"`, an
+  uppercase or unknown token, and text inside an off wrapper within a polite region. A
+  flow requirement could then pass on an announcement no screen reader spoke. The rule
+  and the capture now share one resolver source. A `role="STATUS"` region, which the
+  capture used to miss, is now heard, as the rule already treated it. A change slotted
+  into a live region inside a shadow root is not recorded, because that region's own
+  text is not what the change made speakable.
+
+- `checkPage` now applies a configured screen's `reachedWhen` signal when `screenId` names
+  that screen. It waits for the selector with the CLI's wait, and when the signal does not
+  hold, the result is a `not-covered` gap that names the selector or the response, and no
+  check runs. Before, it checked whatever the page showed, so a sign-in page or an
+  unmounted shell handed to it as the screen could read as verified. An adopted page does
+  not see requests sent before `checkPage` was called, so a screen that declares a
+  response is always a gap in `checkPage`.
+
+- The dev overlay's shared browser now counts failed context opens per browser process.
+  Before, one count served every process, so a late failure or success from a process
+  that had already been replaced was charged to the new one, and could retire a healthy
+  process or keep a wedged one. Two close requests that arrive together now share one
+  close, so the second no longer returns while the process is still closing.
+
+- `usabl floor prune` now writes back every top-level field of the floor it does not
+  change. Before, it wrote only `version` and `entries`, so a floor marked
+  `scope: "partial"` came back without the marker and read as a complete floor for the
+  whole application. Fields from a newer floor are kept the same way.
+
+- `npm run docs:linkcheck` now reads reference-style links and autolinks in markdown.
+  Before, it read only inline links and HTML attributes, so a broken `[text][ref]` link
+  or `<./page.md>` autolink passed unseen. Full, collapsed (`[ref][]`), and shortcut
+  (`[ref]`) references resolve through their `[ref]: url` definitions, a full or
+  collapsed reference to a label with no definition is reported, relative autolinks are
+  checked, and absolute autolinks are counted as external, as other external links are.
+  Footnotes, indented code blocks, and HTML comments are not read as links.
+
+- The pull request comment now lists waived deterministic findings. Before, a waived
+  finding was in no section of the comment, while the terminal and the overlay showed it
+  as recorded debt. The known section is now `### Known (recorded debt)` and lists carried
+  and waived findings, each with its status, and the collapsed view includes them too. A
+  collapsed group also names its screen id and rule once, in its headline, instead of
+  again on a `rule:` line under it. A collapsed group never mixes findings of different
+  status, so a carried or waived finding is never counted inside a new one, and the hint
+  counts as gating only the findings that gate.
+
+- The terminal report printed `NO VERDICT: IDLE` for a null verdict on a run that had
+  something to check, which is the shape of a failed run, not an idle one. It now prints
+  IDLE only when there was nothing to check. Otherwise it prints `NO VERDICT` and says
+  usabl did not reach a verdict, so the run proved nothing about the change, the same
+  reading the stop hook and the self-check give that state.
+
+- Egress redaction now catches credential shapes it used to print: whitespace or a quote
+  between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
+  header segment or a JWT cut to two segments, the user name and password after `//` in
+  an address, such as an `HTTPS_PROXY` value, a key such as `PROXY_PASSWORD` or
+  `proxyPassword`, and GitHub tokens. A GitHub token pasted into the wrong key of
+  `usabl.config.json` is no longer repeated back in full in the unknown-key message.
+  Other base64 JSON, such as `?state=eyJ...` in a screen URL, is kept as written.
+
+- A page can no longer choose usabl's element identities or the announcements it hears.
+  Element paths came from `window.__usablPathFor` and announcements from
+  `window.__usablDrain`, both in the page's own JavaScript world. `checkPage` kept a
+  helper the page had already defined, and page script could replace the one usabl
+  installed, so a page could give every element one identity and hide a barrier, or pass
+  a flow requirement on an announcement no screen reader spoke. Both now run in isolated
+  worlds that page script cannot reach. An element is named by its id only when the id's
+  selector matches exactly that element, so a NUL id and a U+FFFD id get two identities.
+  A document where the capture is not running is now a coverage gap, never silence.
+
+- `usabl.config.json` now refuses a `surfaces[].url` or an `appBaseUrl` that carries a
+  user name or a password, such as `https://user:pass@host/screen`. Before, the URL was
+  printed as written in every report, including the pull request comment, so the
+  credential was published. The message names the field, such as `surfaces[1].url`, and
+  never prints the value. A URL with a query string or a fragment still loads unchanged,
+  so the overlay still matches gaps to screens, and the CLI, the stop hook, and the
+  dev-server plugin now print a warning that names the field and says the query or the
+  fragment is published. A value with no `//`, such as `admin:secret@localhost:3000/x`,
+  is refused too. The stop hook loads the config, so a config with a refused URL makes
+  the stop hook fail open with "NOT verified - stop hook error" until the URL is fixed.
+
+- The stop hook now blocks a stop on a verdict it does not recognize, and on a null
+  verdict from a run that was neither idle nor a crash. Before, both read as NO VERDICT
+  and the stop was allowed, so an unknown answer passed as a clean change. The block says
+  the run proved nothing and tells the model to run the check again. The self-check
+  printed IDLE for such a null verdict; it now prints IDLE only when there was nothing to
+  check, and names both states the way the stop hook does. A failed run (exit 4) still
+  fails open, as before.
+
+- Router discovery now parses the router file instead of matching its text, and reads
+  routes only from the real router: a `<Routes>` or `<Switch>` element, the first argument
+  of `createBrowserRouter`, `createHashRouter`, or `createMemoryRouter` (or an import alias,
+  a const, or a wrapper of one), the argument of `useRoutes`, or the JSX passed to
+  `createRoutesFromElements` or `createRoutesFromChildren`. Before, a `{ path: '/decoy' }`
+  object or a `<Route>` anywhere in the module was read as a route, and `usabl init` could
+  write a stray `<Route>`'s component into the sidecar as the entry file of a real route.
+  A commented-out route was read. A route whose `element` came before its `path`, a `>` in
+  a JSX attribute string, a `)` in a string or comment inside the router call, and a
+  router call in a string or comment each dropped real routes. The regular expression
+  `/[//]/`, which broke an earlier comment-blanking fix, is now a test. A path written as a
+  `const` in the same module, including `ROUTES.home`, is now read, and a relative child
+  path is joined to its parent path. A route the reader finds but cannot read is never
+  dropped in silence: it names the router file and line, and the planner records it as a
+  `skipped` gap whenever a wide-blast change would have queued the router's routes. That
+  includes a `<Route>` outside every router that was read, a call whose name ends in
+  `Router` that is not a known factory, and a route list changed with `push` or an index.
+  A router file that does not parse, and a file with routes but no router, are each one
+  such gap for the whole file. `usabl drift routes` lists each one with an id, and
+  `usabl init` writes a `Review:` note for each. A layout route with child routes gets no entry file,
+  because its component also renders on each child's URL. A route such as `/app/*`, which
+  usually mounts routes declared in another file, is reported with its line instead of
+  being read as the one screen `/app/*`. A bare `*` route is still skipped. Route files
+  with legacy decorators, Flow types, and route objects with methods such as `loader()`
+  are read.
+
+- The Vite plugin no longer breaks a JSX element that has type arguments. It adds
+  `data-source-file` and `data-source-line` to raw TSX, and it found tags by matching
+  text, so in `<PageWizard<SubscriptionWizardData> ...>` it put the attributes inside
+  the type argument list. It did the same inside a generic arrow function such as
+  `<T,>(value: T) => value`. The file then failed to parse, and the dev server answered
+  500 for every module that imported it. Now the plugin parses each file and puts the
+  attributes after the tag's last attribute, or right after the tag name and any type
+  arguments when it has none, so a `data-source-file` in a spread such as `{...rest}`
+  cannot replace the element's own location. Files with legacy decorators, and `.js` and
+  `.jsx` files with Flow types, are read. Nested type arguments, a
+  generic element inside a conditional, a self-closing generic element, and a
+  member-expression tag such as `<Foo.Bar>` all stay valid. A fragment and a namespaced
+  tag such as `<svg:rect>` get no attributes. A file the parser cannot read is served
+  unchanged, with one warning in the dev server log that names the file, never a 500.
+
+- The stop hook now compares session pins before it allows a stop on a stored receipt.
+  Before, a matching receipt allowed the stop first, so a guarded policy file weakened and
+  committed during the session, then checked with `usabl check` under the weaker policy,
+  produced a receipt that matched and a VERIFIED stop with no drift check. Now detected
+  drift prevents a VERIFIED fast allow: the stop blocks on drift whether or not a receipt
+  matches. During an active continuation it allows once, marked NOT verified, and keeps
+  the pins. The fast path records and replaces pins as a full run does. A stop whose hook
+  input has no usable session id compares no pins, and its allow now says session drift
+  was not checked, on the fast path and on a full run. The fast-path line now names what the receipt matched (the tree, the
+  committed policy, the engine, and the scanners), says no new scan ran, says the guarded
+  files match the session pins only when this stop compared them, and carries the
+  `session drift not checked` note and the pin notice when pins were not used.
+
 - Readiness now waits for a screen's declared `reachedWhen` selector before the keyboard
   walk starts. A page that mounted a small shell, paused for more than about 1.7 seconds
   with nothing in flight, and only then fetched and mounted its content was read as
@@ -109,6 +252,21 @@
   there could fail offline. `prepare` now reads as a plain condition: if the
   installer file exists, run it with bash and keep its exit status.
 
+- Import resolution now probes `.vue` and `.svelte` as well as the JS and TS
+  extensions for an import with no extension. Before, `./Widget` beside `Widget.ts` and
+  `Widget.vue` resolved to `Widget.ts` without a word, while a bundler that resolves
+  `.vue` could load `Widget.vue`, so a change could be attributed to a screen that does
+  not render it. Now an import with more than one candidate links every candidate, so a
+  change to any of them maps to the screen. That can scan a screen that does not render
+  the changed file, and never leaves one out. The ambiguity is still disclosed: an
+  unmapped file's gap names every candidate and says to write the import with its
+  extension. Before, an import with two JS or TS candidates made no edge, so a screen
+  behind it could go unscanned with no gap, and its disclosure said no file matched on
+  disk. A lone `.vue` or `.svelte` file
+  resolves. usabl does not
+  read `resolve.extensions` from the Vite config, so the probed list is fixed, and an
+  extension outside it is not seen. The ground truth says so.
+
 ### Added
 
 - `usabl doctor` reports a readiness signals surface. It is missing when a screen holds
@@ -118,6 +276,15 @@
   element seen on the run is the other. A docs page cannot declare a signal, so doctor
   names docs pages with floored debt separately and points to
   `usabl floor prune --unconfirmed` for a barrier known to be fixed.
+
+- `acknowledgedUnreadable` in `usabl.routes.json`: a list of `{ "file", "id" }` for router
+  entries usabl cannot read that the sidecar's author has checked by hand. Without it, a
+  router with a `/app/*` route, a guard element among the routes, or routes built with
+  `map` made `usabl drift routes` exit 2 on every run. An acknowledged entry is still
+  listed and no longer forces exit 2. The id is a hash of the declaration's source text,
+  so it holds when other lines move and stops matching when the declaration changes. A
+  router file that does not parse, or one with routes but no router, cannot be
+  acknowledged. Only drift reads the list.
 
 - `signalTimeoutMs` in `usabl.config.json`, a positive whole number of milliseconds,
   default 15000, at most 600000 (ten minutes). It caps the wait for a `reachedWhen` selector, counted from the first
@@ -129,6 +296,14 @@
 
 ### Changed
 
+- usabl now has one more runtime dependency, `@babel/parser`, pinned to exactly
+  7.29.11 (MIT). Router discovery (`usabl init`, `usabl drift routes`, and the route
+  manifest the planner reads) and the Vite plugin's source attribute injector use it to
+  read JSX and TypeScript, including type arguments, comments, and regular expressions,
+  instead of matching text. Only the parser is used. It brings three small packages with it: `@babel/types`,
+  `@babel/helper-string-parser`, and `@babel/helper-validator-identifier`, all MIT. The
+  7.x line is used because 8.x requires Node.js 22.18 or later, and usabl supports every
+  Node.js 22 release.
 - `checkPage` called without a `screenId` returns `not_covered` in a project that has
   content or flow design requirements: the unlabeled page counts as no surface, so
   each requirement is a `not-covered` gap until the call passes the page's surface id.
@@ -139,6 +314,11 @@
 
 ### Security
 
+- The stop hook's pin notices and drift message now print carried values only inside
+  the untrusted frame: drifted file paths, the session id from the hook input, the pin
+  store's reasons and fixes, which name directories from the environment, and error text.
+  A file under a guarded directory whose name holds a line break and an instruction used
+  to print that instruction as a line of usabl's own output.
 - The stop hook and the self-check now seal by carrier, as the pull request comment
   already did. Every value a Result carries is printed inside the untrusted frame or is
   type-checked first, whoever wrote it. A barrier's rule and layer, the guarded file
@@ -169,6 +349,41 @@
 - A coverage gap list or a guarded path list that is not a list is now reported as
   unreadable on both surfaces. Walking it used to throw, which the stop hook reported
   as a hook error and let the stop through.
+- The exported `gate()` now refuses a floor with two entries at one identity. It
+  indexed the floor last-wins, so which entry survived decided whether a barrier read
+  as new or carried, and one order was a false green. The gate now parses the floor it
+  is handed with the same parser the floor file goes through, and reads only what that
+  parser returns, so a hand-built floor gets every check a file gets.
+- `gate()` and `mintReceipt()` now check every screen and surface id they are handed
+  against the shared id grammar: `coverage.affected[].screenId`, `drafts[].screenId`,
+  `floor.entries[].screenId`, `waivers[].surface`, and `cleanlyScannedScreens` on the
+  gate, and `checked`, `applicability[].screenId`, and the config's `surfaces[].id` and
+  `noiseBudget.perSurface` keys on the receipt. Reading `.usabl-evidence.json` and
+  `.usabl-waivers.json` now checks their screen ids too. A floor entry or waiver whose
+  id the grammar refuses used to match nothing; now the file is refused. `usabl check`
+  ends with exit 4, naming the entry by position, `usabl floor prune` refuses with exit 4,
+  and `usabl doctor` reports the file as drifted.
+- `gate()` now checks every other input field the verdict depends on, reads each one once,
+  and decides from the checked copy only. A JavaScript caller with a type slip used to get a
+  false green: a `nothingToCheck` of "false" read as idle with a failing barrier, and an
+  `evidenceClass` of "Deterministic" returned `verified`. Coverage and drafts are checked
+  against the Result contract, so every closed set must hold one of its values. Waivers go
+  through the ledger's waiver parser, so their dates must be ISO-8601 UTC. `now` must be
+  ISO-8601 UTC, and `guardDivergedPaths` a list of strings. `cleanlyScannedScreens` must be a
+  real `Set`, and its members are copied before use, so an object that answers `has` for
+  every screen can no longer mark a barrier fixed on a screen nobody scanned.
+- Every refusal above is an `InputRefusedError`, now exported from the package entry.
+  Its `field` names the refused value by path and position, for example
+  `floor.entries[2].screenId`. The message never contains the value. A duplicate floor
+  entry used to be reported with its identity, which carries page text; it is now
+  named by position.
+- `usabl comment` and `usabl enforce` now check the whole Result they read from
+  standard input against the contract: every list is a list, every count is a whole
+  number, every enum value is one of its values, and every nested object has its
+  fields. Fields the contract does not name are dropped. A document that does not
+  match exits 4 with a reason that names the field and never repeats the value, and
+  `usabl comment` prints no comment. Text that is not JSON exits 4 the same way. The
+  JSON parser's own message, which quoted the input back, is no longer printed.
 
 ## 0.2.2 - 2026-10-21
 

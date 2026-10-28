@@ -232,7 +232,13 @@ describe('projectCli', () => {
   });
 
   it('projects idle headline when verdict is null', () => {
-    const projected = projectCli(baseResult({ verdict: null, summary: 'nothing to check (no UI-touching files)' }));
+    const projected = projectCli(
+      baseResult({
+        verdict: null,
+        summary: 'nothing to check (no UI-touching files)',
+        coverage: { ...baseResult({}).coverage, nothingToCheck: true },
+      }),
+    );
     expect(projected.text).toContain('IDLE');
   });
 });

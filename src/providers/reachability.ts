@@ -33,7 +33,7 @@
  * a response record that cannot be read has shown nothing. Either way the screen becomes a gap
  * rather than a pass, and the gap names the part, which is what the operator needs to fix it.
  */
-import type { ApiResponse, Page, ReachedWhenSignal } from '../contracts/index.js';
+import type { ApiResponse, Page, ReachedWhenSignal, ReadinessOutcome, ReadinessProbe } from '../contracts/index.js';
 import { appHostname, isAppHost, requestHostname } from './app-host.js';
 
 // How long readiness waits for a declared selector after the page first settled. Long enough for a
@@ -238,4 +238,63 @@ export async function measureReadiness(
       ? null
       : responseSignalSeen(await readApiResponses(page), signal.response, appBaseUrl);
   return { selectorPresent, responseSeen };
+}
+
+/**
+ * The wait readiness runs for a declared signal, as a probe for Page.gotoReady. Undefined when the
+ * signal declares no selector, so the page waits exactly as it would without a signal.
+ *
+ * A page can settle on a small shell, pause with nothing in flight, and only then fetch and mount
+ * its content. A screen that declares a readiness selector says what its content looks like, so
+ * readiness waits until `holds` answers true at a settled moment, for at most `timeoutMs` after the
+ * page first settled.
+ *
+ * Only the selector can end the wait. A response stays seen once it arrived, so it cannot tell the
+ * screen's content from a page that replaced it a moment later, and waiting on it would end the
+ * wait on whatever settled last.
+ *
+ * The CLI scan and checkPage both build their wait here, so the two wait the same way.
+ */
+export function signalWait(
+  signal: ReadinessSignal | null,
+  timeoutMs: number,
+  holds: () => Promise<boolean>,
+): ReadinessProbe | undefined {
+  if (signal === null || signal.selector === null) {
+    return undefined;
+  }
+  return { timeoutMs, holds };
+}
+
+/**
+ * Whether a declared selector held before the walk: the wait ended because it held, and it still
+ * matches now. The wait's outcome decides, whatever a later read says. The selector can appear
+ * after the cap ran out and before that read, on a page still changing, and checking that page
+ * would grade something that had not settled. A page that reports no outcome is read the same
+ * way, because nothing says the signal held.
+ */
+export function selectorHeldBeforeWalk(
+  readiness: ReadinessOutcome | undefined,
+  selectorPresentNow: boolean | null,
+): boolean {
+  return readiness?.signal === 'held' && selectorPresentNow === true;
+}
+
+/**
+ * Each part of the signal as measured twice, before the walk and after the checks. A part that was
+ * not declared stays null. A declared part holds only if both measurements held. The walk and the
+ * checks are only evidence about the screen if its content was there when they began, so a part
+ * that first holds during them, because the content arrived late or a check caused it, does not
+ * count.
+ */
+export function heldThroughout(
+  beforeWalk: ReadinessMeasurement,
+  afterChecks: ReadinessMeasurement,
+): ReadinessMeasurement {
+  const both = (before: boolean | null, after: boolean | null): boolean | null =>
+    before === null && after === null ? null : before === true && after === true;
+  return {
+    selectorPresent: both(beforeWalk.selectorPresent, afterChecks.selectorPresent),
+    responseSeen: both(beforeWalk.responseSeen, afterChecks.responseSeen),
+  };
 }

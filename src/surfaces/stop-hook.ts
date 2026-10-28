@@ -8,7 +8,13 @@ import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { isBlockingBarrier } from '../output/disclosure.js';
 import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-budget.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
-import { barrierLines, guardedFileLines, notEvaluatedPieces, unconfirmedPieces } from './model-pieces.js';
+import {
+  barrierLines,
+  guardedFileLines,
+  notEvaluatedPieces,
+  unconfirmedPieces,
+  unrecognizedRunLine,
+} from './model-pieces.js';
 import { frameUntrustedBlock, scrubResult, scrubString } from './scrub.js';
 
 export interface HookContext {
@@ -64,6 +70,13 @@ const BLOCK_STEPS: NextSteps = {
   approvalWithGaps:
     'Next: resolve every reason under Not evaluated below, then tell the user that guarded policy files changed and need approval on the pull request. Do not edit those files to clear this block.',
 };
+
+// What the model should do when usabl does not recognize the run's state. A fix to the change
+// cannot clear it, because nothing was checked, so the step is to run the check again.
+const UNRECOGNIZED_BLOCK_STEP =
+  'Next: run usabl check again and stop when it reports a verdict. If it still reports none usabl knows, tell the user, and check the change by hand before you call it accessible.';
+const UNRECOGNIZED_CONTINUATION_STEP =
+  'Next: run usabl check again before you tell the user this change is accessible. If it still reports no verdict usabl knows, tell the user.';
 
 /**
  * The same guidance for the run that is let through because continuation is already active.
@@ -209,14 +222,35 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   });
 }
 
+/** What the stop hook did with session pins before it took the receipt fast path. */
+export interface StoredReceiptPinState {
+  // True when this stop compared the session pins and found no drift.
+  pinsCompared: boolean;
+  // False when this stop did not compare pins it should have, for example because the pin store
+  // refused. The line then carries the same note a full run's allow line does.
+  sessionDriftChecked: boolean;
+}
+
 /**
  * The allow line for a stored receipt that still matches the working tree. The stop hook prints
  * it on the fast path, before any run, so no Result exists yet. The receipt was read from a file
  * in the work tree, so its source tree is a carried value and goes inside the frame.
+ *
+ * The line names what was compared and nothing more. A receipt binds the tree, the committed
+ * policy, the engine, and the scanners as they were when it was minted; it says nothing about the
+ * policy at the start of the session. Only a stop that compared the session pins says they match.
  */
-export function formatStoredReceiptAllow(sourceTree: unknown): string {
+export function formatStoredReceiptAllow(
+  sourceTree: unknown,
+  pins: StoredReceiptPinState = { pinsCompared: false, sessionDriftChecked: true },
+): string {
+  const note = pins.sessionDriftChecked ? '' : `, ${DRIFT_NOT_CHECKED}`;
+  const pinClause = pins.pinsCompared ? ' Guarded policy files match the session pins.' : '';
+  const line =
+    `VERIFIED (exit 0${note}): a stored receipt matches this tree, the committed policy, the engine, and the scanners.` +
+    `${pinClause} No new scan ran. You may stop.`;
   return assembleBoundedMessage({
-    scaffold: ['VERIFIED (exit 0): a stored receipt matches this tree. You may stop.'],
+    scaffold: [line],
     keep: 1,
     pieces: [`receipt sourceTree: ${boundField(scrubString(String(sourceTree)), 'receipt')}`],
     keepPieces: 1,
@@ -286,16 +320,37 @@ export function evaluateStopDecision(
     };
   }
 
+  const unrecognized = unrecognizedRunLine(safe);
+  if (unrecognized !== null) {
+    // A verdict usabl does not recognize, or a null verdict on a run that was neither idle nor a
+    // crash, can only be composed outside run(). It is not evidence that the change is clean, so
+    // the stop blocks, with the reason in usabl's own words. The carried verdict is never
+    // printed, and the gate's summary goes inside the frame. While continuation is already active
+    // the stop goes through once, marked NOT verified, as for every other blocking state, so the
+    // model is not looped.
+    const opening = `${unrecognized.word}: NOT verified. ${
+      ctx.stopHookActive ? 'usabl let this stop through without blocking again (continuation already active). ' : ''
+    }${unrecognized.meaning}`;
+    return {
+      block: !ctx.stopHookActive,
+      message: assembleBoundedMessage({
+        scaffold: [opening, ctx.stopHookActive ? UNRECOGNIZED_CONTINUATION_STEP : UNRECOGNIZED_BLOCK_STEP],
+        keep: 2,
+        pieces: [summaryPiece(safe)],
+        keepPieces: 1,
+        frame: frameUntrustedBlock,
+      }),
+    };
+  }
+
   const shouldBlock = safe.verdict !== null && BLOCKING_VERDICTS.has(safe.verdict);
   if (!shouldBlock) {
-    // A null verdict with no idle flag and no crash can only be composed outside run(). Say
-    // that usabl reached no verdict rather than guess which null state it is. The exit code goes
-    // through the shared verdict word, which prints it only when it is a whole number.
-    const noVerdict = formatVerdictWord({ ...describeVerdict(safe), word: 'NO VERDICT' });
+    // Every state that does not block was handled above. This is a guard, not a path: anything
+    // that reaches it is treated as a run that proved nothing, and the stop blocks.
     return {
-      block: false,
+      block: true,
       message: assembleBoundedMessage({
-        scaffold: [`${noVerdict}: usabl did not reach a verdict for this change.`],
+        scaffold: [`${formatVerdictWord(describeVerdict(safe))}: NOT verified. usabl did not reach a verdict for this change.`],
         keep: 1,
         pieces: [summaryPiece(safe)],
         keepPieces: 1,
