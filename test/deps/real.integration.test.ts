@@ -422,6 +422,34 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       ],
     ];
 
+    // A light element slotted into a live region inside a shadow root. The region's own text in the
+    // shadow tree leaves out the slotted text that changed and holds text the change did not make
+    // speakable: slot fallback text, and shadow-only text. Recording it would let a flow
+    // requirement pass on text no screen reader speaks for the change, so "Saved" must never be
+    // heard here.
+    const shadowRegions: Array<[string, string]> = [
+      ['slot fallback text', '<div aria-live="polite"><slot>Saved</slot></div>'],
+      ['shadow-only text beside the slot', '<div aria-live="polite"><span>Saved</span><slot></slot></div>'],
+    ];
+    for (const [name, shadowHtml] of shadowRegions) {
+      it(`never hears ${name} of a live region in a shadow root when slotted text changes`, async () => {
+        const region =
+          '<x-live-slot><span id="message"></span></x-live-slot>' +
+          "<script>customElements.define('x-live-slot', class extends HTMLElement { constructor() { super();" +
+          ` this.attachShadow({ mode: 'open' }).innerHTML = ${JSON.stringify(shadowHtml)}; } });</script>`;
+        const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(regionPage(region))}`);
+        try {
+          await page.click('#save');
+          const drained = await page.drainAnnouncements();
+          expect(drained).not.toContain('Saved');
+          expect(drained.some((entry) => entry.includes('Saved'))).toBe(false);
+          expect(drained).toContain('Heard');
+        } finally {
+          await page.close();
+        }
+      });
+    }
+
     // checkPage adopts a page the caller opened, and the capture it installs there must make the
     // same call as the one the CLI installs at document start.
     it('does not hear an off wrapper inside a polite region on an adopted page', async () => {

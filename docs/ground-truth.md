@@ -1834,7 +1834,10 @@ an explicit `aria-live` beats the role, only the exact tokens `polite` and `asse
 and roles match without regard to case. A change inside `aria-live="off"`, inside an off wrapper
 within a polite region, or inside a region whose token is `POLITE` or `banana` is not heard. The
 walk climbs through a slot the way the rule's walk does, but it runs in page script, so it sees
-only slots in open shadow roots.
+only slots in open shadow roots. When the live region it reaches sits inside a shadow root and the
+changed element is slotted into it from outside, the change is not recorded. That region's own text
+leaves out the slotted text that changed and holds text the change did not make speakable, such as
+slot fallback text, so recording it could pass a flow requirement on words no screen reader spoke.
 
 The capture and the element path function run in isolated worlds, which share the DOM with the
 page but not its globals or prototypes. Page script cannot define, replace, or read either one. A

@@ -102,7 +102,8 @@ const PATH_FOR_IMPL = `
 // token, and it cannot see an off wrapper between a polite region and the text that changed. The
 // capture used one, so it recorded text no screen reader would speak, and a flow requirement that
 // expected that text passed. The walk follows the flat tree the way the rule's walk does, so a
-// slotted element climbs through its slot.
+// slotted element climbs through its slot. A change whose live region sits in a different tree
+// from it is not recorded; see the observer below.
 const LIVE_CAPTURE_IMPL = `
   const liveResolver = (${createLiveResolver.toString()})();
   const flatParent = (element) => {
@@ -154,7 +155,13 @@ const LIVE_CAPTURE_IMPL = `
     for (const mutation of mutations) {
       const target = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
       const host = target ? liveHost(target) : null;
-      if (host) {
+      // A host in another tree is a live region inside a shadow root that the changed element is
+      // slotted into. Its own text leaves out the slotted text that changed and holds text the
+      // change did not make speakable, such as slot fallback text and shadow-only text. A flow
+      // requirement matches the text exactly, so recording it could pass on words no screen
+      // reader spoke for this change. The change is dropped instead: hearing less can only fail a
+      // requirement, never pass one.
+      if (host && host.getRootNode() === target.getRootNode()) {
         push(host.textContent);
       }
     }

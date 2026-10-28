@@ -10,7 +10,9 @@
   uppercase or unknown token, and text inside an off wrapper within a polite region. A
   flow requirement could then pass on an announcement no screen reader spoke. The rule
   and the capture now share one resolver source. A `role="STATUS"` region, which the
-  capture used to miss, is now heard, as the rule already treated it.
+  capture used to miss, is now heard, as the rule already treated it. A change slotted
+  into a live region inside a shadow root is not recorded, because that region's own
+  text is not what the change made speakable.
 
 - Egress redaction now catches credential shapes it used to print: whitespace or a quote
   between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
