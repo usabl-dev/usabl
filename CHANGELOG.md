@@ -10,6 +10,11 @@
   process or keep a wedged one. Two close requests that arrive together now share one
   close, so the second no longer returns while the process is still closing.
 
+- `usabl floor prune` now writes back every top-level field of the floor it does not
+  change. Before, it wrote only `version` and `entries`, so a floor marked
+  `scope: "partial"` came back without the marker and read as a complete floor for the
+  whole application. Fields from a newer floor are kept the same way.
+
 - `npm run docs:linkcheck` now reads reference-style links and autolinks in markdown.
   Before, it read only inline links and HTML attributes, so a broken `[text][ref]` link
   or `<./page.md>` autolink passed unseen. Full, collapsed (`[ref][]`), and shortcut
