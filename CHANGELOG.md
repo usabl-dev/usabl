@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- `usabl.docs.json` now refuses a `docsBaseUrl` that carries a user name or a password,
+  such as `https://user:pass@docs.local`. Before, it was printed in every docs screen
+  url, including the pull request comment. The message names the field and never the
+  value.
+
+- When the requirements files could not be loaded, the run stopped every scan and asked
+  for approval, but did not say why. The loader's reason is now a `not-covered` coverage
+  gap that names the file. When UI files changed, no screen was scanned, so the
+  accessibility half of the result now reads `not_covered`; before, it read `verified`.
+
 - Readiness could report a declared `reachedWhen` selector as held on a page that changed
   while the selector was being checked. The check runs after the settled sample, so content
   that mounted during it was walked and checked before the page held still. A screen whose

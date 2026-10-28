@@ -503,6 +503,27 @@ describe('computeCoverage', () => {
     );
   });
 
+  it('checks page ids against a docs manifest the caller already parsed, without reading it again', async () => {
+    // run() parses usabl.docs.json once and hands the result here. The check must hold against
+    // that manifest, so the file system below has no usabl.docs.json at all.
+    const cfg: UsablConfig = {
+      ...baseConfig,
+      surfaces: [{ id: 'shared', url: '/app', files: ['src/Billing.tsx'] }],
+    };
+    const fs = fsOf({
+      'usabl.routes.json': JSON.stringify({ routes: [] }),
+      'src/Billing.tsx': `export default function Billing() {}`,
+    });
+    const parsed = {
+      format: 'asciibinder', docsBaseUrl: 'http://localhost:4000', builtRoot: 'build',
+      buildCommand: null, sharedGlobs: [],
+      pages: [{ pageId: 'shared', url: '/guide', assemblyFile: 'docs/guide.adoc', sources: [] }],
+    };
+    await expect(computeCoverage(fs, cfg, ['src/Billing.tsx'], parsed)).rejects.toThrow(
+      /also a surfaces\[\]\.id/,
+    );
+  });
+
   it('refuses a docs page id that is also a discovered route screen id', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({

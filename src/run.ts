@@ -83,8 +83,10 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const scanConfigResolution = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
     const scanConfig = scanConfigResolution.config;
     const coverageFs = overlayUntrustedManifests(deps, guardDivergedPaths, opts.trustedRef);
-    const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed);
+    // Parsed once and handed to both planners, so the screen id check and the docs plan read the
+    // same manifest and the file is read once per run.
     const docsManifest = await parseDocsManifest(coverageFs);
+    const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed, docsManifest);
     const docsCoverage = computeDocsCoverage(docsManifest, changed);
     const affected = [...discoveredCoverage.affected, ...docsCoverage.affected];
     // Idle means nothing UI-touching changed. A run whose scan configuration could not be read
@@ -101,7 +103,10 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     const intakePolicyPaths =
       loadedRequirements.ok
         ? []
-        : [loadedRequirements.path ?? config.requirements ?? 'requirements'].filter((path) => path.length > 0);
+        : [intakeFailurePath(loadedRequirements.path, config)].filter((path) => path.length > 0);
+    const intakeGap = loadedRequirements.ok
+      ? null
+      : unloadableRequirementsGap(intakeFailurePath(loadedRequirements.path, config), loadedRequirements.reason);
     const policyDivergedPaths = [...new Set([...guardDivergedPaths, ...intakePolicyPaths])].sort();
 
     // Malformed intake cannot self-grade. The harness stays closed until policy is valid.
@@ -147,6 +152,8 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
         // First, so the surfaces that name one example per gap state name this one. It explains
         // why no app screen appears on this run. Docs screens can still appear below it.
         ...(scanConfigResolution.unreadable === null ? [] : [scanConfigResolution.unreadable]),
+        // Next, because it explains why no screen at all was scanned on this run.
+        ...(intakeGap === null ? [] : [intakeGap]),
         ...discoveredCoverage.gaps,
         ...docsCoverage.gaps,
         ...screens.flatMap((screen) => screen.gaps),
@@ -383,6 +390,35 @@ async function scanConfigForCoverage(
       unreadable: unreadableScanConfigGap(trustedRef, message),
     };
   }
+}
+
+// The file the loader refused, or the configured root when it named none. The same value is the
+// guarded path this run reports as changed, so the gap and that list name one file.
+function intakeFailurePath(loaderPath: string | undefined, config: UsablConfig): string {
+  return loaderPath ?? config.requirements ?? 'requirements';
+}
+
+/**
+ * The disclosure owed when the requirements could not be loaded.
+ *
+ * A requirements file that does not load stops every scan, because policy cannot be half applied,
+ * and the run already asks for approval on that path. Without this the reason the loader returned
+ * was dropped, so the operator saw a guarded path and no word on what was wrong with it. The gap
+ * also keeps the accessibility half honest: no screen was scanned, so it is not covered, never
+ * verified.
+ *
+ * The loader reason names the file and is already scrubbed. It can quote a line of the YAML file
+ * when the parser reports one, never page text, because no page was opened.
+ */
+function unloadableRequirementsGap(path: string, loaderReason: string): CoverageGap {
+  return {
+    ref: path,
+    state: 'not-covered',
+    reason:
+      `usabl could not load the design requirements: ${loaderReason}. Requirements are policy, and ` +
+      'policy is never applied in part, so no screen was scanned on this run and it cannot verify ' +
+      'accessibility. Fix the requirements file, then run usabl again.',
+  };
 }
 
 function overlayUntrustedManifests(

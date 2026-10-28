@@ -76,6 +76,40 @@ function expectDocsPathUrl(value: unknown, field: string): string {
   return url;
 }
 
+// Userinfo is read three ways, and any one of them refuses the value. They match the readings
+// that refuse a user name or password in surfaces[].url and appBaseUrl. URL parsing finds it in
+// the spellings a browser accepts, such as a backslash for a slash. The two shape checks run on
+// every value, with backslashes read as slashes, because a person or another parser can read a
+// credential where URL parsing finds none. The first finds an "@" in the authority after "//".
+// The second finds an "@" before the first slash, query, or fragment, which covers a value with
+// no "//" at all. An "@" in a path, a query, or a fragment is none of these.
+const USERINFO_SHAPE = /^[^/?#]*\/\/[^/?#]*@/;
+const LEADING_USERINFO_SHAPE = /^[^/?#]*@/;
+
+function carriesUserinfo(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    if (url.username !== '' || url.password !== '') {
+      return true;
+    }
+  } catch {
+    // Not a URL the parser accepts. The shape checks below still apply.
+  }
+  const slashed = raw.replace(/\\/g, '/');
+  return USERINFO_SHAPE.test(slashed) || LEADING_USERINFO_SHAPE.test(slashed);
+}
+
+function expectDocsBaseUrl(value: unknown, field: string): string {
+  const url = expectNonEmptyString(value, field);
+  // Every docs screen url is built on this value, and those urls reach every surface, a pull
+  // request comment included. A user name or password here would be printed there, so it is
+  // refused, and the message never repeats the value because the value is the secret.
+  if (carriesUserinfo(url)) {
+    throw configError`usabl.docs.json ${field} has a user name or password in it. Every docs screen url is built on it, and usabl prints those urls in every report, including pull request comments, so it refuses a URL with credentials. Remove them, and reach protected docs with a storage state (USABL_STORAGE_STATE) instead.`;
+  }
+  return url;
+}
+
 function expectSafeRelativePath(value: unknown, field: string): string {
   // Defense-in-depth: these strings are joined against the repo root later, so reject
   // absolute paths and any ".." segment before they can escape the working tree.
@@ -133,7 +167,7 @@ function parseSidecar(raw: string): DocsManifest {
   }
 
   const format = expectNonEmptyString(parsed['format'], 'format');
-  const docsBaseUrl = expectNonEmptyString(parsed['docsBaseUrl'], 'docsBaseUrl');
+  const docsBaseUrl = expectDocsBaseUrl(parsed['docsBaseUrl'], 'docsBaseUrl');
   const builtRoot = expectSafeRelativePath(parsed['builtRoot'], 'builtRoot');
   const buildCommand = expectBuildCommand(parsed['buildCommand']);
 

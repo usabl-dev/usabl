@@ -1260,7 +1260,11 @@ The source closure is built by following real `include::` transclusions
 rather than guessing narrow, and it ignores includes shown as code blocks or comments.
 Manifest paths are validated: a page `url` must start with `/`, reject `@` and
 percent-encoded traversal, and `assemblyFile`/`sources` are `..`-rejecting repo-relative
-paths.
+paths. `docsBaseUrl` is refused when it carries a user name or password, found by URL parsing,
+by an `@` in the authority after `//`, or by an `@` before the first `/`, `?`, or `#`, with
+backslashes read as slashes for the last two, the same readings `usabl.config.json` URLs get. Every
+docs screen url is built on it and printed in the results, so the refusal names the field and
+never the value.
 
 ### Source-aware findings
 
@@ -2177,6 +2181,12 @@ surface id (section 22). A refused character is reported by position and code po
 printed back. Either failure is `approval_required`, returned from the loader rather than
 thrown, and every reason the loader returns is scrubbed before it leaves, including the YAML
 parser's own message and the file path, because both can carry file bytes.
+
+Any loader failure stops every scan, and the run shows the loader's reason as a `not-covered`
+coverage gap whose ref is the refused file, or the configured root when the loader named none.
+So a broken requirements file is visible on every surface. When a UI file changed, the
+accessibility half of the Result reads `not_covered` rather than `verified`, because no screen
+was scanned.
 
 ---
 
