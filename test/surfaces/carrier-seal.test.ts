@@ -60,6 +60,7 @@ function result(over: Partial<Result> = {}): Result {
     accessibilityExitCode: 1,
     paidDownCount: 0,
     floorHeadroom: [],
+    floorUnconfirmed: [],
     ...over,
   };
 }

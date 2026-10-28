@@ -70,6 +70,7 @@ const result = (over: Partial<Result> = {}): Result => ({
   accessibilityExitCode: 0,
   paidDownCount: 0,
   floorHeadroom: [],
+  floorUnconfirmed: [],
   ...over,
 });
 
@@ -3616,6 +3617,54 @@ describe('the panel tells work apart from recorded debt', { timeout: 40_000 }, (
     expect(await groupHeadings(page)).toEqual(['Recorded, not blocking']);
     expect(await panel.getByText('Floor ahead of this run', { exact: false }).count()).toBe(0);
 
+    await page.context().close();
+  });
+
+  it('shows the notice for recorded barriers not seen, as plain text, on a clean screen and beside findings', async () => {
+    // The run is verified and the notice does not change that. It names the screen and the rules
+    // and gives the fix, in the same sentence the terminal prints, and no element key.
+    const notice =
+      '2 recorded barriers on screen overview (button-name) were not seen in this run, so they are not ' +
+      'claimed fixed. If they are fixed, add a reachedWhen signal for this screen or run usabl floor ' +
+      'prune --unconfirmed.';
+    const floorUnconfirmed = [{ screenId: 'overview', rules: ['button-name'], barriers: 2 }];
+    for (const findings of [[], [carried]]) {
+      const page = await mount(
+        projectOverlay(
+          result({
+            verdict: 'verified',
+            summary: 'verified: nothing blocking, 2 recorded barriers not seen, not claimed fixed',
+            findings,
+            exitCode: 0,
+            floorUnconfirmed,
+          }),
+        ),
+        { path: '/clusters' },
+      );
+      const panel = await openPanel(page);
+
+      expect(await panel.getByText('Recorded barriers not seen', { exact: true }).isVisible()).toBe(true);
+      expect(await panel.getByText(notice, { exact: true }).isVisible()).toBe(true);
+      expect(await panel.getByText('Fix this screen', { exact: false }).count()).toBe(0);
+      if (findings.length > 0) {
+        expect(await groupHeadings(page)).toEqual(['Recorded, not blocking', 'Recorded barriers not seen']);
+      }
+
+      const axe = await new AxeBuilder({ page }).analyze();
+      expect(axe.violations).toEqual([]);
+      await page.context().close();
+    }
+  });
+
+  it('says nothing about recorded barriers not seen when every absence was confirmed', async () => {
+    const page = await mount(
+      projectOverlay(
+        result({ verdict: 'verified', summary: 'verified: nothing blocking, 1 recorded', findings: [carried], exitCode: 0 }),
+      ),
+      { path: '/clusters' },
+    );
+    const panel = await openPanel(page);
+    expect(await panel.getByText('Recorded barriers not seen', { exact: false }).count()).toBe(0);
     await page.context().close();
   });
 

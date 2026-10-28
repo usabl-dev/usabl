@@ -107,3 +107,28 @@ describe('parseEvidenceFloor', () => {
     expect((refused as Error).message).not.toContain('leak-me');
   });
 });
+
+describe('parseEvidenceFloor total', () => {
+  it('refuses a floor whose counts add up past the largest exact whole number, naming the field only', () => {
+    const entry = (rule: string, count: number) => ({
+      screenId: 'orders', layer: 'axe', rule, elementKey: null, identityBasis: 'count', count,
+    });
+    const floor = { version: 2, entries: [entry('button-name', Number.MAX_SAFE_INTEGER), entry('image-alt', 2)] };
+    for (const [origin, field] of [
+      [undefined, 'entries'],
+      [{ source: 'gate() input', path: 'floor' }, 'floor.entries'],
+    ] as const) {
+      let refused: unknown;
+      try {
+        parseEvidenceFloor(floor, origin);
+      } catch (err) {
+        refused = err;
+      }
+      expect(refused).toBeInstanceOf(InputRefusedError);
+      expect((refused as InputRefusedError).field).toBe(field);
+      expect(String(refused)).toMatch(/more barriers in total than usabl can count exactly/);
+      expect(String(refused)).not.toContain(String(Number.MAX_SAFE_INTEGER));
+    }
+    expect(() => parseEvidenceFloor({ version: 2, entries: [entry('button-name', Number.MAX_SAFE_INTEGER)] })).not.toThrow();
+  });
+});

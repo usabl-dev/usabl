@@ -43,6 +43,7 @@ function makeResult(receipt: Receipt | null): Result {
     accessibilityExitCode: 0,
     paidDownCount: 0,
     floorHeadroom: [],
+    floorUnconfirmed: [],
   };
 }
 

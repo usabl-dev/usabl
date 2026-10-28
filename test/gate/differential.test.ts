@@ -26,6 +26,9 @@ const base = {
   cleanlyScannedScreens: new Set(['clusters']),
 };
 const find = (out: { findings: Finding[] }, rule: string) => out.findings.filter((f) => f.rule === rule);
+// The run walked the Save button, so a floored barrier on it that is absent this run was fixed
+// rather than never rendered.
+const saveSeen = new Map([['clusters', { signalHeld: false, elementSlots: new Set(['name:save']) }]]);
 
 describe('gate differential', () => {
   it('marks a finding already in the floor as carried and does not regress', () => {
@@ -44,7 +47,7 @@ describe('gate differential', () => {
     const floor: EvidenceFloor = { version: 2, entries: [
       { screenId: 'clusters', layer: 'axe', rule: 'gone-rule', elementKey: 'clusters|gone-rule|name:save', identityBasis: 'name', count: 1 },
     ] };
-    const out = gate({ ...base, floor, drafts: [] });
+    const out = gate({ ...base, floor, drafts: [], renderEvidence: saveSeen });
     expect(find(out, 'gone-rule')[0]!.status).toBe('fixed');
     expect(out.verdict).toBe('verified');
   });
@@ -53,7 +56,7 @@ describe('gate differential', () => {
     const floor: EvidenceFloor = { version: 2, entries: [
       { screenId: 'clusters', layer: 'axe', rule: 'gone-rule', elementKey: 'clusters|gone-rule|name:save', identityBasis: 'name', count: 1 },
     ] };
-    const out = gate({ ...base, floor, drafts: [] });
+    const out = gate({ ...base, floor, drafts: [], renderEvidence: saveSeen });
     const fixed = find(out, 'gone-rule')[0]!;
     expect(fixed.whatUserExperiences.length).toBeGreaterThan(0);
     expect(fixed.why.length).toBeGreaterThan(0);

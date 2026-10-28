@@ -55,6 +55,7 @@ function resultWith(findings: Finding[]): Result {
     accessibilityExitCode: 1,
     paidDownCount: 0,
     floorHeadroom: [],
+    floorUnconfirmed: [],
   };
 }
 

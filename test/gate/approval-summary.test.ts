@@ -181,6 +181,7 @@ describe('the surfaces that only interpolate the summary now disclose it', () =>
       accessibilityExitCode: gated.accessibilityExitCode,
       paidDownCount: 0,
       floorHeadroom: [],
+      floorUnconfirmed: [],
     };
 
     const decision = evaluateStopDecision(result, { stopHookActive: false });

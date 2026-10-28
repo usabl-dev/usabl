@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { gate } from '../../src/gate/index.js';
 import { InputRefusedError } from '../../src/intake/input-refusal.js';
-import type { Coverage, Draft, EvidenceFloor, FloorEntry, GateInput, Waiver } from '../../src/contracts/index.js';
+import type { Coverage, Draft, EvidenceFloor, FloorEntry, GateInput, RenderEvidence, Waiver } from '../../src/contracts/index.js';
 
 // Visible text joined by a zero-width space. The grammar refuses the joiner, and the visible part
 // is what a message must never repeat back.
@@ -248,7 +248,7 @@ describe('gate() reads its input once and gates what it checked', () => {
     const out = gate(counted);
     expect(out.verdict).toBe('verified');
     expect(out.findings).toEqual([]);
-    for (const key of ['coverage', 'guardDivergedPaths', 'drafts', 'floor', 'waivers', 'now', 'cleanlyScannedScreens']) {
+    for (const key of ['coverage', 'guardDivergedPaths', 'drafts', 'floor', 'waivers', 'now', 'cleanlyScannedScreens', 'renderEvidence']) {
       expect(reads.get(key), key).toBe(1);
     }
   });
@@ -272,7 +272,90 @@ describe('gate() reads its input once and gates what it checked', () => {
 
   it('still marks a floor entry fixed on a screen the set really holds', () => {
     const floor: EvidenceFloor = { version: 2, entries: [entry()] };
-    const out = gate(input({ floor, cleanlyScannedScreens: new Set(['clusters']) }));
+    const out = gate(input({ floor, cleanlyScannedScreens: new Set(['clusters']), renderEvidence: held() }));
     expect(out.findings.map((f) => f.status)).toEqual(['fixed']);
+  });
+});
+
+// Render evidence for the clusters screen whose readiness signal held.
+function held(): Map<string, RenderEvidence> {
+  return new Map([['clusters', { signalHeld: true, elementSlots: new Set<string>() }]]);
+}
+
+describe('gate() carries the render evidence a library caller passes', () => {
+  const floor: EvidenceFloor = { version: 2, entries: [entry()] };
+
+  it('pays down an absent floor entry when the screen\'s readiness signal held', () => {
+    const out = gate(input({ floor, renderEvidence: held() }));
+    expect(out.findings.map((f) => f.status)).toEqual(['fixed']);
+    expect(out.floorUnconfirmed).toEqual([]);
+  });
+
+  it('pays down a name-keyed entry when the run met its element, with no signal', () => {
+    const named: EvidenceFloor = {
+      version: 2,
+      entries: [entry({ identityBasis: 'name', elementKey: 'clusters|button-name|name:save' })],
+    };
+    const renderEvidence = new Map([['clusters', { signalHeld: false, elementSlots: new Set(['name:save']) }]]);
+    const out = gate(input({ floor: named, renderEvidence }));
+    expect(out.findings.map((f) => f.status)).toEqual(['fixed']);
+  });
+
+  it('claims nothing fixed without render evidence, and gives the notice', () => {
+    const out = gate(input({ floor }));
+    expect(out.findings).toEqual([]);
+    expect(out.floorUnconfirmed).toEqual([{ screenId: 'clusters', rules: ['button-name'], barriers: 1 }]);
+  });
+
+  type Bad = { field: string; value: () => unknown };
+  const cases: Bad[] = [
+    { field: 'renderEvidence', value: () => ({ clusters: { signalHeld: true, elementSlots: new Set() } }) },
+    { field: 'renderEvidence', value: () => LEAK },
+    { field: 'renderEvidence[0].key', value: () => new Map([[BAD_ID, { signalHeld: true, elementSlots: new Set() }]]) },
+    { field: 'renderEvidence[0].key', value: () => new Map([[7, { signalHeld: true, elementSlots: new Set() }]]) },
+    { field: 'renderEvidence[0].value', value: () => new Map([['clusters', LEAK]]) },
+    { field: 'renderEvidence[0].value.signalHeld', value: () => new Map([['clusters', { signalHeld: LEAK, elementSlots: new Set() }]]) },
+    { field: 'renderEvidence[0].value.elementSlots', value: () => new Map([['clusters', { signalHeld: false, elementSlots: [LEAK] }]]) },
+    {
+      field: 'renderEvidence[1].value.elementSlots[1]',
+      value: () =>
+        new Map<string, unknown>([
+          ['orders', { signalHeld: false, elementSlots: new Set() }],
+          ['clusters', { signalHeld: false, elementSlots: new Set<unknown>(['name:save', { slot: LEAK }]) }],
+        ]),
+    },
+  ];
+  for (const { field, value } of cases) {
+    it(`refuses a malformed ${field}, naming the field and never the value`, () => {
+      const err = refusal(() => gate(input({ floor, renderEvidence: value() as ReadonlyMap<string, RenderEvidence> })));
+      expect(err.field).toBe(field);
+      expect(err.message).toContain(field);
+      expect(err.message).not.toContain(LEAK);
+    });
+  }
+
+  it('decides fixed from the entries the map really holds, not from an overridden get()', () => {
+    class LyingMap extends Map<string, RenderEvidence> {
+      override get(): RenderEvidence {
+        return { signalHeld: true, elementSlots: new Set<string>() };
+      }
+    }
+    const out = gate(input({ floor, renderEvidence: new LyingMap() }));
+    expect(out.findings).toEqual([]);
+  });
+
+  it('decides an element match from the slots the set really holds, not from an overridden has()', () => {
+    class LyingSet extends Set<string> {
+      override has(): boolean {
+        return true;
+      }
+    }
+    const named: EvidenceFloor = {
+      version: 2,
+      entries: [entry({ identityBasis: 'name', elementKey: 'clusters|button-name|name:save' })],
+    };
+    const renderEvidence = new Map([['clusters', { signalHeld: false, elementSlots: new LyingSet() }]]);
+    const out = gate(input({ floor: named, renderEvidence }));
+    expect(out.findings).toEqual([]);
   });
 });

@@ -14,6 +14,7 @@ import type {
 import { markUnseenScreens } from '../../src/coverage/unseen.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
+import { renderEvidenceOf } from '../../src/gate/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import { testConfig } from '../helpers.js';
 
@@ -544,6 +545,32 @@ describe('makeCheckRunner', () => {
     expect(reasons[0]).toContain('table#clusters');
     expect(reasons[0]).toContain('4000');
     expect(reasons[0]).toContain('signalTimeoutMs');
+  });
+
+  it('never reads a timed-out signal as held render evidence, even when the selector appears just after', async () => {
+    // The gate pays down a floored barrier when the screen's signal held. A signal the readiness
+    // wait reported as timed-out did not hold, whatever a later read of the selector finds.
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    let mounted = false;
+    Object.assign(page, {
+      gotoReady: async (readyWhen?: ReadinessProbe): Promise<ReadinessOutcome> => {
+        await readyWhen?.holds();
+        mounted = true;
+        return { signal: 'timed-out' };
+      },
+      queryAll: async () => (mounted ? [{ selector: 'table#clusters' }] : []),
+    });
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig({ surfaces: [{ id: SCREEN.id, url: SCREEN.url, files: [], reachedWhen: 'table#clusters' }] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(renderEvidenceOf([scan]).get(SCREEN.id)?.signalHeld).toBe(false);
   });
 
   it('ends the screen as a gap when the cap ran out, even if the selector appears just after', async () => {

@@ -3,6 +3,8 @@ import type { Draft, EvidenceFloor, ScreenScan, UsablConfig } from '../../src/co
 import { main } from '../../src/cli.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { runFloorPrune } from '../../src/floor/prune.js';
+import { groupByScreen } from '../../src/floor/unconfirmed.js';
+import { computeIdentity } from '../../src/primitives/identity.js';
 import { parseCliArgs } from '../../src/surfaces/cli.js';
 import { testConfig } from '../helpers.js';
 
@@ -107,7 +109,9 @@ describe('runFloorPrune', () => {
           ]),
         ),
       }),
-      scans: { clusters: scanWith([draft()]) },
+      // The screen declares a readiness signal and it held, so the run shows the search field's
+      // part of the page rendered and its absence is a pay-down.
+      scans: { clusters: { ...scanWith([draft()]), reachedSelectorPresent: true } },
     });
     const writer = new MemoryFloorFs();
 
@@ -247,7 +251,7 @@ describe('runFloorPrune', () => {
           'usabl.config.json': '{}',
         },
       ),
-      scans: { clusters: scanWith([]) },
+      scans: { clusters: { ...scanWith([]), reachedSelectorPresent: true } },
     });
     const writer = new MemoryFloorFs();
 
@@ -443,6 +447,215 @@ describe('runFloorPrune lowers counts', () => {
   });
 });
 
+/**
+ * Prune and the gate read one rule for what counts as paid down. An absent floored barrier is
+ * fixed only when the run shows its part of the page rendered: the screen's reachedWhen signal
+ * held, or the run met the barrier's own element. A screen whose header mounted and whose content
+ * did not is scanned cleanly and shows every barrier in the content as absent, so without that rule
+ * prune deleted real debt from the floor.
+ */
+describe('runFloorPrune keeps barriers it cannot confirm were fixed', () => {
+  const searchEntry = {
+    screenId: 'clusters', layer: 'axe', rule: 'aria-input-field-name',
+    elementKey: 'clusters|aria-input-field-name|name:search', identityBasis: 'name' as const, count: 2,
+  };
+  const saveEntry = {
+    screenId: 'clusters', layer: 'axe', rule: 'color-contrast',
+    elementKey: 'clusters|color-contrast|name:save', identityBasis: 'name' as const, count: 1,
+  };
+  const floorOf = (...entries: EvidenceFloor['entries']): string => JSON.stringify({ version: 2, entries });
+  // The Save barrier is still there, so the screen rendered something. Nothing shows the search
+  // field's part of the page did.
+  const chromeOnly = (over: Partial<ScreenScan> = {}): ScreenScan => ({ ...scanWith([draft()]), ...over });
+
+  it('keeps an absent entry with no render evidence, writes nothing, and says why and what to do', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': floorOf(saveEntry, searchEntry) }),
+      scans: { clusters: chromeOnly() },
+    });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, testConfig(), writer);
+
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.wrote).toBe(false);
+    expect(outcome.prunedCount).toBe(0);
+    expect(outcome.keptUnconfirmedCount).toBe(1);
+    expect(writer.writes).toHaveLength(0);
+    expect(outcome.message).toContain(
+      'kept 1 floor entry (2 barriers) on screen clusters (aria-input-field-name) that this run did not see',
+    );
+    expect(outcome.message).toContain('add a reachedWhen signal for this screen or run usabl floor prune --unconfirmed');
+    expect(outcome.message).not.toContain('name:search');
+  });
+
+  it('removes it with --unconfirmed and says how many it removed and why', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': floorOf(saveEntry, searchEntry) }),
+      scans: { clusters: chromeOnly() },
+    });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, testConfig(), writer, { unconfirmed: true });
+
+    expect(outcome.wrote).toBe(true);
+    expect(outcome.prunedCount).toBe(1);
+    expect(outcome.removedUnconfirmedCount).toBe(1);
+    expect(outcome.keptUnconfirmedCount).toBe(0);
+    expect(parseWrittenFloor(writer).entries).toEqual([saveEntry]);
+    expect(outcome.message).toContain('removed 1 floor entry in .usabl-evidence.json');
+    expect(outcome.message).toContain(
+      '1 of them (2 barriers) on screen clusters was removed because you passed --unconfirmed: ' +
+        'this run did not see it and cannot show that part of the page rendered.',
+    );
+  });
+
+  it('removes it without the flag when the screen signal held', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': floorOf(saveEntry, searchEntry) }),
+      scans: { clusters: chromeOnly({ reachedSelectorPresent: true }) },
+    });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, testConfig(), writer);
+
+    expect(outcome.prunedCount).toBe(1);
+    expect(outcome.keptUnconfirmedCount).toBe(0);
+    expect(outcome.removedUnconfirmedCount).toBe(0);
+    expect(parseWrittenFloor(writer).entries).toEqual([saveEntry]);
+    expect(outcome.message).not.toContain('--unconfirmed');
+  });
+
+  it('removes it without the flag when the walk met its element', async () => {
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': floorOf(saveEntry, searchEntry) }),
+      scans: {
+        clusters: chromeOnly({
+          stops: [{ index: 0, elementPath: 'input#search', announcement: [{ kind: 'name', text: 'Search', fromTree: true, source: 'ax-tree' }] }],
+        }),
+      },
+    });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, testConfig(), writer);
+
+    expect(outcome.prunedCount).toBe(1);
+    expect(outcome.keptUnconfirmedCount).toBe(0);
+  });
+
+  it('does not claim it kept entries on unscanned screens when it kept none', async () => {
+    // An unmapped UI file leaves coverage incomplete, but every floor entry is on a screen that
+    // was scanned cleanly. The old message said entries on unscanned screens were kept anyway.
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({
+        '.usabl-evidence.json': floorOf(saveEntry, searchEntry),
+        'fixtures/app/src/Orphan.tsx': 'export {};\n',
+      }),
+      scans: { clusters: chromeOnly({ reachedSelectorPresent: true }) },
+    });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, testConfig(), writer);
+
+    expect(outcome.prunedCount).toBe(1);
+    expect(outcome.message).not.toContain('were kept');
+    expect(outcome.message).not.toContain('kept');
+  });
+
+  it('names the entries it kept on screens it did not scan cleanly', async () => {
+    const settingsEntry = { ...saveEntry, screenId: 'settings', elementKey: 'settings|color-contrast|name:save' };
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': floorOf(saveEntry, searchEntry, settingsEntry) }),
+      scans: { clusters: chromeOnly({ reachedSelectorPresent: true }) },
+    });
+    const writer = new MemoryFloorFs();
+
+    const outcome = await runFloorPrune(deps, testConfig(), writer);
+
+    expect(outcome.prunedCount).toBe(1);
+    expect(outcome.message).toContain('kept 1 floor entry on screens this run did not scan cleanly.');
+  });
+});
+
+describe('runFloorPrune round two', () => {
+  it('redacts a token-shaped screen id and rule in what it prints', async () => {
+    const id = 'orders?token=SECRETPOISON';
+    const entry = { screenId: id, layer: 'axe', rule: 'rule-token=SECRETPOISONRULE', elementKey: null, identityBasis: 'count' as const, count: 1 };
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': JSON.stringify({ version: 2, entries: [entry] }) }),
+      scans: { [id]: { ...scanWith([]), screenId: id } },
+    });
+    const config = testConfig({ surfaces: [{ id, url: 'http://127.0.0.1:5173/orders', files: ['fixtures/app/src/ClustersPage.tsx'] }] });
+
+    for (const unconfirmed of [false, true]) {
+      const outcome = await runFloorPrune(deps, config, new MemoryFloorFs(), { unconfirmed });
+      expect(outcome.message).toContain('[REDACTED]');
+      expect(outcome.message).not.toContain('SECRETPOISON');
+    }
+  });
+
+  it('scans docs pages too, so a docs entry can be confirmed or removed on purpose', async () => {
+    const manifest = JSON.stringify({
+      format: 'asciidoc-modular',
+      docsBaseUrl: 'http://localhost:8080/docs',
+      builtRoot: 'build/html',
+      buildCommand: null,
+      pages: [{ pageId: 'install-guide', url: '/install.html', assemblyFile: 'modules/install.adoc', sources: ['modules/install.adoc'] }],
+      sharedGlobs: [],
+    });
+    const fixedDraft = draft({ screenId: 'install-guide', layer: 'docs-axe', rule: 'image-alt', elementPath: 'img', elementName: null, role: null, evidence: {} });
+    const entry = { screenId: 'install-guide', layer: 'docs-axe', rule: 'image-alt', ...computeIdentity(fixedDraft), count: 1 };
+    const files = {
+      'usabl.config.json': '{}',
+      'usabl.docs.json': manifest,
+      'modules/install.adoc': '= Install\n',
+      '.usabl-evidence.json': JSON.stringify({ version: 2, entries: [entry] }),
+    };
+    const deps = makeFakeDeps({
+      files,
+      headContents: files,
+      scans: { 'install-guide': { ...scanWith([]), screenId: 'install-guide', url: 'http://localhost:8080/docs/install.html' } },
+    });
+    const config = testConfig({ surfaces: [], guardedPaths: ['usabl.config.json', 'usabl.docs.json'] });
+
+    const kept = await runFloorPrune(deps, config, new MemoryFloorFs());
+    expect(kept.keptUnconfirmedCount).toBe(1);
+
+    const writer = new MemoryFloorFs();
+    const removed = await runFloorPrune(deps, config, writer, { unconfirmed: true });
+    expect(removed.prunedCount).toBe(1);
+    expect(parseWrittenFloor(writer).entries).toEqual([]);
+  });
+
+  it('reads an identity with only an advisory draft left the way the gate does', async () => {
+    const entry = { screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count' as const, count: 2 };
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ '.usabl-evidence.json': JSON.stringify({ version: 2, entries: [entry] }) }),
+      scans: { clusters: scanWith([draft({ rule: 'button-name', evidenceClass: 'preview', confidence: 'unverified' })]) },
+    });
+
+    const outcome = await runFloorPrune(deps, testConfig(), new MemoryFloorFs());
+
+    expect(outcome.keptUnconfirmedCount).toBe(1);
+    expect(outcome.wrote).toBe(false);
+  });
+
+  it('adds barriers per screen in an order that does not depend on the floor', () => {
+    const entries = [Number.MAX_SAFE_INTEGER, 2, 1].map((count, index) => ({
+      screenId: 'orders', layer: 'axe', rule: 'link-name', elementKey: `orders|link-name|struct:link:#row${index}`,
+      identityBasis: 'structural' as const, count,
+    }));
+    expect(groupByScreen([...entries].reverse())).toEqual(groupByScreen(entries));
+  });
+});
+
+describe('floor prune --unconfirmed parsing', () => {
+  it('parses the flag', () => {
+    expect(parseCliArgs(['floor', 'prune', '--unconfirmed']).unconfirmed).toBe(true);
+    expect(parseCliArgs(['floor', 'prune']).unconfirmed).toBe(false);
+  });
+});
+
 describe('runFloorPrune keeps the floor document it does not change', () => {
   // Two entries on the cleanly scanned screen, one paid down and one still observed, so prune
   // writes a diff and the rest of the document has to survive it.
@@ -460,7 +673,8 @@ describe('runFloorPrune keeps the floor document it does not change', () => {
   async function pruneDocument(document: Record<string, unknown>): Promise<Record<string, unknown>> {
     const deps = makeFakeDeps({
       ...withPolicyFiles({ '.usabl-evidence.json': JSON.stringify(document) }),
-      scans: { clusters: scanWith([draft()]) },
+      // The screen's readiness signal held, so the absent entry is a pay-down prune may remove.
+      scans: { clusters: { ...scanWith([draft()]), reachedSelectorPresent: true } },
     });
     const writer = new MemoryFloorFs();
     const outcome = await runFloorPrune(deps, testConfig(), writer);

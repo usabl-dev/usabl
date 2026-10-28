@@ -34,6 +34,7 @@ import type {
   Fact,
   Finding,
   FloorHeadroom,
+  FloorUnconfirmed,
   Receipt,
   Result,
   RuleApplicability,
@@ -406,6 +407,15 @@ function headroom(value: unknown, field: string): FloorHeadroom {
   };
 }
 
+function unconfirmed(value: unknown, field: string): FloorUnconfirmed {
+  const source = record(value, field);
+  return {
+    screenId: text(source['screenId'], at(field, 'screenId')),
+    rules: texts(source['rules'], at(field, 'rules')),
+    barriers: whole(source['barriers'], at(field, 'barriers')),
+  };
+}
+
 /**
  * Checks a parsed JSON value against the Result contract and returns a Result built from the
  * checked fields. Throws InputRefusedError on the first field that does not match.
@@ -444,5 +454,6 @@ function readResult(value: unknown): Result {
     findings: list(source['findings'], 'findings', finding),
     receipt: source['receipt'] === null ? null : receipt(source['receipt'], 'receipt'),
     floorHeadroom: list(source['floorHeadroom'], 'floorHeadroom', headroom),
+    floorUnconfirmed: list(source['floorUnconfirmed'], 'floorUnconfirmed', unconfirmed),
   };
 }
