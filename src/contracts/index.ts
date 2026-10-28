@@ -218,6 +218,29 @@ export interface FloorHeadroom {
  */
 export type DebtTrackingOff = 'no-reader' | 'no-history' | 'unreadable' | 'old-floor' | 'no-base';
 
+/**
+ * The accessibility debt a run worked against, for the pull request comment and `usabl debt`.
+ *
+ * Barrier counts, never element keys. `floorBarriers` is what the committed floor accepts.
+ * `acceptedBarriers` is what this run accepted after the fixes main confirmed, so it is never above
+ * `floorBarriers`. `fixedThisRun` is what this run did not see of the accepted debt, which counts
+ * as fixed in this change until main confirms it. `remaining` is accepted minus fixed this run.
+ */
+export interface DebtStatus {
+  tracking: 'on' | 'off';
+  off: { cause: DebtTrackingOff; detail: string | null } | null;
+  historyHead: string | null;
+  floorBarriers: number;
+  acceptedBarriers: number;
+  confirmedFixed: number;
+  fixedThisRun: number;
+  remaining: number;
+  // Whole days since the oldest remaining barrier was first seen on main, or null when unknown.
+  oldestOpenDays: number | null;
+  // Barriers whose fix came back on an unchanged tree. They keep their slot and are not released.
+  intermittent: number;
+}
+
 export interface FloorUnconfirmed {
   screenId: string;
   rules: string[]; // sorted, each rule once
