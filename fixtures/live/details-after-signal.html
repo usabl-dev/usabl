@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orders</title>
+  </head>
+  <body>
+    <header>
+      <nav aria-label="Main">
+        <a id="home-link" href="#home">Home</a>
+      </nav>
+    </header>
+    <main id="root"></main>
+    <script>
+      // A shell that pauses with nothing in flight, then mounts the orders table, which is the
+      // screen's declared readiness selector, and in the same task asks for the order details.
+      // The server answers that request slowly. When it lands, the page mounts a details panel
+      // whose only control is a button with no accessible name. A scan that starts as soon as the
+      // table appears runs before that button exists and misses the barrier.
+      window.addEventListener('load', () => {
+        setTimeout(() => {
+          const root = document.getElementById('root');
+          if (!root) {
+            return;
+          }
+          const table = document.createElement('table');
+          table.id = 'orders';
+          for (const order of ['A-100', 'A-101']) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.textContent = order;
+            row.appendChild(cell);
+            table.appendChild(row);
+          }
+          root.appendChild(table);
+          fetch('/api/slow/details')
+            .then((response) => response.json())
+            .then(() => {
+              const panel = document.createElement('section');
+              panel.id = 'details';
+              const button = document.createElement('button');
+              button.type = 'button';
+              panel.appendChild(button);
+              root.appendChild(panel);
+            });
+        }, 2500);
+      });
+    </script>
+  </body>
+</html>

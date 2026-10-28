@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- Readiness could report a declared `reachedWhen` selector as held on a page that changed
+  while the selector was being checked. The check runs after the settled sample, so content
+  that mounted during it was walked and checked before the page held still. A screen whose
+  barrier mounted after the selector, from a request sent in the same moment, could come
+  out clean with no gap. A match now ends the wait only when the element count is the same
+  and the network is still quiet after the check. Otherwise readiness keeps waiting, inside
+  the same signal cap and readiness budget.
+
 - A floored barrier is no longer reported paid down on a screen whose content never
   rendered. When a screen's header and navigation mounted and its content failed to
   mount, the walk found a real control and no check failed, so the screen had no gap,

@@ -847,7 +847,10 @@ function readinessTimeout(phase: string, timeoutMs: number, detail: string): str
  * readyWhen closes that pause for a screen that declares a readiness selector. Its probe is asked
  * only at a moment when the DOM is stable and the network is quiet, and the loop keeps waiting
  * until it answers true, until readyWhen.timeoutMs has passed since the first such moment, or until
- * the budget runs out, whichever comes first. The cap is counted from the first settled moment,
+ * the budget runs out, whichever comes first. A true answer only ends the wait when the page reads
+ * the same after the probe as before it: the same element count and a network still quiet. A page
+ * that mounted its content while the probe ran was not settled when the probe looked, so the wait
+ * goes on, inside the same cap and budget. The cap is counted from the first settled moment,
  * never restarts, and is checked on every pass whether or not the page is settled, and no sleep
  * runs past it, so a page that keeps changing cannot stretch it. A probe that throws reads as false.
  *
@@ -877,21 +880,38 @@ export async function waitForRendered(
   let previous: number | null = null;
   let repeats = 0;
   for (;;) {
-    const elements = await pw.evaluate(() => document.getElementsByTagName('*').length);
+    let elements = await pw.evaluate(() => document.getElementsByTagName('*').length);
     repeats = elements === previous ? repeats + 1 : 1;
     previous = elements;
 
-    const domStable = repeats >= SETTLE_SAMPLES_REQUIRED;
+    let domStable = repeats >= SETTLE_SAMPLES_REQUIRED;
     // Read live every pass, so a request that started since the last read resets the window.
-    const networkQuiet = pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS);
-    const settled = domStable && networkQuiet;
+    let networkQuiet = pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS);
+    let settled = domStable && networkQuiet;
     if (settled) {
       if (readyWhen === undefined) {
         return { signal: 'not-declared' };
       }
       signalDeadline ??= Date.now() + readyWhen.timeoutMs;
       if (await signalHolds(readyWhen.holds)) {
-        return { signal: 'held' };
+        // The probe takes time, and the page can mount its content while it runs. The sample
+        // before the probe then describes a page that is gone, so the answer only counts when the
+        // page reads the same after it: the same element count, with the network still quiet.
+        // Otherwise the wait goes on. A changed count starts a new run of equal reads, and a busy
+        // network has to go quiet again.
+        const after = await pw.evaluate(() => document.getElementsByTagName('*').length);
+        const quietAfter = pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS);
+        if (after === elements && quietAfter) {
+          return { signal: 'held' };
+        }
+        if (after !== elements) {
+          repeats = 1;
+          previous = after;
+          elements = after;
+          domStable = false;
+        }
+        networkQuiet = quietAfter;
+        settled = false;
       }
     }
     // Checked on every pass, settled or not, so DOM changes after the first settled moment cannot

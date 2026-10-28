@@ -1076,6 +1076,14 @@ selector at each such moment and keeps waiting until it matches at one of them, 
 `signalTimeoutMs` (15000 by default) counted from the first moment the page settled, and always
 inside `readyTimeoutMs`. The cap never restarts, and it is checked on every pass whether or not the
 page has settled since, so a page that keeps changing cannot stretch it.
+A match only ends the wait when the page reads the same after the check as before it: the same
+element count, with the network still quiet. Checking the selector takes several reads of the live
+page, and a page can mount its content during them. Then the moment the check started from was not
+the page the selector matched on, so readiness keeps waiting, inside the same cap and budget, until
+the page holds still again. Measured through a real browser against a page whose table mounts
+during that check and, in the same task, sends a request that later mounts a button with no
+accessible name: ending the wait on that match walked and checked the page before the button
+existed, and the screen came out clean with no gap.
 Readiness stops waiting early when the page is plainly not this screen, by the rules above (a
 refused data request under a configured session, a password field with no signal that holds, or a
 redirect to a sign-in page), so those gaps cost no more than before.
