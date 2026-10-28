@@ -277,6 +277,40 @@ describe('gate() reads its input once and gates what it checked', () => {
   });
 });
 
+describe('gate() reads a version 3 floor with row entries', () => {
+  const ROW_KEY = 'clusters|button-name|row:["0123456789abcdef","fedcba9876543210","button","td:nth-child(2)>button:nth-child(1)"]';
+  const rowEntry = entry({ elementKey: ROW_KEY, identityBasis: 'row' });
+  const rowDraft = draft({
+    evidence: { extra: { rowScope: { table: '0123456789abcdef', row: 'fedcba9876543210', role: 'button', path: 'td:nth-child(2)>button:nth-child(1)' } } },
+  });
+
+  it('accepts the floor and carries the row barrier it records', () => {
+    const out = gate(input({ drafts: [rowDraft], floor: { version: 3, entries: [rowEntry] } }));
+    expect(out.verdict).toBe('verified');
+    expect(out.findings.map((f) => [f.identityBasis, f.status])).toEqual([['row', 'carried']]);
+  });
+
+  it('accepts an empty version 3 floor', () => {
+    expect(() => gate(input({ floor: { version: 3, entries: [] } }))).not.toThrow();
+  });
+
+  it('refuses a row entry with no element key', () => {
+    const err = refusal(() => gate(input({ floor: { version: 3, entries: [entry({ identityBasis: 'row' })] } })));
+    expect(err.message).toContain('floor.entries[0].elementKey');
+  });
+
+  it('refuses a row entry in a version 2 floor', () => {
+    const err = refusal(() => gate(input({ floor: { version: 2, entries: [rowEntry] } })));
+    expect(err.message).toContain('floor.entries[0]');
+    expect(err.message).not.toContain('fedcba9876543210');
+  });
+
+  it('refuses a floor version past 3', () => {
+    const err = refusal(() => gate(input({ floor: { version: 4, entries: [] } as unknown as EvidenceFloor })));
+    expect(err.message).toContain('floor.version');
+  });
+});
+
 // Render evidence for the clusters screen whose readiness signal held.
 function held(): Map<string, RenderEvidence> {
   return new Map([['clusters', { signalHeld: true, elementSlots: new Set<string>() }]]);

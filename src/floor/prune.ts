@@ -6,7 +6,7 @@
 import type { Deps, FloorEntry, UsablConfig } from '../contracts/index.js';
 import { EVIDENCE_FLOOR_PATH, everyScannableFile } from '../baseline/index.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
-import { identityKey } from '../primitives/identity.js';
+import { identityKey, identitySchemeFor } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { run } from '../run.js';
 import {
@@ -168,14 +168,18 @@ export async function runFloorPrune(
     // Counts, not a presence set, so an entry that survives can be lowered to what this run saw.
     // The recorded count is otherwise a high-water mark that only baseline moves, and the gate
     // cannot tell a new barrier in a freed slot from the accepted one that used to hold it.
-    const seen = observeFloor(result.screens);
+    //
+    // Counted with the keys the floor was written with, as the gate compares it. A version 2 floor
+    // collapsed a control repeated in every table row onto one entry, so counting rows apart here
+    // would read every such entry as gone and prune debt that is still on the page.
+    const seen = observeFloor(result.screens, identitySchemeFor(floor));
     const cleanlyScannedScreens = seen.cleanlyScanned;
     const observedCounts = seen.observedCounts;
     // The same test the gate applies before it compares a count. A version 1 floor wrote a
     // placeholder 1 for name and structural entries, so those numbers are not observations and the
     // gate ignores them. Writing a real count into one would present it as observed debt while the
     // file still says version 1, which is the confusion the version field exists to prevent. Those
-    // entries are re-armed by `usabl baseline`, which rewrites the floor at version 2.
+    // entries are re-armed by `usabl baseline`, which rewrites the floor at the current version.
     const countIsObserved = (entry: FloorEntry): boolean =>
       entry.identityBasis === 'count' || floor.version >= 2;
 

@@ -66,7 +66,7 @@ are already there, and check a change:
 
 ```bash
 npx usabl init       # drafts usabl.config.json and usabl.routes.json from your code
-npx usabl baseline   # scans every mapped screen and drafts .usabl-evidence.json
+npx usabl baseline   # scans every mapped screen twice and drafts .usabl-evidence.json
 npx usabl check
 ```
 
