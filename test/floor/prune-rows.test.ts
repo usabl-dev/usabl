@@ -117,4 +117,3 @@ describe('floor prune with row keys', () => {
     expect(written).toEqual({ ...document, entries: [{ ...document.entries[0], count: 2 }] });
   });
 });
-
