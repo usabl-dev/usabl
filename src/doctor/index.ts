@@ -33,6 +33,8 @@ import { neutralize } from '../primitives/neutralize.js';
 import { scrubString } from '../surfaces/scrub.js';
 import { buildGuardedSet } from '../trust/guard.js';
 import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
+import type { ChromiumSandboxProbe } from './sandbox-probe.js';
+import { SANDBOX_FIX } from '../deps/sandbox.js';
 
 // The code-owners file the policy gate reads. Doctor reconciles it against guardedPaths so the
 // two lists cannot drift silently.
@@ -69,6 +71,7 @@ const CI_LABEL = 'ci gate workflow (.github/workflows/usabl-gate.yml)';
 // rather than spelling it out, so doctor can never tell someone to require a stale job name.
 const BRANCH_RULE_LABEL = `branch protection (main requires ${REQUIRED_CHECK})`;
 const PLAYWRIGHT_CHROMIUM_LABEL = 'playwright chromium (headless browser)';
+const CHROMIUM_SANDBOX_LABEL = 'chromium sandbox (isolates the pages usabl scans)';
 const POLICY_SCOPE_LABEL = 'policy scope (guardedPaths covers CODEOWNERS)';
 const READINESS_SIGNALS_LABEL = 'readiness signals (reachedWhen on screens with floored debt)';
 
@@ -102,6 +105,9 @@ export interface DoctorDeps {
   // Probes the Playwright Chromium install that "usabl check" uses for browser scans. Injected
   // in tests so doctor never reaches the real environment.
   probePlaywrightChromium: () => Promise<PlaywrightBootstrapProbe>;
+  // Starts Chromium with its sandbox to learn whether this system can provide one. Injected in
+  // tests so doctor never starts a browser there.
+  probeChromiumSandbox: () => Promise<ChromiumSandboxProbe>;
   // Milliseconds since the Unix epoch, for judging session cookie expiry. Injected for the same
   // reason env is, and defaults to the wall clock so existing callers need not pass one.
   now?: () => number;
@@ -593,6 +599,31 @@ async function collectPlaywrightChromium(deps: DoctorDeps): Promise<SurfaceRepor
   };
 }
 
+async function collectChromiumSandbox(deps: DoctorDeps): Promise<SurfaceReport> {
+  const state = await deps.probeChromiumSandbox();
+  if (state === 'available') {
+    return { id: 'chromium-sandbox', label: CHROMIUM_SANDBOX_LABEL, state: 'wired', nextStep: '' };
+  }
+  if (state === 'unavailable') {
+    return {
+      id: 'chromium-sandbox',
+      label: CHROMIUM_SANDBOX_LABEL,
+      state: 'missing',
+      nextStep:
+        'Chromium could not start its sandbox on this system. Until it can, usabl scans without it and ' +
+        'says so in the run output and the Result, or refuses to scan (exit 4) when usabl.config.json sets ' +
+        `browserSandbox to "require". ${SANDBOX_FIX}`,
+    };
+  }
+  return {
+    id: 'chromium-sandbox',
+    label: CHROMIUM_SANDBOX_LABEL,
+    state: 'unknown',
+    nextStep:
+      'usabl could not start Chromium to check its sandbox. Fix the playwright chromium install first, then run "usabl doctor" again.',
+  };
+}
+
 async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
   // verified is the only wired mapping. not-applied is a confident absence (missing).
   // cannot-verify (gh missing, ambiguous 404, unreadable response) is unknown, because
@@ -726,7 +757,7 @@ async function collectPolicyScope(deps: DoctorDeps): Promise<SurfaceReport> {
 }
 
 export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceReport[]> {
-  // Order mirrors the slice: config, authenticated session, playwright chromium, routes,
+  // Order mirrors the slice: config, authenticated session, playwright chromium, its sandbox, routes,
   // evidence floor, readiness signals for the screens it holds debt on, waivers, overlay, stop hook, usabl-check skill, cursor assistant, ci
   // workflow, branch rule. The session sits second because it decides what every later scan
   // actually measures. Each
@@ -746,6 +777,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     await guardRead('config', CONFIG_LABEL, () => collectConfig(deps)),
     await guardRead('session', SESSION_LABEL, () => collectSession(deps)),
     await guardRead('playwright-chromium', PLAYWRIGHT_CHROMIUM_LABEL, () => collectPlaywrightChromium(deps)),
+    await guardRead('chromium-sandbox', CHROMIUM_SANDBOX_LABEL, () => collectChromiumSandbox(deps)),
     await guardRead('routes', ROUTES_LABEL, () => collectRoutes(deps)),
     await guardRead('evidence-floor', EVIDENCE_FLOOR_LABEL, () => collectEvidenceFloor(deps)),
     await guardRead('readiness-signals', READINESS_SIGNALS_LABEL, () => collectReadinessSignals(deps)),

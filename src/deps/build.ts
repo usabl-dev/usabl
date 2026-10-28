@@ -193,18 +193,6 @@ export async function buildDeps(
     explicit: options.storageStatePath,
     env: options.env ?? process.env,
   });
-  const browserOptions: RealBrowserOptions = {
-    ...(storageStatePath === null ? {} : { storageStatePath }),
-    // The operator's app is what decides how long a screen takes to render, so the budget rides
-    // the config the run was started with.
-    ...(config.readyTimeoutMs === undefined
-      ? {}
-      : { readyTimeoutMs: config.readyTimeoutMs }),
-  };
-  const browser =
-    options.browserFor === undefined
-      ? makeRealBrowserDriver(browserOptions)
-      : options.browserFor(browserOptions);
   const fs = makeFsGlob({ cwd });
   const git = makeGitReader({ cwd });
   const intakeConfig = await resolveIntakeConfig(
@@ -212,6 +200,25 @@ export async function buildDeps(
     config,
     options.trustedRef,
   );
+  const browserOptions: RealBrowserOptions = {
+    ...(storageStatePath === null ? {} : { storageStatePath }),
+    // The operator's app is what decides how long a screen takes to render, so the budget rides
+    // the config the run was started with.
+    ...(config.readyTimeoutMs === undefined
+      ? {}
+      : { readyTimeoutMs: config.readyTimeoutMs }),
+    // The sandbox policy is policy, so a pull request must not be able to turn a required sandbox
+    // off for its own scan. With a trusted ref, require in either document wins.
+    ...(config.browserSandbox === "require" ||
+    intakeConfig.browserSandbox === "require"
+      ? { browserSandbox: "require" as const }
+      : {}),
+  };
+  // Still lazy: nothing launches until the first screen opens.
+  const browser =
+    options.browserFor === undefined
+      ? makeRealBrowserDriver(browserOptions)
+      : options.browserFor(browserOptions);
   const intakeFs = overlayRequirementsFs(
     fs,
     git,

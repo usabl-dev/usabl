@@ -3,7 +3,7 @@
  * This unit validates shape only.
  * It must never mint a verdict or choose scan targets on its own.
  */
-import type { ReachedWhenSignal, SurfaceConfig, UsablConfig } from '../contracts/index.js';
+import type { BrowserSandboxPolicy, ReachedWhenSignal, SurfaceConfig, UsablConfig } from '../contracts/index.js';
 import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
 import { expandBraces } from '../primitives/match-glob.js';
@@ -276,6 +276,16 @@ function parseSurface(raw: unknown, index: number): SurfaceConfig {
   };
 }
 
+// A value other than the two the engine knows would otherwise be read as the default, and a typo
+// such as "required" would scan without the sandbox the operator asked for. So it is refused,
+// naming the field, before a run opens a browser.
+function parseBrowserSandbox(value: unknown): BrowserSandboxPolicy {
+  if (value !== 'auto' && value !== 'require') {
+    throw configError`browserSandbox must be "auto" or "require". "auto" scans without Chromium's sandbox when the system cannot start it and says so; "require" refuses to scan then.`;
+  }
+  return value;
+}
+
 export function parseUsablConfig(raw: string): UsablConfig {
   // A JSON.parse failure message quotes the offending input back, so it is operator text on the
   // same egress as every other message here and cannot be allowed to pass through unscrubbed.
@@ -321,6 +331,10 @@ export function parseUsablConfig(raw: string): UsablConfig {
   const noiseBudget =
     noiseBudgetRaw === undefined ? undefined : parseNoiseBudgetConfig(noiseBudgetRaw);
 
+  const browserSandboxRaw = Reflect.get(root, 'browserSandbox');
+  const browserSandbox =
+    browserSandboxRaw === undefined ? undefined : parseBrowserSandbox(browserSandboxRaw);
+
   return {
     appBaseUrl: parseConfiguredUrl(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
     uiFileGlobs: expectGlobArray(Reflect.get(root, 'uiFileGlobs'), 'uiFileGlobs'),
@@ -338,5 +352,6 @@ export function parseUsablConfig(raw: string): UsablConfig {
     ...(readyTimeoutMs === undefined ? {} : { readyTimeoutMs }),
     ...(signalTimeoutMs === undefined ? {} : { signalTimeoutMs }),
     ...(noiseBudget === undefined ? {} : { noiseBudget }),
+    ...(browserSandbox === undefined ? {} : { browserSandbox }),
   };
 }

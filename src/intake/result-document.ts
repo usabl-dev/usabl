@@ -325,6 +325,9 @@ function screen(value: unknown, field: string): ScreenScan {
   if (has(source, 'reachedWhenResponse')) {
     out.reachedWhenResponse = textOrNull(source['reachedWhenResponse'], at(field, 'reachedWhenResponse'));
   }
+  if (has(source, 'browserSandbox')) {
+    out.browserSandbox = oneOf(source['browserSandbox'], at(field, 'browserSandbox'), ['off'] as const);
+  }
   return out;
 }
 

@@ -9,6 +9,7 @@ import { chromium, type Browser, type BrowserContext, type CDPSession, type Page
 import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page, ReadinessOutcome, ReadinessProbe } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
+import { BrowserSandboxRequiredError, isBrowserSandboxRefusal, isSandboxLaunchFailure, type BrowserSandboxPolicy } from './sandbox.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
 // Ansible Automation Platform screen measured 12.4 s to network idle plus 13.3 s to a DOM that
@@ -1125,7 +1126,9 @@ function wrapPage(
  * (for example from a Playwright test suite). It attaches a CDP session for AX reads and element
  * paths and installs the live-region capture, then returns a usabl Page whose close() is a no-op: the
  * caller owns the page and its context, so adoption must never close them. Navigation and readiness
- * are the caller's job.
+ * are the caller's job. The browser is the caller's too: usabl did not launch it and does not change
+ * how it runs, so whether it has Chromium's sandbox is the caller's choice, and the page carries no
+ * sandbox note.
  *
  * The in-flight tracker starts at adoption, so it counts only requests fired after this call. A
  * caller that adopts a page mid-load and then calls gotoReady would read the network as idle at once
@@ -1158,6 +1161,8 @@ export async function adoptPage(pw: PwPage, options: { readyTimeoutMs?: number }
 export interface RealBrowserOptions {
   storageStatePath?: string;
   readyTimeoutMs?: number;
+  // What this run allows when Chromium cannot start its sandbox. Absent means auto.
+  browserSandbox?: BrowserSandboxPolicy;
 }
 
 /**
@@ -1216,16 +1221,40 @@ export function redactStorageStatePath(error: unknown, storageStatePath: string 
   );
 }
 
-// One launched process and the newContext failures in a row it has had.
+// One launched process, the newContext failures in a row it has had, and whether it runs with
+// Chromium's sandbox. Whether it does is decided once, when the process starts, so every page it
+// opens shares the answer.
 interface ProcessHandle {
   process: LaunchedBrowser;
   contextFailures: number;
+  sandboxed: boolean;
+}
+
+/** What one scan browser launch asks Chromium for. */
+export interface ScanBrowserLaunch {
+  chromiumSandbox: boolean;
+}
+
+/**
+ * The options usabl hands chromium.launch. Playwright adds --no-sandbox unless chromiumSandbox is
+ * true, so the sandbox has to be asked for by name.
+ */
+export function chromiumLaunchOptions(launch: ScanBrowserLaunch): { headless: true; chromiumSandbox: boolean } {
+  return { headless: true, chromiumSandbox: launch.chromiumSandbox };
+}
+
+/**
+ * Starts a scan browser. The shared browser, which the CLI and the overlay open pages through, and
+ * the doctor's sandbox probe both start Chromium here, so they ask for the same thing.
+ */
+export async function launchScanBrowser(launch: ScanBrowserLaunch): Promise<Browser> {
+  return chromium.launch(chromiumLaunchOptions(launch));
 }
 
 export function makeSharedBrowser(
-  ports: { launch?: () => Promise<LaunchedBrowser>; maxContextFailures?: number } = {},
+  ports: { launch?: (launch: ScanBrowserLaunch) => Promise<LaunchedBrowser>; maxContextFailures?: number } = {},
 ): SharedBrowser {
-  const launch = ports.launch ?? (async (): Promise<LaunchedBrowser> => chromium.launch({ headless: true }));
+  const launch = ports.launch ?? launchScanBrowser;
   // How many newContext failures in a row, with the process still reporting connected, before the
   // process is treated as unusable and replaced. A process can hang or wedge in a way that keeps its
   // connection up while every context request fails, and a reference kept forever would fail every
@@ -1263,38 +1292,73 @@ export function makeSharedBrowser(
     await which.process.close().catch(() => undefined);
   };
 
-  const acquire = async (): Promise<ProcessHandle> => {
-    if (closed) {
-      throw closedError();
+  // Starts a process with Chromium's sandbox. Only a launch that failed because the system cannot
+  // provide the sandbox is tried again without it, and only when the run allows that. Any other
+  // failure, such as a missing Chromium or a crash, is reported as it is.
+  const launchHandle = async (policy: BrowserSandboxPolicy): Promise<ProcessHandle> => {
+    try {
+      return { process: await launch({ chromiumSandbox: true }), contextFailures: 0, sandboxed: true };
+    } catch (error) {
+      if (!isSandboxLaunchFailure(error instanceof Error ? error.message : String(error))) {
+        throw error;
+      }
+      if (policy === 'require') {
+        throw new BrowserSandboxRequiredError();
+      }
+      return { process: await launch({ chromiumSandbox: false }), contextFailures: 0, sandboxed: false };
     }
-    if (current !== null && !current.process.isConnected()) {
-      await discard(current);
+  };
+
+  // A process without the sandbox serves only runs that allow one. A run that requires the
+  // sandbox is refused rather than handed a page from it.
+  const usableBy = (handle: ProcessHandle, policy: BrowserSandboxPolicy): ProcessHandle => {
+    if (!handle.sandboxed && policy === 'require') {
+      throw new BrowserSandboxRequiredError();
     }
-    if (current !== null) {
-      return current;
-    }
-    if (launching === null) {
-      launching = launch()
-        .then((launched) => {
-          const handle: ProcessHandle = { process: launched, contextFailures: 0 };
+    return handle;
+  };
+
+  const acquire = async (policy: BrowserSandboxPolicy): Promise<ProcessHandle> => {
+    for (;;) {
+      if (closed) {
+        throw closedError();
+      }
+      if (current !== null && !current.process.isConnected()) {
+        await discard(current);
+      }
+      if (current !== null) {
+        return usableBy(current, policy);
+      }
+      launching ??= launchHandle(policy)
+        .then((handle) => {
           current = handle;
           return handle;
         })
         .finally(() => {
           launching = null;
         });
+      let launched: ProcessHandle;
+      try {
+        launched = await launching;
+      } catch (error) {
+        // The launch this open shared was started by a run that requires the sandbox, and it was
+        // refused. That refusal is not this run's when it allows the fallback, so it starts its own.
+        if (isBrowserSandboxRefusal(error) && policy === 'auto') {
+          continue;
+        }
+        throw error;
+      }
+      if (closed) {
+        // close() ran while the launch was in flight. It awaited the same launch and closed the
+        // process, so there is nothing to hand out.
+        throw closedError();
+      }
+      return usableBy(launched, policy);
     }
-    const launched = await launching;
-    if (closed) {
-      // close() ran while the launch was in flight. It awaited the same launch and closed the
-      // process, so there is nothing to hand out.
-      throw closedError();
-    }
-    return launched;
   };
 
   const openPage = async (url: string, options: RealBrowserOptions): Promise<Page> => {
-    const handle = await acquire();
+    const handle = await acquire(options.browserSandbox ?? 'auto');
     const launched = handle.process;
     const readyTimeoutMs = readyTimeoutMsFor(options);
 
@@ -1329,7 +1393,10 @@ export function makeSharedBrowser(
       // open() owns navigation and gotoReady() only waits for readiness. Navigation takes the same
       // budget, so one config number covers the whole cost of reaching a screen.
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });
-      return wrapPage(page, context, cdp, readyTimeoutMs, network);
+      const wrapped = wrapPage(page, context, cdp, readyTimeoutMs, network);
+      // A page from a process without the sandbox says so, and the check runner carries that onto
+      // the screen in the Result.
+      return handle.sandboxed ? wrapped : { ...wrapped, browserSandbox: 'off' };
     } catch (error) {
       await context.close().catch(() => undefined);
       // A failure with the process gone means the process died under us. Forget it so the next
@@ -1379,7 +1446,7 @@ export function makeSharedBrowser(
  */
 export function makeRealBrowserDriver(
   options: RealBrowserOptions = {},
-  ports: { launch?: () => Promise<LaunchedBrowser> } = {},
+  ports: { launch?: (launch: ScanBrowserLaunch) => Promise<LaunchedBrowser> } = {},
 ): BrowserDriver {
   const shared = makeSharedBrowser(ports);
   const view = shared.driver(options);

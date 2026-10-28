@@ -509,6 +509,61 @@ reads are open.
 
 ---
 
+## Threat 11: The scan browser and its debugging channel
+
+**Attack:** a page usabl scans exploits a bug in Chromium. Every page a scan opens runs in the scan
+browser: the application, its docs pages, and any third-party scripts they load. Without
+Chromium's sandbox, such a page runs code with the rights of the user running usabl. That user can
+read the repository, local keys, and the signed-in session file named by `USABL_STORAGE_STATE`. In
+CI it can read the runner's tokens. A second way in is the channel usabl drives the browser
+through: a debugging port that another local process could reach would let that process drive the
+browser and read the session.
+
+**Controls:**
+
+- The debugging channel, CDP (the Chrome DevTools Protocol), runs over a pipe. Playwright starts
+  the browser with `--remote-debugging-pipe`, and no port is opened. Checked on 2026-10-27 with
+  `ss`: no listening TCP socket is owned by a scan browser. The integration suite checks that the
+  scan browser's command line carries `--remote-debugging-pipe` and no `--remote-debugging-port`.
+- Page-world reads and isolated worlds. usabl reads the page through CDP. A read that runs in the
+  page's own JavaScript world can be changed by page script; a read in an isolated world shares
+  the DOM but not the page's globals or prototypes. Which reads run in an isolated world, and which
+  still do not, is under Threat 10. Page script has no way to reach the CDP pipe itself.
+- The sandbox. usabl asks for `chromiumSandbox: true` on every launch; without it Playwright adds
+  `--no-sandbox`. When Chromium reports that it cannot start its sandbox, as on Ubuntu 23.10 and
+  later with restricted unprivileged user namespaces or in many containers, the default
+  `"browserSandbox": "auto"` starts the browser again without it and says so: a line in the
+  `usabl check` output, a `browserSandbox: "off"` note on each screen in the Result, one line in
+  the dev server output for the overlay, and a `usabl doctor` finding with the fix. The fallback
+  changes no verdict. `"browserSandbox": "require"` refuses to scan: no verdict, exit 4, and a
+  summary that says how to enable the sandbox. CI fails the job on that exit 4; the Stop hook
+  does not block on it and says the run proved nothing, as for every exit 4 (see the decision
+  below). Only Chromium's own sandbox messages count as a
+  sandbox failure, so a missing Chromium or a crash is never retried without the sandbox. The
+  choice is made once per browser process, when it starts. With a trusted ref, `"require"` in
+  either the working tree or the trusted-ref config wins, so a pull request cannot turn it off for
+  its own scan.
+- A caller's own browser is the caller's. A page passed to `checkPage` or `adoptPage` comes from a
+  browser usabl did not launch, so usabl does not change its flags, and its sandbox and its
+  debugging channel are the caller's exposure. Playwright leaves the sandbox off unless the caller
+  passes `chromiumSandbox: true`.
+
+**Not handled:**
+
+- The fallback is a disclosure, not a control. On a system that cannot provide the sandbox, the
+  default still scans without it. A team that scans pages it does not trust should set
+  `"browserSandbox": "require"`.
+- The sandbox limits what a renderer exploit can reach. It does not limit what a page can do by
+  ordinary web means, such as sending requests with the session it was given.
+- The failure messages usabl recognizes are Chromium's Linux sandbox messages. A sandbox failure on
+  another system is reported as an ordinary launch failure, which is a coverage gap, and is not
+  retried without the sandbox.
+
+**Status:** [x] Sandbox on by default, a disclosed fallback, a `"require"` refusal, and CDP over a
+pipe only. [ ] The default still scans without the sandbox where the system cannot provide one.
+
+---
+
 ## Decision: Stop hook fail-open on exit 4
 
 After the guard runs before any coverage, floor, or waiver parse, a diverged

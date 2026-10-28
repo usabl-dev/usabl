@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
@@ -22,6 +22,7 @@ import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { markUnseenScreens } from '../../src/coverage/unseen.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import { testConfig } from '../helpers.js';
+import { probeChromiumSandbox } from '../../src/doctor/sandbox-probe.js';
 
 interface FixtureServer {
   url: string;
@@ -1444,3 +1445,57 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     }
   });
 });
+
+/**
+ * The command lines of the Chromium browser processes this test process started. Playwright starts
+ * the browser process itself as a direct child and talks to it over a pipe, so a child whose
+ * arguments carry --remote-debugging-pipe is one. Linux only: it reads /proc.
+ */
+async function scanBrowserCommandLines(): Promise<string[][]> {
+  const lines: string[][] = [];
+  for (const entry of await readdir('/proc')) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const stat = await readFile(`/proc/${entry}/stat`, 'utf8');
+      // The parent id is the second field after the command name, which ends at the last ')'.
+      const parent = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+      if (parent !== process.pid) continue;
+      // Chromium rewrites its own command line into one string with spaces, so split on both.
+      const args = (await readFile(`/proc/${entry}/cmdline`, 'utf8')).split(/[\0 ]/).filter((arg) => arg.length > 0);
+      if (args.includes('--remote-debugging-pipe')) lines.push(args);
+    } catch {
+      // A process that ended while this read ran is not one of ours any more.
+      continue;
+    }
+  }
+  return lines;
+}
+
+describe.skipIf(process.env.USABL_INTEGRATION !== '1' || process.platform !== 'linux')(
+  'the scan browser on this machine',
+  () => {
+    it('runs with Chromium\'s sandbox and talks to usabl over a pipe, not a port', async () => {
+      const driver = makeRealBrowserDriver();
+      try {
+        const page = await driver.open('data:text/html;charset=utf-8,%3Cp%3Esandboxed%3C%2Fp%3E');
+        try {
+          expect(page.browserSandbox).toBeUndefined();
+          const browsers = await scanBrowserCommandLines();
+          expect(browsers.length).toBeGreaterThan(0);
+          for (const args of browsers) {
+            expect(args).not.toContain('--no-sandbox');
+            expect(args.some((arg) => arg.startsWith('--remote-debugging-port'))).toBe(false);
+          }
+        } finally {
+          await page.close();
+        }
+      } finally {
+        await driver.close();
+      }
+    });
+
+    it('the doctor probe finds the sandbox', async () => {
+      await expect(probeChromiumSandbox()).resolves.toBe('available');
+    });
+  },
+);

@@ -48,6 +48,7 @@ import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './su
 import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
+import { probeChromiumSandbox } from './doctor/sandbox-probe.js';
 
 export async function loadConfig(
   path = 'usabl.config.json',
@@ -446,6 +447,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       configPath: opts.configPath,
       env: process.env,
       probePlaywrightChromium,
+      probeChromiumSandbox: () => probeChromiumSandbox(),
     };
     const outcome = await runDoctor(deps);
     process.stdout.write(outcome.stdout);
