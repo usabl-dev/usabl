@@ -82,6 +82,7 @@ function resultFixture(): Result {
     accessibilityExitCode: 0,
     paidDownCount: 0,
     floorHeadroom: [],
+    floorUnconfirmed: [],
   };
 }
 

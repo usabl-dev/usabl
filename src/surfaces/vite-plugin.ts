@@ -9,6 +9,7 @@ import type { BrowserDriver, Deps, Result, UsablConfig } from '../contracts/inde
 import { buildDeps } from '../deps/build.js';
 import { makeSharedBrowser, type RealBrowserOptions, type SharedBrowser } from '../deps/real.js';
 import { run } from '../run.js';
+import { unconfirmedNotice } from '../output/floor-notice.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { overlayClientSource } from './overlay-client.js';
@@ -77,6 +78,10 @@ export interface OverlayProjection {
   // Floor entries this run counted fewer barriers at than the floor records. Disclosure only: the
   // overlay lists them under the recorded group and nothing about them is a finding or a verdict.
   floorHeadroom: Result['floorHeadroom'];
+  // Floored barriers this run did not see on a screen it cannot show rendered, with the notice the
+  // overlay prints. The sentence is built here from the shared text, so the overlay prints the
+  // same words as the terminal and does not keep a copy of its own.
+  floorUnconfirmed: (Result['floorUnconfirmed'][number] & { notice: string })[];
   paidDownCount: number;
   // The accessibility outcome with the policy divergence set aside, copied from the gate-owned
   // Result and never computed here. An approval_required run can also carry a real barrier, and the
@@ -429,6 +434,12 @@ export function projectOverlay(
       rule: entry.rule,
       recorded: entry.recorded,
       observed: entry.observed,
+    })),
+    floorUnconfirmed: (safe.floorUnconfirmed ?? []).map((entry) => ({
+      screenId: entry.screenId,
+      rules: [...entry.rules],
+      barriers: entry.barriers,
+      notice: unconfirmedNotice(entry),
     })),
     accessibilityVerdict: safe.accessibilityVerdict ?? null,
     accessibilityExitCode: safe.accessibilityExitCode ?? null,

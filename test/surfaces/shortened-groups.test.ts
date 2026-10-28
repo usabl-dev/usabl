@@ -57,6 +57,7 @@ function result(): Result {
     accessibilityExitCode: 1,
     paidDownCount: 0,
     floorHeadroom: [],
+    floorUnconfirmed: [],
   };
 }
 

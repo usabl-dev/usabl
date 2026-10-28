@@ -22,6 +22,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   accessibilityExitCode: 0,
   paidDownCount: 0,
   floorHeadroom: [],
+  floorUnconfirmed: [],
   ...over,
 });
 
@@ -670,6 +671,7 @@ describe('formatSummary', () => {
         summary: 'verified: 0 gating finding(s)',
         paidDownCount: 3,
         floorHeadroom: [],
+        floorUnconfirmed: [],
       }),
     );
     // "resolved" asserts a cause the engine cannot observe: a table rendering no rows leaves
@@ -686,6 +688,7 @@ describe('formatSummary', () => {
         summary: 'verified: 0 gating finding(s)',
         paidDownCount: 0,
         floorHeadroom: [],
+        floorUnconfirmed: [],
       }),
     );
     expect(out).not.toContain('floor');

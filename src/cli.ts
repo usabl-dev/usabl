@@ -398,6 +398,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       };
       const outcome = await runFloorPrune(deps, config, floorFs, {
         ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
+        unconfirmed: opts.unconfirmed,
       });
       if (outcome.exitCode === 0) {
         process.stdout.write(`${outcome.message}\n`);
