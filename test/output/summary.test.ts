@@ -22,6 +22,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   accessibilityExitCode: 0,
   paidDownCount: 0,
   floorHeadroom: [],
+  floorUnconfirmed: [],
   ...over,
 });
 
@@ -63,10 +64,23 @@ describe('formatSummary', () => {
 
   it('names the idle state distinctly', () => {
     const out = formatSummary(
-      baseResult({ verdict: null, summary: 'nothing to check (no UI-touching files)' }),
+      baseResult({
+        verdict: null,
+        summary: 'nothing to check (no UI-touching files)',
+        coverage: { ...baseResult({}).coverage, nothingToCheck: true },
+      }),
     );
     expect(out).toContain('nothing to check');
     expect(out).toContain('IDLE');
+  });
+
+  it('never prints IDLE for a null verdict on a run that had something to check', () => {
+    const out = formatSummary(baseResult({ verdict: null, exitCode: 0, summary: 'no verdict' }));
+    const lines = out.split('\n');
+
+    expect(out).not.toContain('IDLE');
+    expect(lines[0]).toMatch(/^usabl: \S+ NO VERDICT \(exit 0\)$/);
+    expect(lines[1]).toBe('  usabl did not reach a verdict, so the run proved nothing about this change.');
   });
 
   it('separates a failed run from idle even though both carry no verdict', () => {
@@ -107,7 +121,12 @@ describe('formatSummary', () => {
       },
       {
         name: 'idle',
-        result: baseResult({ verdict: null, exitCode: 0, summary: 'nothing to check (no UI-touching files)' }),
+        result: baseResult({
+          verdict: null,
+          exitCode: 0,
+          summary: 'nothing to check (no UI-touching files)',
+          coverage: { ...baseResult({}).coverage, nothingToCheck: true },
+        }),
         word: 'NO VERDICT: IDLE',
         exit: 0,
       },
@@ -652,6 +671,7 @@ describe('formatSummary', () => {
         summary: 'verified: 0 gating finding(s)',
         paidDownCount: 3,
         floorHeadroom: [],
+        floorUnconfirmed: [],
       }),
     );
     // "resolved" asserts a cause the engine cannot observe: a table rendering no rows leaves
@@ -668,6 +688,7 @@ describe('formatSummary', () => {
         summary: 'verified: 0 gating finding(s)',
         paidDownCount: 0,
         floorHeadroom: [],
+        floorUnconfirmed: [],
       }),
     );
     expect(out).not.toContain('floor');

@@ -101,6 +101,9 @@ describe('fixed is only claimed for a screen that was measured this run', () => 
         floor: floorWith('clusters', 'gone-rule'),
         drafts: [],
         cleanlyScannedScreens: new Set(['clusters']),
+        // The run walked the Save button the floored barrier was on, so its part of the page
+        // rendered. Without that the absence could be content that never mounted.
+        renderEvidence: new Map([['clusters', { signalHeld: false, elementSlots: new Set(['name:save']) }]]),
       }),
     );
     const fixed = find(findings, 'gone-rule');

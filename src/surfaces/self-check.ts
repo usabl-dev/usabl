@@ -9,7 +9,13 @@ import { isBlockingBarrier } from '../output/disclosure.js';
 import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-budget.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
-import { barrierLines, guardedFileLines, notEvaluatedPieces, unrecognizedRunLine } from './model-pieces.js';
+import {
+  barrierLines,
+  guardedFileLines,
+  notEvaluatedPieces,
+  unconfirmedPieces,
+  unrecognizedRunLine,
+} from './model-pieces.js';
 import { frameUntrustedBlock, scrubResult } from './scrub.js';
 
 // The source location goes inside the untrusted frame with the other page-derived pieces. A
@@ -98,7 +104,9 @@ export function projectSelfCheck(
   });
 
   const gapPieces = notEvaluatedPieces(safe);
-  const tailPieces = gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : [];
+  // The same floor notices the Stop hook gives, closing the frame as tail pieces, so a shortened
+  // message drops barriers before it drops one.
+  const tailPieces = [...(gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : []), ...unconfirmedPieces(safe)];
 
   // This surface prints a source or candidates piece per group on top of what the stop hook
   // prints, so it has its own budget. Nothing is dropped at the default noise budget.

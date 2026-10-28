@@ -14,6 +14,96 @@
   gap that names the file. When UI files changed, no screen was scanned, so the
   accessibility half of the result now reads `not_covered`; before, it read `verified`.
 
+- Readiness could report a declared `reachedWhen` selector as held on a page that changed
+  while the selector was being checked. The check runs after the settled sample, so content
+  that mounted during it was walked and checked before the page held still. A screen whose
+  barrier mounted after the selector, from a request sent in the same moment, could come
+  out clean with no gap. A match now ends the wait only when the element count is the same
+  and the network is still quiet after the check. Otherwise readiness keeps waiting, inside
+  the same signal cap and readiness budget.
+
+- A floored barrier is no longer reported paid down on a screen whose content never
+  rendered. When a screen's header and navigation mounted and its content failed to
+  mount, the walk found a real control and no check failed, so the screen had no gap,
+  every floored barrier in the missing content was absent, and the run marked those
+  barriers `fixed`. Now an absent floored barrier is `fixed` only when the screen's
+  `reachedWhen` signal held, or when the walk or a check met the barrier's own element,
+  by its path or its accessible name. Otherwise it is not claimed fixed and the floor
+  keeps it at its full count. The verdict does not change. The run shows a notice that
+  names the screen, the rules, and the number of barriers, and gives the fix, on the
+  terminal, the pull request comment, the Stop hook, the self-check, and the overlay,
+  and the summary line gains a `N recorded barriers not seen, not claimed fixed`
+  clause. The Result gains `floorUnconfirmed`. The blind spot: a screen whose content
+  fails to mount reads `verified`, with the notice when it holds floored debt, until it
+  declares a `reachedWhen` signal. That is the same as a screen with no debt.
+
+- `usabl floor prune` and `usabl baseline` keep a floored entry the run cannot confirm
+  was fixed, by the same rule the gate uses. `usabl floor prune --unconfirmed` removes
+  those entries on purpose and says how many it removed and why. Prune no longer says it
+  kept entries on unscanned screens when it kept none. Prune now scans docs pages too, as
+  baseline does, so a fixed docs barrier no longer stays on the floor for good. Baseline
+  refuses, writing nothing, when such an entry is a version 1 placeholder count it would
+  otherwise write into a version 2 floor (exit 3), and when the floor it would replace
+  exists and does not parse (exit 4).
+
+- The gate, `usabl floor prune`, and `usabl baseline` read a floored identity as absent the
+  same way: no deterministic draft at it. An identity with only an advisory draft left was
+  headroom in the gate and an unconfirmed absence in the commands; the verdict is unchanged.
+  The floor parser refuses a floor whose counts add up past the largest exact whole
+  number, and baseline, prune, and doctor scrub the screen ids and rules they print.
+
+- The announcement capture now hears a region only when its effective live value is
+  polite or assertive, resolved the way `pf-toast-live-region` resolves it. Before, it
+  heard any element with an `aria-live` attribute, including `aria-live="off"`, an
+  uppercase or unknown token, and text inside an off wrapper within a polite region. A
+  flow requirement could then pass on an announcement no screen reader spoke. The rule
+  and the capture now share one resolver source. A `role="STATUS"` region, which the
+  capture used to miss, is now heard, as the rule already treated it. A change slotted
+  into a live region inside a shadow root is not recorded, because that region's own
+  text is not what the change made speakable.
+
+- `checkPage` now applies a configured screen's `reachedWhen` signal when `screenId` names
+  that screen. It waits for the selector with the CLI's wait, and when the signal does not
+  hold, the result is a `not-covered` gap that names the selector or the response, and no
+  check runs. Before, it checked whatever the page showed, so a sign-in page or an
+  unmounted shell handed to it as the screen could read as verified. An adopted page does
+  not see requests sent before `checkPage` was called, so a screen that declares a
+  response is always a gap in `checkPage`.
+
+- The dev overlay's shared browser now counts failed context opens per browser process.
+  Before, one count served every process, so a late failure or success from a process
+  that had already been replaced was charged to the new one, and could retire a healthy
+  process or keep a wedged one. Two close requests that arrive together now share one
+  close, so the second no longer returns while the process is still closing.
+
+- `usabl floor prune` now writes back every top-level field of the floor it does not
+  change. Before, it wrote only `version` and `entries`, so a floor marked
+  `scope: "partial"` came back without the marker and read as a complete floor for the
+  whole application. Fields from a newer floor are kept the same way.
+
+- `npm run docs:linkcheck` now reads reference-style links and autolinks in markdown.
+  Before, it read only inline links and HTML attributes, so a broken `[text][ref]` link
+  or `<./page.md>` autolink passed unseen. Full, collapsed (`[ref][]`), and shortcut
+  (`[ref]`) references resolve through their `[ref]: url` definitions, a full or
+  collapsed reference to a label with no definition is reported, relative autolinks are
+  checked, and absolute autolinks are counted as external, as other external links are.
+  Footnotes, indented code blocks, and HTML comments are not read as links.
+
+- The pull request comment now lists waived deterministic findings. Before, a waived
+  finding was in no section of the comment, while the terminal and the overlay showed it
+  as recorded debt. The known section is now `### Known (recorded debt)` and lists carried
+  and waived findings, each with its status, and the collapsed view includes them too. A
+  collapsed group also names its screen id and rule once, in its headline, instead of
+  again on a `rule:` line under it. A collapsed group never mixes findings of different
+  status, so a carried or waived finding is never counted inside a new one, and the hint
+  counts as gating only the findings that gate.
+
+- The terminal report printed `NO VERDICT: IDLE` for a null verdict on a run that had
+  something to check, which is the shape of a failed run, not an idle one. It now prints
+  IDLE only when there was nothing to check. Otherwise it prints `NO VERDICT` and says
+  usabl did not reach a verdict, so the run proved nothing about the change, the same
+  reading the stop hook and the self-check give that state.
+
 - Egress redaction now catches credential shapes it used to print: whitespace or a quote
   between a key and its separator (`token = ...`, `"password": "..."`), a lone JWT
   header segment or a JWT cut to two segments, the user name and password after `//` in
@@ -197,6 +287,14 @@
 
 ### Added
 
+- `usabl doctor` reports a readiness signals surface. It is missing when a screen holds
+  floored debt and declares no `reachedWhen` signal, and its next step names those
+  screens. A floored barrier the run does not see is claimed fixed only with evidence its
+  part of the page rendered: a readiness signal that held is one way, and a matching
+  element seen on the run is the other. A docs page cannot declare a signal, so doctor
+  names docs pages with floored debt separately and points to
+  `usabl floor prune --unconfirmed` for a barrier known to be fixed.
+
 - `acknowledgedUnreadable` in `usabl.routes.json`: a list of `{ "file", "id" }` for router
   entries usabl cannot read that the sidecar's author has checked by hand. Without it, a
   router with a `/app/*` route, a guard element among the routes, or routes built with
@@ -269,6 +367,41 @@
 - A coverage gap list or a guarded path list that is not a list is now reported as
   unreadable on both surfaces. Walking it used to throw, which the stop hook reported
   as a hook error and let the stop through.
+- The exported `gate()` now refuses a floor with two entries at one identity. It
+  indexed the floor last-wins, so which entry survived decided whether a barrier read
+  as new or carried, and one order was a false green. The gate now parses the floor it
+  is handed with the same parser the floor file goes through, and reads only what that
+  parser returns, so a hand-built floor gets every check a file gets.
+- `gate()` and `mintReceipt()` now check every screen and surface id they are handed
+  against the shared id grammar: `coverage.affected[].screenId`, `drafts[].screenId`,
+  `floor.entries[].screenId`, `waivers[].surface`, and `cleanlyScannedScreens` on the
+  gate, and `checked`, `applicability[].screenId`, and the config's `surfaces[].id` and
+  `noiseBudget.perSurface` keys on the receipt. Reading `.usabl-evidence.json` and
+  `.usabl-waivers.json` now checks their screen ids too. A floor entry or waiver whose
+  id the grammar refuses used to match nothing; now the file is refused. `usabl check`
+  ends with exit 4, naming the entry by position, `usabl floor prune` refuses with exit 4,
+  and `usabl doctor` reports the file as drifted.
+- `gate()` now checks every other input field the verdict depends on, reads each one once,
+  and decides from the checked copy only. A JavaScript caller with a type slip used to get a
+  false green: a `nothingToCheck` of "false" read as idle with a failing barrier, and an
+  `evidenceClass` of "Deterministic" returned `verified`. Coverage and drafts are checked
+  against the Result contract, so every closed set must hold one of its values. Waivers go
+  through the ledger's waiver parser, so their dates must be ISO-8601 UTC. `now` must be
+  ISO-8601 UTC, and `guardDivergedPaths` a list of strings. `cleanlyScannedScreens` must be a
+  real `Set`, and its members are copied before use, so an object that answers `has` for
+  every screen can no longer mark a barrier fixed on a screen nobody scanned.
+- Every refusal above is an `InputRefusedError`, now exported from the package entry.
+  Its `field` names the refused value by path and position, for example
+  `floor.entries[2].screenId`. The message never contains the value. A duplicate floor
+  entry used to be reported with its identity, which carries page text; it is now
+  named by position.
+- `usabl comment` and `usabl enforce` now check the whole Result they read from
+  standard input against the contract: every list is a list, every count is a whole
+  number, every enum value is one of its values, and every nested object has its
+  fields. Fields the contract does not name are dropped. A document that does not
+  match exits 4 with a reason that names the field and never repeats the value, and
+  `usabl comment` prints no comment. Text that is not JSON exits 4 the same way. The
+  JSON parser's own message, which quoted the input back, is no longer printed.
 
 ## 0.2.2 - 2026-10-21
 

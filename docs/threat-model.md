@@ -59,6 +59,19 @@ re-baseline to green.
   the per-user temp directory is the boundary. Deleting the pin file as the same
   user resets the baseline with no message, so pins are best-effort against an
   agent with a shell.
+- The exported `gate()` and `mintReceipt()` check their own input, because a library caller can
+  build it by hand and skip every file reader. The gate reads each input field once and decides
+  the verdict from the checked copy only. It parses the floor with the floor file parser, so two
+  entries at one identity are refused; before, they were indexed last-wins, so entry order
+  decided whether a barrier read as new or carried, and one order was a false green. It checks
+  `coverage` and every draft against the Result contract (a boolean `nothingToCheck`, real
+  lists, every closed set such as evidence class, confidence, and severity, and string text
+  fields; a layer is any string, as the contract leaves layers open), every waiver with the
+  ledger's waiver parser (including ISO-8601 UTC dates), `guardDivergedPaths` as a list of
+  strings, `now` as an ISO-8601 UTC timestamp, and `cleanlyScannedScreens` as a real `Set`,
+  copied before use. `mintReceipt()` checks the screen and surface ids it is handed. Both check
+  every screen and surface id against the shared id grammar. A refusal is a typed
+  `InputRefusedError` that names the field and its position and never repeats the value.
 
 **Status:** [x] Documented in ground-truth.
 
@@ -363,13 +376,12 @@ is by carrier: a value the Result carried is sealed, and only text usabl itself 
 left as prose.
 
 Sealing by carrier covers every string. It does not reach a number, and a number was the
-way through. `usabl comment` does not structurally validate the document it reads:
-`parseResultJson` checks the schema version, the accessibility exit code, and one forbidden
-accessibility verdict, and takes every other field on trust. A field typed as a number is
-therefore whatever the document said, and it does not even have to be a field. A list
-supplied as `{"length": "@user"}` is never iterated by the coverage counts, so nothing
-throws and that text was printed as a count, outside every span, where the post-render
-filters reached it.
+way through. `usabl comment` used to take most of the document on trust:
+`parseResultJson` checked the schema version, the accessibility exit code, and one forbidden
+accessibility verdict, and nothing else. A field typed as a number was therefore whatever the
+document said, and it did not even have to be a field. A list supplied as
+`{"length": "@user"}` is never iterated by the coverage counts, so nothing threw and that text
+was printed as a count, outside every span, where the post-render filters reached it.
 
 So the rule for numbers is the one already used for the exit code: every value this
 document prints as a bare number is checked where it is printed, and a value that is not a
@@ -397,13 +409,23 @@ is no use, because a list marker has to be literal digits to work at all, so the
 counts the stops this list prints, from the iteration itself, and is never built from the
 stop index the Result carried.
 
-**Not handled:** `usabl comment` still does not validate the shape of the document it is
-given. Sealing every string and checking every printed number bounds what a malformed or
-hostile document can put on the page, and it does not make the document trustworthy: the
-counts, the sections, and the verdict shown are only as true as the file that supplied
-them. Full structural validation of an externally supplied Result is not implemented. A
-consumer that pipes a Result from an untrusted source into `usabl comment` is reporting
-that source's claims, and the receipt, not the comment, is what proves a run happened.
+**Handled:** `usabl comment` and `usabl enforce` now check the whole document against the
+Result contract before they use any of it (`src/intake/result-document.ts`). Every list must
+be a list, every count a whole number, every enum value one of its values, and every nested
+object must have the fields the contract gives it. A field the contract does not name is
+dropped, and a record key named `__proto__` is kept as data. A document that does not match
+exits 4 and names the field by its path, never the value, because the value may be a mention
+or a link written for the renderer. Text that is not JSON exits 4 the same way, without the
+JSON parser's own message, which quotes the input back. The per-number checks and the sealing
+above stay in place behind it, so a projector called from inside the process with a Result
+that skipped this check is still bounded.
+
+**Not handled:** the check is of shape, not of truth. A well-formed document can still say
+anything the contract allows: a verdict that its findings do not support, counts that do not
+add up, or a receipt for a run that never happened. The counts, the sections, and the verdict
+shown are only as true as the file that supplied them. A consumer that pipes a Result from an
+untrusted source into `usabl comment` is reporting that source's claims, and the receipt, not
+the comment, is what proves a run happened.
 
 The stop hook and the self-check are held to the same rule, by carrier, through their own
 mechanism. They print plain text to a language model with no renderer involved, so the seal

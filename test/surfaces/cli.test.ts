@@ -27,6 +27,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   accessibilityExitCode: 0,
   paidDownCount: 0,
   floorHeadroom: [],
+  floorUnconfirmed: [],
   ...over,
 });
 
@@ -46,6 +47,7 @@ describe('parseCliArgs', () => {
       enforceCheck: null,
       floorSubcommand: null,
       partial: false,
+      unconfirmed: false,
       driftSubcommand: null,
       installTarget: null,
       cursorStopHook: false,
@@ -79,6 +81,7 @@ describe('parseCliArgs', () => {
       enforceCheck: null,
       floorSubcommand: null,
       partial: false,
+      unconfirmed: false,
       driftSubcommand: null,
       installTarget: null,
       cursorStopHook: false,
@@ -144,6 +147,7 @@ describe('parseCliArgs', () => {
       enforceCheck: null,
       floorSubcommand: null,
       partial: false,
+      unconfirmed: false,
       driftSubcommand: null,
       installTarget: null,
       cursorStopHook: false,
@@ -228,7 +232,13 @@ describe('projectCli', () => {
   });
 
   it('projects idle headline when verdict is null', () => {
-    const projected = projectCli(baseResult({ verdict: null, summary: 'nothing to check (no UI-touching files)' }));
+    const projected = projectCli(
+      baseResult({
+        verdict: null,
+        summary: 'nothing to check (no UI-touching files)',
+        coverage: { ...baseResult({}).coverage, nothingToCheck: true },
+      }),
+    );
     expect(projected.text).toContain('IDLE');
   });
 });

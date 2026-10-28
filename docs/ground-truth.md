@@ -1076,6 +1076,14 @@ selector at each such moment and keeps waiting until it matches at one of them, 
 `signalTimeoutMs` (15000 by default) counted from the first moment the page settled, and always
 inside `readyTimeoutMs`. The cap never restarts, and it is checked on every pass whether or not the
 page has settled since, so a page that keeps changing cannot stretch it.
+A match only ends the wait when the page reads the same after the check as before it: the same
+element count, with the network still quiet. Checking the selector takes several reads of the live
+page, and a page can mount its content during them. Then the moment the check started from was not
+the page the selector matched on, so readiness keeps waiting, inside the same cap and budget, until
+the page holds still again. Measured through a real browser against a page whose table mounts
+during that check and, in the same task, sends a request that later mounts a button with no
+accessible name: ending the wait on that match walked and checked the page before the button
+existed, and the screen came out clean with no gap.
 Readiness stops waiting early when the page is plainly not this screen, by the rules above (a
 refused data request under a configured session, a password field with no signal that holds, or a
 redirect to a sign-in page), so those gaps cost no more than before.
@@ -1148,7 +1156,9 @@ the address the scan asked for: a passkey prompt with one button, a magic-link f
 authentication wall that answers 200 to every request under it, including its own status call.
 None makes a refused request and none has a password field, so the three rules say nothing, and
 each has a real control to focus, so the body-only floor says nothing either. Each is scored as the
-screen when the surface declares no signal. Each is a gap when the surface declares a selector for
+screen when the surface declares no signal. If the evidence floor holds barriers for that screen,
+the run claims none of them fixed and shows a notice that names the screen (see "Absent is a fix
+only with evidence" in section 9), but the verdict does not change. Each is a gap when the surface declares a selector for
 the screen's own table, and each is a gap when it declares the screen's own data path, because
 none of them renders that table or asks for that data. The same signal holds on the real screen.
 
@@ -1362,7 +1372,9 @@ are what `usabl baseline` counted when it wrote the floor.
 owner writes it in an `approval_required` accept commit. Advisory findings are never
 written to the floor. The accept loop converges: after the acceptance commit lands, the
 next unchanged run sees the same floor and settles to `verified` (or `not_covered` only if
-coverage cannot be re-established).
+coverage cannot be re-established). Every count must be a safe whole number, and a floor whose
+counts add up past the largest whole number a JavaScript number holds exactly is refused, because a
+total past it depends on the order the counts are added in.
 
 The count comparison runs in both directions, and both are gate decisions:
 
@@ -1379,6 +1391,75 @@ The count comparison runs in both directions, and both are gate decisions:
   tell a paid-down barrier from a page rendering fewer rows today, so it says both readings and
   leaves the operator to pick: if the barriers were fixed, `usabl floor prune` re-arms the floor to
   what is present; if the page simply shows less content today, nothing needs to change.
+
+**Absent is a fix only with evidence the barrier's part of the page rendered.** A floored identity
+is absent when this run has no deterministic draft at it. An advisory draft at the identity does not
+make it present, because the floor counts deterministic barriers only; the gate, prune, and baseline
+all read absence through one shared function. A floored barrier
+missing from this run's drafts was either fixed or was on content that never rendered, and the two
+leave the same absence. A screen in the cleanly scanned set had no gap, but that is not enough: a
+screen whose header and navigation mount and whose content fails to mount has a real control to
+walk and no provider error, so it has no gap, and every floored barrier in the missing content is
+absent. That run used to report the barriers paid down. So the gate marks an absent floored
+identity `fixed` only when one of these holds:
+
+- the screen's readiness signal (`reachedWhen`) was declared and every declared part held, or
+- the identity's own element was met this run: a keyboard stop or a draft on that screen at the
+  same element path, for a structural identity, or with the same accessible name, for a name
+  identity. A counted identity names no element, so only the signal can confirm it.
+
+Otherwise the identity is not claimed `fixed`. It gets no finding, which is what a floor entry on a
+screen the run did not scan already gets, so it is not paid down, it is not counted fixed in the
+receipt, it is not reported as headroom, and the floor keeps its full count as debt. The verdict
+does not change and no gap is raised. Instead the run shows a notice for each such screen. It names
+the screen, the rules, and the number of barriers, and gives the fix, for example: "3 recorded
+barriers on screen orders (button-name, link-name) were not seen in this run, so they are not
+claimed fixed. If they are fixed, add a reachedWhen signal for this screen or run usabl floor prune
+--unconfirmed." It never names an element key, because a key carries page text. The summary line
+gains a `N recorded barriers not seen, not claimed fixed` clause that counts barriers, not entries,
+and the notice itself is printed by the terminal, the pull request comment, the Stop hook (on a
+verified stop too), the self-check, and the overlay. The text is written once, in
+`src/output/floor-notice.ts`. The data is `floorUnconfirmed` on the gate output and on the Result,
+one entry per screen.
+
+Both tests are presence tests on sets, decided inside `gate()`, so they do not depend on order.
+`run()` builds the evidence from the scans with `renderEvidenceOf`, and a caller of the exported
+`gate()` that passes none gets the safe reading: no evidence, so no `fixed`. `usabl floor prune`
+and `usabl baseline` read the same rule, `paydownConfirmed`, through `src/floor/unconfirmed.ts`.
+Prune keeps such an entry by default and says so; `usabl floor prune --unconfirmed` removes it on
+purpose and says how many it removed and why. Baseline, with or without `--partial`, carries such an
+entry into the new floor at its recorded count and says so. Two cases refuse instead, and write
+nothing. If the floor being replaced is version 1 and a carried entry is a name or structural
+entry, its count is a placeholder the run cannot replace with a real one, and writing it into a
+version 2 floor would present it as measured, so baseline exits 3, names the screens and rules, and
+gives the two ways forward: a `reachedWhen` signal and a re-run, or `usabl floor prune
+--unconfirmed` and then baseline. If the floor being replaced exists and does not parse, baseline
+exits 4 before it scans, names the file and the reason without quoting it, and says to fix or
+delete it first, because replacing it would lose its debt. `usabl doctor` names every screen that
+holds floored debt and declares no `reachedWhen` signal.
+
+**The blind spot, stated plainly.** A screen whose content fails to mount reads `verified` until it
+declares a signal. With floored debt on it, the run shows the notice and claims nothing fixed. With
+no floored debt, there is nothing to compare and nothing to say, the same as before this rule. A
+notice is not a gap, so the verdict does not tell the two cases apart; the notice does. Declaring a
+`reachedWhen` signal for content only that screen has is what turns a missing mount into a gap.
+
+No change to the floor format was needed: the element is read off the identity key the floor
+already stores. The cost falls on a genuinely fixed barrier the run cannot place. A counted barrier
+(`button-name`, `pf-icon-button-name`) on a screen with no signal, and a fixed barrier on an element
+the walk does not focus and no check reports, such as an image whose alternative text was added,
+stay on the floor with the notice until the operator declares `reachedWhen` for content only that
+screen has, or runs `usabl floor prune --unconfirmed` and reviews the diff. Measured on a real
+Chromium scan of an axe-sourced floor: axe names a structural element with a short unique selector,
+such as `tr>td>img` or `a[href$="#A-100"]`, which is not the path a keyboard stop records, so in
+practice a structural axe entry is confirmed by a held signal, not by the walk. Name identities are
+confirmed by a stop with the same accessible name.
+
+What this still cannot catch. A path or a name that something else on the screen also has: another
+element at the same path once the position numbers are removed, or a header button with the same
+accessible name as the missing one. A signal that names the shell, which already lets a wrong page
+through (section 8). Content that is missing and held no floored barrier, which leaves nothing to
+compare.
 
 ### The residual hole, and why it is open
 
@@ -1422,6 +1503,38 @@ exported and CI, the overlay and the page helper reach it directly. A check that
 `run()` made the verdict depend on which door the caller came through. The gate weighs its own
 gaps and names them in its summary; `run()` appends them to the Result's coverage so the gaps a
 reader sees are the gaps the verdict was reached from.
+
+Two floor entries may not share an identity (the same `screenId`, `rule`, and `elementKey`; the
+layer is not part of it). The gate indexes the floor by that identity, so a second entry would
+replace the first, and which one survived would decide whether a barrier reads as new or carried.
+The floor is refused instead, with both entries named by position and never by key, because a key
+carries page text. One parser reads the floor everywhere: in `usabl check`, in `usabl floor
+prune`, in `usabl doctor`, and, again, inside `gate()` on the floor it is handed, so a library
+caller that builds a floor by hand gets every check the file gets: the version, each entry's
+fields and count, the screen id grammar, and the duplicate check. A refusal is an
+`InputRefusedError` naming the field, for example `floor.entries[1]`.
+
+`gate()` checks every other input it reads the same way, because a field of the wrong type is
+read in a way that looks like a pass. A `nothingToCheck` of "false" is truthy and read as idle,
+an `evidenceClass` of "Deterministic" never gates, and a `gaps` value with no length reads as no
+gaps. So the gate reads each input field once, checks what it read, and decides the verdict from
+that checked copy only. A getter that returned one value to the check and another to the gate
+would otherwise put an unchecked value in the verdict. What it checks:
+
+- `coverage` and every draft against the Result contract, with the reader `usabl comment`
+  uses: `nothingToCheck` is a boolean, every list is a list, every closed set holds one of its
+  values (evidence class, confidence, severity, gap state, provenance, profile), every text
+  field is a string, and a draft's evidence has the shape the contract gives it. A layer only has
+  to be a string, because the contract leaves layers open.
+- The floor with the floor parser, and every waiver with the waiver parser the ledger file goes
+  through, so a waiver's `created` and `expires` must be ISO-8601 UTC. The gate compares
+  `expires` with its clock as text, which is only a date comparison in that format.
+- `guardDivergedPaths` is a list of strings, and `now` is an ISO-8601 UTC timestamp.
+- `cleanlyScannedScreens` is a real `Set`. Its members are read through `Set`'s own iterator
+  and copied into a new set, and only that copy decides which floored identities may be marked
+  `fixed`, so an object or a subclass that answers `has` for screens it does not hold cannot
+  mark a barrier fixed on a screen nobody scanned.
+- Every screen and surface id against the id grammar, as above.
 
 ### Failure taxonomy
 
@@ -1603,13 +1716,23 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   than one refuses with exit 2. `init` scaffolds policy; `install` wires integrations; they
   are different commands (see section 12).
 - Baseline drafts: `usabl baseline` runs a full UI scan and writes `.usabl-evidence.json`
-  as a reviewable working-tree diff.
+  as a reviewable working-tree diff. A floored entry the run did not see and cannot confirm was
+  fixed is carried into the new floor at its recorded count, with or without `--partial`. It
+  refuses when such an entry is a version 1 placeholder count (exit 3), and when the floor it would
+  replace exists and does not parse (exit 4).
 - Floor prune: `usabl floor prune` re-arms the gate on cleanly scanned screens. It removes
   entries whose identity is gone, and lowers the recorded count on entries whose identity is
-  still present but now holds fewer barriers. It never raises a count and never adds an
+  still present but now holds fewer barriers. An absent entry the run cannot confirm was fixed,
+  because nothing shows its part of the page rendered (section 9), is kept and named;
+  `--unconfirmed` removes those too and says how many and why. The report says it kept entries on
+  screens the run did not scan cleanly only when it kept some. It scans every docs page source in
+  the manifest as well as uiFileGlobs, the same way baseline does, so a docs entry can be confirmed
+  or removed. It never raises a count and never adds an
   identity: accepting new debt is what `usabl baseline` does, under review. It leaves version 1
   name and structural counts alone, because those are placeholders the gate does not compare and
-  writing a real number under them would present a placeholder as an observation. `prune` is the
+  writing a real number under them would present a placeholder as an observation. It keeps the
+  version it read and writes every other top-level field back as it was, in its place, so a
+  `scope: "partial"` floor stays partial and a field from a newer floor survives. `prune` is the
   only subcommand; anything else exits 2.
 - Routes drift: `usabl drift routes` compares `usabl.routes.json` against the app router.
   `routes` is the only subcommand; anything else exits 2.
@@ -1623,6 +1746,15 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
 - Enforce: `usabl enforce accessibility` and `usabl enforce policy --trusted-ref` read
   Result JSON from stdin. They project CI status. They never call the gate and never mint a
   verdict. GitHub stays out of `run()`.
+- Both read the Result as a document someone else wrote, so both check the whole document against
+  the Result contract before they use any of it: every list is a list, every count is a whole
+  number, every enum value is one of its values, and every nested object has the fields the
+  contract gives it. A field the contract does not name is dropped. A document that does not
+  match, or text that is not JSON, exits 4 with a plain reason on stderr that names the field by
+  its path, for example `findings[0].severity`, and never repeats the value. `usabl comment`
+  prints no comment in that case. The check is of shape only. It does not test whether the values
+  agree with each other, so a well-formed document is still only as true as whoever wrote it, and
+  the receipt, not the document, is what proves a run happened.
 - Library: the stop hook, overlay, and an optional MCP wrapper import `run()` directly.
   No MCP surface is built today (section 11.5).
 
@@ -1733,10 +1865,13 @@ Refuses to run without a base ref. The comment leads with the headline
 (`## usabl report: <VERDICT>`), then on approval required the policy split line, then the
 receipt (`_No receipt: run was not verified._` when none), then `### Conformance summary`
 (whose `deterministic:` entry splits new into failing and unconfirmed when any is new),
-then the finding sections `### New barriers`, `### Known (carried)`, and
-`### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the gating lane
+then the finding sections `### New barriers`, `### Known (recorded debt)`, and
+`### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
 when the noise budget collapses it, then `### Coverage gaps` and
-`### Announcements (current run)`. All page-derived text passes through `neutralize()`. Sticky comment
+`### Announcements (current run)`. The known section lists carried and waived deterministic
+findings, each with its status, the same recorded debt the terminal and the overlay list. A
+collapsed group holds findings of one status, and names its screen id and rule once, in its
+headline. Its hint calls the findings gating only when every one of them gates. All page-derived text passes through `neutralize()`. Sticky comment
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
 
@@ -1831,6 +1966,18 @@ surface runs its authored steps, clicks and key presses, on that page.
 On an adopted page the capture starts at adoption, not at document start, and it also starts in
 any document the page navigates to afterwards.
 
+The capture hears a change only when the region it falls in is live. It resolves the effective
+live value with the same resolver `pf-toast-live-region` uses, carried into the browser as that
+resolver's own source, so the two cannot disagree: the nearest element that sets a value wins,
+an explicit `aria-live` beats the role, only the exact tokens `polite` and `assertive` are live,
+and roles match without regard to case. A change inside `aria-live="off"`, inside an off wrapper
+within a polite region, or inside a region whose token is `POLITE` or `banana` is not heard. The
+walk climbs through a slot the way the rule's walk does, but it runs in page script, so it sees
+only slots in open shadow roots. When the live region it reaches sits inside a shadow root and the
+changed element is slotted into it from outside, the change is not recorded. That region's own text
+leaves out the slotted text that changed and holds text the change did not make speakable, such as
+slot fallback text, so recording it could pass a flow requirement on words no screen reader spoke.
+
 The capture and the element path function run in isolated worlds, which share the DOM with the
 page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
 page that defines `window.__usablDrain` or `window.__usablPathFor` before adoption, or replaces
@@ -1852,6 +1999,17 @@ project that has a surface named `page`, so every runtime requirement is a gap a
 judged on it. So a page that regresses on a requirement in the CLI also regresses in
 `checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
 when it is not.
+
+When `options.screenId` names a configured surface that declares `reachedWhen`, `checkPage`
+holds the page to that signal the way the CLI does, with the CLI's own wait and rule. It waits
+for the page to settle and for the selector to match, for at most `signalTimeoutMs` after the
+page first settled, within `readyTimeoutMs`. If the selector did not hold, or a declared
+response was not seen, the result is a `not-covered` gap with ref `readiness:<screenId>` that
+names the part, worded as the CLI words it, and no provider runs. Each part is measured again
+after the checks, and a part that no longer holds drops the drafts and becomes the same gap. An
+adopted page records only the requests sent after `checkPage` was called, so a response the page
+received while it loaded is not seen, and a screen that declares a response is always a gap
+here. That screen is checked with the CLI.
 
 ### 11.7 Other coding assistants (seam)
 
@@ -1885,9 +2043,16 @@ is insufficient.
 `usabl doctor` is a read-only projection that reports the state of each wired
 integration surface. It always exits 0, because a missing surface is information, not a
 failure; its filesystem port throws on any write so an accidental write fails loudly. It
-reports ten surfaces: config, authenticated session, route manifest, evidence floor,
-waivers, overlay, stop-hook, usabl-check skill, ci, and branch-rule, each with a state
-such as wired, missing, drifted, or unknown. The session surface reads the
+reports these surfaces: config, authenticated session, playwright chromium, route manifest,
+evidence floor, readiness signals, waivers, overlay, stop-hook, the usabl-check and usabl-fix
+skills, cursor, ci, branch-rule, and policy scope, each with a state such as wired, missing,
+drifted, or unknown. The readiness signals surface is missing when a screen holds floored debt and
+declares no `reachedWhen` signal, and its next step names those screens. A floored barrier the run
+does not see is claimed fixed only with evidence its part of the page rendered: a readiness signal
+that held is one way, and a matching element seen on the run is the other (section 9). A docs page
+cannot declare a signal, and a surfaces entry with its id is refused, so doctor names docs pages
+with floored debt in a note of their own that points to `usabl floor prune --unconfirmed` for a
+barrier known to be fixed. The session surface reads the
 `USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file:
 unset is missing, a readable JSON file that still holds something which could authenticate
 is wired, and a path that names no file, names a file that is not JSON, or names a state
@@ -2350,14 +2515,32 @@ it. `usabl init` names it in a `Review:` note with its file and line, and it is 
 draft until the operator adds it. What the router reader reads, reports, and still does not see is
 listed under the documented limits in section 8.
 
-The boundary, stated exactly. Ids already present in the evidence floor (`.usabl-evidence.json`)
-and in waiver files (`.usabl-waivers.json`), and the inputs a caller passes directly to the
-exported library functions (`gate()` and `mintReceipt()` from the package entry), are not
-re-validated against the grammar. On the command path every id in those files was minted from, or
-matched against, an id that had already passed the grammar at parse, so the command path is
-covered end to end. A library caller that builds its own floor, waiver, or receipt input bypasses
-that parse, and nothing downstream checks the grammar again. Closing that boundary is listed
-under "After the freeze" at the end of this section.
+The boundary, stated exactly. The grammar is also checked on the evidence floor, the waiver
+ledger, and the inputs of the two exported functions that take ids, so it holds whichever door a
+caller comes through:
+
+- Reading `.usabl-evidence.json` checks `entries[].screenId`. Reading `.usabl-waivers.json`
+  checks `waivers[].surface`.
+- `gate()` checks `coverage.affected[].screenId`, `drafts[].screenId`,
+  `floor.entries[].screenId`, `waivers[].surface`, and every member of `cleanlyScannedScreens`.
+  A member of the set is named by its position in the order the set yields it, counting from 0.
+- `mintReceipt()` checks `args.checked[]`, `args.applicability[].screenId`, and the id fields of
+  the `UsablConfig` it is handed, `surfaces[].id` and the keys of `noiseBudget.perSurface`. A key
+  is named by its position, counting from 1, in the order the config parser counts them.
+
+A refusal is an `InputRefusedError`, exported from the package entry. Its `field` is the path of
+the refused value with its position, for example `floor.entries[2].screenId`, and its message
+names the same path, the grammar's reason, and the position and code point of a refused
+character. Neither ever contains the id. On the command path every one of these ids already
+passed a reader, so nothing that was accepted before is refused now, with one exception: a floor
+entry or waiver whose id the grammar refuses used to be read and match nothing, and now the file
+is refused by every command that reads it, because they share one parser. `usabl check` ends as
+an unhandled error (exit 4) whose summary names the entry by position. `usabl floor prune`
+refuses with exit 4 and writes nothing. `usabl doctor` reports the evidence floor or the waiver
+ledger as drifted.
+The grammar governs screen and surface ids only. It does not govern rule ids, element keys,
+waiver scopes, receipt `notCovered` entries (file references), or receipt `surfaces` (output
+channels).
 
 A blank or repeated id is refused when the config is read. Left in, it would collapse two
 screens into one entry: the second screen is dropped from the scan while its changed files
@@ -2443,26 +2626,6 @@ opens a browser.
 
 There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 (nothing to check) is an explicit informational allow. That is code, not a config dial.
-
-### After the freeze
-
-Work on this section that is known and deferred until after the freeze.
-
-- Re-validate every screen or surface id field a caller can pass directly to the exported
-  library functions, so the id grammar holds for `gate()` and `mintReceipt()` callers and not
-  only for the `usabl` command path. For `gate()` those fields of `GateInput` are
-  `coverage.affected[].screenId`, `drafts[].screenId`, `floor.entries[].screenId`,
-  `waivers[].surface`, and every member of `cleanlyScannedScreens`. For `mintReceipt()` they are
-  `checked`, `applicability[].screenId`, and the id fields of the `UsablConfig` it is handed:
-  `surfaces[].id` and the keys of `noiseBudget.perSurface`. `mintReceipt()` is exported from the
-  package entry and takes any structurally valid `UsablConfig`; it never calls `parseUsablConfig`,
-  so a library caller can hand it ids the grammar would refuse. On the `usabl` command path the
-  config is parsed before it reaches the receipt, so those two fields arrive validated there, but
-  that is a property of the path, not of the function, and it is the function this item is about.
-  None of these is checked today on the library path.
-  The grammar governs screen and surface ids only. It does not govern rule ids, element keys,
-  waiver scopes, receipt `notCovered` entries (file references), or receipt `surfaces` (output
-  channels), and this item makes no claim about them.
 
 ---
 

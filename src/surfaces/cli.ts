@@ -39,6 +39,9 @@ export interface CliOptions {
   // Baseline-only: write a partial floor from only the cleanly scanned screens instead of
   // refusing when coverage is incomplete. Every other command ignores this.
   partial: boolean;
+  // Floor-prune-only: also remove absent floor entries this run cannot confirm were fixed, because
+  // nothing shows their part of the page rendered. Every other command ignores this.
+  unconfirmed: boolean;
   driftSubcommand: 'routes' | null;
   // The single install target for `usabl install`, or null when this is not an install
   // run or when zero or several target flags were given (installRefusal handles those).
@@ -102,6 +105,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let enforceCheck: 'accessibility' | 'policy' | null = null;
   let floorSubcommand: 'prune' | null = null;
   let partial = false;
+  let unconfirmed = false;
   let driftSubcommand: 'routes' | null = null;
   // Install target flags are tracked separately from the command so the exactly-one rule
   // can be enforced after parsing. --ci reuses the existing `ci` boolean below.
@@ -159,6 +163,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
     if (token === '--partial') {
       // baseline-only: floor only the cleanly scanned screens instead of refusing on gaps.
       partial = true;
+      continue;
+    }
+    if (token === '--unconfirmed') {
+      // floor-prune-only: remove absent entries the run cannot confirm were fixed, on purpose.
+      unconfirmed = true;
       continue;
     }
     if (token === '--docs-ci') {
@@ -230,7 +239,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   // target flag and cursorStopHook stays false so the two uses never collide.
   const cursorStopHook = command === 'stop-hook' && cursor;
 
-  return { command, staticOnly, html, docs, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, partial, driftSubcommand, installTarget, cursorStopHook };
+  return { command, staticOnly, html, docs, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, partial, unconfirmed, driftSubcommand, installTarget, cursorStopHook };
 }
 
 export function installRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {

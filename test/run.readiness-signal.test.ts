@@ -123,10 +123,15 @@ function pageFor(shape: PageShape): Page {
   });
 }
 
-function depsFor(shape: PageShape, config: UsablConfig, providers: Provider[]): Deps {
+function depsFor(
+  shape: PageShape,
+  config: UsablConfig,
+  providers: Provider[],
+  policyFiles: Record<string, string> = POLICY_FILES,
+): Deps {
   const base = makeFakeDeps({
-    files: POLICY_FILES,
-    headContents: POLICY_FILES,
+    files: policyFiles,
+    headContents: policyFiles,
     writeTree: 'tree-readiness',
     changed: [{ code: 'M', path: 'fixtures/app/src/UsersPage.tsx' }],
   });
@@ -317,9 +322,14 @@ describe('what is still not caught without a signal', () => {
   it('scores a passkey sign-in page as the screen when no signal is declared', async () => {
     // The documented limit, held so the ground truth cannot drift from the code. No refused
     // request, no password field, and a real control to focus: nothing tells this page apart
-    // from the screen, so it is measured as the screen. The fix is to declare a signal.
+    // from the screen, so it is measured as the screen. The fix is to declare a signal. The floor
+    // holds nothing for this screen, because a floored barrier the page does not show is a gap of
+    // its own, which narrows this limit to screens with no accepted debt.
     const config = configWith(undefined);
-    const r = await run(depsFor(PASSKEY_SIGN_IN, config, [quietProvider]), config);
+    const r = await run(
+      depsFor(PASSKEY_SIGN_IN, config, [quietProvider], { 'usabl.config.json': '{}' }),
+      config,
+    );
     expect(r.coverage.gaps).toEqual([]);
     expect(r.verdict).toBe('verified');
   });

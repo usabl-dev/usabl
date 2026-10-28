@@ -10,13 +10,17 @@ import type {
   Capability,
   CoverageGap,
   Draft,
+  Page,
   ProfileName,
   Provider,
+  ReadinessOutcome,
   RequirementBundle,
   Result,
+  ScreenScan,
   UsablConfig,
 } from '../contracts/index.js';
 import { decideAccessibilityVerdict } from '../coverage/completeness.js';
+import { markUnseenScreens } from '../coverage/unseen.js';
 import { parseRouteManifest } from '../coverage/route-manifest.js';
 import { makeFsGlob } from '../deps/fs.js';
 import { adoptPage } from '../deps/real.js';
@@ -24,6 +28,17 @@ import { parseUsablConfig } from '../intake/config.js';
 import { loadRequirements } from '../intake/load.js';
 import { makeScanProviders } from '../providers/core-stack.js';
 import { runProviders } from '../providers/index.js';
+import {
+  heldThroughout,
+  measureReachability,
+  measureReadiness,
+  readinessSignalOf,
+  selectorHeldBeforeWalk,
+  signalTimeoutMsFor,
+  signalWait,
+  type ReadinessMeasurement,
+  type ReadinessSignal,
+} from '../providers/reachability.js';
 import { scrubResult, scrubString } from './scrub.js';
 
 // A single-page check outcome for a live Playwright page. It calls the same precedence function
@@ -114,6 +129,9 @@ export interface ProjectIntake {
   // Null means the requirements could not be read. Nothing was checked against them.
   requirements: RequirementBundle | null;
   knownSurfaceIds: ReadonlySet<string>;
+  // The parsed usabl.config.json, or null when there is none or it could not be read. checkPage
+  // reads a labeled screen's readiness signal and budgets from it.
+  config: UsablConfig | null;
   project: PageCheckProject;
   gaps: CoverageGap[];
 }
@@ -144,6 +162,7 @@ export async function loadProjectIntake(projectRoot: string, rootWasPassed: bool
       const missing: ProjectIntake = {
         requirements: NO_REQUIREMENTS,
         knownSurfaceIds: new Set(),
+        config: null,
         project: { root, configFound: false },
         gaps: [],
       };
@@ -163,6 +182,7 @@ export async function loadProjectIntake(projectRoot: string, rootWasPassed: bool
     return {
       requirements: null,
       knownSurfaceIds: new Set(),
+      config: null,
       project: { root, configFound: true },
       gaps: [
         {
@@ -192,6 +212,7 @@ export async function loadProjectIntake(projectRoot: string, rootWasPassed: bool
     return {
       requirements: null,
       knownSurfaceIds: known,
+      config,
       project,
       gaps: [
         {
@@ -202,7 +223,7 @@ export async function loadProjectIntake(projectRoot: string, rootWasPassed: bool
       ],
     };
   }
-  return { requirements: loaded.bundle, knownSurfaceIds: known, project, gaps: [] };
+  return { requirements: loaded.bundle, knownSurfaceIds: known, config, project, gaps: [] };
 }
 
 /**
@@ -289,21 +310,134 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     ...(options.tabCap === undefined ? {} : { tabCap: options.tabCap }),
   });
 
-  const page = await adoptPage(pwPage);
-  const { drafts, gaps } = await runProviders(
-    providers,
-    { page, screen: { id: screenId, url: pwPage.url() }, config: PAGE_CHECK_CONFIG, profile },
-    pageCheckCapabilities(providers),
-  );
-
+  const config = intake.config;
+  const page = await adoptPage(pwPage, config?.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: config.readyTimeoutMs });
+  const screen = { id: screenId, url: pwPage.url() };
   const requirementGaps =
     intake.requirements === null
       ? []
       : requirementGapsForPage(intake.requirements, labeledScreenId, intake.knownSurfaceIds);
-  return {
+  const finish = (drafts: Draft[], gaps: CoverageGap[]): PageCheckResult => ({
     ...summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]),
     project: intake.project,
+  });
+
+  // A labeled screen that declares a readiness signal in usabl.config.json is held to it, the way
+  // the CLI holds it. Only a configured surface can declare one, as in the CLI.
+  const reachedWhen =
+    labeledScreenId === null || config === null
+      ? undefined
+      : config.surfaces.find((surface) => surface.id === labeledScreenId)?.reachedWhen;
+  const signal = readinessSignalOf(reachedWhen);
+  if (signal === null || config === null) {
+    const { drafts, gaps } = await runProviders(
+      providers,
+      { page, screen, config: PAGE_CHECK_CONFIG, profile },
+      pageCheckCapabilities(providers),
+    );
+    return finish(drafts, gaps);
+  }
+
+  const before = await readinessBeforeChecks(page, screenId, signal, config);
+  if ('gap' in before) {
+    // The screen is not known to be showing, so no provider runs on it.
+    return finish([], [before.gap]);
+  }
+  await page.markWalkStart();
+  const { drafts, gaps } = await runProviders(
+    providers,
+    { page, screen, config: PAGE_CHECK_CONFIG, profile },
+    pageCheckCapabilities(providers),
+  );
+  // Measured again after the checks, as the CLI does. A part holds only if it held both times.
+  const held = heldThroughout(before.measured, await measureReadiness(page, signal, config.appBaseUrl));
+  const unseen = unseenGap(screenId, signal, held);
+  return unseen === null ? finish(drafts, gaps) : finish([], [...gaps, unseen]);
+}
+
+// What checkPage adds to the CLI's response sentence. The response record of an adopted page starts
+// at adoption, and a caller hands checkPage a page that has already loaded.
+const ADOPTED_RESPONSE_NOTE =
+  'checkPage records only the requests a page sends after it is called, so a response the page ' +
+  'received while it loaded is not seen here. Check a screen that declares a response with the ' +
+  'usabl CLI.';
+
+/**
+ * Waits for the declared signal and measures it once before any check runs, with the CLI's wait
+ * and the CLI's rule. A signal that does not hold is a gap that names the part, worded by the same
+ * unseen pass the CLI uses.
+ */
+async function readinessBeforeChecks(
+  page: Page,
+  screenId: string,
+  signal: ReadinessSignal,
+  config: UsablConfig,
+): Promise<{ measured: ReadinessMeasurement } | { gap: CoverageGap }> {
+  const signalWaitMs = signalTimeoutMsFor(config);
+  const readyWhen = signalWait(
+    signal,
+    signalWaitMs,
+    async () => (await measureReachability(page, signal.selector ?? undefined)) === true,
+  );
+  let readiness: ReadinessOutcome | undefined;
+  try {
+    readiness = await page.gotoReady(readyWhen);
+  } catch (error: unknown) {
+    return {
+      gap: {
+        ref: readinessRef(screenId),
+        state: 'not-covered',
+        reason: scrubString(
+          `checkPage waited for this screen's declared readiness signal and the page did not settle, so it was not checked: ${errorMessage(error)}`,
+        ),
+      },
+    };
+  }
+  const measured = await measureReadiness(page, signal, config.appBaseUrl);
+  // The wait's outcome decides, as in the CLI, so a selector that appeared after the cap ran out
+  // still reads as not held.
+  const selectorHeld = readyWhen === undefined || selectorHeldBeforeWalk(readiness, measured.selectorPresent);
+  const gap = selectorHeld
+    ? unseenGap(screenId, signal, measured)
+    : unseenGap(screenId, signal, { ...measured, selectorPresent: false }, signalWaitMs);
+  return gap === null ? { measured } : { gap };
+}
+
+function readinessRef(screenId: string): string {
+  return `readiness:${screenId}`;
+}
+
+/**
+ * The CLI's unseen-screen gap for a readiness measurement, or null when every declared part held.
+ * Built by markUnseenScreens itself, so the two surfaces word and decide it the same way.
+ */
+function unseenGap(
+  screenId: string,
+  signal: ReadinessSignal,
+  measured: ReadinessMeasurement,
+  signalWaitMs?: number,
+): CoverageGap | null {
+  const scan: ScreenScan = {
+    screenId,
+    url: readinessRef(screenId),
+    stops: [],
+    drafts: [],
+    gaps: [],
+    applicability: [],
+    reachedSelectorPresent: measured.selectorPresent,
+    reachedWhenSelector: signal.selector,
+    ...(signalWaitMs === undefined ? {} : { signalWaitMs }),
+    ...(signal.response === null
+      ? {}
+      : { reachedResponseSeen: measured.responseSeen, reachedWhenResponse: signal.response }),
   };
+  const marked = markUnseenScreens([scan]).screens[0];
+  const gap = marked?.gaps[0];
+  if (gap === undefined) {
+    return null;
+  }
+  const reason = measured.responseSeen === false ? `${gap.reason} ${ADOPTED_RESPONSE_NOTE}` : gap.reason;
+  return { ref: gap.ref, state: 'not-covered', reason: scrubString(reason) };
 }
 
 export function assertUsablVerdict(

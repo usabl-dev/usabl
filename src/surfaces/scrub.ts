@@ -476,6 +476,13 @@ export function scrubResult(result: Result): Result {
     // page-derived, so there is nothing here to scrub, but it is copied explicitly rather than
     // spread so a new field can never reach egress without someone deciding it is safe.
     floorHeadroom: result.floorHeadroom.map((entry) => ({ ...entry })),
+    // The same kind of fields, copied field by field for the same reason. A screen id can come
+    // from a route literal in the application, so the strings are scrubbed like every other one.
+    floorUnconfirmed: (result.floorUnconfirmed ?? []).map((entry) => ({
+      screenId: scrubString(entry.screenId),
+      rules: entry.rules.map((rule) => scrubString(rule)),
+      barriers: entry.barriers,
+    })),
     paidDownCount: result.paidDownCount,
   };
 }

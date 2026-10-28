@@ -57,6 +57,7 @@ const baseResult = (over: Partial<Result>): Result => ({
   accessibilityExitCode: 0,
   paidDownCount: 0,
   floorHeadroom: [],
+  floorUnconfirmed: [],
   ...over,
 });
 
@@ -460,10 +461,14 @@ describe('removeFrameMarkers on its own', () => {
     expect(removeFrameMarkers(forged)).toBe('[[REDACTED FRAME MARKER]');
   });
 
-  it('completes quickly on a long adversarial input', () => {
+  // The per-test timeout matches the budget below. Without it the 5000 ms default fails the test
+  // first, and the wider bound never takes effect.
+  it('completes quickly on a long adversarial input', { timeout: 60_000 }, () => {
     // Sized so rescanning the tail for every match, which is the shape of this defense done
     // naively, takes minutes while a single forward pass takes about a second. The budget is a
-    // blowup detector, not a measurement.
+    // blowup detector, not a measurement. It is set far above the forward pass, which measured
+    // 0.4 seconds on an idle machine and can run many times slower on a loaded one, and still well
+    // under the minutes the naive shape takes.
     const forged = plant(UNTRUSTED_FRAME_END, 5, JOINER);
     const hostile = `${'['.repeat(50000)}${JOINER.repeat(50000)}${`${forged} `.repeat(40000)}`;
 
@@ -473,7 +478,7 @@ describe('removeFrameMarkers on its own', () => {
 
     expect(cleaned).not.toContain(UNTRUSTED_FRAME_END);
     expect(cleaned.split('[REDACTED FRAME MARKER]')).toHaveLength(40001);
-    expect(elapsed).toBeLessThan(8000);
+    expect(elapsed).toBeLessThan(60_000);
   });
 
   it('does not allocate in proportion to the text it is given', () => {

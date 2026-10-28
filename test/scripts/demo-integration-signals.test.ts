@@ -64,13 +64,26 @@ describe('ownSignals', () => {
   });
 
   it('bounds the wait for a replayed listener that never settles', async () => {
-    const host = new EventEmitter();
-    host.on('SIGTERM', () => new Promise<void>(() => {}));
-    const claimed = ownSignals(host, SIGNALS, vi.fn());
+    // Driven by a fake clock rather than measured on the real one, so a loaded machine cannot fail
+    // it. The replay must still be waiting just before its bound and must return at the bound.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const host = new EventEmitter();
+      host.on('SIGTERM', () => new Promise<void>(() => {}));
+      const claimed = ownSignals(host, SIGNALS, vi.fn());
 
-    const started = Date.now();
-    await claimed.replay('SIGTERM', [15], 50);
-    expect(Date.now() - started).toBeLessThan(1_000);
+      let returned = false;
+      const replayed = claimed.replay('SIGTERM', [15], 50).then(() => {
+        returned = true;
+      });
+      await vi.advanceTimersByTimeAsync(49);
+      expect(returned).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(returned).toBe(true);
+      await replayed;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('replays nothing for a signal that had no listeners', async () => {
