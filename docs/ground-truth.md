@@ -1485,7 +1485,9 @@ identity `fixed` only when one of these holds:
 - the screen's readiness signal (`reachedWhen`) was declared and every declared part held, or
 - the identity's own element was met this run: a keyboard stop or a draft on that screen at the
   same element path, for a structural identity, or with the same accessible name, for a name
-  identity. A counted identity names no element, so only the signal can confirm it.
+  identity. A counted identity names no element, so only the signal can confirm it. Neither
+  does a row identity: its row and table are kept only as hashes, which no keyboard stop or
+  element path carries, so an absent row is confirmed only by the signal.
 
 Otherwise the identity is not claimed `fixed`. It gets no finding, which is what a floor entry on a
 screen the run did not scan already gets, so it is not paid down, it is not counted fixed in the
@@ -1506,11 +1508,14 @@ Both tests are presence tests on sets, decided inside `gate()`, so they do not d
 `gate()` that passes none gets the safe reading: no evidence, so no `fixed`. `usabl floor prune`
 and `usabl baseline` read the same rule, `paydownConfirmed`, through `src/floor/unconfirmed.ts`.
 Prune keeps such an entry by default and says so; `usabl floor prune --unconfirmed` removes it on
-purpose and says how many it removed and why. Baseline, with or without `--partial`, carries such an
-entry into the new floor at its recorded count and says so. Two cases refuse instead, and write
+purpose and says how many it removed and why. Both read absence with the keys the floor was written
+with, as the gate compares it, so a version 2 floor's collapsed row entries are not read as absent
+while their barriers are on the page. Baseline, with or without `--partial`, carries such an entry
+into the new floor at its recorded count and says so. It scans twice, and an entry either scan
+could not confirm is carried; a carried identity is not recorded again or listed as intermittent. Two cases refuse instead, and write
 nothing. If the floor being replaced is version 1 and a carried entry is a name or structural
 entry, its count is a placeholder the run cannot replace with a real one, and writing it into a
-version 2 floor would present it as measured, so baseline exits 3, names the screens and rules, and
+current-version floor would present it as measured, so baseline exits 3, names the screens and rules, and
 gives the two ways forward: a `reachedWhen` signal and a re-run, or `usabl floor prune
 --unconfirmed` and then baseline. If the floor being replaced exists and does not parse, baseline
 exits 4 before it scans, names the file and the reason without quoting it, and says to fix or
