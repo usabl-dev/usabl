@@ -1731,10 +1731,13 @@ Refuses to run without a base ref. The comment leads with the headline
 (`## usabl report: <VERDICT>`), then on approval required the policy split line, then the
 receipt (`_No receipt: run was not verified._` when none), then `### Conformance summary`
 (whose `deterministic:` entry splits new into failing and unconfirmed when any is new),
-then the finding sections `### New barriers`, `### Known (carried)`, and
-`### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the gating lane
+then the finding sections `### New barriers`, `### Known (recorded debt)`, and
+`### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
 when the noise budget collapses it, then `### Coverage gaps` and
-`### Announcements (current run)`. All page-derived text passes through `neutralize()`. Sticky comment
+`### Announcements (current run)`. The known section lists carried and waived deterministic
+findings, each with its status, the same recorded debt the terminal and the overlay list. A
+collapsed group holds findings of one status, and names its screen id and rule once, in its
+headline. Its hint calls the findings gating only when every one of them gates. All page-derived text passes through `neutralize()`. Sticky comment
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
 

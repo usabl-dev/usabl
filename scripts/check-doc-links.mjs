@@ -9,7 +9,16 @@ import { SITE_BASE_PATH } from './stage-public-pages.mjs';
 // intra-page and cross-page `#anchor` fragments where the target file can be
 // parsed. External http(s) URLs (and other schemes such as mailto and tel) are
 // reported as skipped, not fetched, so the check stays deterministic and does
-// not touch the network.
+// not touch the network. In markdown it reads inline links, reference-style
+// links resolved through their definitions, and autolinks; in every file it
+// reads HTML URL attributes and CSS url() references. Reference links and
+// autolinks are not read inside fenced code, indented code blocks, inline code
+// spans, or HTML comments, and footnotes (labels that start with "^") are not
+// links. Three cases are not handled. A definition inside a blockquote, and
+// every definition in a file with CRLF line endings, is not found, so a full
+// or collapsed reference to it is reported as undefined. A reference in a list
+// item indented four or more columns is read as an indented code block and is
+// not checked.
 //
 // The docs:linkcheck command runs this pass and then the staged pass in
 // check-staged-links.mjs, and both must pass. They check different properties.
@@ -149,6 +158,25 @@ const CSS_IMPORT_STRING = /@import\s+(?:"([^"]*)"|'([^']*)')/gi;
 // Markdown inline links and images: [text](target) / ![alt](target), allowing
 // an optional "title" after the target.
 const MARKDOWN_LINK = /!?\[[^\]]*\]\(\s*([^)\s]+?)(?:\s+["'][^"']*["'])?\s*\)/g;
+// A link reference definition: `[label]: target` with an optional title, on a
+// line of its own, indented at most three spaces. The target may be wrapped in
+// angle brackets, which is how a target with spaces is written.
+const REFERENCE_DEFINITION =
+  /^ {0,3}\[((?:[^[\]\\]|\\.)+)\]:[ \t]*(?:<([^<>\n]*)>|(\S+))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$/;
+// A reference link or image: `[text][label]` (full), `[label][]` (collapsed),
+// or `[label]` (shortcut). An escaped opening bracket starts no link. A bracket
+// pair followed by `(` is an inline link, which MARKDOWN_LINK reads.
+const REFERENCE_USE = /(?<!\\)!?\[((?:[^[\]\\]|\\.)*)\](?:\[((?:[^[\]\\]|\\.)*)\])?(?!\()/g;
+// Autolinks. A CommonMark autolink is an absolute URI or an email address in
+// angle brackets, and both are external. A relative target in angle brackets,
+// starting with `./`, `../`, `/`, or `#`, is read too, so a link written that
+// way is checked rather than passed over. HTML tags never start that way, except
+// a closing tag such as `</p>`, which is left out by its shape.
+const AUTOLINK_URI = /<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*)>/g;
+const AUTOLINK_EMAIL =
+  /<([A-Za-z0-9.!#$%&'*+/=?^_{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>/g;
+const AUTOLINK_RELATIVE = /<((?:\.{1,2}\/|\/|#)[^\s<>]*)>/g;
+const CLOSING_TAG = /^\/[A-Za-z][A-Za-z0-9-]*$/;
 
 function quotedValue(match) {
   return match[1] ?? match[2] ?? '';
@@ -218,6 +246,147 @@ function srcsetUrls(value) {
   return urls;
 }
 
+// CommonMark matches a reference label without regard to case, and treats any
+// run of whitespace inside it as one space.
+function normalizeLabel(label) {
+  return label.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+// The same line with every inline code span blanked out, character for
+// character, so offsets still line up. Text in a code span is an example, not a
+// link. A backtick run with no closing run of the same length is literal text.
+function maskCodeSpans(line) {
+  let out = '';
+  let index = 0;
+  while (index < line.length) {
+    if (line[index] !== '`') {
+      out += line[index];
+      index += 1;
+      continue;
+    }
+    let runEnd = index;
+    while (runEnd < line.length && line[runEnd] === '`') runEnd += 1;
+    const run = line.slice(index, runEnd);
+    let close = line.indexOf(run, runEnd);
+    while (close !== -1 && line[close + run.length] === '`') {
+      let next = close;
+      while (next < line.length && line[next] === '`') next += 1;
+      close = line.indexOf(run, next);
+    }
+    if (close === -1) {
+      out += run;
+      index = runEnd;
+      continue;
+    }
+    out += ' '.repeat(close + run.length - index);
+    index = close + run.length;
+  }
+  return out;
+}
+
+// Reference links, reference images, and autolinks in a markdown file, outside
+// fenced code. Returns the targets they name with their offsets, and the full or
+// collapsed references whose label has no definition. A shortcut `[label]` with
+// no definition renders as plain text, a task box or a bracketed word, so it is
+// not a link and is not reported. A definition that nothing uses renders nothing
+// and is not checked.
+// The same text with every closed HTML comment blanked out, newlines kept, so
+// offsets and line numbers still line up. Text in a comment is not rendered.
+function maskHtmlComments(content) {
+  return content.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, ' '));
+}
+
+// Which lines are prose that can hold a reference: not fenced code, and not an
+// indented code block. An indented code block is a run of lines indented four
+// or more columns that starts after a blank line, a heading, or the start of
+// the file; an indented line right after a paragraph line continues that
+// paragraph instead. Blank lines inside the run keep it open.
+function proseLines(lines) {
+  const prose = [];
+  let inFence = false;
+  let inIndentedCode = false;
+  let previousBlankOrHeading = true;
+  for (const line of lines) {
+    const blank = line.trim() === '';
+    if (stripFence(line)) {
+      inFence = !inFence;
+      inIndentedCode = false;
+      prose.push(false);
+      previousBlankOrHeading = false;
+      continue;
+    }
+    if (inFence) {
+      prose.push(false);
+      continue;
+    }
+    const indented = /^(?: {4}|\t| {0,3}\t)/.test(line) && !blank;
+    if (indented && (inIndentedCode || previousBlankOrHeading)) {
+      inIndentedCode = true;
+      prose.push(false);
+      continue;
+    }
+    if (!blank) inIndentedCode = false;
+    prose.push(!blank);
+    previousBlankOrHeading = blank || /^ {0,3}#{1,6}(?:\s|$)/.test(line);
+  }
+  return prose;
+}
+
+// A label that starts with "^" is a footnote, not a link reference.
+function isFootnoteLabel(label) {
+  return label.trimStart().startsWith('^');
+}
+
+function markdownReferences(content) {
+  const lines = maskHtmlComments(content).split('\n');
+  const prose = proseLines(lines);
+  const definitions = new Map();
+  lines.forEach((line, index) => {
+    if (!prose[index]) return;
+    const definition = REFERENCE_DEFINITION.exec(line);
+    if (definition && !isFootnoteLabel(definition[1])) {
+      const label = normalizeLabel(definition[1]);
+      // The first definition of a label wins, as it does in CommonMark.
+      if (label !== '' && !definitions.has(label)) {
+        definitions.set(label, definition[2] ?? definition[3] ?? '');
+      }
+    }
+  });
+
+  const links = [];
+  const undefinedReferences = [];
+  let offset = 0;
+  for (const [index, line] of lines.entries()) {
+    if (prose[index] && !REFERENCE_DEFINITION.test(line)) {
+      const masked = maskCodeSpans(line);
+      for (const match of masked.matchAll(REFERENCE_USE)) {
+        const written = match[2] === undefined || match[2] === '' ? match[1] : match[2];
+        const explicit = match[2] !== undefined;
+        if (isFootnoteLabel(written)) continue;
+        const target = definitions.get(normalizeLabel(written));
+        if (target !== undefined) {
+          links.push({ url: target, offset: offset + match.index });
+        } else if (explicit && normalizeLabel(written) !== '') {
+          undefinedReferences.push({ label: written, offset: offset + match.index });
+        }
+      }
+      for (const match of masked.matchAll(AUTOLINK_URI)) {
+        links.push({ url: match[1], offset: offset + match.index + 1 });
+      }
+      for (const match of masked.matchAll(AUTOLINK_EMAIL)) {
+        // An email autolink is a mailto link, so it is counted as external.
+        links.push({ url: `mailto:${match[1]}`, offset: offset + match.index + 1 });
+      }
+      for (const match of masked.matchAll(AUTOLINK_RELATIVE)) {
+        if (CLOSING_TAG.test(match[1])) continue;
+        links.push({ url: match[1], offset: offset + match.index + 1 });
+      }
+    }
+    offset += line.length + 1;
+  }
+  return { links, undefinedReferences };
+}
+
 // Map a character offset in the file to its 1-based line number.
 function lineIndexer(content) {
   const starts = [0];
@@ -261,6 +430,7 @@ function extractLinks(filePath, content) {
       }
       offset += line.length + 1;
     }
+    for (const { url, offset: at } of markdownReferences(content).links) pushAt(url, at);
   }
 
   // HTML attributes appear in HTML files and in raw HTML inside markdown.
@@ -289,6 +459,18 @@ function extractLinks(filePath, content) {
   return links
     .sort((a, b) => a.offset - b.offset)
     .map(({ target, lineNumber }) => ({ target, lineNumber }));
+}
+
+// Full and collapsed references in a markdown file whose label is never
+// defined, with the line each one is on. Such a reference is meant as a link and
+// renders as plain text, so it is reported as broken.
+function findUndefinedReferences(filePath, content) {
+  if (extname(filePath).toLowerCase() !== '.md') return [];
+  const lineAt = lineIndexer(content);
+  return markdownReferences(content).undefinedReferences.map(({ label, offset }) => ({
+    label,
+    lineNumber: lineAt(offset),
+  }));
 }
 
 function safeDecode(value) {
@@ -367,6 +549,10 @@ async function checkDocLinks(root) {
     const anchors = await anchorsFor(file);
     const links = extractLinks(file, content);
     const relFile = relative(root, file).split('\\').join('/');
+
+    for (const { label, lineNumber } of findUndefinedReferences(file, content)) {
+      broken.push({ relFile, lineNumber, target: `[${label}]`, reason: 'undefined link reference' });
+    }
 
     for (const { target, lineNumber } of links) {
       const raw = target.trim();
@@ -476,6 +662,7 @@ export {
   collectAnchors,
   extractLinks,
   EXTERNAL_PREFIX,
+  findUndefinedReferences,
   siteRootedPath,
   slugify,
   splitLinkTarget,
