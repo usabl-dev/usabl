@@ -37,7 +37,8 @@ import { planOverlay, writeOverlay } from './install/overlay.js';
 import { planClaude, writeClaude } from './install/claude.js';
 import { installClaudeSkills } from './install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs, writeCursor } from './install/cursor.js';
-import { planCi, planDocsCi, writeCi, writeDocsCi } from './install/ci.js';
+import { planDocsCi, writeDocsCi } from './install/ci.js';
+import { installCi } from './install/history-ci.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { projectDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
@@ -231,7 +232,8 @@ async function runInstall(opts: CliOptions): Promise<number> {
   } else if (opts.installTarget === 'docs-ci') {
     result = await writeDocsCi(installFs, await planDocsCi(installFs));
   } else {
-    result = await writeCi(installFs, await planCi(installFs));
+    // The pull request gate and the default-branch history workflow that turns on debt tracking.
+    result = await installCi(installFs);
   }
 
   // Exit 0 (written or already wired) goes to stdout; a refusal (exit 2) goes to stderr,

@@ -17,6 +17,7 @@ import {
   USABL_GATE_WORKFLOW,
   USABL_GATE_WORKFLOW_PATH,
 } from '../../src/install/ci.js';
+import { USABL_HISTORY_WORKFLOW, USABL_HISTORY_WORKFLOW_PATH } from '../../src/install/history-ci.js';
 import { CLAUDE_SETTINGS_PATH } from '../../src/install/claude.js';
 import {
   CLAUDE_FIX_SKILL_CONTENTS,
@@ -102,6 +103,8 @@ describe('usabl install command wiring', () => {
     expect(code).toBe(0);
     const written = await readFile(join(workspace, USABL_GATE_WORKFLOW_PATH), 'utf8');
     expect(written).toBe(USABL_GATE_WORKFLOW);
+    // The default-branch history workflow comes with it, so debt tracking turns on with the gate.
+    expect(await readFile(join(workspace, USABL_HISTORY_WORKFLOW_PATH), 'utf8')).toBe(USABL_HISTORY_WORKFLOW);
   });
 
   it('routes --docs-ci to the docs-ci generator and writes the docs gate workflow', async () => {
