@@ -471,6 +471,33 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
           "<script>customElements.define('x-off-slot', class extends HTMLElement { constructor() { super();" +
           " this.attachShadow({ mode: 'open' }).innerHTML = '<div aria-live=\"off\"><slot></slot></div>'; } });</script>",
       ],
+      // Content hidden from assistive technology is silent even inside a live region. Orca says
+      // nothing for a polite status inside aria-hidden="true", so the capture must not record it.
+      [
+        'a polite region inside an aria-hidden="true" subtree',
+        '<div aria-hidden="true"><div aria-live="polite" id="message"></div></div>',
+      ],
+      [
+        'an aria-hidden="true" wrapper between a polite region and the change',
+        '<div aria-live="polite"><div aria-hidden="true"><span id="message"></span></div></div>',
+      ],
+      ['a role="status" region that is itself aria-hidden="true"', '<div role="status" aria-hidden="true" id="message"></div>'],
+      [
+        'a polite region inside aria-hidden="TRUE", which Chromium hides',
+        '<div aria-hidden="TRUE"><div aria-live="polite" id="message"></div></div>',
+      ],
+      [
+        'a polite region inside aria-hidden="false" under aria-hidden="true"',
+        '<div aria-hidden="true"><div aria-hidden="false"><div aria-live="polite" id="message"></div></div></div>',
+      ],
+      ['a polite region inside an inert subtree', '<div inert><div aria-live="polite" id="message"></div></div>'],
+      ['a polite region inside hidden content', '<div hidden><div aria-live="polite" id="message"></div></div>'],
+      [
+        'an aria-hidden wrapper around a slot inside a polite region',
+        '<div aria-live="polite"><x-hidden-slot><span id="message"></span></x-hidden-slot></div>' +
+          "<script>customElements.define('x-hidden-slot', class extends HTMLElement { constructor() { super();" +
+          " this.attachShadow({ mode: 'open' }).innerHTML = '<div aria-hidden=\"true\"><slot></slot></div>'; } });</script>",
+      ],
     ];
 
     for (const [name, region] of cases) {
@@ -494,6 +521,12 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
         'a polite region inside an off wrapper',
         '<div aria-live="off"><div aria-live="polite" id="message"></div></div>',
       ],
+      ['a polite region with aria-hidden="false"', '<div aria-live="polite" aria-hidden="false" id="message"></div>'],
+      [
+        'a polite region inside an aria-hidden="false" wrapper',
+        '<div aria-hidden="false"><div aria-live="polite"><span id="message"></span></div></div>',
+      ],
+      ['a polite region with an empty aria-hidden', '<div aria-live="polite" aria-hidden="" id="message"></div>'],
     ];
 
     // A light element slotted into a live region inside a shadow root. The region's own text in the
@@ -534,6 +567,21 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
           regionPage('<div aria-live="polite"><div aria-live="off"><span id="message"></span></div></div>'),
           { waitUntil: 'domcontentloaded' },
         );
+        const page = await adoptPage(pw);
+        await page.click('#save');
+        expect(await page.drainAnnouncements()).toEqual(['Heard']);
+      } finally {
+        await browser.close();
+      }
+    });
+
+    it('does not hear a polite region inside aria-hidden="true" on an adopted page', async () => {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const pw = await browser.newPage();
+        await pw.setContent(regionPage('<div aria-hidden="true"><div aria-live="polite" id="message"></div></div>'), {
+          waitUntil: 'domcontentloaded',
+        });
         const page = await adoptPage(pw);
         await page.click('#save');
         expect(await page.drainAnnouncements()).toEqual(['Heard']);
@@ -1431,6 +1479,89 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       expect(screen?.gaps ?? []).toEqual([]);
       expect((screen?.drafts ?? []).map((draft) => draft.rule)).toContain('button-name');
     }, 30_000);
+  });
+
+  // The focus and style reads must report what the browser holds, not what page script says.
+  // This page replaces every function and getter those reads could use in its own world. Each
+  // fake answers so that a read made through it is wrong: the decoy button is reported as the
+  // focused element and as the match for every selector, contains says yes to everything, focus
+  // does nothing, and every computed style is the same made-up color.
+  const SPOOFING_FOCUS_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Focus</title></head><body>
+    <main>
+      <button type="button" id="focused" style="color: rgb(0, 128, 0)">Focused</button>
+      <button type="button" id="decoy">Decoy</button>
+      <div id="dialog"><button type="button" id="inside">Inside</button></div>
+    </main>
+    <script>
+      const decoy = document.getElementById('decoy');
+      Object.defineProperty(Document.prototype, 'activeElement', { get() { return decoy; } });
+      Object.defineProperty(Document.prototype, 'body', { get() { return decoy; } });
+      Document.prototype.querySelector = function () { return decoy; };
+      Node.prototype.contains = function () { return true; };
+      HTMLElement.prototype.focus = function () {};
+      Element.prototype.hasAttribute = function () { return true; };
+      window.getComputedStyle = () => ({ getPropertyValue: () => 'rgb(1, 2, 3)' });
+    </script>
+  </body></html>`;
+
+  describe('focus and style reads on a page that redefines what they use', () => {
+    const openSpoofingPage = async (): Promise<UsablPage> => {
+      const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(SPOOFING_FOCUS_PAGE)}`);
+      // A real click puts focus on the first button, whatever the page says about focus.
+      await page.click('#focused');
+      return page;
+    };
+
+    it('activeElementIs reports the element that holds focus', async () => {
+      const page = await openSpoofingPage();
+      try {
+        await expect(page.activeElementIs('#decoy')).resolves.toBe(false);
+        await expect(page.activeElementIs('#focused')).resolves.toBe(true);
+      } finally {
+        await page.close();
+      }
+    });
+
+    it('activeElementWithin reports whether focus is inside the element', async () => {
+      const page = await openSpoofingPage();
+      try {
+        await expect(page.activeElementWithin('#dialog')).resolves.toBe(false);
+        await expect(page.activeElementWithin('main')).resolves.toBe(true);
+      } finally {
+        await page.close();
+      }
+    });
+
+    it('focusBody moves focus to the real body', async () => {
+      const page = await openSpoofingPage();
+      try {
+        await page.focusBody();
+        // activePath and queryAll already run in an isolated world, so they are the reference.
+        const [body] = await page.queryAll('body');
+        await expect(page.activePath()).resolves.toBe(body?.selector);
+      } finally {
+        await page.close();
+      }
+    });
+
+    it('activeNode reads the accessibility node of the element that holds focus', async () => {
+      const page = await openSpoofingPage();
+      try {
+        const node = await page.activeNode();
+        expect(node?.name).toBe('Focused');
+      } finally {
+        await page.close();
+      }
+    });
+
+    it('getComputedStyle reads the style the browser computed', async () => {
+      const page = await openSpoofingPage();
+      try {
+        await expect(page.getComputedStyle('#focused', 'color')).resolves.toBe('rgb(0, 128, 0)');
+      } finally {
+        await page.close();
+      }
+    });
   });
 
   it('returns null for ignored or missing AX nodes', async () => {
