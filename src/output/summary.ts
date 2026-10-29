@@ -223,9 +223,10 @@ const SEVERITY_ORDER: Finding['severity'][] = ['critical', 'serious', 'moderate'
  *
  * PatternFly 6 draws its buttons on a gradient, so a screen can carry dozens of these, one per
  * button, each saying the same thing. Printed one by one they bury the results that differ. The
- * entry stands for all of them and names each element, and `usabl check --json` still lists each
- * finding. The findings, their count in the heading, and the verdict are untouched: this changes
- * how they are printed, never what they are.
+ * entry stands for all of them and names each element on its own line. Each path is bounded on its
+ * own, so a long list never cuts an element off. `usabl check --json` still lists each finding.
+ * The findings, their count in the heading, and the verdict are untouched: this changes how they
+ * are printed, never what they are.
  */
 function renderGradientGroup(findings: Finding[]): string[] {
   const first = findings[0];
@@ -241,7 +242,8 @@ function renderGradientGroup(findings: Finding[]): string[] {
       `measure the color contrast of ${subject} a gradient background.`,
     `        why: ${GRADIENT_CONTRAST_WHY}`,
     `        check: ${GRADIENT_CONTRAST_CHECK}`,
-    `        elements (${String(count)}): ${boundField(elements.join(', '), 'candidates')}`,
+    `        elements (${String(count)}):`,
+    ...elements.map((element) => `          ${boundField(element, 'source')}`),
     '        usabl check --json lists each one as its own finding.',
   ];
 }

@@ -81,8 +81,23 @@ describe('formatSummary groups gradient contrast results per screen', () => {
   it('lists every grouped element under its entry, sorted', () => {
     const out = formatSummary(resultWith(findings));
 
-    expect(out).toContain('elements (3): .btn-a, .btn-b, .btn-c');
-    expect(out).toContain('elements (1): .btn-s');
+    expect(out).toContain('        elements (3):\n          .btn-a\n          .btn-b\n          .btn-c\n');
+    expect(out).toContain('        elements (1):\n          .btn-s\n');
+  });
+
+  it('prints every element in full on its own line, however many there are', () => {
+    const paths = Array.from(
+      { length: 12 },
+      (_, i) =>
+        `#main-content > div.pf-v6-c-toolbar > div:nth-child(2) > button.pf-v6-c-button:nth-child(${String(i + 1)})`,
+    );
+    const out = formatSummary(resultWith(paths.map((path) => contrast('clusters', path, 'bgGradient'))));
+    const lines = out.split('\n');
+    const start = lines.indexOf('        elements (12):');
+
+    expect(start).toBeGreaterThan(-1);
+    expect(lines.slice(start + 1, start + 13)).toEqual([...paths].sort().map((path) => `          ${path}`));
+    expect(out).not.toContain('shortened');
   });
 
   it('leaves every other contrast result as its own entry', () => {
@@ -137,7 +152,7 @@ describe('formatSummary groups gradient contrast results per screen', () => {
     const out = formatSummary(resultWith([contrast('clusters', '.btn\u001b[2J', 'bgGradient')]));
 
     expect(out).not.toContain('\u001b');
-    expect(out).toContain('elements (1): .btn');
+    expect(out).toContain('elements (1):\n          .btn');
   });
 });
 
