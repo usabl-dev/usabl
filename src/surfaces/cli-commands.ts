@@ -65,6 +65,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     flags: [
       { name: '--docs', help: 'Draft usabl.docs.json for a docs repository instead.' },
       { name: '--force', help: 'Replace draft files that already exist.' },
+      { name: '--app', value: '<dir>', help: 'Draft one app folder of a monorepo, such as packages/web.' },
     ],
   },
   {

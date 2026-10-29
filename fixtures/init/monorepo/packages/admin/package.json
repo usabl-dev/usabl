@@ -1,0 +1,8 @@
+{
+  "name": "@mono/admin",
+  "private": true,
+  "dependencies": {
+    "@mono/shared": "workspace:*",
+    "react": "^18.3.0"
+  }
+}
