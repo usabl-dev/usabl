@@ -97,7 +97,9 @@ export function computeDocsCoverage(manifest: DocsManifest | null, changedFiles:
       gaps.push({
         ref: file,
         state: 'unresolved',
-        reason: 'changed docs file was not in any page sources or shared glob pattern',
+        reason:
+          'changed docs file was not in any page sources or shared glob pattern. To fix it, add it to ' +
+          'the sources of a page in usabl.docs.json, or to its sharedGlobs.',
       });
     }
   }

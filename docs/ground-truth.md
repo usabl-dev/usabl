@@ -762,6 +762,18 @@ Given a set of changed files, discover which surfaces they affect:
 5. Manual surface globs in config are an additive fallback, never a replacement.
 6. Anything resolving to nothing stays in `unresolvedFiles` and forces `not_covered`.
 
+**Files usabl cannot place.** Each file in `unresolvedFiles` gets an `unresolved` gap whose ref
+is its repository path. The reason says why usabl could not place it, then the fix: add it to the
+`files` of a surface in `usabl.config.json`, or add the route that renders it to
+`usabl.routes.json` with an `entryFile` that imports it. Any import usabl could not follow on the
+way comes last, as discovery detail. A docs source gets the docs form of the fix: add it to a
+page's `sources` in `usabl.docs.json`, or to its `sharedGlobs`. The common case is a shared file,
+such as a layout every route imports through an alias usabl does not resolve. `usabl check` names
+the first such file in its gap list and then lists every other one with its reason, sorted.
+`usabl baseline` scans every UI file, so it is where these show up first: its refusal on
+incomplete coverage, and its `--partial` report, list every such file with its reason, sorted. No
+page text is printed in either list.
+
 An import with no extension is probed against a fixed list: `.mjs`, `.js`, `.mts`, `.ts`, `.jsx`,
 `.tsx`, `.vue`, and `.svelte`, then the same names as `index` files in a directory. usabl does not
 read `resolve.extensions` from the Vite config, because it cannot run the config. When more than
@@ -885,7 +897,10 @@ from a relative path. A layout route with children gets no entry file, because i
 also renders on every child's URL, and a change to it must not read as covered by one screen.
 This holds for JSX passed to `createRoutesFromElements` and `createRoutesFromChildren` too. Route
 objects, in a router factory call or in `useRoutes`, never get one. When two routes with the same
-path name different components, neither is attributed.
+path name different components, neither is attributed. An import without an extension is tried
+as `.tsx`, `.ts`, `.jsx`, and `.js`. When more than one of those files exists, the route gets no
+entry file and a `Review:` note names every candidate, sorted, because the bundler's pick depends on
+an extension order init cannot read.
 
 **What it still does not see.** These leave no gap, so check for them:
 
@@ -1861,9 +1876,25 @@ coverage honesty, and optional receipt minting.
 
 **Command surface.** `main` recognizes exactly twelve commands: `check`, `comment`,
 `bypass`, `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`,
-`doctor`, `docs`. `check` is the default when no command is given. There is no `--help`
-and no `--version`, and unrecognized flags are silently ignored (the parser has no
-catch-all for unknown `-` tokens); an unknown *command* exits 2.
+`doctor`, `docs`, plus `help`. `check` is the default when no command is given, so `usabl`
+alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
+`usabl help <command>` print help and exit 0 before anything else runs: no config is read, no
+browser opens, stdin is not read, and no file is written. The top-level help lists every
+command with one line each. A command's help lists every flag it takes. Both come from one
+command table in `src/surfaces/cli-commands.ts`, and a flag the table does not list for that
+command is refused with exit 2 and a pointer to `usabl <command> --help`, instead of being
+ignored. An unknown command exits 2 and points to `usabl help`. There is no `--version`.
+
+A local `usabl check` that ends in `approval_required` also prints the next step: commit the
+guarded files (a code owner approves them on a pull request). When no UI file changed, it
+says no screen was scanned and that `usabl baseline`, after the commit, scans every mapped
+screen. When every touched screen opened and was measured, it says their accessibility
+barriers are listed above. A screen that did not open, or was not fully measured, is still in
+`screens`, as a scan with a gap. Only a scan with no gap counts as measured. When some touched
+screens were measured and some were not, it gives both counts and points to the "not evaluated"
+lines. When none was measured, it says no screen was measured and points to the same lines. The
+verdict and the exit code do not change. A run with `--trusted-ref` or `--json` prints no such
+lines.
 
 **Typical uses:**
 

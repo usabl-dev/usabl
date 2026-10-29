@@ -293,6 +293,8 @@ function formatDirtyGuardedPaths(paths: string[]): string {
   const lines = [
     `refused: guarded paths other than ${EVIDENCE_FLOOR_PATH} are dirty`,
     ...paths.map((path) => `  - ${neutralize(path)}`),
+    'a floor draft is reviewed on its own, so other policy changes must be committed first.',
+    'review those files, commit or revert them, then run usabl baseline again.',
   ];
   return lines.join('\n');
 }
@@ -313,15 +315,42 @@ function formatSuccessReport(entryCount: number, intermittent: IntermittentGroup
   ].join('\n');
 }
 
+/**
+ * Each file the scans could not place on a screen, by repository path, with the planner's reason,
+ * which says why and how to fix it. A baseline scans every UI file, so this is where a shared file
+ * that no route mapping reaches, such as a layout every route imports, first shows up. Listed in
+ * full and sorted, so the operator can fix the map file by file and the output never changes
+ * between runs. No page text is involved: the path and the reason both come from the source tree.
+ */
+function unplacedFileLines(coverages: ReadonlyArray<Result['coverage']>): string[] {
+  const byRef = new Map<string, string>();
+  for (const coverage of coverages) {
+    for (const gap of coverage.gaps) {
+      if (gap.state === 'unresolved' && !byRef.has(gap.ref)) {
+        byRef.set(gap.ref, gap.reason);
+      }
+    }
+  }
+  if (byRef.size === 0) {
+    return [];
+  }
+  const refs = [...byRef.keys()].sort();
+  return [
+    `files usabl could not place on any screen: ${refs.length}`,
+    ...refs.map((ref) => `  - ${neutralize(ref)}: ${neutralize(byRef.get(ref) ?? '')}`),
+  ];
+}
+
 // The default refusal when coverage is incomplete. A floor is an acceptance of existing debt, so a
 // run that admits it did not see everything must not mint one. Name the numbers and the two ways
 // out: fix coverage, or ask for a partial floor over only the cleanly scanned screens.
-function formatCoverageRefusal(unresolvedFiles: number, gaps: number): string {
+function formatCoverageRefusal(unresolvedFiles: number, gaps: number, unplaced: string[]): string {
   return [
     'refused: coverage gaps remain, so no baseline floor was written.',
     `  gaps: ${gaps}, unresolved files: ${unresolvedFiles}.`,
+    ...unplaced,
     'a floor accepts existing debt, so it must come from a run that saw the whole application.',
-    'fix coverage first (session, auth, or URL), then re-run baseline.',
+    'fix coverage first (session, auth, URL, or file mapping), then re-run baseline.',
     `or re-run with --partial to floor only the cleanly scanned screens.`,
   ].join('\n');
 }
@@ -344,6 +373,7 @@ function formatPartialReport(
   skippedScreens: string[],
   intermittent: IntermittentGroup[],
   carried: FloorEntry[],
+  unplaced: string[],
 ): string {
   const lines = [
     `wrote ${entriesWord(entryCount)} to ${EVIDENCE_FLOOR_PATH} as a partial baseline.`,
@@ -357,6 +387,8 @@ function formatPartialReport(
       `skipped ${skippedScreens.length} screen${skippedScreens.length === 1 ? '' : 's'} with coverage gaps: ${skippedScreens.join(', ')}.`,
     );
   }
+  // A file no screen renders, as far as usabl can tell, is not in this floor at all.
+  lines.push(...unplaced);
   lines.push(...formatStability(intermittent));
   lines.push(...keptUnconfirmedLines(groupByScreen(carried)));
   return lines.join('\n');
@@ -396,7 +428,11 @@ function refusedRun(result: Result): BaselineOutcome | null {
     return {
       exitCode: 2,
       wrote: false,
-      message: 'refused: no UI files matched uiFileGlobs for baseline.',
+      message: [
+        'refused: no UI files matched uiFileGlobs for baseline.',
+        'set uiFileGlobs in usabl.config.json to match your UI source files, such as',
+        'src/**/*.tsx, then run usabl baseline again.',
+      ].join('\n'),
       entryCount: 0,
     };
   }
@@ -495,7 +531,7 @@ export async function runBaseline(
     return {
       exitCode: 3,
       wrote: false,
-      message: formatCoverageRefusal(counts.unresolvedFiles, counts.gaps),
+      message: formatCoverageRefusal(counts.unresolvedFiles, counts.gaps, unplacedFileLines([incompleteRun.coverage])),
       entryCount: 0,
     };
   }
@@ -530,7 +566,14 @@ export async function runBaseline(
       exitCode: 0,
       wrote: true,
       entryCount: partialFloor.entries.length,
-      message: formatPartialReport(partialFloor.entries.length, coveredScreens, skippedScreens, stable.intermittent, carried),
+      message: formatPartialReport(
+        partialFloor.entries.length,
+        coveredScreens,
+        skippedScreens,
+        stable.intermittent,
+        carried,
+        unplacedFileLines([first.coverage, second.coverage]),
+      ),
     };
   }
 

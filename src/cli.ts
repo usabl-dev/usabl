@@ -30,7 +30,16 @@ import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
 import { configUrlWarnings, parseUsablConfig } from './intake/config.js';
-import { ciRefusal, installRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
+import {
+  ciRefusal,
+  installRefusal,
+  localApprovalNextSteps,
+  mergeChangedPaths,
+  parseCliArgs,
+  projectCli,
+  type CliOptions,
+} from './surfaces/cli.js';
+import { preflightCli } from './surfaces/cli-commands.js';
 import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
 import { planOverlay, writeOverlay } from './install/overlay.js';
@@ -56,7 +65,17 @@ export async function loadConfig(
   },
 ): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
-  const config = parseUsablConfig(await readFile(path, 'utf8'));
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      // The first error a new user meets. Name the command that writes the file.
+      throw new Error(`${path} not found. Run "usabl init" to draft it, or pass --config <path>.`);
+    }
+    throw error;
+  }
+  const config = parseUsablConfig(raw);
   // A configured URL with a query or a fragment loads, and the operator is told it is published.
   for (const warning of configUrlWarnings(config)) {
     warn(warning);
@@ -237,6 +256,18 @@ async function runInstall(opts: CliOptions): Promise<number> {
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
+  // Help and unknown flags are answered before anything runs, so asking how to use a command
+  // never loads config, opens a browser, reads stdin, or writes a file.
+  const preflight = preflightCli(argv);
+  if (preflight !== null && preflight.kind === 'help') {
+    process.stdout.write(preflight.text);
+    return 0;
+  }
+  if (preflight !== null) {
+    process.stderr.write(`usabl: ${preflight.message}\n`);
+    return 2;
+  }
+
   let opts;
   try {
     opts = parseCliArgs(argv);
@@ -260,7 +291,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'doctor' &&
     opts.command !== 'docs'
   ) {
-    process.stderr.write(`unknown command: ${opts.command}\n`);
+    // The command table names a command this dispatch does not run. Refuse it the same way.
+    process.stderr.write('usabl: unknown command. Run "usabl help" to list the commands.\n');
     return 2;
   }
 
@@ -550,7 +582,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return advisory.advisoryExitCode;
     }
     const projected = projectCli(result);
-    process.stdout.write((opts.json ? projected.json : projected.text) + '\n');
+    if (opts.json) {
+      process.stdout.write(projected.json + '\n');
+      return projected.exitCode;
+    }
+    // A local run has no pull request to approve on, so it also says how to clear the state here.
+    const nextSteps = opts.trustedRef === null ? localApprovalNextSteps(result) : [];
+    process.stdout.write([projected.text, ...nextSteps].join('\n') + '\n');
     return projected.exitCode;
   } finally {
     // Always close browser resources, even when run() throws before returning a Result.
