@@ -355,10 +355,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     };
     let draft;
     try {
-      // Init throws when a derived screen id is one the parser would refuse. A draft without
-      // that route would hide it from coverage, so the refusal surfaces as an error and nothing
-      // is written, the same way docs init refuses.
-      draft = await inferInit(initFs, { sessionConfigured: readStorageStateEnv(process.env) !== null });
+      // Init throws when a derived screen id is one the parser would refuse, when it finds more
+      // than one app and no --app, and when it finds no UI files. Each of those drafts would hide
+      // a screen or read as idle, so the refusal surfaces as an error and nothing is written, the
+      // same way docs init refuses.
+      draft = await inferInit(initFs, {
+        sessionConfigured: readStorageStateEnv(process.env) !== null,
+        ...(opts.app === undefined ? {} : { appDir: opts.app }),
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`usabl: ${message}\n`);

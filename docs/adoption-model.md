@@ -39,10 +39,14 @@ each stage matters; this section is what a team actually types, in order.
    and running `npm install --save-dev file:../usabl`. The generated CI clones
    `usabl-dev/usabl` and pins the engine to a commit you choose.
 2. (automatic, `usabl init`) Drafts `usabl.config.json` and `usabl.routes.json` from
-   the working tree. It infers `appBaseUrl` from the Vite port, reads the app router
-   for screens, and seeds the interface globs, the wide-impact globs, and the
-   guarded-path list. It writes nothing else and refuses to overwrite either file
-   without `--force`.
+   the working tree. It infers `appBaseUrl` from the Vite port and https setting, reads
+   the app router for screens, and seeds the interface globs, the wide-impact globs, and
+   the guarded-path list. It writes nothing else and refuses to overwrite either file
+   without `--force`. In a monorepo, run `usabl init --app <dir>` for the app to check,
+   such as `usabl init --app packages/web`; with no flag and more than one app, `init`
+   lists the apps and writes nothing. When it finds no UI files it writes nothing, and
+   when it derives no route it skips `usabl.routes.json` and says how to map screens by
+   hand.
 3. (human) Review the two drafts; the routes and globs are drafts, not measured facts.
    `init` reads JSX routes, data routers, route config arrays rendered through `map` (the
    PatternFly seed shape), lazy routes, and nested routes. Each route it cannot read, and
@@ -229,8 +233,9 @@ read as a useful open tool.
 
 **What they need:**
 
-- `usabl init` to scaffold policy. It inspects the working tree, infers `appBaseUrl`
-  from the Vite config port, reads the app router for its routes, and writes
+- `usabl init` to scaffold policy (`usabl init --app <dir>` in a monorepo). It inspects
+  the working tree, infers `appBaseUrl` from the Vite config port and https setting, reads
+  the app router for its routes, and writes
   `usabl.config.json` and `usabl.routes.json` as reviewable drafts. It refuses to
   overwrite either file without `--force`, and it writes nothing else. The routes and
   surfaces are drafts to review, not measured facts.

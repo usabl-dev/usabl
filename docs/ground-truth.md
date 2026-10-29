@@ -1964,7 +1964,8 @@ lines.
 
 - Local: `usabl check` (the default) on changed files or named surfaces.
 - First-run policy drafts: `usabl init` infers and writes `usabl.config.json` and
-  `usabl.routes.json` only. It never calls the gate and never consumes the files it just
+  `usabl.routes.json` only. `--app <dir>` drafts one app folder in a repository that holds
+  several (see section 12). It never calls the gate and never consumes the files it just
   wrote, and it refuses to overwrite existing files unless `--force` is given (`--force`
   is init-only draft overwrite, not a gate bypass).
 - Integration wiring: `usabl install <target>` wires exactly one integration surface per
@@ -2363,12 +2364,59 @@ required status check exist). `init` does not wire CI or overlays, and `install`
 scaffold policy.
 
 `usabl init` looks for the router in `src/App.tsx`, `src/App.jsx`, `src/routes.tsx`,
-`src/router.tsx`, `src/app/routes.tsx`, and `src/app/routes.jsx`, in that order, and takes the
-first that holds route code. It reads routes from it as described in
-[Reading routes out of router source](#reading-routes-out-of-router-source). The draft's
+`src/router.tsx`, `src/app/routes.tsx`, and `src/app/routes.jsx`, in that order, under the app
+folder (below), and takes the first that holds route code. It reads routes from it as described
+in [Reading routes out of router source](#reading-routes-out-of-router-source). The draft's
 `wideBlastGlobs` list the router file and whichever of `src/main.tsx`, `src/main.ts`,
 `src/index.tsx`, `src/App.tsx`, `src/App.jsx`, `index.html`, `src/index.html`, the Vite config, and
-the CSS files under `src/` exist, because a change to any of them can reach every screen.
+the CSS files under `src/` exist in the app folder, because a change to any of them can reach
+every screen. Path aliases come from the `tsconfig.json`, `tsconfig.app.json`, and Vite config in
+the app folder, the configs that app's compiler and bundler read.
+
+**Which app `init` drafts.** `usabl init --app <dir>` drafts the app in that folder, written
+relative to the repository root, such as `usabl init --app packages/web`. A folder outside the
+repository, or one with no files, is refused. With no flag, `init` drafts the root app when the
+root has a Vite config, a router file, or `src/**/*.tsx` or `src/**/*.jsx` files. Otherwise it
+looks below the root: a folder with a Vite config two levels down anywhere, or three under
+`packages/` or `apps/`, and a folder under `packages/` or `apps/` with a router file. It skips
+`node_modules`, `dist`, `build`, `coverage`, and hidden folders. When it finds one app, it drafts
+that app and says so in a `Review:` note. When it finds more than one, it refuses, writes
+nothing, lists every app it found, sorted, and names the `--app` flag to use, because a config
+drafted for the wrong app checks the wrong files.
+
+Every path `init` writes stays relative to the repository root: `uiFileGlobs`, the router file,
+`wideBlastGlobs`, and each entry file carry the app folder, such as `packages/web/src/**/*.tsx`.
+`usabl.config.json` and `usabl.routes.json` are written at the root, and `guardedPaths` names
+them there, so CODEOWNERS and the trusted-ref guard still match them. A config drafted for one
+app treats a change in another app as no UI change. That includes a workspace package the app
+renders components from, so when the app's `package.json` depends on a package found under
+`packages/` or `apps/`, a `Review:` note names it and says to add its files to `uiFileGlobs`.
+`init` does not add them itself, because it cannot tell which of the package's files the app
+renders.
+
+**The dev server URL.** `init` parses the app's Vite config, without running it, and reads
+`server.port` and `server.https` from the exported config: `export default { ... }`,
+`defineConfig({ ... })`, a function that returns the config, or a `const` that holds one. The
+port counts when it is a number literal. https counts when `server.https` is `true` or an options
+object, or when the plugins list calls `basicSsl()`. A setting that is absent takes Vite's
+default, port 5173 over http. A setting written as code, such as `Number(process.env.PORT)`, or a
+`server` block it cannot see into, such as a spread or a variable, is never guessed: `init` uses
+the default and a `Review:` note names the setting it could not read and says to set
+`appBaseUrl` by hand. A port in another block, such as `preview.port`, or in a comment or a
+string, is never read as the dev server port.
+
+**Drafts that would read as idle.** A config with empty `uiFileGlobs` treats no change as a UI
+change, so every run reads as nothing to check and no run can ever produce a verdict. `init`
+drafts `src/**/*.tsx` and `src/**/*.jsx` under the app folder when those files exist. When
+neither exists, it refuses, writes nothing, and says to use `--app` or to set `uiFileGlobs` by
+hand. When it derives no route at all, it writes `usabl.config.json` but not
+`usabl.routes.json`, because an empty sidecar takes precedence over the router and lists no
+screens. It says so and points to the manual mapping: a surface in `surfaces` with its id, url,
+and files, or routes written into `usabl.routes.json`. Until then a changed UI file is
+reported as not covered.
+
+`usabl check` itself does not refuse a config with empty `uiFileGlobs` yet. Such a config,
+written by hand or by an older `init`, still reads as nothing to check on every run.
 
 ### Brownfield adoption (prove what you touch)
 
