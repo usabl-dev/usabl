@@ -38,6 +38,25 @@ function isMissingShow(stderr: string): boolean {
   return MISSING_SHOW_PATTERNS.some((pattern) => pattern.test(stderr));
 }
 
+// The ref itself does not exist. Still an error, never a missing file: reading no policy at all
+// as "no policy" would let a run pass against nothing. The message names the fix, because a new
+// repository with no commits and a CI checkout without the trusted ref both land here.
+function missingRefError(ref: string, stderr: string): Error | null {
+  if (!/invalid object name/i.test(stderr)) {
+    return null;
+  }
+  if (ref === 'HEAD') {
+    return new Error(
+      'git cannot read HEAD. If this repository has no commits yet, make a first commit, then run ' +
+        'usabl again. usabl compares policy files with the last commit.',
+    );
+  }
+  return new Error(
+    `git cannot read ${ref}. usabl reads trusted policy from that ref. Check its name, or fetch it ` +
+      'first (for example git fetch origin main), then run usabl again.',
+  );
+}
+
 function parseStatus(output: string): Array<{ code: string; path: string }> {
   const parsed: Array<{ code: string; path: string }> = [];
   const entries = output.split(STATUS_ENTRY_SEPARATOR).filter((entry) => entry.length > 0);
@@ -141,7 +160,7 @@ export function makeGitReader(options: { cwd?: string } = {}): GitReader {
         if (code !== null && isMissingShow(stderr)) {
           return null;
         }
-        throw err;
+        throw missingRefError(ref, stderr) ?? err;
       }
     },
     async lsTree(ref, paths) {

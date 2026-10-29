@@ -3,7 +3,7 @@
  * This unit renders operator-facing text only.
  * It must never mutate Result, mint a verdict, or pass through untrusted text unsanitized.
  */
-import type { Finding, Result } from '../contracts/index.js';
+import type { CoverageGap, Finding, Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 import {
   discloseGaps,
@@ -64,6 +64,34 @@ function renderNotEvaluated(result: Result): string[] {
       });
       return `    ${gapHeadline(disclosure)} ${detail}`;
     }),
+    ...renderOtherUnplacedFiles(gaps),
+  ];
+}
+
+/**
+ * Every file usabl could not place on a screen, after the one the gap list above already named.
+ *
+ * The gap list names one example per state so every surface stays bounded. A file that is not
+ * placed is fixed one file at a time, in config or in the routes sidecar, so the terminal names
+ * each one with its own reason, which carries the fix. Refs are repository paths and reasons are
+ * usabl's own words about the source tree; both are neutralized like any printed field.
+ */
+function renderOtherUnplacedFiles(gaps: readonly CoverageGap[]): string[] {
+  const unplaced = gaps.filter((gap) => gap.state === 'unresolved');
+  if (unplaced.length < 2) {
+    return [];
+  }
+  // The gap list above named the first one. Sort the rest so the output is the same on every run.
+  const rest = [...unplaced.slice(1)].sort((left, right) =>
+    left.ref < right.ref ? -1 : left.ref > right.ref ? 1 : 0,
+  );
+  return [
+    `    other files not placed on any screen: ${rest.length}`,
+    ...rest.map(
+      (gap) =>
+        `      ${boundField(neutralizePrintedText(gap.ref), 'gapRef')}: ` +
+        `${boundField(neutralizePrintedText(gap.reason), 'gapReason')}`,
+    ),
   ];
 }
 
