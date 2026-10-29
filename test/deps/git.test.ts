@@ -89,3 +89,30 @@ describe('makeGitReader', () => {
     expect(changed).not.toContain('src/gate/local-only.ts');
   });
 });
+
+describe('makeGitReader in a repository with no commits', () => {
+  let emptyRepo = '';
+
+  beforeEach(async () => {
+    emptyRepo = await mkdtemp(join(tmpdir(), 'usabl-git-empty-'));
+    await runGit(emptyRepo, ['init', '--initial-branch=main']);
+  });
+
+  afterEach(async () => {
+    await rm(emptyRepo, { recursive: true, force: true });
+  });
+
+  it('names the fix when HEAD does not exist yet', async () => {
+    const git = makeGitReader({ cwd: emptyRepo });
+    await expect(git.show('HEAD', 'usabl.config.json')).rejects.toThrow(
+      /git cannot read HEAD.*no commits yet.*first commit/s,
+    );
+  });
+
+  it('names the ref and the fix when a trusted ref does not exist', async () => {
+    const git = makeGitReader({ cwd: emptyRepo });
+    await expect(git.show('origin/main', 'usabl.config.json')).rejects.toThrow(
+      /git cannot read origin\/main.*fetch it/s,
+    );
+  });
+});
