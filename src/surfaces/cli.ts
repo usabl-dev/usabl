@@ -5,7 +5,7 @@
  */
 import type { Result } from '../contracts/index.js';
 import { formatSummary } from '../output/summary.js';
-import { scrubResult } from './scrub.js';
+import { scrubPublishedResult } from './scrub.js';
 
 // The one integration each install run wires. Exactly one per invocation.
 export type InstallTarget = 'overlay' | 'claude' | 'claude-skill' | 'cursor' | 'ci' | 'docs-ci' | 'branch-rule';
@@ -355,8 +355,9 @@ export function localApprovalNextSteps(result: Result): string[] {
 }
 
 export function projectCli(result: Result): { exitCode: number; text: string; json: string } {
-  // Scrub before any egress so page text and credential-shaped values cannot hijack output.
-  const safe = scrubResult(result);
+  // Scrub before any egress so page text and credential-shaped values cannot hijack output. This
+  // text and this JSON are what CI publishes, so URLs also lose their query and fragment.
+  const safe = scrubPublishedResult(result);
   return {
     exitCode: safe.exitCode,
     text: formatSummary(safe),

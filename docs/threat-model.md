@@ -206,6 +206,11 @@ comments.
   `{"label":"Password:"}` the quote after the colon closes the label, so the text after it is
   kept. A bare label followed by more text, such as `Password : Enter a new one`, is still
   redacted, because it reads the same as `secret : value`.
+- The surfaces CI publishes, the CLI text, the JSON Result, and the pull request comment, drop
+  the userinfo, the query, and the fragment of every URL in the Result, as `checkPage` output
+  already did. A preview token in a configured screen URL no longer reaches a pull request. The
+  overlay and the stop hook keep the URL as written, because the overlay matches a gap to its
+  screen by the exact URL, and the config loader warns about that.
 
 **Status:** [x] Local-first; egress redaction and neutralization ship, with anchors matched
 through invisible characters and redaction on both sides of the strip. [ ] Telemetry decision

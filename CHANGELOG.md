@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- The CLI text, the JSON Result from `usabl check --json`, and the pull request comment now
+  drop the query string and the fragment from every URL, as `checkPage` output already did.
+  Before, a preview token in a configured screen URL was printed in each of them. The
+  dev-server overlay and the stop hook still print the URL as written, because the overlay
+  matches a gap to its screen by the exact URL, and the config warning now says so.
+
 - Egress redaction now removes a quoted password or secret with spaces in it whole, such as
   `password: "two words"`. Before, only the first word was removed. It also removes the user
   name and password from an address written with backslashes (`https:\\user:pass@host`) or

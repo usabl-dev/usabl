@@ -7,6 +7,7 @@ import {
   parseCliArgs,
   projectCli,
 } from '../../src/surfaces/cli.js';
+import { parseResultJson } from '../../src/surfaces/policy-enforce.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
   schemaVersion: 'usabl.result.v1',
@@ -238,6 +239,37 @@ describe('projectCli', () => {
     expect(JSON.parse(projected.json).schemaVersion).toBe('usabl.result.v1');
     expect(projected.text).not.toContain('super-secret-value');
     expect(projected.json).not.toContain('super-secret-value');
+  });
+
+  it('drops the query and the fragment of every screen url from the text and the JSON', () => {
+    // A configured url can carry a preview token in its query. The CLI output and the JSON
+    // Result are what CI publishes, so they lose it the way checkPage output already does.
+    const url = 'http://127.0.0.1:5173/clusters?preview=SECRETPOISON#state=SECRETPOISON';
+    const raw = baseResult({
+      verdict: 'not_covered',
+      exitCode: 3,
+      screens: [
+        { screenId: 'clusters', url, stops: [], drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
+      ],
+      coverage: {
+        changedFiles: ['src/Clusters.tsx'],
+        affected: [{ screenId: 'clusters', url, provenance: 'manual' }],
+        unresolvedFiles: [],
+        gaps: [{ ref: url, state: 'not-covered', reason: `timeout loading ${url}` }],
+        nothingToCheck: false,
+      },
+    });
+    const projected = projectCli(raw);
+
+    expect(projected.text).not.toContain('SECRETPOISON');
+    expect(projected.json).not.toContain('SECRETPOISON');
+    const parsed = parseResultJson(JSON.parse(projected.json));
+    expect(parsed.screens[0]?.url).toBe('http://127.0.0.1:5173/clusters');
+    expect(parsed.coverage.affected[0]?.url).toBe('http://127.0.0.1:5173/clusters');
+    expect(parsed.coverage.gaps[0]?.ref).toBe('http://127.0.0.1:5173/clusters');
+    expect(projected.text).toContain('http://127.0.0.1:5173/clusters');
+    // The raw Result keeps the url as written, for the overlay and for receipts.
+    expect(raw.screens[0]?.url).toBe(url);
   });
 
   it('projects idle headline when verdict is null', () => {

@@ -561,6 +561,19 @@ export function scrubResult(result: Result): Result {
 }
 
 /**
+ * A scrubbed copy of a Result for the surfaces that publish it: the CLI text, the JSON Result,
+ * and the pull request comment. On top of scrubResult, every URL in it loses its sign-in
+ * credentials, its query string, and its fragment, the way checkPage output does.
+ *
+ * A configured screen url can carry a preview token or a session value in its query, and CI
+ * posts these surfaces where many people can read them. The overlay and the stop hook keep
+ * scrubResult, because the overlay matches a gap to its screen by the exact url.
+ */
+export function scrubPublishedResult(result: Result): Result {
+  return scrubUnknown(scrubResult(result), stripUrlSecrets) as Result;
+}
+
+/**
  * Frames page-derived text so agent-facing consumers treat it as untrusted data.
  *
  * The body cannot close the frame. scrubString removes both markers from page text, so the

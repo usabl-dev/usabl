@@ -188,9 +188,9 @@ function parseReachedWhen(raw: unknown, index: number): string | ReachedWhenSign
   };
 }
 
-// A configured URL is printed as written in every report. A gap ref, a screen url, and an affected
-// url all carry it, and the pull request comment publishes them, so a credential written into one
-// is published with it. The url is not rewritten to remove one, because the overlay matches a gap
+// A configured URL is carried as written in the Result. A gap ref, a screen url, and an affected
+// url all carry it, and the overlay and the stop hook print it, so a credential written into one
+// reaches their readers. The url is not rewritten to remove one, because the overlay matches a gap
 // to its screen by comparing the exact url, and a rewritten url would orphan the gap. It is
 // refused instead, and the message names the field and never the value.
 //
@@ -220,7 +220,7 @@ function carriesUserinfo(raw: string): boolean {
 function parseConfiguredUrl(raw: unknown, label: string): string {
   const value = expectString(raw, label);
   if (carriesUserinfo(value)) {
-    throw configError`${label} has a user name or password in it. usabl prints this URL in every report, including pull request comments, so it refuses a URL with credentials. Remove them, and reach a protected screen with a storage state (USABL_STORAGE_STATE) instead.`;
+    throw configError`${label} has a user name or password in it. usabl prints this URL as written in the dev-server overlay and the stop hook, so it refuses a URL with credentials. Remove them, and reach a protected screen with a storage state (USABL_STORAGE_STATE) instead.`;
   }
   return value;
 }
@@ -229,8 +229,9 @@ function parseConfiguredUrl(raw: unknown, label: string): string {
  * Warnings about configured URLs that load but may publish something they should not.
  *
  * A query string or a fragment is accepted, because applications select screens by both, and the
- * url is kept as written so the overlay can match gaps to screens. It is still printed in every
- * report, so a token or a session value in it is published. Each warning names the field and
+ * url is kept as written so the overlay can match gaps to screens. The CLI output, the JSON Result,
+ * and the pull request comment drop both, but the overlay and the stop hook print the url as
+ * written, so a token or a session value in it still reaches their readers. Each warning names the field and
  * never the value. Text only: this never refuses a config and never decides a verdict.
  */
 export function configUrlWarnings(config: UsablConfig): string[] {
@@ -242,7 +243,7 @@ export function configUrlWarnings(config: UsablConfig): string[] {
     .filter(({ url }) => url.includes('?') || url.includes('#'))
     .map(
       ({ label }) =>
-        `usabl: warning: ${label} has a query string or a fragment. usabl prints this URL as written in every report, including pull request comments, so anything in the query or the fragment is published. If it carries a token or a session value, remove it and reach the screen with a storage state (USABL_STORAGE_STATE) instead.`,
+        `usabl: warning: ${label} has a query string or a fragment. usabl drops the query and the fragment from its CLI output, its JSON Result, and pull request comments, but the dev-server overlay and the stop hook print this URL as written, so anything in them still reaches those readers. If it carries a token or a session value, remove it and reach the screen with a storage state (USABL_STORAGE_STATE) instead.`,
     );
 }
 

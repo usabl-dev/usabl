@@ -1234,7 +1234,7 @@ for a screen Rule B fires on wrongly, and for a screen whose identity call is re
 token refresh. It is only as good as what it names: see the paragraphs above on what a shell
 selector and a public shell cost.
 
-#### A credential in a configured surface URL is refused, and a query is echoed
+#### A credential in a configured surface URL is refused, and a query is dropped where it is published
 
 Text that comes off the page is sanitized before it is published. A coverage gap reason strips the
 userinfo, the query, and the fragment from every address it names, and shortens a refused request
@@ -1251,11 +1251,14 @@ secret that is short, lowercase, and sitting in either of the first two path seg
 printed. `/reset/<token>` is cut because a token is normally mixed case or long, not because the
 position is protected.
 
-Configured surface URLs are not page text and are not sanitized. `gap.ref`, `ScreenScan.url`, and
+Configured surface URLs are not page text. `gap.ref`, `ScreenScan.url`, and
 `coverage.affected[].url` carry the operator's own `usabl.config.json` value verbatim into the
-Result, and from there into the CLI output, the overlay, and the pull request comment. That is
-deliberate: the overlay attributes a gap to a screen by comparing these values exactly, so
-rewriting one would silently orphan the gap it belongs to.
+Result, and from there into the overlay and the stop hook. That is deliberate: the overlay
+attributes a gap to a screen by comparing these values exactly, so rewriting one would silently
+orphan the gap it belongs to. The surfaces CI publishes are different. The CLI text, the JSON
+Result that `usabl check --json` writes, and the pull request comment drop the userinfo, the query,
+and the fragment from every URL in the Result, the same way `checkPage` output does. Nothing reads
+those surfaces back to match a gap to a screen, so dropping them costs no match.
 
 So the loader keeps the value and refuses what must not be published. A `surfaces[].url` or an
 `appBaseUrl` that carries userinfo (`https://user:pass@host/screen`, or a user name alone) is
@@ -1268,13 +1271,13 @@ with backslashes read as slashes: an `@` in the authority after `//`, and an `@`
 where URL parsing reads `admin:` as a scheme and finds no password. An `@` later in the path, the
 query, or the fragment is accepted.
 
-A query string or a fragment is accepted, because applications select screens by both, and it is
-still printed as written. The CLI, the stop hook, and the dev-server plugin print a warning on
-stderr each time they load the config. It names the field, never the value, and says that anything
-in the query or the fragment is published. The residual an operator has to know about: a preview token in the query, or anything
-in the fragment, is still echoed by every surface that renders a Result, including a comment
-posted to a public pull request. Do not put one in `usabl.config.json`. Reach a protected
-environment with a storage state, which never enters committed config, instead.
+A query string or a fragment is accepted, because applications select screens by both. The CLI,
+the stop hook, and the dev-server plugin print a warning on stderr when they load the config. It
+names the field, never the value, and says where the query and the fragment are still printed.
+The residual an operator has to know about: a preview token in the query, or anything in the
+fragment, is still echoed by the overlay and the stop hook, and so reaches an agent transcript.
+Do not put one in `usabl.config.json`. Reach a protected environment with a storage state, which
+never enters committed config, instead.
 
 ### Documentation coverage
 

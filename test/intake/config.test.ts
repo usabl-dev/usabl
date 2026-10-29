@@ -662,9 +662,9 @@ describe('parseUsablConfig unknown key message', () => {
 });
 
 describe('parseUsablConfig configured URL credentials', () => {
-  // A surface URL is printed as written in every report: gap refs, screen urls, and affected
-  // urls all carry it, and the pull request comment publishes them. A credential written into one
-  // would be published with it, so the loader refuses it and never repeats the value.
+  // A surface URL is carried as written in the Result: gap refs, screen urls, and affected urls
+  // all carry it, and the overlay and the stop hook print them. A credential written into one
+  // would reach their readers, so the loader refuses it and never repeats the value.
   const SECRET = 'SECRETPOISON';
 
   function refusalFor(extra: Record<string, unknown>): string {
