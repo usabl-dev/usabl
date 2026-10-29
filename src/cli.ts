@@ -29,7 +29,7 @@ import {
 import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
-import { configUrlWarnings, parseUsablConfig } from './intake/config.js';
+import { configUrlWarningsByUrl, parseUsablConfig } from './intake/config.js';
 import {
   ciRefusal,
   installRefusal,
@@ -58,6 +58,10 @@ import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
 
+// The configured url warnings this process has already printed. It holds config urls, which may
+// carry a query, so it is never printed and never leaves the process.
+const warnedConfigUrls = new Set<string>();
+
 export async function loadConfig(
   path = 'usabl.config.json',
   warn: (line: string) => void = (line) => {
@@ -76,9 +80,15 @@ export async function loadConfig(
     throw error;
   }
   const config = parseUsablConfig(raw);
-  // A configured URL with a query or a fragment loads, and the operator is told it is published.
-  for (const warning of configUrlWarnings(config)) {
-    warn(warning);
+  // A configured URL with a query or a fragment loads, and the operator is told where it is
+  // printed. Once per process for each field and url: the dev-server plugin loads the config on
+  // every save, and the same warning on every save buries the output it sits in.
+  for (const { url, warning } of configUrlWarningsByUrl(config)) {
+    const key = `${warning}\u0000${url}`;
+    if (!warnedConfigUrls.has(key)) {
+      warnedConfigUrls.add(key);
+      warn(warning);
+    }
   }
   return config;
 }

@@ -211,20 +211,29 @@ function parseConfiguredUrl(raw: unknown, label: string): string {
  * A query string or a fragment is accepted, because applications select screens by both, and the
  * url is kept as written so the overlay can match gaps to screens. The CLI output, the JSON Result,
  * and the pull request comment drop both, but the overlay and the stop hook print the url as
- * written, so a token or a session value in it still reaches their readers. Each warning names the field and
- * never the value. Text only: this never refuses a config and never decides a verdict.
+ * written, so a token or a session value in it still reaches their readers. Each warning names
+ * the field and never the value. Text only: this never refuses a config and never decides a verdict.
  */
 export function configUrlWarnings(config: UsablConfig): string[] {
+  return configUrlWarningsByUrl(config).map(({ warning }) => warning);
+}
+
+/**
+ * The same warnings, each with the url it is about, so a caller that loads the config many times,
+ * such as a dev server on every save, can say each one once. The url is for that comparison only
+ * and must never be printed.
+ */
+export function configUrlWarningsByUrl(config: UsablConfig): Array<{ url: string; warning: string }> {
   const fields: Array<{ label: string; url: string }> = [
     { label: 'appBaseUrl', url: config.appBaseUrl },
     ...config.surfaces.map((surface, index) => ({ label: `surfaces[${index}].url`, url: surface.url })),
   ];
   return fields
     .filter(({ url }) => url.includes('?') || url.includes('#'))
-    .map(
-      ({ label }) =>
-        `usabl: warning: ${label} has a query string or a fragment. usabl drops the query and the fragment from its CLI output, its JSON Result, and pull request comments, but the dev-server overlay and the stop hook print this URL as written, so anything in them still reaches those readers. If it carries a token or a session value, remove it and reach the screen with a storage state (USABL_STORAGE_STATE) instead.`,
-    );
+    .map(({ label, url }) => ({
+      url,
+      warning: `usabl: warning: ${label} has a query string or a fragment. usabl drops the query and the fragment from its CLI output, its JSON Result, and pull request comments, but the dev-server overlay and the stop hook print this URL as written, so anything in them still reaches those readers. If it carries a token or a session value, remove it and reach the screen with a storage state (USABL_STORAGE_STATE) instead.`,
+    }));
 }
 
 // A surface id and a discovered route screen id are one namespace. This declaration is how an

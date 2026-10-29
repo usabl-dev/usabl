@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- The warning about a query string or a fragment in a configured URL now prints once per
+  process for each URL. Before, the dev-server plugin printed it again on every save.
+
 - When `checkPage` cannot load a requirements file, its gap now names that file, such as
   `design/broken.yaml`, as `usabl check` does. Before, the ref was the word
   `requirements`.

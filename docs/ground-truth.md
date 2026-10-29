@@ -1272,8 +1272,10 @@ where URL parsing reads `admin:` as a scheme and finds no password. An `@` later
 query, or the fragment is accepted.
 
 A query string or a fragment is accepted, because applications select screens by both. The CLI,
-the stop hook, and the dev-server plugin print a warning on stderr when they load the config. It
-names the field, never the value, and says where the query and the fragment are still printed.
+the stop hook, and the dev-server plugin print a warning on stderr when they load the config,
+once per process for each field and URL, so the dev-server plugin does not repeat it on every
+save. It names the field, never the value, and says where the query and the fragment are still
+printed.
 The residual an operator has to know about: a preview token in the query, or anything in the
 fragment, is still echoed by the overlay and the stop hook, and so reaches an agent transcript.
 Do not put one in `usabl.config.json`. Reach a protected environment with a storage state, which
