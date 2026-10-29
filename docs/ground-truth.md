@@ -1986,6 +1986,11 @@ client runs inside the tested page's own JavaScript realm, so the page can inter
 what the overlay shows; the gate computes the verdict and the CLI and CI enforce it. Oracle-preserving:
 mounts only when `navigator.webdriver` is false and `?usabl=off` is not present.
 
+The overlay and the CLI start the scan browser through the same shared browser in
+`src/deps/real.ts`, so both ask for Chromium's sandbox, fall back the same way, and honor
+`browserSandbox` (section 22). When a scan ran without the sandbox, the dev server output says so
+once per dev session, and the Result carries the note on each screen.
+
 In `vite serve` only, the plugin adds `data-source-file` and `data-source-line` to each component
 and HTML element opening tag in the application's `.tsx` and `.jsx` files, so a finding can name
 the line that rendered the element. The plugin runs before the host's JSX transform
@@ -2106,6 +2111,12 @@ surface runs its authored steps, clicks and key presses, on that page.
 string passes through the scrubber, and every URL in it, the page address in a gap ref included,
 loses its sign-in credentials, query string, and fragment.
 
+The browser behind that page is the caller's. usabl did not launch it and does not change it, so
+`browserSandbox` does not apply, and whether that browser runs with Chromium's sandbox is the
+caller's choice and the caller's exposure. Playwright's own launch leaves the sandbox off unless
+the caller passes `chromiumSandbox: true`. The screens of a `checkPage` result never carry the
+sandbox note, because usabl cannot tell how the caller launched the browser.
+
 `adoptPage` installs the same live-region capture the CLI installs, from one shared source in
 `src/deps/real.ts`. So a flow requirement that expects an announcement hears the same text in both.
 On an adopted page the capture starts at adoption, not at document start, and it also starts in
@@ -2192,10 +2203,13 @@ is insufficient.
 `usabl doctor` is a read-only projection that reports the state of each wired
 integration surface. It always exits 0, because a missing surface is information, not a
 failure; its filesystem port throws on any write so an accidental write fails loudly. It
-reports these surfaces: config, authenticated session, playwright chromium, route manifest,
-evidence floor, readiness signals, waivers, overlay, stop-hook, the usabl-check and usabl-fix
-skills, cursor, ci, branch-rule, and policy scope, each with a state such as wired, missing,
-drifted, or unknown. The readiness signals surface is missing when a screen holds floored debt and
+reports these surfaces: config, authenticated session, playwright chromium, chromium sandbox,
+route manifest, evidence floor, readiness signals, waivers, overlay, stop-hook, the usabl-check
+and usabl-fix skills, cursor, ci, branch-rule, and policy scope, each with a state such as wired,
+missing, drifted, or unknown. The chromium sandbox surface starts Chromium with its sandbox the way
+a scan does, opens one blank page, and closes it. It is wired when that works, missing with the fix
+when Chromium reports that it cannot start its sandbox, and unknown when the launch failed for
+another reason, such as a missing Chromium. It writes nothing to the repository. The readiness signals surface is missing when a screen holds floored debt and
 declares no `reachedWhen` signal, and its next step names those screens. A floored barrier the run
 does not see is claimed fixed only with evidence its part of the page rendered: a readiness signal
 that held is one way, and a matching element seen on the run is the other (section 9). A docs page
@@ -2466,6 +2480,8 @@ not blocking).
    type-check it first (section 11.2), and an MCP wrapper must do the same when it
    ships. `neutralize()` at every egress.
 10. Requirement files (design intake) added to the guarded set.
+11. The scan browser starts with Chromium's sandbox. Without one, the run says so, or refuses
+    with exit 4 when `browserSandbox` is `"require"` (section 22, threat model Threat 11).
 
 ### Documented seams
 
@@ -2781,6 +2797,22 @@ out of budget is disclosed as `not-covered` with a reason naming which of the tw
 ran out, never scanned as if it had finished rendering. The value must be a positive whole
 number of milliseconds; anything else is refused when the config is read, before a run
 opens a browser.
+
+`browserSandbox` is optional and is `"auto"` or `"require"`; absent means `"auto"`. usabl always
+asks Chromium for its sandbox when it starts the scan browser. When Chromium reports that it cannot
+start the sandbox on this system, as on Ubuntu 23.10 and later with restricted unprivileged user
+namespaces or in many containers, `"auto"` starts the browser again without it and discloses that
+in three places: a line in the `usabl check` output, a `browserSandbox: "off"` note on each screen
+in the Result, and the chromium sandbox surface of `usabl doctor`, which gives the fix. The
+fallback changes no verdict. `"require"` refuses to scan instead: the run ends with no verdict and
+exit 4, and the summary says how to enable the sandbox. Only a launch failure whose text is
+Chromium's own sandbox message (for example `No usable sandbox!` or
+`Running as root without --no-sandbox is not supported`) counts; a missing Chromium, a missing library, or a crash is
+reported as it is and never triggers the fallback. The decision is made once per browser process,
+when it starts, so every page of that process shares it. The CLI and the overlay share this launch
+path. With a trusted ref, `"require"` in either the working tree or the trusted-ref
+`usabl.config.json` wins, so a pull request cannot turn a required sandbox off for its own scan.
+Any other value is refused when the config is read, and the refusal names the field.
 
 There is no `notCovered` mode key. When usabl is on, `not_covered` blocks. Idle
 (nothing to check) is an explicit informational allow. That is code, not a config dial.

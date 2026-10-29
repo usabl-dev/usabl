@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- The scan browser now starts with Chromium's sandbox. Before, usabl never asked for it,
+  so Playwright added `--no-sandbox` and every page a scan opened ran without it. When
+  Chromium reports that it cannot start its sandbox, as on Ubuntu 23.10 and later or in
+  many containers, usabl starts the browser again without it and says so: a line in the
+  `usabl check` output, a `browserSandbox: "off"` note on each screen in the Result, one
+  line in the dev server output for the overlay, and a new `usabl doctor` chromium sandbox
+  surface with the fix. The verdict does not change. A missing Chromium or a crash is not
+  read as a sandbox failure and is never retried without it. The new
+  `"browserSandbox": "require"` in `usabl.config.json` refuses to scan instead, with no
+  verdict and exit 4; any value other than `"auto"` or `"require"` is refused. A page a
+  caller passes to `checkPage` comes from the caller's own browser, which usabl does not
+  change.
+
 - The focus and style reads now run in an isolated world, the way element paths and the
   announcement capture already did. These are `focusBody`, `activeElementIs`,
   `activeElementWithin`, the focused element `activeNode` reads, and `getComputedStyle`.

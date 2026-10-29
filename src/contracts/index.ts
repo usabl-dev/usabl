@@ -166,6 +166,11 @@ export interface ScreenScan {
   // The response path the surface declared, carried so a coverage gap can name it. Absent or null
   // when the surface declared no response.
   reachedWhenResponse?: string | null;
+  // 'off' when the page was scanned in a browser that usabl started without Chromium's sandbox,
+  // because the system could not provide one. Absent means usabl did not report it off: the
+  // browser ran with its sandbox, or the page came from a caller's own browser. Disclosure only:
+  // the gate never reads it and it never changes a verdict.
+  browserSandbox?: 'off';
 }
 
 // ---- coverage ----
@@ -519,6 +524,10 @@ export interface ReadinessOutcome {
   signal: 'held' | 'timed-out' | 'not-declared';
 }
 export interface Page {
+  // 'off' when the browser this page runs in started without Chromium's sandbox, because the
+  // system could not provide one. Absent on a page from a sandboxed browser and on a caller's own
+  // page, which usabl did not launch.
+  browserSandbox?: 'off';
   // Waits until the page stopped changing and the network went quiet. With readyWhen, it also
   // waits until readyWhen.holds answers true at a moment when both of those hold, for at most
   // readyWhen.timeoutMs after the first such moment and always inside the readiness budget. A page
@@ -690,7 +699,14 @@ export interface UsablConfig {
   signalTimeoutMs?: number;
   // Caps how many finding groups bounded surfaces show before collapsing by rule.
   noiseBudget?: NoiseBudgetConfig;
+  // What to do when Chromium cannot start its sandbox on this system. auto, the default, scans
+  // without it and says so in the run output and the Result. require refuses to scan: the run
+  // ends with no verdict and exit 4.
+  browserSandbox?: BrowserSandboxPolicy;
 }
+
+// The values browserSandbox accepts.
+export type BrowserSandboxPolicy = 'auto' | 'require';
 
 export type Capability = 'live' | 'network' | 'secrets' | 'filesystem-write';
 

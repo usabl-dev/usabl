@@ -1272,6 +1272,41 @@ describe('usablVitePluginFromConfig', () => {
     expect(warm.closeCalls()).toBe(1);
   });
 
+  it('says once in the dev server output when a scan ran without the browser sandbox', async () => {
+    const warnings: string[] = [];
+    const unsandboxed = baseResult({
+      screens: [
+        {
+          screenId: 'users',
+          url: 'http://127.0.0.1:5173/users',
+          stops: [],
+          drafts: [],
+          gaps: [],
+          applicability: [],
+          reachedSelectorPresent: null,
+          browserSandbox: 'off',
+        },
+      ],
+    });
+    const plugin = usablVitePluginFromConfig(
+      { cwd: '/repo/app' },
+      {
+        ...makeFactoryPorts({ runEngine: async () => unsandboxed }),
+        logWarning: (line: string) => {
+          warnings.push(line);
+        },
+      },
+    );
+    const middleware = getMiddleware(plugin);
+
+    await callMiddleware(middleware, '/__usabl/result');
+    await callMiddleware(middleware, '/__usabl/result');
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('without Chromium');
+    expect(warnings[0]).toContain('usabl doctor');
+  });
+
   it('hands each run its own storage state and ready timeout through the shared browser', async () => {
     // The real buildDeps resolves the authenticated session from the environment and the readiness
     // budget from the config. Both must reach the driver the shared process hands out for THAT run.
