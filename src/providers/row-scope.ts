@@ -18,9 +18,22 @@
  * element. Under the old key a new barrier in one row can fill a count accepted for another and read
  * as carried, so the run cannot prove it is not hiding there.
  */
-import type { CoverageGap, Draft, Page, RowAmbiguity, RowContextRead, RowUnreadable } from '../contracts/index.js';
+import type { CoverageGap, Draft, ElementTarget, Page, RowAmbiguity, RowContextRead, RowUnreadable } from '../contracts/index.js';
 import { sha256 } from '../primitives/canonical.js';
 import { slug } from '../primitives/slug.js';
+
+/**
+ * Where a provider tells this module how to find a draft's element, in `evidence.extra`, when the
+ * element path alone cannot. Both are removed from the draft here, once read.
+ *
+ * ROW_TARGET_KEY holds an ElementTarget, one part per frame and shadow root, for an element the
+ * element path cannot name: axe joins its target into one selector, and past a boundary that
+ * selector names nothing, or the wrong element. ROW_READ_KEY holds a CarriedRow: a row the provider
+ * read itself, at the element, while it had it. The keyboard walk reads the row of the element it
+ * focused, because a stop's path can be missing or name another element by the time the walk ends.
+ */
+export const ROW_TARGET_KEY = 'rowTarget';
+export const ROW_READ_KEY = 'rowRead';
 
 // Sixteen hex characters, 64 bits. Enough that two rows of one screen almost never share a token by
 // chance, short enough to read in a floor diff. The rare case where they do is checked below.
@@ -68,19 +81,23 @@ const WHY: Record<Unkeyed, string> = {
   'selector-invalid': 'usabl could not use the selector the scanner gave for the element',
   'element-missing': 'usabl could not find the element again after the scan, so it may have left the page',
   'element-multiple': 'the selector the scanner gave matched more than one element',
+  'frame-unreadable': 'the element sits in a frame usabl could not look inside, such as one from another origin',
   'read-failed': 'usabl could not read the row',
 };
 
 type RowRead = RowContextRead | { kind: 'read-failed' };
 
-async function readRow(page: Page, selector: string): Promise<RowRead> {
-  const trimmed = selector.trim();
-  if (trimmed === '') {
-    // No selector means the finding is about the page or the walk, not an element, so no row.
-    return { kind: 'none' };
+async function readRow(page: Page, target: ElementTarget): Promise<RowRead> {
+  let query: ElementTarget = target;
+  if (typeof target === 'string') {
+    query = target.trim();
+    if (query === '') {
+      // No selector means the finding is about the page or the walk, not an element, so no row.
+      return { kind: 'none' };
+    }
   }
   try {
-    return await page.rowContext(trimmed);
+    return await page.rowContext(query);
   } catch {
     // The page could not be read. Whether the element sits in a row is unknown, so it is disclosed
     // rather than read as outside a row. The error text is not repeated: it is not needed to act.
@@ -102,6 +119,92 @@ function unkeyedReason(read: RowRead): Unkeyed | null {
       // A failed read, or a shape this code does not know, is no proof the element is outside a row.
       return 'read-failed';
   }
+}
+
+/**
+ * What a row read means for a draft, with the page text already hashed away: a row scope, no row,
+ * or a reason the row could not be keyed. This is the only form a row read leaves this module in.
+ */
+export type CarriedRow =
+  | { kind: 'scoped'; rowScope: Record<string, string> }
+  | { kind: 'none' }
+  | { kind: 'unkeyed'; reason: Unkeyed };
+
+function carry(read: RowRead, hash: RowHash): CarriedRow {
+  const rowScope = read.kind === 'keyed' ? rowScopeOf(read, hash) : null;
+  if (rowScope !== null) return { kind: 'scoped', rowScope };
+  const reason = unkeyedReason(read);
+  return reason === null ? { kind: 'none' } : { kind: 'unkeyed', reason };
+}
+
+/**
+ * Reads the row of the element that has focus now and returns it hashed, for a provider to carry on
+ * its draft under ROW_READ_KEY. A read that fails is carried as a reason, never as no row.
+ */
+export async function readFocusedRow(page: Page, hash: RowHash = sha256): Promise<CarriedRow> {
+  let read: RowRead;
+  try {
+    read = await page.focusedRowContext();
+  } catch {
+    read = { kind: 'read-failed' };
+  }
+  return carry(read, hash);
+}
+
+const isText = (value: unknown): value is string => typeof value === 'string';
+
+// A carried row as a draft holds it. A draft can come from a library caller, so anything that is not
+// one of the three shapes reads as a failed read, which is disclosed, never as no row.
+function carriedRowOf(value: unknown): CarriedRow {
+  const failed: CarriedRow = { kind: 'unkeyed', reason: 'read-failed' };
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return failed;
+  const record = value as Record<string, unknown>;
+  if (record['kind'] === 'none') return { kind: 'none' };
+  if (record['kind'] === 'unkeyed') {
+    const reason = record['reason'];
+    return isText(reason) && Object.hasOwn(WHY, reason) ? { kind: 'unkeyed', reason: reason as Unkeyed } : failed;
+  }
+  if (record['kind'] === 'scoped') {
+    const scope = record['rowScope'];
+    if (typeof scope !== 'object' || scope === null || Array.isArray(scope)) return failed;
+    const { table, row, role, path } = scope as Record<string, unknown>;
+    if (!isText(table) || !isText(row) || !isText(role) || !isText(path) || row === '') return failed;
+    return { kind: 'scoped', rowScope: { table, row, role, path } };
+  }
+  return failed;
+}
+
+// A target as a draft holds it, or null when it is not one: a non-empty list of non-empty lists of
+// strings.
+function rowTargetOf(value: unknown): ElementTarget | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const levels: string[][] = [];
+  for (const level of value) {
+    if (!Array.isArray(level) || level.length === 0 || !level.every(isText)) return null;
+    levels.push([...level]);
+  }
+  return levels;
+}
+
+/**
+ * The draft without the two keys a provider leaves for this module, and what they held. A draft
+ * that held neither comes back as it was. One that held only these keys loses its extra record, so
+ * no empty record is left where there was none.
+ */
+function takeRowFields(draft: Draft): { draft: Draft; carried: CarriedRow | null; target: ElementTarget | null | 'invalid' } {
+  const extra = draft.evidence.extra;
+  if (extra === undefined || (!Object.hasOwn(extra, ROW_READ_KEY) && !Object.hasOwn(extra, ROW_TARGET_KEY))) {
+    return { draft, carried: null, target: null };
+  }
+  const { [ROW_READ_KEY]: carried, [ROW_TARGET_KEY]: target, ...rest } = extra;
+  const { extra: _dropped, ...evidence } = draft.evidence;
+  const stripped: Draft = { ...draft, evidence: Object.keys(rest).length === 0 ? evidence : { ...evidence, extra: rest } };
+  const parsedTarget = Object.hasOwn(extra, ROW_TARGET_KEY) ? (rowTargetOf(target) ?? 'invalid') : null;
+  return {
+    draft: stripped,
+    carried: Object.hasOwn(extra, ROW_READ_KEY) ? carriedRowOf(carried) : null,
+    target: parsedTarget,
+  };
 }
 
 interface UnkeyedGroup {
@@ -135,18 +238,26 @@ export async function attachRowScopeToDrafts(
   const hash = options.hash ?? sha256;
   const enriched: Draft[] = [];
   const unkeyed = new Map<string, UnkeyedGroup>();
-  for (const draft of drafts) {
-    const read = await readRow(page, draft.elementPath);
-    const rowScope = read.kind === 'keyed' ? rowScopeOf(read, hash) : null;
-    if (rowScope !== null) {
+  for (const original of drafts) {
+    const { draft, carried, target } = takeRowFields(original);
+    // A row the provider read at the element wins. Else the element is found by its target when it
+    // sits past a frame or a shadow root, and by its element path otherwise. A target that is not
+    // one is a failed read, never a quiet fall back to a path that may name another element.
+    const outcome: CarriedRow =
+      carried ??
+      (target === 'invalid'
+        ? { kind: 'unkeyed', reason: 'read-failed' }
+        : carry(await readRow(page, target ?? draft.elementPath), hash));
+    if (outcome.kind === 'scoped') {
+      const rowScope = outcome.rowScope;
       enriched.push({
         ...draft,
         evidence: { ...draft.evidence, extra: { ...draft.evidence.extra, rowScope } },
       });
       continue;
     }
-    const reason = unkeyedReason(read);
-    if (reason !== null) {
+    if (outcome.kind === 'unkeyed') {
+      const reason = outcome.reason;
       const group = unkeyed.get(draft.rule) ?? { rule: draft.rule, count: 0, why: new Set<Unkeyed>() };
       group.count += 1;
       group.why.add(reason);
