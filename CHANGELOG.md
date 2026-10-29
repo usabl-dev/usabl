@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- `usabl init` no longer picks one entry file when a route's import matches more than one
+  file, such as `Page.tsx` and `Page.ts`. Before, it took the first by extension order and
+  wrote it into the draft `usabl.routes.json`, so a change to the file the route really
+  renders could miss its screen. Now the route's entry file is empty and a `Review:` note
+  names every candidate.
+
 - Row keys now reach findings inside shadow roots, frames, and layout tables, so their
   screens no longer read as not covered on every run. Before, axe's selector for an element
   in a shadow root or a frame was joined into one string that named nothing, or several

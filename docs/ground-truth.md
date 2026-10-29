@@ -884,7 +884,10 @@ from a relative path. A layout route with children gets no entry file, because i
 also renders on every child's URL, and a change to it must not read as covered by one screen.
 This holds for JSX passed to `createRoutesFromElements` and `createRoutesFromChildren` too. Route
 objects, in a router factory call or in `useRoutes`, never get one. When two routes with the same
-path name different components, neither is attributed.
+path name different components, neither is attributed. An import without an extension is tried
+as `.tsx`, `.ts`, `.jsx`, and `.js`. When more than one of those files exists, the route gets no
+entry file and a `Review:` note names every candidate, sorted, because the bundler's pick depends on
+an extension order init cannot read.
 
 **What it still does not see.** These leave no gap, so check for them:
 

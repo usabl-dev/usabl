@@ -95,6 +95,43 @@ export function App() {
     expect(draft.notes.some((note) => note.includes('/lazy'))).toBe(true);
   });
 
+  it('leaves the entry file empty and names every candidate when several files match one import', async () => {
+    const fs = memoryFs(
+      fixtureFiles({
+        'src/pages/Clusters.ts': 'export function Clusters() { return null }\n',
+        'src/pages/Clusters.jsx': 'export function Clusters() { return null }\n',
+      }),
+    );
+
+    const draft = await inferInit(fs);
+    expect(draft.routes.routes).toEqual([
+      { screenId: 'root', url: '/', entryFile: 'src/pages/Overview.tsx' },
+      { screenId: 'clusters', url: '/clusters', entryFile: null },
+    ]);
+    const note = draft.notes.find((entry) => entry.includes('/clusters'));
+    expect(note).toBeDefined();
+    expect(note).toMatch(/^Review: /);
+    for (const candidate of ['src/pages/Clusters.jsx', 'src/pages/Clusters.ts', 'src/pages/Clusters.tsx']) {
+      expect(note).toContain(candidate);
+    }
+    // Sorted, so the note reads the same on every run.
+    expect(note!.indexOf('src/pages/Clusters.jsx')).toBeLessThan(note!.indexOf('src/pages/Clusters.ts,'));
+    expect(draft.notes.some((entry) => entry.includes('Attributed 1 of 2 routes'))).toBe(true);
+  });
+
+  it('still attributes an entry file when exactly one candidate exists', async () => {
+    const files = fixtureFiles({ 'src/pages/Clusters.js': 'export function Clusters() { return null }\n' });
+    delete files['src/pages/Clusters.tsx'];
+    const fs = memoryFs(files);
+
+    const draft = await inferInit(fs);
+    expect(draft.routes.routes).toContainEqual({
+      screenId: 'clusters',
+      url: '/clusters',
+      entryFile: 'src/pages/Clusters.js',
+    });
+  });
+
   it('joins a nested relative route path to its parent instead of inventing a root-absolute URL', async () => {
     const fs = memoryFs(
       fixtureFiles({
