@@ -2375,8 +2375,10 @@ the app folder, the configs that app's compiler and bundler read.
 
 **Which app `init` drafts.** `usabl init --app <dir>` drafts the app in that folder, written
 relative to the repository root, such as `usabl init --app packages/web`. A folder outside the
-repository, or one with no files, is refused. With no flag, `init` drafts the root app when the
-root has a Vite config, a router file, or `src/**/*.tsx` or `src/**/*.jsx` files. Otherwise it
+repository, one with no files, and one written with a glob character (`*`, `?`, `[`, `]`, `{`,
+`}`, or `!`) are refused, because a glob could name several apps at once. With no flag, `init`
+drafts the root app when the root has a Vite config, a router file, or `src/**/*.tsx` or
+`src/**/*.jsx` files. Otherwise it
 looks below the root: a folder with a Vite config two levels down anywhere, or three under
 `packages/` or `apps/`, and a folder under `packages/` or `apps/` with a router file. It skips
 `node_modules`, `dist`, `build`, `coverage`, and hidden folders. When it finds one app, it drafts

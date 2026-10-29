@@ -11,7 +11,8 @@
   app, or the one app it finds below the root. When it finds more than one, it lists them,
   names the flag to use, and writes nothing. In a monorepo, the router, alias, and shell
   files `init` reads, such as `src/app/routes.tsx` and the app's own `tsconfig.json`, are
-  read inside the app folder.
+  read inside the app folder. `--app` takes one existing folder: a path with glob
+  characters, such as `packages/*`, is refused.
 
 - `usabl init` now reads the router shapes real apps use. A route config array rendered
   through `map`, as in the PatternFly seed, is read with its nested `routes` when the list

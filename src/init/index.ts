@@ -191,8 +191,9 @@ export interface InferInitOptions {
  * The app folder from `--app`, as a clean repository-relative path with no trailing slash.
  *
  * Everything init writes is relative to the repository root, because CODEOWNERS, the trusted-ref
- * guard, and the planner all read paths from there. A folder outside the repository, or one with
- * no files, is refused: drafting it would write globs that match nothing in this tree.
+ * guard, and the planner all read paths from there. A folder outside the repository, one with no
+ * files, and one written with glob characters are refused: drafting it would write globs that
+ * match nothing in this tree, or that match several apps.
  */
 async function normalizeAppDir(fs: InitFs, appDir: string): Promise<string> {
   const cleaned = posix.normalize(appDir.trim().split('\\').join('/')).replace(/\/+$/, '');
@@ -205,8 +206,18 @@ async function normalizeAppDir(fs: InitFs, appDir: string): Promise<string> {
         'written relative to its root, such as packages/web. Nothing was written.',
     );
   }
+  // A glob could name several app folders at once, which is the choice init refuses to make, and
+  // its characters would ride into every glob init drafts from the folder.
+  if (/[*?[\]{}!]/.test(cleaned)) {
+    throw new Error(
+      `usabl init refused --app ${operatorText(appDir)}: the app folder must be one folder, written without the ` +
+        'glob characters * ? [ ] { } !, such as packages/web. Nothing was written.',
+    );
+  }
   // Two levels is enough to tell an app folder from a missing one, without walking its packages.
-  if ((await fs.glob([`${cleaned}/*`, `${cleaned}/*/*`])).length === 0) {
+  // A file counts only when its path starts with the folder as written, so the folder exists.
+  const inside = (await fs.glob([`${cleaned}/*`, `${cleaned}/*/*`])).filter((file) => file.startsWith(`${cleaned}/`));
+  if (inside.length === 0) {
     throw new Error(
       `usabl init refused --app ${operatorText(cleaned)}: that folder has no files in this repository. ` +
         'Check the path, relative to the repository root. Nothing was written.',

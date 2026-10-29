@@ -124,6 +124,26 @@ describe('usabl init --app on a monorepo', () => {
     );
   });
 
+  it('refuses an app directory written with glob characters, which could name several apps', async () => {
+    const real = makeFsGlob({ cwd: fileURLToPath(new URL('../../fixtures/init/monorepo', import.meta.url)) });
+    const realFs: InitFs = {
+      ...real,
+      writeFile: async () => {
+        throw new Error('this test never writes');
+      },
+    };
+    const globs = ['packages/*', 'packages/{web,admin}', '**', 'packages/we?', 'packages/[w]eb', '!packages/web', 'packages/web/*'];
+    for (const fs of [memoryFs(monorepo()), realFs]) {
+      for (const appDir of globs) {
+        await expect(inferInit(fs, { appDir }), appDir).rejects.toThrow('glob characters');
+      }
+    }
+  });
+
+  it('refuses an app directory that is a file, not a folder', async () => {
+    await expect(inferInit(memoryFs(monorepo()), { appDir: 'packages/web/package.json' })).rejects.toThrow('has no files');
+  });
+
   it('does not scan one app for a change in the other', async () => {
     const files = monorepo();
     const draft = await inferInit(memoryFs(files), { appDir: 'packages/admin' });
