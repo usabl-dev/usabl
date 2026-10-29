@@ -813,6 +813,51 @@ describe('egress redaction of credential shapes the patterns used to miss', () =
     }
   });
 
+  it('redacts a quoted password or secret that has spaces in it, up to its closing quote', () => {
+    for (const text of [
+      `password: "two ${POISON} words"`,
+      `password = 'two ${POISON}'`,
+      `"password": "a b ${POISON}"`,
+      `secret: "x ${POISON} y"`,
+    ]) {
+      expect(egress(text), text).not.toContain(POISON);
+    }
+    expect(redactSecrets(`password: "two ${POISON} words" after`)).toBe('password: "[REDACTED]" after');
+  });
+
+  it('redacts a value on an indented next line, as in YAML', () => {
+    expect(egress(`password:\n  ${POISON}`)).not.toContain(POISON);
+  });
+
+  it('keeps a quoted label word, its colon, and the text after the closing quote', () => {
+    // A label such as "Password :" is page text, not a credential. The quote after its colon
+    // closes the label, so what follows it is not a value.
+    for (const text of [
+      'input[aria-label="Password :"]',
+      'input[aria-label="Password:"]',
+      'The field "Password :" has no name',
+      "The field 'Secret :' has no name",
+      '{"label":"Password :","hint":"Use 8 characters"}',
+      'Password :',
+    ]) {
+      expect(redactSecrets(text), text).toBe(text);
+      expect(scrubString(text), text).toBe(text);
+    }
+  });
+
+  it('redacts userinfo after an escaped or backslash authority opener', () => {
+    for (const text of [
+      `https:\\\\user:${POISON}@host.local/x`,
+      `https:\\/\\/user:${POISON}@host.local\\/x`,
+      `{"url":"http:\\/\\/u:${POISON}@h"}`,
+      `https:\\\\\\\\user:${POISON}@host.local`,
+      `http:/\\${POISON}@proxy.local:3128`,
+    ]) {
+      expect(egress(text), text).not.toContain(POISON);
+    }
+    expect(redactSecrets(`https:\\/\\/user:${POISON}@host.local`)).toBe('https:\\/\\/[REDACTED]@host.local');
+  });
+
   it('leaves an @ outside a URL authority, and a URL with no credentials, alone', () => {
     for (const text of [
       'https://app.local/users/@alice',

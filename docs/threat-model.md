@@ -198,6 +198,14 @@ comments.
   tokens by their prefix. Any other lone base64 JSON, such as `?state=eyJ...` in a screen URL, is
   kept as written, because the overlay matches screen URLs and gap refs against the live location. The last one matters for config errors: a token pasted into the
   wrong key used to be repeated back in full in the unknown-key message.
+- A quoted password or secret value is redacted to its closing quote on the same line, so a
+  value with spaces in it (`password: "two words"`) is removed whole. Userinfo is also found
+  after a backslash authority opener (`https:\\user:pass@host`) and after JSON-escaped slashes
+  (`https:\/\/user:pass@host`).
+- A label word inside a quote that is still open is not a key. In `aria-label="Password :"` or
+  `{"label":"Password:"}` the quote after the colon closes the label, so the text after it is
+  kept. A bare label followed by more text, such as `Password : Enter a new one`, is still
+  redacted, because it reads the same as `secret : value`.
 
 **Status:** [x] Local-first; egress redaction and neutralization ship, with anchors matched
 through invisible characters and redaction on both sides of the strip. [ ] Telemetry decision

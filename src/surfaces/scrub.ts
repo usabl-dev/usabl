@@ -183,21 +183,52 @@ function isSecretKey(key: string): boolean {
   return SECRET_KEY_PATTERN.test(key) || SECRET_KEY_SUFFIX_PATTERN.test(key) || SECRET_KEY_CAMEL_SUFFIX_PATTERN.test(key);
 }
 
-// What may sit between a credential key and its value. A closing quote and spaces or tabs can
-// come before the separator, as in JSON ("token": "...") and in shell and config files
-// (token = ...). Whitespace and an opening quote, and whitespace inside that quote, can come after
-// it. Each run of whitespace is its own bounded piece, and the optional quote is matched together
-// with the whitespace after it, so no two runs compete for the same characters and a long run of
-// spaces costs one pass, not one per split.
-const KEY_TO_VALUE = String.raw`["']?[ \t]*[=:]\s*(?:["']\s*)?`;
+// What may sit between a credential key and its separator: a closing quote, as in JSON
+// ("token": "..."), and spaces or tabs, as in shell and config files (token = ...).
+const BEFORE_SEPARATOR = String.raw`["']?[ \t]*[=:]`;
+
+// What may sit between the separator and the value: any whitespace, line breaks included.
+const AFTER_SEPARATOR = String.raw`\s*`;
+
+// A quote after the separator opens the value, unless the key word itself sits inside a quote
+// that is still open. Then the quote after the separator closes a label, as in
+// aria-label="Password :" or {"label":"Password:"}, and no value follows. The JSON form
+// "password": "..." is not caught by this, because its key closes its own quote before the
+// separator.
+function quoteOpensValue(word: string): string {
+  return String.raw`(?<!["']${word}[ \t]*[=:]${AFTER_SEPARATOR})`;
+}
+
+// The key, its separator, and an optional opening quote with the whitespace inside it. Each run of
+// whitespace is its own bounded piece, and the optional quote is matched together with the spaces
+// after it, so no two runs compete for the same characters and a long run of spaces costs one
+// pass, not one per split. The value that follows never opens with a quote, so a closing label
+// quote can never be read as the start of a value.
+function keyToValue(word: string): string {
+  return String.raw`${word}${BEFORE_SEPARATOR}${AFTER_SEPARATOR}(?:${quoteOpensValue(word)}["']\s*)?(?!["'])`;
+}
+
+// A quoted value read to its closing quote on the same line, so a password with spaces in it is
+// redacted whole rather than up to its first space. The scan stops at the first matching quote,
+// and that quote ends the match, so each quote is read once.
+function quotedValue(word: string): RegExp {
+  return new RegExp(
+    String.raw`(${word}${BEFORE_SEPARATOR}${AFTER_SEPARATOR}${quoteOpensValue(word)})(["'])(?:(?!\2)[^\r\n])+\2`,
+    'gi',
+  );
+}
 
 const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   // Authorization headers often carry bearer credentials that should never leave the raw Result.
   { pattern: /(authorization:\s*bearer\s+)\S+/gi, replacement: '$1[REDACTED]' },
   { pattern: /(authorization:\s*)\S+/gi, replacement: '$1[REDACTED]' },
-  { pattern: new RegExp(String.raw`(token${KEY_TO_VALUE})[A-Za-z0-9+/=_.-]{8,}(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
-  { pattern: new RegExp(String.raw`(password${KEY_TO_VALUE})\S+(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
-  { pattern: new RegExp(String.raw`(secret${KEY_TO_VALUE})\S+(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
+  { pattern: new RegExp(String.raw`(${keyToValue('token')})[A-Za-z0-9+/=_.-]{8,}(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
+  { pattern: new RegExp(String.raw`(${keyToValue('password')})\S+(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
+  { pattern: new RegExp(String.raw`(${keyToValue('secret')})\S+(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
+  // The same keys with a quoted value. Where both readings match, the spans merge and the wider
+  // one, this one, is what gets written.
+  { pattern: quotedValue('password'), replacement: '$1$2[REDACTED]$2' },
+  { pattern: quotedValue('secret'), replacement: '$1$2[REDACTED]$2' },
   // JWTs are common access-token payloads and can appear as bare values.
   { pattern: /\b(eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b/g, replacement: '[REDACTED]' },
   // A JWT cut to two segments, a header and a payload. Both are JSON objects, so both open with
@@ -210,8 +241,10 @@ const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: /\beyJ(?:hbGci|0eXAi|raWQi)[A-Za-z0-9_-]{8,}/g, replacement: '[REDACTED]' },
   // The userinfo of a URL, such as a proxy address with a user name and password in it. The match
   // starts at the two slashes and cannot cross a slash, so each address is read once. It runs to
-  // the last @ before the host, because a password can itself contain an @.
-  { pattern: /(\/\/)[^\s/?#]+@/g, replacement: '$1[REDACTED]@' },
+  // the last @ before the host, because a password can itself contain an @. Each of the two
+  // slashes may also be a backslash, which browsers read as a slash in a web address, or either
+  // one escaped with a backslash, as JSON writes them (http:\/\/user:pass@host).
+  { pattern: /((?:\\?[/\\]){2})[^\s/\\?#]+@/g, replacement: '$1[REDACTED]@' },
   // GitHub tokens, classic and fine-grained. A token pasted into the wrong config key is repeated
   // back in the unknown-key message, so it has to be recognised by its shape alone.
   { pattern: /gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}/g, replacement: '[REDACTED]' },
@@ -220,8 +253,9 @@ const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
 
 // A cheap first question before the work below: is any credential anchor even present. Every
 // pattern above needs one of these words, the opening of a JWT, a GitHub token prefix, or an @
-// after two slashes, so text without them cannot match and does not need a second look.
-const ANCHOR_HINT = /authorization|token|password|secret|storagestate|eyJ|gh[pousr]_|github_pat_|\/\/[^\s/?#]*@/i;
+// after two slashes or their escaped forms, so text without them cannot match and does not need a
+// second look.
+const ANCHOR_HINT = /authorization|token|password|secret|storagestate|eyJ|gh[pousr]_|github_pat_|(?:\\?[/\\]){2}[^\s/\\?#]*@/i;
 
 function expandReplacement(template: string, match: RegExpExecArray): string {
   return template.replace(/\$(\d)/g, (_whole, digit: string) => match[Number(digit)] ?? '');

@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- Egress redaction now removes a quoted password or secret with spaces in it whole, such as
+  `password: "two words"`. Before, only the first word was removed. It also removes the user
+  name and password from an address written with backslashes (`https:\\user:pass@host`) or
+  with JSON-escaped slashes (`https:\/\/user:pass@host`). A quoted label such as
+  `aria-label="Password :"` is no longer cut after its colon, so element paths and page text
+  that only name a password field come out as written.
+
 - `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
   `usabl help <command>` now print help and exit 0 without running anything. Before,
   `--help` was ignored and a check ran, and `help` was an unknown command. The top-level
