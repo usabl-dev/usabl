@@ -451,6 +451,10 @@
 
 ### Changed
 
+- The user name and password check for configured URLs is now one shared function, used by
+  `usabl.config.json` (`surfaces[].url`, `appBaseUrl`) and `usabl.docs.json`
+  (`docsBaseUrl`). What it refuses is unchanged.
+
 - `usabl baseline` now scans twice and records only the barriers both scans found, at the
   smaller of the two counts. The rest are listed as intermittent, by screen and rule and
   never by element key, with what to do: fix them, check the screen against fixed data, or

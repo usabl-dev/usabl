@@ -8,6 +8,7 @@ import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
 import { expandBraces } from '../primitives/match-glob.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
+import { carriesUserinfo } from '../primitives/url-userinfo.js';
 
 function expectObject(value: unknown, label: string): object {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -194,29 +195,8 @@ function parseReachedWhen(raw: unknown, index: number): string | ReachedWhenSign
 // to its screen by comparing the exact url, and a rewritten url would orphan the gap. It is
 // refused instead, and the message names the field and never the value.
 //
-// Userinfo is read three ways, and any one of them refuses the value. URL parsing finds it in the
-// spellings a browser accepts, such as a backslash for a slash or a tab inside the name. The two
-// shape checks below run on every value, with backslashes read as slashes, because a person or
-// another parser can read a credential where URL parsing finds none. The first finds an @ in the
-// authority after "//". The second finds an @ before the first slash, query, or fragment, which
-// covers a value with no "//" at all: URL parsing reads "admin:" in "admin:secret@host" as a
-// scheme and reports no password.
-const USERINFO_SHAPE = /^[^/?#]*\/\/[^/?#]*@/;
-const LEADING_USERINFO_SHAPE = /^[^/?#]*@/;
-
-function carriesUserinfo(raw: string): boolean {
-  try {
-    const url = new URL(raw);
-    if (url.username !== '' || url.password !== '') {
-      return true;
-    }
-  } catch {
-    // Not a URL the parser accepts. The shape checks below still apply.
-  }
-  const slashed = raw.replace(/\\/g, '/');
-  return USERINFO_SHAPE.test(slashed) || LEADING_USERINFO_SHAPE.test(slashed);
-}
-
+// Userinfo is found by the one shared reading in src/primitives/url-userinfo.ts, the same one the
+// docs manifest uses for docsBaseUrl.
 function parseConfiguredUrl(raw: unknown, label: string): string {
   const value = expectString(raw, label);
   if (carriesUserinfo(value)) {
