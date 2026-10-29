@@ -2191,6 +2191,12 @@ loses its sign-in credentials, query string, and fragment.
 On an adopted page the capture starts at adoption, not at document start, and it also starts in
 any document the page navigates to afterwards.
 
+When `checkPage` is done with the page, it releases what adoption added and nothing else: it
+detaches its CDP session, which also ends the live-region capture and the accessibility domain
+that session started, and removes its network listeners. The caller's page and context stay
+open, so a test can go on using the page, and repeated checks on one page do not pile up
+sessions or listeners.
+
 The capture hears a change only when the region it falls in is live. It resolves the effective
 live value with the same resolver `pf-toast-live-region` uses, carried into the browser as that
 resolver's own source, so the two cannot disagree: the nearest element that sets a value wins,

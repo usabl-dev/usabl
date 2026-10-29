@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- `checkPage` now detaches the CDP session it opens on the caller's page, and removes its
+  network listeners, when it is done. Before, each call left a session and four listeners
+  attached for the life of the page. The caller's page stays open.
+
 - The warning about a query string or a fragment in a configured URL now prints once per
   process for each URL. Before, the dev-server plugin printed it again on every save.
 
