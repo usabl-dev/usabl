@@ -16,7 +16,8 @@
  * on the screen ids in the evidence floor and the waiver ledger when they are read, and on every
  * screen and surface id handed to the exported `gate()` and `mintReceipt()`, including the
  * `UsablConfig` the receipt is handed, and on the `screenId` a caller hands `checkPage()`, because
- * a library caller that builds those inputs itself skips every parser above. See input-refusal.ts for how those boundaries refuse.
+ * a library caller that builds those inputs itself skips every parser above. See input-refusal.ts
+ * for how those boundaries refuse.
  *
  * The contract, stated exactly. The grammar refuses whitespace, control and format characters,
  * surrogates, private use, default-ignorable characters, and the known assigned blank glyphs, and

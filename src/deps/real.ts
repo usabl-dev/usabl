@@ -859,8 +859,29 @@ const READ_ROW_CONTEXT = ({ target, limit, textLimit, nestingLimit }: RowReadArg
   const firstRoleToken = (candidate: Element): string =>
     (candidate.getAttribute('role') ?? '').replace(/[A-Z]/g, (ch) => ch.toLowerCase()).trim().split(/[\t\n\f\r ]+/)[0] ?? '';
   const layoutCache = new Map<Element, boolean>();
-  // Filled in below, once the key sources are defined.
-  let rowsCarryKeys: (table: Element) => boolean = () => true;
+  // Where a row's key can come from, in order: each row attribute, then a row header.
+  const usable = (value: string | null): string | null =>
+    value === null || value.trim() === '' || GENERATED.test(value) ? null : value;
+  const rowHeader = (row: Element): string | null => {
+    const header = Array.from(row.children).find((cell) =>
+      cell.matches('th:not([scope="col"]):not([scope="colgroup"]), [role="rowheader"]'),
+    );
+    if (header === undefined) return null;
+    const text = header.textContent ?? '';
+    return text.trim() === '' ? null : text;
+  };
+  const SOURCES: Array<[string, (row: Element) => string | null]> = [
+    ...ROW_ATTRIBUTES.map((name): [string, (row: Element) => string | null] => [
+      `attr:${name}`,
+      (row) => usable(row.getAttribute(name)),
+    ]),
+    ['header', rowHeader],
+  ];
+  // Whether a layout table's own rows, those whose nearest candidate table is it, carry a key.
+  const rowsCarryKeys = (table: Element): boolean =>
+    queryDrawn(table, ROW)
+      .filter((row) => nearest(parentOf(row), isCandidate) === table)
+      .some((row) => SOURCES.some(([, read]) => read(row) !== null));
   const isTable = (candidate: Element): boolean => {
     if (!isCandidate(candidate)) return false;
     if (candidate.tagName.toLowerCase() !== 'table') return true;
@@ -889,29 +910,6 @@ const READ_ROW_CONTEXT = ({ target, limit, textLimit, nestingLimit }: RowReadArg
   };
   const bodyRows = (table: Element): Element[] =>
     queryDrawn(table, ROW).filter((row) => isRow(row) && tableOf(row) === table && isBodyRow(row, table));
-  const usable = (value: string | null): string | null =>
-    value === null || value.trim() === '' || GENERATED.test(value) ? null : value;
-  const rowHeader = (row: Element): string | null => {
-    const header = Array.from(row.children).find((cell) =>
-      cell.matches('th:not([scope="col"]):not([scope="colgroup"]), [role="rowheader"]'),
-    );
-    if (header === undefined) return null;
-    const text = header.textContent ?? '';
-    return text.trim() === '' ? null : text;
-  };
-  const SOURCES: Array<[string, (row: Element) => string | null]> = [
-    ...ROW_ATTRIBUTES.map((name): [string, (row: Element) => string | null] => [
-      `attr:${name}`,
-      (row) => usable(row.getAttribute(name)),
-    ]),
-    ['header', rowHeader],
-  ];
-
-  // A layout table's own rows: those whose nearest candidate table is it.
-  rowsCarryKeys = (table: Element): boolean =>
-    queryDrawn(table, ROW)
-      .filter((row) => nearest(parentOf(row), isCandidate) === table)
-      .some((row) => SOURCES.some(([, read]) => read(row) !== null));
 
   // A row's key: keyed, ambiguous, or null when its table keys no rows (or it is not a body row).
   type RowKey = { source: string; key: string } | { ambiguous: Ambiguity } | null;
