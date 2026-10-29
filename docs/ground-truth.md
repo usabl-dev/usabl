@@ -2172,7 +2172,8 @@ config and nothing would be checked. When the root is the default and there is n
 adds no gap, because a project that does not use usabl config has none. Either way the result's
 `project` field holds the absolute root that was read and whether a config was found there, so
 a caller can tell an empty project from the wrong folder. A config or requirements directory
-that is present and cannot be read is a gap.
+that is present and cannot be read is a gap. A requirements file that does not load is a gap
+whose ref is that file, the same ref `usabl check` gives it.
 
 `checkPage` is not a merge gate. Its verdict is advisory output for a test suite; the gate is
 the only verdict authority. It also acts on the caller's page: the keyboard walk presses Tab,

@@ -210,7 +210,9 @@ export async function loadProjectIntake(projectRoot: string, rootWasPassed: bool
       project,
       gaps: [
         {
-          ref: 'requirements',
+          // The refused file, the same ref a run gives this gap, so the reader knows which file
+          // to fix. A failure that names no file falls back to the configured root.
+          ref: loaded.path ?? config.requirements ?? 'requirements',
           state: 'not-covered',
           reason: `design requirements could not be loaded, so none were checked: ${loaded.reason}`,
         },

@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- When `checkPage` cannot load a requirements file, its gap now names that file, such as
+  `design/broken.yaml`, as `usabl check` does. Before, the ref was the word
+  `requirements`.
+
 - A requirements file with a YAML syntax error is now reported by file, line, and problem,
   and the reason no longer quotes the source line. Before, the parser's message, which
   repeats the offending line, reached the coverage gap with only pattern redaction on it.
