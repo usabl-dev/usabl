@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- `setZoom` now writes the zoom from an isolated world, like the focus and style reads. Before,
+  it ran in the page's own world, so a page that redefined style writes could stop the zoom
+  from landing. No check calls it yet.
+
 - `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
   `usabl help <command>` now print help and exit 0 without running anything. Before,
   `--help` was ignored and a check ran, and `help` was an unknown command. The top-level
