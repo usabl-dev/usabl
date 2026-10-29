@@ -183,21 +183,64 @@ function isSecretKey(key: string): boolean {
   return SECRET_KEY_PATTERN.test(key) || SECRET_KEY_SUFFIX_PATTERN.test(key) || SECRET_KEY_CAMEL_SUFFIX_PATTERN.test(key);
 }
 
-// What may sit between a credential key and its value. A closing quote and spaces or tabs can
-// come before the separator, as in JSON ("token": "...") and in shell and config files
-// (token = ...). Whitespace and an opening quote, and whitespace inside that quote, can come after
-// it. Each run of whitespace is its own bounded piece, and the optional quote is matched together
-// with the whitespace after it, so no two runs compete for the same characters and a long run of
-// spaces costs one pass, not one per split.
-const KEY_TO_VALUE = String.raw`["']?[ \t]*[=:]\s*(?:["']\s*)?`;
+// What may sit between a credential key and its separator: a closing quote, as in JSON
+// ("token": "..."), and spaces or tabs, as in shell and config files (token = ...).
+const BEFORE_SEPARATOR = String.raw`["']?[ \t]*[=:]`;
+
+// What may sit between the separator and the value: any whitespace, line breaks included.
+const AFTER_SEPARATOR = String.raw`\s*`;
+
+// A quote after the separator opens the value, unless it closes a label: the key word sits right
+// after the same quote character, on the same line with only spaces or tabs around the separator,
+// and nothing that could be a value follows the quote. That is the shape of
+// aria-label="Password :" and {"label":"Password:"}. A different quote, a line break, or more text
+// right after the quote reads as a value, as in "password='hunter2'" or "password: "hunter2" here,
+// because a missed label costs a redacted word and a missed value costs a credential. The JSON form
+// "password": "..." is not caught by this, because its key closes its own quote before the
+// separator.
+const LABEL_END = String.raw`(?:$|[\s>,}\]/])`;
+
+function quoteOpensValue(word: string): string {
+  const closesLabel = ['"', "'"].map(
+    (quote) => String.raw`(?<=${quote}${word}[ \t]*[=:][ \t]*)${quote}${LABEL_END}`,
+  );
+  return `(?!${closesLabel.join('|')})`;
+}
+
+// The key, its separator, and an optional opening quote with the whitespace inside it. Each run of
+// whitespace is its own bounded piece, and the optional quote is matched together with the spaces
+// after it, so no two runs compete for the same characters and a long run of spaces costs one
+// pass, not one per split. The value that follows never opens with a quote, so a closing label
+// quote can never be read as the start of a value.
+function keyToValue(word: string): string {
+  return String.raw`${word}${BEFORE_SEPARATOR}${AFTER_SEPARATOR}(?:${quoteOpensValue(word)}["']\s*)?(?!["'])`;
+}
+
+// A quoted value read to its closing quote on the same line, so a password with spaces in it is
+// redacted whole rather than up to its first space. The scan stops at the first matching quote,
+// and that quote ends the match, so each quote is read once.
+function quotedValue(word: string): RegExp {
+  return new RegExp(
+    String.raw`(${word}${BEFORE_SEPARATOR}${AFTER_SEPARATOR}${quoteOpensValue(word)})(["'])(?:(?!\2)[^\r\n])+\2`,
+    'gi',
+  );
+}
+
+// One character of URL userinfo: anything but white space, a slash, a query or fragment mark, or a
+// backslash that opens another slash pair.
+const USERINFO_CHAR = String.raw`(?:[^\s/?#\\]|\\(?![/\\]))`;
 
 const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   // Authorization headers often carry bearer credentials that should never leave the raw Result.
   { pattern: /(authorization:\s*bearer\s+)\S+/gi, replacement: '$1[REDACTED]' },
   { pattern: /(authorization:\s*)\S+/gi, replacement: '$1[REDACTED]' },
-  { pattern: new RegExp(String.raw`(token${KEY_TO_VALUE})[A-Za-z0-9+/=_.-]{8,}(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
-  { pattern: new RegExp(String.raw`(password${KEY_TO_VALUE})\S+(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
-  { pattern: new RegExp(String.raw`(secret${KEY_TO_VALUE})\S+(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
+  { pattern: new RegExp(String.raw`(${keyToValue('token')})[A-Za-z0-9+/=_.-]{8,}(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
+  { pattern: new RegExp(String.raw`(${keyToValue('password')})\S+(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
+  { pattern: new RegExp(String.raw`(${keyToValue('secret')})\S+(["']?)`, 'gi'), replacement: '$1[REDACTED]$2' },
+  // The same keys with a quoted value. Where both readings match, the spans merge and the wider
+  // one, this one, is what gets written.
+  { pattern: quotedValue('password'), replacement: '$1$2[REDACTED]$2' },
+  { pattern: quotedValue('secret'), replacement: '$1$2[REDACTED]$2' },
   // JWTs are common access-token payloads and can appear as bare values.
   { pattern: /\b(eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b/g, replacement: '[REDACTED]' },
   // A JWT cut to two segments, a header and a payload. Both are JSON objects, so both open with
@@ -210,8 +253,13 @@ const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: /\beyJ(?:hbGci|0eXAi|raWQi)[A-Za-z0-9_-]{8,}/g, replacement: '[REDACTED]' },
   // The userinfo of a URL, such as a proxy address with a user name and password in it. The match
   // starts at the two slashes and cannot cross a slash, so each address is read once. It runs to
-  // the last @ before the host, because a password can itself contain an @.
-  { pattern: /(\/\/)[^\s/?#]+@/g, replacement: '$1[REDACTED]@' },
+  // the last @ before the host, because a password can itself contain an @. Each of the two
+  // slashes may also be a backslash, which browsers read as a slash in a web address, or either
+  // one escaped with a backslash, as JSON writes them (http:\/\/user:pass@host). A backslash
+  // inside the userinfo is part of it, as in a domain user name (http://CORP\jdoe:pass@proxy).
+  // The userinfo stops before a backslash that starts another slash pair, so a long run of
+  // backslashes is read once rather than once from every backslash in it.
+  { pattern: new RegExp(String.raw`((?:\\?[/\\]){2})${USERINFO_CHAR}+@`, 'g'), replacement: '$1[REDACTED]@' },
   // GitHub tokens, classic and fine-grained. A token pasted into the wrong config key is repeated
   // back in the unknown-key message, so it has to be recognised by its shape alone.
   { pattern: /gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}/g, replacement: '[REDACTED]' },
@@ -220,8 +268,12 @@ const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
 
 // A cheap first question before the work below: is any credential anchor even present. Every
 // pattern above needs one of these words, the opening of a JWT, a GitHub token prefix, or an @
-// after two slashes, so text without them cannot match and does not need a second look.
-const ANCHOR_HINT = /authorization|token|password|secret|storagestate|eyJ|gh[pousr]_|github_pat_|\/\/[^\s/?#]*@/i;
+// after two slashes or their escaped forms, so text without them cannot match and does not need a
+// second look.
+const ANCHOR_HINT = new RegExp(
+  String.raw`authorization|token|password|secret|storagestate|eyJ|gh[pousr]_|github_pat_|(?:\\?[/\\]){2}${USERINFO_CHAR}*@`,
+  'i',
+);
 
 function expandReplacement(template: string, match: RegExpExecArray): string {
   return template.replace(/\$(\d)/g, (_whole, digit: string) => match[Number(digit)] ?? '');
@@ -524,6 +576,55 @@ export function scrubResult(result: Result): Result {
     })),
     paidDownCount: result.paidDownCount,
   };
+}
+
+// Fields that name an identity rather than describe one. The gate, the evidence floor, and
+// waivers match them byte for byte, and a waiver scope is copied from the elementKey in
+// `usabl check --json`. A structural key holds the element path, and an axe selector can hold an
+// absolute URL, as in a[href="https://t.co/?ref=nav"], so taking the query out of either would
+// publish a key that no longer matches. Credential redaction still applies to them.
+const IDENTITY_FIELDS: ReadonlySet<string> = new Set([
+  'screenId',
+  'layer',
+  'rule',
+  'rules',
+  'elementKey',
+  'elementPath',
+  'surfaces',
+]);
+
+function stripUrlsOutsideIdentity(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return stripUrlSecrets(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripUrlsOutsideIdentity(entry));
+  }
+
+  if (isPlainObject(value)) {
+    const stripped: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value)) {
+      stripped[key] = IDENTITY_FIELDS.has(key) ? nested : stripUrlsOutsideIdentity(nested);
+    }
+    return stripped;
+  }
+
+  return value;
+}
+
+/**
+ * A scrubbed copy of a Result for the surfaces that publish it: the CLI text, the JSON Result,
+ * and the pull request comment. On top of scrubResult, every URL in it loses its sign-in
+ * credentials, its query string, and its fragment, the way checkPage output does. Identity
+ * fields keep their URLs as written, so a key copied from this output still matches.
+ *
+ * A configured screen url can carry a preview token or a session value in its query, and CI
+ * posts these surfaces where many people can read them. The overlay and the stop hook keep
+ * scrubResult, because the overlay matches a gap to its screen by the exact url.
+ */
+export function scrubPublishedResult(result: Result): Result {
+  return stripUrlsOutsideIdentity(scrubResult(result)) as Result;
 }
 
 /**

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Result } from '../../src/contracts/index.js';
+import type { Coverage, Draft, EvidenceFloor, Result } from '../../src/contracts/index.js';
+import { gate } from '../../src/gate/index.js';
 import {
   ciRefusal,
   localApprovalNextSteps,
@@ -7,6 +8,7 @@ import {
   parseCliArgs,
   projectCli,
 } from '../../src/surfaces/cli.js';
+import { parseResultJson } from '../../src/surfaces/policy-enforce.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
   schemaVersion: 'usabl.result.v1',
@@ -238,6 +240,90 @@ describe('projectCli', () => {
     expect(JSON.parse(projected.json).schemaVersion).toBe('usabl.result.v1');
     expect(projected.text).not.toContain('super-secret-value');
     expect(projected.json).not.toContain('super-secret-value');
+  });
+
+  it('drops the query and the fragment of every screen url from the text and the JSON', () => {
+    // A configured url can carry a preview token in its query. The CLI output and the JSON
+    // Result are what CI publishes, so they lose it the way checkPage output already does.
+    const url = 'http://127.0.0.1:5173/clusters?preview=SECRETPOISON#state=SECRETPOISON';
+    const raw = baseResult({
+      verdict: 'not_covered',
+      exitCode: 3,
+      accessibilityVerdict: 'not_covered',
+      accessibilityExitCode: 3,
+      screens: [
+        { screenId: 'clusters', url, stops: [], drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
+      ],
+      coverage: {
+        changedFiles: ['src/Clusters.tsx'],
+        affected: [{ screenId: 'clusters', url, provenance: 'manual' }],
+        unresolvedFiles: [],
+        gaps: [{ ref: url, state: 'not-covered', reason: `timeout loading ${url}` }],
+        nothingToCheck: false,
+      },
+    });
+    const projected = projectCli(raw);
+
+    expect(projected.text).not.toContain('SECRETPOISON');
+    expect(projected.json).not.toContain('SECRETPOISON');
+    const parsed = parseResultJson(JSON.parse(projected.json));
+    expect(parsed.screens[0]?.url).toBe('http://127.0.0.1:5173/clusters');
+    expect(parsed.coverage.affected[0]?.url).toBe('http://127.0.0.1:5173/clusters');
+    expect(parsed.coverage.gaps[0]?.ref).toBe('http://127.0.0.1:5173/clusters');
+    expect(projected.text).toContain('http://127.0.0.1:5173/clusters');
+    // The raw Result keeps the url as written, for the overlay and for receipts.
+    expect(raw.screens[0]?.url).toBe(url);
+  });
+
+  it('publishes finding identity keys unchanged, so a waiver copied from the JSON still matches', () => {
+    // A structural key holds the element path, and an axe selector can hold an absolute URL with
+    // a query. Waivers match the key exactly, so the published key has to be the real one.
+    const coverage: Coverage = {
+      changedFiles: ['src/Home.tsx'],
+      affected: [{ screenId: 'home', url: 'http://127.0.0.1:5173/', provenance: 'manual' }],
+      unresolvedFiles: [],
+      gaps: [],
+      nothingToCheck: false,
+    };
+    const floor: EvidenceFloor = { version: 3, entries: [] };
+    const draft: Draft = {
+      rule: 'link-name', layer: 'axe', severity: 'serious', evidenceClass: 'deterministic',
+      screenId: 'home', elementPath: 'a[href="https://t.co/?ref=nav"]', elementName: null, role: 'link',
+      whatUserExperiences: '', why: '', fix: '', evidence: {}, confidence: 'fail',
+    };
+    const input = { guardDivergedPaths: [] as string[], coverage, floor, drafts: [draft], cleanlyScannedScreens: new Set<string>(), now: '2026-06-01T00:00:00.000Z' };
+    const first = gate({ ...input, waivers: [] });
+    expect(first.verdict).toBe('regression');
+    const realKey = first.findings[0]?.elementKey;
+    expect(realKey).toBe('home|link-name|struct:link:a[href="https://t.co/?ref=nav"]');
+
+    const published = parseResultJson(
+      JSON.parse(
+        projectCli(
+          baseResult({
+            verdict: 'regression',
+            exitCode: 1,
+            accessibilityVerdict: 'regression',
+            accessibilityExitCode: 1,
+            coverage,
+            findings: first.findings,
+          }),
+        ).json,
+      ),
+    );
+    const publishedKey = published.findings[0]?.elementKey ?? '';
+    expect(publishedKey).toBe(realKey);
+
+    const waived = gate({
+      ...input,
+      waivers: [
+        {
+          rule: 'link-name', surface: 'home', scope: publishedKey, reason: 'tracked', owner: 'team', approvedBy: 'owner',
+          created: '2026-01-01T00:00:00.000Z', expires: '2026-12-31T00:00:00.000Z',
+        },
+      ],
+    });
+    expect(waived.verdict).toBe('verified');
   });
 
   it('projects idle headline when verdict is null', () => {

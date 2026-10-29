@@ -19,8 +19,8 @@ function stripTrailingSlashes(path: string): string {
 
 /**
  * The one egress for a loader failure. The path is an operator-authored file name and the reason
- * can quote file bytes, for example an unrecognised key name from the schema or a source line from
- * the YAML parser, and both reach a terminal, so the whole sentence is scrubbed here. Scrubbing
+ * can quote file bytes, for example an unrecognised key name from the schema, and both reach a
+ * terminal, so the whole sentence is scrubbed here. Scrubbing
  * text that a producer already scrubbed changes nothing, so a reason may arrive clean or not.
  * Control characters in the path are shown as code point labels first, so a file name that
  * carried a control sequence still reads as a different file from a clean one. The path is also

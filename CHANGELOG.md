@@ -33,6 +33,46 @@
 
 ### Fixed
 
+- `usabl comment` and `usabl enforce` now refuse a Result whose `verdict` and
+  `accessibilityVerdict` are a pair the engine never writes, such as `verified` over an
+  accessibility `regression`, with exit 4 and a reason that names `verdict`. Before, each
+  half was checked only against its own exit code, so the comment could show one outcome
+  while the accessibility check exited on another. An approval hold over any scan outcome,
+  an idle scan included, is still accepted.
+
+- The stop hook now reads a run as idle only when `coverage.nothingToCheck` is `true`, as
+  the verdict line and the self-check do. Before, a hand-composed Result with a null verdict
+  and any truthy value there, such as `1`, let the stop through with "You may stop". It now
+  blocks as a run that proved nothing. An unreachable fallback branch was removed.
+
+- `checkPage` now detaches the CDP session it opens on the caller's page, and removes its
+  network listeners, when it is done. Before, each call left a session and four listeners
+  attached for the life of the page. The caller's page stays open.
+
+- The warning about a query string or a fragment in a configured URL now prints once per
+  process for each URL. Before, the dev-server plugin printed it again on every save.
+
+- When `checkPage` cannot load a requirements file, its gap now names that file, such as
+  `design/broken.yaml`, as `usabl check` does. Before, the ref was the word
+  `requirements`.
+
+- A requirements file with a YAML syntax error is now reported by file, line, and problem,
+  and the reason no longer quotes the source line. Before, the parser's message, which
+  repeats the offending line, reached the coverage gap with only pattern redaction on it.
+
+- The CLI text, the JSON Result from `usabl check --json`, and the pull request comment now
+  drop the query string and the fragment from every URL, as `checkPage` output already did.
+  Before, a preview token in a configured screen URL was printed in each of them. The
+  dev-server overlay and the stop hook still print the URL as written, because the overlay
+  matches a gap to its screen by the exact URL, and the config warning now says so.
+
+- Egress redaction now removes a quoted password or secret with spaces in it whole, such as
+  `password: "two words"`. Before, only the first word was removed. It also removes the user
+  name and password from an address written with backslashes (`https:\\user:pass@host`) or
+  with JSON-escaped slashes (`https:\/\/user:pass@host`). A quoted label such as
+  `aria-label="Password :"` is no longer cut after its colon, so element paths and page text
+  that only name a password field come out as written.
+
 - `setZoom` now writes the zoom from an isolated world, like the focus and style reads. Before,
   it ran in the page's own world, so a page that redefined style writes could stop the zoom
   from landing. No check calls it yet.
@@ -479,6 +519,10 @@
   screen ends in about 17.1 seconds with the default cap.
 
 ### Changed
+
+- The user name and password check for configured URLs is now one shared function, used by
+  `usabl.config.json` (`surfaces[].url`, `appBaseUrl`) and `usabl.docs.json`
+  (`docsBaseUrl`). What it refuses is unchanged.
 
 - `usabl baseline` now scans twice and records only the barriers both scans found, at the
   smaller of the two counts. The rest are listed as intermittent, by screen and rule and

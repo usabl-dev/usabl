@@ -662,9 +662,9 @@ describe('parseUsablConfig unknown key message', () => {
 });
 
 describe('parseUsablConfig configured URL credentials', () => {
-  // A surface URL is printed as written in every report: gap refs, screen urls, and affected
-  // urls all carry it, and the pull request comment publishes them. A credential written into one
-  // would be published with it, so the loader refuses it and never repeats the value.
+  // A surface URL is carried as written in the Result: gap refs, screen urls, and affected urls
+  // all carry it, and the overlay and the stop hook print them. A credential written into one
+  // would reach their readers, so the loader refuses it and never repeats the value.
   const SECRET = 'SECRETPOISON';
 
   function refusalFor(extra: Record<string, unknown>): string {
@@ -807,6 +807,25 @@ describe('loadConfig', () => {
     expect(config.surfaces[0]?.url).toBe('http://127.0.0.1:5173/x?view=a');
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('surfaces[0].url');
+  });
+
+  it('warns once per process for each url, so a dev server reloading its config does not repeat it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usabl-config-'));
+    const path = join(dir, 'usabl.config.json');
+    const write = (url: string) =>
+      writeFile(path, configJson({ surfaces: [{ id: 'overview', url, files: ['src/Overview.tsx'] }] }), 'utf8');
+    const warnings: string[] = [];
+
+    await write('http://127.0.0.1:5173/x?view=once');
+    await loadConfig(path, (line) => warnings.push(line));
+    await loadConfig(path, (line) => warnings.push(line));
+    expect(warnings).toHaveLength(1);
+
+    // A different url is a different warning.
+    await write('http://127.0.0.1:5173/x?view=twice');
+    await loadConfig(path, (line) => warnings.push(line));
+    await loadConfig(path, (line) => warnings.push(line));
+    expect(warnings).toHaveLength(2);
   });
 });
 

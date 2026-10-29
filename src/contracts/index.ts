@@ -301,7 +301,9 @@ export interface Result {
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);
-// 5 reserved for an opt-in judgment soft-gate (off by default). The default install never emits 5.
+// 5 reserved for an opt-in judgment soft-gate (off by default). The default install never emits 5,
+// and the Result reader (src/intake/result-document.ts) refuses a document that carries 5 until
+// that gate exists.
 
 // ---- conformance summary: a NON-GATING projection of Result, never a single score ----
 // Always shows every bucket side by side; never hides the not-evaluated denominator. The gate

@@ -867,8 +867,29 @@ const READ_ROW_CONTEXT = ({ target, limit, textLimit, nestingLimit }: RowReadArg
   const firstRoleToken = (candidate: Element): string =>
     (candidate.getAttribute('role') ?? '').replace(/[A-Z]/g, (ch) => ch.toLowerCase()).trim().split(/[\t\n\f\r ]+/)[0] ?? '';
   const layoutCache = new Map<Element, boolean>();
-  // Filled in below, once the key sources are defined.
-  let rowsCarryKeys: (table: Element) => boolean = () => true;
+  // Where a row's key can come from, in order: each row attribute, then a row header.
+  const usable = (value: string | null): string | null =>
+    value === null || value.trim() === '' || GENERATED.test(value) ? null : value;
+  const rowHeader = (row: Element): string | null => {
+    const header = Array.from(row.children).find((cell) =>
+      cell.matches('th:not([scope="col"]):not([scope="colgroup"]), [role="rowheader"]'),
+    );
+    if (header === undefined) return null;
+    const text = header.textContent ?? '';
+    return text.trim() === '' ? null : text;
+  };
+  const SOURCES: Array<[string, (row: Element) => string | null]> = [
+    ...ROW_ATTRIBUTES.map((name): [string, (row: Element) => string | null] => [
+      `attr:${name}`,
+      (row) => usable(row.getAttribute(name)),
+    ]),
+    ['header', rowHeader],
+  ];
+  // Whether a layout table's own rows, those whose nearest candidate table is it, carry a key.
+  const rowsCarryKeys = (table: Element): boolean =>
+    queryDrawn(table, ROW)
+      .filter((row) => nearest(parentOf(row), isCandidate) === table)
+      .some((row) => SOURCES.some(([, read]) => read(row) !== null));
   const isTable = (candidate: Element): boolean => {
     if (!isCandidate(candidate)) return false;
     if (candidate.tagName.toLowerCase() !== 'table') return true;
@@ -897,29 +918,6 @@ const READ_ROW_CONTEXT = ({ target, limit, textLimit, nestingLimit }: RowReadArg
   };
   const bodyRows = (table: Element): Element[] =>
     queryDrawn(table, ROW).filter((row) => isRow(row) && tableOf(row) === table && isBodyRow(row, table));
-  const usable = (value: string | null): string | null =>
-    value === null || value.trim() === '' || GENERATED.test(value) ? null : value;
-  const rowHeader = (row: Element): string | null => {
-    const header = Array.from(row.children).find((cell) =>
-      cell.matches('th:not([scope="col"]):not([scope="colgroup"]), [role="rowheader"]'),
-    );
-    if (header === undefined) return null;
-    const text = header.textContent ?? '';
-    return text.trim() === '' ? null : text;
-  };
-  const SOURCES: Array<[string, (row: Element) => string | null]> = [
-    ...ROW_ATTRIBUTES.map((name): [string, (row: Element) => string | null] => [
-      `attr:${name}`,
-      (row) => usable(row.getAttribute(name)),
-    ]),
-    ['header', rowHeader],
-  ];
-
-  // A layout table's own rows: those whose nearest candidate table is it.
-  rowsCarryKeys = (table: Element): boolean =>
-    queryDrawn(table, ROW)
-      .filter((row) => nearest(parentOf(row), isCandidate) === table)
-      .some((row) => SOURCES.some(([, read]) => read(row) !== null));
 
   // A row's key: keyed, ambiguous, or null when its table keys no rows (or it is not a body row).
   type RowKey = { source: string; key: string } | { ambiguous: Ambiguity } | null;
@@ -1192,6 +1190,9 @@ export interface NetworkActivity {
   apiResponses(): ApiResponse[];
   // Records how many requests had been sent when the walk began. See Page.markWalkStart.
   markWalkStart(): void;
+  // Removes the tracker's listeners from the page. An adopted page stays open after usabl is done
+  // with it, so its listeners have to come off rather than pile up on every check.
+  stop(): void;
 }
 
 // The subset of a Playwright request this tracker reads. Playwright hands the same object to the
@@ -1218,6 +1219,10 @@ export interface RequestEvents {
   on(event: 'request', handler: (request: RequestHandle) => void): void;
   on(event: 'requestfinished' | 'requestfailed', handler: () => void): void;
   on(event: 'response', handler: (response: ResponseEvent) => void): void;
+  // Optional so a test driver without it still works. Playwright's page has it.
+  off?(event: 'request', handler: (request: RequestHandle) => void): void;
+  off?(event: 'requestfinished' | 'requestfailed', handler: () => void): void;
+  off?(event: 'response', handler: (response: ResponseEvent) => void): void;
 }
 
 // How far back a redirect chain is followed to find the request that started it. A browser stops
@@ -1294,16 +1299,14 @@ export function makeNetworkActivityTracker(
     }
   };
 
-  page.on('request', (request) => {
+  const onRequest = (request: RequestHandle): void => {
     inFlight += 1;
     if (typeof request === 'object' && request !== null) {
       sentOrder.set(request, sentCount);
     }
     sentCount += 1;
-  });
-  page.on('requestfinished', settled);
-  page.on('requestfailed', settled);
-  page.on('response', (response) => {
+  };
+  const onResponse = (response: ResponseEvent): void => {
     // A listener that throws would take down the page event emitter, and a status read on a
     // response from a frame that has already gone can throw. Nothing here is worth that.
     try {
@@ -1320,7 +1323,11 @@ export function makeNetworkActivityTracker(
     } catch {
       return;
     }
-  });
+  };
+  page.on('request', onRequest);
+  page.on('requestfinished', settled);
+  page.on('requestfailed', settled);
+  page.on('response', onResponse);
 
   return {
     networkQuietFor(windowMs: number): boolean {
@@ -1344,6 +1351,12 @@ export function makeNetworkActivityTracker(
       if (walkMark === null) {
         walkMark = sentCount;
       }
+    },
+    stop(): void {
+      page.off?.('request', onRequest);
+      page.off?.('requestfinished', settled);
+      page.off?.('requestfailed', settled);
+      page.off?.('response', onResponse);
     },
   };
 }
@@ -1651,9 +1664,9 @@ function wrapPage(
 /**
  * Adopts a Playwright page a caller already created and navigated, so usabl can run providers on it
  * (for example from a Playwright test suite). It attaches a CDP session for AX reads and element
- * paths and installs the live-region capture, then returns a usabl Page whose close() is a no-op: the
- * caller owns the page and its context, so adoption must never close them. Navigation and readiness
- * are the caller's job.
+ * paths and installs the live-region capture, then returns a usabl Page whose close() releases only
+ * what adoption added, the CDP session and the network listeners: the caller owns the page and its
+ * context, so adoption must never close them. Navigation and readiness are the caller's job.
  *
  * The in-flight tracker starts at adoption, so it counts only requests fired after this call. A
  * caller that adopts a page mid-load and then calls gotoReady would read the network as idle at once
@@ -1675,7 +1688,21 @@ export async function adoptPage(pw: PwPage, options: { readyTimeoutMs?: number }
   const network = makeNetworkActivityTracker(pw);
   // A caller that read the operator config passes its readiness budget; any other gets the default.
   const page = wrapPage(pw, context, cdp, readyTimeoutMsFor(options), network);
-  return { ...page, close: async (): Promise<void> => {} };
+  // close() never closes the caller's page or context. It ends usabl's own hold on the page: the
+  // network listeners come off, and the CDP session is detached, which also drops the live-region
+  // capture script and the accessibility domain that session set up. A session the page already
+  // lost, because the caller closed it, has nothing left to detach.
+  return {
+    ...page,
+    close: async (): Promise<void> => {
+      network.stop();
+      try {
+        await cdp.detach();
+      } catch {
+        // Already detached, or the page is gone. Either way nothing is held.
+      }
+    },
+  };
 }
 
 /**

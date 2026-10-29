@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -286,6 +286,26 @@ describe('loadProjectIntake', () => {
       expect(intake.gaps).toEqual([]);
       expect(intake.requirements).toEqual({ version: 1, requirements: [] });
       expect(intake.project).toEqual({ root: dir, configFound: false });
+    });
+  });
+
+  it('names the refused requirements file as the gap ref', async () => {
+    await withDir(async (dir) => {
+      const config = {
+        appBaseUrl: 'http://127.0.0.1:5173',
+        uiFileGlobs: ['src/**'],
+        discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
+        surfaces: [{ id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['src/Clusters.tsx'] }],
+        guardedPaths: [],
+        requirements: 'design',
+      };
+      await writeFile(join(dir, 'usabl.config.json'), JSON.stringify(config));
+      await mkdir(join(dir, 'design'));
+      await writeFile(join(dir, 'design', 'broken.yaml'), 'version: 1\nrequirements: [1, 2\n');
+      const intake = await loadProjectIntake(dir, true);
+      expect(intake.requirements).toBeNull();
+      expect(intake.gaps.map((gap) => gap.ref)).toEqual(['design/broken.yaml']);
+      expect(intake.gaps[0]?.state).toBe('not-covered');
     });
   });
 

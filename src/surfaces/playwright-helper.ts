@@ -210,7 +210,9 @@ export async function loadProjectIntake(projectRoot: string, rootWasPassed: bool
       project,
       gaps: [
         {
-          ref: 'requirements',
+          // The refused file, the same ref a run gives this gap, so the reader knows which file
+          // to fix. A failure that names no file falls back to the configured root.
+          ref: loaded.path ?? config.requirements ?? 'requirements',
           state: 'not-covered',
           reason: `design requirements could not be loaded, so none were checked: ${loaded.reason}`,
         },
@@ -314,53 +316,59 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
 
   const config = intake.config;
   const page = await adoptPage(pwPage, config?.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: config.readyTimeoutMs });
-  const screen = { id: screenId, url: pwPage.url() };
-  const requirementGaps =
-    intake.requirements === null
-      ? []
-      : requirementGapsForPage(intake.requirements, labeledScreenId, intake.knownSurfaceIds);
-  // The projection leaves usabl here, so it is scrubbed here: page text, gap refs, and reasons. The
-  // page address is a gap ref, and a query string or a fragment in it can hold a session token.
-  const finish = (drafts: Draft[], gaps: CoverageGap[]): PageCheckResult =>
-    scrubOutboundData({
-      ...summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]),
-      project: intake.project,
-    });
-  // The providers, then the same row keys the CLI attaches, so a finding here carries the identity
-  // it has in usabl check.
-  const runChecks = async (): Promise<{ drafts: Draft[]; gaps: CoverageGap[] }> => {
-    const provided = await runProviders(
-      providers,
-      { page, screen, config: PAGE_CHECK_CONFIG, profile },
-      pageCheckCapabilities(providers),
-    );
-    const rows = await attachRowScopeToDrafts(page, screen, provided.drafts);
-    return { drafts: rows.drafts, gaps: [...provided.gaps, ...rows.gaps] };
-  };
+  try {
+    const screen = { id: screenId, url: pwPage.url() };
+    const requirementGaps =
+      intake.requirements === null
+        ? []
+        : requirementGapsForPage(intake.requirements, labeledScreenId, intake.knownSurfaceIds);
+    // The projection leaves usabl here, so it is scrubbed here: page text, gap refs, and reasons.
+    // The page address is a gap ref, and a query string or a fragment in it can hold a session
+    // token.
+    const finish = (drafts: Draft[], gaps: CoverageGap[]): PageCheckResult =>
+      scrubOutboundData({
+        ...summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]),
+        project: intake.project,
+      });
+    // The providers, then the same row keys the CLI attaches, so a finding here carries the
+    // identity it has in usabl check.
+    const runChecks = async (): Promise<{ drafts: Draft[]; gaps: CoverageGap[] }> => {
+      const provided = await runProviders(
+        providers,
+        { page, screen, config: PAGE_CHECK_CONFIG, profile },
+        pageCheckCapabilities(providers),
+      );
+      const rows = await attachRowScopeToDrafts(page, screen, provided.drafts);
+      return { drafts: rows.drafts, gaps: [...provided.gaps, ...rows.gaps] };
+    };
 
-  // A labeled screen that declares a readiness signal in usabl.config.json is held to it, the way
-  // the CLI holds it. Only a configured surface can declare one, as in the CLI.
-  const reachedWhen =
-    labeledScreenId === null || config === null
-      ? undefined
-      : config.surfaces.find((surface) => surface.id === labeledScreenId)?.reachedWhen;
-  const signal = readinessSignalOf(reachedWhen);
-  if (signal === null || config === null) {
+    // A labeled screen that declares a readiness signal in usabl.config.json is held to it, the
+    // way the CLI holds it. Only a configured surface can declare one, as in the CLI.
+    const reachedWhen =
+      labeledScreenId === null || config === null
+        ? undefined
+        : config.surfaces.find((surface) => surface.id === labeledScreenId)?.reachedWhen;
+    const signal = readinessSignalOf(reachedWhen);
+    if (signal === null || config === null) {
+      const { drafts, gaps } = await runChecks();
+      return finish(drafts, gaps);
+    }
+
+    const before = await readinessBeforeChecks(page, screenId, signal, config);
+    if ('gap' in before) {
+      // The screen is not known to be showing, so no provider runs on it.
+      return finish([], [before.gap]);
+    }
+    await page.markWalkStart();
     const { drafts, gaps } = await runChecks();
-    return finish(drafts, gaps);
+    // Measured again after the checks, as the CLI does. A part holds only if it held both times.
+    const held = heldThroughout(before.measured, await measureReadiness(page, signal, config.appBaseUrl));
+    const unseen = unseenGap(screenId, signal, held);
+    return unseen === null ? finish(drafts, gaps) : finish([], [...gaps, unseen]);
+  } finally {
+    // Releases the CDP session and the listeners adoption added. The caller's page stays open.
+    await page.close();
   }
-
-  const before = await readinessBeforeChecks(page, screenId, signal, config);
-  if ('gap' in before) {
-    // The screen is not known to be showing, so no provider runs on it.
-    return finish([], [before.gap]);
-  }
-  await page.markWalkStart();
-  const { drafts, gaps } = await runChecks();
-  // Measured again after the checks, as the CLI does. A part holds only if it held both times.
-  const held = heldThroughout(before.measured, await measureReadiness(page, signal, config.appBaseUrl));
-  const unseen = unseenGap(screenId, signal, held);
-  return unseen === null ? finish(drafts, gaps) : finish([], [...gaps, unseen]);
 }
 
 // What checkPage adds to the CLI's response sentence. The response record of an adopted page starts

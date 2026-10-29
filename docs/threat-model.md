@@ -198,6 +198,19 @@ comments.
   tokens by their prefix. Any other lone base64 JSON, such as `?state=eyJ...` in a screen URL, is
   kept as written, because the overlay matches screen URLs and gap refs against the live location. The last one matters for config errors: a token pasted into the
   wrong key used to be repeated back in full in the unknown-key message.
+- A quoted password or secret value is redacted to its closing quote on the same line, so a
+  value with spaces in it (`password: "two words"`) is removed whole. Userinfo is also found
+  after a backslash authority opener (`https:\\user:pass@host`) and after JSON-escaped slashes
+  (`https:\/\/user:pass@host`).
+- A label word inside a quote that is still open is not a key. In `aria-label="Password :"` or
+  `{"label":"Password:"}` the quote after the colon closes the label, so the text after it is
+  kept. A bare label followed by more text, such as `Password : Enter a new one`, is still
+  redacted, because it reads the same as `secret : value`.
+- The surfaces CI publishes, the CLI text, the JSON Result, and the pull request comment, drop
+  the userinfo, the query, and the fragment of every URL in the Result, as `checkPage` output
+  already did. A preview token in a configured screen URL no longer reaches a pull request. The
+  overlay and the stop hook keep the URL as written, because the overlay matches a gap to its
+  screen by the exact URL, and the config loader warns about that.
 
 **Status:** [x] Local-first; egress redaction and neutralization ship, with anchors matched
 through invisible characters and redaction on both sides of the strip. [ ] Telemetry decision
@@ -423,7 +436,10 @@ that skipped this check is still bounded.
 A verdict must also carry the exit code the engine writes for it, for both the verdict and the
 accessibility verdict, and a Result with no verdict must exit 0 or 4. A document that shows a
 regression and exits 0 is refused with exit 4, so `usabl comment` and `usabl enforce` cannot
-report two different outcomes from one document.
+report two different outcomes from one document. For the same reason the verdict and the
+accessibility verdict must be a pair the engine writes. A document that says `verified` over an
+accessibility `regression` is refused, so the comment cannot show a pass while the
+accessibility check fails, or the reverse.
 
 **Not handled:** the check is of shape, not of truth. A well-formed document can still say
 anything the contract allows: a verdict that its findings do not support, counts that do not

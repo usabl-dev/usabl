@@ -76,6 +76,30 @@ describe('evaluateStopDecision', () => {
     expect(decision.message).toContain('nothing to check');
   });
 
+  it('blocks a null verdict whose nothingToCheck is truthy but not true', () => {
+    // Only run() writes an idle Result, and it writes the boolean true. Any other truthy value is
+    // a hand-composed Result, and it proves nothing, so the stop blocks rather than reading idle.
+    for (const nothingToCheck of [1, 'true', {}]) {
+      const decision = evaluateStopDecision(
+        baseResult({
+          verdict: null,
+          exitCode: 0,
+          coverage: {
+            changedFiles: [],
+            affected: [],
+            unresolvedFiles: [],
+            gaps: [],
+            nothingToCheck: nothingToCheck as unknown as boolean,
+          },
+        }),
+        { stopHookActive: false },
+      );
+      expect(decision.block, String(nothingToCheck)).toBe(true);
+      expect(decision.message).toContain('NOT verified');
+      expect(decision.message).not.toContain('You may stop');
+    }
+  });
+
   it('blocks regression, approval_required, and not_covered', () => {
     const verdicts: Array<'regression' | 'approval_required' | 'not_covered'> = [
       'regression',

@@ -1282,7 +1282,7 @@ for a screen Rule B fires on wrongly, and for a screen whose identity call is re
 token refresh. It is only as good as what it names: see the paragraphs above on what a shell
 selector and a public shell cost.
 
-#### A credential in a configured surface URL is refused, and a query is echoed
+#### A credential in a configured surface URL is refused, and a query is dropped where it is published
 
 Text that comes off the page is sanitized before it is published. A coverage gap reason strips the
 userinfo, the query, and the fragment from every address it names, and shortens a refused request
@@ -1299,11 +1299,14 @@ secret that is short, lowercase, and sitting in either of the first two path seg
 printed. `/reset/<token>` is cut because a token is normally mixed case or long, not because the
 position is protected.
 
-Configured surface URLs are not page text and are not sanitized. `gap.ref`, `ScreenScan.url`, and
+Configured surface URLs are not page text. `gap.ref`, `ScreenScan.url`, and
 `coverage.affected[].url` carry the operator's own `usabl.config.json` value verbatim into the
-Result, and from there into the CLI output, the overlay, and the pull request comment. That is
-deliberate: the overlay attributes a gap to a screen by comparing these values exactly, so
-rewriting one would silently orphan the gap it belongs to.
+Result, and from there into the overlay and the stop hook. That is deliberate: the overlay
+attributes a gap to a screen by comparing these values exactly, so rewriting one would silently
+orphan the gap it belongs to. The surfaces CI publishes are different. The CLI text, the JSON
+Result that `usabl check --json` writes, and the pull request comment drop the userinfo, the query,
+and the fragment from every URL in the Result, the same way `checkPage` output does. Nothing reads
+those surfaces back to match a gap to a screen, so dropping them costs no match.
 
 So the loader keeps the value and refuses what must not be published. A `surfaces[].url` or an
 `appBaseUrl` that carries userinfo (`https://user:pass@host/screen`, or a user name alone) is
@@ -1316,13 +1319,15 @@ with backslashes read as slashes: an `@` in the authority after `//`, and an `@`
 where URL parsing reads `admin:` as a scheme and finds no password. An `@` later in the path, the
 query, or the fragment is accepted.
 
-A query string or a fragment is accepted, because applications select screens by both, and it is
-still printed as written. The CLI, the stop hook, and the dev-server plugin print a warning on
-stderr each time they load the config. It names the field, never the value, and says that anything
-in the query or the fragment is published. The residual an operator has to know about: a preview token in the query, or anything
-in the fragment, is still echoed by every surface that renders a Result, including a comment
-posted to a public pull request. Do not put one in `usabl.config.json`. Reach a protected
-environment with a storage state, which never enters committed config, instead.
+A query string or a fragment is accepted, because applications select screens by both. The CLI,
+the stop hook, and the dev-server plugin print a warning on stderr when they load the config,
+once per process for each field and URL, so the dev-server plugin does not repeat it on every
+save. It names the field, never the value, and says where the query and the fragment are still
+printed.
+The residual an operator has to know about: a preview token in the query, or anything in the
+fragment, is still echoed by the overlay and the stop hook, and so reaches an agent transcript.
+Do not put one in `usabl.config.json`. Reach a protected environment with a storage state, which
+never enters committed config, instead.
 
 ### Documentation coverage
 
@@ -2012,11 +2017,15 @@ lines.
   contract gives it. A field the contract does not name is dropped. A document that does not
   match, or text that is not JSON, exits 4 with a plain reason on stderr that names the field by
   its path, for example `findings[0].severity`, and never repeats the value. `usabl comment`
-  prints no comment in that case. The check is of shape, plus one agreement: each verdict must
+  prints no comment in that case. The check is of shape, plus two agreements. Each verdict must
   carry the exit code the engine writes for it (verified 0, regression 1, approval_required 2,
   not_covered 3), and a Result with no verdict must exit 0 or 4. The same holds for
   `accessibilityVerdict` and `accessibilityExitCode`. A document that shows one outcome and exits
-  with another exits 4 and names the exit code field. The check does not test whether the other
+  with another exits 4 and names the exit code field. And `verdict` and `accessibilityVerdict`
+  must be a pair the engine writes: without a policy hold the two are the same verdict, or both
+  null with the same exit code, and `approval_required` sits over any accessibility outcome,
+  an idle scan included (`accessibilityVerdict` null, exit 0), but never over exit 4. Any other
+  pair exits 4 and names `verdict`. The check does not test whether the other
   values agree with each other, so a well-formed document is still only as true as whoever wrote
   it, and the receipt, not the document, is what proves a run happened.
 - Library: the stop hook, overlay, and an optional MCP wrapper import `run()` directly.
@@ -2065,8 +2074,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   usabl did not reach a verdict for this change, so the run proved nothing about it.", followed by
   a next step to run the check again and the gate's summary inside the untrusted frame. The
   carried verdict is never printed. During an active continuation it allows once, marked NOT
-  verified, like every other blocking state. The self-check prints the same words, and prints IDLE
-  only when `nothingToCheck` is true.
+  verified, like every other blocking state. The self-check prints the same words. The stop hook
+  and the self-check both read a run as idle only when `nothingToCheck` is the boolean `true`; a
+  null verdict with any other value, such as `1` or `"true"`, blocks.
 - `not_covered`: default block. Recalibrate from real-repo measurement
   (section 25) if this drives persistent bypass behavior.
 - Policy mismatch against git anchor: block.
@@ -2218,7 +2228,8 @@ config and nothing would be checked. When the root is the default and there is n
 adds no gap, because a project that does not use usabl config has none. Either way the result's
 `project` field holds the absolute root that was read and whether a config was found there, so
 a caller can tell an empty project from the wrong folder. A config or requirements directory
-that is present and cannot be read is a gap.
+that is present and cannot be read is a gap. A requirements file that does not load is a gap
+whose ref is that file, the same ref `usabl check` gives it.
 
 `checkPage` is not a merge gate. Its verdict is advisory output for a test suite; the gate is
 the only verdict authority. It also acts on the caller's page: the keyboard walk presses Tab,
@@ -2233,6 +2244,12 @@ loses its sign-in credentials, query string, and fragment.
 `src/deps/real.ts`. So a flow requirement that expects an announcement hears the same text in both.
 On an adopted page the capture starts at adoption, not at document start, and it also starts in
 any document the page navigates to afterwards.
+
+When `checkPage` is done with the page, it releases what adoption added and nothing else: it
+detaches its CDP session, which also ends the live-region capture and the accessibility domain
+that session started, and removes its network listeners. The caller's page and context stay
+open, so a test can go on using the page, and repeated checks on one page do not pile up
+sessions or listeners.
 
 The capture hears a change only when the region it falls in is live. It resolves the effective
 live value with the same resolver `pf-toast-live-region` uses, carried into the browser as that
@@ -2530,8 +2547,12 @@ file at once, since each file can be valid on its own, and names both files and 
 positions. A requirement id, and the surface it names, follow the same character grammar as a
 surface id (section 22). A refused character is reported by position and code point, never
 printed back. Either failure is `approval_required`, returned from the loader rather than
-thrown, and every reason the loader returns is scrubbed before it leaves, including the YAML
-parser's own message and the file path, because both can carry file bytes.
+thrown, and every reason the loader returns is scrubbed before it leaves, including the file
+path, because it can carry file bytes. A YAML syntax error names the file, the line, and the
+parser's problem, such as `intake YAML is invalid at line 5: unexpected end of the stream within
+a flow collection`. The parser's own message is never used, because it quotes the source line,
+and a problem that carries source text after its fixed wording, such as an alias name, is cut
+before that text.
 
 Any loader failure stops every scan, and the run shows the loader's reason as a `not-covered`
 coverage gap whose ref is the refused file, or the configured root when the loader named none.
