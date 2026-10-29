@@ -248,6 +248,8 @@ describe('projectCli', () => {
     const raw = baseResult({
       verdict: 'not_covered',
       exitCode: 3,
+      accessibilityVerdict: 'not_covered',
+      accessibilityExitCode: 3,
       screens: [
         { screenId: 'clusters', url, stops: [], drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
       ],
