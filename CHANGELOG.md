@@ -13,13 +13,16 @@
 
 - A local `usabl check` that needs approval now says what to do next: review and commit
   the guarded files. When no UI file changed, it says no screen was scanned and that
-  `usabl baseline` scans every mapped screen once the files are committed. The verdict
-  does not change.
+  `usabl baseline` scans every mapped screen once the files are committed. It says a
+  touched screen was scanned only when the screen opened and was measured; otherwise it
+  says how many did not and points to the "not evaluated" lines. The verdict does not
+  change.
 
 - First-run errors now name the fix: a missing `usabl.config.json` points to
   `usabl init` or `--config`; a repository with no commits, or a trusted ref git cannot
   read, says to make a first commit or fetch the ref; a screen where nothing answers says
-  to start the app or set `appBaseUrl`; `usabl baseline` refused on other dirty policy
+  to start the app or set its `surfaces[].url`, or to fix the screen's configured URL when
+  usabl cannot tell which setting it came from; `usabl baseline` refused on other dirty policy
   files says to commit or revert them, and refused on empty `uiFileGlobs` says which
   field to set. A flag missing its value gives an example.
 

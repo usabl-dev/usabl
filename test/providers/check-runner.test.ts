@@ -238,7 +238,7 @@ describe('makeCheckRunner', () => {
     expect(scan.gaps[0]?.reason).toContain('page did not stop changing');
   });
 
-  it('names the fix when nothing answers at the screen url', async () => {
+  it('names surfaces[].url as the fix when nothing answers at a surface url', async () => {
     const runner = makeCheckRunner({
       browser: {
         open: async (): Promise<Page> => {
@@ -260,7 +260,33 @@ describe('makeCheckRunner', () => {
     const reason = scan.gaps[0]?.reason ?? '';
     expect(reason).toMatch(/^screen failed to open: nothing answered at /);
     expect(reason).toContain('Start the app');
-    expect(reason).toContain('appBaseUrl in usabl.config.json');
+    expect(reason).toContain('set surfaces[].url for screen clusters in usabl.config.json');
+    expect(reason).not.toContain('appBaseUrl');
+    expect(reason).toContain('ERR_CONNECTION_REFUSED');
+  });
+
+  it('names no setting when the runner cannot tell where the screen url came from', async () => {
+    const runner = makeCheckRunner({
+      browser: {
+        open: async (): Promise<Page> => {
+          throw new Error(`page.goto: net::ERR_CONNECTION_REFUSED at ${SCREEN.url}`);
+        },
+        close: async () => {},
+      },
+      providers: [],
+      config: testConfig({ surfaces: [] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    const reason = scan.gaps[0]?.reason ?? '';
+    expect(reason).toMatch(/^screen failed to open: nothing answered at /);
+    expect(reason).toContain('Start the app');
+    expect(reason).toContain('or fix the URL configured for this screen.');
+    expect(reason).not.toContain('appBaseUrl');
+    expect(reason).not.toContain('surfaces[]');
     expect(reason).toContain('ERR_CONNECTION_REFUSED');
   });
 

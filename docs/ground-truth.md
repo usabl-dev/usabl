@@ -1850,7 +1850,11 @@ ignored. An unknown command exits 2 and points to `usabl help`. There is no `--v
 A local `usabl check` that ends in `approval_required` also prints the next step: commit the
 guarded files (a code owner approves them on a pull request). When no UI file changed, it
 says no screen was scanned and that `usabl baseline`, after the commit, scans every mapped
-screen. When screens were scanned, it says their accessibility barriers are listed above. The
+screen. When every touched screen opened and was measured, it says their accessibility
+barriers are listed above. A screen that did not open, or was not fully measured, is still in
+`screens`, as a scan with a gap. Only a scan with no gap counts as measured. When some touched
+screens were measured and some were not, it gives both counts and points to the "not evaluated"
+lines. When none was measured, it says no screen was measured and points to the same lines. The
 verdict and the exit code do not change. A run with `--trusted-ref` or `--json` prints no such
 lines.
 

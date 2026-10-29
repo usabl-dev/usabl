@@ -62,13 +62,24 @@ function notCoveredGap(ref: string, reason: string): CoverageGap {
   return { ref, state: 'not-covered', reason };
 }
 
+// Where this screen's url was set, when the runner can tell. A surface with this id and this exact
+// url means the operator wrote it in surfaces[].url. Any other url was built by a planner from
+// appBaseUrl or from the docs manifest's docsBaseUrl, and the runner cannot tell which, so it
+// names no setting rather than the wrong one.
+function urlFix(screen: { id: string; url: string }, config: UsablConfig): string {
+  const declared = config.surfaces.some((surface) => surface.id === screen.id && surface.url === screen.url);
+  return declared
+    ? `or set surfaces[].url for screen ${screen.id} in usabl.config.json to where it runs.`
+    : 'or fix the URL configured for this screen.';
+}
+
 // Why a screen did not open. Nothing listening at the address is the first failure a new user
 // meets, because the app's dev server is not running yet, so that case names the fix.
-function openFailureReason(url: string, message: string): string {
+function openFailureReason(screen: { id: string; url: string }, config: UsablConfig, message: string): string {
   if (/ERR_CONNECTION_REFUSED|ECONNREFUSED/.test(message)) {
     return (
-      `screen failed to open: nothing answered at ${url}. Start the app (for example its dev server), ` +
-      `or set appBaseUrl in usabl.config.json to where it runs. ${message}`
+      `screen failed to open: nothing answered at ${screen.url}. Start the app (for example its dev server), ` +
+      `${urlFix(screen, config)} ${message}`
     );
   }
   return `screen failed to open: ${message}`;
@@ -155,7 +166,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       try {
         page = await deps.browser.open(screen.url);
       } catch (err) {
-        return failedScan(screen, openFailureReason(screen.url, errorMessage(err)));
+        return failedScan(screen, openFailureReason(screen, deps.config, errorMessage(err)));
       }
 
       // Look up the surface's optional readiness signal by screen id. Only manually declared
