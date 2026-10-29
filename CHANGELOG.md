@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- The announcement capture no longer records a change inside content hidden from
+  assistive technology. Before, a polite status inside `aria-hidden="true"` was recorded as
+  announced, though Orca says nothing for it, so a flow requirement that expected its text
+  passed. Now a change is not recorded when anything between it and the top of the page,
+  the live region included, has `inert`, `hidden`, or an `aria-hidden` value Chromium reads
+  as true (every non-empty value but `false` and `undefined`). The walk follows the flat
+  tree, so an `aria-hidden` wrapper around a slot counts. `aria-hidden="false"` is heard.
+
 - A control repeated in every table row, such as an unnamed icon button or a kebab
   toggle, now has one identity per row. Before, every row shared one identity whose count
   followed how many rows the page showed, so a floor of two, with one row fixed and a new

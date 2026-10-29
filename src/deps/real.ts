@@ -103,7 +103,9 @@ const PATH_FOR_IMPL = `
 // capture used one, so it recorded text no screen reader would speak, and a flow requirement that
 // expected that text passed. The walk follows the flat tree the way the rule's walk does, so a
 // slotted element climbs through its slot. A change whose live region sits in a different tree
-// from it is not recorded; see the observer below.
+// from it is not recorded; see the observer below. Nor is a change inside content hidden from
+// assistive technology, by aria-hidden, inert, or hidden anywhere on that walk. The same resolver
+// holds that rule.
 const LIVE_CAPTURE_IMPL = `
   const liveResolver = (${createLiveResolver.toString()})();
   const flatParent = (element) => {
@@ -120,15 +122,24 @@ const LIVE_CAPTURE_IMPL = `
     return null;
   };
   // The element whose region the change belongs to: the nearest one that sets a live value, when
-  // that value is polite or assertive. Null when the change is not live.
+  // that value is polite or assertive. Null when the change is not live, and null when anything on
+  // the walk hides its subtree from assistive technology: the changed element, a wrapper between it
+  // and the region, the region itself, or anything above the region. A screen reader says nothing
+  // for that change, so recording it would let a flow requirement pass on words no one heard.
   const liveHost = (start) => {
     const elements = [];
     const chain = [];
     for (let current = start; current instanceof Element; current = flatParent(current)) {
       elements.push(current);
-      chain.push({ ariaLive: current.getAttribute('aria-live'), role: current.getAttribute('role') });
+      chain.push({
+        ariaLive: current.getAttribute('aria-live'),
+        role: current.getAttribute('role'),
+        ariaHidden: current.getAttribute('aria-hidden'),
+        inert: current.hasAttribute('inert'),
+        hidden: current.hasAttribute('hidden'),
+      });
     }
-    if (liveResolver.effectiveLiveValue(chain) === 'off') {
+    if (liveResolver.hiddenInChain(chain) || liveResolver.effectiveLiveValue(chain) === 'off') {
       return null;
     }
     return elements[liveResolver.nearestLiveSetter(chain)] ?? null;

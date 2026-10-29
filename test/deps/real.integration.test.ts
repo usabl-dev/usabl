@@ -471,6 +471,33 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
           "<script>customElements.define('x-off-slot', class extends HTMLElement { constructor() { super();" +
           " this.attachShadow({ mode: 'open' }).innerHTML = '<div aria-live=\"off\"><slot></slot></div>'; } });</script>",
       ],
+      // Content hidden from assistive technology is silent even inside a live region. Orca says
+      // nothing for a polite status inside aria-hidden="true", so the capture must not record it.
+      [
+        'a polite region inside an aria-hidden="true" subtree',
+        '<div aria-hidden="true"><div aria-live="polite" id="message"></div></div>',
+      ],
+      [
+        'an aria-hidden="true" wrapper between a polite region and the change',
+        '<div aria-live="polite"><div aria-hidden="true"><span id="message"></span></div></div>',
+      ],
+      ['a role="status" region that is itself aria-hidden="true"', '<div role="status" aria-hidden="true" id="message"></div>'],
+      [
+        'a polite region inside aria-hidden="TRUE", which Chromium hides',
+        '<div aria-hidden="TRUE"><div aria-live="polite" id="message"></div></div>',
+      ],
+      [
+        'a polite region inside aria-hidden="false" under aria-hidden="true"',
+        '<div aria-hidden="true"><div aria-hidden="false"><div aria-live="polite" id="message"></div></div></div>',
+      ],
+      ['a polite region inside an inert subtree', '<div inert><div aria-live="polite" id="message"></div></div>'],
+      ['a polite region inside hidden content', '<div hidden><div aria-live="polite" id="message"></div></div>'],
+      [
+        'an aria-hidden wrapper around a slot inside a polite region',
+        '<div aria-live="polite"><x-hidden-slot><span id="message"></span></x-hidden-slot></div>' +
+          "<script>customElements.define('x-hidden-slot', class extends HTMLElement { constructor() { super();" +
+          " this.attachShadow({ mode: 'open' }).innerHTML = '<div aria-hidden=\"true\"><slot></slot></div>'; } });</script>",
+      ],
     ];
 
     for (const [name, region] of cases) {
@@ -494,6 +521,12 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
         'a polite region inside an off wrapper',
         '<div aria-live="off"><div aria-live="polite" id="message"></div></div>',
       ],
+      ['a polite region with aria-hidden="false"', '<div aria-live="polite" aria-hidden="false" id="message"></div>'],
+      [
+        'a polite region inside an aria-hidden="false" wrapper',
+        '<div aria-hidden="false"><div aria-live="polite"><span id="message"></span></div></div>',
+      ],
+      ['a polite region with an empty aria-hidden', '<div aria-live="polite" aria-hidden="" id="message"></div>'],
     ];
 
     // A light element slotted into a live region inside a shadow root. The region's own text in the
@@ -534,6 +567,21 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
           regionPage('<div aria-live="polite"><div aria-live="off"><span id="message"></span></div></div>'),
           { waitUntil: 'domcontentloaded' },
         );
+        const page = await adoptPage(pw);
+        await page.click('#save');
+        expect(await page.drainAnnouncements()).toEqual(['Heard']);
+      } finally {
+        await browser.close();
+      }
+    });
+
+    it('does not hear a polite region inside aria-hidden="true" on an adopted page', async () => {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const pw = await browser.newPage();
+        await pw.setContent(regionPage('<div aria-hidden="true"><div aria-live="polite" id="message"></div></div>'), {
+          waitUntil: 'domcontentloaded',
+        });
         const page = await adoptPage(pw);
         await page.click('#save');
         expect(await page.drainAnnouncements()).toEqual(['Heard']);
