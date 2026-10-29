@@ -403,6 +403,15 @@ export function App() {
     expect(notes.some((note) => note.includes('/sign-in'))).toBe(true);
   });
 
+  it('recommends a readiness signal for every screen when usabl session saved a session', async () => {
+    const draft = await inferInit(memoryFs(fixtureFiles({ '.usabl/session/storage-state.json': '{}' })));
+    const notes = recommendationsIn(draft.notes);
+    for (const id of ['root', 'clusters']) {
+      expect(notes.some((note) => note.includes(`"${id}"`))).toBe(true);
+    }
+    expect(notes.some((note) => note.includes('.usabl/session/storage-state.json'))).toBe(true);
+  });
+
   it('says nothing about a readiness signal when nothing suggests a login', async () => {
     const draft = await inferInit(memoryFs(fixtureFiles()), { sessionConfigured: false });
     expect(recommendationsIn(draft.notes)).toEqual([]);
