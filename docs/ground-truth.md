@@ -761,6 +761,18 @@ Given a set of changed files, discover which surfaces they affect:
 5. Manual surface globs in config are an additive fallback, never a replacement.
 6. Anything resolving to nothing stays in `unresolvedFiles` and forces `not_covered`.
 
+**Files usabl cannot place.** Each file in `unresolvedFiles` gets an `unresolved` gap whose ref
+is its repository path. The reason says why usabl could not place it, then the fix: add it to the
+`files` of a surface in `usabl.config.json`, or add the route that renders it to
+`usabl.routes.json` with an `entryFile` that imports it. Any import usabl could not follow on the
+way comes last, as discovery detail. A docs source gets the docs form of the fix: add it to a
+page's `sources` in `usabl.docs.json`, or to its `sharedGlobs`. The common case is a shared file,
+such as a layout every route imports through an alias usabl does not resolve. `usabl check` names
+the first such file in its gap list and then lists every other one with its reason, sorted.
+`usabl baseline` scans every UI file, so it is where these show up first: its refusal on
+incomplete coverage, and its `--partial` report, list every such file with its reason, sorted. No
+page text is printed in either list.
+
 An import with no extension is probed against a fixed list: `.mjs`, `.js`, `.mts`, `.ts`, `.jsx`,
 `.tsx`, `.vue`, and `.svelte`, then the same names as `index` files in a directory. usabl does not
 read `resolve.extensions` from the Vite config, because it cannot run the config. When more than
