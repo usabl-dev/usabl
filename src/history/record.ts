@@ -13,7 +13,7 @@
  *
  * This unit builds, writes, and reads records. It must never decide a verdict.
  */
-import type { EvidenceFloor, FloorEntry, IdentityBasis, ScreenScan } from '../contracts/index.js';
+import type { EvidenceFloor, FloorEntry, IdentityBasis, RenderEvidence, ScreenScan } from '../contracts/index.js';
 import { paydownConfirmed } from '../gate/index.js';
 import { canonicalHash, sha256 } from '../primitives/canonical.js';
 import { assertIso8601Utc } from '../primitives/iso8601.js';
@@ -101,10 +101,11 @@ export interface RecordInput {
  * The record for one scan of main.
  *
  * An identity is observed on a screen only when every scan of that screen had no gap. Its count is
- * the deterministic tally the gate compares, keyed with the floor's scheme. An identity the scan
- * did not see at all counts as an observed zero only when the gate's own rule confirms its part of
- * the page rendered (paydownConfirmed). Otherwise the record holds no observation for it, because a
- * screen whose content failed to mount shows every barrier in that content as absent.
+ * the deterministic tally the gate compares, keyed with the floor's scheme. A count at or above the
+ * floor's count is recorded as seen. A count below it is recorded only when the scan shows the
+ * identity's part of the page rendered (lowerCountConfirmed). Otherwise the record holds no
+ * observation for it, because a screen whose content failed to mount shows the barriers in that
+ * content as absent, and two such scans would release debt that was never fixed.
  */
 export function buildRecord(input: RecordInput): HistoryRecord {
   const seen = observeFloor(input.screens, identitySchemeFor(input.floor));
@@ -137,7 +138,7 @@ export function buildRecord(input: RecordInput): HistoryRecord {
       const id = identityId(entry);
       if (idCounts.get(id) !== 1) continue;
       const count = seen.observedCounts.get(identityKey(entry)) ?? 0;
-      if (count === 0 && !paydownConfirmed(entry, seen.renderEvidence.get(screenId))) continue;
+      if (count < entry.count && !lowerCountConfirmed(entry, count, seen.renderEvidence.get(screenId))) continue;
       identities.push({ id, rule: entry.rule, basis: entry.identityBasis, count });
     }
     return { screenId, coverage: 'full', identities: sortBy(identities, (identity) => identity.id) };
@@ -158,6 +159,19 @@ export function buildRecord(input: RecordInput): HistoryRecord {
     floorHash: floorHashOf(input.floor),
     screens,
   };
+}
+
+/**
+ * Whether a count below the floor's count shows a fix rather than content that did not render.
+ *
+ * A zero uses the gate's own rule (paydownConfirmed): the readiness signal held, or the identity's
+ * element was met. A nonzero count needs the readiness signal. The barriers the scan drew sit at
+ * the identity's own element, so the element test would always pass, and one element drawn does
+ * not show that the rest of the content rendered.
+ */
+function lowerCountConfirmed(entry: FloorEntry, count: number, evidence: RenderEvidence | undefined): boolean {
+  if (count === 0) return paydownConfirmed(entry, evidence);
+  return evidence?.signalHeld === true;
 }
 
 /** One record as one line of JSON, with its fields in a fixed order. No trailing newline. */

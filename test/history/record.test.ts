@@ -7,7 +7,11 @@ import {
   buildRecord, floorHashOf, historyFileFor, HistoryRefusedError, identityId, isHistoryFile,
   parseHistoryFile, parseRecord, serializeRecord,
 } from '../../src/history/record.js';
-import { COMMIT_A, dialogAt, entryFor, floorOf, POLICY, recordOf, rowButton, SCANNERS, scanOf } from './helpers.js';
+import { trackDebt } from '../../src/history/track.js';
+import { gate } from '../../src/gate/index.js';
+import {
+  COMMIT_A, COMMIT_B, dialogAt, entryFor, floorOf, gateInputFor, POLICY, recordOf, rowButton, SCANNERS, scanOf,
+} from './helpers.js';
 
 const MARKER = 'zz-marker-zz';
 
@@ -82,6 +86,40 @@ describe('buildRecord', () => {
 
     expect(held.screens[0]!.identities.map((identity) => identity.count)).toEqual([0]);
     expect(unsure.screens[0]).toEqual({ screenId: 'clusters', coverage: 'full', identities: [] });
+  });
+
+  it('records a count below the floor only when the readiness signal shows the screen rendered', () => {
+    // The header rendered and the content did not: the signal did not hold, there is no gap, and
+    // only one of the three dialogs was drawn. That lower count is not evidence of a fix.
+    const floor = floorOf([entryFor(dialogAt(1), 3)]);
+    const halfDrawn = scanOf('clusters', [dialogAt(1)], { reachedSelectorPresent: false });
+    const scans = [
+      buildRecord(input({ floor, screens: [halfDrawn] })),
+      buildRecord(input({ floor, commit: COMMIT_B, sourceTree: 'tree-b', screens: [halfDrawn] })),
+    ];
+
+    expect(scans[0]!.screens[0]).toEqual({ screenId: 'clusters', coverage: 'full', identities: [] });
+    const track = trackDebt(floor, scans);
+    expect(track.floor.entries.map((entry) => entry.count)).toEqual([3]);
+    const pr = gate(gateInputFor(track.floor, [dialogAt(1), dialogAt(2), dialogAt(3)], ['clusters']));
+    expect(pr.accessibilityVerdict).toBe('verified');
+  });
+
+  it('records a count below the floor when the readiness signal held', () => {
+    const floor = floorOf([entryFor(dialogAt(1), 3)]);
+    const record = buildRecord(input({ floor, screens: [scanOf('clusters', [dialogAt(1)])] }));
+
+    expect(record.screens[0]!.identities.map((identity) => identity.count)).toEqual([1]);
+  });
+
+  it('records a count equal to the floor count with no readiness signal', () => {
+    const floor = floorOf([entryFor(dialogAt(1), 1)]);
+    const record = buildRecord(input({
+      floor,
+      screens: [scanOf('clusters', [dialogAt(1)], { reachedSelectorPresent: false })],
+    }));
+
+    expect(record.screens[0]!.identities.map((identity) => identity.count)).toEqual([1]);
   });
 });
 

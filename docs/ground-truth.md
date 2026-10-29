@@ -1700,17 +1700,23 @@ working tree, so a pull request cannot write its own history. The gate job alrea
 scan (source tree, policy hash, runner version, scanner versions), the hash of the floor it was
 compared with, and per screen its coverage: `full` when every scan of the screen had no gap,
 `partial` otherwise. For each floored identity on a full screen it holds the first 16 hex
-characters of the SHA-256 of the identity key, the rule, the basis, and the observed count. An
-absent identity is recorded as zero only when the gate's own rule (`paydownConfirmed`) shows its
-part of the page rendered; otherwise the record holds no observation for it. No element key and no
-page text. The parser refuses any field it does not know, so a record cannot carry text the writer
+characters of the SHA-256 of the identity key, the rule, the basis, and the observed count. A
+count at or above the floor's count is recorded as seen. A count below it needs evidence that the
+identity's part of the page rendered; otherwise the record holds no observation for it. An absent
+identity is recorded as zero only when the gate's own rule (`paydownConfirmed`) shows that. A
+nonzero count below the floor's is recorded only when the screen's readiness signal held: the
+barriers the scan drew are themselves elements at the identity, so seeing them does not show that
+the rest of the content rendered. Without this, a screen whose header mounted and whose content did
+not would record a lower count, two such scans would release debt that was never fixed, and the
+next pull request that renders everything would block as a regression. No element key and no page
+text. The parser refuses any field it does not know, so a record cannot carry text the writer
 did not put there.
 
 **Confirmed fixed.** Two consecutive observations of an identity, each from a full scan of main and
 each written against the same floor, below its accepted count. The accepted count then becomes the
 higher of the two, so a page that shows either reading again is not a regression. A scan that holds
-no observation of the identity (the screen was partial, or the identity was absent with no render
-evidence) is skipped. It neither confirms nor breaks the pair. A further pair below the new count
+no observation of the identity (the screen was partial, or its count was below the floor's with no
+render evidence) is skipped. It neither confirms nor breaks the pair. A further pair below the new count
 lowers it again.
 
 **Intermittent.** Two observations of one identity on the same source tree with different counts.

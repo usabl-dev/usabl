@@ -106,9 +106,9 @@ export function trackDebt(floor: EvidenceFloor, records: readonly HistoryRecord[
 
 /**
  * What one record saw at one floor identity, or null when it holds no observation of it: the screen
- * was not in the scan, was scanned with a gap, or the identity was absent with nothing to show its
- * part of the page rendered. The rule and basis must match the floor entry too, so a record that
- * reuses a hash for another rule observes nothing.
+ * was not in the scan, was scanned with a gap, or its count was below the floor's with nothing to
+ * show its part of the page rendered. The rule and basis must match the floor entry too, so a
+ * record that reuses a hash for another rule observes nothing.
  */
 function observationIn(record: HistoryRecord, entry: FloorEntry, id: string): Observation | null {
   const screen = record.screens.find((candidate) => candidate.screenId === entry.screenId);
