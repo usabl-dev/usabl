@@ -76,13 +76,24 @@ not trust policy files with uncommitted changes.
 Then set up the other places usabl runs, one per command:
 
 ```bash
-npx usabl install --overlay       # browser overlay in the Vite dev server
+npx usabl install --overlay       # browser overlay in the Vite or webpack dev server
 npx usabl install --claude        # Claude Code Stop hook
 npx usabl install --claude-skill  # /usabl-check and /usabl-fix skills
 npx usabl install --cursor        # Cursor stop hook, command, and rule
 npx usabl install --ci            # pull request gate for GitHub Actions
 npx usabl doctor                  # reports what is set up and what is missing
 ```
+
+In a webpack app, `install --overlay` does not edit your config. It prints the two lines
+to add to the development config, for example:
+
+```js
+const { UsablWebpackPlugin } = require('usabl/webpack');
+// in the plugins array of the development config:
+new UsablWebpackPlugin({ cwd: __dirname }),
+```
+
+The plugin does nothing unless webpack runs in development mode.
 
 To try usabl on an app with known barriers first, use the
 [usabl-app](https://github.com/usabl-dev/usabl-app) sample.
@@ -113,7 +124,8 @@ What has been proven, and on what:
 
 Known limits:
 
-- Route discovery and the development overlay are built for React and Vite today.
+- Route discovery is built for React apps. The development overlay supports Vite and
+  webpack-dev-server; rspack, Next.js, and other bundlers are not supported yet.
 - usabl has not been load tested against a large fleet of applications.
 - Screens behind a login need a stored session, set with `USABL_STORAGE_STATE`. usabl
   detects many sign-in pages and reports them as gaps, but not every kind.

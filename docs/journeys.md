@@ -50,7 +50,7 @@ hook can never freeze the assistant through an exit code.
 ## Journey 2: Manual coder, dev-server overlay
 
 **Persona:** Engineer coding by hand, no assistant.
-**usabl installed:** Yes. `usabl install --overlay` wired the advisory Vite plugin.
+**usabl installed:** Yes. `usabl install --overlay` wired the advisory Vite or webpack plugin.
 
 | Stage | What happens | Emotion | Friction risk |
 |---|---|---|---|
