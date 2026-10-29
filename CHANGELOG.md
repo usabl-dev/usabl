@@ -17,6 +17,13 @@
   caller passes to `checkPage` comes from the caller's own browser, which usabl does not
   change.
 
+- The focus and style reads now run in an isolated world, the way element paths and the
+  announcement capture already did. These are `focusBody`, `activeElementIs`,
+  `activeElementWithin`, the focused element `activeNode` reads, and `getComputedStyle`.
+  Before, they ran in the page's own world, so a page that redefined `querySelector`, the
+  `activeElement` getter, `contains`, `focus`, or `getComputedStyle` could make a keyboard
+  or focus check report what the page wanted and pass a check it fails.
+
 - A control repeated in every table row, such as an unnamed icon button or a kebab
   toggle, now has one identity per row. Before, every row shared one identity whose count
   followed how many rows the page showed, so a floor of two, with one row fixed and a new
