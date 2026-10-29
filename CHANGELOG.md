@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- A file usabl cannot place on any screen, such as a shared layout every route imports
+  through an alias usabl does not resolve, is now named with its path, why it could not be
+  placed, and the fix: add it to a surface's `files` in `usabl.config.json`, or add the
+  route that renders it to `usabl.routes.json`. Before, `usabl baseline` printed only a
+  count of unresolved files, and `usabl check` named one file and counted the rest. Both
+  now list every such file, sorted. Docs sources that no page lists get the docs form of
+  the fix.
+
 - The announcement capture no longer records a change inside content hidden from
   assistive technology. Before, a polite status inside `aria-hidden="true"` was recorded as
   announced, though Orca says nothing for it, so a flow requirement that expected its text
