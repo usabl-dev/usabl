@@ -420,6 +420,11 @@ JSON parser's own message, which quotes the input back. The per-number checks an
 above stay in place behind it, so a projector called from inside the process with a Result
 that skipped this check is still bounded.
 
+A verdict must also carry the exit code the engine writes for it, for both the verdict and the
+accessibility verdict, and a Result with no verdict must exit 0 or 4. A document that shows a
+regression and exits 0 is refused with exit 4, so `usabl comment` and `usabl enforce` cannot
+report two different outcomes from one document.
+
 **Not handled:** the check is of shape, not of truth. A well-formed document can still say
 anything the contract allows: a verdict that its findings do not support, counts that do not
 add up, or a receipt for a run that never happened. The counts, the sections, and the verdict
@@ -508,15 +513,20 @@ outside every table as the control in an accepted row. Either way a new barrier 
   and a document where it is not running is an error, which becomes a coverage gap.
 - An element is named by its id only when the id's selector matches exactly that element. A NUL id
   and a literal U+FFFD id escape to one selector and now get two identities.
+- The focus and style reads run in an isolated world too: `focusBody`, `activeElementIs`,
+  `activeElementWithin`, the focused element that `activeNode` reads the accessibility tree for,
+  and `getComputedStyle`. A page that redefines `querySelector`, the `activeElement` or `body`
+  getters, `contains`, `focus`, or `getComputedStyle` in its own world does not change what they
+  report.
 
-**Not handled:** other reads still run in the page's own world, such as the focus checks
-(`activeElementIs`, `activeElementWithin`), the computed style read, and the zoom write. A page
-can change what those see by redefining DOM methods. axe also computes its target selectors in the
-page's own world, so a page that patches DOM accessors can still change the selector, and with it
-the identity key, of an axe finding.
+**Not handled:** two page operations still run in the page's own world: the zoom write
+(`setZoom`) and the element count that readiness polls to tell when the DOM stopped changing. A
+page can change what those see by redefining DOM methods. No provider calls `setZoom` today. axe
+also computes its target selectors in the page's own world, so a page that patches DOM accessors
+can still change the selector, and with it the identity key, of an axe finding.
 
-**Status:** [x] Paths, announcements, and table rows read in isolated worlds. [ ] The remaining main-world
-reads are open.
+**Status:** [x] Paths, announcements, table rows, and the focus and style reads run in isolated
+worlds. [ ] The zoom write, the readiness element count, and axe's target selectors are open.
 
 ---
 

@@ -17,6 +17,31 @@
   still cannot be found, stays a not-covered gap. The element path of every finding is
   unchanged.
 
+- Three input checks that were missing. `checkPage` now refuses a `screenId` the shared id
+  grammar refuses, such as one with a space or an invisible character, with
+  `InputRefusedError` before it reads the project or touches the page. The stop hook's local
+  receipt now counts only as a receipt when every count in it is a whole number, zero or
+  more; any other receipt is ignored and the hook checks again. `usabl comment` and
+  `usabl enforce` now refuse a Result whose verdict does not carry the exit code the engine
+  writes for it, or whose accessibility verdict does not, and exit 4 naming the field.
+  Before, a document could show a regression and exit 0. Each refusal names the field and
+  never repeats the value.
+
+- The announcement capture no longer records a change inside content hidden from
+  assistive technology. Before, a polite status inside `aria-hidden="true"` was recorded as
+  announced, though Orca says nothing for it, so a flow requirement that expected its text
+  passed. Now a change is not recorded when anything between it and the top of the page,
+  the live region included, has `inert`, `hidden`, or an `aria-hidden` value Chromium reads
+  as true (every non-empty value but `false` and `undefined`). The walk follows the flat
+  tree, so an `aria-hidden` wrapper around a slot counts. `aria-hidden="false"` is heard.
+
+- The focus and style reads now run in an isolated world, the way element paths and the
+  announcement capture already did. These are `focusBody`, `activeElementIs`,
+  `activeElementWithin`, the focused element `activeNode` reads, and `getComputedStyle`.
+  Before, they ran in the page's own world, so a page that redefined `querySelector`, the
+  `activeElement` getter, `contains`, `focus`, or `getComputedStyle` could make a keyboard
+  or focus check report what the page wanted and pass a check it fails.
+
 - A control repeated in every table row, such as an unnamed icon button or a kebab
   toggle, now has one identity per row. Before, every row shared one identity whose count
   followed how many rows the page showed, so a floor of two, with one row fixed and a new

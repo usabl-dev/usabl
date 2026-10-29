@@ -1915,9 +1915,13 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   contract gives it. A field the contract does not name is dropped. A document that does not
   match, or text that is not JSON, exits 4 with a plain reason on stderr that names the field by
   its path, for example `findings[0].severity`, and never repeats the value. `usabl comment`
-  prints no comment in that case. The check is of shape only. It does not test whether the values
-  agree with each other, so a well-formed document is still only as true as whoever wrote it, and
-  the receipt, not the document, is what proves a run happened.
+  prints no comment in that case. The check is of shape, plus one agreement: each verdict must
+  carry the exit code the engine writes for it (verified 0, regression 1, approval_required 2,
+  not_covered 3), and a Result with no verdict must exit 0 or 4. The same holds for
+  `accessibilityVerdict` and `accessibilityExitCode`. A document that shows one outcome and exits
+  with another exits 4 and names the exit code field. The check does not test whether the other
+  values agree with each other, so a well-formed document is still only as true as whoever wrote
+  it, and the receipt, not the document, is what proves a run happened.
 - Library: the stop hook, overlay, and an optional MCP wrapper import `run()` directly.
   No MCP surface is built today (section 11.5).
 
@@ -2138,18 +2142,29 @@ live value with the same resolver `pf-toast-live-region` uses, carried into the 
 resolver's own source, so the two cannot disagree: the nearest element that sets a value wins,
 an explicit `aria-live` beats the role, only the exact tokens `polite` and `assertive` are live,
 and roles match without regard to case. A change inside `aria-live="off"`, inside an off wrapper
-within a polite region, or inside a region whose token is `POLITE` or `banana` is not heard. The
-walk climbs through a slot the way the rule's walk does, but it runs in page script, so it sees
-only slots in open shadow roots. When the live region it reaches sits inside a shadow root and the
-changed element is slotted into it from outside, the change is not recorded. That region's own text
-leaves out the slotted text that changed and holds text the change did not make speakable, such as
-slot fallback text, so recording it could pass a flow requirement on words no screen reader spoke.
+within a polite region, or inside a region whose token is `POLITE` or `banana` is not heard. Nor is
+a change inside content hidden from assistive technology: anything on the walk with `inert`, with
+`hidden`, or with an `aria-hidden` value Chromium reads as true. That is every non-empty value
+except `false` and `undefined` in any case. It covers a region inside `aria-hidden="true"`, an
+`aria-hidden` wrapper between the region and the change, and a region that is itself hidden. Orca
+says nothing for a polite status inside `aria-hidden="true"`. `aria-hidden="false"` does not bring
+back content an ancestor hides. A `hidden` attribute that page CSS overrides still counts as
+hidden, which can only make the capture hear less. The walk climbs through a slot the way the
+rule's walk does, but it runs in page script, so it sees only slots in open shadow roots. When
+the live region it reaches sits inside a shadow root and the changed element is slotted into it
+from outside, the change is not recorded. That region's own text leaves out the slotted text that
+changed and holds text the change did not make speakable, such as slot fallback text, so recording
+it could pass a flow requirement on words no screen reader spoke.
 
 The capture and the element path function run in isolated worlds, which share the DOM with the
 page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
 page that defines `window.__usablDrain` or `window.__usablPathFor` before adoption, or replaces
 them after load, changes nothing usabl reads, and neither does a page that redefines
-`textContent`, `querySelectorAll`, or `CSS.escape` in its own world. A document where the capture
+`textContent`, `querySelectorAll`, or `CSS.escape` in its own world. The focus and style reads
+(`focusBody`, `activeElementIs`, `activeElementWithin`, the focused element behind `activeNode`,
+and `getComputedStyle`) run in an isolated world as well, so a page that redefines
+`querySelector`, the `activeElement` getter, `contains`, `focus`, or `getComputedStyle` cannot
+make a focus check report what it wants. A document where the capture
 is not running is an error, which the check runner turns into a coverage gap, never an empty list
 of announcements. An element is named by its id only when that id's selector matches exactly the
 element in hand, so two ids that escape to one selector, such as a NUL and a literal U+FFFD, give
@@ -2163,7 +2178,9 @@ ref `requirement:<id>`: the page is labeled with no known surface, or the requir
 surface that matches no configured or discovered surface. A call with no `screenId` is an
 unlabeled page. Its findings carry the label `page`, but it counts as no surface, even in a
 project that has a surface named `page`, so every runtime requirement is a gap and none is
-judged on it. So a page that regresses on a requirement in the CLI also regresses in
+judged on it. A `screenId` the shared id grammar refuses, such as one with a space or an
+invisible character, throws `InputRefusedError` before `checkPage` reads the project or touches
+the page. The error names the field and never repeats the id. So a page that regresses on a requirement in the CLI also regresses in
 `checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
 when it is not.
 
