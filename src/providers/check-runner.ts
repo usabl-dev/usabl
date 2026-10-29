@@ -23,6 +23,7 @@ import type {
   UsablConfig,
 } from '../contracts/index.js';
 import { attachDomSourceToDrafts } from './dom-source.js';
+import { attachRowScopeToDrafts } from './row-scope.js';
 import {
   heldThroughout,
   measureReadiness,
@@ -237,7 +238,14 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
             { page, screen, config: deps.config, profile: screen.profile ?? 'app' },
             deps.allowedCapabilities,
           );
-          const drafts = await attachDomSourceToDrafts(page, providerResult.drafts);
+          // The row a finding sits in is read on the same page the providers saw, before anything
+          // else changes it, so the gate can key a control repeated in every table row per row.
+          const rows = await attachRowScopeToDrafts(
+            page,
+            screen,
+            await attachDomSourceToDrafts(page, providerResult.drafts),
+          );
+          const drafts = rows.drafts;
 
           // Measure the readiness signal again after the walk and providers have run, while the
           // page is still open. This is the only place the live page exists; markUnseenScreens runs
@@ -277,7 +285,9 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
               url: screen.url,
               stops,
               drafts,
-              gaps: providerResult.gaps,
+              // A row the scan could not tell apart is a gap on this screen, so the screen is not
+              // cleanly scanned: no floored row is claimed fixed and prune keeps its entries.
+              gaps: [...providerResult.gaps, ...rows.gaps],
               applicability: providerResult.applicability,
               reachedSelectorPresent: readiness.selectorPresent,
               reachedWhenSelector: signal?.selector ?? null,

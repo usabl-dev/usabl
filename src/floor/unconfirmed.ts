@@ -13,7 +13,7 @@
  */
 import type { FloorEntry, RenderEvidence, ScreenScan } from '../contracts/index.js';
 import { deterministicCountsByIdentity, floorEntryAbsent, paydownConfirmed, renderEvidenceOf } from '../gate/index.js';
-import { identityKey } from '../primitives/identity.js';
+import { identityKey, type IdentityScheme } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { scrubString } from '../surfaces/scrub.js';
 
@@ -37,9 +37,10 @@ export interface FloorObservation {
  * no gap, and what each screen showed of itself. Deterministic drafts only, matching what baseline
  * writes and what the gate compares.
  */
-export function observeFloor(screens: readonly ScreenScan[]): FloorObservation {
-  // The gate's own tally, so an identity is absent here exactly when it is absent there.
-  const observedCounts = deterministicCountsByIdentity(screens.flatMap((screen) => screen.drafts));
+export function observeFloor(screens: readonly ScreenScan[], scheme: IdentityScheme = 'row-scoped'): FloorObservation {
+  // The gate's own tally, keyed with the floor's scheme as the gate keys it, so an identity is
+  // absent here exactly when it is absent there.
+  const observedCounts = deterministicCountsByIdentity(screens.flatMap((screen) => screen.drafts), scheme);
   return {
     cleanlyScanned: new Set(screens.filter((screen) => screen.gaps.length === 0).map((screen) => screen.screenId)),
     observedCounts,

@@ -77,6 +77,8 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     // A fake page has no DOM, so it cannot find the element. That is not a chain with no live region.
     ancestorAttributes: async () => ({ kind: 'not-found' }),
     queryAll: async () => [],
+    // No DOM, so no element sits in a keyed table row, and drafts key as they did before row keys.
+    rowContext: async () => ({ kind: 'none' }),
     close: async () => {},
     setViewport: async () => {},
     setZoom: async () => {},

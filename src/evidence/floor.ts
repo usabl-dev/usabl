@@ -57,8 +57,12 @@ export function parseFloorEntry(value: unknown, origin: FloorOrigin = FLOOR_FILE
   if (elementKey !== null && typeof elementKey !== 'string') {
     refuse(origin, fieldOf(at, 'elementKey'), 'must be a string or null');
   }
-  if (identityBasis !== 'name' && identityBasis !== 'structural' && identityBasis !== 'count') {
-    refuse(origin, fieldOf(at, 'identityBasis'), 'must be name, structural, or count');
+  if (identityBasis !== 'name' && identityBasis !== 'structural' && identityBasis !== 'count' && identityBasis !== 'row') {
+    refuse(origin, fieldOf(at, 'identityBasis'), 'must be name, structural, count, or row');
+  }
+  // A row entry is keyed by its row. One with no key would match nothing and could never gate.
+  if (identityBasis === 'row' && elementKey === null) {
+    refuse(origin, fieldOf(at, 'elementKey'), 'must be a string for a row entry');
   }
   // isSafeInteger, not isInteger: a value past 2^53 has already lost precision in the JSON parse
   // (9007199254740993 becomes ...992), so accepting it would compare the gate against a tally that
@@ -75,8 +79,8 @@ export function parseEvidenceFloor(value: unknown, origin: FloorOrigin = FLOOR_F
     refuse(origin, origin.path, 'must be an object');
   }
   const version = value['version'];
-  if (version !== 1 && version !== 2) {
-    refuse(origin, fieldOf(origin.path, 'version'), 'must be 1 or 2');
+  if (version !== 1 && version !== 2 && version !== 3) {
+    refuse(origin, fieldOf(origin.path, 'version'), 'must be 1, 2, or 3');
   }
   const entriesField = fieldOf(origin.path, 'entries');
   const entriesRaw = value['entries'];
@@ -88,6 +92,17 @@ export function parseEvidenceFloor(value: unknown, origin: FloorOrigin = FLOOR_F
     refuse(origin, fieldOf(origin.path, 'scope'), "must be 'partial' when present");
   }
   const entries = entriesRaw.map((entry, index) => parseFloorEntry(entry, origin, `${entriesField}[${index}]`));
+  // Row keys first exist in version 3. A row entry in an older floor was not written by any
+  // baseline, and the gate would compare it with the old keys, where it can never match.
+  const rowIndex = entries.findIndex((entry) => entry.identityBasis === 'row');
+  if (version < 3 && rowIndex !== -1) {
+    refuse(
+      origin,
+      `${entriesField}[${rowIndex}]`,
+      `is a row entry, and a version ${version} floor cannot hold one: row keys need version 3. ` +
+        'Run "usabl baseline" to write the floor again.',
+    );
+  }
   // The gate indexes the floor by screen|rule|elementKey (no layer). Two entries that share that
   // key would last-win, so a hand-edited or corrupt floor could drop debt, and which entry won
   // would decide the verdict. Fail closed so a quiet verdict cannot rest on an ambiguous floor.
@@ -124,7 +139,8 @@ export function parseEvidenceFloor(value: unknown, origin: FloorOrigin = FLOOR_F
     }
   }
   // The version is carried through, not normalized. Readers need it to know whether the
-  // per-entry counts are observed debt (version 2) or a placeholder 1 (version 1).
+  // per-entry counts are observed debt (version 2 and 3) or a placeholder 1 (version 1), and
+  // whether controls in table rows are keyed per row (version 3).
   // Scope is optional. Absent means a complete whole-application floor, so it is left off the
   // parsed object rather than defaulted, and no consumer changes behavior on it.
   return scope === undefined ? { version, entries } : { version, scope, entries };

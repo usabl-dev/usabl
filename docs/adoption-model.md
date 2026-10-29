@@ -68,10 +68,13 @@ each stage matters; this section is what a team actually types, in order.
 
 ### Phase 3: baseline the floor (the key human decision)
 
-8. (automatic, `usabl baseline`) Runs a full scan and drafts the accepted floor into
-   `.usabl-evidence.json` as a reviewable working-tree diff. It refuses when other
-   guarded paths are dirty, when the scan crashed, or when nothing matched the
-   interface globs.
+8. (automatic, `usabl baseline`) Runs two full scans, one after the other, and drafts the
+   accepted floor into `.usabl-evidence.json` as a reviewable working-tree diff. The floor
+   holds only the barriers both scans found. Barriers only one scan found are listed as
+   intermittent, by screen and rule, and are not recorded; see
+   [Screens that show live data](#screens-that-show-live-data). It refuses when other
+   guarded paths are dirty, when either scan crashed or had coverage gaps, or when nothing
+   matched the interface globs.
 9. (human) Review and merge the floor as an `approval_required` accept. After it lands,
    carried debt does not gate. New, unwaived barriers above the floor still do, and so do
     unconfirmed coverage and later edits to the guarded policy files. A barrier that lands
@@ -82,6 +85,53 @@ each stage matters; this section is what a team actually types, in order.
     `scope`, `reason`, `owner`, `approvedBy`, `created`, and `expires` (both timestamps
     ISO-8601 UTC). An expired waiver is inert: the finding is then carried if the evidence
     floor holds its identity, and blocks only if it is new against the floor.
+
+### Screens that show live data
+
+Many screens show data that changes on its own: a jobs list, a user list, a dashboard. The same
+code then renders a different number of rows from one run to the next. Here is how usabl treats
+that, and what to do.
+
+- **Controls in table rows key per row.** An icon button or a kebab toggle in every row is one
+  identity per row, named by the row's key attribute (`data-row-key`, `data-key`, `data-id`, or a
+  unique `id`) or by its row header (`<th>` in a body row, or `role="rowheader"`). The key is
+  hashed, so no row text reaches the floor. Give every body row of a table the same kind of key,
+  with a value no other row of that table holds, and give each table an `id`, a caption, or an
+  accessible name that no other table on the screen shares. A table whose rows have no key at all
+  falls back to one identity for the whole column, whose count follows how many rows the page shows.
+- **Declare `reachedWhen` on screens with keyed tables.** A fixed barrier in a table row is paid
+  down only when the screen's readiness signal held, because a row identity names no element the
+  walk can meet.
+- **Keep table names stable.** A table name that holds live data, such as a row count or a time,
+  changes between scans, so the rows under it key differently each time and `usabl baseline` lists
+  their barriers as intermittent. Give such a table a stable `id` or `data-table-key`.
+- **Key the rows around a nested table.** A table inside a row of another table is keyed only when
+  that outer row has a key of its own. Inside an outer table whose rows have no key, or inside an
+  outer row that shares its key, the nested rows are a coverage gap.
+- **Rows usabl cannot tell apart are a gap.** If a keyed table has a row without a key, two rows
+  with the same key, or two tables on a screen look the same, the run reports a coverage gap that
+  names the screen and the rule, and the run is `not_covered`. Fix the keys and run again. The
+  same gap appears when an element the scanner found has left the page before usabl reads its row,
+  for example a toast that closed. Let the screen settle before usabl checks it.
+- **Fewer rows is never a block.** A recorded row the page does not show today is reported as
+  fixed and as a floor entry ahead of the run. The verdict does not move, and the row is carried
+  again when it comes back. Do not run `usabl floor prune` only because a list came back shorter:
+  prune removes the row, and it then blocks as new when it returns. Prune after a real fix.
+- **A row the baseline did not see in both scans blocks when it appears.** It is a barrier nobody
+  accepted. `usabl baseline` lists such barriers as intermittent, by screen and rule. To handle
+  them, in order of preference:
+  1. Fix the barrier. A control repeated in every row is usually one fix in one component.
+  2. Check the screen against fixed data: point the surface at a seeded environment or a
+     fixture backend, so it shows the same rows on every run.
+  3. If neither is possible yet, add a waiver for the rule on that screen with an expiry, in a
+     reviewed commit, and say why in its `reason`.
+  Then run `usabl baseline` again and review the diff.
+- **A floor from before row keys.** A floor at version 1 or 2 recorded those controls as one
+  identity across rows. usabl still compares it the old way, and on screens where it now finds
+  barriers in keyed rows it reports a coverage gap until you run `usabl baseline` and merge the
+  version 3 floor. `usabl baseline` itself does not refuse on that gap, or on the version 1 gap,
+  because it is the command that clears them. A waiver scoped to one element key of such a control names the old key; rewrite
+  it with the new key from `usabl check --json`.
 
 ### Phase 4: install the surfaces (human, one draft per run)
 

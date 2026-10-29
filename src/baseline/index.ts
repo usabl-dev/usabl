@@ -1,15 +1,22 @@
 /**
  * Evidence floor drafting for the explicit `usabl baseline` command.
- * This unit writes a deterministic floor draft from a gated Result and returns.
+ * This unit writes a deterministic floor draft from two gated Results and returns.
  * It must never mint a verdict, write waivers, or re-consume newly written floor bytes in the same process.
+ *
+ * It scans the application twice and records only the barriers both scans found. A barrier one
+ * scan saw and the other did not is not stable debt: a table showed a row that later went away, or
+ * a tooltip the scanner opened was still fading out. Recording it would leave headroom on every
+ * run without it, and headroom is where a new barrier can hide. It is listed instead, by screen
+ * and rule, never by element key, because a key can carry page text.
  */
-import type { Deps, EvidenceFloor, FloorEntry, Finding, Result, UsablConfig } from '../contracts/index.js';
+import type { CoverageGap, Deps, EvidenceFloor, FloorEntry, Finding, Result, UsablConfig } from '../contracts/index.js';
+import { buildFindings } from '../gate/index.js';
 import { coverageIncomplete, notEvaluatedCounts } from '../coverage/completeness.js';
 import { parseDocsManifest } from '../coverage/docs-manifest.js';
 import { neutralize } from '../primitives/neutralize.js';
-import { computeIdentity, identityKey } from '../primitives/identity.js';
+import { computeIdentity, FLOOR_VERSION, identityKey, identitySchemeFor } from '../primitives/identity.js';
 import { sortBy } from '../primitives/sortKey.js';
-import { run } from '../run.js';
+import { runWithFloorGaps } from '../run.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { groupByScreen, isUnconfirmedAbsence, keptUnconfirmedLines, observeFloor } from '../floor/unconfirmed.js';
 import { scrubString } from '../surfaces/scrub.js';
@@ -42,6 +49,7 @@ function countDeterministicDrafts(result: Result): Map<string, number> {
       if (draft.evidenceClass !== 'deterministic') {
         continue;
       }
+      // The floor is written with the current keys, whatever keys the committed floor used.
       const identity = computeIdentity(draft);
       const key = identityKey({
         screenId: draft.screenId,
@@ -70,16 +78,95 @@ function toFloorEntry(finding: Finding, deterministicDraftCounts: Map<string, nu
   };
 }
 
-export function buildEvidenceFloorDraft(result: Result): EvidenceFloor {
-  const deterministicDraftCounts = countDeterministicDrafts(result);
-  // Only deterministic findings belong in the floor draft.
-  // Fixed findings are synthesized disappearances from the previous floor, not observed debt.
-  const entries = result.findings
-    .filter((finding) => finding.evidenceClass === 'deterministic' && finding.status !== 'fixed')
-    .map((finding) => toFloorEntry(finding, deterministicDraftCounts));
+/**
+ * The deterministic findings of one run, keyed the way a new floor is written.
+ *
+ * The Result's own findings were keyed against the committed floor, and a floor from before row
+ * keys is compared with its old keys. A new floor must not inherit those, so the run's drafts are
+ * keyed again here through the gate's own differential against an empty current-version floor.
+ * That reuses the gate's dedup and its choice of which draft represents an identity, so the floor
+ * names the same layer the gate will show.
+ */
+function currentFindings(result: Result): Finding[] {
+  return buildFindings({
+    coverage: result.coverage,
+    guardDivergedPaths: [],
+    drafts: result.screens.flatMap((screen) => screen.drafts),
+    floor: { version: FLOOR_VERSION, entries: [] },
+    waivers: [],
+    now: '1970-01-01T00:00:00.000Z',
+    cleanlyScannedScreens: new Set(),
+  }).filter((finding) => finding.evidenceClass === 'deterministic');
+}
+
+/** One run's observed floor entries, by identity. */
+function observedEntries(result: Result): Map<string, FloorEntry> {
+  const counts = countDeterministicDrafts(result);
+  const entries = new Map<string, FloorEntry>();
+  for (const finding of currentFindings(result)) {
+    entries.set(identityKey(finding), toFloorEntry(finding, counts));
+  }
+  return entries;
+}
+
+/** Barriers one scan found and the other did not, counted by screen and rule. */
+interface IntermittentGroup {
+  screenId: string;
+  rule: string;
+  count: number;
+}
+
+interface StableFloor {
+  entries: FloorEntry[];
+  intermittent: IntermittentGroup[];
+}
+
+/**
+ * What both scans found, and what only one did.
+ *
+ * An identity both scans found is recorded at the smaller of its two counts, because that is how
+ * many barriers both scans saw there. The rest of its count, and every identity only one scan found,
+ * is intermittent. The entry is copied from the first scan; the second can only differ in which
+ * layer represents the identity, which is not part of the identity.
+ */
+function stableFloor(
+  first: Result,
+  second: Result,
+  keep: (screenId: string) => boolean,
+  carried: ReadonlySet<string> = new Set(),
+): StableFloor {
+  const a = observedEntries(first);
+  const b = observedEntries(second);
+  const entries: FloorEntry[] = [];
+  const intermittent = new Map<string, IntermittentGroup>();
+  const addIntermittent = (entry: FloorEntry, count: number): void => {
+    if (count <= 0) return;
+    const key = JSON.stringify([entry.screenId, entry.rule]);
+    const group = intermittent.get(key) ?? { screenId: entry.screenId, rule: entry.rule, count: 0 };
+    group.count += count;
+    intermittent.set(key, group);
+  };
+
+  for (const key of [...new Set([...a.keys(), ...b.keys()])].sort()) {
+    const inFirst = a.get(key);
+    const inSecond = b.get(key);
+    const entry = inFirst ?? inSecond!;
+    if (!keep(entry.screenId)) continue;
+    // An identity carried from the floor being replaced keeps its recorded entry. It is neither
+    // recorded again nor listed as intermittent.
+    if (carried.has(key)) continue;
+    const firstCount = inFirst?.count ?? 0;
+    const secondCount = inSecond?.count ?? 0;
+    const both = Math.min(firstCount, secondCount);
+    if (inFirst !== undefined && inSecond !== undefined && both > 0) {
+      entries.push({ ...inFirst, count: both });
+    }
+    addIntermittent(entry, Math.max(firstCount, secondCount) - both);
+  }
+
   return {
-    version: 2,
     entries: sortBy(entries, findingKey),
+    intermittent: sortBy([...intermittent.values()], (group) => JSON.stringify([group.screenId, group.rule])),
   };
 }
 
@@ -130,10 +217,16 @@ function formatUnreadableFloorRefusal(reason: string): string {
  * content failed to mount shows every barrier in that content as absent. Dropping them would turn
  * a rendering failure into a silent pay-down in the committed floor.
  */
-function unconfirmedCarry(previous: PreviousFloor, result: Result): FloorEntry[] {
+function unconfirmedCarry(previous: PreviousFloor, scans: readonly Result[]): FloorEntry[] {
   if (previous.kind !== 'floor') return [];
-  const seen = observeFloor(result.screens);
-  return previous.floor.entries.filter((entry) => isUnconfirmedAbsence(entry, seen));
+  // Absence is read with the keys the floor was written with, as the gate and prune read it. A
+  // version 2 floor collapsed a control repeated in every table row onto one entry, and counting
+  // rows apart would read that entry as absent while its barriers are still on the page.
+  const scheme = identitySchemeFor(previous.floor);
+  const seen = scans.map((scan) => observeFloor(scan.screens, scheme));
+  // Either scan is enough: a scan that could not show the part of the page rendered did not see
+  // the barrier go away, whatever the other scan saw.
+  return previous.floor.entries.filter((entry) => seen.some((observation) => isUnconfirmedAbsence(entry, observation)));
 }
 
 /**
@@ -163,12 +256,6 @@ function formatPlaceholderRefusal(entries: FloorEntry[]): string {
   ].join('\n');
 }
 
-/** Adds the carried entries to a floor draft, keeping its sort order. */
-function withCarried(floor: EvidenceFloor, carried: FloorEntry[]): EvidenceFloor {
-  if (carried.length === 0) return floor;
-  return { ...floor, entries: sortBy([...floor.entries, ...carried], findingKey) };
-}
-
 // The screen ids that were scanned and reported no gap of their own. This is the same notion the
 // gate and floor prune use for cleanlyScannedScreens: scanned and no gap.
 function cleanlyScannedScreenIds(result: Result): Set<string> {
@@ -177,19 +264,29 @@ function cleanlyScannedScreenIds(result: Result): Set<string> {
   );
 }
 
-// A floor draft built from only the cleanly scanned screens, marked partial so a reader of the
-// committed file can tell it apart from a whole-application floor. Entries for screens that had a
-// gap are dropped, so nothing an unrendered or half-measured screen produced enters the floor.
-function buildPartialEvidenceFloorDraft(result: Result, cleanScreenIds: Set<string>): EvidenceFloor {
-  const full = buildEvidenceFloorDraft(result);
-  return {
-    version: full.version,
-    scope: 'partial',
-    // Keying on entry.screenId is sound only because every provider stamps a draft's screenId from
-    // the scan context, never from page-derived data. If a provider ever set screenId from the page,
-    // a gapped screen's finding could carry a cleanly scanned screen's id and slip into this floor.
-    entries: full.entries.filter((entry) => cleanScreenIds.has(entry.screenId)),
-  };
+function intermittentTotal(groups: IntermittentGroup[]): number {
+  return groups.reduce((sum, group) => sum + group.count, 0);
+}
+
+/**
+ * The stability lines of a baseline report. Screen ids come from the operator's config and rules
+ * from usabl, but both are neutralized anyway, as every line here is. No element key is printed:
+ * a key can carry page text, and a screen and rule are enough to find the barrier with usabl check.
+ */
+function formatStability(groups: IntermittentGroup[]): string[] {
+  if (groups.length === 0) {
+    return ['scanned twice: both scans found the same barriers.'];
+  }
+  const total = intermittentTotal(groups);
+  return [
+    `scanned twice: ${total} barrier${total === 1 ? '' : 's'} came and went between the two scans (intermittent) and ${total === 1 ? 'was' : 'were'} not recorded:`,
+    ...groups.map((group) => `  - screen ${neutralize(group.screenId)}, rule ${neutralize(group.rule)}: ${group.count}`),
+    'an intermittent barrier is not on the floor, so it blocks as new on any later run where it appears.',
+    'to handle one: fix it (a control repeated in every table row is usually one fix);',
+    'or check the screen against fixed data, so it shows the same rows on every run;',
+    'or, when the page changes on its own, waive the rule on that screen with an expiry in a reviewed commit.',
+    'then run baseline again.',
+  ];
 }
 
 function formatDirtyGuardedPaths(paths: string[]): string {
@@ -204,13 +301,14 @@ function entriesWord(count: number): string {
   return `${count} floor entr${count === 1 ? 'y' : 'ies'}`;
 }
 
-function formatSuccessReport(entryCount: number, carried: FloorEntry[]): string {
+function formatSuccessReport(entryCount: number, intermittent: IntermittentGroup[], carried: FloorEntry[]): string {
   return [
     `wrote ${entriesWord(entryCount)} to ${EVIDENCE_FLOOR_PATH}.`,
     'draft only: review and merge this working-tree diff.',
     // "extra findings" would promise more than the floor can deliver. What gates is a finding at
     // an identity the floor does not hold, or a count above what it recorded there.
     'after merge, matching findings carry; a new identity, or more barriers at a recorded one, gates.',
+    ...formatStability(intermittent),
     ...keptUnconfirmedLines(groupByScreen(carried)),
   ].join('\n');
 }
@@ -244,6 +342,7 @@ function formatPartialReport(
   entryCount: number,
   coveredScreens: string[],
   skippedScreens: string[],
+  intermittent: IntermittentGroup[],
   carried: FloorEntry[],
 ): string {
   const lines = [
@@ -258,8 +357,50 @@ function formatPartialReport(
       `skipped ${skippedScreens.length} screen${skippedScreens.length === 1 ? '' : 's'} with coverage gaps: ${skippedScreens.join(', ')}.`,
     );
   }
+  lines.push(...formatStability(intermittent));
   lines.push(...keptUnconfirmedLines(groupByScreen(carried)));
   return lines.join('\n');
+}
+
+/**
+ * The run's coverage without the gaps that come from comparing it with the committed floor.
+ *
+ * The gate raises a gap when the committed floor is too old to compare: a version 1 floor with
+ * placeholder counts, or a version 1 or 2 floor that predates row keys. Those gaps say "regenerate
+ * the floor", and this command is the one that does it, so they must not stop it. The gate hands
+ * them over as a list of its own, and exactly those objects are dropped. A gap is never dropped for
+ * its ref or its reason: a check runner can return a gap whose ref is the floor file name. Every
+ * other gap is a measurement gap, and a baseline still refuses on it, because a floor accepts debt
+ * only from a run that saw the whole application.
+ */
+function measuredCoverage(coverage: Result['coverage'], floorGaps: readonly CoverageGap[]): Result['coverage'] {
+  const gateRaised = new Set(floorGaps);
+  return { ...coverage, gaps: coverage.gaps.filter((gap) => !gateRaised.has(gap)) };
+}
+
+/**
+ * Why a run cannot be part of a baseline, or null when it can. A run with no verdict is not
+ * evidence of clean debt, and exit 4 covers both a crash and a run that never saw the
+ * application, so the run's own summary says which.
+ */
+function refusedRun(result: Result): BaselineOutcome | null {
+  if (result.exitCode === 4) {
+    return {
+      exitCode: 4,
+      wrote: false,
+      message: `refused: ${result.summary}. No baseline floor was written.`,
+      entryCount: 0,
+    };
+  }
+  if (result.coverage.nothingToCheck) {
+    return {
+      exitCode: 2,
+      wrote: false,
+      message: 'refused: no UI files matched uiFileGlobs for baseline.',
+      entryCount: 0,
+    };
+  }
+  return null;
 }
 
 /**
@@ -274,6 +415,12 @@ export async function everyScannableFile(deps: Deps, config: UsablConfig): Promi
   const docsSourceFiles =
     docsManifest === null ? [] : docsManifest.pages.flatMap((page) => page.sources);
   return [...new Set([...appFiles, ...docsSourceFiles])].sort();
+}
+
+/** Adds the carried entries to a floor, keeping its sort order. */
+function floorOf(stable: StableFloor, carried: FloorEntry[], scope: 'partial' | null): EvidenceFloor {
+  const entries = sortBy([...stable.entries, ...carried], findingKey);
+  return scope === null ? { version: FLOOR_VERSION, entries } : { version: FLOOR_VERSION, scope, entries };
 }
 
 export async function runBaseline(
@@ -295,46 +442,38 @@ export async function runBaseline(
     };
   }
 
-  // The floor must absorb docs debt too, not only app debt. uiFileGlobs never matches docs source
-  // files, so enumerate every docs page source from the manifest and add them to the change set.
-  // That makes run() scan every docs page (each source maps to its page) so its barriers are floored
-  // in the same commit. Absent manifest leaves the app-only behavior byte-identical. Reaching this
-  // point means no guarded file other than the floor is dirty, so the working-tree manifest matches
-  // the trusted one; enumerating its sources cannot smuggle in attacker-chosen scan targets.
   // Read before the scan, so a floor that cannot be read is refused without running the browser.
   const previous = await readPreviousFloor(deps);
   if (previous.kind === 'unreadable') {
     return { exitCode: 4, wrote: false, message: formatUnreadableFloorRefusal(previous.reason), entryCount: 0 };
   }
 
+  // The floor must absorb docs debt too, not only app debt, so every docs page source is scanned
+  // as well as every app file. Reaching this point means no guarded file other than the floor is
+  // dirty, so the working-tree manifest matches the trusted one; enumerating its sources cannot
+  // smuggle in attacker-chosen scan targets.
   const changedFiles = await everyScannableFile(deps, config);
-  const result = await run(deps, config, {
+  const runOptions = {
     ...(opts.trustedRef === undefined ? {} : { trustedRef: opts.trustedRef }),
     changedFiles,
-  });
-  // A run that produced no verdict is not evidence of clean debt. Refuse instead of snapshotting
-  // it as an empty floor. Exit 4 covers a crash and a run that never saw the application, and the
-  // run's own summary says which, so the operator is not sent to look for the wrong failure.
-  if (result.exitCode === 4) {
-    return {
-      exitCode: 4,
-      wrote: false,
-      message: `refused: ${result.summary}. No baseline floor was written.`,
-      entryCount: 0,
-    };
+  };
+  // Two full scans, one after the other, on the same tree. Only what both found is recorded.
+  const firstRun = await runWithFloorGaps(deps, config, runOptions);
+  const first = firstRun.result;
+  const firstRefusal = refusedRun(first);
+  if (firstRefusal !== null) {
+    return firstRefusal;
   }
-  if (result.coverage.nothingToCheck) {
-    return {
-      exitCode: 2,
-      wrote: false,
-      message: 'refused: no UI files matched uiFileGlobs for baseline.',
-      entryCount: 0,
-    };
+  const secondRun = await runWithFloorGaps(deps, config, runOptions);
+  const second = secondRun.result;
+  const secondRefusal = refusedRun(second);
+  if (secondRefusal !== null) {
+    return secondRefusal;
   }
 
-  const incomplete = coverageIncomplete(result.coverage);
   // Only cleanly scanned screens can hold one, so a partial floor keeps every carried entry too.
-  const carried = unconfirmedCarry(previous, result);
+  const carried = unconfirmedCarry(previous, [first, second]);
+  const carriedKeys = new Set(carried.map((entry) => identityKey(entry)));
   // Checked before the coverage refusal, in both modes, because a version 1 floor always leaves a
   // coverage gap of its own, and this is the more specific reason and the one with a way forward.
   const placeholders = placeholderCarry(previous, carried);
@@ -342,11 +481,17 @@ export async function runBaseline(
     return { exitCode: 3, wrote: false, message: formatPlaceholderRefusal(placeholders), entryCount: 0 };
   }
 
+  // Coverage must be complete in both scans. A screen one scan could not reach is not one the
+  // floor can speak for, whichever scan missed it.
+  const incompleteRun = [firstRun, secondRun]
+    .map(({ result, floorGaps }) => ({ ...result, coverage: measuredCoverage(result.coverage, floorGaps) }))
+    .find((result) => coverageIncomplete(result.coverage));
+
   // Default baseline refuses when coverage is incomplete. A floor is an acceptance of existing
   // debt, so it must not be minted from a run that admits it did not see the whole application.
   // Exit 3 is not_covered, the same channel the check path uses for incomplete coverage.
-  if (incomplete && opts.partial !== true) {
-    const counts = notEvaluatedCounts(result.coverage);
+  if (incompleteRun !== undefined && opts.partial !== true) {
+    const counts = notEvaluatedCounts(incompleteRun.coverage);
     return {
       exitCode: 3,
       wrote: false,
@@ -355,10 +500,12 @@ export async function runBaseline(
     };
   }
 
-  // A partial baseline over a run that was already complete is just a complete baseline. The flag
+  // A partial baseline over runs that were already complete is just a complete baseline. The flag
   // is a no-op, so fall through to the complete write below and omit the scope field.
-  if (opts.partial === true && incomplete) {
-    const cleanScreenIds = cleanlyScannedScreenIds(result);
+  if (opts.partial === true && incompleteRun !== undefined) {
+    // Clean in both scans. A screen with a gap in either one is skipped.
+    const cleanInSecond = cleanlyScannedScreenIds(second);
+    const cleanScreenIds = new Set([...cleanlyScannedScreenIds(first)].filter((id) => cleanInSecond.has(id)));
     // Nothing was cleanly scanned means there is no clean screen to floor. Refuse rather than
     // write an empty floor, which would read as a real acceptance of an empty debt set.
     if (cleanScreenIds.size === 0) {
@@ -369,27 +516,31 @@ export async function runBaseline(
         entryCount: 0,
       };
     }
-    const partialFloor = withCarried(buildPartialEvidenceFloorDraft(result, cleanScreenIds), carried);
+    // Keying on entry.screenId is sound only because every provider stamps a draft's screenId from
+    // the scan context, never from page-derived data. If a provider ever set screenId from the page,
+    // a gapped screen's finding could carry a cleanly scanned screen's id and slip into this floor.
+    const stable = stableFloor(first, second, (screenId) => cleanScreenIds.has(screenId), carriedKeys);
+    const partialFloor = floorOf(stable, carried, 'partial');
     await floorFs.writeFile(EVIDENCE_FLOOR_PATH, `${JSON.stringify(partialFloor, null, 2)}\n`);
     const coveredScreens = [...cleanScreenIds].sort();
-    const skippedScreens = result.screens
-      .filter((screen) => screen.gaps.length > 0)
-      .map((screen) => screen.screenId)
+    const skippedScreens = [...new Set([...first.screens, ...second.screens].map((screen) => screen.screenId))]
+      .filter((id) => !cleanScreenIds.has(id))
       .sort();
     return {
       exitCode: 0,
       wrote: true,
       entryCount: partialFloor.entries.length,
-      message: formatPartialReport(partialFloor.entries.length, coveredScreens, skippedScreens, carried),
+      message: formatPartialReport(partialFloor.entries.length, coveredScreens, skippedScreens, stable.intermittent, carried),
     };
   }
 
-  const floor = withCarried(buildEvidenceFloorDraft(result), carried);
+  const stable = stableFloor(first, second, () => true, carriedKeys);
+  const floor = floorOf(stable, carried, null);
   await floorFs.writeFile(EVIDENCE_FLOOR_PATH, `${JSON.stringify(floor, null, 2)}\n`);
   return {
     exitCode: 0,
     wrote: true,
     entryCount: floor.entries.length,
-    message: formatSuccessReport(floor.entries.length, carried),
+    message: formatSuccessReport(floor.entries.length, stable.intermittent, carried),
   };
 }

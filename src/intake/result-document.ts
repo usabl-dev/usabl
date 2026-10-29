@@ -253,14 +253,21 @@ function appSource(value: unknown, field: string): AppSourceMapping {
   };
 }
 
+const IDENTITY_BASES = ['name', 'structural', 'count', 'row'] as const;
+
 function finding(value: unknown, field: string): Finding {
   const source = record(value, field);
   const out: Finding = {
     ...draft(source, field),
     elementKey: textOrNull(source['elementKey'], at(field, 'elementKey')),
-    identityBasis: oneOf(source['identityBasis'], at(field, 'identityBasis'), ['name', 'structural', 'count'] as const),
+    identityBasis: oneOf(source['identityBasis'], at(field, 'identityBasis'), IDENTITY_BASES),
     status: oneOf(source['status'], at(field, 'status'), ['new', 'carried', 'fixed', 'waived'] as const),
   };
+  // A finding keyed by its table row always has a key: the row is the key. A row finding with none
+  // is not one the engine writes, the same rule the floor applies to a row entry.
+  if (out.identityBasis === 'row' && out.elementKey === null) {
+    refuse(at(field, 'elementKey'), 'must be a string for a row finding');
+  }
   if (has(source, 'docsSource')) out.docsSource = docsSource(source['docsSource'], at(field, 'docsSource'));
   if (has(source, 'appSource')) out.appSource = appSource(source['appSource'], at(field, 'appSource'));
   return out;

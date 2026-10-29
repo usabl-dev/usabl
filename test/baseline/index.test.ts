@@ -143,7 +143,7 @@ describe('runBaseline', () => {
     const floor = parseWrittenFloor(writer);
 
     expect(result.exitCode).toBe(0);
-    expect(floor.version).toBe(2);
+    expect(floor.version).toBe(3);
     expect(floor.entries).toEqual([
       {
         screenId: 'clusters',

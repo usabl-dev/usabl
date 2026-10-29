@@ -486,7 +486,10 @@ were reachable from page script: `window.__usablPathFor`, which names each eleme
 `window.__usablDrain`, which hands back the live-region text usabl heard. A page that returned one
 path for every element collapsed every identity, so a set difference such as "alerts minus alerts
 inside a live region" came out empty and a barrier read as fixed. A page that returned its own
-announcements passed a flow requirement on text no screen reader spoke.
+announcements passed a flow requirement on text no screen reader spoke. The table row read was
+reachable too: a page that patched `Element.prototype.getAttribute` could make one row's key read
+as another's, and one that patched `closest` and the `parentElement` getter could report a control
+outside every table as the control in an accepted row. Either way a new barrier read as carried.
 
 **Controls:**
 
@@ -494,7 +497,11 @@ announcements passed a flow requirement on text no screen reader spoke.
   ancestor walk already did. Page script shares the DOM with them but not their globals or
   prototypes, so it cannot define, replace, or read them, and redefining `textContent`,
   `querySelectorAll`, or `CSS.escape` in its own world does not change what they read.
-- The path function is sent with every query, so there is no installed helper to trust. The
+- The table row read runs in an isolated world of its own over CDP, for a page usabl opens and for
+  a page `checkPage` adopts, so page script cannot change the `getAttribute`, `closest`,
+  `parentElement`, or `querySelectorAll` calls a row key and a table identity are read through.
+- The path function and the row read are sent with every query, so there is no installed helper
+  to trust. The
   capture is started at document start on a page usabl opens and at adoption on a caller's page,
   and a document where it is not running is an error, which becomes a coverage gap.
 - An element is named by its id only when the id's selector matches exactly that element. A NUL id
@@ -502,9 +509,11 @@ announcements passed a flow requirement on text no screen reader spoke.
 
 **Not handled:** other reads still run in the page's own world, such as the focus checks
 (`activeElementIs`, `activeElementWithin`), the computed style read, and the zoom write. A page
-can change what those see by redefining DOM methods.
+can change what those see by redefining DOM methods. axe also computes its target selectors in the
+page's own world, so a page that patches DOM accessors can still change the selector, and with it
+the identity key, of an axe finding.
 
-**Status:** [x] Paths and announcements read in isolated worlds. [ ] The remaining main-world
+**Status:** [x] Paths, announcements, and table rows read in isolated worlds. [ ] The remaining main-world
 reads are open.
 
 ---

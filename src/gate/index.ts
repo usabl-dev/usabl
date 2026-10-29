@@ -14,7 +14,7 @@
 import type { AccessibilityExitCode, AccessibilityVerdict, Coverage, CoverageGap, Draft, EvidenceFacts, EvidenceFloor, Finding, FloorEntry, FloorHeadroom, FloorUnconfirmed, GateInput, GateOutput, RenderEvidence, ScreenScan, Waiver } from '../contracts/index.js';
 import { coverageIncomplete, decideAccessibilityVerdict, notEvaluatedCounts } from '../coverage/completeness.js';
 import { sortBy } from '../primitives/sortKey.js';
-import { computeIdentity, elementSlots, identityKey, identitySlot } from '../primitives/identity.js';
+import { computeIdentity, elementSlots, identityKey, identitySchemeFor, identitySlot, readRowScope, type IdentityScheme } from '../primitives/identity.js';
 import { canonicalize } from '../primitives/canonical.js';
 import { checkGateInput } from './input.js';
 
@@ -75,7 +75,7 @@ function accessibilityOutcome(input: GateInput): {
   // the run is not covered. Headroom is different and is deliberately not a gap: see floorHeadroom.
   // So is a floored barrier that is absent on a screen this run cannot show rendered: see
   // unconfirmedByScreen.
-  const floorGaps = staleFloorGaps(input.floor);
+  const floorGaps = [...staleFloorGaps(input.floor), ...rowKeyFloorGaps(input.floor, input.drafts)];
   const floorUnconfirmed = unconfirmedByScreen(unconfirmed);
 
   // The gate weighs and reports its own gaps. Handing the caller a gap it did not count would let
@@ -140,6 +140,43 @@ function staleFloorGaps(floor: EvidenceFloor): CoverageGap[] {
       'instead of the barriers observed. Several barriers can share one of those identities, so this ' +
       'run cannot compare their counts and cannot prove no new barrier is hiding behind an accepted one. ' +
       'Run "usabl baseline" to regenerate the floor with real counts, then review and merge the diff.',
+  }];
+}
+
+/**
+ * The disclosure owed when the floor predates row keys and this run found barriers in keyed rows on
+ * a screen the floor holds entries for.
+ *
+ * A version 1 or 2 floor recorded a control repeated in every table row as one identity collapsed
+ * across rows, with a count that follows how many rows the page showed. The gate compares such a
+ * floor with the keys it was written with, so nothing reads as new or fixed just because the keys
+ * changed. But a collapsed count is the hole row keys exist to close: one row fixed and a new
+ * barrier in another row leave the count where it was, and the new one reads as carried. So the
+ * run cannot prove there is no new barrier in a row, and it says so as a gap until `usabl baseline`
+ * rewrites the floor at version 3.
+ *
+ * Only screens the floor holds entries for count. A screen the floor knows nothing about has no
+ * collapsed entry for a new barrier to hide behind: every barrier there is new under either key.
+ */
+function rowKeyFloorGaps(floor: EvidenceFloor, drafts: Draft[]): CoverageGap[] {
+  if (identitySchemeFor(floor) !== 'legacy') return [];
+  const flooredScreens = new Set(floor.entries.map((entry) => entry.screenId));
+  const screens = new Set<string>();
+  for (const draft of drafts) {
+    if (GATES(draft.evidenceClass) && flooredScreens.has(draft.screenId) && readRowScope(draft) !== null) {
+      screens.add(draft.screenId);
+    }
+  }
+  if (screens.size === 0) return [];
+  return [{
+    ref: EVIDENCE_FLOOR_PATH,
+    state: 'not-covered',
+    reason:
+      `${EVIDENCE_FLOOR_PATH} predates row keys (version ${floor.version}). On ${screens.size} screen` +
+      (screens.size === 1 ? '' : 's') + ', this run found barriers in table rows that the floor recorded as one ' +
+      'identity across rows, so this run compares them the old way. A barrier fixed in one row and a new one in ' +
+      'another row leave that count unchanged, so this run cannot prove no new barrier is hiding behind an ' +
+      'accepted one. Run "usabl baseline" to regenerate the floor at version 3, then review and merge the diff.',
   }];
 }
 
@@ -411,8 +448,11 @@ export function buildFindings(input: GateInput): Finding[] {
 }
 
 function differential(input: GateInput): Differential {
+  // The floor is compared with the keys it was written with. See identitySchemeFor and
+  // rowKeyFloorGaps for what that means for a floor from before row keys.
+  const scheme = identitySchemeFor(input.floor);
   const raw = input.drafts.map((draft: Draft): Finding => {
-    const { elementKey, identityBasis } = computeIdentity(draft);
+    const { elementKey, identityBasis } = computeIdentity(draft, scheme);
     return { ...draft, elementKey, identityBasis, status: 'new' };
   });
 
@@ -425,7 +465,7 @@ function differential(input: GateInput): Differential {
   // mixed tally against a deterministic-only floor, so one preview draft sharing an identity with
   // a deterministic one read as growth and reported a barrier that was not there.
   const groups = new Map<string, Finding[]>();
-  const countByGroup = deterministicCountsByIdentity(input.drafts);
+  const countByGroup = deterministicCountsByIdentity(input.drafts, scheme);
   for (const f of raw) {
     const key = identityKey(f);
     const group = groups.get(key);
@@ -549,11 +589,15 @@ function differential(input: GateInput): Differential {
  * still there. An advisory draft at a floored identity does not count: it is not one of the
  * barriers the floor recorded.
  */
-export function deterministicCountsByIdentity(drafts: readonly Draft[]): Map<string, number> {
+export function deterministicCountsByIdentity(
+  drafts: readonly Draft[],
+  scheme: IdentityScheme = 'row-scoped',
+): Map<string, number> {
   const counts = new Map<string, number>();
   for (const draft of drafts) {
     if (!GATES(draft.evidenceClass)) continue;
-    const key = identityKey({ screenId: draft.screenId, rule: draft.rule, elementKey: computeIdentity(draft).elementKey });
+    // Keyed with the scheme of the floor the counts are compared with, as the findings are.
+    const key = identityKey({ screenId: draft.screenId, rule: draft.rule, elementKey: computeIdentity(draft, scheme).elementKey });
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return counts;

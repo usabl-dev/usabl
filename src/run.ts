@@ -78,6 +78,28 @@ async function readJson(read: (path: string) => Promise<string | null>, path: st
 }
 
 export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}): Promise<Result> {
+  return runCore(deps, config, opts, []);
+}
+
+/**
+ * run(), and the gaps the gate raised from comparing the run with the committed floor: the version
+ * 1 placeholder counts and the floor that predates row keys. They are in the Result's coverage gaps
+ * too, as the same objects, because a reader must see every gap the verdict was reached from. This
+ * list is how a caller tells them apart from measurement gaps without trusting a ref or a reason,
+ * which any check runner can set to anything. `usabl baseline` uses it, because it is the command
+ * that replaces an old floor and must not refuse on the gaps that say to run it.
+ */
+export async function runWithFloorGaps(
+  deps: Deps,
+  config: UsablConfig,
+  opts: RunOptions = {},
+): Promise<{ result: Result; floorGaps: CoverageGap[] }> {
+  const floorGaps: CoverageGap[] = [];
+  const result = await runCore(deps, config, opts, floorGaps);
+  return { result, floorGaps };
+}
+
+async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorGapSink: CoverageGap[]): Promise<Result> {
   try {
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
     const guardDivergedPaths = await checkGuard(deps, config, opts.trustedRef ?? 'HEAD');
@@ -222,6 +244,7 @@ export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}
     // observed. It has already weighed both into its verdict and named them in its summary, so
     // appending them here is disclosure catching up with a decision, never a second decision. The
     // Result must carry them or a reader sees a not_covered run whose coverage names no cause.
+    floorGapSink.push(...gated.floorGaps);
     const coverageWithFloorGaps: Coverage =
       gated.floorGaps.length === 0
         ? coverage

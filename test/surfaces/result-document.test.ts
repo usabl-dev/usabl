@@ -351,3 +351,61 @@ describe('usabl comment and usabl enforce refuse a malformed Result', () => {
     expect(out.stderr).not.toContain('leak-me');
   });
 });
+
+// A control in a keyed table row has identity basis row. Its element key names the row by hashes.
+const ROW_KEY = 'clusters|button-name|row:["0123456789abcdef","fedcba9876543210","button","td:nth-child(2)>button:nth-child(1)"]';
+
+function withRowFinding(over: Record<string, unknown> = {}): Record<string, unknown> {
+  const doc = validResult();
+  const findings = doc['findings'] as Record<string, unknown>[];
+  findings[0] = {
+    ...findings[0],
+    rule: 'button-name',
+    elementKey: ROW_KEY,
+    identityBasis: 'row',
+    evidence: { extra: { rowScope: { table: '0123456789abcdef', row: 'fedcba9876543210', role: 'button', path: 'td:nth-child(2)>button:nth-child(1)' } } },
+    ...over,
+  };
+  return doc;
+}
+
+describe('a Result with findings keyed by table row', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('is accepted, with its row basis and key kept', () => {
+    const parsed = parseResultJson(withRowFinding());
+    expect(parsed.findings[0]?.identityBasis).toBe('row');
+    expect(parsed.findings[0]?.elementKey).toBe(ROW_KEY);
+  });
+
+  it('is accepted by usabl comment and usabl enforce', async () => {
+    const restoreComment = withStdin(JSON.stringify(withRowFinding()));
+    const commentOut = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(await main(['comment', '--config', 'does-not-exist.json'])).toBe(1);
+      expect(commentOut.mock.calls.map((call) => String(call[0])).join('')).toContain('<!-- usabl-report -->');
+    } finally {
+      restoreComment();
+    }
+    const restoreEnforce = withStdin(JSON.stringify(withRowFinding()));
+    try {
+      expect(await main(['enforce', 'accessibility'])).toBe(1);
+    } finally {
+      restoreEnforce();
+    }
+  });
+
+  it('still refuses an identity basis outside the set, without repeating it', () => {
+    const err = refusal(withRowFinding({ identityBasis: 'Row' }));
+    expect(err.message).toContain('findings[0].identityBasis');
+    expect(err.message).not.toContain('Row');
+  });
+
+  it('refuses a row finding with no element key', () => {
+    const err = refusal(withRowFinding({ elementKey: null }));
+    expect(err.message).toContain('findings[0].elementKey');
+  });
+});

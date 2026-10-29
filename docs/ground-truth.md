@@ -1330,6 +1330,10 @@ Every Finding gets `{ screenId, layer, rule, elementKey, identityBasis }`.
 
 Priority:
 
+0. **row** - a control inside a keyed table row: the row's key, the control's role, and its
+   place in the row. It comes first because repeated controls are exactly the ones a name or a
+   count cannot tell apart: "Edit" in every row shares one name, and an unnamed icon button in
+   every row has none. Only a version 3 floor is compared this way; see below.
 1. **name** - a stable accessible name from evidence (survives markup churn).
 2. **structural** - role plus the element path with nth-child indexes stripped.
    Weaker than a name; stronger than a volatile CSS path.
@@ -1351,6 +1355,100 @@ the gate compares it for every basis: more than the floor accepted is `new`, equ
 is `carried`. Fewer is never a regression. It is also not proof of progress: the same reading
 comes from a page rendering fewer rows, which is why the surfaces report both counts and let
 the operator say which happened.
+
+#### Row keys
+
+After the providers run, the check runner reads, on the same live page, the table row each
+finding's element sits in (`Page.rowContext`). The finding's selector must name exactly one element.
+A selector the page cannot parse, one that matches no element (the element left the page after the
+scanner saw it), and one that matches more than one element are unreadable, and are handled like a
+row that cannot be told apart, below. Only an element that was found, outside every body row of a
+keyed table, keeps its old key with no gap. A finding with no selector at all is about the page or
+the walk, not an element, and has no row. A table is a `table` or an element with role
+`table`, `grid`, or `treegrid`. Its rows are the `tr` and `role="row"` elements whose nearest table
+is that table, so a row of a nested table is never one of the outer table's rows. Header and footer
+rows (inside `thead` or `tfoot`, or holding a column header) are not body rows.
+
+**How a table keys its rows.** The table's key source is the first of these that any of its body
+rows has:
+
+1. A key attribute: `data-row-key`, `data-key`, `data-id`, `data-ouia-component-id`, or `id`. An
+   id a framework mints per mount (React `useId`, `pf-random-id-`, `OUIA-Generated-`) does not
+   count.
+2. A row header: a `th` that is not a column header, or `role="rowheader"`. Its text is the key.
+
+A table none of whose body rows has any of these is not keyed, and its controls key as they did
+before. In a keyed table, every body row must have the table's key source with a value no other row
+of the table holds. Values are compared exactly, as they are hashed: the full string, with case and
+spaces. A row's position is never used: rows move when a list is sorted or grows.
+
+**How a table is named.** By its own key attribute (`id`, `data-ouia-component-id`,
+`data-table-key`), else its accessible name in the order a browser uses (`aria-labelledby`, then
+`aria-label`, then the caption), with white space collapsed, after the identity of the table and row
+it is nested in, if any. Its position is never used. An unnamed table is fine when it is the only
+table on the screen with its identity. Two tables whose names are the same once white space is
+collapsed cannot be told apart. A name that holds live data, such as a count or a time ("Jobs (12)"
+or "Updated 10:42"), changes between scans, so the table's rows key differently each time and their
+barriers come and go: a baseline lists them as intermittent and floors none of them. Give such a
+table a stable `id` or `data-table-key`.
+
+A nested table's identity is valid only when the row and the table it sits in are valid. So a table
+inside a row that cannot be told apart, inside a table that cannot be told apart, or inside a row
+of a table that keys none of its rows, is ambiguous, and so is every row under it. It is never keyed
+with an empty part in place of the identity it is missing.
+
+**Rows that cannot be told apart.** A row in a keyed table that has no key of the table's kind, a
+key another row of the table holds exactly, a key or a table identity over 65,536 characters, or a
+table whose identity another table on the screen shares, is ambiguous. So is a row under an
+ambiguous nested identity, a row whose hash another row of its table or another table on the screen
+shares (see What is kept), a row the page could not be read for, and an element whose selector is
+unreadable. Such a finding keeps its old key and is marked unverified, and the scan adds a
+not-covered gap for the screen that names the screen and the rule, never a key, and says why and
+what to change. Under the old key a new barrier in one row could fill a count accepted for another
+and read as carried, so the run cannot prove it is not hiding there. Calling the finding new would
+be a guess, so it is unverified: it blocks as not covered, never as carried. A finding outside any
+body row of a keyed table is not ambiguous: it keeps the old key with no gap, as before.
+
+**What is kept.** The row key and the table identity are page text, often customer data such as a
+host or user name, and a nested table's identity includes the key of the row around it. Each is
+hashed with SHA-256, exactly and in full, at once, and only the first 16 hex characters are kept,
+in `evidence.extra.rowScope`. Hashing the exact value is what keeps two rows the page reader told
+apart from sharing a hash; folding case or cutting a long key did not. Sixteen hex characters can
+still collide, so the page reader also returns the keys of the table's other rows and the identities
+of the screen's other tables, which are hashed and dropped at once. When a row's token matches
+another row's, or its table's token matches another table's, the row is ambiguous. To bound what one
+read carries, a table whose other keys and the screen's other table identities add up to more than
+4 MiB is treated as too long to read. So no row key or table name
+reaches a finding's identity or the committed floor. The rest of the row scope is the control's
+role folded to a token and the tag and child-position path from the row down to the control. The
+child positions are kept inside the row, so two unnamed buttons in one row stay apart, and they do
+not depend on the row's position in the table. A finding's `elementPath` is the scanner's selector,
+which tells a developer where the element is; it is not part of the identity and is printed only
+through the scrubber.
+
+The element key is `screenId|rule|row:` followed by the JSON encoding of those four values, so a
+separator inside one cannot make two rows share a key. A row scope on a draft that is not four
+strings is ignored, because a library caller can hand the gate any draft.
+
+The row read runs in an isolated world, so page script cannot change the DOM reads a row key or a
+table identity comes from (see Threat 10 in the threat model).
+
+Declare `reachedWhen` on a screen with keyed tables. A row identity names no element a keyboard stop
+or element path can meet, so a fixed row barrier is paid down only when the screen's readiness
+signal held.
+
+What row keys do not cover: a control outside any table row, a control in a table none of whose
+rows has a key, and a grid built without row roles. Those keep the name, structural, or count key
+and the residual described under Evidence floor.
+
+#### Which keys a comparison uses
+
+A floor is compared with the keys it was written with. `usabl baseline` writes version 3, with
+row keys. A version 1 or 2 floor recorded a repeated control as one identity across rows, so the
+gate compares it with the old keys: nothing reads as new or fixed only because the keys changed.
+An empty floor has nothing to compare, so it takes row keys. `usabl floor prune` counts with the
+same scheme as the floor it prunes. See the version rule under Evidence floor for the gap a
+version 2 floor gets.
 
 The built-in layer ids are stable (`axe`, `pf`, `walk`) so dedup and identity do not churn.
 The field stays `string` so a later provider can add a layer without a gate change.
@@ -1406,7 +1504,9 @@ identity `fixed` only when one of these holds:
 - the screen's readiness signal (`reachedWhen`) was declared and every declared part held, or
 - the identity's own element was met this run: a keyboard stop or a draft on that screen at the
   same element path, for a structural identity, or with the same accessible name, for a name
-  identity. A counted identity names no element, so only the signal can confirm it.
+  identity. A counted identity names no element, so only the signal can confirm it. Neither
+  does a row identity: its row and table are kept only as hashes, which no keyboard stop or
+  element path carries, so an absent row is confirmed only by the signal.
 
 Otherwise the identity is not claimed `fixed`. It gets no finding, which is what a floor entry on a
 screen the run did not scan already gets, so it is not paid down, it is not counted fixed in the
@@ -1427,11 +1527,14 @@ Both tests are presence tests on sets, decided inside `gate()`, so they do not d
 `gate()` that passes none gets the safe reading: no evidence, so no `fixed`. `usabl floor prune`
 and `usabl baseline` read the same rule, `paydownConfirmed`, through `src/floor/unconfirmed.ts`.
 Prune keeps such an entry by default and says so; `usabl floor prune --unconfirmed` removes it on
-purpose and says how many it removed and why. Baseline, with or without `--partial`, carries such an
-entry into the new floor at its recorded count and says so. Two cases refuse instead, and write
+purpose and says how many it removed and why. Both read absence with the keys the floor was written
+with, as the gate compares it, so a version 2 floor's collapsed row entries are not read as absent
+while their barriers are on the page. Baseline, with or without `--partial`, carries such an entry
+into the new floor at its recorded count and says so. It scans twice, and an entry either scan
+could not confirm is carried; a carried identity is not recorded again or listed as intermittent. Two cases refuse instead, and write
 nothing. If the floor being replaced is version 1 and a carried entry is a name or structural
 entry, its count is a placeholder the run cannot replace with a real one, and writing it into a
-version 2 floor would present it as measured, so baseline exits 3, names the screens and rules, and
+current-version floor would present it as measured, so baseline exits 3, names the screens and rules, and
 gives the two ways forward: a `reachedWhen` signal and a re-run, or `usabl floor prune
 --unconfirmed` and then baseline. If the floor being replaced exists and does not parse, baseline
 exits 4 before it scans, names the file and the reason without quoting it, and says to fix or
@@ -1493,11 +1596,47 @@ says so and names the command. Headroom is not only left behind by a pay-down: a
 fewer rows than the floor recorded opens the same window, and usabl reports it the same way
 because it cannot tell the two apart.
 
+Row keys (see Identity) are the strong element keys for the case that measured worst: a control
+repeated in every table row. Each row's control is its own identity with a count of one, so a row
+that is fixed or not shown today leaves headroom only at its own identity, and a barrier that
+arrives in another row has an identity the floor never accepted and blocks as new. The proven case,
+a floor of two, one fixed, a new one in another row, is a regression now. A row that the page does
+not show today is reported as `fixed` and as headroom, and does not move the verdict, so a list
+that comes back shorter does not flap, as long as nobody prunes it: `usabl floor prune` removes
+an absent row, and that row then blocks as new when it returns, so prune after a real fix and not
+after a short list. The residual stays open for every control that does not sit
+in a keyed row, and for a barrier swapped in at the same row, control, and rule in one change.
+
+`usabl baseline` scans the application twice, one scan after the other on the same tree, and
+records only what both scans found. An identity both found is recorded at the smaller of its two
+counts. Everything else is intermittent: a row the page showed in one scan only, or a tooltip the
+scanner opened that was still fading out. Recording it would leave headroom on every run without
+it, so it is left off the floor and listed in the baseline report by screen and rule, never by
+element key, because a key can carry page text. An intermittent barrier is not accepted debt, so it
+blocks as new on any later run where it appears. The report says so and names the ways out: fix
+it, check the screen against fixed data, or waive the rule on that screen with an expiry. Coverage
+must be complete in both scans; a partial baseline floors only the screens both scans saw cleanly.
+The gaps the gate raises because the committed floor is old, the version 1 placeholder counts and
+the version 1 or 2 floor that predates row keys, do not count against completeness here: they say
+to regenerate the floor, and this is the command that does it. The gate hands those gaps to
+baseline as a list of its own, and baseline drops exactly those. It never drops a gap for its ref or
+its reason, because a check runner can return a gap whose ref is the floor file name. Every other
+gap still counts.
+
 The file carries a `version`. Version 1 wrote a placeholder count of 1 for every name and
 structural entry, so those counts are not observations and the gate must not compare them.
 Version 2 writes the observed count for every entry. Reading a version 1 floor that holds
 name or structural entries produces a coverage gap, so the run reports `not_covered`
-instead of a green it cannot support. `usabl baseline` regenerates the floor at version 2.
+instead of a green it cannot support. Version 3 also keys controls in keyed table rows per row.
+A version 1 or 2 floor is compared with its own keys, and when this run found barriers in keyed rows
+on a screen the floor holds entries for, the gate adds a coverage gap: the floor recorded those
+controls as one identity across rows, so a barrier fixed in one row and a new one in another leave
+its count unchanged, and the run cannot prove no new barrier is hiding. The run reports
+`not_covered` until `usabl baseline` regenerates the floor at version 3 and the diff is merged. A
+version 1 or 2 floor with no barrier in a keyed row on its screens gets no gap. A version 1 or 2
+floor that holds a row entry is refused, because no baseline wrote one. Waivers scoped to one
+element key name the old key, so a waiver for a control in a keyed row must be rewritten with the
+row key after the floor moves to version 3; until then the finding is not waived and blocks.
 Both floor disclosures are decided inside `gate()`, not in the run path, because `gate()` is
 exported and CI, the overlay and the page helper reach it directly. A check that lived only in
 `run()` made the verdict depend on which door the caller came through. The gate weighs its own
@@ -1715,11 +1854,13 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   `--docs-ci`, and `--branch-rule`; zero or more
   than one refuses with exit 2. `init` scaffolds policy; `install` wires integrations; they
   are different commands (see section 12).
-- Baseline drafts: `usabl baseline` runs a full UI scan and writes `.usabl-evidence.json`
-  as a reviewable working-tree diff. A floored entry the run did not see and cannot confirm was
-  fixed is carried into the new floor at its recorded count, with or without `--partial`. It
-  refuses when such an entry is a version 1 placeholder count (exit 3), and when the floor it would
-  replace exists and does not parse (exit 4).
+- Baseline drafts: `usabl baseline` runs two full UI scans and writes `.usabl-evidence.json`
+  as a reviewable working-tree diff, holding only what both scans found. It lists the rest as
+  intermittent, by screen and rule, and says how to handle them (see Evidence floor). A floored
+  entry either scan did not see and cannot confirm was fixed is carried into the new floor at its
+  recorded count, with or without `--partial`. It refuses when such an entry is a version 1
+  placeholder count (exit 3), and when the floor it would replace exists and does not parse
+  (exit 4).
 - Floor prune: `usabl floor prune` re-arms the gate on cleanly scanned screens. It removes
   entries whose identity is gone, and lowers the recorded count on entries whose identity is
   still present but now holds fewer barriers. An absent entry the run cannot confirm was fixed,
@@ -1965,6 +2106,10 @@ that is present and cannot be read is a gap.
 the only verdict authority. It also acts on the caller's page: the keyboard walk presses Tab,
 the PatternFly probes open and close dialogs and menus, and each flow requirement on the page's
 surface runs its authored steps, clicks and key presses, on that page.
+
+`checkPage` scrubs its result before it returns it, because the result leaves usabl there. Every
+string passes through the scrubber, and every URL in it, the page address in a gap ref included,
+loses its sign-in credentials, query string, and fragment.
 
 The browser behind that page is the caller's. usabl did not launch it and does not change it, so
 `browserSandbox` does not apply, and whether that browser runs with Chromium's sandbox is the
