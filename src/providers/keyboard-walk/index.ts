@@ -3,7 +3,8 @@
  * It must never mint a verdict, and it must never guess when the AX node is missing.
  * Missing focus metadata stays unverified so the gate can disclose uncertainty honestly.
  */
-import type { AxNode, Draft, Fact, Provider } from '../../contracts/index.js';
+import type { AxNode, Draft, Fact, Page, Provider } from '../../contracts/index.js';
+import { ROW_READ_KEY, readFocusedRow } from '../row-scope.js';
 import { makeStepRunner } from './steps.js';
 
 const INTERACTIVE_ROLES = new Set([
@@ -47,6 +48,17 @@ function roleFact(role: string | null): { role?: Fact } {
 
 function tabStopPath(path: string, index: number): string {
   return path === '' ? `tab-stop-${index}` : path;
+}
+
+/**
+ * The draft with the row of the element the walk has focused, read now, while the walk is at it.
+ * A stop's path is a placeholder when it cannot be computed, and as a selector it names nothing.
+ * Read later through the path, the row would be lost, or would be the row of whatever element the
+ * path names by then.
+ */
+async function withFocusedRow(page: Page, draft: Draft): Promise<Draft> {
+  const row = await readFocusedRow(page);
+  return { ...draft, evidence: { ...draft.evidence, extra: { ...draft.evidence.extra, [ROW_READ_KEY]: row } } };
 }
 
 function unconfirmedFocusDraft(screenId: string, elementPath: string): Draft {
@@ -173,12 +185,12 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
 
         const node = await ctx.page.activeNode();
         if (node === null) {
-          drafts.push(unconfirmedFocusDraft(ctx.screen.id, path));
+          drafts.push(await withFocusedRow(ctx.page, unconfirmedFocusDraft(ctx.screen.id, path)));
           continue;
         }
 
         if (isUnnamedInteractive(node)) {
-          drafts.push(unnamedInteractiveDraft(ctx.screen.id, path, node));
+          drafts.push(await withFocusedRow(ctx.page, unnamedInteractiveDraft(ctx.screen.id, path, node)));
         }
       }
 

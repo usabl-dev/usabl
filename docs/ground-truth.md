@@ -896,7 +896,10 @@ from a relative path. A layout route with children gets no entry file, because i
 also renders on every child's URL, and a change to it must not read as covered by one screen.
 This holds for JSX passed to `createRoutesFromElements` and `createRoutesFromChildren` too. Route
 objects, in a router factory call or in `useRoutes`, never get one. When two routes with the same
-path name different components, neither is attributed.
+path name different components, neither is attributed. An import without an extension is tried
+as `.tsx`, `.ts`, `.jsx`, and `.js`. When more than one of those files exists, the route gets no
+entry file and a `Review:` note names every candidate, sorted, because the bundler's pick depends on
+an extension order init cannot read.
 
 **What it still does not see.** These leave no gap, so check for them:
 
@@ -1381,6 +1384,26 @@ the walk, not an element, and has no row. A table is a `table` or an element wit
 is that table, so a row of a nested table is never one of the outer table's rows. Header and footer
 rows (inside `thead` or `tfoot`, or holding a column header) are not body rows.
 
+**Shadow roots, frames, and focus stops.** The row is read on the tree the element is drawn in. The
+walk goes up from an element in a shadow root to its host, and up out of a same-origin frame to the
+frame element, so a button in a web component, or in a frame, that sits in a keyed row belongs to
+that row. Searches for rows and tables go down into every open shadow root and every same-origin
+frame. axe names an element past a boundary with one selector per boundary, and its joined element
+path names nothing, or more than one element, in the top document, so the axe provider keeps the
+parts and the row read follows them: the host, then into its shadow root, or the frame, then into
+its document. The element path stays as it was. A frame from another origin cannot be looked inside,
+so a finding in one is unreadable. The keyboard walk reads the row of the element it focused at the
+stop itself, through open shadow roots and same-origin frames, instead of going back through the
+stop's path later: a stop whose path could not be computed has only a placeholder, which names
+nothing. A step out of a shadow root or a frame is marked in the path from the row to the control,
+so the path of an element in a web component never reads as one in the same light tree.
+
+**Layout tables.** A `table` whose first role token is `presentation` or `none` is a layout table
+and is not a table here. Its rows are not rows, so a data table inside a layout table is not nested
+in an unkeyed row, and a control in a layout row looks for a row further up. A layout table whose
+own rows carry a key source is still a table: rows a user can tell apart are a list, whatever the
+role says, and leaving them out would key their controls the old way.
+
 **How a table keys its rows.** The table's key source is the first of these that any of its body
 rows has:
 
@@ -1450,7 +1473,9 @@ or element path can meet, so a fixed row barrier is paid down only when the scre
 signal held.
 
 What row keys do not cover: a control outside any table row, a control in a table none of whose
-rows has a key, and a grid built without row roles. Those keep the name, structural, or count key
+rows has a key, a grid built without row roles, rows inside a closed shadow root, and a row in a
+shadow tree that a light element is slotted into. A finding inside a frame from another origin is
+a not-covered gap. Those keep the name, structural, or count key
 and the residual described under Evidence floor.
 
 #### Which keys a comparison uses
@@ -1905,9 +1930,13 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   contract gives it. A field the contract does not name is dropped. A document that does not
   match, or text that is not JSON, exits 4 with a plain reason on stderr that names the field by
   its path, for example `findings[0].severity`, and never repeats the value. `usabl comment`
-  prints no comment in that case. The check is of shape only. It does not test whether the values
-  agree with each other, so a well-formed document is still only as true as whoever wrote it, and
-  the receipt, not the document, is what proves a run happened.
+  prints no comment in that case. The check is of shape, plus one agreement: each verdict must
+  carry the exit code the engine writes for it (verified 0, regression 1, approval_required 2,
+  not_covered 3), and a Result with no verdict must exit 0 or 4. The same holds for
+  `accessibilityVerdict` and `accessibilityExitCode`. A document that shows one outcome and exits
+  with another exits 4 and names the exit code field. The check does not test whether the other
+  values agree with each other, so a well-formed document is still only as true as whoever wrote
+  it, and the receipt, not the document, is what proves a run happened.
 - Library: the stop hook, overlay, and an optional MCP wrapper import `run()` directly.
   No MCP surface is built today (section 11.5).
 
@@ -2164,7 +2193,9 @@ ref `requirement:<id>`: the page is labeled with no known surface, or the requir
 surface that matches no configured or discovered surface. A call with no `screenId` is an
 unlabeled page. Its findings carry the label `page`, but it counts as no surface, even in a
 project that has a surface named `page`, so every runtime requirement is a gap and none is
-judged on it. So a page that regresses on a requirement in the CLI also regresses in
+judged on it. A `screenId` the shared id grammar refuses, such as one with a space or an
+invisible character, throws `InputRefusedError` before `checkPage` reads the project or touches
+the page. The error names the field and never repeats the id. So a page that regresses on a requirement in the CLI also regresses in
 `checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
 when it is not.
 
