@@ -2423,8 +2423,12 @@ file at once, since each file can be valid on its own, and names both files and 
 positions. A requirement id, and the surface it names, follow the same character grammar as a
 surface id (section 22). A refused character is reported by position and code point, never
 printed back. Either failure is `approval_required`, returned from the loader rather than
-thrown, and every reason the loader returns is scrubbed before it leaves, including the YAML
-parser's own message and the file path, because both can carry file bytes.
+thrown, and every reason the loader returns is scrubbed before it leaves, including the file
+path, because it can carry file bytes. A YAML syntax error names the file, the line, and the
+parser's problem, such as `intake YAML is invalid at line 5: unexpected end of the stream within
+a flow collection`. The parser's own message is never used, because it quotes the source line,
+and a problem that carries source text after its fixed wording, such as an alias name, is cut
+before that text.
 
 Any loader failure stops every scan, and the run shows the loader's reason as a `not-covered`
 coverage gap whose ref is the refused file, or the configured root when the loader named none.

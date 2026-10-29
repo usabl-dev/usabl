@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- A requirements file with a YAML syntax error is now reported by file, line, and problem,
+  and the reason no longer quotes the source line. Before, the parser's message, which
+  repeats the offending line, reached the coverage gap with only pattern redaction on it.
+
 - The CLI text, the JSON Result from `usabl check --json`, and the pull request comment now
   drop the query string and the fragment from every URL, as `checkPage` output already did.
   Before, a preview token in a configured screen URL was printed in each of them. The
