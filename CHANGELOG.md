@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- `usabl init` now reads the router shapes real apps use. A route config array rendered
+  through `map`, as in the PatternFly seed, is read with its nested `routes` when the list
+  is flattened with `reduce`, `flatMap`, or `flat`, and each item is attributed to the
+  component its map renders. Under a plain `map`, nested route objects are left out and
+  named in a note. Lazy routes are attributed too: a component made with
+  `React.lazy(() => import('./Page'))`, and a data router route with
+  `lazy: () => import('./route')`. A leaf
+  data router route object now gets the entry file its `element` or `Component` names, the
+  same as a JSX route. Entry imports resolve through a configured tsconfig or Vite path
+  alias, a directory's `index` file, and the `./Page.js` form for `Page.ts`. More than one
+  match at one step still gets no entry file and a note. `init` also looks for the router in
+  `src/app/routes.tsx`. Every route it cannot attribute, and every route list it read on an
+  assumption, such as one flattened with `reduce`, is a `Review:` note with the file and
+  line. With no `usabl.routes.json`, such a list is not proven: `usabl check` records it as
+  a skipped gap on a wide-blast change, and `usabl drift routes` refuses on it until the
+  sidecar acknowledges its id.
+
 ### Fixed
 
 - `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and

@@ -856,7 +856,17 @@ never read as router code.
   as `import { createBrowserRouter as makeRouter }`, a `const` that holds one, and a `const` made
   by a call that takes one, such as `Sentry.wrapCreateBrowserRouterV6(createBrowserRouter)`;
 - the argument of `useRoutes`, read the same way as a route object list;
-- the JSX passed to `createRoutesFromElements` or `createRoutesFromChildren`.
+- the JSX passed to `createRoutesFromElements` or `createRoutesFromChildren`;
+- a route config array rendered through `map` inside one of the routers above, as in the
+  PatternFly seed: `{routes.map(({ path, element }) => <Route path={path} element={element} />)}`.
+  The callback must return one element, with no children and no spread, whose `path` is the
+  item's `path` (a destructured name or `item.path`). The list must be a `const` array literal in
+  the module, reached directly or through `reduce`, `flatMap`, `flat`, or `filter`. Its objects
+  are read like data router objects. The callback renders only the items it is given, so nested
+  lists under `routes` or `children` are read only when the list passes through `reduce`,
+  `flatMap`, or `flat`, which can bring them to the top level. Then an object with only a `label`
+  and nested `routes` is a group, and its children keep its parent's path. Otherwise usabl reads
+  the top-level objects, leaves the nested ones out, and reports the list as `assumed` (below).
 
 A path object anywhere else in the module is not part of the router and is not read. A `<Route>`
 anywhere else is not scanned either, because it may be a decoy, but it is named as an unreadable
@@ -885,6 +895,20 @@ not-found page, which is not a screen, and is skipped. A path that ends in `*` a
 segments, such as `/app/*`, matches many URLs and usually mounts routes declared in another
 file, so it is reported (below) rather than scanned as the literal URL `/app/*`.
 
+**What it assumes.** usabl does not run code, so a route config list that reaches the map through
+`reduce`, `flatMap`, `flat`, or `filter` is read as if every route object in it is rendered. So
+is a list whose nested relative paths it joins to their parent's path, a plain list whose nested
+route objects it left out, and a list rendered through an element that is not `<Route>`, such
+as a v5 wrapper inside `<Switch>`. Each such list
+is an `assumed` entry with the line of the map call. `usabl init` writes it as a `Review:` note
+with the file and line and keeps the routes in the draft. When the code does more than flatten or
+select, for example when it rewrites paths, the draft can name URLs the app does not serve, which
+is why init asks the operator to check. With no sidecar, nothing has checked the assumption, so
+the router fallback reports each `assumed` entry as an `unreadable` entry (below) with its own
+reason and an id. The planner still queues the routes it read on a wide-blast change, and records
+the entry as a `skipped` gap, so the run is not covered. `usabl drift routes` refuses on it until
+the sidecar acknowledges its id.
+
 **What it reports.** A route it finds but cannot read is never dropped. Each one is an
 `unreadable` entry with the router file, the line, and the reason: a path it cannot resolve (an
 import, an expression, a template with expressions, a `let`), a route that takes its props from a
@@ -907,21 +931,45 @@ the syntax error, and no routes. So is a file with routes but no router. Then:
 - `usabl init` writes a `Review:` note for each entry with its file and line, because the draft
   sidecar does not list that route and usabl never scans a route the sidecar leaves out.
 
-**Entry files.** `usabl init` attributes an entry file only to a JSX route that sits in a router
-the module defines, has no child routes, and names its component as `element={<Name />}` imported
-from a relative path. A layout route with children gets no entry file, because its component
-also renders on every child's URL, and a change to it must not read as covered by one screen.
-This holds for JSX passed to `createRoutesFromElements` and `createRoutesFromChildren` too. Route
-objects, in a router factory call or in `useRoutes`, never get one. When two routes with the same
-path name different components, neither is attributed. An import without an extension is tried
-as `.tsx`, `.ts`, `.jsx`, and `.js`. When more than one of those files exists, the route gets no
-entry file and a `Review:` note names every candidate, sorted, because the bundler's pick depends on
-an extension order init cannot read.
+**Entry files.** `usabl init` attributes an entry file only to a leaf route, one with no child
+routes, that sits in a router the module defines. A layout route with children gets no entry
+file, because its component also renders on every child's URL, and a change to it must not read
+as covered by one screen. The route names what it renders in one of these ways:
+
+- a JSX route's `element={<Name />}`, including JSX passed to `createRoutesFromElements` and
+  `createRoutesFromChildren`;
+- a route object's `element: <Name />` or `Component: Name`, in a router factory call or in
+  `useRoutes`;
+- a data router route object's `lazy: () => import('./module')`, which names the module itself.
+  The loader must make exactly one dynamic import of a plain string; `.then(...)` and an async
+  function that awaits it count;
+- a route config item's field that its map callback renders: `element={item.element}` reads the
+  item's `element: <Name />`, and `element={<C />}` or `component={component}` reads the item's
+  `component: Name`. A field the callback does not render is never read.
+
+`<Suspense>` around one element counts as that element. A lower-case name is an HTML element, not
+a component. `Name` must be imported, or be a `const` made by React's `lazy` from one dynamic
+import, such as `const Reports = React.lazy(() => import('./pages/Reports'))`. A relative
+specifier is resolved from the router file. Any other is resolved only through a tsconfig
+`paths` entry or a Vite `resolve.alias` the project configures, such as `@app/*` to `src/app/*`;
+a package import resolves to nothing. When two sources for one path name different components
+or modules, neither is attributed.
+
+An import is tried the way bundlers try it. A written `.js` names `.js`, `.ts`, or `.tsx`, the
+TypeScript ESM style; `.jsx` names `.jsx` or `.tsx`; `.mjs` names `.mjs` or `.mts`; `.cjs` names
+`.cjs` or `.cts`. An import without an extension is tried as `.tsx`, `.ts`, `.jsx`, and `.js`,
+and then as a directory's `index` file with the same extensions. A file always wins over a
+directory index. When more than one file matches at the same step, the route gets no entry file
+and a `Review:` note names every candidate, sorted, because the bundler's pick depends on an
+extension order init cannot read. Every route init cannot attribute is named in a `Review:` note
+with the router file and the line of its path.
 
 **What it still does not see.** These leave no gap, so check for them:
 
 - routes kept in another module, such as an imported route array. The router file's reference
   to it is reported, but the routes inside are not read;
+- file-system routers, such as Next.js `app/` and `pages/` folders. There is no router file to
+  read;
 - a descendant `<Routes>` element in another file, which only exists at run time;
 - a router file with no router and nothing route-shaped: no `<Routes>`, no router call, no
   `<Route>`, and no `path:` object. It reads as no routes, the same as a missing router file;
@@ -2313,6 +2361,14 @@ stop-hook` in `.claude/settings.json`), `--ci` (the generated PR-gate workflow),
 `--branch-rule` (a read-only check that the protected branch and the `usabl-required`
 required status check exist). `init` does not wire CI or overlays, and `install` does not
 scaffold policy.
+
+`usabl init` looks for the router in `src/App.tsx`, `src/App.jsx`, `src/routes.tsx`,
+`src/router.tsx`, `src/app/routes.tsx`, and `src/app/routes.jsx`, in that order, and takes the
+first that holds route code. It reads routes from it as described in
+[Reading routes out of router source](#reading-routes-out-of-router-source). The draft's
+`wideBlastGlobs` list the router file and whichever of `src/main.tsx`, `src/main.ts`,
+`src/index.tsx`, `src/App.tsx`, `src/App.jsx`, `index.html`, `src/index.html`, the Vite config, and
+the CSS files under `src/` exist, because a change to any of them can reach every screen.
 
 ### Brownfield adoption (prove what you touch)
 
