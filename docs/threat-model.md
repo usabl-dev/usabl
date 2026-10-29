@@ -505,6 +505,8 @@ outside every table as the control in an accepted row. Either way a new barrier 
 - The table row read runs in an isolated world of its own over CDP, for a page usabl opens and for
   a page `checkPage` adopts, so page script cannot change the `getAttribute`, `closest`,
   `parentElement`, or `querySelectorAll` calls a row key and a table identity are read through.
+  It reads same-origin frames from that world too, so a frame's own page script cannot change
+  them there either.
 - The path function and the row read are sent with every query, so there is no installed helper
   to trust. The
   capture is started at document start on a page usabl opens and at adoption on a caller's page,

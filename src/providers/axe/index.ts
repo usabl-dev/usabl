@@ -14,6 +14,7 @@ import type {
   RuleOutcome,
   Severity,
 } from '../../contracts/index.js';
+import { ROW_TARGET_KEY } from '../row-scope.js';
 import { noteFor } from './notes.js';
 
 export interface AxeCheck {
@@ -22,6 +23,9 @@ export interface AxeCheck {
 
 export interface AxeNode {
   target: string[];
+  // The target one part per boundary, present only for an element inside a frame or a shadow
+  // root. See ElementTarget.
+  targetParts?: string[][];
   html?: string;
   failureSummary?: string;
   any?: AxeCheck[];
@@ -109,6 +113,11 @@ function mapNodeToDraft(
   }
   if (firstAny?.data !== undefined) {
     extra.axeData = firstAny.data;
+  }
+  // The joined element path names nothing, or the wrong element, past a frame or a shadow root.
+  // The row read uses these parts instead. See ROW_TARGET_KEY.
+  if (node.targetParts !== undefined) {
+    extra[ROW_TARGET_KEY] = node.targetParts;
   }
 
   const evidence = Object.keys(extra).length === 0 ? {} : { extra };

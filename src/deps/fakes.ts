@@ -79,6 +79,7 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     queryAll: async () => [],
     // No DOM, so no element sits in a keyed table row, and drafts key as they did before row keys.
     rowContext: async () => ({ kind: 'none' }),
+    focusedRowContext: async () => ({ kind: 'none' }),
     close: async () => {},
     setViewport: async () => {},
     setZoom: async () => {},
