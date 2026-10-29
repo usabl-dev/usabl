@@ -6,7 +6,7 @@
  */
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, ElementTarget, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
 
@@ -259,6 +259,14 @@ function mapAxeCheck(rawCheck: unknown): { data?: unknown } {
 function mapAxeNode(rawNode: unknown): AxeIssue['nodes'][number] {
   const rawTarget = getProp(rawNode, 'target');
   const target = Array.isArray(rawTarget) ? rawTarget.map((entry) => String(entry)) : [];
+  // axe names an element in a frame or a shadow root with one part per boundary: one entry per
+  // frame, and an entry that is a list for the path into shadow roots. The joined target above
+  // stays the element path a finding is named by. The parts are kept beside it, only for an element
+  // past a boundary, so its row can be read where it really is.
+  const parts = Array.isArray(rawTarget)
+    ? rawTarget.map((entry) => (Array.isArray(entry) ? entry.map((part) => String(part)) : [String(entry)]))
+    : [];
+  const crossesBoundary = parts.length > 1 || parts.some((level) => level.length > 1);
   const html = readString(getProp(rawNode, 'html'));
   const failureSummary = readString(getProp(rawNode, 'failureSummary'));
   const rawAny = getProp(rawNode, 'any');
@@ -266,6 +274,7 @@ function mapAxeNode(rawNode: unknown): AxeIssue['nodes'][number] {
 
   return {
     target,
+    ...(crossesBoundary ? { targetParts: parts } : {}),
     ...(html === null ? {} : { html }),
     ...(failureSummary === null ? {} : { failureSummary }),
     ...(checks.length === 0 ? {} : { any: checks }),
@@ -611,15 +620,26 @@ const TABLE_NESTING_LIMIT = 32;
  * The table row an element sits in, read in the page in usabl's own world (see ROW_WORLD). See
  * RowContextRead.
  *
- * The selector must name exactly one element. One the page cannot parse, one that matches nothing
- * (the element went away after the scanner saw it), and one that matches more than one element are
- * all 'unreadable'. Only an element that was found, and is outside every body row of a keyed table,
- * is 'none'.
+ * The target must name exactly one element (see ElementTarget), or the read is of the element that
+ * has focus. A selector the page cannot parse, one that matches nothing (the element went away
+ * after the scanner saw it), one that matches more than one element, and a frame usabl cannot look
+ * inside are all 'unreadable'. Only an element that was found, and is outside every body row of a
+ * keyed table, is 'none'.
  *
- * A table is a `table` or an element with role table, grid, or treegrid. Its rows are the `tr` and
- * `role="row"` elements whose nearest table is that table, so a row of a nested table is never
- * counted as a row of the table around it. Header and footer rows, those inside `thead` or `tfoot`
- * or holding a column header, are not body rows.
+ * Every step below walks the tree the element is drawn in, not only its own document: up from an
+ * element in a shadow root to its host, and up from a same-origin frame's document to the frame
+ * element. Searches go the other way, into every open shadow root and every same-origin frame. A
+ * button in a web component in a keyed row, or in a frame in a keyed row, sits in that row.
+ * Without this, axe's one-selector-per-boundary target named nothing, or several elements, and the
+ * screen read as not covered on every run.
+ *
+ * A table is a `table` or an element with role table, grid, or treegrid. A `table` whose first role
+ * token is presentation or none is a layout table and not a table, unless one of its own rows
+ * carries a key source: a layout table that wraps a data table made every row of the data table
+ * read as nested in an unkeyed row. Its rows are not rows, so the walk goes on to the next row
+ * above. A table's rows are the `tr` and `role="row"` elements whose nearest table is that table,
+ * so a row of a nested table is never counted as a row of the table around it. Header and footer
+ * rows, those inside `thead` or `tfoot` or holding a column header, are not body rows.
  *
  * The table's key source is the first of these that any of its body rows has: `data-row-key`,
  * `data-key`, `data-id`, `data-ouia-component-id`, `id` (an id a framework mints per mount does not
@@ -637,7 +657,8 @@ const TABLE_NESTING_LIMIT = 32;
  * table that keys no rows, is ambiguous. It is never keyed with an empty part.
  */
 interface RowReadArgs {
-  query: string;
+  // One entry per document, outermost first, as in ElementTarget. Null reads the focused element.
+  target: string[][] | null;
   limit: number;
   textLimit: number;
   nestingLimit: number;
@@ -645,38 +666,176 @@ interface RowReadArgs {
 
 // The row read, as a function sent to the row world with each call. It must use nothing from
 // outside its own body: it runs in the browser from its source text.
-const READ_ROW_CONTEXT = ({ query, limit, textLimit, nestingLimit }: RowReadArgs) => {
-  const TABLE = 'table, [role="table"], [role="grid"], [role="treegrid"]';
+const READ_ROW_CONTEXT = ({ target, limit, textLimit, nestingLimit }: RowReadArgs) => {
+  const CANDIDATE_TABLE = 'table, [role="table"], [role="grid"], [role="treegrid"]';
   const ROW = 'tr, [role="row"]';
+  // Node types are compared by number. An element in a frame has that frame's own constructors, so
+  // instanceof against this document's Element or ShadowRoot is false for it.
+  const ELEMENT_NODE = 1;
+  const DOCUMENT_NODE = 9;
+  const FRAGMENT_NODE = 11;
+  // How many shadow roots and frames the focused element is looked for through. A bound, so a
+  // read always ends.
+  const FOCUS_DEPTH_LIMIT = 1024;
   const GENERATED = /^OUIA-Generated-|pf-random-id-|:r[0-9a-z]+:|«r[0-9a-z]+»|_r_[0-9a-z]+_/i;
   const ROW_ATTRIBUTES = ['data-row-key', 'data-key', 'data-id', 'data-ouia-component-id', 'id'];
   const TABLE_ATTRIBUTES = ['id', 'data-ouia-component-id', 'data-table-key'];
   type Ambiguity = 'row-key-missing' | 'row-key-duplicate' | 'row-key-too-long' | 'table-ambiguous' | 'enclosing-row-unkeyed';
 
-  let matches: Element[];
-  try {
-    matches = Array.from(document.querySelectorAll(query));
-  } catch {
-    return { kind: 'unreadable' as const, reason: 'selector-invalid' as const };
-  }
-  if (matches.length === 0) {
-    return { kind: 'unreadable' as const, reason: 'element-missing' as const };
-  }
-  if (matches.length > 1) {
-    return { kind: 'unreadable' as const, reason: 'element-multiple' as const };
-  }
-  const element = matches[0] as Element;
+  type Unreadable = 'selector-invalid' | 'element-missing' | 'element-multiple' | 'frame-unreadable';
+  const unreadable = (reason: Unreadable) => ({ kind: 'unreadable' as const, reason });
 
-  const tableOf = (row: Element): Element | null => row.closest(TABLE);
+  // The document inside a frame element, or null when the element is not a frame or the document
+  // is from another origin.
+  const frameDocument = (element: Element): Document | null => {
+    const tag = element.tagName.toLowerCase();
+    if (tag !== 'iframe' && tag !== 'frame') return null;
+    try {
+      return (element as HTMLIFrameElement).contentDocument;
+    } catch {
+      return null;
+    }
+  };
+
+  // The parent on the drawn tree: the parent element, else the host of a shadow root, else the
+  // frame element that holds a document.
+  const parentOf = (element: Element): Element | null => {
+    if (element.parentElement !== null) return element.parentElement;
+    const parent = element.parentNode;
+    if (parent === null) return null;
+    if (parent.nodeType === FRAGMENT_NODE) {
+      const host = (parent as ShadowRoot).host;
+      return host !== undefined && host !== null && host.nodeType === ELEMENT_NODE ? host : null;
+    }
+    if (parent.nodeType === DOCUMENT_NODE) {
+      try {
+        return (parent as Document).defaultView?.frameElement ?? null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+  const nearest = (start: Element | null, test: (element: Element) => boolean): Element | null => {
+    for (let current = start; current !== null; current = parentOf(current)) {
+      if (test(current)) return current;
+    }
+    return null;
+  };
+  // Every element under a root that matches a selector, through every open shadow root and every
+  // same-origin frame under it. The root itself is not included.
+  const queryDrawn = (root: Element | Document, selector: string): Element[] => {
+    const out: Element[] = [];
+    const scopes: Array<Element | Document | ShadowRoot> = [root];
+    for (let next = scopes.pop(); next !== undefined; next = scopes.pop()) {
+      out.push(...Array.from(next.querySelectorAll(selector)));
+      for (const element of Array.from(next.querySelectorAll('*'))) {
+        if (element.shadowRoot !== null) scopes.push(element.shadowRoot);
+        const inner = frameDocument(element);
+        if (inner !== null) scopes.push(inner);
+      }
+    }
+    return out;
+  };
+
+  // The one element a target names, part by part across frames and shadow roots.
+  type Resolved = { element: Element } | ReturnType<typeof unreadable>;
+  const resolveTarget = (levels: string[][]): Resolved => {
+    if (levels.length === 0) return unreadable('selector-invalid');
+    let found: Element | null = null;
+    for (const [level, selectors] of levels.entries()) {
+      if (selectors.length === 0) return unreadable('selector-invalid');
+      let scope: Document | ShadowRoot = document;
+      if (level > 0) {
+        const inner = found === null ? null : frameDocument(found);
+        if (inner === null) return unreadable('frame-unreadable');
+        scope = inner;
+      }
+      for (const [step, selector] of selectors.entries()) {
+        if (step > 0) {
+          const root: ShadowRoot | null = found === null ? null : found.shadowRoot;
+          if (root === null) return unreadable('element-missing');
+          scope = root;
+        }
+        let matches: Element[];
+        try {
+          matches = Array.from(scope.querySelectorAll(selector));
+        } catch {
+          return unreadable('selector-invalid');
+        }
+        if (matches.length === 0) return unreadable('element-missing');
+        if (matches.length > 1) return unreadable('element-multiple');
+        found = matches[0] as Element;
+      }
+    }
+    return found === null ? unreadable('element-missing') : { element: found };
+  };
+
+  // The element that has focus, followed into open shadow roots and same-origin frames. A focused
+  // frame whose own document has nothing focused is itself the focused element.
+  const focusedElement = (): Resolved => {
+    let current: Element | null = document.activeElement;
+    for (let depth = 0; current !== null; depth += 1) {
+      if (depth >= FOCUS_DEPTH_LIMIT) return unreadable('element-missing');
+      const inShadow: Element | null = current.shadowRoot?.activeElement ?? null;
+      if (inShadow !== null) {
+        current = inShadow;
+        continue;
+      }
+      const tag = current.tagName.toLowerCase();
+      if (tag !== 'iframe' && tag !== 'frame') break;
+      const inner = frameDocument(current);
+      if (inner === null) return unreadable('frame-unreadable');
+      const active = inner.activeElement;
+      if (active === null || active === inner.body || active === inner.documentElement) break;
+      current = active;
+    }
+    return current === null ? unreadable('element-missing') : { element: current };
+  };
+
+  // The result is wrapped, so an element can never be read as a refusal: a track element has a
+  // property named kind.
+  const resolved = target === null ? focusedElement() : resolveTarget(target);
+  if (!('element' in resolved)) return resolved;
+  const element = resolved.element;
+
+  // A layout table: a table element whose first role token is presentation or none. It is still a
+  // table when one of its own rows carries a key source, because rows a user can tell apart are a
+  // list whatever the role says, and leaving them out would key their controls the old way.
+  const isCandidate = (candidate: Element): boolean => candidate.matches(CANDIDATE_TABLE);
+  const firstRoleToken = (candidate: Element): string =>
+    (candidate.getAttribute('role') ?? '').replace(/[A-Z]/g, (ch) => ch.toLowerCase()).trim().split(/[\t\n\f\r ]+/)[0] ?? '';
+  const layoutCache = new Map<Element, boolean>();
+  // Filled in below, once the key sources are defined.
+  let rowsCarryKeys: (table: Element) => boolean = () => true;
+  const isTable = (candidate: Element): boolean => {
+    if (!isCandidate(candidate)) return false;
+    if (candidate.tagName.toLowerCase() !== 'table') return true;
+    const role = firstRoleToken(candidate);
+    if (role !== 'presentation' && role !== 'none') return true;
+    const cached = layoutCache.get(candidate);
+    if (cached !== undefined) return cached;
+    const counts = rowsCarryKeys(candidate);
+    layoutCache.set(candidate, counts);
+    return counts;
+  };
+  // A row of a layout table is not a row. Whether it is is read from its nearest candidate table.
+  const isRow = (candidate: Element): boolean => {
+    if (!candidate.matches(ROW)) return false;
+    const owner = nearest(parentOf(candidate), isCandidate);
+    return owner === null || isTable(owner);
+  };
+
+  const tableOf = (row: Element): Element | null => nearest(row, isTable);
   const isBodyRow = (row: Element, table: Element): boolean => {
-    const section = row.closest('thead, tfoot');
-    if (section !== null && section.closest(TABLE) === table) return false;
+    const section = nearest(row, (candidate) => candidate.matches('thead, tfoot'));
+    if (section !== null && tableOf(section) === table) return false;
     return !Array.from(row.children).some((cell) =>
       cell.matches('th[scope="col"], th[scope="colgroup"], [role="columnheader"]'),
     );
   };
   const bodyRows = (table: Element): Element[] =>
-    Array.from(table.querySelectorAll(ROW)).filter((row) => tableOf(row) === table && isBodyRow(row, table));
+    queryDrawn(table, ROW).filter((row) => isRow(row) && tableOf(row) === table && isBodyRow(row, table));
   const usable = (value: string | null): string | null =>
     value === null || value.trim() === '' || GENERATED.test(value) ? null : value;
   const rowHeader = (row: Element): string | null => {
@@ -694,6 +853,12 @@ const READ_ROW_CONTEXT = ({ query, limit, textLimit, nestingLimit }: RowReadArgs
     ]),
     ['header', rowHeader],
   ];
+
+  // A layout table's own rows: those whose nearest candidate table is it.
+  rowsCarryKeys = (table: Element): boolean =>
+    queryDrawn(table, ROW)
+      .filter((row) => nearest(parentOf(row), isCandidate) === table)
+      .some((row) => SOURCES.some(([, read]) => read(row) !== null));
 
   // A row's key: keyed, ambiguous, or null when its table keys no rows (or it is not a body row).
   type RowKey = { source: string; key: string } | { ambiguous: Ambiguity } | null;
@@ -746,11 +911,13 @@ const READ_ROW_CONTEXT = ({ query, limit, textLimit, nestingLimit }: RowReadArgs
     // The accessible-name order: aria-labelledby wins over aria-label, which wins over a caption.
     const labelledBy = table.getAttribute('aria-labelledby');
     if (labelledBy !== null) {
+      // Ids are looked up in the tree the table is in: its document, or its shadow root.
+      const scope = table.getRootNode() as Document | ShadowRoot;
       const text = collapse(
         labelledBy
           .split(/\s+/)
           .filter((id) => id !== '')
-          .map((id) => document.getElementById(id)?.textContent ?? '')
+          .map((id) => (typeof scope.getElementById === 'function' ? scope.getElementById(id)?.textContent : null) ?? '')
           .join(' '),
       );
       if (text !== '') return ['labelledby', text];
@@ -767,7 +934,7 @@ const READ_ROW_CONTEXT = ({ query, limit, textLimit, nestingLimit }: RowReadArgs
   // down: a table nested under a row or a table that cannot be told apart cannot be either.
   type Identity = { value: string; problem: Ambiguity | null };
   const enclosing = (table: Element): { row: Element; table: Element } | null => {
-    const outerRow = table.parentElement?.closest(ROW) ?? null;
+    const outerRow = nearest(parentOf(table), isRow);
     const outerTable = outerRow === null ? null : tableOf(outerRow);
     return outerRow === null || outerTable === null ? null : { row: outerRow, table: outerTable };
   };
@@ -788,7 +955,7 @@ const READ_ROW_CONTEXT = ({ query, limit, textLimit, nestingLimit }: RowReadArgs
     valueCache.set(table, value);
     return value;
   };
-  const allTables = Array.from(document.querySelectorAll(TABLE));
+  const allTables = queryDrawn(document, CANDIDATE_TABLE).filter(isTable);
   const sameValue = new Map<string, number>();
   for (const table of allTables) {
     const value = valueOf(table, 0);
@@ -824,7 +991,7 @@ const READ_ROW_CONTEXT = ({ query, limit, textLimit, nestingLimit }: RowReadArgs
     return identity;
   };
 
-  const row = element.closest(ROW);
+  const row = nearest(element, isRow);
   const table = row === null ? null : tableOf(row);
   if (row === null || table === null || !isBodyRow(row, table)) {
     return { kind: 'none' as const };
@@ -850,10 +1017,11 @@ const READ_ROW_CONTEXT = ({ query, limit, textLimit, nestingLimit }: RowReadArgs
     return { kind: 'ambiguous' as const, reason: 'row-key-too-long' as const };
   }
 
+  // The path from the row down to the element. A step out of a shadow root or a frame document is
+  // marked, so a path across a boundary never reads the same as one that stays in one tree.
   const steps: string[] = [];
   let current: Element | null = element;
   while (current !== null && current !== row) {
-    const parent: Element | null = current.parentElement;
     let index = 1;
     let sibling = current.previousElementSibling;
     while (sibling !== null) {
@@ -861,7 +1029,12 @@ const READ_ROW_CONTEXT = ({ query, limit, textLimit, nestingLimit }: RowReadArgs
       sibling = sibling.previousElementSibling;
     }
     steps.unshift(`${current.tagName.toLowerCase()}:nth-child(${String(index)})`);
-    current = parent;
+    if (current.parentElement === null) {
+      const parent = current.parentNode;
+      if (parent !== null && parent.nodeType === FRAGMENT_NODE) steps.unshift('#shadow-root');
+      if (parent !== null && parent.nodeType === DOCUMENT_NODE) steps.unshift('#document');
+    }
+    current = parentOf(current);
   }
 
   const tag = element.tagName.toLowerCase();
@@ -898,8 +1071,9 @@ const READ_ROW_CONTEXT = ({ query, limit, textLimit, nestingLimit }: RowReadArgs
 // every call.
 const ROW_WORLD = 'usabl-rows';
 
-async function rowContextForSelector(cdp: CDPSession, selector: string): Promise<RowContextRead> {
-  const args: RowReadArgs = { query: selector, limit: ROW_KEY_LIMIT, textLimit: ROW_CONTEXT_TEXT_LIMIT, nestingLimit: TABLE_NESTING_LIMIT };
+async function rowContextFor(cdp: CDPSession, target: ElementTarget | null): Promise<RowContextRead> {
+  const levels = target === null ? null : typeof target === 'string' ? [[target]] : target.map((level) => [...level]);
+  const args: RowReadArgs = { target: levels, limit: ROW_KEY_LIMIT, textLimit: ROW_CONTEXT_TEXT_LIMIT, nestingLimit: TABLE_NESTING_LIMIT };
   return (await callInWorld(cdp, ROW_WORLD, 'read the table row', READ_ROW_CONTEXT.toString(), [args])) as RowContextRead;
 }
 
@@ -937,7 +1111,8 @@ export function readyTimeoutMsFor(config: { readyTimeoutMs?: number }): number {
 //
 // Playwright's waitForLoadState('networkidle') is a one-shot lifecycle event: it resolves once per
 // navigation and then returns at once, so it cannot see a request that starts after the page first
-// went idle. That is the exact miss #146 is about. This tracker instead counts requests that are
+// went idle. So a screen that fetched the rest of its content after it first went idle was scanned
+// before that content arrived. This tracker instead counts requests that are
 // actually in flight, from the page request events, and reports whether that count has held at zero
 // for a quiet window. It re-evaluates every time it is asked, so a late request is seen.
 //
@@ -1389,8 +1564,11 @@ function wrapPage(
       const paths = await stablePathsForSelector(cdp, selector);
       return paths.map((path) => ({ selector: path }));
     },
-    async rowContext(selector: string): Promise<RowContextRead> {
-      return rowContextForSelector(cdp, selector);
+    async rowContext(target: ElementTarget): Promise<RowContextRead> {
+      return rowContextFor(cdp, target);
+    },
+    async focusedRowContext(): Promise<RowContextRead> {
+      return rowContextFor(cdp, null);
     },
     async close(): Promise<void> {
       await context.close();

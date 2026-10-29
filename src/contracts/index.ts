@@ -447,7 +447,17 @@ export type RowUnreadable =
   // The selector matched no element: the element went away after the scanner saw it.
   | 'element-missing'
   // The selector matched more than one element, so which one the scanner meant is unknown.
-  | 'element-multiple';
+  | 'element-multiple'
+  // The element sits in a frame usabl could not look inside: one from another origin, or a part of
+  // the target that names something that is not a frame.
+  | 'frame-unreadable';
+
+// Where the one element a row read is about sits. A string is one selector in the top document. A
+// list has one entry per document, outermost first, the way axe-core names an element in a frame.
+// Each entry is the selectors from that document down through each open shadow root: the first
+// matches in the document, and each one after it matches in the shadow root of the element the one
+// before it matched. The last element an entry names is the frame the next entry looks inside.
+export type ElementTarget = string | readonly (readonly string[])[];
 
 // What Page.rowContext read about the table row an element sits in.
 //
@@ -460,9 +470,15 @@ export type RowUnreadable =
 // 'ambiguous': the element is in a row of a keyed table, but the row cannot be told apart. So is an
 // element under such a row, or under a table that cannot be told apart. The caller must not key it
 // by row, and must disclose that it could not.
-// 'unreadable': the selector did not name exactly one element, so whether that element sits in a
-// keyed row is unknown. The caller must disclose it, exactly as for 'ambiguous'. Only an element
-// that was found and seen outside every body row of a keyed table is 'none'.
+// 'unreadable': the target did not name exactly one element, or named one inside a frame usabl
+// could not look inside, so whether that element sits in a keyed row is unknown. The caller must
+// disclose it, exactly as for 'ambiguous'. Only an element that was found and seen outside every
+// body row of a keyed table is 'none'.
+//
+// The row is read on the tree the element is drawn in: up through a shadow root to its host, and
+// up out of a same-origin frame to the frame element, so a control in a web component or a frame
+// that sits in a keyed row belongs to that row. A table whose role is presentation or none is a
+// layout table and is not a table here, unless its own rows carry keys.
 export type RowContextRead =
   | { kind: 'none' }
   | {
@@ -576,10 +592,15 @@ export interface Page {
   // null. See AncestorAttributesRead for the two results that carry no chain.
   ancestorAttributes(selector: string, names: readonly string[]): Promise<AncestorAttributesRead>;
   queryAll(selector: string): Promise<ElementRef[]>;
-  // The table row the one element a selector matches sits in. See RowContextRead. A selector the
-  // page cannot parse, or one that matches no element or more than one, is 'unreadable', never
-  // 'none'. It throws when the page cannot be read.
-  rowContext(selector: string): Promise<RowContextRead>;
+  // The table row the one element a target names sits in. See RowContextRead and ElementTarget. A
+  // selector the page cannot parse, or one that matches no element or more than one, is
+  // 'unreadable', never 'none'. It throws when the page cannot be read.
+  rowContext(target: ElementTarget): Promise<RowContextRead>;
+  // The table row the element that has focus sits in, read through open shadow roots and
+  // same-origin frames to the element itself. Read at the moment of the call, so a provider that
+  // finds a barrier at a focus stop reads the row of the element it saw, not one a selector names
+  // later.
+  focusedRowContext(): Promise<RowContextRead>;
   close(): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;
   setZoom(percent: number): Promise<void>;

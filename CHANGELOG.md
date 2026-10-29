@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- Row keys now reach findings inside shadow roots, frames, and layout tables, so their
+  screens no longer read as not covered on every run. Before, axe's selector for an element
+  in a shadow root or a frame was joined into one string that named nothing, or several
+  elements, and a keyboard-walk stop with no path was looked up by a placeholder that named
+  nothing. Now the row read follows axe's target part by part, into the shadow root or the
+  same-origin frame, and climbs back out to the host or the frame element, so a button in a
+  web component in a keyed row belongs to that row. The keyboard walk reads the row of the
+  element it focused at the stop itself. A `table` whose role is `presentation` or `none`
+  is a layout table and no longer makes a data table inside it read as nested in an unkeyed
+  row, unless its own rows carry keys. A finding in a frame from another origin, or one that
+  still cannot be found, stays a not-covered gap. The element path of every finding is
+  unchanged.
+
 - A control repeated in every table row, such as an unnamed icon button or a kebab
   toggle, now has one identity per row. Before, every row shared one identity whose count
   followed how many rows the page showed, so a floor of two, with one row fixed and a new

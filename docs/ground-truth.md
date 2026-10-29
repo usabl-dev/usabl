@@ -1369,6 +1369,26 @@ the walk, not an element, and has no row. A table is a `table` or an element wit
 is that table, so a row of a nested table is never one of the outer table's rows. Header and footer
 rows (inside `thead` or `tfoot`, or holding a column header) are not body rows.
 
+**Shadow roots, frames, and focus stops.** The row is read on the tree the element is drawn in. The
+walk goes up from an element in a shadow root to its host, and up out of a same-origin frame to the
+frame element, so a button in a web component, or in a frame, that sits in a keyed row belongs to
+that row. Searches for rows and tables go down into every open shadow root and every same-origin
+frame. axe names an element past a boundary with one selector per boundary, and its joined element
+path names nothing, or more than one element, in the top document, so the axe provider keeps the
+parts and the row read follows them: the host, then into its shadow root, or the frame, then into
+its document. The element path stays as it was. A frame from another origin cannot be looked inside,
+so a finding in one is unreadable. The keyboard walk reads the row of the element it focused at the
+stop itself, through open shadow roots and same-origin frames, instead of going back through the
+stop's path later: a stop whose path could not be computed has only a placeholder, which names
+nothing. A step out of a shadow root or a frame is marked in the path from the row to the control,
+so the path of an element in a web component never reads as one in the same light tree.
+
+**Layout tables.** A `table` whose first role token is `presentation` or `none` is a layout table
+and is not a table here. Its rows are not rows, so a data table inside a layout table is not nested
+in an unkeyed row, and a control in a layout row looks for a row further up. A layout table whose
+own rows carry a key source is still a table: rows a user can tell apart are a list, whatever the
+role says, and leaving them out would key their controls the old way.
+
 **How a table keys its rows.** The table's key source is the first of these that any of its body
 rows has:
 
@@ -1438,7 +1458,9 @@ or element path can meet, so a fixed row barrier is paid down only when the scre
 signal held.
 
 What row keys do not cover: a control outside any table row, a control in a table none of whose
-rows has a key, and a grid built without row roles. Those keep the name, structural, or count key
+rows has a key, a grid built without row roles, rows inside a closed shadow root, and a row in a
+shadow tree that a light element is slotted into. A finding inside a frame from another origin is
+a not-covered gap. Those keep the name, structural, or count key
 and the residual described under Evidence floor.
 
 #### Which keys a comparison uses
