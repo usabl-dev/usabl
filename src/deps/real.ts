@@ -251,6 +251,44 @@ const ACTIVE_PATH_FUNCTION = `function () {
   return pathFor(document.activeElement instanceof Element ? document.activeElement : null);
 }`;
 
+// The world the focus and style reads run in, for the same reason as the path world. A page that
+// redefines querySelector, the activeElement or body getters, contains, focus, or getComputedStyle
+// in its own world could otherwise make a focus check report what the page wants, and pass a
+// keyboard or focus check it fails. Nothing is installed there: each read sends its function.
+const READ_WORLD = 'usabl-reads';
+
+// Moves focus to the body, making it focusable first when it is not.
+const FOCUS_BODY_FUNCTION = `function () {
+  if (!(document.body instanceof HTMLElement)) {
+    return;
+  }
+  if (!document.body.hasAttribute('tabindex')) {
+    document.body.setAttribute('tabindex', '-1');
+  }
+  document.body.focus();
+}`;
+
+// Whether the first element a selector matches is the focused element.
+const ACTIVE_ELEMENT_IS_FUNCTION = `function (query) {
+  return document.querySelector(query) === document.activeElement;
+}`;
+
+// Whether the focused element is the first element a selector matches or sits inside it.
+const ACTIVE_ELEMENT_WITHIN_FUNCTION = `function (query) {
+  const root = document.querySelector(query);
+  return root instanceof Element && root.contains(document.activeElement);
+}`;
+
+// One computed style value of the first element a selector matches, or the empty string when
+// nothing matches.
+const COMPUTED_STYLE_FUNCTION = `function (query, cssProperty) {
+  const element = document.querySelector(query);
+  if (!(element instanceof Element)) {
+    return '';
+  }
+  return getComputedStyle(element).getPropertyValue(cssProperty);
+}`;
+
 
 interface AxeResult {
   violations: AxeIssue[];
@@ -382,8 +420,12 @@ async function backendNodeIdForSelector(cdp: CDPSession, selector: string): Prom
 }
 
 async function backendNodeIdForActiveElement(cdp: CDPSession): Promise<number | null> {
+  // Read in the read world, so a page that redefines the activeElement getter cannot point the
+  // accessibility read at an element that does not hold focus.
+  const contextId = await isolatedWorldContextId(cdp, READ_WORLD, 'read the focused element');
   const evaluated: unknown = await cdp.send('Runtime.evaluate', {
     expression: 'document.activeElement',
+    contextId,
     objectGroup: 'usabl-active-node',
     includeCommandLineAPI: false,
   });
@@ -1336,15 +1378,7 @@ function wrapPage(
       return total;
     },
     async focusBody(): Promise<void> {
-      await pw.evaluate(() => {
-        if (!(document.body instanceof HTMLElement)) {
-          return;
-        }
-        if (!document.body.hasAttribute('tabindex')) {
-          document.body.setAttribute('tabindex', '-1');
-        }
-        document.body.focus();
-      });
+      await callInWorld(cdp, READ_WORLD, 'focus the body', FOCUS_BODY_FUNCTION);
     },
     async tab(): Promise<void> {
       await pw.keyboard.press('Tab');
@@ -1356,13 +1390,10 @@ function wrapPage(
       await pw.click(selector, { timeout: CLICK_TIMEOUT_MS });
     },
     async activeElementIs(selector: string): Promise<boolean> {
-      return pw.evaluate((query) => document.querySelector(query) === document.activeElement, selector);
+      return (await callInWorld(cdp, READ_WORLD, 'read focus', ACTIVE_ELEMENT_IS_FUNCTION, [selector])) === true;
     },
     async activeElementWithin(selector: string): Promise<boolean> {
-      return pw.evaluate((query) => {
-        const root = document.querySelector(query);
-        return root instanceof Element && root.contains(document.activeElement);
-      }, selector);
+      return (await callInWorld(cdp, READ_WORLD, 'read focus', ACTIVE_ELEMENT_WITHIN_FUNCTION, [selector])) === true;
     },
     async armAnnouncementCapture(): Promise<void> {
       // The observer is already running: it starts at document start on a page usabl opens, and
@@ -1420,16 +1451,8 @@ function wrapPage(
       await pw.emulateMedia({ reducedMotion: enabled ? 'reduce' : 'no-preference' });
     },
     async getComputedStyle(selector: string, property: string): Promise<string> {
-      return pw.evaluate(
-        ({ query, cssProperty }) => {
-          const element = document.querySelector(query);
-          if (!(element instanceof Element)) {
-            return '';
-          }
-          return getComputedStyle(element).getPropertyValue(cssProperty);
-        },
-        { query: selector, cssProperty: property },
-      );
+      const value = await callInWorld(cdp, READ_WORLD, 'read a computed style', COMPUTED_STYLE_FUNCTION, [selector, property]);
+      return typeof value === 'string' ? value : '';
     },
     async screenshot(selector?: string): Promise<Buffer> {
       if (selector === undefined) {
