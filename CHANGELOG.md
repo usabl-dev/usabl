@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added
+
+- `usabl init --app <dir>` drafts the config for one app folder in a monorepo, such as
+  `usabl init --app packages/web`. Every path it writes stays relative to the repository
+  root, so CODEOWNERS and the trusted-ref guard still match the policy files, and a change
+  in another app is not a UI change for this config. With no flag, `init` drafts the root
+  app, or the one app it finds below the root. When it finds more than one, it lists them,
+  names the flag to use, and writes nothing. In a monorepo, the router, alias, and shell
+  files `init` reads, such as `src/app/routes.tsx` and the app's own `tsconfig.json`, are
+  read inside the app folder. `--app` takes one existing folder: a path with glob
+  characters, such as `packages/*`, is refused.
+
+- `usabl init` now reads the router shapes real apps use. A route config array rendered
+  through `map`, as in the PatternFly seed, is read with its nested `routes` when the list
+  is flattened with `reduce`, `flatMap`, or `flat`, and each item is attributed to the
+  component its map renders. Under a plain `map`, nested route objects are left out and
+  named in a note. Lazy routes are attributed too: a component made with
+  `React.lazy(() => import('./Page'))`, and a data router route with
+  `lazy: () => import('./route')`. A leaf
+  data router route object now gets the entry file its `element` or `Component` names, the
+  same as a JSX route. Entry imports resolve through a configured tsconfig or Vite path
+  alias, a directory's `index` file, and the `./Page.js` form for `Page.ts`. More than one
+  match at one step still gets no entry file and a note. `init` also looks for the router in
+  `src/app/routes.tsx`. Every route it cannot attribute, and every route list it read on an
+  assumption, such as one flattened with `reduce`, is a `Review:` note with the file and
+  line. With no `usabl.routes.json`, such a list is not proven: `usabl check` records it as
+  a skipped gap on a wide-blast change, and `usabl drift routes` refuses on it until the
+  sidecar acknowledges its id.
+
 ### Fixed
 
 - `usabl comment` and `usabl enforce` now refuse a Result whose `verdict` and
@@ -43,6 +72,23 @@
   with JSON-escaped slashes (`https:\/\/user:pass@host`). A quoted label such as
   `aria-label="Password :"` is no longer cut after its colon, so element paths and page text
   that only name a password field come out as written.
+
+- `setZoom` now writes the zoom from an isolated world, like the focus and style reads. Before,
+  it ran in the page's own world, so a page that redefined style writes could stop the zoom
+  from landing. No check calls it yet.
+
+- `usabl init` reads the dev server port and https setting from the parsed Vite config.
+  Before, a pattern match took the first `port:` after `server:`, so a `preview.port`
+  could become the draft's port, and https was never read. A setting written as code is
+  now named in a `Review:` note with how to set `appBaseUrl`.
+
+- `usabl init` no longer writes a config that can never produce a verdict. With no UI
+  files it refuses and writes nothing, because empty `uiFileGlobs` make every run read as
+  nothing to check. With no route derived, it skips `usabl.routes.json`, because an empty
+  sidecar lists no screens, and says how to map screens by hand. If a `usabl.routes.json`
+  already exists then, it refuses even with `--force` and names the file to review or
+  delete, because the old sidecar would pair the new config with routes it did not derive.
+  A JSX app now gets `src/**/*.jsx` as its UI glob.
 
 - `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
   `usabl help <command>` now print help and exit 0 without running anything. Before,

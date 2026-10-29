@@ -281,6 +281,14 @@ const ACTIVE_ELEMENT_WITHIN_FUNCTION = `function (query) {
 
 // One computed style value of the first element a selector matches, or the empty string when
 // nothing matches.
+// Sets the zoom of the root element, as a percentage. Run in an isolated world, so a page that
+// redefines style writes or what counts as an element cannot stop the zoom from landing.
+const SET_ZOOM_FUNCTION = `function (zoomPercent) {
+  if (document.documentElement instanceof HTMLElement) {
+    document.documentElement.style.zoom = zoomPercent + '%';
+  }
+}`;
+
 const COMPUTED_STYLE_FUNCTION = `function (query, cssProperty) {
   const element = document.querySelector(query);
   if (!(element instanceof Element)) {
@@ -1632,11 +1640,7 @@ function wrapPage(
       await pw.setViewportSize({ width, height });
     },
     async setZoom(percent: number): Promise<void> {
-      await pw.evaluate((zoomPercent) => {
-        if (document.documentElement instanceof HTMLElement) {
-          document.documentElement.style.zoom = `${zoomPercent}%`;
-        }
-      }, percent);
+      await callInWorld(cdp, READ_WORLD, 'set the zoom', SET_ZOOM_FUNCTION, [percent]);
     },
     async setReducedMotion(enabled: boolean): Promise<void> {
       await pw.emulateMedia({ reducedMotion: enabled ? 'reduce' : 'no-preference' });

@@ -39,14 +39,21 @@ each stage matters; this section is what a team actually types, in order.
    and running `npm install --save-dev file:../usabl`. The generated CI clones
    `usabl-dev/usabl` and pins the engine to a commit you choose.
 2. (automatic, `usabl init`) Drafts `usabl.config.json` and `usabl.routes.json` from
-   the working tree. It infers `appBaseUrl` from the Vite port, reads the app router
-   for screens, and seeds the interface globs, the wide-impact globs, and the
-   guarded-path list. It writes nothing else and refuses to overwrite either file
-   without `--force`.
+   the working tree. It infers `appBaseUrl` from the Vite port and https setting, reads
+   the app router for screens, and seeds the interface globs, the wide-impact globs, and
+   the guarded-path list. It writes nothing else and refuses to overwrite either file
+   without `--force`. In a monorepo, run `usabl init --app <dir>` for the app to check,
+   such as `usabl init --app packages/web`; with no flag and more than one app, `init`
+   lists the apps and writes nothing. When it finds no UI files it writes nothing, and
+   when it derives no route it skips `usabl.routes.json` and says how to map screens by
+   hand. If a `usabl.routes.json` already exists then, it refuses even with `--force`,
+   writes nothing, and names the file to review or delete.
 3. (human) Review the two drafts; the routes and globs are drafts, not measured facts.
-   One limit to plan for: `init` recognizes self-closing `<Route ... />` entries with
-   root-absolute paths, so a `createBrowserRouter` or data-router app starts
-   under-mapped. Step 6 surfaces exactly which screens are missing.
+   `init` reads JSX routes, data routers, route config arrays rendered through `map` (the
+   PatternFly seed shape), lazy routes, and nested routes. Each route it cannot read, and
+   each one it read on an assumption, is a `Review:` line with the file and line. Add
+   those by hand. File-system routers, such as Next.js, are not read. Step 6 surfaces any
+   screen that is still missing.
 4. (human) Merge both files through a normal PR. They are guarded from then on: an edit
    that makes them diverge from the trusted ref forces an `approval_required` verdict
    until a code owner reviews it.
@@ -227,8 +234,9 @@ read as a useful open tool.
 
 **What they need:**
 
-- `usabl init` to scaffold policy. It inspects the working tree, infers `appBaseUrl`
-  from the Vite config port, reads the app router for `<Route>` entries, and writes
+- `usabl init` to scaffold policy (`usabl init --app <dir>` in a monorepo). It inspects
+  the working tree, infers `appBaseUrl` from the Vite config port and https setting, reads
+  the app router for its routes, and writes
   `usabl.config.json` and `usabl.routes.json` as reviewable drafts. It refuses to
   overwrite either file without `--force`, and it writes nothing else. The routes and
   surfaces are drafts to review, not measured facts.

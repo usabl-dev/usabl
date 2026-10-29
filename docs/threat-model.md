@@ -535,14 +535,18 @@ outside every table as the control in an accepted row. Either way a new barrier 
   getters, `contains`, `focus`, or `getComputedStyle` in its own world does not change what they
   report.
 
-**Not handled:** two page operations still run in the page's own world: the zoom write
-(`setZoom`) and the element count that readiness polls to tell when the DOM stopped changing. A
-page can change what those see by redefining DOM methods. No provider calls `setZoom` today. axe
-also computes its target selectors in the page's own world, so a page that patches DOM accessors
-can still change the selector, and with it the identity key, of an axe finding.
+- The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
+  that redefines style writes, or says its root is not an element, cannot stop the zoom from
+  landing. No provider calls `setZoom` today; the planned resize check (WCAG 1.4.4) will.
 
-**Status:** [x] Paths, announcements, table rows, and the focus and style reads run in isolated
-worlds. [ ] The zoom write, the readiness element count, and axe's target selectors are open.
+**Not handled:** one page operation still runs in the page's own world: the element count that
+readiness polls to tell when the DOM stopped changing. A page can change what it sees by
+redefining DOM methods. axe also computes its target selectors in the page's own world, so a page
+that patches DOM accessors can still change the selector, and with it the identity key, of an axe
+finding.
+
+**Status:** [x] Paths, announcements, table rows, the focus and style reads, and the zoom write
+run in isolated worlds. [ ] The readiness element count and axe's target selectors are open.
 
 ---
 
