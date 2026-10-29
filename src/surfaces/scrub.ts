@@ -226,6 +226,10 @@ function quotedValue(word: string): RegExp {
   );
 }
 
+// One character of URL userinfo: anything but white space, a slash, a query or fragment mark, or a
+// backslash that opens another slash pair.
+const USERINFO_CHAR = String.raw`(?:[^\s/?#\\]|\\(?![/\\]))`;
+
 const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   // Authorization headers often carry bearer credentials that should never leave the raw Result.
   { pattern: /(authorization:\s*bearer\s+)\S+/gi, replacement: '$1[REDACTED]' },
@@ -251,8 +255,11 @@ const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   // starts at the two slashes and cannot cross a slash, so each address is read once. It runs to
   // the last @ before the host, because a password can itself contain an @. Each of the two
   // slashes may also be a backslash, which browsers read as a slash in a web address, or either
-  // one escaped with a backslash, as JSON writes them (http:\/\/user:pass@host).
-  { pattern: /((?:\\?[/\\]){2})[^\s/\\?#]+@/g, replacement: '$1[REDACTED]@' },
+  // one escaped with a backslash, as JSON writes them (http:\/\/user:pass@host). A backslash
+  // inside the userinfo is part of it, as in a domain user name (http://CORP\jdoe:pass@proxy).
+  // The userinfo stops before a backslash that starts another slash pair, so a long run of
+  // backslashes is read once rather than once from every backslash in it.
+  { pattern: new RegExp(String.raw`((?:\\?[/\\]){2})${USERINFO_CHAR}+@`, 'g'), replacement: '$1[REDACTED]@' },
   // GitHub tokens, classic and fine-grained. A token pasted into the wrong config key is repeated
   // back in the unknown-key message, so it has to be recognised by its shape alone.
   { pattern: /gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}/g, replacement: '[REDACTED]' },
@@ -263,7 +270,10 @@ const VALUE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
 // pattern above needs one of these words, the opening of a JWT, a GitHub token prefix, or an @
 // after two slashes or their escaped forms, so text without them cannot match and does not need a
 // second look.
-const ANCHOR_HINT = /authorization|token|password|secret|storagestate|eyJ|gh[pousr]_|github_pat_|(?:\\?[/\\]){2}[^\s/\\?#]*@/i;
+const ANCHOR_HINT = new RegExp(
+  String.raw`authorization|token|password|secret|storagestate|eyJ|gh[pousr]_|github_pat_|(?:\\?[/\\]){2}${USERINFO_CHAR}*@`,
+  'i',
+);
 
 function expandReplacement(template: string, match: RegExpExecArray): string {
   return template.replace(/\$(\d)/g, (_whole, digit: string) => match[Number(digit)] ?? '');

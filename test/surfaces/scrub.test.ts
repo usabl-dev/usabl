@@ -7,6 +7,7 @@ import {
   frameUntrusted,
   redactSecrets,
   removeFrameMarkers,
+  scrubPublishedResult,
   scrubResult,
   scrubString,
 } from '../../src/surfaces/scrub.js';
@@ -868,6 +869,36 @@ describe('egress redaction of credential shapes the patterns used to miss', () =
       expect(scrubString(text), text).toBe(text);
     }
   });
+
+  it('redacts userinfo that contains a backslash, as in a domain user name', () => {
+    const text = 'HTTP_PROXY=http://CORP\\jdoe:P4ss@proxy:8080';
+    expect(redactSecrets(text)).toBe('HTTP_PROXY=http://[REDACTED]@proxy:8080');
+    expect(scrubString(text)).toBe('HTTP_PROXY=http://[REDACTED]@proxy:8080');
+    const published = JSON.stringify(
+      scrubPublishedResult(
+        baseResult({
+          coverage: {
+            changedFiles: [],
+            affected: [],
+            unresolvedFiles: [],
+            gaps: [{ ref: 'home', state: 'not-covered', reason: `proxy refused: ${text}` }],
+            nothingToCheck: false,
+          },
+        }),
+      ),
+    );
+    expect(published).not.toContain('P4ss');
+    expect(published).not.toContain('jdoe');
+  });
+
+  it('reads a long run of backslashes once, not once from every backslash in it', () => {
+    // A blowup detector, not a measurement. A shape that rescans the run from every backslash
+    // takes about half a minute here; the linear one takes milliseconds.
+    const startedAt = Date.now();
+    scrubString('\\'.repeat(40000));
+    scrubString('\\\\a'.repeat(15000));
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  }, 60_000);
 
   it('redacts userinfo after an escaped or backslash authority opener', () => {
     for (const text of [
