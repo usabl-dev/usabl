@@ -81,6 +81,7 @@ npx usabl install --claude        # Claude Code Stop hook
 npx usabl install --claude-skill  # /usabl-check and /usabl-fix skills
 npx usabl install --cursor        # Cursor stop hook, command, and rule
 npx usabl install --ci            # pull request gate for GitHub Actions
+npx usabl session                 # sign in once, for screens behind a login
 npx usabl doctor                  # reports what is set up and what is missing
 ```
 
@@ -115,7 +116,8 @@ Known limits:
 
 - Route discovery and the development overlay are built for React and Vite today.
 - usabl has not been load tested against a large fleet of applications.
-- Screens behind a login need a stored session, set with `USABL_STORAGE_STATE`. usabl
+- Screens behind a login need a stored session. Run `npx usabl session` once to sign in
+  and save one (it needs `.usabl/` in `.gitignore`), or set `USABL_STORAGE_STATE`. usabl
   detects many sign-in pages and reports them as gaps, but not every kind.
 - The CI workflow that `usabl install --ci` writes builds the engine from a commit of
   this repository that you pin.

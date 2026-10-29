@@ -550,6 +550,46 @@ run in isolated worlds. [ ] The readiness element count and axe's target selecto
 
 ---
 
+## Threat 12: The saved session file
+
+**Attack:** `usabl session` writes a live credential, a Playwright storage state with session
+cookies and site storage, into the repository folder. It leaks if it is committed and pushed, if
+it rides into a CI artifact or a pull request comment, if another account on the machine reads
+it, or if usabl prints any of it in output, an error, or a Result.
+
+**Controls:**
+
+- Git: the file is written only where `git check-ignore` says git ignores it and `git ls-files`
+  says git does not track it. This is checked before the browser opens and again right before the
+  write. Otherwise it refuses and names the `.gitignore` line (`.usabl/`) or `git rm --cached`.
+- Use: a run loads the saved file only under the same rule. A tracked or unignored file stops the
+  run with no verdict, so a session committed into a pull request is never used by a CI checkout.
+- Permissions: the folder is 0700 and the file 0600, written to a temporary name and renamed so a
+  looser mode left by an older file is replaced. A run that finds looser bits warns with
+  `chmod 600`; doctor reports the file as drifted.
+- Output: nothing in the file is printed by `usabl session`, `usabl check`, `usabl doctor`, or
+  `usabl init`. Messages name the fixed path, counts, and fixes only. A browser error is replaced
+  by a fixed sentence, and `redactStorageStatePath` already keeps the path out of browser errors.
+  `usabl init` checks only that the file exists. The opened URL is the origin of `appBaseUrl`, so
+  a query string in the config is not shown.
+- CI: the generated workflows upload `usabl-result.json` and nothing else, and the Result never
+  names the session file or holds anything from it.
+- Fixtures use low-entropy values (`SECRETPOISON`), because CI runs gitleaks on the whole history.
+
+**Tests:** `test/session/session.test.ts` (refusals before the browser and before the write,
+0600 and 0700, nothing printed), `test/deps/session-file.test.ts` (load only when ignored,
+tracked and unknown refused, expired and non-JSON refused without quoting, mode warning, real
+`git` states), `test/doctor/doctor.test.ts` (each problem and every fix named, nothing printed),
+`test/install/ci.test.ts` (uploads), and `test/session/session-login.integration.test.ts` (a real
+login, then `usabl check` signed in, then doctor on mode 0644 and on a file git would commit).
+
+**Not handled:** the file is plain JSON on disk. Anyone who runs as the same user, and any backup
+of the folder, can read it. Delete it when the session is no longer needed.
+
+**Status:** [x] Shipped with `usabl session`.
+
+---
+
 ## Decision: Stop hook fail-open on exit 4
 
 After the guard runs before any coverage, floor, or waiver parse, a diverged

@@ -285,6 +285,7 @@ src/
   floor/            prune.ts
   init/             index.ts docs/index.ts docs/asciidoc-modular.ts docs/asciibinder.ts
   baseline/         index.ts
+  session/          index.ts   (usabl session: sign in once, save the storage state)
   install/          overlay.ts claude.ts ci.ts branch-rule.ts index.ts
   voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts   (built, not wired; section 7.5)
   measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
@@ -1019,7 +1020,22 @@ password field is reliable on its own. Its own API calls to identity endpoints a
 
 Two layers now stand against this, and neither closes the hole completely.
 
-**Before the browser opens.** When `USABL_STORAGE_STATE` names a file in which every cookie carries
+**Where the session comes from.** In order: a storage state path a library caller passes, then the
+file the `USABL_STORAGE_STATE` environment variable names, then the file `usabl session` saved at
+`.usabl/session/storage-state.json`, when it exists. `buildDeps` resolves it, so the CLI, the dev
+overlay, and the Stop hook all use the same one. `usabl session` opens a headed Chromium at the
+origin of `appBaseUrl` (never its path or query), waits for the person to press Enter or close the
+tab, and saves the Playwright storage state. It refuses with exit 2 before the browser opens, and
+again right before the write, unless git ignores the path, and the refusal names the line to add to
+`.gitignore` (`.usabl/`) or, for a tracked file, `git rm --cached`. The folder is made 0700 and the
+file 0600, written to a temporary name and renamed. It saves nothing, and says so, when the browser
+quits before usabl can read the session or the browser holds no cookies and no site storage. It
+prints only the path and how many cookies and sites the file holds. A run uses the saved file only
+when git ignores it: a file git tracks or would commit stops the run with no verdict (exit 4) and
+the fix, because in a CI checkout it can only be there if someone committed it. A saved file other
+users can read is used, with a warning on stderr that names `chmod 600`.
+
+**Before the browser opens.** When the session file, named by the variable or saved by `usabl session`, is one in which every cookie carries
 an expiry, every one of those is already past, no origin holds local storage or IndexedDB, and
 there are no stored credentials, there is nothing left in it that could authenticate. The run stops
 with no verdict (exit 4). The bar is deliberately "nothing here could possibly work" rather than
@@ -1226,7 +1242,8 @@ counts, not controls. A run that was itself graded on the shell would write the 
 record. The answer for a screen with a late or slow mount is to declare `reachedWhen`.
 
 `usabl init` recommends a signal for every surface it drafts when the application looks
-login-gated: when `USABL_STORAGE_STATE` is set while init runs, or when a discovered route has a
+login-gated: when `USABL_STORAGE_STATE` is set while init runs, when `usabl session` has saved a
+session (init checks only that the file exists), or when a discovered route has a
 sign-in path segment such as `login`, `sign-in`, `logout`, `auth`, or `sso`. It writes none itself,
 because only the operator knows what each screen shows, and a guessed selector that a sign-in page
 also matches would read as proof.
@@ -1978,6 +1995,9 @@ lines.
   `--docs-ci`, and `--branch-rule`; zero or more
   than one refuses with exit 2. `init` scaffolds policy; `install` wires integrations; they
   are different commands (see section 12).
+- Sign in once: `usabl session` opens a browser at the app, the person signs in, and it saves the
+  Playwright storage state to `.usabl/session/storage-state.json` (0600, in a 0700 folder) only
+  where git ignores it. Later runs sign in with it (see "Where the session comes from").
 - Baseline drafts: `usabl baseline` runs two full UI scans and writes `.usabl-evidence.json`
   as a reviewable working-tree diff, holding only what both scans found. It lists the rest as
   intermittent, by screen and rule, and says how to handle them (see Evidence floor). A floored
@@ -2351,13 +2371,18 @@ that held is one way, and a matching element seen on the run is the other (secti
 cannot declare a signal, and a surfaces entry with its id is refused, so doctor names docs pages
 with floored debt in a note of their own that points to `usabl floor prune --unconfirmed` for a
 barrier known to be fixed. The session surface reads the
-`USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file:
-unset is missing, a readable JSON file that still holds something which could authenticate
+`USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file, and
+when it is unset, the file `usabl session` saved at `.usabl/session/storage-state.json`:
+neither is missing, a readable JSON file that still holds something which could authenticate
 is wired, and a path that names no file, names a file that is not JSON, or names a state
 holding nothing that could authenticate (no unexpired or undated cookie, no local storage,
-no IndexedDB, and no stored credential) is drifted. Doctor reads the same expiry rule
-`usabl check` refuses on, so the two surfaces cannot disagree about one file. Doctor
-reports whether a session is set and never prints the path or the file contents. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
+no IndexedDB, and no stored credential) is drifted. It is also drifted when git would commit
+the file (`git ls-files` and `git check-ignore`; a file outside the repository cannot be
+committed) or when its group or other permission bits are set, and the next step names every
+fix at once: the `.gitignore` line, `git rm --cached`, `chmod 600`, or `usabl session`. Doctor
+reads the same expiry rule `usabl check` refuses on, so the two surfaces cannot disagree about
+one file. Doctor reports whether a session is set and never prints the variable's path or the
+file contents. The saved file's fixed path is printed, because usabl chose it. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
 engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the pin
 sentinel), or `drifted` (any other shape). Doctor never mints a verdict or a receipt.
 
