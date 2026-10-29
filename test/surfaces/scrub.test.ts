@@ -845,6 +845,30 @@ describe('egress redaction of credential shapes the patterns used to miss', () =
     }
   });
 
+  it('redacts a quoted value after a key word that follows a quote', () => {
+    // The quote after the separator closes a label only when it repeats the quote before the
+    // key word on the same line and nothing that could be a value follows it. The token value is
+    // assembled at run time so no token-shaped string appears in the source.
+    const tokenValue = ['abcdefgh', '12345678'].join('');
+    for (const [text, secret] of [
+      [`<input data-cfg="password='hunter2'">`, 'hunter2'],
+      [`"PASSWORD: 'hunter2'"`, 'hunter2'],
+      [`"secret='s3cr3t value'"`, 's3cr3t'],
+      [`const cfg = 'token="${tokenValue}"'`, tokenValue],
+      [`Error: "password: "hunter2" rejected`, 'hunter2'],
+      [`x"password:\n"hunter2"`, 'hunter2'],
+    ] as const) {
+      expect(scrubString(text), text).not.toContain(secret);
+      expect(egress(text), text).not.toContain(secret);
+    }
+  });
+
+  it('keeps a label in an attribute or JSON whose closing quote follows its colon', () => {
+    for (const text of ['<input aria-label="Password :">', '{"label":"Password:"}', '[aria-label="Secret:"]']) {
+      expect(scrubString(text), text).toBe(text);
+    }
+  });
+
   it('redacts userinfo after an escaped or backslash authority opener', () => {
     for (const text of [
       `https:\\\\user:${POISON}@host.local/x`,

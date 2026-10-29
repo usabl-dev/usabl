@@ -190,13 +190,21 @@ const BEFORE_SEPARATOR = String.raw`["']?[ \t]*[=:]`;
 // What may sit between the separator and the value: any whitespace, line breaks included.
 const AFTER_SEPARATOR = String.raw`\s*`;
 
-// A quote after the separator opens the value, unless the key word itself sits inside a quote
-// that is still open. Then the quote after the separator closes a label, as in
-// aria-label="Password :" or {"label":"Password:"}, and no value follows. The JSON form
+// A quote after the separator opens the value, unless it closes a label: the key word sits right
+// after the same quote character, on the same line with only spaces or tabs around the separator,
+// and nothing that could be a value follows the quote. That is the shape of
+// aria-label="Password :" and {"label":"Password:"}. A different quote, a line break, or more text
+// right after the quote reads as a value, as in "password='hunter2'" or "password: "hunter2" here,
+// because a missed label costs a redacted word and a missed value costs a credential. The JSON form
 // "password": "..." is not caught by this, because its key closes its own quote before the
 // separator.
+const LABEL_END = String.raw`(?:$|[\s>,}\]/])`;
+
 function quoteOpensValue(word: string): string {
-  return String.raw`(?<!["']${word}[ \t]*[=:]${AFTER_SEPARATOR})`;
+  const closesLabel = ['"', "'"].map(
+    (quote) => String.raw`(?<=${quote}${word}[ \t]*[=:][ \t]*)${quote}${LABEL_END}`,
+  );
+  return `(?!${closesLabel.join('|')})`;
 }
 
 // The key, its separator, and an optional opening quote with the whitespace inside it. Each run of
