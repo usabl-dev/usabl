@@ -578,17 +578,53 @@ export function scrubResult(result: Result): Result {
   };
 }
 
+// Fields that name an identity rather than describe one. The gate, the evidence floor, and
+// waivers match them byte for byte, and a waiver scope is copied from the elementKey in
+// `usabl check --json`. A structural key holds the element path, and an axe selector can hold an
+// absolute URL, as in a[href="https://t.co/?ref=nav"], so taking the query out of either would
+// publish a key that no longer matches. Credential redaction still applies to them.
+const IDENTITY_FIELDS: ReadonlySet<string> = new Set([
+  'screenId',
+  'layer',
+  'rule',
+  'rules',
+  'elementKey',
+  'elementPath',
+  'surfaces',
+]);
+
+function stripUrlsOutsideIdentity(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return stripUrlSecrets(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripUrlsOutsideIdentity(entry));
+  }
+
+  if (isPlainObject(value)) {
+    const stripped: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value)) {
+      stripped[key] = IDENTITY_FIELDS.has(key) ? nested : stripUrlsOutsideIdentity(nested);
+    }
+    return stripped;
+  }
+
+  return value;
+}
+
 /**
  * A scrubbed copy of a Result for the surfaces that publish it: the CLI text, the JSON Result,
  * and the pull request comment. On top of scrubResult, every URL in it loses its sign-in
- * credentials, its query string, and its fragment, the way checkPage output does.
+ * credentials, its query string, and its fragment, the way checkPage output does. Identity
+ * fields keep their URLs as written, so a key copied from this output still matches.
  *
  * A configured screen url can carry a preview token or a session value in its query, and CI
  * posts these surfaces where many people can read them. The overlay and the stop hook keep
  * scrubResult, because the overlay matches a gap to its screen by the exact url.
  */
 export function scrubPublishedResult(result: Result): Result {
-  return scrubUnknown(scrubResult(result), stripUrlSecrets) as Result;
+  return stripUrlsOutsideIdentity(scrubResult(result)) as Result;
 }
 
 /**

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Result } from '../../src/contracts/index.js';
+import type { Coverage, Draft, EvidenceFloor, Result } from '../../src/contracts/index.js';
+import { gate } from '../../src/gate/index.js';
 import {
   ciRefusal,
   localApprovalNextSteps,
@@ -272,6 +273,57 @@ describe('projectCli', () => {
     expect(projected.text).toContain('http://127.0.0.1:5173/clusters');
     // The raw Result keeps the url as written, for the overlay and for receipts.
     expect(raw.screens[0]?.url).toBe(url);
+  });
+
+  it('publishes finding identity keys unchanged, so a waiver copied from the JSON still matches', () => {
+    // A structural key holds the element path, and an axe selector can hold an absolute URL with
+    // a query. Waivers match the key exactly, so the published key has to be the real one.
+    const coverage: Coverage = {
+      changedFiles: ['src/Home.tsx'],
+      affected: [{ screenId: 'home', url: 'http://127.0.0.1:5173/', provenance: 'manual' }],
+      unresolvedFiles: [],
+      gaps: [],
+      nothingToCheck: false,
+    };
+    const floor: EvidenceFloor = { version: 3, entries: [] };
+    const draft: Draft = {
+      rule: 'link-name', layer: 'axe', severity: 'serious', evidenceClass: 'deterministic',
+      screenId: 'home', elementPath: 'a[href="https://t.co/?ref=nav"]', elementName: null, role: 'link',
+      whatUserExperiences: '', why: '', fix: '', evidence: {}, confidence: 'fail',
+    };
+    const input = { guardDivergedPaths: [] as string[], coverage, floor, drafts: [draft], cleanlyScannedScreens: new Set<string>(), now: '2026-06-01T00:00:00.000Z' };
+    const first = gate({ ...input, waivers: [] });
+    expect(first.verdict).toBe('regression');
+    const realKey = first.findings[0]?.elementKey;
+    expect(realKey).toBe('home|link-name|struct:link:a[href="https://t.co/?ref=nav"]');
+
+    const published = parseResultJson(
+      JSON.parse(
+        projectCli(
+          baseResult({
+            verdict: 'regression',
+            exitCode: 1,
+            accessibilityVerdict: 'regression',
+            accessibilityExitCode: 1,
+            coverage,
+            findings: first.findings,
+          }),
+        ).json,
+      ),
+    );
+    const publishedKey = published.findings[0]?.elementKey ?? '';
+    expect(publishedKey).toBe(realKey);
+
+    const waived = gate({
+      ...input,
+      waivers: [
+        {
+          rule: 'link-name', surface: 'home', scope: publishedKey, reason: 'tracked', owner: 'team', approvedBy: 'owner',
+          created: '2026-01-01T00:00:00.000Z', expires: '2026-12-31T00:00:00.000Z',
+        },
+      ],
+    });
+    expect(waived.verdict).toBe('verified');
   });
 
   it('projects idle headline when verdict is null', () => {
