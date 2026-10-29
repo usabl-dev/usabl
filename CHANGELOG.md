@@ -33,6 +33,10 @@
 
 ### Fixed
 
+- `setZoom` now writes the zoom from an isolated world, like the focus and style reads. Before,
+  it ran in the page's own world, so a page that redefined style writes could stop the zoom
+  from landing. No check calls it yet.
+
 - `usabl init` reads the dev server port and https setting from the parsed Vite config.
   Before, a pattern match took the first `port:` after `server:`, so a `preview.port`
   could become the draft's port, and https was never read. A setting written as code is

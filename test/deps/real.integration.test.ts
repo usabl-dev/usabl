@@ -1622,6 +1622,27 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     });
   });
 
+  // A page that swallows every inline style write and says its root is not an element, so a zoom
+  // written from the page's own world never lands.
+  const ZOOM_REFUSING_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Zoom</title></head><body>
+    <main><p>Text</p></main>
+    <script>
+      Object.defineProperty(CSSStyleDeclaration.prototype, 'zoom', { get() { return ''; }, set() {}, configurable: true });
+      Object.defineProperty(HTMLElement, Symbol.hasInstance, { value: () => false });
+    </script>
+  </body></html>`;
+
+  it('setZoom sets the zoom on a page that redefines style writes', async () => {
+    const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(ZOOM_REFUSING_PAGE)}`);
+    try {
+      await page.setZoom(200);
+      // getComputedStyle runs in an isolated world, so it reads what the browser applied.
+      await expect(page.getComputedStyle('html', 'zoom')).resolves.toBe('2');
+    } finally {
+      await page.close();
+    }
+  });
+
   it('returns null for ignored or missing AX nodes', async () => {
     const page = await driver.open(fixture.url);
     try {
