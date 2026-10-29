@@ -2127,7 +2127,11 @@ The capture and the element path function run in isolated worlds, which share th
 page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
 page that defines `window.__usablDrain` or `window.__usablPathFor` before adoption, or replaces
 them after load, changes nothing usabl reads, and neither does a page that redefines
-`textContent`, `querySelectorAll`, or `CSS.escape` in its own world. A document where the capture
+`textContent`, `querySelectorAll`, or `CSS.escape` in its own world. The focus and style reads
+(`focusBody`, `activeElementIs`, `activeElementWithin`, the focused element behind `activeNode`,
+and `getComputedStyle`) run in an isolated world as well, so a page that redefines
+`querySelector`, the `activeElement` getter, `contains`, `focus`, or `getComputedStyle` cannot
+make a focus check report what it wants. A document where the capture
 is not running is an error, which the check runner turns into a coverage gap, never an empty list
 of announcements. An element is named by its id only when that id's selector matches exactly the
 element in hand, so two ids that escape to one selector, such as a NUL and a literal U+FFFD, give
