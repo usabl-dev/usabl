@@ -47,6 +47,8 @@ describe('usabl install command wiring', () => {
   });
 
   it('routes --overlay to the overlay generator and writes vite.config.ts', async () => {
+    // The app runs Vite and has no Vite config yet, so the draft is a file Vite will read.
+    await writeFile(join(workspace, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
     const code = await main(['install', '--overlay']);
     expect(code).toBe(0);
     const written = await readFile(join(workspace, 'vite.config.ts'), 'utf8');

@@ -27,9 +27,13 @@ function memoryFs(files: Record<string, string>): InstallFs & { store: Record<st
   };
 }
 
+// A Vite app with no Vite config: its dev script runs the vite command, which reads vite.config.ts
+// when one appears. Install writes the draft only when it can see the app runs Vite.
+const VITE_APP_PACKAGE = JSON.stringify({ scripts: { dev: 'vite', build: 'vite build' } });
+
 describe('planOverlay', () => {
-  it('plans a full draft when no vite config exists', async () => {
-    const plan = await planOverlay(memoryFs({}));
+  it('plans a full draft when the app runs Vite and no vite config exists', async () => {
+    const plan = await planOverlay(memoryFs({ 'package.json': VITE_APP_PACKAGE }));
     expect(plan.action).toBe('write');
     expect(plan.path).toBe('vite.config.ts');
     if (plan.action === 'write') {
@@ -88,7 +92,7 @@ export default defineConfig({
 
 describe('writeOverlay', () => {
   it('writes the draft when absent and stays idempotent on a second run', async () => {
-    const fs = memoryFs({});
+    const fs = memoryFs({ 'package.json': VITE_APP_PACKAGE });
     const first = await writeOverlay(fs, await planOverlay(fs));
     expect(first.exitCode).toBe(0);
     expect(first.action).toBe('written');
