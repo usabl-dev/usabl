@@ -374,7 +374,7 @@ function webpackRefusalMessage(path: string, esm: boolean): string {
     `Found webpack. Refusing to edit ${path}: usabl cannot prove a lossless insertion into an existing webpack config.`,
     `Add the overlay by hand to the config your dev server uses (${path}). Add this near the top:`,
     importLine,
-    'and add this entry to its plugins array:',
+    'and add this entry to its plugins array, creating the array if the config has none:',
     `  new UsablWebpackPlugin({ cwd: ${webpackCwdExpression(path, esm)} }),`,
     'The plugin does nothing unless webpack runs in development mode, so a production build does not change.',
     ...(esm ? [] : ['require() of usabl/webpack needs Node.js 22.12 or later.']),
