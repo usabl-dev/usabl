@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- The announcement capture no longer records a change inside content hidden from
+  assistive technology. Before, a polite status inside `aria-hidden="true"` was recorded as
+  announced, though Orca says nothing for it, so a flow requirement that expected its text
+  passed. Now a change is not recorded when anything between it and the top of the page,
+  the live region included, has `inert`, `hidden`, or an `aria-hidden` value Chromium reads
+  as true (every non-empty value but `false` and `undefined`). The walk follows the flat
+  tree, so an `aria-hidden` wrapper around a slot counts. `aria-hidden="false"` is heard.
+
 - The focus and style reads now run in an isolated world, the way element paths and the
   announcement capture already did. These are `focusBody`, `activeElementIs`,
   `activeElementWithin`, the focused element `activeNode` reads, and `getComputedStyle`.
