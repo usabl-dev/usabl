@@ -12,6 +12,7 @@ import { isRouterSource, readRouterSource, screenIdFromUrl } from '../coverage/r
 import { validateId } from '../intake/id-grammar.js';
 import { STORAGE_STATE_ENV_VAR } from '../deps/session.js';
 import { APP_INIT_REFUSAL, unusableIdsError, type UnusableId } from './unusable-ids.js';
+import { loadAliasConfig, resolveAliasSpecifier, type AliasMapping } from '../coverage/alias-config.js';
 
 // Init writes only these two drafts. Waivers stay human-authored judgment.
 const POLICY_FILES = ['usabl.config.json', 'usabl.routes.json'] as const;
@@ -25,7 +26,15 @@ const VITE_CONFIG_CANDIDATES = [
   'vite.config.cts',
   'vite.config.cjs',
 ];
-const ROUTER_CANDIDATES = ['src/App.tsx', 'src/App.jsx', 'src/routes.tsx', 'src/router.tsx'];
+// The PatternFly seed keeps its route config and router in src/app/routes.tsx.
+const ROUTER_CANDIDATES = [
+  'src/App.tsx',
+  'src/App.jsx',
+  'src/routes.tsx',
+  'src/router.tsx',
+  'src/app/routes.tsx',
+  'src/app/routes.jsx',
+];
 // Seed guardedPaths to match the engine's always-guarded set so a first draft
 // cannot omit a ledger the gate later treats as trusted policy.
 const ALWAYS_GUARDED = [
@@ -35,6 +44,16 @@ const ALWAYS_GUARDED = [
   '.usabl-waivers.json',
 ];
 const ENTRY_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js'];
+// TypeScript written as ESM imports a file by the name it compiles to, so `./Page.js` can mean
+// Page.ts or Page.tsx. Each written extension maps to the files it can name, itself included.
+const WRITTEN_EXTENSION_FILES: ReadonlyArray<[string, string[]]> = [
+  ['.js', ['.js', '.ts', '.tsx']],
+  ['.jsx', ['.jsx', '.tsx']],
+  ['.mjs', ['.mjs', '.mts']],
+  ['.cjs', ['.cjs', '.cts']],
+  ['.tsx', ['.tsx']],
+  ['.ts', ['.ts']],
+];
 
 export interface InitFs {
   readFile(path: string): Promise<string | null>;
@@ -79,35 +98,59 @@ function lineAtOffset(raw: string, offset: number): number {
 // or nothing proven.
 type EntryResolution = { file: string } | { candidates: string[] } | null;
 
-async function resolveEntryFile(
-  fs: InitFs,
-  routerFile: string,
-  specifier: string,
-): Promise<EntryResolution> {
-  const resolved = posix.normalize(posix.join(posix.dirname(routerFile), specifier));
-  // Stay inside the project tree. A `..` after normalize is an unproven path,
-  // not an entry file we are willing to attribute.
-  if (resolved.startsWith('..') || posix.isAbsolute(resolved)) {
-    return null;
-  }
-  const hasExtension = ENTRY_EXTENSIONS.some((ext) => resolved.endsWith(ext));
-  const candidates = hasExtension
-    ? [resolved]
-    : ENTRY_EXTENSIONS.map((ext) => resolved + ext);
+async function existingFiles(fs: InitFs, candidates: readonly string[]): Promise<string[]> {
   const hits: string[] = [];
   for (const candidate of candidates) {
     if ((await fs.readFile(candidate)) !== null) {
       hits.push(candidate);
     }
   }
-  // The bundler's pick among several files depends on its configured extension order, which init
-  // cannot read. Picking one could map the screen to a file it does not render, and the committed
-  // sidecar would then hide that, so more than one hit is disclosed and left unattributed.
-  if (hits.length === 1 && hits[0] !== undefined) {
-    return { file: hits[0] };
+  return hits;
+}
+
+/**
+ * The entry file an import specifier names. A relative specifier is resolved from the router file;
+ * any other only through a path alias the project configures (tsconfig paths or Vite
+ * resolve.alias), so a package import resolves to nothing.
+ *
+ * Candidates are tried in tiers, as bundlers do: a written extension names that file or its
+ * TypeScript source (`./Page.js` can be Page.ts); with no extension, the file tier (`Page.tsx`,
+ * `Page.ts`, `Page.jsx`, `Page.js`) comes before the directory tier (`Page/index.tsx` and the rest).
+ * A file always wins over a directory index, in every bundler, so that order is not a guess. Inside
+ * one tier the bundler's pick depends on its configured extension order, which init cannot read, so
+ * more than one hit is disclosed and left unattributed: picking one could map the screen to a file
+ * it does not render, and the committed sidecar would then hide that.
+ */
+async function resolveEntryFile(
+  fs: InitFs,
+  routerFile: string,
+  specifier: string,
+  aliases: readonly AliasMapping[],
+): Promise<EntryResolution> {
+  const target = specifier.startsWith('.')
+    ? posix.join(posix.dirname(routerFile), specifier)
+    : resolveAliasSpecifier(specifier, [...aliases]);
+  if (target === null) {
+    return null;
   }
-  if (hits.length > 1) {
-    return { candidates: [...hits].sort() };
+  const resolved = posix.normalize(target);
+  // Stay inside the project tree. A `..` after normalize is an unproven path,
+  // not an entry file we are willing to attribute.
+  if (resolved.startsWith('..') || posix.isAbsolute(resolved)) {
+    return null;
+  }
+  const written = WRITTEN_EXTENSION_FILES.find(([ext]) => resolved.endsWith(ext));
+  const tiers = written
+    ? [written[1].map((ext) => resolved.slice(0, -written[0].length) + ext)]
+    : [ENTRY_EXTENSIONS.map((ext) => resolved + ext), ENTRY_EXTENSIONS.map((ext) => `${resolved}/index${ext}`)];
+  for (const tier of tiers) {
+    const hits = await existingFiles(fs, tier);
+    if (hits.length === 1 && hits[0] !== undefined) {
+      return { file: hits[0] };
+    }
+    if (hits.length > 1) {
+      return { candidates: [...hits].sort() };
+    }
   }
   return null;
 }
@@ -223,6 +266,7 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
     const read = readRouterSource(routerRaw, routerFile);
     const imports = read.localImports;
     const parsed = read.routes;
+    const aliases = read.bareImports.size > 0 ? (await loadAliasConfig(fs)).mappings : [];
     if (read.dataRouter) {
       notes.push('Review: data-router routes detected; verify entry file attribution.');
     }
@@ -237,25 +281,32 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
           'scans a route that usabl.routes.json leaves out. Add the route by hand before you merge.',
       );
     }
+    // A route list read on an assumption is in the draft. The operator confirms the assumption.
+    for (const entry of read.assumed) {
+      const where = entry.line === null ? routerFile : `${routerFile} line ${entry.line}`;
+      notes.push(`Review: ${where}: ${entry.reason}`);
+    }
     let attributed = 0;
     for (const route of parsed) {
+      const where = `${routerFile} line ${lineAtOffset(routerRaw, route.offset)}`;
       if (!isProvenRoutePath(route.path)) {
         notes.push(
-          `Review: skipped unproven route path "${route.path}". Nested or relative paths are not attributed.`,
+          `Review: ${where}: skipped unproven route path "${route.path}". Nested or relative paths are not attributed.`,
         );
         continue;
       }
       let entryFile: string | null = null;
       let entryCandidates: string[] = [];
-      if (route.component !== null) {
-        const specifier = imports.get(route.component);
-        if (specifier !== undefined) {
-          const resolution = await resolveEntryFile(fs, routerFile, specifier);
-          if (resolution !== null && 'file' in resolution) {
-            entryFile = resolution.file;
-          } else if (resolution !== null) {
-            entryCandidates = resolution.candidates;
-          }
+      const specifier =
+        route.component !== null
+          ? (imports.get(route.component) ?? read.bareImports.get(route.component))
+          : route.entryImport;
+      if (specifier !== undefined) {
+        const resolution = await resolveEntryFile(fs, routerFile, specifier, aliases);
+        if (resolution !== null && 'file' in resolution) {
+          entryFile = resolution.file;
+        } else if (resolution !== null) {
+          entryCandidates = resolution.candidates;
         }
       }
       // Ask the question the parser is going to ask, at the point the id is made. A route path
@@ -273,7 +324,7 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
       const refusal = validateId(screenId);
       if (!refusal.ok) {
         unusable.push({
-          source: `${routerFile} line ${lineAtOffset(routerRaw, route.offset)}`,
+          source: where,
           origin: 'the screen id derived from the route path there',
           refusal,
         });
@@ -285,11 +336,11 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
         attributed += 1;
       } else if (entryCandidates.length > 0) {
         notes.push(
-          `Review: ${route.path} has no proven entry file. Its import matches more than one file: ` +
+          `Review: ${where}: ${route.path} has no proven entry file. Its import matches more than one file: ` +
             `${entryCandidates.join(', ')}. Set entryFile in usabl.routes.json to the file the route renders.`,
         );
       } else {
-        notes.push(`Review: ${route.path} has no proven entry file.`);
+        notes.push(`Review: ${where}: ${route.path} has no proven entry file.`);
       }
       routes.push({
         screenId,
@@ -310,12 +361,17 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
 
   const srcTsx = await fs.glob(['src/**/*.tsx']);
   const uiFileGlobs = srcTsx.length > 0 ? ['src/**/*.tsx'] : [];
+  // The router file itself can change every route, so it is wide blast too. src/index.tsx and
+  // src/index.html are the shell in apps built like the PatternFly seed.
   const wideCandidates = [
     'src/main.tsx',
     'src/main.ts',
+    'src/index.tsx',
     'src/App.tsx',
     'src/App.jsx',
+    ...(routerFile.length > 0 ? [routerFile] : []),
     'index.html',
+    'src/index.html',
     'vite.config.ts',
     'vite.config.js',
     ...(await fs.glob(['src/**/*.css'])),

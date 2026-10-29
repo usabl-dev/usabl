@@ -22,9 +22,16 @@
  * with its line, so the planner, init, and drift can each say so. A file that does not parse comes
  * back the same way, as one unreadable entry, never as a router with no routes.
  *
- * It must never invent entry files. A component is attributed only to a JSX route that has no child
- * routes and that sits in a router this module defines, including JSX passed to
- * `createRoutesFromElements`. Route objects are never attributed.
+ * A route config array rendered through `map` inside a router is read too, when the callback
+ * returns one route element whose path is the item's `path`. Its objects are read like a data
+ * router's, with nested `routes` or `children` lists. When the list reaches the map through code
+ * the reader does not run, such as `reduce`, or a nested relative path was joined to its parent,
+ * the read is an `assumed` entry with a line, so init can ask the operator to confirm it.
+ *
+ * It must never invent entry files. A component is attributed only to a leaf route, one with no
+ * child routes, that sits in a router this module defines: a JSX route's `element={<Name />}`, and
+ * a route object's `element: <Name />`, `Component: Name`, or `lazy: () => import('./module')`. A
+ * config array item is attributed only from the field its map callback renders.
  */
 import { createHash } from 'node:crypto';
 import { describeIdProblem } from '../intake/id-grammar.js';
@@ -47,6 +54,19 @@ export interface ParsedRouteSite {
   path: string;
   component: string | null;
   offset: number;
+  // The module a data router `lazy` route imports, when that is how the route names what it
+  // renders. Set only when `component` is null.
+  entryImport?: string;
+}
+
+/**
+ * A route list the reader read by assuming what code it does not run does, such as a `reduce` that
+ * flattens a route config. `line` is the line of the map call. The reason is a full sentence that
+ * never repeats source text.
+ */
+export interface AssumedRoutes {
+  line: number | null;
+  reason: string;
 }
 
 /** A route whose path cannot be turned into a screen id, with the reason in config-message words. */
@@ -80,11 +100,17 @@ export interface RouterSourceRead {
   // data-router reader and its tests read alone.
   dataRoutes: ParsedRouteSite[];
   unreadable: UnreadableRoute[];
+  // Route lists read on an assumption the operator should confirm.
+  assumed: AssumedRoutes[];
   // Whether the module calls createBrowserRouter, createHashRouter, createMemoryRouter, or a name
   // for one of them.
   dataRouter: boolean;
-  // Local names bound by relative, non-type imports, mapped to their specifiers.
+  // Local names bound by relative, non-type imports, mapped to their specifiers. A const made by
+  // React's lazy from one relative dynamic import counts as an import of that module.
   localImports: Map<string, string>;
+  // The same for imports that are not relative, such as "@app/Page". Only a path alias the project
+  // configures can map one of these to a file; a package import maps to none.
+  bareImports: Map<string, string>;
 }
 
 export function screenIdFromUrl(url: string): string {
@@ -140,9 +166,8 @@ export function isRouterSource(raw: string): boolean {
   );
 }
 
-// Discovers data-router route URLs from route object lists only. It never attributes
-// a component: a data route's element is not proof of which file renders the screen, and
-// route-manifest's rule holds here too, never invent entry-file attribution from router text.
+// Discovers data-router routes from route object lists only. A component is named only for a
+// leaf route object, from the object itself, as the file comment describes.
 export function parseDataRouterRoutes(raw: string, file = 'router.tsx'): ParsedRouteSite[] {
   return readRouterSource(raw, file).dataRoutes;
 }
@@ -158,16 +183,23 @@ export function mergeParsedRoutes(
   jsxRoutes: readonly ParsedRouteSite[],
   dataRoutes: readonly ParsedRouteSite[],
 ): ParsedRouteSite[] {
-  const byPath = new Map<string, { site: ParsedRouteSite; components: Set<string> }>();
+  const byPath = new Map<string, { site: ParsedRouteSite; sources: Map<string, ParsedRouteSite> }>();
   for (const route of [...jsxRoutes, ...dataRoutes]) {
-    const entry = byPath.get(route.path) ?? { site: route, components: new Set<string>() };
-    if (route.component !== null) entry.components.add(route.component);
+    const entry = byPath.get(route.path) ?? { site: route, sources: new Map<string, ParsedRouteSite>() };
+    // A component name and a lazy module are both a claim about what the route renders. They are
+    // kept apart by kind so a name and a module path can never be read as the same claim.
+    if (route.component !== null) entry.sources.set(`component:${route.component}`, route);
+    else if (route.entryImport !== undefined) entry.sources.set(`import:${route.entryImport}`, route);
     byPath.set(route.path, entry);
   }
-  return [...byPath.values()].map(({ site, components }) => ({
-    ...site,
-    component: components.size === 1 ? ([...components][0] ?? null) : null,
-  }));
+  return [...byPath.values()].map(({ site, sources }) => {
+    const { entryImport: _ignored, ...rest } = site;
+    const only = sources.size === 1 ? [...sources.values()][0] : undefined;
+    if (only === undefined) return { ...rest, component: null };
+    return only.component !== null
+      ? { ...rest, component: only.component }
+      : { ...rest, component: null, ...(only.entryImport === undefined ? {} : { entryImport: only.entryImport }) };
+  });
 }
 
 // The calls whose first argument is the application's route list. A local name imported as one of
@@ -184,6 +216,17 @@ const ROUTES_FROM_ELEMENTS_FUNCTIONS = new Set(['createRoutesFromElements', 'cre
 const JSX_ROUTER_ELEMENTS = new Set(['Routes', 'Switch']);
 // Elements that may sit among routes and declare no screen of their own.
 const NON_ROUTE_ELEMENTS = new Set(['Navigate', 'Redirect']);
+// The array methods a route config can pass through on its way to the map that renders it. The
+// reader does not run them; it reads every route object in the list and says so.
+const CONFIG_LIST_METHODS = new Set(['reduce', 'flatMap', 'flat', 'filter']);
+// The keys under which a route config object nests more route objects.
+const CONFIG_NESTED_KEYS = ['routes', 'children'] as const;
+// What React Router reads from a data route object to know what it renders, and how it reads each.
+const DATA_ROUTE_RENDER_KEYS: ReadonlyMap<string, RenderKind> = new Map<string, RenderKind>([
+  ['element', 'element'],
+  ['Component', 'component'],
+  ['lazy', 'lazy'],
+]);
 // Wrappers that the parser keeps around an expression and that do not change its value.
 const TRANSPARENT_WRAPPERS = new Set([
   'TSAsExpression',
@@ -406,6 +449,7 @@ class RouterReader {
   readonly dataSites: ParsedRouteSite[] = [];
   // Each gap keeps the offset of the expression it is about, so two gaps on one line stay two.
   readonly unreadable: Array<UnreadableRoute & { offset: number }> = [];
+  readonly assumed: Array<AssumedRoutes & { offset: number }> = [];
   // Expressions already being followed, so a const that refers to itself cannot loop.
   private readonly following = new Set<AstNode>();
   // Nodes reported as unreadable, so a <Route> inside one is not reported a second time.
@@ -650,9 +694,98 @@ class RouterReader {
         }
         return;
       }
+      case 'CallExpression': {
+        const gapsBefore = this.gapped.size;
+        if (this.readConfigMap(node, parent, base, attribute)) return;
+        // A list changed in place is already named where the map reads it. The call is marked too,
+        // so the <Route> in its callback is not named a second time as a loose route.
+        if (this.gapped.size === gapsBefore) this.gap(node, REASONS.computedRoutes);
+        else this.gapped.add(node);
+        return;
+      }
       default:
         this.gap(node, REASONS.computedRoutes);
     }
+  }
+
+  /**
+   * Reads `list.map((item) => <Route path={item.path} ... />)` when `list` is, or comes from, a
+   * const array of route objects. Returns false when the call is not that shape, so the caller
+   * reports it as routes built by code. A list changed in place is reported here and returns false.
+   */
+  private readConfigMap(call: AstNode, parent: string | null | undefined, base: string | null, attribute: boolean): boolean {
+    const callee = unwrap(child(call, 'callee'));
+    if (
+      callee === null ||
+      (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') ||
+      callee['computed'] === true ||
+      nameOf(child(callee, 'property')) !== 'map'
+    ) {
+      return false;
+    }
+    const shape = mappedRouteShape(children(call, 'arguments')[0] ?? null);
+    if (shape === null) return false;
+    const through: string[] = [];
+    const list = this.traceConfigList(child(callee, 'object'), through);
+    if (list === null) return false;
+    this.visitedRoutes.add(shape.route);
+    const mode: ObjectRouteMode = {
+      nestedKeys: CONFIG_NESTED_KEYS,
+      renderKeys: new Map(attribute && shape.renders !== null ? [[shape.renders.field, shape.renders.as]] : []),
+      sink: this.jsxSites,
+      joinedNested: false,
+    };
+    this.readDataRoutes(list, parent, call, base, mode);
+    const reasons: string[] = [];
+    if (through.length > 0) {
+      const methods = [...new Set(through)].join(' and ');
+      reasons.push(`These routes come from a route config list through ${methods}, which usabl does not run.`);
+    }
+    if (mode.joinedNested) {
+      reasons.push("usabl joined each nested relative path to its parent's path.");
+    }
+    if (shape.elementName !== 'Route') {
+      reasons.push(`Each route is rendered through <${shape.elementName}>, not <Route>.`);
+    }
+    if (reasons.length > 0) {
+      const start = typeof call.start === 'number' ? call.start : 0;
+      this.assumed.push({
+        line: lineOf(call),
+        reason: `${reasons.join(' ')} usabl read every route object in the list as a route. Check that the app renders each one at the path in the draft.`,
+        offset: start,
+      });
+    }
+    return true;
+  }
+
+  // The const array literal a mapped list comes from, following consts and the array methods in
+  // CONFIG_LIST_METHODS, or null when it comes from anything else.
+  private traceConfigList(expression: AstNode | null, through: string[]): AstNode | null {
+    const node = unwrap(expression);
+    if (node === null) return null;
+    if (node.type === 'ArrayExpression') return node;
+    if (node.type === 'Identifier') {
+      const init = this.followList(node);
+      if (init === null) return null;
+      this.following.add(init);
+      try {
+        return this.traceConfigList(init, through);
+      } finally {
+        this.following.delete(init);
+      }
+    }
+    if (node.type === 'CallExpression') {
+      const callee = unwrap(child(node, 'callee'));
+      if (
+        (callee?.type === 'MemberExpression' || callee?.type === 'OptionalMemberExpression') &&
+        callee['computed'] !== true &&
+        CONFIG_LIST_METHODS.has(nameOf(child(callee, 'property')) ?? '')
+      ) {
+        through.push(nameOf(child(callee, 'property')) ?? '');
+        return this.traceConfigList(child(callee, 'object'), through);
+      }
+    }
+    return null;
   }
 
   private readJsxRoute(
@@ -751,7 +884,13 @@ class RouterReader {
    * top-level relative path is relative to: "/" for a router factory call, and for useRoutes only
    * when it is the one router in the file.
    */
-  readDataRoutes(expression: AstNode | null, parent: string | null | undefined, at: AstNode, base: string | null): void {
+  readDataRoutes(
+    expression: AstNode | null,
+    parent: string | null | undefined,
+    at: AstNode,
+    base: string | null,
+    mode: ObjectRouteMode = this.dataMode,
+  ): void {
     const node = unwrap(expression);
     if (node === null) {
       this.gap(at, REASONS.computedRoutes);
@@ -760,14 +899,14 @@ class RouterReader {
     if (node.type === 'ArrayExpression') {
       for (const element of children(node, 'elements')) {
         if (element.type === 'SpreadElement') {
-          this.readDataRoutes(child(element, 'argument'), parent, element, base);
+          this.readDataRoutes(child(element, 'argument'), parent, element, base, mode);
         } else {
-          this.readDataEntry(element, parent, base);
+          this.readDataEntry(element, parent, base, mode);
         }
       }
       return;
     }
-    if (node.type === 'CallExpression' && ROUTES_FROM_ELEMENTS_FUNCTIONS.has(calleeName(node) ?? '')) {
+    if (mode === this.dataMode && node.type === 'CallExpression' && ROUTES_FROM_ELEMENTS_FUNCTIONS.has(calleeName(node) ?? '')) {
       // createRoutesFromElements(<Route ... />) is read as a JSX route tree with the router's base.
       this.readJsxChildren(children(node, 'arguments'), parent, base, true);
       return;
@@ -778,7 +917,7 @@ class RouterReader {
       if (init !== null) {
         this.following.add(init);
         try {
-          this.readDataRoutes(init, parent, node, base);
+          this.readDataRoutes(init, parent, node, base, mode);
         } finally {
           this.following.delete(init);
         }
@@ -789,7 +928,7 @@ class RouterReader {
     this.gap(node, REASONS.computedRoutes);
   }
 
-  private readDataEntry(entry: AstNode, parent: string | null | undefined, base: string | null): void {
+  private readDataEntry(entry: AstNode, parent: string | null | undefined, base: string | null, mode: ObjectRouteMode): void {
     const node = unwrap(entry);
     if (node === null) return;
     if (node.type === 'Identifier') {
@@ -798,7 +937,7 @@ class RouterReader {
       if (init !== null) {
         this.following.add(init);
         try {
-          this.readDataEntry(init, parent, base);
+          this.readDataEntry(init, parent, base, mode);
         } finally {
           this.following.delete(init);
         }
@@ -812,13 +951,14 @@ class RouterReader {
     }
     let pathProperty: AstNode | null = null;
     let indexTrue = false;
-    let childList: AstNode | null = null;
-    // Where the last spread, the path, and the child routes sit among the properties. A later
-    // property replaces an earlier one, so a spread can only supply what is written before it or
-    // not written at all.
+    const childLists: AstNode[] = [];
+    const renders = new Map<string, AstNode>();
+    // Where the last spread, the path, and each kind of child list sit among the properties. A
+    // later property replaces an earlier one, so a spread can only supply what is written before
+    // it or not written at all.
     let lastSpread = -1;
     let pathAt = -1;
-    let childrenAt = -1;
+    const nestedAt = new Map<string, number>(mode.nestedKeys.map((key) => [key, -1]));
     const properties = children(node, 'properties');
     for (let i = 0; i < properties.length; i += 1) {
       const property = properties[i];
@@ -838,7 +978,7 @@ class RouterReader {
       if (property.type === 'ObjectMethod') {
         // A method such as loader() or action() is not a path. A method or getter named path or
         // children could supply one, which this reader cannot evaluate.
-        if (keyName === 'path' || keyName === 'children') {
+        if (keyName === 'path' || mode.nestedKeys.includes(keyName)) {
           this.gap(node, REASONS.spreadRoute);
           return;
         }
@@ -853,15 +993,23 @@ class RouterReader {
         const value = unwrap(child(property, 'value'));
         indexTrue = value?.type === 'BooleanLiteral' && value['value'] === true;
       }
-      if (keyName === 'children') {
-        childList = child(property, 'value');
-        childrenAt = i;
+      if (mode.nestedKeys.includes(keyName)) {
+        const value = child(property, 'value');
+        if (value !== null) childLists.push(value);
+        nestedAt.set(keyName, i);
+      }
+      if (mode.renderKeys.has(keyName)) {
+        const value = child(property, 'value');
+        if (value !== null) renders.set(keyName, value);
       }
     }
-    if (lastSpread >= 0 && (pathAt < lastSpread || childrenAt < lastSpread)) {
+    if (lastSpread >= 0 && (pathAt < lastSpread || [...nestedAt.values()].some((at) => at < lastSpread))) {
       this.gap(node, REASONS.spreadRoute);
       return;
     }
+    // Only a leaf route renders one screen's component. A spread could replace what it renders.
+    const leaf = childLists.length === 0 && lastSpread < 0;
+    const rendered = leaf ? renderedEntry(renders, mode.renderKeys) : {};
 
     let full: string | null | undefined = parent;
     if (pathProperty !== null) {
@@ -872,11 +1020,13 @@ class RouterReader {
       } else {
         const joined = this.joinPath(parent, own, base, pathProperty, false);
         full = joined ?? undefined;
+        if (joined !== null && typeof parent === 'string' && !own.startsWith('/')) mode.joinedNested = true;
         if (joined !== null && this.isScreenPath(own, pathProperty)) {
-          this.dataSites.push({
+          mode.sink.push({
             path: joined,
             component: null,
             offset: typeof pathProperty.start === 'number' ? pathProperty.start : 0,
+            ...rendered,
           });
         }
       }
@@ -885,13 +1035,190 @@ class RouterReader {
       if (indexPath === undefined || indexPath === null) {
         this.gap(node, parent === undefined ? REASONS.unknownParent : REASONS.ambiguousBase);
       } else {
-        this.dataSites.push({ path: indexPath, component: null, offset: typeof node.start === 'number' ? node.start : 0 });
+        mode.sink.push({ path: indexPath, component: null, offset: typeof node.start === 'number' ? node.start : 0, ...rendered });
       }
     }
-    if (childList !== null) {
-      this.readDataRoutes(childList, full, node, base);
+    for (const childList of childLists) {
+      this.readDataRoutes(childList, full, node, base, mode);
     }
   }
+
+  // How a data router route list is read: nested under `children`, rendering what React Router
+  // reads, into the data route sites.
+  readonly dataMode: ObjectRouteMode = {
+    nestedKeys: ['children'],
+    renderKeys: DATA_ROUTE_RENDER_KEYS,
+    sink: this.dataSites,
+    joinedNested: false,
+  };
+}
+
+// How a route object field names what the route renders: a JSX element, a component reference, or
+// a lazy loader that imports the route's module.
+type RenderKind = 'element' | 'component' | 'lazy';
+
+/** How a list of route objects is read: which keys nest routes, which name what a route renders. */
+interface ObjectRouteMode {
+  nestedKeys: readonly string[];
+  renderKeys: ReadonlyMap<string, RenderKind>;
+  sink: ParsedRouteSite[];
+  // Set when a nested relative path was joined to its parent's path.
+  joinedNested: boolean;
+}
+
+/**
+ * What a leaf route object renders, from the keys its reader attributes from. `element: <Name />`
+ * and `Component: Name` (or `component: Name`) name a component; `lazy: () => import('./module')`
+ * names a module. More than one distinct answer is a conflict, so the route gets none.
+ */
+function renderedEntry(
+  renders: ReadonlyMap<string, AstNode>,
+  kinds: ReadonlyMap<string, RenderKind>,
+): { component?: string; entryImport?: string } {
+  const answers = new Map<string, { component?: string; entryImport?: string }>();
+  for (const [key, value] of [...renders.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const kind = kinds.get(key);
+    if (kind === 'element') {
+      const name = jsxComponentName(unwrap(value));
+      if (name !== null) answers.set(`component:${name}`, { component: name });
+    } else if (kind === 'lazy') {
+      const specifier = singleDynamicImport(unwrap(value));
+      if (specifier !== null) answers.set(`import:${specifier}`, { entryImport: specifier });
+    } else if (kind === 'component') {
+      const ref = unwrap(value);
+      const name = ref?.type === 'Identifier' ? nameOf(ref) : null;
+      if (name !== null && isComponentName(name)) answers.set(`component:${name}`, { component: name });
+    }
+  }
+  if (answers.size !== 1) return {};
+  return [...answers.values()][0] ?? {};
+}
+
+// A component reference starts with a capital letter. A lower-case JSX name is an HTML element.
+function isComponentName(name: string): boolean {
+  return /^[A-Z]/.test(name);
+}
+
+// The specifier of the one dynamic import a lazy loader makes, when there is exactly one and it is a
+// plain string. `() => import('./x')`, `() => import('./x').then(...)`, and an async function that
+// awaits one import all count.
+function singleDynamicImport(fn: AstNode | null): string | null {
+  if (fn === null || (fn.type !== 'ArrowFunctionExpression' && fn.type !== 'FunctionExpression')) return null;
+  const found: Array<string | null> = [];
+  walk(fn, (node) => {
+    const isImportCall = node.type === 'CallExpression' && child(node, 'callee')?.type === 'Import';
+    if (isImportCall) found.push(stringValue(unwrap(children(node, 'arguments')[0] ?? null)));
+    else if (node.type === 'ImportExpression') found.push(stringValue(unwrap(child(node, 'source'))));
+  });
+  return found.length === 1 ? (found[0] ?? null) : null;
+}
+
+/**
+ * The shape of a map callback that renders one route per item: `(item) => <Route path={item.path}
+ * ... />` or `({ path, element }) => ...`, with an expression body or a block with one return.
+ * `renders` is the item field the route renders, when it renders one: `element={item.element}`,
+ * `element={<item.component />}`, or `component={component}`. Null when the callback is not that
+ * shape, so the map stays an unreadable entry.
+ */
+function mappedRouteShape(
+  callback: AstNode | null,
+): { route: AstNode; elementName: string; renders: { field: string; as: RenderKind } | null } | null {
+  const fn = unwrap(callback);
+  if (fn === null || (fn.type !== 'ArrowFunctionExpression' && fn.type !== 'FunctionExpression')) return null;
+  const item = itemBinding(children(fn, 'params')[0] ?? null);
+  if (item === null) return null;
+  const body = child(fn, 'body');
+  let returned: AstNode | null = body;
+  if (body?.type === 'BlockStatement') {
+    const statements = children(body, 'body');
+    const last = statements[statements.length - 1];
+    let returns = 0;
+    walk(body, (node) => {
+      if (node.type === 'ReturnStatement') returns += 1;
+    });
+    returned = returns === 1 && last?.type === 'ReturnStatement' ? child(last, 'argument') : null;
+  }
+  const route = unwrap(returned);
+  if (route?.type !== 'JSXElement') return null;
+  const elementName = jsxElementName(route);
+  if (elementName === null) return null;
+  const hasChildren = children(route, 'children').some(
+    (node) => node.type !== 'JSXText' || String(node['value'] ?? '').trim() !== '',
+  );
+  if (hasChildren) return null;
+  const opening = child(route, 'openingElement');
+  let pathIsItemPath = false;
+  let renders: { field: string; as: RenderKind } | null = null;
+  for (const attr of opening === null ? [] : children(opening, 'attributes')) {
+    if (attr.type === 'JSXSpreadAttribute') return null;
+    const name = nameOf(child(attr, 'name'));
+    const value = child(attr, 'value');
+    const expression = value?.type === 'JSXExpressionContainer' ? unwrap(child(value, 'expression')) : null;
+    if (name === 'path') {
+      pathIsItemPath = fieldRef(expression, item) === 'path';
+    } else if (name === 'element') {
+      // element={item.element} renders the field as an element; element={<item.component />}
+      // renders it as a component.
+      const asElement = fieldRef(expression, item);
+      const asComponent = expression?.type === 'JSXElement' ? jsxFieldRef(expression, item) : null;
+      renders =
+        asElement !== null ? { field: asElement, as: 'element' } : asComponent !== null ? { field: asComponent, as: 'component' } : null;
+    } else if (name === 'component' || name === 'Component') {
+      const field = fieldRef(expression, item);
+      renders = field === null ? null : { field, as: 'component' };
+    }
+  }
+  return pathIsItemPath ? { route, elementName, renders } : null;
+}
+
+// How a map callback's parameter reaches the item's fields: `item` reads them as `item.field`, and
+// `{ path, component: C }` binds the local name C to the field "component".
+interface ItemBinding {
+  name: string | null;
+  fields: Map<string, string>;
+}
+
+function itemBinding(param: AstNode | null): ItemBinding | null {
+  const node = param?.type === 'AssignmentPattern' ? child(param, 'left') : param;
+  if (node?.type === 'Identifier') {
+    const name = nameOf(node);
+    return name === null ? null : { name, fields: new Map() };
+  }
+  if (node?.type !== 'ObjectPattern') return null;
+  const fields = new Map<string, string>();
+  for (const property of children(node, 'properties')) {
+    if (property.type !== 'ObjectProperty' || property['computed'] === true) continue;
+    const key = nameOf(child(property, 'key')) ?? stringValue(child(property, 'key'));
+    let value = child(property, 'value');
+    if (value?.type === 'AssignmentPattern') value = child(value, 'left');
+    const local = value?.type === 'Identifier' ? nameOf(value) : null;
+    if (key !== null && local !== null) fields.set(local, key);
+  }
+  return { name: null, fields };
+}
+
+// The item field an expression reads: a destructured name, or `item.field` on the parameter.
+function fieldRef(expression: AstNode | null, item: ItemBinding): string | null {
+  if (expression?.type === 'Identifier') return item.fields.get(nameOf(expression) ?? '') ?? null;
+  if ((expression?.type === 'MemberExpression' || expression?.type === 'OptionalMemberExpression') && expression['computed'] !== true) {
+    const object = unwrap(child(expression, 'object'));
+    if (item.name === null || object?.type !== 'Identifier' || nameOf(object) !== item.name) return null;
+    return nameOf(child(expression, 'property'));
+  }
+  return null;
+}
+
+// The item field a JSX element renders as its component: `<C />` for a destructured C, or
+// `<item.component />`.
+function jsxFieldRef(element: AstNode, item: ItemBinding): string | null {
+  const name = child(child(element, 'openingElement') ?? element, 'name');
+  if (name?.type === 'JSXIdentifier') return item.fields.get(nameOf(name) ?? '') ?? null;
+  if (name?.type === 'JSXMemberExpression') {
+    const object = child(name, 'object');
+    if (item.name === null || object?.type !== 'JSXIdentifier' || nameOf(object) !== item.name) return null;
+    return nameOf(child(name, 'property'));
+  }
+  return null;
 }
 
 function lastSegment(path: string): string {
@@ -902,27 +1229,57 @@ function lastSegment(path: string): string {
 // The component named by `element={<Name />}`, when it is a plain identifier.
 function elementComponent(value: AstNode | null): string | null {
   if (value?.type !== 'JSXExpressionContainer') return null;
-  const expression = unwrap(child(value, 'expression'));
-  if (expression?.type !== 'JSXElement') return null;
-  const name = child(child(expression, 'openingElement') ?? expression, 'name');
-  return name?.type === 'JSXIdentifier' ? nameOf(name) : null;
+  return jsxComponentName(unwrap(child(value, 'expression')));
 }
 
-function readLocalImports(program: AstNode): Map<string, string> {
-  // Only relative specifiers (starting with ".") can prove a local entry file. Package imports
-  // are left unmapped so init cannot guess across dependencies. Type-only imports render nothing.
-  const imports = new Map<string, string>();
+// The component a JSX element renders: `<Name />`, or the one element inside `<Suspense>`, which a
+// lazy component needs around it. A lower-case name is an HTML element, not a component.
+function jsxComponentName(expression: AstNode | null): string | null {
+  if (expression?.type !== 'JSXElement') return null;
+  const name = child(child(expression, 'openingElement') ?? expression, 'name');
+  if (jsxElementName(expression) === 'Suspense') {
+    const inner = children(expression, 'children').filter(
+      (node) => node.type !== 'JSXText' || String(node['value'] ?? '').trim() !== '',
+    );
+    return inner.length === 1 && inner[0]?.type === 'JSXElement' ? jsxComponentName(inner[0]) : null;
+  }
+  const local = name?.type === 'JSXIdentifier' ? nameOf(name) : null;
+  return local !== null && isComponentName(local) ? local : null;
+}
+
+function readImports(program: AstNode): { local: Map<string, string>; bare: Map<string, string> } {
+  // Only relative specifiers (starting with ".") can prove a local entry file by themselves. Other
+  // specifiers are kept apart, for init to map through a configured path alias or not at all, so it
+  // cannot guess across dependencies. Type-only imports render nothing.
+  const local = new Map<string, string>();
+  const bare = new Map<string, string>();
+  const record = (name: string, specifier: string): void => {
+    (specifier.startsWith('.') ? local : bare).set(name, specifier);
+  };
   for (const statement of children(program, 'body')) {
-    if (statement.type !== 'ImportDeclaration' || statement['importKind'] === 'type') continue;
-    const specifier = stringValue(child(statement, 'source'));
-    if (specifier === null || !specifier.startsWith('.')) continue;
-    for (const binding of children(statement, 'specifiers')) {
-      if (binding.type === 'ImportNamespaceSpecifier' || binding['importKind'] === 'type') continue;
-      const local = nameOf(child(binding, 'local'));
-      if (local !== null) imports.set(local, specifier);
+    if (statement.type === 'ImportDeclaration' && statement['importKind'] !== 'type') {
+      const specifier = stringValue(child(statement, 'source'));
+      if (specifier === null) continue;
+      for (const binding of children(statement, 'specifiers')) {
+        if (binding.type === 'ImportNamespaceSpecifier' || binding['importKind'] === 'type') continue;
+        const name = nameOf(child(binding, 'local'));
+        if (name !== null) record(name, specifier);
+      }
+      continue;
+    }
+    // `const Page = lazy(() => import('./Page'))` at the top of the module, exported or not.
+    const declaration = statement.type === 'ExportNamedDeclaration' ? child(statement, 'declaration') : statement;
+    if (declaration?.type !== 'VariableDeclaration' || declaration['kind'] !== 'const') continue;
+    for (const declarator of children(declaration, 'declarations')) {
+      const name = nameOf(child(declarator, 'id'));
+      const init = unwrap(child(declarator, 'init'));
+      if (name === null || init?.type !== 'CallExpression' || calleeName(init) !== 'lazy') continue;
+      const args = children(init, 'arguments');
+      const specifier = args.length === 1 ? singleDynamicImport(unwrap(args[0] ?? null)) : null;
+      if (specifier !== null) record(name, specifier);
     }
   }
-  return imports;
+  return { local, bare };
 }
 
 // Every local name that refers to a known router factory: the factory names themselves, a name
@@ -977,11 +1334,14 @@ export function readRouterSource(raw: string, file = 'router.tsx'): RouterSource
       routes: [],
       dataRoutes: [],
       unreadable: [{ line: parsed.line, reason: `The file does not parse${where}, so usabl read no routes from it.`, wholeFile: true }],
+      assumed: [],
       dataRouter: false,
       localImports: new Map(),
+      bareImports: new Map(),
     };
   }
   const program = parsed.program;
+  const imports = readImports(program);
   const bindings = new ModuleBindings(program);
   const reader = new RouterReader(bindings, raw);
   const factories = routerFactoryNames(bindings);
@@ -1075,8 +1435,10 @@ export function readRouterSource(raw: string, file = 'router.tsx'): RouterSource
       routes: [],
       dataRoutes: [],
       unreadable: [{ line: null, reason: REASONS.noRouter, wholeFile: true }],
+      assumed: [],
       dataRouter: false,
-      localImports: readLocalImports(program),
+      localImports: imports.local,
+      bareImports: imports.bare,
     };
   }
 
@@ -1092,11 +1454,22 @@ export function readRouterSource(raw: string, file = 'router.tsx'): RouterSource
       return true;
     })
     .map(({ line, reason, id }) => (id === undefined ? { line, reason } : { line, reason, id }));
+  const seenAssumed = new Set<number>();
+  const assumed: AssumedRoutes[] = [...reader.assumed]
+    .sort((a, b) => a.offset - b.offset)
+    .filter((entry) => {
+      if (seenAssumed.has(entry.offset)) return false;
+      seenAssumed.add(entry.offset);
+      return true;
+    })
+    .map(({ line, reason }) => ({ line, reason }));
   return {
     routes: mergeParsedRoutes(reader.jsxSites, reader.dataSites),
     dataRoutes: mergeParsedRoutes([], reader.dataSites),
     unreadable,
+    assumed,
     dataRouter: dataCalls.length > 0,
-    localImports: readLocalImports(program),
+    localImports: imports.local,
+    bareImports: imports.bare,
   };
 }
