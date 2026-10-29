@@ -1838,9 +1838,21 @@ coverage honesty, and optional receipt minting.
 
 **Command surface.** `main` recognizes exactly twelve commands: `check`, `comment`,
 `bypass`, `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`,
-`doctor`, `docs`. `check` is the default when no command is given. There is no `--help`
-and no `--version`, and unrecognized flags are silently ignored (the parser has no
-catch-all for unknown `-` tokens); an unknown *command* exits 2.
+`doctor`, `docs`, plus `help`. `check` is the default when no command is given, so `usabl`
+alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
+`usabl help <command>` print help and exit 0 before anything else runs: no config is read, no
+browser opens, stdin is not read, and no file is written. The top-level help lists every
+command with one line each. A command's help lists every flag it takes. Both come from one
+command table in `src/surfaces/cli-commands.ts`, and a flag the table does not list for that
+command is refused with exit 2 and a pointer to `usabl <command> --help`, instead of being
+ignored. An unknown command exits 2 and points to `usabl help`. There is no `--version`.
+
+A local `usabl check` that ends in `approval_required` also prints the next step: commit the
+guarded files (a code owner approves them on a pull request). When no UI file changed, it
+says no screen was scanned and that `usabl baseline`, after the commit, scans every mapped
+screen. When screens were scanned, it says their accessibility barriers are listed above. The
+verdict and the exit code do not change. A run with `--trusted-ref` or `--json` prints no such
+lines.
 
 **Typical uses:**
 

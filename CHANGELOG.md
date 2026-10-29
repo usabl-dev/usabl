@@ -4,6 +4,25 @@
 
 ### Fixed
 
+- `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
+  `usabl help <command>` now print help and exit 0 without running anything. Before,
+  `--help` was ignored and a check ran, and `help` was an unknown command. The top-level
+  help lists every command, and each command's help lists its flags. A flag a command
+  does not take is now refused with exit 2 and a pointer to that command's help, instead
+  of being ignored. `usabl` with no command still runs `check`, as the docs say.
+
+- A local `usabl check` that needs approval now says what to do next: review and commit
+  the guarded files. When no UI file changed, it says no screen was scanned and that
+  `usabl baseline` scans every mapped screen once the files are committed. The verdict
+  does not change.
+
+- First-run errors now name the fix: a missing `usabl.config.json` points to
+  `usabl init` or `--config`; a repository with no commits, or a trusted ref git cannot
+  read, says to make a first commit or fetch the ref; a screen where nothing answers says
+  to start the app or set `appBaseUrl`; `usabl baseline` refused on other dirty policy
+  files says to commit or revert them, and refused on empty `uiFileGlobs` says which
+  field to set. A flag missing its value gives an example.
+
 - The announcement capture no longer records a change inside content hidden from
   assistive technology. Before, a polite status inside `aria-hidden="true"` was recorded as
   announced, though Orca says nothing for it, so a flow requirement that expected its text

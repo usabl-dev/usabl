@@ -218,7 +218,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     if (token === '--trusted-ref') {
       const value = argv[index + 1];
       if (value === undefined || isFlag(value)) {
-        throw new Error('--trusted-ref requires a value');
+        throw new Error('--trusted-ref requires a value, such as --trusted-ref origin/main');
       }
       trustedRef = value;
       index += 1;
@@ -227,7 +227,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     if (token === '--config') {
       const value = argv[index + 1];
       if (value === undefined || isFlag(value)) {
-        throw new Error('--config requires a value');
+        throw new Error('--config requires a value, such as --config usabl.config.json');
       }
       configPath = value;
       index += 1;
@@ -261,8 +261,39 @@ export function installRefusal(opts: CliOptions): { exitCode: 2; message: string
 export function ciRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {
   // CI must pin a trusted ref so a PR cannot edit policy and self-accept in one run.
   return opts.ci && opts.trustedRef === null
-    ? { exitCode: 2, message: 'CI mode requires --trusted-ref <git-ref>' }
+    ? { exitCode: 2, message: 'CI mode requires --trusted-ref <git-ref>, such as --trusted-ref origin/main' }
     : null;
+}
+
+/**
+ * The next step for a local run that needs approval. On a pull request a code owner approves the
+ * change, and the comment there says so. A local run has no pull request, and its most common
+ * cause is a new user whose drafted policy files are not committed yet, so it says what clears the
+ * state and what the run still reported. It reads the Result and never changes the verdict.
+ */
+export function localApprovalNextSteps(result: Result): string[] {
+  if (result.verdict !== 'approval_required') {
+    return [];
+  }
+  const lines = [
+    '  next: usabl trusts policy files only after they are committed.',
+    '    Review the guarded paths above, then commit them. On a pull request,',
+    '    a code owner approves them there.',
+  ];
+  if (result.coverage.nothingToCheck) {
+    lines.push(
+      '  accessibility report: none yet. No UI file changed, so no screen was',
+      '    scanned. After you commit the policy files, run usabl baseline. It',
+      '    scans every mapped screen and records the accessibility barriers it',
+      '    finds in .usabl-evidence.json.',
+    );
+  } else if (result.screens.length > 0) {
+    lines.push(
+      '  accessibility report: the screens this change touches were still scanned.',
+      '    Any accessibility barriers found there are listed above.',
+    );
+  }
+  return lines;
 }
 
 export function projectCli(result: Result): { exitCode: number; text: string; json: string } {

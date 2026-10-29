@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Result } from '../../src/contracts/index.js';
 import {
   ciRefusal,
+  localApprovalNextSteps,
   mergeChangedPaths,
   parseCliArgs,
   projectCli,
@@ -252,5 +253,58 @@ describe('mergeChangedPaths', () => {
       ),
     ).toEqual(['src/a.ts', 'src/b.ts', 'src/z.ts']);
     expect(mergeChangedPaths([], [])).toEqual([]);
+  });
+});
+
+describe('localApprovalNextSteps', () => {
+  const approval = (over: Partial<Result>): Result =>
+    baseResult({
+      verdict: 'approval_required',
+      summary: 'approval required: 2 guarded path(s) changed',
+      dirtyGuardedPaths: ['usabl.config.json', 'usabl.routes.json'],
+      exitCode: 2,
+      ...over,
+    });
+
+  it('tells a first-run user to commit the new policy files and how to get the report', () => {
+    const lines = localApprovalNextSteps(
+      approval({ coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true } }),
+    );
+    const text = lines.join('\n');
+    expect(text).toContain('next: usabl trusts policy files only after they are committed.');
+    expect(text).toContain('commit them');
+    expect(text).toContain('usabl baseline');
+    expect(text).toContain('accessibility barriers');
+    expect(text).not.toMatch(/\u2014|--(?!\w)/);
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(80);
+    }
+  });
+
+  it('says the touched screens were still scanned when they were', () => {
+    const text = localApprovalNextSteps(
+      approval({
+        screens: [
+          {
+            screenId: 'home',
+            url: 'http://127.0.0.1:5173/',
+            stops: [],
+            drafts: [],
+            gaps: [],
+            applicability: [],
+            reachedSelectorPresent: null,
+            reachedWhenSelector: null,
+          },
+        ],
+      }),
+    ).join('\n');
+    expect(text).toContain('commit them');
+    expect(text).toContain('were still scanned');
+    expect(text).not.toContain('usabl baseline');
+  });
+
+  it('adds nothing for any other verdict', () => {
+    expect(localApprovalNextSteps(baseResult({}))).toEqual([]);
+    expect(localApprovalNextSteps(baseResult({ verdict: 'regression', exitCode: 1 }))).toEqual([]);
   });
 });

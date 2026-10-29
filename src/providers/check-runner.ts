@@ -62,6 +62,18 @@ function notCoveredGap(ref: string, reason: string): CoverageGap {
   return { ref, state: 'not-covered', reason };
 }
 
+// Why a screen did not open. Nothing listening at the address is the first failure a new user
+// meets, because the app's dev server is not running yet, so that case names the fix.
+function openFailureReason(url: string, message: string): string {
+  if (/ERR_CONNECTION_REFUSED|ECONNREFUSED/.test(message)) {
+    return (
+      `screen failed to open: nothing answered at ${url}. Start the app (for example its dev server), ` +
+      `or set appBaseUrl in usabl.config.json to where it runs. ${message}`
+    );
+  }
+  return `screen failed to open: ${message}`;
+}
+
 function failedScan(screen: { id: string; url: string }, reason: string): ScreenScan {
   // A scan that failed knows nothing about which rules applied, so it claims nothing. It also made
   // no reachability observation, so both reachability fields stay null. The gap here already tells
@@ -143,7 +155,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       try {
         page = await deps.browser.open(screen.url);
       } catch (err) {
-        return failedScan(screen, `screen failed to open: ${errorMessage(err)}`);
+        return failedScan(screen, openFailureReason(screen.url, errorMessage(err)));
       }
 
       // Look up the surface's optional readiness signal by screen id. Only manually declared

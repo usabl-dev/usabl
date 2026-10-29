@@ -238,6 +238,32 @@ describe('makeCheckRunner', () => {
     expect(scan.gaps[0]?.reason).toContain('page did not stop changing');
   });
 
+  it('names the fix when nothing answers at the screen url', async () => {
+    const runner = makeCheckRunner({
+      browser: {
+        open: async (): Promise<Page> => {
+          throw new Error(`page.goto: net::ERR_CONNECTION_REFUSED at ${SCREEN.url}`);
+        },
+        close: async () => {},
+      },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.drafts).toEqual([]);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: SCREEN.url, state: 'not-covered' });
+    const reason = scan.gaps[0]?.reason ?? '';
+    expect(reason).toMatch(/^screen failed to open: nothing answered at /);
+    expect(reason).toContain('Start the app');
+    expect(reason).toContain('appBaseUrl in usabl.config.json');
+    expect(reason).toContain('ERR_CONNECTION_REFUSED');
+  });
+
   it('returns a not-covered gap when browser.open throws and never rejects', async () => {
     const runner = makeCheckRunner({
       browser: {
