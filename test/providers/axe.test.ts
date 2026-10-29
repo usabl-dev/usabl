@@ -123,6 +123,17 @@ describe('axeProvider', () => {
     });
   });
 
+  it('keeps the element path as before and carries the target parts of an element past a boundary', async () => {
+    const shadow: AxeIssue = {
+      ...VIOLATION,
+      nodes: [{ target: ['x-row-actions,button'], targetParts: [['x-row-actions', 'button']] }, { target: ['.plain'] }],
+    };
+    const drafts = draftsOf(await axeProvider.run(await makeContext({ violations: [shadow] })));
+    expect(drafts.map((d) => d.elementPath)).toEqual(['x-row-actions,button', '.plain']);
+    expect(drafts[0]?.evidence.extra?.['rowTarget']).toEqual([['x-row-actions', 'button']]);
+    expect(drafts[1]?.evidence).toEqual({});
+  });
+
   it('maps incomplete findings as unverified and never drops them', async () => {
     const ctx = await makeContext({ incomplete: [VIOLATION] });
 

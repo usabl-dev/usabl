@@ -10,6 +10,29 @@
   renders could miss its screen. Now the route's entry file is empty and a `Review:` note
   names every candidate.
 
+- Row keys now reach findings inside shadow roots, frames, and layout tables, so their
+  screens no longer read as not covered on every run. Before, axe's selector for an element
+  in a shadow root or a frame was joined into one string that named nothing, or several
+  elements, and a keyboard-walk stop with no path was looked up by a placeholder that named
+  nothing. Now the row read follows axe's target part by part, into the shadow root or the
+  same-origin frame, and climbs back out to the host or the frame element, so a button in a
+  web component in a keyed row belongs to that row. The keyboard walk reads the row of the
+  element it focused at the stop itself. A `table` whose role is `presentation` or `none`
+  is a layout table and no longer makes a data table inside it read as nested in an unkeyed
+  row, unless its own rows carry keys. A finding in a frame from another origin, or one that
+  still cannot be found, stays a not-covered gap. The element path of every finding is
+  unchanged.
+
+- Three input checks that were missing. `checkPage` now refuses a `screenId` the shared id
+  grammar refuses, such as one with a space or an invisible character, with
+  `InputRefusedError` before it reads the project or touches the page. The stop hook's local
+  receipt now counts only as a receipt when every count in it is a whole number, zero or
+  more; any other receipt is ignored and the hook checks again. `usabl comment` and
+  `usabl enforce` now refuse a Result whose verdict does not carry the exit code the engine
+  writes for it, or whose accessibility verdict does not, and exit 4 naming the field.
+  Before, a document could show a regression and exit 0. Each refusal names the field and
+  never repeats the value.
+
 - The announcement capture no longer records a change inside content hidden from
   assistive technology. Before, a polite status inside `aria-hidden="true"` was recorded as
   announced, though Orca says nothing for it, so a flow requirement that expected its text

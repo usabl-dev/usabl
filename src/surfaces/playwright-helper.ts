@@ -24,6 +24,7 @@ import { markUnseenScreens } from '../coverage/unseen.js';
 import { makeFsGlob } from '../deps/fs.js';
 import { adoptPage } from '../deps/real.js';
 import { parseUsablConfig } from '../intake/config.js';
+import { assertIdField } from '../intake/input-refusal.js';
 import { loadRequirements } from '../intake/load.js';
 import { knownSurfaceIds, unknownSurfaceRequirementGaps } from '../intake/requirement-surfaces.js';
 import { makeScanProviders } from '../providers/core-stack.js';
@@ -288,6 +289,12 @@ export function requirementGapsForPage(
  *   clicks and key presses. Hand it a page you no longer need in its current state.
  */
 export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}): Promise<PageCheckResult> {
+  // The caller's id is checked before anything reads the project or touches the page, against the
+  // same grammar every other entry point applies. An id with an invisible character would label
+  // the findings with a surface that looks like a configured one and matches none of it.
+  if (options.screenId !== undefined) {
+    assertIdField('checkPage() options', 'screenId', options.screenId);
+  }
   const profile: ProfileName = options.profile ?? 'app';
   // An unlabeled page is no surface, so no requirement is in scope and each one becomes a gap. Its
   // providers are not built either: the only one that could run is one for a surface literally

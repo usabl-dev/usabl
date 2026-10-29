@@ -420,6 +420,11 @@ JSON parser's own message, which quotes the input back. The per-number checks an
 above stay in place behind it, so a projector called from inside the process with a Result
 that skipped this check is still bounded.
 
+A verdict must also carry the exit code the engine writes for it, for both the verdict and the
+accessibility verdict, and a Result with no verdict must exit 0 or 4. A document that shows a
+regression and exits 0 is refused with exit 4, so `usabl comment` and `usabl enforce` cannot
+report two different outcomes from one document.
+
 **Not handled:** the check is of shape, not of truth. A well-formed document can still say
 anything the contract allows: a verdict that its findings do not support, counts that do not
 add up, or a receipt for a run that never happened. The counts, the sections, and the verdict
@@ -500,6 +505,8 @@ outside every table as the control in an accepted row. Either way a new barrier 
 - The table row read runs in an isolated world of its own over CDP, for a page usabl opens and for
   a page `checkPage` adopts, so page script cannot change the `getAttribute`, `closest`,
   `parentElement`, or `querySelectorAll` calls a row key and a table identity are read through.
+  It reads same-origin frames from that world too, so a frame's own page script cannot change
+  them there either.
 - The path function and the row read are sent with every query, so there is no installed helper
   to trust. The
   capture is started at document start on a page usabl opens and at adoption on a caller's page,
