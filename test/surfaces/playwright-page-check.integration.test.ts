@@ -294,7 +294,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage runs the desig
     try {
       const result = await checkPage(page, { screenId: 'clusters', projectRoot: dir, tabCap: 10 });
       expect(result.verdict).toBe('not_covered');
-      expect(result.gaps.map((g) => g.ref)).toContain('requirements');
+      expect(result.gaps.map((g) => g.ref)).toEqual(['requirements/broken.yaml']);
     } finally {
       await context.close();
       await rm(dir, { recursive: true, force: true });
