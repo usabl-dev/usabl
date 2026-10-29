@@ -25,6 +25,9 @@ export interface CliOptions {
   // Render the docs artifacts as an accessible HTML page instead of JSON.
   // Only the docs command reads this; every other command ignores it.
   html: boolean;
+  // Document every in-scope surface, not only the ones the change touched. Only the docs command
+  // reads this; every other command ignores it.
+  all: boolean;
   // Select the docs-manifest onboarding for `usabl init --docs`. Only the init command
   // reads this; every other command ignores it.
   docs: boolean;
@@ -95,6 +98,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | string = 'check';
   let staticOnly = false;
   let html = false;
+  let all = false;
   let docs = false;
   let trustedRef: string | null = null;
   let json = false;
@@ -153,6 +157,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
     if (token === '--html') {
       html = true;
+      continue;
+    }
+    if (token === '--all') {
+      // docs-only: document the whole app instead of the change.
+      all = true;
       continue;
     }
     if (token === '--docs') {
@@ -239,7 +248,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   // target flag and cursorStopHook stays false so the two uses never collide.
   const cursorStopHook = command === 'stop-hook' && cursor;
 
-  return { command, staticOnly, html, docs, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, partial, unconfirmed, driftSubcommand, installTarget, cursorStopHook };
+  return { command, staticOnly, html, all, docs, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, partial, unconfirmed, driftSubcommand, installTarget, cursorStopHook };
 }
 
 export function installRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {

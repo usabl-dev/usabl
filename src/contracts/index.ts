@@ -166,6 +166,21 @@ export interface ScreenScan {
   // The response path the surface declared, carried so a coverage gap can name it. Absent or null
   // when the surface declared no response.
   reachedWhenResponse?: string | null;
+  // The images the screen showed, read only when the docs generator asks for them. Page text,
+  // so untrusted. Nothing in the gate reads it. Absent means the images were not read, which is
+  // not the same as a screen with no images (an empty list).
+  images?: PageImage[];
+  // How many more images the screen showed beyond the ones listed. Absent when none were left out.
+  imagesNotListed?: number;
+}
+// One image as the accessibility tree reported it. The name and role are page-derived.
+export interface PageImage {
+  elementPath: string;
+  name: string | null;
+  role: string | null;
+  // The page marks the image as decorative: an empty alt attribute, or role none or presentation.
+  // Chromium leaves such an image out of the accessibility tree, so the tree alone cannot say it.
+  decorative: boolean;
 }
 
 // ---- coverage ----
@@ -412,6 +427,10 @@ export interface DocArtifact {
     content: string;
     status: 'draft' | 'approved';
     evidenceRef?: string;
+    // 'page' means usabl drafted this entry from the page's own text because no content
+    // requirement covered the surface. Such an entry is always a draft, never carries evidence,
+    // and needs a person to review it. Absent means the entry came from a content requirement.
+    origin?: 'page';
   }>;
   generatedAt: string;
   boundToReceipt?: string;

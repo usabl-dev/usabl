@@ -353,6 +353,17 @@
 
 ### Added
 
+- `usabl docs --all` documents every in-scope surface, not only the ones the change
+  touched. It plans the run from every UI file, every surface file, and every docs page
+  source, so a clean tree no longer yields an empty page. It still exits 0, mints no
+  verdict of its own, and takes every honesty state from the receipt, as before.
+
+- The alt-text manifest is drafted from the page when no content requirement covers a
+  screen. The docs run reads each image on the screen and the text it has now. Every such
+  entry is marked `origin: 'page'`, stays a draft, carries no evidence, and is scrubbed and
+  shortened like other page text. The HTML page says a person must review it. Gating runs
+  do not read images, so `usabl check` output is unchanged.
+
 - `usabl doctor` reports a readiness signals surface. It is missing when a screen holds
   floored debt and declares no `reachedWhen` signal, and its next step names those
   screens. A floored barrier the run does not see is claimed fixed only with evidence its

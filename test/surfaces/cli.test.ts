@@ -37,6 +37,7 @@ describe('parseCliArgs', () => {
       command: 'check',
       staticOnly: false,
       html: false,
+      all: false,
       docs: false,
       trustedRef: null,
       json: false,
@@ -71,6 +72,7 @@ describe('parseCliArgs', () => {
       command: 'check',
       staticOnly: true,
       html: true,
+      all: false,
       docs: false,
       trustedRef: 'origin/main',
       json: true,
@@ -92,6 +94,11 @@ describe('parseCliArgs', () => {
     const parsed = parseCliArgs(['docs', '--html']);
     expect(parsed.command).toBe('docs');
     expect(parsed.html).toBe(true);
+  });
+
+  it('parses --all for the docs command and defaults it to false', () => {
+    expect(parseCliArgs(['docs', '--all']).all).toBe(true);
+    expect(parseCliArgs(['docs']).all).toBe(false);
   });
 
   it('defaults html to false', () => {
@@ -137,6 +144,7 @@ describe('parseCliArgs', () => {
       command: 'check',
       staticOnly: false,
       html: false,
+      all: false,
       docs: false,
       trustedRef: null,
       json: false,

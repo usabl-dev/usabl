@@ -39,7 +39,7 @@ import { installClaudeSkills } from './install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs, writeCursor } from './install/cursor.js';
 import { planCi, planDocsCi, writeCi, writeDocsCi } from './install/ci.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
-import { projectDocs } from './surfaces/docs.js';
+import { generateDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultText } from './surfaces/policy-enforce.js';
@@ -484,13 +484,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // Docs is a generator, not a gate. It projects design-intake and transcript artifacts
     // from a full run and always exits 0. Artifact honesty comes from receipt binding
     // (unverified surfaces carry no evidenceRef), never from a verdict this command invents.
+    // --all documents every in-scope surface, not only the ones the change touched.
     const config = await loadConfig(opts.configPath);
     const deps = await buildDeps(config, {
       allowedCapabilities: opts.staticOnly ? [] : ['live'],
+      // The alt-text manifest drafts from the page's images when no content requirement covers
+      // a screen, so the docs run reads them. Gating runs never do.
+      collectPageImages: true,
     });
     try {
-      const result = await run(deps, config);
-      const projected = projectDocs(result, deps.requirements);
+      const projected = await generateDocs(deps, config, { all: opts.all });
       // --html renders the same artifacts as one accessible, self-contained page.
       // The page carries the honesty invariant on its face: only receipt-bound
       // cards are shown as verified; everything else is labelled an observation.
