@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- The stop hook now reads a run as idle only when `coverage.nothingToCheck` is `true`, as
+  the verdict line and the self-check do. Before, a hand-composed Result with a null verdict
+  and any truthy value there, such as `1`, let the stop through with "You may stop". It now
+  blocks as a run that proved nothing. An unreachable fallback branch was removed.
+
 - `checkPage` now detaches the CDP session it opens on the caller's page, and removes its
   network listeners, when it is done. Before, each call left a session and four listeners
   attached for the life of the page. The caller's page stays open.
