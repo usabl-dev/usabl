@@ -65,9 +65,9 @@ describe('router-parse', () => {
     expect(isRouterSource('export function App() { return null }')).toBe(false);
   });
 
-  it('discovers data-router route urls without attributing a component', () => {
-    // Component attribution is intentionally not done: slicing to the next brace binds a nested
-    // child element to its parent route. Routes are discovered as URLs only (component null).
+  it('attributes a leaf data-router route to the component its element names', () => {
+    // The router file is parsed, so a route object's element is read from that object alone. The
+    // old brace slicer could bind a nested child's element to its parent; a syntax tree cannot.
     const source = `
       createBrowserRouter([
         { path: '/home', element: <Home /> },
@@ -76,8 +76,8 @@ describe('router-parse', () => {
     `;
     const routes = parseDataRouterRoutes(source);
     expect(routes).toEqual([
-      { path: '/home', component: null, offset: source.indexOf("path: '/home'") },
-      { path: '/about', component: null, offset: source.indexOf("path: '/about'") },
+      { path: '/home', component: 'Home', offset: source.indexOf("path: '/home'") },
+      { path: '/about', component: 'About', offset: source.indexOf("path: '/about'") },
     ]);
   });
 
@@ -95,8 +95,8 @@ describe('router-parse', () => {
   });
 
   it('does not attribute a nested child element to its parent route', () => {
-    // False-coverage guard. The old brace-slicer bound /parent to Child. Now no component is
-    // attributed, so init cannot invent a wrong entry file for the parent route.
+    // False-coverage guard. The old brace-slicer bound /parent to Child. The parent has child
+    // routes, so its own element is a layout and is not attributed either; only the leaf is.
     const source = `
       createBrowserRouter([
         { path: '/parent', children: [{ path: '/child', element: <Child /> }], element: <Parent /> },
@@ -105,14 +105,14 @@ describe('router-parse', () => {
     const routes = parseDataRouterRoutes(source);
     expect(routes).toEqual([
       { path: '/parent', component: null, offset: source.indexOf("path: '/parent'") },
-      { path: '/child', component: null, offset: source.indexOf("path: '/child'") },
+      { path: '/child', component: 'Child', offset: source.indexOf("path: '/child'") },
     ]);
   });
 
   it('discovers the root path', () => {
     const source = `createBrowserRouter([{ path: '/', element: <Root /> }])`;
     expect(parseDataRouterRoutes(source)).toEqual([
-      { path: '/', component: null, offset: source.indexOf("path: '/'") },
+      { path: '/', component: 'Root', offset: source.indexOf("path: '/'") },
     ]);
   });
 
@@ -123,7 +123,7 @@ describe('router-parse', () => {
       createBrowserRouter([{ path: '/home', element: <Home /> }]);
     `;
     expect(parseDataRouterRoutes(source)).toEqual([
-      { path: '/home', component: null, offset: source.indexOf("path: '/home'") },
+      { path: '/home', component: 'Home', offset: source.indexOf("path: '/home'") },
     ]);
   });
 
@@ -287,7 +287,7 @@ describe('router-parse: reads only the real router', () => {
       "const pages = [{ path: '/a' }, { path: '/b' }];",
       'export const App = () => (',
       '  <Routes>',
-      '    {pages.map((page) => <Route key={page.path} path={page.path} element={<Page />} />)}',
+      '    {loadPages().map((page) => <Route key={page.path} path={page.path} element={<Page />} />)}',
       '  </Routes>',
       ');',
       'export const router = createBrowserRouter(buildRoutes());',

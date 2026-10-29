@@ -170,7 +170,7 @@ export function App() {
     );
   });
 
-  it('discovers createBrowserRouter route urls without inventing entry files', async () => {
+  it('discovers createBrowserRouter route urls and attributes each leaf route to its element', async () => {
     const fs = memoryFs(
       fixtureFiles({
         'src/App.tsx': `export function App() { return null }\n`,
@@ -190,14 +190,14 @@ const router = createBrowserRouter([
 
     const draft = await inferInit(fs);
     expect(draft.config.discovery.routerFile).toBe('src/router.tsx');
-    // Data-router URLs are discovered, but entry files are NOT invented from inline elements.
-    // Attributing them by brace-slicing bound nested children to the wrong route (false coverage).
+    // The router is parsed, so each route object's element is read from that object alone. Brace
+    // slicing once bound nested children to the wrong route; a syntax tree cannot.
     expect(draft.routes.routes).toEqual([
-      { screenId: 'home', url: '/home', entryFile: null },
-      { screenId: 'about', url: '/about', entryFile: null },
+      { screenId: 'home', url: '/home', entryFile: 'src/pages/Home.tsx' },
+      { screenId: 'about', url: '/about', entryFile: 'src/pages/About.tsx' },
     ]);
     expect(draft.notes.some((note) => note.includes('data-router'))).toBe(true);
-    expect(draft.notes.some((note) => note.includes('no proven entry file'))).toBe(true);
+    expect(draft.notes.some((note) => note.includes('no proven entry file'))).toBe(false);
   });
 
   it('detects a router file that only uses createBrowserRouter path literals', async () => {

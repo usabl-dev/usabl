@@ -504,7 +504,7 @@ describe('runRoutesDrift with routes usabl cannot read', () => {
     '    <Route path="/home" element={<Home />} />',
     '    <Route path="/app/*" element={<AppRoutes />} />',
     '    <RequireAuth><Route path="/admin" element={<Admin />} /></RequireAuth>',
-    '    {pages.map((page) => <Route key={page.path} path={page.path} />)}',
+    '    {loadPages().map((page) => <Route key={page.path} path={page.path} />)}',
     '  </Routes>',
     ');',
   ].join('\n');
