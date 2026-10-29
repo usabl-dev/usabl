@@ -1893,9 +1893,13 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   contract gives it. A field the contract does not name is dropped. A document that does not
   match, or text that is not JSON, exits 4 with a plain reason on stderr that names the field by
   its path, for example `findings[0].severity`, and never repeats the value. `usabl comment`
-  prints no comment in that case. The check is of shape only. It does not test whether the values
-  agree with each other, so a well-formed document is still only as true as whoever wrote it, and
-  the receipt, not the document, is what proves a run happened.
+  prints no comment in that case. The check is of shape, plus one agreement: each verdict must
+  carry the exit code the engine writes for it (verified 0, regression 1, approval_required 2,
+  not_covered 3), and a Result with no verdict must exit 0 or 4. The same holds for
+  `accessibilityVerdict` and `accessibilityExitCode`. A document that shows one outcome and exits
+  with another exits 4 and names the exit code field. The check does not test whether the other
+  values agree with each other, so a well-formed document is still only as true as whoever wrote
+  it, and the receipt, not the document, is what proves a run happened.
 - Library: the stop hook, overlay, and an optional MCP wrapper import `run()` directly.
   No MCP surface is built today (section 11.5).
 
@@ -2141,7 +2145,9 @@ ref `requirement:<id>`: the page is labeled with no known surface, or the requir
 surface that matches no configured or discovered surface. A call with no `screenId` is an
 unlabeled page. Its findings carry the label `page`, but it counts as no surface, even in a
 project that has a surface named `page`, so every runtime requirement is a gap and none is
-judged on it. So a page that regresses on a requirement in the CLI also regresses in
+judged on it. A `screenId` the shared id grammar refuses, such as one with a space or an
+invisible character, throws `InputRefusedError` before `checkPage` reads the project or touches
+the page. The error names the field and never repeats the id. So a page that regresses on a requirement in the CLI also regresses in
 `checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
 when it is not.
 

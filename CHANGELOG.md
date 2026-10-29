@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- Three input checks that were missing. `checkPage` now refuses a `screenId` the shared id
+  grammar refuses, such as one with a space or an invisible character, with
+  `InputRefusedError` before it reads the project or touches the page. The stop hook's local
+  receipt now counts only as a receipt when every count in it is a whole number, zero or
+  more; any other receipt is ignored and the hook checks again. `usabl comment` and
+  `usabl enforce` now refuse a Result whose verdict does not carry the exit code the engine
+  writes for it, or whose accessibility verdict does not, and exit 4 naming the field.
+  Before, a document could show a regression and exit 0. Each refusal names the field and
+  never repeats the value.
+
 - A control repeated in every table row, such as an unnamed icon button or a kebab
   toggle, now has one identity per row. Before, every row shared one identity whose count
   followed how many rows the page showed, so a floor of two, with one row fixed and a new
