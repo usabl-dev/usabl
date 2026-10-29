@@ -720,3 +720,74 @@ describe('makeCheckRunner', () => {
     expect(scan.gaps).toEqual([]);
   });
 });
+
+describe('makeCheckRunner page images for the docs generator', () => {
+  function imagePage(page: Page): Page {
+    return Object.assign(page, {
+      queryAll: async (selector: string) =>
+        selector.includes('img') ? [{ selector: '#logo' }, { selector: '#chart' }] : [],
+      axAt: async (selector: string): Promise<AxNode | null> =>
+        selector === '#logo' ? { name: 'Company logo', role: 'img', states: {} } : null,
+    });
+  }
+
+  it('reads the images on the screen only when the caller asks for them', async () => {
+    const page = imagePage(await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] }));
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      collectPageImages: true,
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.images).toEqual([
+      { elementPath: '#logo', name: 'Company logo', role: 'img', decorative: false },
+      { elementPath: '#chart', name: null, role: null, decorative: false },
+    ]);
+    expect(scan.imagesNotListed).toBeUndefined();
+  });
+
+  it('leaves a gating scan exactly as it was when nobody asked for images', async () => {
+    const page = imagePage(await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] }));
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect('images' in scan).toBe(false);
+    expect('imagesNotListed' in scan).toBe(false);
+  });
+
+  it('adds no gap and keeps the scan when the image read fails', async () => {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    Object.assign(page, {
+      queryAll: async (selector: string) => {
+        if (selector.includes('img')) throw new Error('page went away');
+        return [];
+      },
+    });
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      collectPageImages: true,
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.stops.length).toBeGreaterThan(0);
+    expect('images' in scan).toBe(false);
+  });
+});

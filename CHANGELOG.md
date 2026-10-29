@@ -389,6 +389,17 @@
 
 ### Added
 
+- `usabl docs --all` documents every in-scope surface, not only the ones the change
+  touched. It plans the run from every UI file, every surface file, and every docs page
+  source, so a clean tree no longer yields an empty page. It still exits 0, mints no
+  verdict of its own, and takes every honesty state from the receipt, as before.
+
+- The alt-text manifest is drafted from the page when no content requirement covers a
+  screen. The docs run reads each image on the screen and the text it has now. Every such
+  entry is marked `origin: 'page'`, stays a draft, carries no evidence, and is scrubbed and
+  shortened like other page text. The HTML page says a person must review it. Gating runs
+  do not read images, so `usabl check` output is unchanged.
+
 - Color-contrast results that axe could not measure because the background is a gradient,
   as on PatternFly 6 buttons, now say why and what a person should check. The terminal
   summary prints them as one entry per screen with the count and every element, and the

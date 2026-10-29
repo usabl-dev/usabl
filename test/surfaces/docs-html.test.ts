@@ -210,3 +210,29 @@ describe('renderDocsHtml', () => {
     expect(renderDocsHtml(artifacts)).toBe(renderDocsHtml(artifacts));
   });
 });
+
+describe('renderDocsHtml page-drafted alt text', () => {
+  const drafted = boundWithoutEvidence({
+    entries: [
+      { element: '#logo', content: 'Company logo', status: 'draft', origin: 'page' },
+      { element: '#chart', content: 'No text alternative on the page.', status: 'draft', origin: 'page' },
+    ],
+  });
+
+  it('says the entries were drafted from the page and need a person to review them', () => {
+    const html = renderDocsHtml([drafted]);
+
+    expect(html).toContain('Drafted from the page.');
+    expect(html).toContain('A person must review');
+    expect(html).toContain('<th scope="col">Text on the page</th>');
+    expect(html).not.toContain('<th scope="col">Expected text</th>');
+    expect(html).not.toContain('Verified.');
+  });
+
+  it('keeps the expected-text heading for alt text from content requirements', () => {
+    const html = renderDocsHtml([boundWithoutEvidence()]);
+
+    expect(html).toContain('<th scope="col">Expected text</th>');
+    expect(html).not.toContain('Drafted from the page.');
+  });
+});

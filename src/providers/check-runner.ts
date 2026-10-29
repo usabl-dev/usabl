@@ -32,6 +32,7 @@ import {
   signalWait,
   type ReadinessSignal,
 } from './reachability.js';
+import { readPageImages } from './page-images.js';
 import { observeLanding, readRefusedRequests, redirectedAwayGap } from './redirected.js';
 import { waitForScannerArtifactsToClear } from './scanner-artifacts.js';
 import { runProviders } from './index.js';
@@ -50,6 +51,9 @@ export interface CheckRunnerDeps {
   // legitimately meets 401s and login forms, and firing on those would turn every deliberate
   // signed-out run into a coverage gap. The composition root sets it for every gating surface.
   sessionConfigured?: boolean;
+  // Read the images each screen shows, for the alt-text manifest `usabl docs` drafts. Only the docs
+  // generator sets it. Gating surfaces leave it off, so their scans keep exactly the shape they had.
+  collectPageImages?: boolean;
 }
 
 const DEFAULT_TRANSCRIPT_TAB_CAP = 50;
@@ -139,6 +143,20 @@ function responseFields(
     return {};
   }
   return { reachedResponseSeen: seen, reachedWhenResponse: signal.response };
+}
+
+/**
+ * The images on the open page, for the docs generator. A failed read adds no gap and leaves the
+ * fields off. The images feed no check, so a failure here says nothing about the screen's
+ * accessibility, and the manifest then has nothing to draft for the screen rather than a guess.
+ */
+async function pageImagesOf(page: Page): Promise<Pick<ScreenScan, 'images' | 'imagesNotListed'>> {
+  try {
+    const read = await readPageImages(page);
+    return { images: read.images, ...(read.notListed > 0 ? { imagesNotListed: read.notListed } : {}) };
+  } catch {
+    return {};
+  }
 }
 
 function makeTabSteps(tabCap: number): Step[] {
@@ -260,6 +278,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
             await attachDomSourceToDrafts(page, providerResult.drafts),
           );
           const drafts = rows.drafts;
+          const images = deps.collectPageImages === true ? await pageImagesOf(page) : {};
 
           // Measure the readiness signal again after the walk and providers have run, while the
           // page is still open. This is the only place the live page exists; markUnseenScreens runs
@@ -306,6 +325,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
               reachedSelectorPresent: readiness.selectorPresent,
               reachedWhenSelector: signal?.selector ?? null,
               ...responseFields(signal, readiness.responseSeen),
+              ...images,
             };
           }
         }

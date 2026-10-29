@@ -510,6 +510,7 @@ export interface DocArtifact {
     content: string;
     status: 'draft' | 'approved';
     evidenceRef?: string;
+    origin?: 'page';               // drafted from the page; always a draft, never evidence
   }>;
   generatedAt: string;
   boundToReceipt?: string;
@@ -2468,6 +2469,32 @@ manifest comes from configured content requirements. Surfaces the run did not ve
 carry no `evidenceRef`, so unverified state cannot masquerade as proof. The same
 projection is available to library callers as `projectDocs` and `collectDocArtifacts`
 from the `usabl/docs` export.
+
+By default `usabl docs` documents the surfaces the working-tree change touched, the same
+scope `usabl check` uses, so a clean tree yields an empty `artifacts` list. `usabl docs
+--all` documents every in-scope surface instead. It plans the run from every file the
+`uiFileGlobs` match, every file a surface names, and every source of a docs page, so every
+screen the planners can reach is scanned, whatever git status says. Nothing else about
+coverage changes: a file no screen owns is still a coverage gap, and that gap still stops
+the run from minting a receipt. It is still a generator. It exits 0, mints no verdict of
+its own, and takes every honesty state from receipt binding, exactly as the per-change
+mode does.
+
+When no content requirement covers a scanned screen, the alt-text manifest for that
+screen is drafted from the page instead. The docs run reads each image on the screen
+(`img`, `role="img"`, `role="image"`, and `input type="image"`) and its accessible name
+and role from the accessibility tree. Gating runs never read them. Each entry is the
+image's element path and the text it has now. An image with no name reads `Marked
+decorative on the page.` when its own `alt` is empty or its role is `none` or
+`presentation`, and `No text alternative on the page.` otherwise.
+That text is untrusted page text. It passes the surface scrubber, each string is cut to a
+fixed length and marked `(shortened)` when cut, and at most 200 images are listed per
+screen, with one more entry that counts the rest. Every drafted entry has `origin:
+'page'` and `status: 'draft'`, and never an `evidenceRef`. It never becomes a check, a
+requirement, or an approval. The HTML page labels such a card "Drafted from the page" and
+says a person must review every entry. A screen that has content requirements keeps the
+manifest built from them, and a screen whose images could not be read, or that usabl did
+not see, gets no drafted manifest.
 
 ### Not v1
 

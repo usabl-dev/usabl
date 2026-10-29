@@ -182,6 +182,9 @@ export async function buildDeps(
     // fresh context, so run isolation is unchanged. When omitted, a driver is created per call and
     // the caller closes it, which is the CLI's one-shot behavior.
     browserFor?: (options: RealBrowserOptions) => BrowserDriver;
+    // Read the images each screen shows, for the alt-text manifest `usabl docs` drafts. Only the
+    // docs command sets it. See CheckRunnerDeps.collectPageImages.
+    collectPageImages?: boolean;
   } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
@@ -251,6 +254,7 @@ export async function buildDeps(
       // The one place that knows whether this run asserted a session. Every gating surface builds
       // its Deps here, so setting it once covers the CLI, the Vite overlay, and the Stop hook.
       sessionConfigured: storageStatePath !== null,
+      ...(options.collectPageImages === true ? { collectPageImages: true } : {}),
     }),
   };
 }

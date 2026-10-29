@@ -134,6 +134,11 @@ reads as one of three states, and the states are separated in words, not by colo
 - **Not verified (observation).** The artifact is not bound to any receipt, so it is an
   observation of what the interface announced, with no receipt claim.
 
+An alt-text manifest drafted from the page, because no content requirement covers the
+surface, also carries a "Drafted from the page" note under its state. The note says the
+text came from the page, usabl did not check it, and a person must review every entry.
+Such a card is never verified, because its entries carry no evidence.
+
 The overlay and HUD follow the caption rule above: label live output as an accessibility
 preview, never as verified proof.
 

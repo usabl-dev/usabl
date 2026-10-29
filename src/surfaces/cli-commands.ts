@@ -131,7 +131,12 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     name: 'docs',
     usage: 'usabl docs [options]',
     summary: 'Print the design intake and transcript artifacts of a run as JSON.',
-    flags: [{ name: '--html', help: 'Print them as one HTML page instead.' }, STATIC_ONLY_FLAG, CONFIG_FLAG],
+    flags: [
+      { name: '--all', help: 'Document every in-scope screen, not only the screens this change touches.' },
+      { name: '--html', help: 'Print them as one HTML page instead.' },
+      STATIC_ONLY_FLAG,
+      CONFIG_FLAG,
+    ],
   },
   {
     name: 'comment',
