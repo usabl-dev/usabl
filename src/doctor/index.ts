@@ -26,8 +26,12 @@ import { parseWaiverLedger } from '../run.js';
 import {
   isStorageStateExpired,
   readStorageStateEnv,
+  SESSION_STATE_PATH,
+  sessionIgnoreProblem,
+  sessionModeProblem,
   STORAGE_STATE_ENV_VAR,
   type EnvReader,
+  type GitIgnoreState,
 } from '../deps/session.js';
 import { neutralize } from '../primitives/neutralize.js';
 import { scrubString } from '../surfaces/scrub.js';
@@ -48,7 +52,7 @@ const WAIVERS_PATH = '.usabl-waivers.json';
 const CONFIG_LABEL = 'usabl config';
 // The label names the variable, never its value. The value is a path the operator chose and
 // the file it names holds live session cookies, so neither belongs in a printed report.
-const SESSION_LABEL = `authenticated session (${STORAGE_STATE_ENV_VAR})`;
+const SESSION_LABEL = `authenticated session (${STORAGE_STATE_ENV_VAR} or ${SESSION_STATE_PATH})`;
 const ROUTES_LABEL = 'route manifest (usabl.routes.json)';
 const EVIDENCE_FLOOR_LABEL = `evidence floor (${EVIDENCE_FLOOR_PATH})`;
 const WAIVERS_LABEL = `waiver ledger (${WAIVERS_PATH})`;
@@ -105,6 +109,12 @@ export interface DoctorDeps {
   // Milliseconds since the Unix epoch, for judging session cookie expiry. Injected for the same
   // reason env is, and defaults to the wall clock so existing callers need not pass one.
   now?: () => number;
+  // What git says about the session file, and its permission bits. The CLI always passes both.
+  // A caller that leaves them out gets no git or mode check, and the report says so.
+  sessionFile?: {
+    ignoreState(path: string): Promise<GitIgnoreState>;
+    mode(path: string): Promise<number | null>;
+  };
 }
 
 function isFsReadError(error: unknown): boolean {
@@ -171,17 +181,22 @@ async function collectConfig(deps: DoctorDeps): Promise<SurfaceReport> {
 async function collectSession(deps: DoctorDeps): Promise<SurfaceReport> {
   // Without a session usabl scans signed out, which is how a login-gated application was
   // measured as three blank pages and still received a verdict. So the missing state carries
-  // the consequence, not just the variable name. Nothing here prints the path or the file:
-  // the path can name a private location and the file holds live session tokens, so doctor
-  // reports whether a session is set, never what it is.
+  // the consequence, not just the variable name. Nothing here prints the variable's path or any
+  // file contents: that path can name a private location and the file holds live session tokens,
+  // so doctor reports whether a session is set, never what it is. The saved session's path is
+  // printed, because it is the fixed path usabl itself chose inside the repository.
   const path = readStorageStateEnv(deps.env);
   if (path === null) {
-    return {
-      id: 'session',
-      label: SESSION_LABEL,
-      state: 'missing',
-      nextStep: `No ${STORAGE_STATE_ENV_VAR}. usabl will scan signed out, so a login-gated screen is measured as whatever a signed-out visitor sees, often a blank or redirected page that still mints a verdict. Export ${STORAGE_STATE_ENV_VAR} with the path to a Playwright storage state JSON file to scan signed in.`,
-    };
+    const raw = await deps.fs.readFile(SESSION_STATE_PATH);
+    if (raw === null) {
+      return {
+        id: 'session',
+        label: SESSION_LABEL,
+        state: 'missing',
+        nextStep: `No ${STORAGE_STATE_ENV_VAR} and no session saved by usabl session. usabl will scan signed out, so a login-gated screen is measured as whatever a signed-out visitor sees, often a blank or redirected page that still mints a verdict. Run usabl session to sign in once and save a session, or export ${STORAGE_STATE_ENV_VAR} with the path to a Playwright storage state JSON file to scan signed in.`,
+      };
+    }
+    return judgeSessionFile(deps, raw, { path: SESSION_STATE_PATH, saved: true });
   }
   // A real read error (EACCES and the like) propagates to guardRead as unknown. This fs port
   // returns null for a missing file, which is the confident "the path names nothing" signal.
@@ -194,6 +209,16 @@ async function collectSession(deps: DoctorDeps): Promise<SurfaceReport> {
       nextStep: `${STORAGE_STATE_ENV_VAR} is set but no file exists at the path it names (the path is not printed here). Re-export the session file, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
     };
   }
+  return judgeSessionFile(deps, raw, { path, saved: false });
+}
+
+// The checks a session file must pass, the same for the variable's file and the saved one. Every
+// problem found is named, so one doctor run lists every fix rather than one per run.
+async function judgeSessionFile(
+  deps: DoctorDeps,
+  raw: string,
+  file: { path: string; saved: boolean },
+): Promise<SurfaceReport> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -202,20 +227,55 @@ async function collectSession(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'session',
       label: SESSION_LABEL,
       state: 'drifted',
-      nextStep: `${STORAGE_STATE_ENV_VAR} names a file that is not JSON, so it is not a Playwright storage state. Re-export the session file, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
+      nextStep: file.saved
+        ? `${SESSION_STATE_PATH} is not JSON, so it is not a Playwright storage state. Delete it and sign in again with usabl session.`
+        : `${STORAGE_STATE_ENV_VAR} names a file that is not JSON, so it is not a Playwright storage state. Re-export the session file, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
     };
   }
+  const problems: string[] = [];
   // Set but dead is drift, not wiring. It reads the same rule "usabl check" refuses on, so the
   // two surfaces cannot disagree about the same file: doctor must never call a session wired
   // that the next run will stop on, and never call one drifted that the next run will accept.
   if (isStorageStateExpired(parsed, (deps.now ?? Date.now)())) {
-    return {
-      id: 'session',
-      label: SESSION_LABEL,
-      state: 'drifted',
-      nextStep: `${STORAGE_STATE_ENV_VAR} names a Playwright storage state whose session has expired. Everything usabl can check in that file is spent: every cookie carries an expiry, every one of those is already past, no origin holds local storage or IndexedDB, and there are no stored credentials. "usabl check" stops on this rather than scanning the sign-in page. Mint a new session and re-export ${STORAGE_STATE_ENV_VAR}, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
-    };
+    problems.push(
+      file.saved
+        ? `${SESSION_STATE_PATH} has expired: every cookie in it is past its expiry and it holds nothing else that could sign in. "usabl check" stops on this rather than scanning the sign-in page. Sign in again with usabl session, or delete the file to scan signed out on purpose.`
+        : `${STORAGE_STATE_ENV_VAR} names a Playwright storage state whose session has expired. Everything usabl can check in that file is spent: every cookie carries an expiry, every one of those is already past, no origin holds local storage or IndexedDB, and there are no stored credentials. "usabl check" stops on this rather than scanning the sign-in page. Mint a new session and re-export ${STORAGE_STATE_ENV_VAR}, or unset ${STORAGE_STATE_ENV_VAR} to scan signed out on purpose.`,
+    );
   }
+  const checks = deps.sessionFile;
+  // What the wired state may claim about git and permissions: only what was checked and held.
+  const confirmed: string[] = [];
+  if (checks !== undefined) {
+    const ignore = await checks.ignoreState(file.path);
+    if (ignore === 'ignored' || ignore === 'outside') {
+      confirmed.push('git cannot commit it');
+    }
+    if (file.saved) {
+      const problem = sessionIgnoreProblem(ignore, SESSION_STATE_PATH);
+      if (problem !== null) {
+        problems.push(`${problem} "usabl check" will not use the session until then.`);
+      }
+    } else if (ignore === 'tracked' || ignore === 'not-ignored') {
+      // The variable's path is never printed, so the fix is phrased without it.
+      problems.push(
+        `${STORAGE_STATE_ENV_VAR} names a file inside this repository that git ${ignore === 'tracked' ? 'already tracks' : 'does not ignore'}, so the session in it could be committed. Move the file outside the repository, or untrack it and add it to .gitignore.`,
+      );
+    }
+    const mode = await checks.mode(file.path);
+    const modeProblem = mode === null ? null : sessionModeProblem(mode, file.saved ? SESSION_STATE_PATH : `"$${STORAGE_STATE_ENV_VAR}"`);
+    if (modeProblem !== null) {
+      problems.push(modeProblem.charAt(0).toUpperCase() + modeProblem.slice(1));
+    } else if (mode !== null) {
+      confirmed.push('only its owner can read it');
+    }
+  }
+  if (problems.length > 0) {
+    return { id: 'session', label: SESSION_LABEL, state: 'drifted', nextStep: problems.join(' ') };
+  }
+  const claims = confirmed.length === 0 ? '' : ` ${confirmed.join(', and ')}.`;
+  const unchecked =
+    confirmed.length === 2 ? '' : ' usabl could not confirm both that git cannot commit the file and that only its owner can read it.';
   return {
     id: 'session',
     label: SESSION_LABEL,
@@ -223,7 +283,7 @@ async function collectSession(deps: DoctorDeps): Promise<SurfaceReport> {
     // Readable, parsing, and holding something that could still authenticate is all doctor can
     // confirm. Whether the application accepts the session is a live question no read of the file
     // can answer, so the wired state says so instead of implying more.
-    nextStep: `Set, readable, parses, and still holds something that could authenticate: an unexpired or undated cookie, local storage, IndexedDB, or a stored credential. Whether the application accepts the session is not something reading the file can answer; a scan that meets a sign-in page or a refused data request is reported as a coverage gap.`,
+    nextStep: `${file.saved ? `Saved by usabl session at ${SESSION_STATE_PATH}. ` : ''}Set, readable, parses, and still holds something that could authenticate: an unexpired or undated cookie, local storage, IndexedDB, or a stored credential.${claims} Whether the application accepts the session is not something reading the file can answer; a scan that meets a sign-in page or a refused data request is reported as a coverage gap.${unchecked}`,
   };
 }
 
