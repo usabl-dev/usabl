@@ -30,7 +30,16 @@ import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
 import { configUrlWarnings, parseUsablConfig } from './intake/config.js';
-import { ciRefusal, installRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
+import {
+  ciRefusal,
+  installRefusal,
+  localApprovalNextSteps,
+  mergeChangedPaths,
+  parseCliArgs,
+  projectCli,
+  type CliOptions,
+} from './surfaces/cli.js';
+import { preflightCli } from './surfaces/cli-commands.js';
 import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
 import { planOverlay, writeOverlay } from './install/overlay.js';
@@ -39,7 +48,7 @@ import { installClaudeSkills } from './install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs, writeCursor } from './install/cursor.js';
 import { planCi, planDocsCi, writeCi, writeDocsCi } from './install/ci.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
-import { projectDocs } from './surfaces/docs.js';
+import { generateDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultText } from './surfaces/policy-enforce.js';
@@ -56,7 +65,17 @@ export async function loadConfig(
   },
 ): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
-  const config = parseUsablConfig(await readFile(path, 'utf8'));
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      // The first error a new user meets. Name the command that writes the file.
+      throw new Error(`${path} not found. Run "usabl init" to draft it, or pass --config <path>.`);
+    }
+    throw error;
+  }
+  const config = parseUsablConfig(raw);
   // A configured URL with a query or a fragment loads, and the operator is told it is published.
   for (const warning of configUrlWarnings(config)) {
     warn(warning);
@@ -237,6 +256,18 @@ async function runInstall(opts: CliOptions): Promise<number> {
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
+  // Help and unknown flags are answered before anything runs, so asking how to use a command
+  // never loads config, opens a browser, reads stdin, or writes a file.
+  const preflight = preflightCli(argv);
+  if (preflight !== null && preflight.kind === 'help') {
+    process.stdout.write(preflight.text);
+    return 0;
+  }
+  if (preflight !== null) {
+    process.stderr.write(`usabl: ${preflight.message}\n`);
+    return 2;
+  }
+
   let opts;
   try {
     opts = parseCliArgs(argv);
@@ -260,7 +291,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'doctor' &&
     opts.command !== 'docs'
   ) {
-    process.stderr.write(`unknown command: ${opts.command}\n`);
+    // The command table names a command this dispatch does not run. Refuse it the same way.
+    process.stderr.write('usabl: unknown command. Run "usabl help" to list the commands.\n');
     return 2;
   }
 
@@ -484,13 +516,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // Docs is a generator, not a gate. It projects design-intake and transcript artifacts
     // from a full run and always exits 0. Artifact honesty comes from receipt binding
     // (unverified surfaces carry no evidenceRef), never from a verdict this command invents.
+    // --all documents every in-scope surface, not only the ones the change touched.
     const config = await loadConfig(opts.configPath);
     const deps = await buildDeps(config, {
       allowedCapabilities: opts.staticOnly ? [] : ['live'],
+      // The alt-text manifest drafts from the page's images when no content requirement covers
+      // a screen, so the docs run reads them. Gating runs never do.
+      collectPageImages: true,
     });
     try {
-      const result = await run(deps, config);
-      const projected = projectDocs(result, deps.requirements);
+      const projected = await generateDocs(deps, config, { all: opts.all });
       // --html renders the same artifacts as one accessible, self-contained page.
       // The page carries the honesty invariant on its face: only receipt-bound
       // cards are shown as verified; everything else is labelled an observation.
@@ -547,7 +582,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return advisory.advisoryExitCode;
     }
     const projected = projectCli(result);
-    process.stdout.write((opts.json ? projected.json : projected.text) + '\n');
+    if (opts.json) {
+      process.stdout.write(projected.json + '\n');
+      return projected.exitCode;
+    }
+    // A local run has no pull request to approve on, so it also says how to clear the state here.
+    const nextSteps = opts.trustedRef === null ? localApprovalNextSteps(result) : [];
+    process.stdout.write([projected.text, ...nextSteps].join('\n') + '\n');
     return projected.exitCode;
   } finally {
     // Always close browser resources, even when run() throws before returning a Result.

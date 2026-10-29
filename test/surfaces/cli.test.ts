@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Result } from '../../src/contracts/index.js';
 import {
   ciRefusal,
+  localApprovalNextSteps,
   mergeChangedPaths,
   parseCliArgs,
   projectCli,
@@ -37,6 +38,7 @@ describe('parseCliArgs', () => {
       command: 'check',
       staticOnly: false,
       html: false,
+      all: false,
       docs: false,
       trustedRef: null,
       json: false,
@@ -71,6 +73,7 @@ describe('parseCliArgs', () => {
       command: 'check',
       staticOnly: true,
       html: true,
+      all: false,
       docs: false,
       trustedRef: 'origin/main',
       json: true,
@@ -92,6 +95,11 @@ describe('parseCliArgs', () => {
     const parsed = parseCliArgs(['docs', '--html']);
     expect(parsed.command).toBe('docs');
     expect(parsed.html).toBe(true);
+  });
+
+  it('parses --all for the docs command and defaults it to false', () => {
+    expect(parseCliArgs(['docs', '--all']).all).toBe(true);
+    expect(parseCliArgs(['docs']).all).toBe(false);
   });
 
   it('defaults html to false', () => {
@@ -137,6 +145,7 @@ describe('parseCliArgs', () => {
       command: 'check',
       staticOnly: false,
       html: false,
+      all: false,
       docs: false,
       trustedRef: null,
       json: false,
@@ -252,5 +261,119 @@ describe('mergeChangedPaths', () => {
       ),
     ).toEqual(['src/a.ts', 'src/b.ts', 'src/z.ts']);
     expect(mergeChangedPaths([], [])).toEqual([]);
+  });
+});
+
+describe('localApprovalNextSteps', () => {
+  const approval = (over: Partial<Result>): Result =>
+    baseResult({
+      verdict: 'approval_required',
+      summary: 'approval required: 2 guarded path(s) changed',
+      dirtyGuardedPaths: ['usabl.config.json', 'usabl.routes.json'],
+      exitCode: 2,
+      ...over,
+    });
+
+  it('tells a first-run user to commit the new policy files and how to get the report', () => {
+    const lines = localApprovalNextSteps(
+      approval({ coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true } }),
+    );
+    const text = lines.join('\n');
+    expect(text).toContain('next: usabl trusts policy files only after they are committed.');
+    expect(text).toContain('commit them');
+    expect(text).toContain('usabl baseline');
+    expect(text).toContain('accessibility barriers');
+    expect(text).not.toMatch(/\u2014|--(?!\w)/);
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(80);
+    }
+  });
+
+  it('says the touched screens were still scanned when they were', () => {
+    const text = localApprovalNextSteps(
+      approval({
+        screens: [
+          {
+            screenId: 'home',
+            url: 'http://127.0.0.1:5173/',
+            stops: [],
+            drafts: [],
+            gaps: [],
+            applicability: [],
+            reachedSelectorPresent: null,
+            reachedWhenSelector: null,
+          },
+        ],
+      }),
+    ).join('\n');
+    expect(text).toContain('commit them');
+    expect(text).toContain('were still scanned');
+    expect(text).not.toContain('usabl baseline');
+  });
+
+  const scanOf = (screenId: string, gaps: Result['screens'][number]['gaps']): Result['screens'][number] => ({
+    screenId,
+    url: `http://127.0.0.1:59999/${screenId}`,
+    stops: [],
+    drafts: [],
+    gaps,
+    applicability: [],
+    reachedSelectorPresent: null,
+    reachedWhenSelector: null,
+  });
+  const openFailure = (screenId: string): Result['screens'][number]['gaps'][number] => ({
+    ref: `http://127.0.0.1:59999/${screenId}`,
+    state: 'not-covered',
+    reason: 'screen failed to open: nothing answered at http://127.0.0.1:59999/',
+  });
+
+  it('says no screen was measured when no touched screen opened', () => {
+    const failed = scanOf('home', [openFailure('home')]);
+    const lines = localApprovalNextSteps(
+      approval({
+        screens: [failed],
+        coverage: { changedFiles: ['src/Home.tsx'], affected: [], unresolvedFiles: [], gaps: failed.gaps, nothingToCheck: false },
+        accessibilityVerdict: 'not_covered',
+        accessibilityExitCode: 3,
+      }),
+    );
+    const text = lines.join('\n');
+    expect(text).toContain('commit them');
+    expect(text).not.toContain('were still scanned');
+    expect(text).not.toContain('were scanned');
+    expect(text).toContain('no screen was measured');
+    expect(text).toContain('"not evaluated"');
+    expect(text).not.toMatch(/\u2014|--(?!\w)/);
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(80);
+    }
+  });
+
+  it('counts the touched screens that opened and the ones that did not', () => {
+    const failed = scanOf('settings', [openFailure('settings')]);
+    const lines = localApprovalNextSteps(
+      approval({
+        screens: [scanOf('home', []), failed],
+        coverage: { changedFiles: ['src/Home.tsx'], affected: [], unresolvedFiles: [], gaps: failed.gaps, nothingToCheck: false },
+        accessibilityVerdict: 'not_covered',
+        accessibilityExitCode: 3,
+      }),
+    );
+    const text = lines.join('\n');
+    expect(text).not.toContain('were still scanned');
+    const flat = text.replace(/\s+/g, ' ');
+    expect(flat).toContain('1 of the 2 screens this change touches was scanned.');
+    expect(flat).toContain('Any accessibility barriers found there are listed above.');
+    expect(flat).toContain('1 screen did not open or was not fully measured.');
+    expect(text).toContain('"not evaluated"');
+    expect(text).not.toMatch(/\u2014|--(?!\w)/);
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(80);
+    }
+  });
+
+  it('adds nothing for any other verdict', () => {
+    expect(localApprovalNextSteps(baseResult({}))).toEqual([]);
+    expect(localApprovalNextSteps(baseResult({ verdict: 'regression', exitCode: 1 }))).toEqual([]);
   });
 });

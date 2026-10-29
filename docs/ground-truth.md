@@ -510,6 +510,7 @@ export interface DocArtifact {
     content: string;
     status: 'draft' | 'approved';
     evidenceRef?: string;
+    origin?: 'page';               // drafted from the page; always a draft, never evidence
   }>;
   generatedAt: string;
   boundToReceipt?: string;
@@ -629,6 +630,22 @@ Wraps axe-core so it returns `Draft[]`. It owns color contrast, alt text, and ge
 WCAG-mapped checks. A curated notes table overrides axe's default `why`/`fix` text for
 common rules with plain-language PatternFly-specific guidance. Every Draft has
 `evidenceClass: 'deterministic'`.
+
+A color-contrast result axe could not measure because the element's background is a
+gradient is still a needs-review draft (`confidence: 'unverified'`) with the same rule,
+element, severity, and evidence. It is the result whose `color-contrast` check data has
+`messageKey: 'bgGradient'`, the axe-core 4.13.0 reason for a background gradient, matched
+exactly. Only its words differ: it says axe could not measure the contrast because the
+background is a gradient, and that a person should check the text against the lightest
+and the darkest part of the gradient (4.5:1, or 3:1 for large text). PatternFly 6 buttons
+draw a gradient, so a screen can carry many of these. The terminal summary prints them as
+one entry per screen and status, with the count and every element path, after the other
+findings in the same list. The collapsed views (pull request comment, Stop hook, self
+check) give them a group of their own, so they never merge with a contrast result axe did
+measure. Every other contrast result, including other needs-review reasons, is printed as
+before. None of this changes a finding, an identity, the floor, a verdict, an exit code,
+or a receipt: new ones still block as not covered, and recorded ones still do not. `usabl
+check --json` lists each one as its own finding.
 
 ### 7.2 PatternFly rulepack
 
@@ -1923,9 +1940,25 @@ coverage honesty, and optional receipt minting.
 
 **Command surface.** `main` recognizes exactly twelve commands: `check`, `comment`,
 `bypass`, `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`,
-`doctor`, `docs`. `check` is the default when no command is given. There is no `--help`
-and no `--version`, and unrecognized flags are silently ignored (the parser has no
-catch-all for unknown `-` tokens); an unknown *command* exits 2.
+`doctor`, `docs`, plus `help`. `check` is the default when no command is given, so `usabl`
+alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
+`usabl help <command>` print help and exit 0 before anything else runs: no config is read, no
+browser opens, stdin is not read, and no file is written. The top-level help lists every
+command with one line each. A command's help lists every flag it takes. Both come from one
+command table in `src/surfaces/cli-commands.ts`, and a flag the table does not list for that
+command is refused with exit 2 and a pointer to `usabl <command> --help`, instead of being
+ignored. An unknown command exits 2 and points to `usabl help`. There is no `--version`.
+
+A local `usabl check` that ends in `approval_required` also prints the next step: commit the
+guarded files (a code owner approves them on a pull request). When no UI file changed, it
+says no screen was scanned and that `usabl baseline`, after the commit, scans every mapped
+screen. When every touched screen opened and was measured, it says their accessibility
+barriers are listed above. A screen that did not open, or was not fully measured, is still in
+`screens`, as a scan with a gap. Only a scan with no gap counts as measured. When some touched
+screens were measured and some were not, it gives both counts and points to the "not evaluated"
+lines. When none was measured, it says no screen was measured and points to the same lines. The
+verdict and the exit code do not change. A run with `--trusted-ref` or `--json` prints no such
+lines.
 
 **Typical uses:**
 
@@ -2492,6 +2525,32 @@ manifest comes from configured content requirements. Surfaces the run did not ve
 carry no `evidenceRef`, so unverified state cannot masquerade as proof. The same
 projection is available to library callers as `projectDocs` and `collectDocArtifacts`
 from the `usabl/docs` export.
+
+By default `usabl docs` documents the surfaces the working-tree change touched, the same
+scope `usabl check` uses, so a clean tree yields an empty `artifacts` list. `usabl docs
+--all` documents every in-scope surface instead. It plans the run from every file the
+`uiFileGlobs` match, every file a surface names, and every source of a docs page, so every
+screen the planners can reach is scanned, whatever git status says. Nothing else about
+coverage changes: a file no screen owns is still a coverage gap, and that gap still stops
+the run from minting a receipt. It is still a generator. It exits 0, mints no verdict of
+its own, and takes every honesty state from receipt binding, exactly as the per-change
+mode does.
+
+When no content requirement covers a scanned screen, the alt-text manifest for that
+screen is drafted from the page instead. The docs run reads each image on the screen
+(`img`, `role="img"`, `role="image"`, and `input type="image"`) and its accessible name
+and role from the accessibility tree. Gating runs never read them. Each entry is the
+image's element path and the text it has now. An image with no name reads `Marked
+decorative on the page.` when its own `alt` is empty or its role is `none` or
+`presentation`, and `No text alternative on the page.` otherwise.
+That text is untrusted page text. It passes the surface scrubber, each string is cut to a
+fixed length and marked `(shortened)` when cut, and at most 200 images are listed per
+screen, with one more entry that counts the rest. Every drafted entry has `origin:
+'page'` and `status: 'draft'`, and never an `evidenceRef`. It never becomes a check, a
+requirement, or an approval. The HTML page labels such a card "Drafted from the page" and
+says a person must review every entry. A screen that has content requirements keeps the
+manifest built from them, and a screen whose images could not be read, or that usabl did
+not see, gets no drafted manifest.
 
 ### Not v1
 

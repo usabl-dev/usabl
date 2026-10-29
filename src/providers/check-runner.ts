@@ -32,6 +32,7 @@ import {
   signalWait,
   type ReadinessSignal,
 } from './reachability.js';
+import { readPageImages } from './page-images.js';
 import { observeLanding, readRefusedRequests, redirectedAwayGap } from './redirected.js';
 import { waitForScannerArtifactsToClear } from './scanner-artifacts.js';
 import { runProviders } from './index.js';
@@ -50,6 +51,9 @@ export interface CheckRunnerDeps {
   // legitimately meets 401s and login forms, and firing on those would turn every deliberate
   // signed-out run into a coverage gap. The composition root sets it for every gating surface.
   sessionConfigured?: boolean;
+  // Read the images each screen shows, for the alt-text manifest `usabl docs` drafts. Only the docs
+  // generator sets it. Gating surfaces leave it off, so their scans keep exactly the shape they had.
+  collectPageImages?: boolean;
 }
 
 const DEFAULT_TRANSCRIPT_TAB_CAP = 50;
@@ -60,6 +64,29 @@ function errorMessage(err: unknown): string {
 
 function notCoveredGap(ref: string, reason: string): CoverageGap {
   return { ref, state: 'not-covered', reason };
+}
+
+// Where this screen's url was set, when the runner can tell. A surface with this id and this exact
+// url means the operator wrote it in surfaces[].url. Any other url was built by a planner from
+// appBaseUrl or from the docs manifest's docsBaseUrl, and the runner cannot tell which, so it
+// names no setting rather than the wrong one.
+function urlFix(screen: { id: string; url: string }, config: UsablConfig): string {
+  const declared = config.surfaces.some((surface) => surface.id === screen.id && surface.url === screen.url);
+  return declared
+    ? `or set surfaces[].url for screen ${screen.id} in usabl.config.json to where it runs.`
+    : 'or fix the URL configured for this screen.';
+}
+
+// Why a screen did not open. Nothing listening at the address is the first failure a new user
+// meets, because the app's dev server is not running yet, so that case names the fix.
+function openFailureReason(screen: { id: string; url: string }, config: UsablConfig, message: string): string {
+  if (/ERR_CONNECTION_REFUSED|ECONNREFUSED/.test(message)) {
+    return (
+      `screen failed to open: nothing answered at ${screen.url}. Start the app (for example its dev server), ` +
+      `${urlFix(screen, config)} ${message}`
+    );
+  }
+  return `screen failed to open: ${message}`;
 }
 
 function failedScan(screen: { id: string; url: string }, reason: string): ScreenScan {
@@ -118,6 +145,20 @@ function responseFields(
   return { reachedResponseSeen: seen, reachedWhenResponse: signal.response };
 }
 
+/**
+ * The images on the open page, for the docs generator. A failed read adds no gap and leaves the
+ * fields off. The images feed no check, so a failure here says nothing about the screen's
+ * accessibility, and the manifest then has nothing to draft for the screen rather than a guess.
+ */
+async function pageImagesOf(page: Page): Promise<Pick<ScreenScan, 'images' | 'imagesNotListed'>> {
+  try {
+    const read = await readPageImages(page);
+    return { images: read.images, ...(read.notListed > 0 ? { imagesNotListed: read.notListed } : {}) };
+  } catch {
+    return {};
+  }
+}
+
 function makeTabSteps(tabCap: number): Step[] {
   return Array.from({ length: tabCap }, (): Step => ({ do: 'tab' }));
 }
@@ -143,7 +184,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       try {
         page = await deps.browser.open(screen.url);
       } catch (err) {
-        return failedScan(screen, `screen failed to open: ${errorMessage(err)}`);
+        return failedScan(screen, openFailureReason(screen, deps.config, errorMessage(err)));
       }
 
       // Look up the surface's optional readiness signal by screen id. Only manually declared
@@ -237,6 +278,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
             await attachDomSourceToDrafts(page, providerResult.drafts),
           );
           const drafts = rows.drafts;
+          const images = deps.collectPageImages === true ? await pageImagesOf(page) : {};
 
           // Measure the readiness signal again after the walk and providers have run, while the
           // page is still open. This is the only place the live page exists; markUnseenScreens runs
@@ -283,6 +325,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
               reachedSelectorPresent: readiness.selectorPresent,
               reachedWhenSelector: signal?.selector ?? null,
               ...responseFields(signal, readiness.responseSeen),
+              ...images,
             };
           }
         }

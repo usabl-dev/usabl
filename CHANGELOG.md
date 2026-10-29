@@ -23,6 +23,28 @@
 
 ### Fixed
 
+- `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
+  `usabl help <command>` now print help and exit 0 without running anything. Before,
+  `--help` was ignored and a check ran, and `help` was an unknown command. The top-level
+  help lists every command, and each command's help lists its flags. A flag a command
+  does not take is now refused with exit 2 and a pointer to that command's help, instead
+  of being ignored. `usabl` with no command still runs `check`, as the docs say.
+
+- A local `usabl check` that needs approval now says what to do next: review and commit
+  the guarded files. When no UI file changed, it says no screen was scanned and that
+  `usabl baseline` scans every mapped screen once the files are committed. It says a
+  touched screen was scanned only when the screen opened and was measured; otherwise it
+  says how many did not and points to the "not evaluated" lines. The verdict does not
+  change.
+
+- First-run errors now name the fix: a missing `usabl.config.json` points to
+  `usabl init` or `--config`; a repository with no commits, or a trusted ref git cannot
+  read, says to make a first commit or fetch the ref; a screen where nothing answers says
+  to start the app or set its `surfaces[].url`, or to fix the screen's configured URL when
+  usabl cannot tell which setting it came from; `usabl baseline` refused on other dirty policy
+  files says to commit or revert them, and refused on empty `uiFileGlobs` says which
+  field to set. A flag missing its value gives an example.
+
 - A file usabl cannot place on any screen, such as a shared layout every route imports
   through an alias usabl does not resolve, is now named with its path, why it could not be
   placed, and the fix: add it to a surface's `files` in `usabl.config.json`, or add the
@@ -385,6 +407,24 @@
   extension outside it is not seen. The ground truth says so.
 
 ### Added
+
+- `usabl docs --all` documents every in-scope surface, not only the ones the change
+  touched. It plans the run from every UI file, every surface file, and every docs page
+  source, so a clean tree no longer yields an empty page. It still exits 0, mints no
+  verdict of its own, and takes every honesty state from the receipt, as before.
+
+- The alt-text manifest is drafted from the page when no content requirement covers a
+  screen. The docs run reads each image on the screen and the text it has now. Every such
+  entry is marked `origin: 'page'`, stays a draft, carries no evidence, and is scrubbed and
+  shortened like other page text. The HTML page says a person must review it. Gating runs
+  do not read images, so `usabl check` output is unchanged.
+
+- Color-contrast results that axe could not measure because the background is a gradient,
+  as on PatternFly 6 buttons, now say why and what a person should check. The terminal
+  summary prints them as one entry per screen with the count and every element, and the
+  collapsed views give them a group of their own. Only axe's exact reason for a background
+  gradient is grouped. No finding is dropped, and no verdict, exit code, floor, or receipt
+  changes.
 
 - `usabl doctor` reports a readiness signals surface. It is missing when a screen holds
   floored debt and declares no `reachedWhen` signal, and its next step names those

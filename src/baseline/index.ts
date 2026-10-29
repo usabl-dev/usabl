@@ -293,6 +293,8 @@ function formatDirtyGuardedPaths(paths: string[]): string {
   const lines = [
     `refused: guarded paths other than ${EVIDENCE_FLOOR_PATH} are dirty`,
     ...paths.map((path) => `  - ${neutralize(path)}`),
+    'a floor draft is reviewed on its own, so other policy changes must be committed first.',
+    'review those files, commit or revert them, then run usabl baseline again.',
   ];
   return lines.join('\n');
 }
@@ -426,7 +428,11 @@ function refusedRun(result: Result): BaselineOutcome | null {
     return {
       exitCode: 2,
       wrote: false,
-      message: 'refused: no UI files matched uiFileGlobs for baseline.',
+      message: [
+        'refused: no UI files matched uiFileGlobs for baseline.',
+        'set uiFileGlobs in usabl.config.json to match your UI source files, such as',
+        'src/**/*.tsx, then run usabl baseline again.',
+      ].join('\n'),
       entryCount: 0,
     };
   }
