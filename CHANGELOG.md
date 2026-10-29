@@ -389,6 +389,13 @@
 
 ### Added
 
+- Color-contrast results that axe could not measure because the background is a gradient,
+  as on PatternFly 6 buttons, now say why and what a person should check. The terminal
+  summary prints them as one entry per screen with the count and every element, and the
+  collapsed views give them a group of their own. Only axe's exact reason for a background
+  gradient is grouped. No finding is dropped, and no verdict, exit code, floor, or receipt
+  changes.
+
 - `usabl doctor` reports a readiness signals surface. It is missing when a screen holds
   floored debt and declares no `reachedWhen` signal, and its next step names those
   screens. A floored barrier the run does not see is claimed fixed only with evidence its

@@ -273,3 +273,37 @@ describe('applyAxeTags', () => {
     expect(builder.calls).toHaveLength(0);
   });
 });
+
+describe('axe provider and a gradient background', () => {
+  const contrastIssue = (messageKey: string): AxeIssue => ({
+    id: 'color-contrast',
+    impact: 'serious',
+    description: 'Elements must meet minimum color contrast ratio thresholds',
+    nodes: [{ target: ['.pf-v6-c-button'], any: [{ data: { messageKey } }] }],
+  });
+
+  it('says why axe could not measure and what a person should check', async () => {
+    const drafts = draftsOf(await axeProvider.run(await makeContext({ incomplete: [contrastIssue('bgGradient')] })));
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      rule: 'color-contrast',
+      layer: 'axe',
+      severity: 'serious',
+      elementPath: '.pf-v6-c-button',
+      confidence: 'unverified',
+      evidence: { extra: { axeData: { messageKey: 'bgGradient' } } },
+    });
+    expect(drafts[0]?.whatUserExperiences).toBe(
+      'Needs review: axe could not measure the color contrast, because the background is a gradient.',
+    );
+    expect(drafts[0]?.why).toContain('A gradient has many');
+    expect(drafts[0]?.fix).toContain('lightest and the darkest part of the gradient');
+  });
+
+  it('keeps the usual wording for any other contrast result axe could not finish', async () => {
+    const drafts = draftsOf(await axeProvider.run(await makeContext({ incomplete: [contrastIssue('bgImage')] })));
+
+    expect(drafts[0]?.whatUserExperiences).toBe('Needs review: Elements must meet minimum color contrast ratio thresholds');
+  });
+});

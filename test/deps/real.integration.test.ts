@@ -18,6 +18,7 @@ import { computeIdentity, identityKey } from '../../src/primitives/identity.js';
 import { LIVE_WORLD, adoptPage, makeRealBrowserDriver } from '../../src/deps/real.js';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
 import { axeProvider } from '../../src/providers/axe/index.js';
+import { isGradientContrastReview } from '../../src/primitives/gradient-contrast.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { markUnseenScreens } from '../../src/coverage/unseen.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -707,6 +708,33 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       state: 'capability-denied',
       reason: 'provider net-only denied capability: network',
     });
+  });
+
+  it('names a real gradient background with the exact axe reason, and nothing else with it', async () => {
+    const html =
+      '<!doctype html><html lang="en"><head><title>Gradient</title></head><body><main>' +
+      '<button id="gradient" style="background: linear-gradient(90deg, #0066cc, #004080); color: #fff">Save</button>' +
+      '<button id="flat" style="background: #fff; color: #999999">Cancel</button>' +
+      '</main></body></html>';
+    const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [axeProvider],
+      config: testConfig({ surfaces: [] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 2,
+    });
+
+    const scan = await runner.scan({ id: 'gradient-screen', url });
+    const contrast = scan.drafts.filter((draft) => draft.rule === 'color-contrast');
+    const gradient = contrast.filter((draft) => isGradientContrastReview(draft));
+
+    expect(gradient.map((draft) => draft.elementPath)).toEqual(['#gradient']);
+    expect(gradient[0]?.whatUserExperiences).toContain('because the background is a gradient');
+    expect(contrast.filter((draft) => !isGradientContrastReview(draft)).map((draft) => draft.elementPath)).toEqual([
+      '#flat',
+    ]);
   });
 
   it('measures reachedSelectorPresent true when the selector is in the rendered DOM', async () => {
