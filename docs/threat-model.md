@@ -436,7 +436,10 @@ that skipped this check is still bounded.
 A verdict must also carry the exit code the engine writes for it, for both the verdict and the
 accessibility verdict, and a Result with no verdict must exit 0 or 4. A document that shows a
 regression and exits 0 is refused with exit 4, so `usabl comment` and `usabl enforce` cannot
-report two different outcomes from one document.
+report two different outcomes from one document. For the same reason the verdict and the
+accessibility verdict must be a pair the engine writes. A document that says `verified` over an
+accessibility `regression` is refused, so the comment cannot show a pass while the
+accessibility check fails, or the reverse.
 
 **Not handled:** the check is of shape, not of truth. A well-formed document can still say
 anything the contract allows: a verdict that its findings do not support, counts that do not

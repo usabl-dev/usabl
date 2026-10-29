@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- `usabl comment` and `usabl enforce` now refuse a Result whose `verdict` and
+  `accessibilityVerdict` are a pair the engine never writes, such as `verified` over an
+  accessibility `regression`, with exit 4 and a reason that names `verdict`. Before, each
+  half was checked only against its own exit code, so the comment could show one outcome
+  while the accessibility check exited on another. An approval hold over any scan outcome,
+  an idle scan included, is still accepted.
+
 - The stop hook now reads a run as idle only when `coverage.nothingToCheck` is `true`, as
   the verdict line and the self-check do. Before, a hand-composed Result with a null verdict
   and any truthy value there, such as `1`, let the stop through with "You may stop". It now

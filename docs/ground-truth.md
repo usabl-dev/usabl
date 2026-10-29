@@ -1968,11 +1968,15 @@ lines.
   contract gives it. A field the contract does not name is dropped. A document that does not
   match, or text that is not JSON, exits 4 with a plain reason on stderr that names the field by
   its path, for example `findings[0].severity`, and never repeats the value. `usabl comment`
-  prints no comment in that case. The check is of shape, plus one agreement: each verdict must
+  prints no comment in that case. The check is of shape, plus two agreements. Each verdict must
   carry the exit code the engine writes for it (verified 0, regression 1, approval_required 2,
   not_covered 3), and a Result with no verdict must exit 0 or 4. The same holds for
   `accessibilityVerdict` and `accessibilityExitCode`. A document that shows one outcome and exits
-  with another exits 4 and names the exit code field. The check does not test whether the other
+  with another exits 4 and names the exit code field. And `verdict` and `accessibilityVerdict`
+  must be a pair the engine writes: without a policy hold the two are the same verdict, or both
+  null with the same exit code, and `approval_required` sits over any accessibility outcome,
+  an idle scan included (`accessibilityVerdict` null, exit 0), but never over exit 4. Any other
+  pair exits 4 and names `verdict`. The check does not test whether the other
   values agree with each other, so a well-formed document is still only as true as whoever wrote
   it, and the receipt, not the document, is what proves a run happened.
 - Library: the stop hook, overlay, and an optional MCP wrapper import `run()` directly.

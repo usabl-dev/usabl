@@ -308,10 +308,33 @@ describe('parseResultJson refuses a verdict that disagrees with its exit code', 
     ['a run that crashed', { verdict: null, exitCode: 4, accessibilityVerdict: null, accessibilityExitCode: 4 }],
     ['an approval hold over an idle scan', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: null, accessibilityExitCode: 0 }],
     ['an approval hold over a regression', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: 'regression', accessibilityExitCode: 1 }],
+    ['an approval hold over a verified scan', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: 'verified', accessibilityExitCode: 0 }],
+    ['an approval hold over a not_covered scan', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: 'not_covered', accessibilityExitCode: 3 }],
   ];
   for (const [name, fields] of accepted) {
     it(`accepts ${name}`, () => {
       expect(() => parseResultJson(withFields(fields))).not.toThrow();
+    });
+  }
+
+  // Each half is a valid verdict with its own code, but the engine never writes the two together.
+  // Without a policy hold the verdict is the accessibility verdict. A hold sits over a scan that
+  // finished, so never over a crash. usabl comment shows the verdict and usabl enforce
+  // accessibility exits on the other half, so such a document would report two different runs.
+  const unpaired: Array<[string, Record<string, unknown>]> = [
+    ['a verified run over an accessibility regression', { verdict: 'verified', exitCode: 0, accessibilityVerdict: 'regression', accessibilityExitCode: 1 }],
+    ['a regression over an accessibility verified', { verdict: 'regression', exitCode: 1, accessibilityVerdict: 'verified', accessibilityExitCode: 0 }],
+    ['a not_covered run over no accessibility verdict', { verdict: 'not_covered', exitCode: 3, accessibilityVerdict: null, accessibilityExitCode: 0 }],
+    ['an idle run over an accessibility verified', { verdict: null, exitCode: 0, accessibilityVerdict: 'verified', accessibilityExitCode: 0 }],
+    ['an idle run over an accessibility crash', { verdict: null, exitCode: 0, accessibilityVerdict: null, accessibilityExitCode: 4 }],
+    ['a crashed run over an idle accessibility half', { verdict: null, exitCode: 4, accessibilityVerdict: null, accessibilityExitCode: 0 }],
+    ['an approval hold over a crash', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: null, accessibilityExitCode: 4 }],
+  ];
+  for (const [name, fields] of unpaired) {
+    it(`refuses ${name}, naming verdict`, () => {
+      const err = refusal(withFields(fields));
+      expect(err.field).toBe('verdict');
+      expect(err.message).toContain('accessibilityVerdict');
     });
   }
 
