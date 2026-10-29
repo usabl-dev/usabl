@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- `usabl init` no longer picks one entry file when a route's import matches more than one
+  file, such as `Page.tsx` and `Page.ts`. Before, it took the first by extension order and
+  wrote it into the draft `usabl.routes.json`, so a change to the file the route really
+  renders could miss its screen. Now the route's entry file is empty and a `Review:` note
+  names every candidate.
+
 - The announcement capture no longer records a change inside content hidden from
   assistive technology. Before, a polite status inside `aria-hidden="true"` was recorded as
   announced, though Orca says nothing for it, so a flow requirement that expected its text

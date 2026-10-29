@@ -75,11 +75,15 @@ function lineAtOffset(raw: string, offset: number): number {
   return raw.slice(0, offset).split('\n').length;
 }
 
+// What a route's import resolves to: one file, several candidates init will not choose between,
+// or nothing proven.
+type EntryResolution = { file: string } | { candidates: string[] } | null;
+
 async function resolveEntryFile(
   fs: InitFs,
   routerFile: string,
   specifier: string,
-): Promise<string | null> {
+): Promise<EntryResolution> {
   const resolved = posix.normalize(posix.join(posix.dirname(routerFile), specifier));
   // Stay inside the project tree. A `..` after normalize is an unproven path,
   // not an entry file we are willing to attribute.
@@ -90,10 +94,20 @@ async function resolveEntryFile(
   const candidates = hasExtension
     ? [resolved]
     : ENTRY_EXTENSIONS.map((ext) => resolved + ext);
+  const hits: string[] = [];
   for (const candidate of candidates) {
     if ((await fs.readFile(candidate)) !== null) {
-      return candidate;
+      hits.push(candidate);
     }
+  }
+  // The bundler's pick among several files depends on its configured extension order, which init
+  // cannot read. Picking one could map the screen to a file it does not render, and the committed
+  // sidecar would then hide that, so more than one hit is disclosed and left unattributed.
+  if (hits.length === 1 && hits[0] !== undefined) {
+    return { file: hits[0] };
+  }
+  if (hits.length > 1) {
+    return { candidates: [...hits].sort() };
   }
   return null;
 }
@@ -232,10 +246,16 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
         continue;
       }
       let entryFile: string | null = null;
+      let entryCandidates: string[] = [];
       if (route.component !== null) {
         const specifier = imports.get(route.component);
         if (specifier !== undefined) {
-          entryFile = await resolveEntryFile(fs, routerFile, specifier);
+          const resolution = await resolveEntryFile(fs, routerFile, specifier);
+          if (resolution !== null && 'file' in resolution) {
+            entryFile = resolution.file;
+          } else if (resolution !== null) {
+            entryCandidates = resolution.candidates;
+          }
         }
       }
       // Ask the question the parser is going to ask, at the point the id is made. A route path
@@ -263,6 +283,11 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
       // coverage gap behind a mapping we cannot prove.
       if (entryFile !== null) {
         attributed += 1;
+      } else if (entryCandidates.length > 0) {
+        notes.push(
+          `Review: ${route.path} has no proven entry file. Its import matches more than one file: ` +
+            `${entryCandidates.join(', ')}. Set entryFile in usabl.routes.json to the file the route renders.`,
+        );
       } else {
         notes.push(`Review: ${route.path} has no proven entry file.`);
       }
