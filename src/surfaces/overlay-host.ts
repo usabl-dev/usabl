@@ -1,0 +1,818 @@
+/**
+ * The dev server side of the advisory overlay, shared by the Vite and webpack plugins.
+ * It serves the overlay client and a read-only projection of the gate-owned Result, guards both
+ * against requests from another origin, caches one run per change, and adds source location
+ * attributes to JSX in dev. Each bundler plugin only adapts its own hooks to this host.
+ * Nothing here converts advisory display state into a process exit or a verdict.
+ */
+import { resolve, relative } from 'node:path';
+import { loadConfig } from '../cli.js';
+import type { BrowserDriver, Deps, Result, UsablConfig } from '../contracts/index.js';
+import { buildDeps } from '../deps/build.js';
+import { makeSharedBrowser, type RealBrowserOptions, type SharedBrowser } from '../deps/real.js';
+import { run } from '../run.js';
+import { unconfirmedNotice } from '../output/floor-notice.js';
+import { frameUntrusted, scrubResult } from './scrub.js';
+import { neutralize } from '../primitives/neutralize.js';
+import { injectJsxSourceAttributes, shouldInjectJsxSource } from './vite-jsx-source.js';
+
+export interface OverlayProjection {
+  advisory: true;
+  displayExitCode: 0;
+  workspaceRoot: string | null;
+  exitCode: Result['exitCode'];
+  verdict: Result['verdict'];
+  schemaVersion: Result['schemaVersion'];
+  summary: string;
+  coverage: {
+    affected: Result['coverage']['affected'];
+    unresolvedFiles: Result['coverage']['unresolvedFiles'];
+    gaps: Result['coverage']['gaps'];
+    // Carried through because a null verdict means two different things. With nothingToCheck true
+    // and exit code 0 it means the run had no affected screen and there was nothing to prove.
+    // Without it, a null verdict is an absence of proof, and the overlay must not draw that green.
+    nothingToCheck: Result['coverage']['nothingToCheck'];
+  };
+  findings: Array<{
+    rule: string;
+    screenId: string;
+    layer: string;
+    severity: Result['findings'][number]['severity'];
+    evidenceClass: Result['findings'][number]['evidenceClass'];
+    status: Result['findings'][number]['status'];
+    confidence: Result['findings'][number]['confidence'];
+    elementPath: string;
+    elementName: string | null;
+    role: string | null;
+    elementKey: string | null;
+    identityBasis: Result['findings'][number]['identityBasis'];
+    whatUserExperiences: string;
+    why: string;
+    fix: string;
+    appSource: Result['findings'][number]['appSource'] | null;
+  }>;
+  // The number of findings in this projection. The list is flat, one entry per finding, so this is
+  // simply its length. There is no collapsing here and therefore no "showing N of M" to disclose.
+  findingsTotalCount: number;
+  receipt: {
+    sourceTree: string;
+    baseRevision: string | null;
+    policyHash: string;
+    runnerVersion: string;
+    scannerVersions: NonNullable<Result['receipt']>['scannerVersions'];
+    surfaces: string[];
+    checkedScreens: string[];
+    notCovered: string[];
+    findingsSummary: NonNullable<Result['receipt']>['findingsSummary'];
+    activeWaivers: number;
+    mintedAt: string;
+  } | null;
+  dirtyGuardedPaths: string[];
+  // Floor entries this run counted fewer barriers at than the floor records. Disclosure only: the
+  // overlay lists them under the recorded group and nothing about them is a finding or a verdict.
+  floorHeadroom: Result['floorHeadroom'];
+  // Floored barriers this run did not see on a screen it cannot show rendered, with the notice the
+  // overlay prints. The sentence is built here from the shared text, so the overlay prints the
+  // same words as the terminal and does not keep a copy of its own.
+  floorUnconfirmed: (Result['floorUnconfirmed'][number] & { notice: string })[];
+  paidDownCount: number;
+  // The accessibility outcome with the policy divergence set aside, copied from the gate-owned
+  // Result and never computed here. An approval_required run can also carry a real barrier, and the
+  // overlay states the two apart so a developer can fix the barrier while the approval is pending.
+  // Both are null when the Result did not carry them, so an older Result cannot be misread.
+  accessibilityVerdict: Result['accessibilityVerdict'];
+  accessibilityExitCode: Result['accessibilityExitCode'] | null;
+}
+
+export type IncomingHeaders = Record<string, string | string[] | undefined>;
+
+// rawHeaders is the flat name, value, name, value list Node keeps before it folds duplicates. It is
+// the only place a second Host header is still visible: the folded headers object keeps one of them
+// and which one depends on the runtime, so a check made on it can be steered by header order.
+// on('close') is how the event stream learns that a browser went away; Node's request has it.
+export interface IncomingRequest {
+  method?: string;
+  url?: string;
+  headers?: IncomingHeaders;
+  rawHeaders?: string[];
+  on?(event: 'close', handler: () => void): void;
+}
+
+// write is needed only by the event stream, which keeps its response open. Node's response has it.
+export interface OverlayResponse {
+  statusCode: number;
+  setHeader(name: string, value: string): void;
+  end(chunk?: string): void;
+  write?(chunk: string): void;
+}
+
+export type Middleware = (req: IncomingRequest, res: OverlayResponse, next: () => void) => void | Promise<void>;
+
+export interface UsablHttpServer {
+  on(event: 'close', handler: () => void): void;
+  // Node's net.Server.address(): the port the server actually listens on, which can differ from the
+  // configured one when that port was taken. Read at request time, because it is null until listen.
+  address?(): unknown;
+}
+
+export interface ResolvedServerAddress {
+  host?: string | boolean;
+  port?: number;
+  https?: unknown;
+}
+
+// The origin this dev server answers as: its scheme, its listening port, and the host it was told to
+// bind to when that host is a name. It is what a request's Host and Origin are compared against.
+interface DevServerOrigin {
+  scheme: 'http' | 'https';
+  port: number;
+  configuredHost: string | null;
+}
+
+// A parsed authority: a lowercased hostname, bracketed for IPv6, and the port when one was written.
+interface Authority {
+  hostname: string;
+  port: number | null;
+}
+
+// Parses a Host header value. IPv6 hosts arrive in brackets, for example "[::1]:5173", and the
+// brackets are kept so the value compares equal to the bracketed form URL.hostname produces.
+function parseHostHeader(hostHeader: string): Authority | null {
+  const trimmed = hostHeader.trim().toLowerCase();
+  if (trimmed === '') {
+    return null;
+  }
+  let hostname: string;
+  let rest: string;
+  if (trimmed.startsWith('[')) {
+    const close = trimmed.indexOf(']');
+    if (close === -1) {
+      return null;
+    }
+    hostname = trimmed.slice(0, close + 1);
+    rest = trimmed.slice(close + 1);
+  } else {
+    const colon = trimmed.indexOf(':');
+    hostname = colon === -1 ? trimmed : trimmed.slice(0, colon);
+    rest = colon === -1 ? '' : trimmed.slice(colon);
+  }
+  if (rest === '') {
+    return { hostname, port: null };
+  }
+  if (!/^:\d{1,5}$/.test(rest)) {
+    return null;
+  }
+  return { hostname, port: Number(rest.slice(1)) };
+}
+
+// One spelling for a hostname wherever it comes from. Vite's config carries an IPv6 bind address
+// without brackets, "fd00::1", while an HTTP Host header and URL.hostname carry it bracketed,
+// "[fd00::1]". Comparing the two spellings never matched, so a configured IPv6 host was never
+// allowed. Everything is compared in the bracketed, lowercased form.
+function normalizeHostname(hostname: string): string {
+  const lower = hostname.trim().toLowerCase();
+  if (lower.includes(':') && !lower.startsWith('[')) {
+    return '[' + lower + ']';
+  }
+  return lower;
+}
+
+function isLocalHostname(hostname: string, configuredHost: string | null): boolean {
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]') {
+    return true;
+  }
+  return configuredHost !== null && hostname === configuredHost;
+}
+
+// The port a URL or authority means when none was written.
+function effectivePort(port: number | null, scheme: 'http' | 'https'): number {
+  if (port !== null) {
+    return port;
+  }
+  return scheme === 'https' ? 443 : 80;
+}
+
+function countHeader(rawHeaders: string[] | undefined, name: string): number {
+  if (rawHeaders === undefined) {
+    return 0;
+  }
+  let count = 0;
+  for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
+    if (rawHeaders[index]?.toLowerCase() === name) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+// The result projection exposes the absolute workspace root, source paths, import chains, guarded
+// paths, and findings. These handlers run before Vite validates the Host header and they end the
+// response, so without this check they answer a request aimed at the dev server from another origin
+// through DNS rebinding or a cross-origin fetch.
+//
+// The Host must name a local host or the configured bind host, on this server's port. When an Origin
+// is present it must be a browser's exact serialization, scheme://host[:port] and nothing more, and
+// it must match scheme, hostname, and effective port against either the origin this request's own
+// Host names under the server's scheme, or the configured dev origin. "null" is not an origin the
+// page can be trusted from, so it is refused. A request carrying two Host headers is refused
+// outright: the folded header keeps one of them and which one depends on the runtime, so a check on
+// the folded value could be steered by header order.
+export function isRequestFromDevOrigin(req: IncomingRequest, server: DevServerOrigin): boolean {
+  if (countHeader(req.rawHeaders, 'host') > 1 || Array.isArray(req.headers?.host)) {
+    return false;
+  }
+  const hostHeader = req.headers?.host;
+  if (typeof hostHeader !== 'string') {
+    // A missing Host header on HTTP/1.1 is malformed. Refuse rather than guess.
+    return false;
+  }
+  const host = parseHostHeader(hostHeader);
+  if (host === null || !isLocalHostname(host.hostname, server.configuredHost)) {
+    return false;
+  }
+  if (effectivePort(host.port, server.scheme) !== server.port) {
+    return false;
+  }
+
+  const originHeader = req.headers?.origin;
+  if (originHeader === undefined) {
+    return true;
+  }
+  if (Array.isArray(originHeader) || originHeader.trim() === '' || originHeader.trim() === 'null') {
+    return false;
+  }
+  let origin: URL;
+  try {
+    origin = new URL(originHeader.trim());
+  } catch {
+    return false;
+  }
+  // A browser serializes Origin as exactly scheme://host[:port], lowercase, with no path, query,
+  // fragment, or default port. Anything else was not written by a browser's Origin logic, so it is
+  // refused rather than parsed leniently.
+  if (origin.origin !== originHeader.trim()) {
+    return false;
+  }
+  const originScheme = origin.protocol === 'https:' ? 'https' : origin.protocol === 'http:' ? 'http' : null;
+  if (originScheme !== server.scheme) {
+    return false;
+  }
+  const originHostname = origin.hostname.toLowerCase();
+  const allowedHostnames = new Set([host.hostname]);
+  if (server.configuredHost !== null) {
+    allowedHostnames.add(server.configuredHost);
+  }
+  if (!allowedHostnames.has(originHostname)) {
+    return false;
+  }
+  const originPort = origin.port === '' ? null : Number(origin.port);
+  return effectivePort(originPort, originScheme) === server.port;
+}
+
+function portOfAddress(address: unknown): number | null {
+  if (typeof address !== 'object' || address === null) {
+    return null;
+  }
+  const port = Reflect.get(address, 'port');
+  return typeof port === 'number' && Number.isInteger(port) && port > 0 ? port : null;
+}
+
+export function toRepoRelativeSourcePath(workspaceRoot: string, id: string): string {
+  const normalizedId = id.replace(/\\/g, '/');
+  const normalizedRoot = workspaceRoot.replace(/\\/g, '/').replace(/\/$/, '');
+  if (normalizedRoot !== '' && normalizedId.startsWith(`${normalizedRoot}/`)) {
+    return normalizedId.slice(normalizedRoot.length + 1);
+  }
+  return relative(workspaceRoot || process.cwd(), id).replace(/\\/g, '/');
+}
+
+// What a config-backed plugin needs: the app root and the usabl config path inside it.
+export interface OverlayFromConfigOptions {
+  cwd?: string;
+  configPath?: string;
+}
+
+export interface OverlayFactoryPorts {
+  cwd: () => string;
+  resolvePath: (cwd: string, configPath: string) => string;
+  loadConfig: (path: string) => Promise<UsablConfig>;
+  buildDeps: (
+    config: UsablConfig,
+    options: { cwd: string; browserFor?: (options: RealBrowserOptions) => BrowserDriver },
+  ) => Promise<Deps>;
+  runEngine: (deps: Deps, config: UsablConfig) => Promise<Result>;
+  // Makes the one browser process the overlay keeps across refresh waves. It is a port so a test can
+  // inject a fake and prove the process is made once, receives each run's options, and is closed
+  // once, without a real Chromium.
+  makeBrowser: () => SharedBrowser;
+  // Where a failed run's reason is written. A port for the same reason as the rest: a test reads it
+  // instead of the suite's output.
+  logError: (error: unknown) => void;
+}
+
+function makeOverlayFactoryPorts(overrides: Partial<OverlayFactoryPorts> = {}): OverlayFactoryPorts {
+  return {
+    cwd: overrides.cwd ?? (() => process.cwd()),
+    resolvePath: overrides.resolvePath ?? ((cwd: string, configPath: string) => resolve(cwd, configPath)),
+    loadConfig: overrides.loadConfig ?? (async (path: string) => loadConfig(path)),
+    buildDeps:
+      overrides.buildDeps ??
+      (async (
+        config: UsablConfig,
+        options: { cwd: string; browserFor?: (options: RealBrowserOptions) => BrowserDriver },
+      ) => buildDeps(config, options)),
+    runEngine: overrides.runEngine ?? (async (deps: Deps, config: UsablConfig) => run(deps, config)),
+    makeBrowser: overrides.makeBrowser ?? (() => makeSharedBrowser()),
+    logError: overrides.logError ?? ((error: unknown) => console.error('[usabl]', error)),
+  };
+}
+
+export function projectOverlay(
+  result: Result,
+  workspaceRoot: string | null = null,
+): OverlayProjection {
+  // Overlay is advisory only, so displayExitCode stays 0 even when the gated Result blocked.
+  const safe = scrubResult(result);
+  // No noise budget here. The overlay list is flat, one row per finding, so each one can be located
+  // on the page by itself. A collapsed representative row cannot be located, because it stands for
+  // elements it does not name. Carrying a "showing N of M" flag beside a list that shows all of them
+  // would describe a projection that no longer exists, so those fields are gone rather than stale.
+  return {
+    advisory: true,
+    displayExitCode: 0,
+    workspaceRoot,
+    exitCode: safe.exitCode,
+    verdict: safe.verdict,
+    schemaVersion: safe.schemaVersion,
+    summary: safe.summary,
+    coverage: {
+      affected: safe.coverage.affected,
+      unresolvedFiles: safe.coverage.unresolvedFiles,
+      gaps: safe.coverage.gaps,
+      nothingToCheck: safe.coverage.nothingToCheck,
+    },
+    findings: safe.findings.map((finding) => {
+      return {
+        rule: finding.rule,
+        screenId: finding.screenId,
+        layer: finding.layer,
+        severity: finding.severity,
+        evidenceClass: finding.evidenceClass,
+        status: finding.status,
+        confidence: finding.confidence,
+        elementPath: frameUntrusted(finding.elementPath),
+        elementName: finding.elementName === null ? null : frameUntrusted(finding.elementName),
+        role: finding.role === null ? null : frameUntrusted(finding.role),
+        elementKey: finding.elementKey === null ? null : frameUntrusted(finding.elementKey),
+        identityBasis: finding.identityBasis,
+        whatUserExperiences: frameUntrusted(finding.whatUserExperiences),
+        why: finding.why,
+        fix: finding.fix,
+        appSource: finding.appSource ?? null,
+      };
+    }),
+    findingsTotalCount: safe.findings.length,
+    receipt:
+      safe.receipt === null
+        ? null
+        : {
+            sourceTree: safe.receipt.sourceTree,
+            baseRevision: safe.receipt.baseRevision,
+            policyHash: safe.receipt.policyHash,
+            runnerVersion: safe.receipt.runnerVersion,
+            scannerVersions: safe.receipt.scannerVersions,
+            surfaces: safe.receipt.surfaces,
+            checkedScreens: safe.receipt.coverage.checked,
+            notCovered: safe.receipt.coverage.notCovered,
+            findingsSummary: safe.receipt.findingsSummary,
+            activeWaivers: safe.receipt.activeWaivers,
+            mintedAt: safe.receipt.mintedAt,
+          },
+    dirtyGuardedPaths: safe.dirtyGuardedPaths,
+    paidDownCount: safe.paidDownCount,
+    // Screen ids, rule names and two integers. Copied field by field like everything else here, so
+    // the overlay is handed exactly what it renders and nothing rides along.
+    floorHeadroom: (safe.floorHeadroom ?? []).map((entry) => ({
+      screenId: entry.screenId,
+      rule: entry.rule,
+      recorded: entry.recorded,
+      observed: entry.observed,
+    })),
+    floorUnconfirmed: (safe.floorUnconfirmed ?? []).map((entry) => ({
+      screenId: entry.screenId,
+      rules: [...entry.rules],
+      barriers: entry.barriers,
+      notice: unconfirmedNotice(entry),
+    })),
+    accessibilityVerdict: safe.accessibilityVerdict ?? null,
+    accessibilityExitCode: safe.accessibilityExitCode ?? null,
+  };
+}
+
+export interface ResultCache<T> {
+  // The current result. Joins a run already in flight, serves the cached result when one exists,
+  // and starts a run otherwise. fresh: true skips the cache but still joins an in-flight run.
+  read(options?: { fresh?: boolean }): Promise<T>;
+  // Drops the cached result. A run already in flight keeps going but its result is not cached,
+  // because it measured the tree as it was before the change that invalidated it.
+  invalidate(): void;
+}
+
+/**
+ * One completed result, served until the next invalidation.
+ *
+ * The earlier wrapper only shared one execution between CONCURRENT callers and forgot the result
+ * the moment it settled, so the very next read after a run re-ran the whole engine. A scan is
+ * dominated by the keyboard focus transcript, which is real evidence and cannot be cut, so every
+ * panel open and every re-read paid the full scan again. The file watcher is the only thing that
+ * makes a completed result stale, so its invalidation is the only thing that drops the cache.
+ *
+ * A rejected run is never cached: the next read retries. A run that was in flight when the cache
+ * was invalidated is neither joined nor cached, so a reader after a save always gets a run that saw
+ * the save.
+ */
+export function makeResultCache<T>(
+  fn: () => Promise<T>,
+  ports: {
+    // Resolves when no invalidation wave is open. A run is not started while a wave is open, so a
+    // burst of file events that arrive a few milliseconds apart produces one run, started once the
+    // burst has settled, that every reader in the burst shares. Without this each event made the
+    // run started by the previous read stale, and the next read started yet another run.
+    settled?: () => Promise<void>;
+  } = {},
+): ResultCache<T> {
+  const settled = ports.settled ?? (() => Promise.resolve());
+  let generation = 0;
+  let cached: Promise<T> | null = null;
+  // The run in progress. Before it has started, that is while it waits for the wave to settle, any
+  // read may join it, because it will read the generation that is current when it starts. Once it
+  // has started, only a read of the same generation may join it: a run already under way when an
+  // invalidation arrived measured the tree before the change and is not shared with readers after
+  // the change.
+  let running: { started: boolean; generation: number; promise: Promise<T> } | null = null;
+
+  return {
+    read(options = {}) {
+      if (running !== null && (!running.started || running.generation === generation)) {
+        return running.promise;
+      }
+      if (options.fresh !== true && cached !== null) {
+        return cached;
+      }
+      const entry = { started: false, generation: -1, promise: Promise.resolve() as unknown as Promise<T> };
+      entry.promise = (async () => {
+        await settled();
+        entry.started = true;
+        entry.generation = generation;
+        return fn();
+      })();
+      running = entry;
+      // Bookkeeping runs in the first reaction on the promise, registered here before any caller
+      // can await it, so by the time a caller continues the run is no longer marked as in flight.
+      // Clearing it in a later chained step left a window where a fresh read issued right after
+      // completion joined the finished run instead of starting a new one.
+      const finish = (): void => {
+        if (running === entry) {
+          running = null;
+        }
+      };
+      entry.promise.then(
+        () => {
+          if (entry.generation === generation) {
+            cached = entry.promise;
+          }
+          finish();
+        },
+        () => {
+          // Not cached. The caller sees the rejection and the next read starts a new run.
+          finish();
+        },
+      );
+      return entry.promise;
+    },
+    invalidate() {
+      generation += 1;
+      cached = null;
+    },
+  };
+}
+
+// The path the overlay client asks for its result, the path that serves the client itself, and the
+// path of the event stream a host without a hot channel of its own uses to push refreshes.
+export const OVERLAY_CLIENT_PATH = '/__usabl/client.js';
+export const OVERLAY_RESULT_PATH = '/__usabl/result';
+export const OVERLAY_EVENTS_PATH = '/__usabl/events';
+// The one event name the server pushes and the client listens for.
+export const OVERLAY_REFRESH_EVENT = 'usabl:refresh';
+
+export interface OverlayHostOptions {
+  run: () => Promise<Result>;
+  workspaceRoot?: string;
+  // Called once when the dev server or build shuts down. The config-backed factory uses it to close
+  // the one warm browser it kept alive across refresh waves. It is guarded so it runs at most once.
+  onClose?: () => void | Promise<void>;
+  // Where the reason for a failed run goes. It is a port so a test can read what was logged instead
+  // of writing to the suite's own output, and so the reason has one destination: the dev server's
+  // console, which is where the panel tells the user to look when it cannot load a result.
+  logError?: (error: unknown) => void;
+  // Where a warning for the developer goes, such as a file the source injector could not parse.
+  // A port for the same reason as logError.
+  logWarning?: (message: string) => void;
+  // The module the browser loads from OVERLAY_CLIENT_PATH. Each bundler wires its own refresh channel
+  // in front of the shared client source.
+  clientModuleSource: () => string;
+  // The bundler's default dev port, used only when neither the live listener nor the config names one.
+  defaultPort: number;
+  // Serve OVERLAY_EVENTS_PATH and push refreshes over it. Vite has a hot channel of its own and leaves
+  // this off; webpack's dev server has no channel a plugin can send a custom event on.
+  eventStream?: boolean;
+}
+
+export interface OverlayHost {
+  // Answers the overlay paths and passes every other request on.
+  middleware: Middleware;
+  // The one invalidation point. The bundler calls it when a watched file changes. The cache is
+  // dropped at once; the browser is told after a short debounce.
+  scheduleRefresh(): void;
+  // Where a refresh notice goes, for a host with a hot channel of its own.
+  setNotify(notify: () => void): void;
+  applyServerConfig(config: ResolvedServerAddress | undefined): void;
+  setHttpServer(server: UsablHttpServer | null): void;
+  // Source attributes for one module, or null when it is left as it came. The caller decides
+  // whether this is a dev build; the host decides which files get attributes.
+  transformSource(code: string, id: string): string | null;
+  close(): Promise<void>;
+}
+
+export function makeOverlayHost(opts: OverlayHostOptions): OverlayHost {
+  // The open invalidation wave, if any. It opens on the first watcher event and closes when the
+  // debounce timer fires. The cache does not start a run while it is open.
+  let wave: { promise: Promise<void>; resolve: () => void } | null = null;
+  const results = makeResultCache(opts.run, {
+    settled: () => (wave === null ? Promise.resolve() : wave.promise),
+  });
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let configuredHost: string | null = null;
+  let configuredPort: number | null = null;
+  let scheme: 'http' | 'https' = 'http';
+  let httpServer: UsablHttpServer | null = null;
+  let closed = false;
+  let notify: () => void = () => {};
+  const streams = new Set<OverlayResponse>();
+  const workspaceRoot = opts.workspaceRoot ?? '';
+  const logError = opts.logError ?? ((error: unknown) => console.error('[usabl]', error));
+  const logWarning = opts.logWarning ?? ((message: string) => console.warn(`[usabl] ${message}`));
+  // Files the source injector could not parse and has already warned about. One warning per file is
+  // enough: the dev server transforms a file again on every change, and the reason does not change.
+  const unreadableWarned = new Set<string>();
+  const warnUnreadable = (file: string): void => {
+    if (unreadableWarned.has(file)) {
+      return;
+    }
+    unreadableWarned.add(file);
+    logWarning(
+      `could not parse ${neutralize(file)}, so it added no source location attributes to it and served it ` +
+        'unchanged. The app is not affected, but findings on elements from this file will not point to a ' +
+        'source line. If the file has a syntax error, fixing it brings the source line back.',
+    );
+  };
+
+  // The port this server answers on: the live listener first, then the configured port, then the
+  // bundler default. The listener is consulted per request because it is null until the server listens.
+  const devOrigin = (): DevServerOrigin => ({
+    scheme,
+    port: portOfAddress(httpServer?.address?.()) ?? configuredPort ?? opts.defaultPort,
+    configuredHost,
+  });
+
+  const rejectNonLocal = (req: IncomingRequest, res: OverlayResponse): boolean => {
+    if (isRequestFromDevOrigin(req, devOrigin())) {
+      return false;
+    }
+    res.statusCode = 403;
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    res.end('forbidden');
+    return true;
+  };
+
+  const pushToStreams = (): void => {
+    for (const stream of [...streams]) {
+      try {
+        stream.write?.(`event: ${OVERLAY_REFRESH_EVENT}\ndata: {}\n\n`);
+      } catch {
+        // A browser that went away mid-write. Its close handler removes it; nothing else to do.
+        streams.delete(stream);
+      }
+    }
+  };
+
+  const middleware: Middleware = async (req, res, next) => {
+    const method = req.method ?? 'GET';
+    const requestUrl = new URL(req.url ?? '/', 'http://localhost');
+    const pathname = requestUrl.pathname;
+    if (method === 'GET' && pathname === OVERLAY_CLIENT_PATH) {
+      if (rejectNonLocal(req, res)) {
+        return;
+      }
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/javascript; charset=utf-8');
+      res.end(opts.clientModuleSource());
+      return;
+    }
+    if (opts.eventStream === true && method === 'GET' && pathname === OVERLAY_EVENTS_PATH) {
+      if (rejectNonLocal(req, res)) {
+        return;
+      }
+      if (res.write === undefined) {
+        // A response that cannot stay open cannot carry a stream. The panel still works without
+        // it: it reads on load, and "Check again" reads on demand.
+        res.statusCode = 501;
+        res.end();
+        return;
+      }
+      res.statusCode = 200;
+      res.setHeader('content-type', 'text/event-stream; charset=utf-8');
+      res.setHeader('cache-control', 'no-cache');
+      res.setHeader('connection', 'keep-alive');
+      // The stream carries only the event name. No result, path, or page text ever goes over it.
+      res.write(': usabl\n\n');
+      streams.add(res);
+      req.on?.('close', () => {
+        streams.delete(res);
+      });
+      return;
+    }
+    if (method === 'GET' && pathname === OVERLAY_RESULT_PATH) {
+      if (rejectNonLocal(req, res)) {
+        return;
+      }
+      // fresh=1 is the panel's "Check again". It is the one user-driven way to re-run the engine
+      // without a file change: the scan measures the live application, which can change without
+      // a source edit, so a person who asks to check again gets a real check. Every other read
+      // serves the cached result, and a fresh read still joins a run already in flight rather
+      // than starting a second one beside it.
+      const fresh = requestUrl.searchParams.get('fresh') === '1';
+      // A run can fail for ordinary reasons: an unreadable config, a dev server that is not up
+      // yet, a browser that will not launch. Connect does not await what a middleware returns,
+      // so letting the rejection escape would set no status and leave the socket open, and the
+      // panel would sit on "Scanning" for a run that already failed. That is the one thing this
+      // engine must never do, report work that could not execute as work still in progress.
+      // Answering here hands the panel a response it already knows how to show as a failure.
+      let projected: OverlayProjection;
+      try {
+        const result = await results.read({ fresh });
+        projected = projectOverlay(result, opts.workspaceRoot ?? null);
+      } catch (error) {
+        logError(error);
+        res.statusCode = 500;
+        res.setHeader('content-type', 'application/json; charset=utf-8');
+        // The reason stays on the server. A failure message can carry absolute paths, config
+        // contents, and stack frames, and this endpoint is the one already guarded because of
+        // what it would otherwise disclose. The panel does not need the reason to report the
+        // failure, and it already points the user at the dev server log.
+        res.end(JSON.stringify({ error: 'The usabl run could not complete.' }));
+        return;
+      }
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json; charset=utf-8');
+      res.end(JSON.stringify(projected));
+      return;
+    }
+    next();
+  };
+
+  // The cache is dropped the instant the watcher reports a change. Only the browser notification
+  // is debounced. Dropping the cache inside the debounce left a window, between the file event
+  // and the timer, where a read was answered with the result of the tree before the change, and
+  // a fresh read in that window started a second engine run for one save.
+  //
+  // The wave stays open across a burst of events. A read that lands inside the burst waits for
+  // it to close and then shares the one run for the whole burst, so three events a few
+  // milliseconds apart cost one engine run and every reader in the burst gets that run.
+  const scheduleRefresh = (): void => {
+    results.invalidate();
+    if (wave === null) {
+      let resolveWave: () => void = () => {};
+      const promise = new Promise<void>((done) => {
+        resolveWave = done;
+      });
+      wave = { promise, resolve: resolveWave };
+    }
+    if (refreshTimer !== null) {
+      clearTimeout(refreshTimer);
+    }
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      const settledWave = wave;
+      wave = null;
+      settledWave?.resolve();
+      notify();
+      pushToStreams();
+    }, 80);
+  };
+
+  return {
+    middleware,
+    scheduleRefresh,
+    setNotify(next) {
+      notify = next;
+    },
+    applyServerConfig(config) {
+      const host = config?.host;
+      // A string host is a specific bind address. true means all interfaces and false means
+      // localhost, neither of which names an extra allowed host, so only a string is captured.
+      configuredHost = typeof host === 'string' ? normalizeHostname(host) : null;
+      configuredPort = typeof config?.port === 'number' ? config.port : null;
+      scheme = config?.https ? 'https' : 'http';
+    },
+    setHttpServer(server) {
+      httpServer = server;
+    },
+    transformSource(code, id) {
+      if (!shouldInjectJsxSource(id)) {
+        return null;
+      }
+      const injected = injectJsxSourceAttributes(code, toRepoRelativeSourcePath(workspaceRoot, id), warnUnreadable);
+      // An unchanged file is passed on as it came, so the host's own transform sees the original.
+      return injected === code ? null : injected;
+    },
+    async close() {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      if (refreshTimer !== null) {
+        clearTimeout(refreshTimer);
+        refreshTimer = null;
+      }
+      for (const stream of [...streams]) {
+        streams.delete(stream);
+        try {
+          stream.end();
+        } catch {
+          // Already closed by the browser.
+        }
+      }
+      if (opts.onClose !== undefined) {
+        await opts.onClose();
+      }
+    },
+  };
+}
+
+export interface ConfigBackedOverlayRun {
+  workspaceRoot: string;
+  run: () => Promise<Result>;
+  onClose: () => Promise<void>;
+  logError: (error: unknown) => void;
+}
+
+/**
+ * The engine run behind a config-backed overlay plugin, the same for every bundler.
+ *
+ * One warm browser for the whole dev session. It is launched lazily on the first run and reused by
+ * every later run, so a save no longer pays a cold Chromium launch and teardown. Each run still
+ * builds fresh Deps for correct git and intake state, and each open still makes a fresh context, so
+ * run isolation is unchanged. The driver is closed once when the dev server shuts down.
+ */
+export function makeConfigBackedOverlayRun(
+  opts: OverlayFromConfigOptions = {},
+  ports: Partial<OverlayFactoryPorts> = {},
+): ConfigBackedOverlayRun {
+  const resolvedPorts = makeOverlayFactoryPorts(ports);
+  const cwd = opts.cwd ?? resolvedPorts.cwd();
+  const configPath = opts.configPath ?? 'usabl.config.json';
+  const resolvedConfigPath = resolvedPorts.resolvePath(cwd, configPath);
+  let warmBrowser: SharedBrowser | null = null;
+
+  // Hosts should not assemble Deps. This keeps wiring in-package and still returns a
+  // projection-only overlay backed by the gate-owned Result.
+  return {
+    workspaceRoot: cwd,
+    run: async () => {
+      const config = await resolvedPorts.loadConfig(resolvedConfigPath);
+      warmBrowser ??= resolvedPorts.makeBrowser();
+      const shared = warmBrowser;
+      // buildDeps resolves this run's storage state and readiness budget and hands them back here,
+      // so every context the shared process opens for this run carries this run's session and
+      // budget. A process that took them once at launch would scan signed out after the operator
+      // exported a session, and would keep the first run's budget after the config changed.
+      const deps = await resolvedPorts.buildDeps(config, {
+        cwd,
+        browserFor: (options) => shared.driver(options),
+      });
+      // No browser teardown here on purpose. The process is shared across refresh waves and is
+      // closed once at shutdown. Each open opens and closes its own context, so a run still leaves no
+      // page or context state behind.
+      return resolvedPorts.runEngine(deps, config);
+    },
+    onClose: async () => {
+      if (warmBrowser !== null) {
+        const browser = warmBrowser;
+        warmBrowser = null;
+        await browser.close();
+      }
+    },
+    logError: resolvedPorts.logError,
+  };
+}
