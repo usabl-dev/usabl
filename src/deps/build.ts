@@ -185,16 +185,21 @@ export async function buildDeps(
     // Read the images each screen shows, for the alt-text manifest `usabl docs` drafts. Only the
     // docs command sets it. See CheckRunnerDeps.collectPageImages.
     collectPageImages?: boolean;
+    // Where a warning about the saved session goes. Defaults to stderr, so JSON on stdout stays clean.
+    warn?: (line: string) => void;
   } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
   const allowedCapabilities = options.allowedCapabilities ?? ["live"];
   // Every operator surface funnels through here, so this is the one place a session has to
-  // be picked up for the CLI, the Vite overlay, and the Stop hook to all reach a login-gated
-  // screen. The environment defaults like cwd does, and stays injectable for tests.
+  // be picked up for the CLI, the dev overlay, and the Stop hook to all reach a login-gated
+  // screen. The environment defaults like cwd does, and stays injectable for tests. With no
+  // variable set, the session `usabl session` saved under cwd is used when git ignores it.
   const storageStatePath = await resolveStorageStatePath({
     explicit: options.storageStatePath,
     env: options.env ?? process.env,
+    cwd,
+    warn: options.warn ?? ((line) => process.stderr.write(`${line}\n`)),
   });
   const browserOptions: RealBrowserOptions = {
     ...(storageStatePath === null ? {} : { storageStatePath }),
