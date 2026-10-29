@@ -14,6 +14,12 @@ import type {
   RuleOutcome,
   Severity,
 } from '../../contracts/index.js';
+import {
+  GRADIENT_CONTRAST_CHECK,
+  GRADIENT_CONTRAST_EXPERIENCE,
+  GRADIENT_CONTRAST_WHY,
+  isGradientContrastReview,
+} from '../../primitives/gradient-contrast.js';
 import { ROW_TARGET_KEY } from '../row-scope.js';
 import { noteFor } from './notes.js';
 
@@ -124,7 +130,7 @@ function mapNodeToDraft(
   const whatUserExperiences =
     confidence === 'unverified' ? `Needs review: ${issue.description}` : issue.description;
 
-  return {
+  const draft: Draft = {
     rule: issue.id,
     layer: 'axe',
     severity: mapSeverity(issue.impact),
@@ -139,6 +145,12 @@ function mapNodeToDraft(
     evidence,
     confidence,
   };
+  // A gradient background is the one needs-review reason with its own words, because the generic
+  // contrast text tells a person to fix a ratio nobody measured. Only the prose changes. The rule,
+  // element, severity, evidence, and confidence stay as they are, so identity and the verdict do too.
+  return isGradientContrastReview(draft)
+    ? { ...draft, whatUserExperiences: GRADIENT_CONTRAST_EXPERIENCE, why: GRADIENT_CONTRAST_WHY, fix: GRADIENT_CONTRAST_CHECK }
+    : draft;
 }
 
 function mapIssueToDrafts(
