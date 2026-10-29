@@ -26,7 +26,8 @@ page.
   not finish, returns no verdict. No verdict is not a pass.
 - **Existing debt does not block.** usabl records the barriers already in your app as an
   evidence floor. Only new barriers block, so you can adopt it without fixing everything
-  first.
+  first. When two scans of main confirm a fix, its slot in the floor closes on its own, so
+  a new barrier cannot take it. `usabl debt` lists what remains and how old it is.
 - **One engine, many places.** The same engine runs in the command line, a browser
   overlay, an AI assistant's Stop hook, a pull request check, and your Playwright tests.
   It can also check your product documentation.
@@ -80,7 +81,7 @@ npx usabl install --overlay       # browser overlay in the Vite dev server
 npx usabl install --claude        # Claude Code Stop hook
 npx usabl install --claude-skill  # /usabl-check and /usabl-fix skills
 npx usabl install --cursor        # Cursor stop hook, command, and rule
-npx usabl install --ci            # pull request gate for GitHub Actions
+npx usabl install --ci            # pull request gate and debt history for GitHub Actions
 npx usabl doctor                  # reports what is set up and what is missing
 ```
 

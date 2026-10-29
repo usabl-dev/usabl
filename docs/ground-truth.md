@@ -285,7 +285,8 @@ src/
   floor/            prune.ts
   init/             index.ts docs/index.ts docs/asciidoc-modular.ts docs/asciibinder.ts
   baseline/         index.ts
-  install/          overlay.ts claude.ts ci.ts branch-rule.ts index.ts
+  install/          overlay.ts claude.ts ci.ts history-ci.ts branch-rule.ts index.ts
+  history/          record.ts read.ts track.ts tracking.ts append.ts git.ts record-run.ts report.ts
   voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts   (built, not wired; section 7.5)
   measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
   surfaces/
@@ -1567,11 +1568,13 @@ compare.
 ### The residual hole, and why it is open
 
 The recorded count is a high-water mark. `usabl baseline` writes it, `usabl floor prune` lowers it,
-and nothing else moves it. Between a pay-down and a prune the floor claims more barriers at an
-identity than are present, and that difference is headroom.
+and nothing else moves the committed file. Between a pay-down and a prune the floor claims more
+barriers at an identity than are present, and that difference is headroom. The debt history (see
+the next section) closes most of that window without a human step: once two scans of main confirm
+a fix, a run accepts only what they saw.
 
-**A new barrier arriving at an identity with headroom is counted as `carried` until
-`usabl floor prune` re-arms the floor.** It fills the slot the fixed barrier left, the tally stays
+**A new barrier arriving at an identity with headroom is counted as `carried` until main confirms
+the fix or `usabl floor prune` re-arms the floor.** It fills the slot the fixed barrier left, the tally stays
 at or under what was accepted, and no comparison of counts can separate it from the debt that was
 accepted. The same is true, without even the headroom, of a single change that fixes one barrier
 and adds another at the same collapsed identity: the tally never moves at all. usabl discloses the
@@ -1674,6 +1677,98 @@ would otherwise put an unchecked value in the verdict. What it checks:
   `fixed`, so an object or a subclass that answers `has` for screens it does not hold cannot
   mark a barrier fixed on a screen nobody scanned.
 - Every screen and surface id against the id grammar, as above.
+
+### Debt history: a confirmed fix closes its slot
+
+The floor's count is a high-water mark, so a fixed barrier used to leave headroom that a new
+barrier could take, and read as carried, until someone ran `usabl floor prune`. The debt history
+closes that slot on its own. It only ever lowers the debt a run accepts, which makes the gate
+stricter, so a missing or wrong history falls back to the floor alone and cannot produce a green
+the floor would not. The code is in `src/history/`.
+
+**Where it lives.** A branch in the team's own repository, `usabl/history`, holding append-only
+JSON Lines files, one per month (`2026-10.jsonl`). Only the default-branch workflow that `usabl
+install --ci` writes appends to it, after a scan of main. Its `history-scan` job runs `usabl history
+record`, which scans every screen, the way baseline does, and writes one record to a file. Its
+`history-append` job, which runs no application code, runs `usabl history append`, which commits the
+record on top of the fetched branch with git plumbing, and the job pushes without force. No server
+and no telemetry. A run reads the branch as git objects at `origin/usabl/history`, never from a
+working tree, so a pull request cannot write its own history. The gate job already checks out with
+`fetch-depth: 0`, which fetches every branch, so pull requests need no new step.
+
+**What a record holds.** The schema version, the time, the commit, the receipt bindings of the
+scan (source tree, policy hash, runner version, scanner versions), the hash of the floor it was
+compared with, and per screen its coverage: `full` when every scan of the screen had no gap,
+`partial` otherwise. For each floored identity on a full screen it holds the first 16 hex
+characters of the SHA-256 of the identity key, the rule, the basis, and the observed count. An
+absent identity is recorded as zero only when the gate's own rule (`paydownConfirmed`) shows its
+part of the page rendered; otherwise the record holds no observation for it. No element key and no
+page text. The parser refuses any field it does not know, so a record cannot carry text the writer
+did not put there.
+
+**Confirmed fixed.** Two consecutive observations of an identity, each from a full scan of main and
+each written against the same floor, below its accepted count. The accepted count then becomes the
+higher of the two, so a page that shows either reading again is not a regression. A scan that holds
+no observation of the identity (the screen was partial, or the identity was absent with no render
+evidence) is skipped. It neither confirms nor breaks the pair. A further pair below the new count
+lowers it again.
+
+**Intermittent.** Two observations of one identity on the same source tree with different counts.
+The code did not change and the reading did, so the barrier comes and goes with the page content.
+It gets its full floor count back, is labelled intermittent, and is never released again under this
+floor. This covers a confirmed fix that reappears on an unchanged tree, and a row that shows in one
+scan of main and not the next. Each identity is judged on its own, so a row identity is judged by
+its own row and never by how many rows the table showed. A fix that comes back after the code
+changed stays closed, because that is a regression. Unrelated pull requests are not affected
+either way: they do not scan the screen.
+
+**How a run is judged.** Against the effective floor: the floor as committed (read from the trusted
+ref in CI), with each identity lowered by the fixes confirmed in records written at the base commit
+or one of its ancestors. A record on a commit the base does not contain, for example one from a
+newer main, does not apply. Only records with the same floor hash count toward a release or an
+intermittent label, because a floor written again by `usabl baseline` or `usabl floor prune` is a
+new acceptance by a person and starts a new history. The effective floor has the floor's version
+and scope, never an identity the floor lacks, and never a count above the floor's. An identity whose
+accepted count reaches zero is left out, so a barrier that returns there is new. `run()` builds it
+with `loadDebtTracking` and hands it to `gate()` in place of the committed floor; the gate itself is
+unchanged. Only a version 3 floor is tracked. A version 1 or 2 floor counts the rows of a table
+together, so an observation cannot say which row was fixed, and the gate already asks for a new
+baseline when such a floor meets a keyed row.
+
+**Missing or unreadable history.** No history reader (a library call), no branch, a branch usabl
+cannot read, a floor before version 3, or a base commit usabl cannot resolve: the run is judged
+against the floor as committed, exactly as a run without history, and `Result.debt` says tracking is
+off and why (`no-reader`, `no-history`, `unreadable`, `old-floor`, `no-base`). A history with one
+line usabl cannot read is unreadable as a whole, because skipping the line could skip the
+observation that keeps two absences from being consecutive. The reason names the file, the line,
+and the field, never the value.
+
+**Why it cannot make a run greener.** The history only lowers counts on floor identities. A lower
+count can turn a carried finding into a new one, and can take away a `fixed` finding, a headroom
+line, or an unconfirmed notice. It cannot add a carried finding, and it cannot remove a gap,
+because a version 3 floor raises neither of the floor gaps. A forged history that claims higher
+counts stops a release and nothing more; one that names identities the floor does not hold is
+ignored. A forged history can still lower counts and block pull requests. Protecting the branch
+with a ruleset (no force push, no deletion, updates only from the default-branch job) is the
+hardening for that, and it is optional.
+
+**Determinism.** The fold is pure over the floor and the records in append order, and ages count
+whole days from the run's clock, so the same tree, floor, history, and date give the same verdict.
+
+**What a run reports.** `Result.debt` carries the counts: barriers the floor accepts, barriers this
+run accepted, fixes main confirmed, barriers this run did not see (counted as fixed in this change
+until main confirms them), what remains, the age in days of the oldest remaining barrier, and how
+many are intermittent. The pull request comment prints them as one line, and `usabl debt` lists the
+remaining debt by screen and rule (section 11.4).
+
+**What this still cannot catch.** Between a fix landing and its second confirming scan, the slot is
+still open, as it was before. A barrier swapped in at the same collapsed identity in the same change
+never moves a count. A history that starts with two absences of a floored row on an unchanged tree
+releases the row, and a pull request that shows the row before the next scan of main blocks once;
+that scan then marks it intermittent. First-seen dates start with the history, so debt older than
+the first record shows the first record's date. An identity hash of a short name can be guessed by
+someone who can read the branch, but such a reader can already read the floor, which holds the key
+itself.
 
 ### Failure taxonomy
 
@@ -1782,7 +1877,7 @@ What this does not cover:
 
 ### Receipt binding
 
-Four bindings are compared on re-verification:
+Five bindings are compared on re-verification:
 - `sourceTree`: hash of the working tree (git write-tree on a temporary index).
 - `policyHash`: sha256 over sorted guarded-path blob shas at the anchor.
 - `runnerVersion`: package version + sha256 over the engine's own shipped files
@@ -1793,8 +1888,13 @@ Four bindings are compared on re-verification:
   verdict. `verifyReceipt` compares these too, so a swapped or upgraded scanner
   invalidates the receipt.
 
+- `historyHead`: the commit of the debt history branch the run read, or null. The history can
+  lower the debt a run accepts, so a receipt minted before the history moved stops matching,
+  and the Stop hook's fast path falls back to a full run. Added in receipt schema version 2. A
+  stored version 1 receipt is not read, which costs one full run.
+
 A source-tree change or committed policy change invalidates the receipt, and so does an
-engine or scanner change.
+engine or scanner change or a move of the history branch.
 
 Scope and limits, stated plainly so the proof is not oversold:
 - The engine hash covers first-party engine code, not the `node_modules` dependency
@@ -1874,7 +1974,19 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   writing a real number under them would present a placeholder as an observation. It keeps the
   version it read and writes every other top-level field back as it was, in its place, so a
   `scope: "partial"` floor stays partial and a field from a newer floor survives. `prune` is the
-  only subcommand; anything else exits 2.
+  only subcommand; anything else exits 2. With debt tracking on, prune is an escape hatch rather
+  than a routine step: a fix that two scans of main confirm already closes its slot (section 9).
+- Debt: `usabl debt` lists the remaining accessibility debt by screen and rule, with the date
+  each was first seen on main, its age in days, its trend (falling, rising, steady, or no data),
+  and how many barriers are intermittent. It reads the floor (at `--trusted-ref` when given) and
+  the history branch, scans nothing, and decides nothing. With tracking off it lists the floor
+  and says why the dates are missing and how to turn tracking on. `--json` prints the same data.
+- History: `usabl history record --out <file>` scans every screen of main and writes one history
+  record to the file; `usabl history append <file>` adds it to the local `usabl/history` branch
+  on top of `origin/usabl/history` and never pushes. Both run only in the default-branch
+  workflow (section 9, Debt history). Record refuses a run that never saw the application, a run
+  with nothing to check, and a checkout whose guarded files differ from HEAD. Append refuses a
+  record or a history it cannot read and writes nothing then.
 - Routes drift: `usabl drift routes` compares `usabl.routes.json` against the app router.
   `routes` is the only subcommand; anything else exits 2.
 - Health check: `usabl doctor` is a read-only projection over the wired surfaces and always
@@ -2006,6 +2118,9 @@ Refuses to run without a base ref. The comment leads with the headline
 (`## usabl report: <VERDICT>`), then on approval required the policy split line, then the
 receipt (`_No receipt: run was not verified._` when none), then `### Conformance summary`
 (whose `deterministic:` entry splits new into failing and unconfirmed when any is new),
+then `### Accessibility debt` when the floor holds debt or the change fixed some, for example
+"This PR fixes 2 accessibility barriers. 14 remain; the oldest has been open 41 days. 1 is
+intermittent.", followed, when automatic tracking is off, by why and how to turn it on,
 then the finding sections `### New barriers`, `### Known (recorded debt)`, and
 `### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
 when the noise budget collapses it, then `### Coverage gaps` and
@@ -2052,6 +2167,18 @@ something inferred from a GitHub job status. Anything else, an unknown event, a 
 job, a missing or unparseable artifact, or any verdict that is not exactly `pass`, blocks.
 The rule is one string, `REQUIRED_GATE_SCRIPT` in `src/install/ci.ts`, embedded verbatim in
 all three workflows so the rule that is tested is the rule that runs.
+
+**The history workflow.** `usabl install --ci` also writes `.github/workflows/usabl-history.yml`,
+the default-branch workflow that feeds the debt history (section 9). It runs on a push to main,
+once a day, and by hand, one run at a time. Its `history-scan` job checks out main, starts the
+application, runs `usabl history record`, and uploads the record. It runs application code, so it
+reads only. Its `history-append` job needs the scan, runs only the trusted engine, appends the
+record with `usabl history append`, and pushes `usabl/history` without force, fetching and trying
+again when a push loses a race. It is the one job that holds `contents: write`, the one permission
+tracking needs. GitHub cannot narrow that permission to one branch; a ruleset on `usabl/history`
+can. A team that cannot grant it leaves the file out and keeps the floor-only behavior, and every
+run says tracking is off. The gate workflow is unchanged, and this repository's own workflows do
+not run it.
 
 ### 11.5 Mid-task self-check (CLI; MCP optional)
 
@@ -2242,18 +2369,21 @@ screens on Monday.
 5. First check of that page: likely a pile of existing findings. A code owner accepts
    the evidence floor (and maybe a few waivers). That is one `approval_required` commit.
 6. Next PR on that page: full default stack. A problem at an identity the floor does not
-   hold, or above the count it recorded there, blocks. Recorded ones stay visible debt, and
-   the floor comes down only through `usabl floor prune`; a waiver becomes inert on its
-   expiry date and never edits the floor.
+   hold, or above the count it recorded there, blocks. Recorded ones stay visible debt. A
+   fix that two scans of main confirm closes its slot on its own (see Debt history in
+   section 9); the committed floor comes down only through `usabl floor prune` or a new
+   baseline. A waiver becomes inert on its expiry date and never edits the floor.
 
 Coverage grows as the team works. It does not require Design to declare epic scope.
 
 ### Ratchet
 
 Same full check every time. Existing findings are the floor. New findings are
-regressions. The floor changes only when `usabl floor prune` writes a new one after a
-clean scan observed fewer barriers, or when `usabl baseline` re-drafts it under review. A
-source fix alone does not shrink it, and it never silently grows.
+regressions. The committed floor changes only when `usabl floor prune` writes a new one
+after a clean scan observed fewer barriers, or when `usabl baseline` re-drafts it under
+review, and it never silently grows. What a run accepts can only shrink without review:
+once two scans of main confirm a fix, the debt history lowers the accepted count for that
+identity (section 9). Accepting new debt stays human.
 
 ### Waivers
 

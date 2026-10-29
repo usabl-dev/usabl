@@ -13,9 +13,14 @@ usabl install <one>   wire one integration surface at a time (--overlay | --clau
 usabl baseline        draft the accepted accessibility floor (.usabl-evidence.json)
 usabl doctor          read-only health check across every wired surface
 usabl check           run the local gate (this is the default command)
-usabl floor prune     re-arm the floor as debt is paid down (removes and lowers counts; --unconfirmed)
+usabl floor prune     re-arm the floor by hand (removes and lowers counts; --unconfirmed); an escape hatch
+usabl debt            list the remaining debt by screen and rule, with first-seen date, age, and trend
 usabl drift routes    check the route manifest against the app router
 ```
+
+Two more commands run only in the default-branch workflow that `usabl install --ci` writes:
+`usabl history record` scans main and writes a history record, and `usabl history append` adds it
+to the `usabl/history` branch.
 
 `init` and `install` are separate generators. `init` writes policy files and wires
 nothing. `install` wires exactly one integration per run and enables nothing on its
@@ -77,9 +82,12 @@ each stage matters; this section is what a team actually types, in order.
    matched the interface globs.
 9. (human) Review and merge the floor as an `approval_required` accept. After it lands,
    carried debt does not gate. New, unwaived barriers above the floor still do, and so do
-    unconfirmed coverage and later edits to the guarded policy files. A barrier that lands
-    in headroom the floor still records counts as carried until `usabl floor prune` re-arms
-    the floor; usabl discloses that headroom on every run where it exists.
+    unconfirmed coverage and later edits to the guarded policy files. When barriers are fixed,
+    the floor still records them. With the history workflow from step 13 merged, two scans of
+    main that no longer see a barrier close its slot, so a new barrier there blocks as new. Until
+    then, or without the history workflow, a barrier that lands in that headroom is carried until
+    `usabl floor prune` re-arms the floor; usabl discloses that headroom on every run where it
+    exists.
 10. (human, optional) Add waivers to `.usabl-waivers.json` for findings that need a
     temporary exception. Each waiver is fully typed and names `rule`, `surface`,
     `scope`, `reason`, `owner`, `approvedBy`, `created`, and `expires` (both timestamps
@@ -151,7 +159,12 @@ that, and what to do.
     `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel with a full engine SHA. The workflow runs
     `usabl check --ci --trusted-ref origin/<base-ref>`; the trusted ref is what stops a
     PR from rewriting the floor and approving itself, because policy is read from the
-    trusted base and the `usabl-policy` job never checks out PR head.
+    trusted base and the `usabl-policy` job never checks out PR head. The same command
+    writes `.github/workflows/usabl-history.yml`, which scans main after each merge and once
+    a day and records what it saw on the `usabl/history` branch. That is what turns on
+    automatic debt tracking. Pin the engine there too. Its `history-append` job needs
+    `contents: write`, the one permission tracking needs, and it runs no application code. A
+    team that cannot grant it leaves the file out: every run then says tracking is off.
 14. (human) Turn on branch protection so the `usabl-required` check is required, then run
     `usabl install --branch-rule`. That target is read-only: it verifies through the
     GitHub API that `main` requires the check and writes nothing. Require `usabl-required`,
@@ -169,16 +182,25 @@ that, and what to do.
     `verified` mints a receipt bound to the exact code, and the Stop hook accepts a
     valid receipt without rescanning. `usabl bypass` is a loud, one-time escape that
     lets the next stop skip verification once.
-17. (human, when a run says to, `usabl floor prune`) When a floor finding is fixed it shows
-    as `fixed` and stops appearing. `floor prune` re-arms the gate on screens that scanned
-    cleanly: it removes entries whose identity is gone and lowers the recorded count where
-    fewer barriers remain. A run that finds the floor claiming more barriers than are present
+17. (automatic, with the history workflow) When a floor finding is fixed it shows as `fixed`,
+    and the pull request comment counts it: "This PR fixes 2 accessibility barriers. 14
+    remain; the oldest has been open 41 days." Once two scans of main confirm the fix, every
+    later run accepts the lower count, with no human step. A barrier that comes back on an
+    unchanged tree was not fixed, only not showing: it keeps its slot, is labelled
+    intermittent, and blocks no pull request. `usabl debt` lists what remains, by screen and
+    rule, with its age and trend.
+18. (human, only when needed, `usabl floor prune`) Prune is the escape hatch for a team
+    without the history workflow, or for debt the history cannot confirm. It re-arms the
+    gate on screens that scanned cleanly: it removes entries whose identity is gone and
+    lowers the recorded count where fewer barriers remain. A run that finds the floor
+    claiming more barriers than are present
     says so and names this command, so you find out on a run rather than having to remember.
     It reports both counts without guessing why they differ: barriers may have been paid
     down, or the page may render fewer rows today. It is a notice and not a block: the
     verdict does not move, and until the floor is re-armed a new barrier at that identity is
-    recorded as accepted debt. Merge the floor diff with the fix. The
-    floor only ratchets downward with review; it never grows silently.
+    recorded as accepted debt, unless main has confirmed the fix. Merge the floor diff with
+    the fix. The committed floor only ratchets downward with review; it never grows
+    silently.
 
 ---
 
@@ -275,7 +297,7 @@ pin the engine and turn on branch protection.
 
 | Entry point | Command | What it wires | Value |
 |---|---|---|---|
-| **CI gate** | `usabl install --ci` | Writes `.github/workflows/usabl-gate.yml`, a three-job draft (`gate-comment`, `usabl-policy`, and the required `usabl-required` aggregate). The engine ref is left as the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel for you to replace with a full commit SHA. | Sticky PR comment plus a fail-closed gate |
+| **CI gate** | `usabl install --ci` | Writes `.github/workflows/usabl-gate.yml`, a three-job draft (`gate-comment`, `usabl-policy`, and the required `usabl-required` aggregate), and `.github/workflows/usabl-history.yml`, which records each scan of main on the `usabl/history` branch. The engine ref is left as the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel for you to replace with a full commit SHA. | Sticky PR comment, a fail-closed gate, and automatic debt tracking |
 | **Dev-server overlay** | `usabl install --overlay` | Wires the advisory Vite plugin into `vite.config.ts`. Writes a draft when no config exists, no-ops when already wired, and refuses to clobber a hand-tuned config. | Advisory findings badge while coding |
 | **Assistant hook** | `usabl install --claude` | Wires a Stop hook running `npx usabl stop-hook` into `.claude/settings.json`. | Blocks the first stop on a blocking verdict unless a one-use bypass was issued |
 | **Assistant skill** | `usabl install --claude-skill` | Writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`, running the advisory `npx usabl check --self-check`. Writes a draft when absent, no-ops when it matches, and refuses to clobber a differing file. | The assistant can self-check mid-task without leaving the editor |
@@ -323,7 +345,10 @@ assistant loop.
 - The waiver ledger `.usabl-waivers.json` for known debt. Each waiver is fully typed
   and carries an `expires` field (validated ISO-8601 UTC), so a waiver ages out on a
   date rather than lingering forever
-- `usabl floor prune` to re-arm the floor. On screens that scanned cleanly with no gaps, it
+- Automatic debt tracking from the history workflow `usabl install --ci` writes, so a fix
+  closes its slot after two scans of main, and `usabl debt` to see what remains and how old
+  it is
+- `usabl floor prune` to re-arm the floor by hand. On screens that scanned cleanly with no gaps, it
   removes an entry whose identity was not observed and lowers the count where fewer were
   observed. It cannot tell a repaired barrier from a page rendering fewer rows, so run it
   when you know why the count dropped. It keeps an entry the run did not see when nothing
