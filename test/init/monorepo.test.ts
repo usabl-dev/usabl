@@ -263,6 +263,55 @@ describe('usabl init with no --app on a monorepo', () => {
   });
 });
 
+describe('usabl init --force never leaves a stale routes sidecar behind', () => {
+  const stale = JSON.stringify({ routes: [{ screenId: 'home', url: '/home', entryFile: 'src/Home.tsx' }] });
+
+  it('refuses to write when a sidecar exists and no route was derived, and names the file', async () => {
+    // The router now builds its routes with code, so init derives none. The old sidecar would keep
+    // mapping src/Home.tsx to "home" while the new config says nothing about routes.
+    const fs = memoryFs({
+      'vite.config.ts': 'export default { server: { port: 5173 } }\n',
+      'src/App.tsx':
+        'export const App = () => <Routes>{loadRoutes().map((r) => <Route key={r.path} path={r.path} element={r.element} />)}</Routes>;\n',
+      'src/Home.tsx': 'export const Home = () => null;\n',
+      'usabl.routes.json': stale,
+    });
+    const draft = await inferInit(fs);
+    expect(draft.routes.routes).toEqual([]);
+    const result = await writeInitDrafts(fs, draft, { force: true });
+    expect(result.ok).toBe(false);
+    expect(result.written).toEqual([]);
+    expect(result.refused).toEqual(['usabl.routes.json']);
+    expect(result.message).toContain('usabl.routes.json already exists');
+    expect(result.message).toContain('Nothing was written');
+    expect(result.message).not.toContain('Until then');
+    expect(fs.store['usabl.routes.json']).toBe(stale);
+    expect(fs.store['usabl.config.json']).toBeUndefined();
+  });
+
+  it("refuses to pair one app's config with another app's routes", async () => {
+    const fs = memoryFs({
+      'package.json': '{"private":true,"workspaces":["packages/*"]}\n',
+      'packages/web/vite.config.ts': 'export default { server: { port: 5173 } }\n',
+      'packages/web/src/App.tsx': 'export const App = () => <Routes><Route path="/home" element={<Home />} /></Routes>;\n',
+      'packages/admin/vite.config.ts': 'export default { server: { port: 4100 } }\n',
+      'packages/admin/src/main.tsx': 'export const Shell = () => null;\n',
+    });
+    const web = await inferInit(fs, { appDir: 'packages/web' });
+    expect((await writeInitDrafts(fs, web, { force: false })).written).toEqual(['usabl.config.json', 'usabl.routes.json']);
+    const webConfig = fs.store['usabl.config.json'];
+    const webRoutes = fs.store['usabl.routes.json'];
+
+    const admin = await inferInit(fs, { appDir: 'packages/admin' });
+    expect(admin.routes.routes).toEqual([]);
+    const result = await writeInitDrafts(fs, admin, { force: true });
+    expect(result.ok).toBe(false);
+    expect(result.refused).toEqual(['usabl.routes.json']);
+    expect(fs.store['usabl.config.json']).toBe(webConfig);
+    expect(fs.store['usabl.routes.json']).toBe(webRoutes);
+  });
+});
+
 describe('usabl init never writes a config that reads as idle', () => {
   it('refuses to write a config with no UI file globs, and says what to set', async () => {
     const fs = memoryFs({ 'README.md': '# nothing here\n' });

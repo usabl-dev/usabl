@@ -40,8 +40,10 @@
 - `usabl init` no longer writes a config that can never produce a verdict. With no UI
   files it refuses and writes nothing, because empty `uiFileGlobs` make every run read as
   nothing to check. With no route derived, it skips `usabl.routes.json`, because an empty
-  sidecar lists no screens, and says how to map screens by hand. A JSX app now gets
-  `src/**/*.jsx` as its UI glob.
+  sidecar lists no screens, and says how to map screens by hand. If a `usabl.routes.json`
+  already exists then, it refuses even with `--force` and names the file to review or
+  delete, because the old sidecar would pair the new config with routes it did not derive.
+  A JSX app now gets `src/**/*.jsx` as its UI glob.
 
 - `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
   `usabl help <command>` now print help and exit 0 without running anything. Before,

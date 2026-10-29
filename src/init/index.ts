@@ -665,6 +665,22 @@ export async function writeInitDrafts(
       message: `Refusing to overwrite ${refused.join(', ')} without --force.`,
     };
   }
+  // With no route derived, init writes no sidecar. One already on disk would stay, and usabl reads
+  // it instead of the router, so the new config would be checked against routes init did not
+  // derive, possibly another app's. init refuses rather than leave that pairing behind.
+  if (draft.routes.routes.length === 0 && (await fs.readFile('usabl.routes.json')) !== null) {
+    return {
+      ok: false,
+      written: [],
+      refused: ['usabl.routes.json'],
+      message:
+        'Refusing to write: usabl could not derive any route from source, and usabl.routes.json already exists. ' +
+        'Nothing was written. usabl reads usabl.routes.json instead of the router, so a new usabl.config.json ' +
+        'next to it would be checked against routes init did not derive, possibly from another app. Review ' +
+        'usabl.routes.json. If it does not list the screens of this app, delete it and run usabl init --force ' +
+        'again. If it does, keep it and edit usabl.config.json by hand.',
+    };
+  }
 
   const written: string[] = [];
   await fs.writeFile('usabl.config.json', `${JSON.stringify(draft.config, null, 2)}\n`);

@@ -46,7 +46,8 @@ each stage matters; this section is what a team actually types, in order.
    such as `usabl init --app packages/web`; with no flag and more than one app, `init`
    lists the apps and writes nothing. When it finds no UI files it writes nothing, and
    when it derives no route it skips `usabl.routes.json` and says how to map screens by
-   hand.
+   hand. If a `usabl.routes.json` already exists then, it refuses even with `--force`,
+   writes nothing, and names the file to review or delete.
 3. (human) Review the two drafts; the routes and globs are drafts, not measured facts.
    `init` reads JSX routes, data routers, route config arrays rendered through `map` (the
    PatternFly seed shape), lazy routes, and nested routes. Each route it cannot read, and

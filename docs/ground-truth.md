@@ -2413,7 +2413,11 @@ hand. When it derives no route at all, it writes `usabl.config.json` but not
 `usabl.routes.json`, because an empty sidecar takes precedence over the router and lists no
 screens. It says so and points to the manual mapping: a surface in `surfaces` with its id, url,
 and files, or routes written into `usabl.routes.json`. Until then a changed UI file is
-reported as not covered.
+reported as not covered. When no route is derived and a `usabl.routes.json` already exists,
+`init` refuses even with `--force` and writes nothing, because usabl reads that sidecar instead
+of the router: the new config would be checked against routes `init` did not derive, possibly
+another app's after `--app` names a different folder. The refusal names the file to review, and
+says to delete it and run `init --force` again if it does not list this app's screens.
 
 `usabl check` itself does not refuse a config with empty `uiFileGlobs` yet. Such a config,
 written by hand or by an older `init`, still reads as nothing to check on every run.
