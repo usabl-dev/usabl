@@ -1209,7 +1209,7 @@ kbd {
         <defs><marker id="ah6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="fill-red"/></marker></defs>
       </svg>
     </div>
-    <figcaption><b>Fig. 6</b> On day one you run <code>usabl baseline</code>, which records every barrier the application currently has. From that moment the recorded count is a ceiling. Fixing a barrier lowers it. Adding one is a regression and blocks. Raising the ceiling means editing a guarded file, which triggers the approval outcome and needs a code owner to sign off on a specific commit.</figcaption>
+    <figcaption><b>Fig. 6</b> On day one you run <code>usabl baseline</code>, which records every barrier the application currently has, as seen in two scans in a row. From that moment the recorded count is a ceiling. Fixing a barrier lowers it. Adding one is a regression and blocks. Raising the ceiling means editing a guarded file, which triggers the approval outcome and needs a code owner to sign off on a specific commit.</figcaption>
   </figure>
 
   <h3>Waivers, for when a barrier cannot be fixed yet</h3>
@@ -1371,7 +1371,7 @@ kbd {
 
   <ol class="steps">
     <li><b>Point it at the app</b><code>usabl init</code> reads your Vite config and your router, works out your base URL, your route list and your user interface file globs, and writes a draft config for you to review. It never overwrites an existing config without <code>--force</code>.</li>
-    <li><b>Record what is already broken</b><code>usabl baseline</code> scans everything and writes the current barrier count into <code>.usabl-evidence.json</code>. This is the ceiling. Nothing that exists today will block anyone.</li>
+    <li><b>Record what is already broken</b><code>usabl baseline</code> scans everything twice and writes the barriers both scans found into <code>.usabl-evidence.json</code>. A barrier only one scan found, such as a row a live list showed once, is listed as intermittent and not recorded. This is the ceiling. Nothing that exists today will block anyone.</li>
     <li><b>Wire up the surfaces you want</b><code>usabl install --overlay</code>, <code>--claude</code>, <code>--cursor</code>, <code>--ci</code>. Each writes a draft integration for review. The CI target deliberately leaves a placeholder where the engine commit hash goes, so nobody wires up an unpinned action by accident.</li>
     <li><b>Check the wiring</b><code>usabl doctor</code> reports every surface as wired, missing, drifted or unknown, and always exits zero, because a missing surface is information rather than a failure.</li>
     <li><b>Pay debt down when you are in the area</b>Fix barriers on screens you are already working on. The floor drops automatically. <code>usabl floor prune</code> re-arms the ratchet at the lower count.</li>
@@ -1608,7 +1608,7 @@ kbd {
           <text x="382" y="142" fill="#A82E14">elementKey: string | null</text>
           <text x="382" y="162">identityBasis:</text>
           <text x="382" y="180">  'name' | 'structural'</text>
-          <text x="382" y="198">  | 'count'</text>
+          <text x="382" y="198">  | 'count' | 'row'</text>
           <text x="382" y="228" fill="#A82E14">status:</text>
           <text x="382" y="246">  'new' | 'carried'</text>
           <text x="382" y="264">  | 'fixed' | 'waived'</text>
@@ -2006,8 +2006,10 @@ kbd {
         <defs><marker id="a12" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="fill-ink"/></marker></defs>
       </svg>
     </div>
-    <figcaption><b>Fig. 12</b> Three bases, tried in order of strength. Dropping <code>nth-child</code> selectors is what lets a barrier keep its identity when a row is inserted above it. Replacing generated ids is what lets it survive a React remount. The count basis is the honest fallback for controls that have nothing stable to hold on to: it cannot tell you which icon button broke, so it only claims to know how many are broken.</figcaption>
+    <figcaption><b>Fig. 12</b> Three of the four bases, tried in order of strength. The fourth, row, is tried before all of them and is described below the figure. Dropping <code>nth-child</code> selectors is what lets a barrier keep its identity when a row is inserted above it. Replacing generated ids is what lets it survive a React remount. The count basis is the honest fallback for controls that have nothing stable to hold on to: it cannot tell you which icon button broke, so it only claims to know how many are broken.</figcaption>
   </figure>
+
+  <p>A control repeated in every table row, such as an icon button or a kebab toggle, is the case the three bases handle worst: every row shares one name, or none, so all of them collapse onto one identity whose count follows how many rows the page shows. So a fourth basis comes first. When the element sits in a table row that has a key, either a key attribute no other row of its table holds or a row header, the basis is <code>row</code> and the key combines a hash of the table's name, a hash of the row's key, the control's role, and its place inside the row. The hashes mean no row text or table name, which is often customer data, reaches the floor. A row usabl cannot tell apart from another, such as two rows with the same key, is a coverage gap rather than a guess. A floor written before row keys existed is still compared with the old keys, and the run discloses a coverage gap until <code>usabl baseline</code> rewrites it.</p>
 
   <h3>The differential</h3>
 

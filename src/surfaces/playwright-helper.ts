@@ -39,7 +39,8 @@ import {
   type ReadinessMeasurement,
   type ReadinessSignal,
 } from '../providers/reachability.js';
-import { scrubResult, scrubString } from './scrub.js';
+import { attachRowScopeToDrafts } from '../providers/row-scope.js';
+import { scrubOutboundData, scrubResult, scrubString } from './scrub.js';
 
 // A single-page check outcome for a live Playwright page. It calls the same precedence function
 // as the gate, so the two can never rank a blocking failure and a coverage gap differently.
@@ -311,10 +312,24 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     intake.requirements === null
       ? []
       : requirementGapsForPage(intake.requirements, labeledScreenId, intake.knownSurfaceIds);
-  const finish = (drafts: Draft[], gaps: CoverageGap[]): PageCheckResult => ({
-    ...summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]),
-    project: intake.project,
-  });
+  // The projection leaves usabl here, so it is scrubbed here: page text, gap refs, and reasons. The
+  // page address is a gap ref, and a query string or a fragment in it can hold a session token.
+  const finish = (drafts: Draft[], gaps: CoverageGap[]): PageCheckResult =>
+    scrubOutboundData({
+      ...summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]),
+      project: intake.project,
+    });
+  // The providers, then the same row keys the CLI attaches, so a finding here carries the identity
+  // it has in usabl check.
+  const runChecks = async (): Promise<{ drafts: Draft[]; gaps: CoverageGap[] }> => {
+    const provided = await runProviders(
+      providers,
+      { page, screen, config: PAGE_CHECK_CONFIG, profile },
+      pageCheckCapabilities(providers),
+    );
+    const rows = await attachRowScopeToDrafts(page, screen, provided.drafts);
+    return { drafts: rows.drafts, gaps: [...provided.gaps, ...rows.gaps] };
+  };
 
   // A labeled screen that declares a readiness signal in usabl.config.json is held to it, the way
   // the CLI holds it. Only a configured surface can declare one, as in the CLI.
@@ -324,11 +339,7 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
       : config.surfaces.find((surface) => surface.id === labeledScreenId)?.reachedWhen;
   const signal = readinessSignalOf(reachedWhen);
   if (signal === null || config === null) {
-    const { drafts, gaps } = await runProviders(
-      providers,
-      { page, screen, config: PAGE_CHECK_CONFIG, profile },
-      pageCheckCapabilities(providers),
-    );
+    const { drafts, gaps } = await runChecks();
     return finish(drafts, gaps);
   }
 
@@ -338,11 +349,7 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     return finish([], [before.gap]);
   }
   await page.markWalkStart();
-  const { drafts, gaps } = await runProviders(
-    providers,
-    { page, screen, config: PAGE_CHECK_CONFIG, profile },
-    pageCheckCapabilities(providers),
-  );
+  const { drafts, gaps } = await runChecks();
   // Measured again after the checks, as the CLI does. A part holds only if it held both times.
   const held = heldThroughout(before.measured, await measureReadiness(page, signal, config.appBaseUrl));
   const unseen = unseenGap(screenId, signal, held);

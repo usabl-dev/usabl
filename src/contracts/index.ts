@@ -26,7 +26,9 @@ export type AccessibilityVerdict = Exclude<Verdict, 'approval_required'>;
 // AccessibilityExitCode never includes 2. Crash is 4.
 export type AccessibilityExitCode = 0 | 1 | 3 | 4;
 export type FactSource = 'ax-tree' | 'attribute';
-export type IdentityBasis = 'name' | 'structural' | 'count';
+// 'row' keys a control inside a keyed table row by the row and the control's place in it, so the
+// same control in two rows never shares an identity. Only a version 3 floor holds row entries.
+export type IdentityBasis = 'name' | 'structural' | 'count' | 'row';
 
 // ---- evidence + findings ----
 export interface Fact<T = string | null> {
@@ -322,7 +324,10 @@ export interface FloorEntry {
 export interface EvidenceFloor {
   // Version 1 recorded a literal 1 for name and structural entries, so those counts prove nothing.
   // Version 2 records the observed count for every basis, so the gate can compare all of them.
-  version: 1 | 2;
+  // Version 3 also keys a control inside a keyed table row per row (identity basis 'row'). Version 1
+  // and 2 floors recorded those controls collapsed across rows, so the gate compares them with the
+  // keys they were written with and discloses a gap until `usabl baseline` rewrites the floor.
+  version: 1 | 2 | 3;
   // Present and 'partial' only when `usabl baseline --partial` wrote a floor from a subset of the
   // application, the screens that were cleanly scanned. A complete whole-application floor omits
   // this field entirely, so its bytes stay identical to floors written before this field existed.
@@ -421,6 +426,64 @@ export interface AxNode {
 export interface ElementRef {
   selector: string;
 }
+// Why a row an element sits in could not be told apart from other rows. See RowContextRead.
+export type RowAmbiguity =
+  // The table keys its rows, and this row has no key of the kind the table uses.
+  | 'row-key-missing'
+  // Another row of the same table has exactly the same key.
+  | 'row-key-duplicate'
+  // The key, or the table's identity, is longer than usabl reads.
+  | 'row-key-too-long'
+  // Another table on the screen has the same identity, so the two cannot be told apart.
+  | 'table-ambiguous'
+  // The table sits in a row of another table that keys none of its rows, so the row it sits in has
+  // no identity, and neither does anything under it.
+  | 'enclosing-row-unkeyed';
+
+// Why usabl could not find the one element a selector names. See RowContextRead.
+export type RowUnreadable =
+  // The page could not parse the selector.
+  | 'selector-invalid'
+  // The selector matched no element: the element went away after the scanner saw it.
+  | 'element-missing'
+  // The selector matched more than one element, so which one the scanner meant is unknown.
+  | 'element-multiple';
+
+// What Page.rowContext read about the table row an element sits in.
+//
+// 'none': the element is not in a body row of a table whose rows carry keys. It keys the way it did
+// before row keys existed, and nothing was lost.
+// 'keyed': the element is in a row usabl can tell apart from every other row on the screen.
+// `table` and `key` are page text, exact and in full, and must never be stored: the caller hashes
+// them at once. `table` names the table without using its position: its own key attribute, its
+// accessible name, or its caption, after the identity of the row it is nested in, if any.
+// 'ambiguous': the element is in a row of a keyed table, but the row cannot be told apart. So is an
+// element under such a row, or under a table that cannot be told apart. The caller must not key it
+// by row, and must disclose that it could not.
+// 'unreadable': the selector did not name exactly one element, so whether that element sits in a
+// keyed row is unknown. The caller must disclose it, exactly as for 'ambiguous'. Only an element
+// that was found and seen outside every body row of a keyed table is 'none'.
+export type RowContextRead =
+  | { kind: 'none' }
+  | {
+      kind: 'keyed';
+      table: string;
+      // Where the key came from: 'attr:<name>' for a key attribute on the row, 'header' for a row header.
+      source: string;
+      key: string;
+      // The element's role attribute, or a role implied by its tag, or its tag name.
+      role: string;
+      // Tag and child position from the row down to the element, for example
+      // 'td:nth-child(4) > button:nth-child(1)'. Empty when the element is the row itself.
+      path: string;
+      // The keys of the table's other body rows, from the same source, and the identities of every
+      // other table on the screen. Page text like `key` and `table`, so the caller only hashes them.
+      // They let the caller check that no two rows of the table, and no two tables, share a hash.
+      otherKeys: string[];
+      otherTables: string[];
+    }
+  | { kind: 'ambiguous'; reason: RowAmbiguity }
+  | { kind: 'unreadable'; reason: RowUnreadable };
 // What Page.ancestorAttributes read. 'chain' is the element and every element above it, nearest
 // first. 'not-found' means no connected element matched, for example a toast that closed between
 // two reads. 'too-deep' means the walk reached `limit` elements and had more to go, so the chain is
@@ -513,6 +576,10 @@ export interface Page {
   // null. See AncestorAttributesRead for the two results that carry no chain.
   ancestorAttributes(selector: string, names: readonly string[]): Promise<AncestorAttributesRead>;
   queryAll(selector: string): Promise<ElementRef[]>;
+  // The table row the one element a selector matches sits in. See RowContextRead. A selector the
+  // page cannot parse, or one that matches no element or more than one, is 'unreadable', never
+  // 'none'. It throws when the page cannot be read.
+  rowContext(selector: string): Promise<RowContextRead>;
   close(): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;
   setZoom(percent: number): Promise<void>;

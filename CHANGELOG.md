@@ -11,6 +11,27 @@
   `activeElement` getter, `contains`, `focus`, or `getComputedStyle` could make a keyboard
   or focus check report what the page wanted and pass a check it fails.
 
+- A control repeated in every table row, such as an unnamed icon button or a kebab
+  toggle, now has one identity per row. Before, every row shared one identity whose count
+  followed how many rows the page showed, so a floor of two, with one row fixed and a new
+  broken row added, still counted two and was verified with a receipt. Now the new row has
+  an identity the floor never accepted and blocks as new. A row is named by a key attribute
+  no other row of the table holds (`data-row-key`, `data-key`, `data-id`,
+  `data-ouia-component-id`, or `id`, but not a framework-generated id) or by its row
+  header, compared and hashed exactly and in full, so rows whose keys differ only in case
+  or share a long prefix stay apart. A table is named by its own id, its accessible name,
+  or its caption, after the row it is nested in, never by its position, and only the rows
+  it owns count. Row keys and table names are hashed at once, so no row text or table name
+  reaches a finding's identity or the floor. A row that cannot be told apart (a missing or
+  shared key in a keyed table, two tables that look the same, a table nested under either,
+  or two rows or tables whose short hashes match) or cannot be read is a not-covered gap
+  for its screen and rule. So is a finding whose selector no longer names exactly one
+  element, for example one that left the page before its row was read. Table names follow
+  the accessible-name order (aria-labelledby, aria-label, caption) with white space
+  collapsed. A row the page does not show today is reported
+  as fixed and as headroom and does not move the verdict. Controls outside a keyed table
+  keep their old keys.
+
 - A `content` or `flow` requirement whose surface matches no configured surface, no
   route manifest screen, and no docs manifest page is now a `not-covered` gap on the CLI
   run, with ref `requirement:<id>` and a reason that names the surface. Before, no run
@@ -328,6 +349,25 @@
 
 ### Changed
 
+- `usabl baseline` now scans twice and records only the barriers both scans found, at the
+  smaller of the two counts. The rest are listed as intermittent, by screen and rule and
+  never by element key, with what to do: fix them, check the screen against fixed data, or
+  waive the rule on that screen with an expiry. An intermittent barrier is not on the
+  floor, so it blocks as new on a run where it appears. Both scans must have complete
+  coverage; `--partial` floors only the screens both scans saw cleanly. A default
+  `usabl baseline` no longer refuses on the gaps an old floor raises against itself (the
+  version 1 placeholder counts and the version 2 row-key gap), so it can replace that floor
+  with a complete one. It drops only the gaps the gate itself raised, so a measurement gap
+  that names the floor file as its ref still refuses.
+
+- `usabl baseline` writes floor version 3, which keys controls in table rows per row. A
+  version 1 or 2 floor is still compared with the keys it was written with, so nothing
+  reads as new or fixed only because the keys changed. When a run finds barriers in keyed
+  rows on a screen such a floor holds entries for, it reports a coverage gap and
+  `not_covered`, because the old collapsed count cannot rule out a new barrier in another
+  row. Run `usabl baseline` and merge the version 3 floor to clear it. A waiver scoped to
+  one element key of a control in a keyed row names the old key and must be rewritten.
+
 - usabl now has one more runtime dependency, `@babel/parser`, pinned to exactly
   7.29.11 (MIT). Router discovery (`usabl init`, `usabl drift routes`, and the route
   manifest the planner reads) and the Vite plugin's source attribute injector use it to
@@ -345,6 +385,11 @@
   an unlabeled call still carry the label `page`.
 
 ### Security
+
+- `checkPage` scrubs its whole result before it returns it. A page address with a token in
+  its query string or fragment used to come back as a coverage gap ref. Now every string is
+  scrubbed, and every URL in the result loses its sign-in credentials, query string, and
+  fragment.
 
 - The stop hook's pin notices and drift message now print carried values only inside
   the untrusted frame: drifted file paths, the session id from the hook input, the pin
