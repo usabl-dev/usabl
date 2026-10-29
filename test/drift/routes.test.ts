@@ -581,3 +581,55 @@ describe('runRoutesDrift with routes usabl cannot read', () => {
     }
   });
 });
+
+describe('runRoutesDrift with a route config list rendered through map', () => {
+  const app = (mapped: string): string =>
+    [
+      "const routes = [{ path: '/', element: <Home /> }, { path: '/beta', element: <Beta />, enabled: false }];",
+      'export const App = () => (',
+      `  <Routes>{${mapped}.map((r) => <Route key={r.path} path={r.path} element={r.element} />)}</Routes>`,
+      ');',
+    ].join('\n');
+  const sidecar = (acknowledgedUnreadable?: unknown): string =>
+    JSON.stringify({
+      routes: [{ screenId: 'root', url: '/', entryFile: 'src/Home.tsx' }],
+      ...(acknowledgedUnreadable === undefined ? {} : { acknowledgedUnreadable }),
+    });
+  const idsIn = (text: string): string[] => [...text.matchAll(/\[id ([0-9a-f]{12})\]/g)].map((match) => match[1] ?? '');
+
+  it('refuses a list that passes through filter, because usabl does not run the filter', async () => {
+    const outcome = await runRoutesDrift(
+      fsOf({ 'usabl.routes.json': sidecar(), 'src/App.tsx': app('routes.filter((r) => r.enabled !== false)') }),
+      'src/App.tsx',
+    );
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toContain('src/App.tsx line 3');
+    expect(outcome.stderr).toContain('filter');
+    expect(idsIn(outcome.stderr ?? '')).toHaveLength(1);
+  });
+
+  it('refuses a list flattened with reduce, and passes once the entry is acknowledged', async () => {
+    const router = app('routes.reduce((all, r) => [...all, r], [])');
+    const first = await runRoutesDrift(fsOf({ 'usabl.routes.json': sidecar(), 'src/App.tsx': router }), 'src/App.tsx');
+    expect(first.exitCode).toBe(2);
+    expect(first.stderr).toContain('reduce');
+    const acknowledged = idsIn(first.stderr ?? '').map((id) => ({ file: 'src/App.tsx', id }));
+    expect(acknowledged).toHaveLength(1);
+
+    const outcome = await runRoutesDrift(
+      fsOf({ 'usabl.routes.json': sidecar(acknowledged), 'src/App.tsx': router }),
+      'src/App.tsx',
+    );
+    // The acknowledged entry no longer refuses, and /beta is still reported as added.
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stdout).toContain('/beta');
+    expect(outcome.stdout).toContain('acknowledged in usabl.routes.json');
+  });
+
+  it('reads a plain mapped list as written and reports drift from it', async () => {
+    const outcome = await runRoutesDrift(fsOf({ 'usabl.routes.json': sidecar(), 'src/App.tsx': app('routes') }), 'src/App.tsx');
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stderr).toBeUndefined();
+    expect(outcome.stdout).toContain('/beta');
+  });
+});

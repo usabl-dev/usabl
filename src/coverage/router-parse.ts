@@ -26,7 +26,8 @@
  * returns one route element whose path is the item's `path`. Its objects are read like a data
  * router's, with nested `routes` or `children` lists. When the list reaches the map through code
  * the reader does not run, such as `reduce`, or a nested relative path was joined to its parent,
- * the read is an `assumed` entry with a line, so init can ask the operator to confirm it.
+ * the read is an `assumed` entry with a line, so init can ask the operator to confirm it. The
+ * router fallback reports the same entry as unreadable, because at check time nothing confirmed it.
  *
  * It must never invent entry files. A component is attributed only to a leaf route, one with no
  * child routes, that sits in a router this module defines: a JSX route's `element={<Name />}`, and
@@ -61,12 +62,19 @@ export interface ParsedRouteSite {
 
 /**
  * A route list the reader read by assuming what code it does not run does, such as a `reduce` that
- * flattens a route config. `line` is the line of the map call. The reason is a full sentence that
+ * flattens a route config. `line` is the line of the map call. Each reason is a full sentence that
  * never repeats source text.
  */
 export interface AssumedRoutes {
   line: number | null;
+  // For init, which keeps the routes in the draft and asks the operator to confirm them.
   reason: string;
+  // For check time and drift, where nothing has confirmed the assumption. The router fallback
+  // reports the list as an unreadable entry with this reason and the id below.
+  checkReason: string;
+  // A short hash of the map call's source text and the check reason, like an unreadable entry's
+  // id, so usabl.routes.json can acknowledge the entry once its author has checked the routes.
+  id: string;
 }
 
 /** A route whose path cannot be turned into a screen id, with the reason in config-message words. */
@@ -154,7 +162,12 @@ export function parseRouterFallback(
     }
     routes.push({ screenId: derived.screenId, url: route.path, entryFile: null });
   }
-  return { routes, unusable, unreadable: read.unreadable };
+  // A list read on an assumption is not proven at check time. It is reported like a route usabl
+  // could not read, so wide blast records a gap and drift refuses until the sidecar acknowledges
+  // it. The routes it read stay in the list. Entries are ordered by line; the sort is stable.
+  const assumed: UnreadableRoute[] = read.assumed.map(({ line, checkReason, id }) => ({ line, reason: checkReason, id }));
+  const unreadable = [...read.unreadable, ...assumed].sort((a, b) => (a.line ?? 0) - (b.line ?? 0));
+  return { routes, unusable, unreadable };
 }
 
 export function isRouterSource(raw: string): boolean {
@@ -749,9 +762,15 @@ class RouterReader {
     }
     if (reasons.length > 0) {
       const start = typeof call.start === 'number' ? call.start : 0;
+      const end = typeof call.end === 'number' ? call.end : start;
+      const basis = reasons.join(' ');
+      const checkReason = `${basis} usabl read every route object in the list as a route, and cannot confirm that the app renders each one at that path.`;
+      const text = this.raw.slice(start, end).replace(/\s+/g, ' ').trim();
       this.assumed.push({
         line: lineOf(call),
-        reason: `${reasons.join(' ')} usabl read every route object in the list as a route. Check that the app renders each one at the path in the draft.`,
+        reason: `${basis} usabl read every route object in the list as a route. Check that the app renders each one at the path in the draft.`,
+        checkReason,
+        id: createHash('sha256').update(`${checkReason}\u0000${text}`).digest('hex').slice(0, 12),
         offset: start,
       });
     }
@@ -1462,7 +1481,7 @@ export function readRouterSource(raw: string, file = 'router.tsx'): RouterSource
       seenAssumed.add(entry.offset);
       return true;
     })
-    .map(({ line, reason }) => ({ line, reason }));
+    .map(({ line, reason, checkReason, id }) => ({ line, reason, checkReason, id }));
   return {
     routes: mergeParsedRoutes(reader.jsxSites, reader.dataSites),
     dataRoutes: mergeParsedRoutes([], reader.dataSites),

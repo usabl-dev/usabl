@@ -296,6 +296,38 @@ describe('router-parse: reads only the real router', () => {
     expect(unreadableLines(raw)).toEqual([4, 7]);
   });
 
+  it('reads a plain map over a const route list as written, with no gap', () => {
+    const raw = [
+      "const pages = [{ path: '/a' }, { path: '/b' }];",
+      'export const App = () => (',
+      '  <Routes>',
+      '    {pages.map((page) => <Route key={page.path} path={page.path} element={<Page />} />)}',
+      '  </Routes>',
+      ');',
+    ].join('\n');
+    expect(urls(raw)).toEqual(['/a', '/b']);
+    expect(unreadableLines(raw)).toEqual([]);
+  });
+
+  it('reports a mapped list that passes through filter or reduce as an entry with an id', () => {
+    for (const through of ['pages.filter((page) => page.on)', 'pages.reduce((all, page) => [...all, page], [])']) {
+      const raw = [
+        "const pages = [{ path: '/a' }, { path: '/b', on: false }];",
+        'export const App = () => (',
+        '  <Routes>',
+        `    {${through}.map((page) => <Route key={page.path} path={page.path} element={<Page />} />)}`,
+        '  </Routes>',
+        ');',
+      ].join('\n');
+      // The routes are still read, and the assumption is an entry the planner and drift report.
+      expect(urls(raw)).toEqual(['/a', '/b']);
+      const gaps = parseRouterFallback(raw).unreadable;
+      expect(gaps.map((gap) => gap.line)).toEqual([4]);
+      expect(gaps[0]?.id).toMatch(/^[0-9a-f]{12}$/);
+      expect(gaps[0]?.reason).toContain(through.startsWith('pages.filter') ? 'filter' : 'reduce');
+    }
+  });
+
   it('joins a nested relative path to its parent path', () => {
     const raw = [
       'export const router = createBrowserRouter([',

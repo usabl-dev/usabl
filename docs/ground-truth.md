@@ -880,10 +880,13 @@ file, so it is reported (below) rather than scanned as the literal URL `/app/*`.
 is a list whose nested relative paths it joins to their parent's path, and a list rendered
 through an element that is not `<Route>`, such as a v5 wrapper inside `<Switch>`. Each such list
 is an `assumed` entry with the line of the map call. `usabl init` writes it as a `Review:` note
-with the file and line and keeps the routes in the draft. The planner and `usabl drift routes`
-read the routes and do not report the assumption. When the code does more than flatten or
+with the file and line and keeps the routes in the draft. When the code does more than flatten or
 select, for example when it rewrites paths, the draft can name URLs the app does not serve, which
-is why init asks the operator to check.
+is why init asks the operator to check. With no sidecar, nothing has checked the assumption, so
+the router fallback reports each `assumed` entry as an `unreadable` entry (below) with its own
+reason and an id. The planner still queues the routes it read on a wide-blast change, and records
+the entry as a `skipped` gap, so the run is not covered. `usabl drift routes` refuses on it until
+the sidecar acknowledges its id.
 
 **What it reports.** A route it finds but cannot read is never dropped. Each one is an
 `unreadable` entry with the router file, the line, and the reason: a path it cannot resolve (an

@@ -14,7 +14,9 @@
   `./Page.js` form for `Page.ts`. More than one match at one step still gets no entry file and a note. `init`
   also looks for the router in `src/app/routes.tsx`. Every route it cannot attribute, and
   every route list it read on an assumption, such as one flattened with `reduce`, is a
-  `Review:` note with the file and line.
+  `Review:` note with the file and line. With no `usabl.routes.json`, such a list is not
+  proven: `usabl check` records it as a skipped gap on a wide-blast change, and
+  `usabl drift routes` refuses on it until the sidecar acknowledges its id.
 
 ### Fixed
 
