@@ -9,7 +9,7 @@
  * Sample `usabl.config.json` URLs (`http://127.0.0.1:5173`) are the fixture app's
  * Vite origin, not a hardcoded engine target. The engine always reads operator config.
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -18,7 +18,8 @@ import { run } from './run.js';
 import type { Result, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
 import { makeFsGlob } from './deps/fs.js';
-import { readStorageStateEnv } from './deps/session.js';
+import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
+import { openSessionBrowser, runSession, waitForPerson } from './session/index.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
 import {
   formatDocsInitReport,
@@ -299,7 +300,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'install' &&
     opts.command !== 'stop-hook' &&
     opts.command !== 'doctor' &&
-    opts.command !== 'docs'
+    opts.command !== 'docs' &&
+    opts.command !== 'session'
   ) {
     // The command table names a command this dispatch does not run. Refuse it the same way.
     process.stderr.write('usabl: unknown command. Run "usabl help" to list the commands.\n');
@@ -381,6 +383,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const result = await writeInitDrafts(initFs, draft, { force: opts.force });
     process.stdout.write(formatInitReport(draft, result));
     return result.ok ? 0 : 2;
+  }
+
+  if (opts.command === 'session') {
+    // Saves a signed-in storage state for later scans. It runs no check and mints no verdict.
+    return runSession({
+      cwd: process.cwd(),
+      configPath: opts.configPath,
+      loadConfig: (path) => loadConfig(path),
+      gitIgnoreState,
+      openBrowser: (url) => openSessionBrowser(url),
+      waitForConfirmation: waitForPerson,
+      out: (line) => {
+        process.stdout.write(`${line}\n`);
+      },
+      err: (line) => {
+        process.stderr.write(`${line}\n`);
+      },
+    });
   }
 
   if (opts.command === 'bypass') {
@@ -492,6 +512,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       configPath: opts.configPath,
       env: process.env,
       probePlaywrightChromium,
+      // Read-only: git ls-files and check-ignore, and a stat for the permission bits.
+      sessionFile: {
+        ignoreState: (path) => gitIgnoreState(process.cwd(), path),
+        mode: async (path) => {
+          try {
+            return (await stat(path)).mode;
+          } catch {
+            return null;
+          }
+        },
+      },
     };
     const outcome = await runDoctor(deps);
     process.stdout.write(outcome.stdout);

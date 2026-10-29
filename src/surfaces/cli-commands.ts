@@ -82,6 +82,12 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     ],
   },
   {
+    name: 'session',
+    usage: 'usabl session [options]',
+    summary: 'Sign in once in a browser and save the session scans use.',
+    flags: [CONFIG_FLAG],
+  },
+  {
     name: 'floor',
     usage: 'usabl floor prune [options]',
     summary: 'Lower or remove floor entries for accessibility barriers now gone.',

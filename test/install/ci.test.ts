@@ -185,3 +185,20 @@ describe('writeCi', () => {
     expect(result.message).toContain('line');
   });
 });
+
+describe('the gate workflow and the saved session', () => {
+  // The session `usabl session` saves is a credential under .usabl/. The workflow uploads the
+  // Result JSON and nothing else, so no artifact can carry it, and the Result never names it.
+  it('uploads only the Result JSON, never anything under .usabl/', () => {
+    for (const workflow of [USABL_GATE_WORKFLOW, USABL_DOCS_GATE_WORKFLOW]) {
+      const uploads = [...workflow.matchAll(/uses: actions\/upload-artifact@[^\n]*\n\s+with:\n((?:\s+[a-z-]+:[^\n]*\n)+)/g)];
+      expect(uploads.length).toBe(workflow.split('actions/upload-artifact@').length - 1);
+      for (const upload of uploads) {
+        const paths = /path: ([^\n]+)/.exec(upload[1] ?? '')?.[1]?.trim();
+        expect(paths).toBe('usabl-result.json');
+      }
+      expect(workflow).not.toContain('.usabl/');
+      expect(workflow).not.toContain('storage-state');
+    }
+  });
+});
