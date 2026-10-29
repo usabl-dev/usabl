@@ -845,8 +845,11 @@ never read as router code.
   The callback must return one element, with no children and no spread, whose `path` is the
   item's `path` (a destructured name or `item.path`). The list must be a `const` array literal in
   the module, reached directly or through `reduce`, `flatMap`, `flat`, or `filter`. Its objects
-  are read like data router objects, with nested lists under `routes` or `children`; an object
-  with only a `label` and nested `routes` is a group, and its children keep its parent's path.
+  are read like data router objects. The callback renders only the items it is given, so nested
+  lists under `routes` or `children` are read only when the list passes through `reduce`,
+  `flatMap`, or `flat`, which can bring them to the top level. Then an object with only a `label`
+  and nested `routes` is a group, and its children keep its parent's path. Otherwise usabl reads
+  the top-level objects, leaves the nested ones out, and reports the list as `assumed` (below).
 
 A path object anywhere else in the module is not part of the router and is not read. A `<Route>`
 anywhere else is not scanned either, because it may be a decoy, but it is named as an unreadable
@@ -877,8 +880,9 @@ file, so it is reported (below) rather than scanned as the literal URL `/app/*`.
 
 **What it assumes.** usabl does not run code, so a route config list that reaches the map through
 `reduce`, `flatMap`, `flat`, or `filter` is read as if every route object in it is rendered. So
-is a list whose nested relative paths it joins to their parent's path, and a list rendered
-through an element that is not `<Route>`, such as a v5 wrapper inside `<Switch>`. Each such list
+is a list whose nested relative paths it joins to their parent's path, a plain list whose nested
+route objects it left out, and a list rendered through an element that is not `<Route>`, such
+as a v5 wrapper inside `<Switch>`. Each such list
 is an `assumed` entry with the line of the map call. `usabl init` writes it as a `Review:` note
 with the file and line and keeps the routes in the draft. When the code does more than flatten or
 select, for example when it rewrites paths, the draft can name URLs the app does not serve, which

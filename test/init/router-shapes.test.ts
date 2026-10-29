@@ -76,6 +76,42 @@ describe('usabl init on a PatternFly seed-shaped app', () => {
   });
 });
 
+describe('usabl init on nested route objects under a plain map', () => {
+  // The map renders one <Route> per top-level item, with no children, so the nested object is not
+  // a route the app serves through this map.
+  const files = {
+    'src/App.tsx': [
+      "import { Routes, Route } from 'react-router-dom';",
+      "import { Settings } from './Settings';",
+      "import { General } from './General';",
+      '',
+      "const routes = [{ path: '/settings', element: <Settings />, children: [{ path: '/settings/general', element: <General /> }] }];",
+      '',
+      'export function App() {',
+      '  return <Routes>{routes.map((r) => <Route key={r.path} path={r.path} element={r.element} />)}</Routes>;',
+      '}',
+    ].join('\n'),
+    'src/Settings.tsx': 'export function Settings() { return null }\n',
+    'src/General.tsx': 'export function General() { return null }\n',
+  };
+
+  it('drafts only the top-level route and names the nested one in a Review note', async () => {
+    const draft = await inferInit(memoryFs(files));
+    expect(draft.routes.routes).toEqual([{ screenId: 'settings', url: '/settings', entryFile: 'src/Settings.tsx' }]);
+    const note = draft.notes.find((entry) => entry.includes('nested'));
+    expect(note).toMatch(/^Review: src\/App\.tsx line 8: /);
+  });
+
+  it('leaves a change to the nested page unresolved, never mapped to a screen', async () => {
+    const draft = await inferInit(memoryFs(files));
+    const config = parseUsablConfig(JSON.stringify(draft.config));
+    const planFs = memoryFs({ ...files, 'usabl.routes.json': JSON.stringify(draft.routes) });
+    const coverage = await computeCoverage(planFs, config, ['src/General.tsx']);
+    expect(coverage.affected).toEqual([]);
+    expect(coverage.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['src/General.tsx', 'unresolved']]);
+  });
+});
+
 describe('usabl init on lazy routes and nested route objects', () => {
   const page = (name: string): string => `export function ${name}() { return null }\n`;
 

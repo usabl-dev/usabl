@@ -96,6 +96,39 @@ describe('readRouterSource reads a route config array rendered through map', () 
     expect(read.assumed[0]?.reason).toContain('joined');
   });
 
+  it('reads only the top-level items of a plain map, and says it left the nested ones out', () => {
+    // The callback renders one <Route> per item with no children, so React Router never sees the
+    // nested list. Its absolute paths would otherwise read as real routes with no note.
+    const raw = [
+      "import { Settings } from './Settings';",
+      "import { General } from './General';",
+      "const routes = [{ path: '/settings', element: <Settings />, children: [{ path: '/settings/general', element: <General /> }] }];",
+      'export const App = () => (',
+      '  <Routes>{routes.map((r) => <Route key={r.path} path={r.path} element={r.element} />)}</Routes>',
+      ');',
+    ].join('\n');
+    const read = readRouterSource(raw);
+    expect(read.routes.map((route) => [route.path, route.component])).toEqual([['/settings', 'Settings']]);
+    expect(read.unreadable).toEqual([]);
+    expect(read.assumed.map((entry) => entry.line)).toEqual([5]);
+    expect(read.assumed[0]?.reason).toContain('nested');
+    expect(read.assumed[0]?.checkReason).toContain('nested');
+  });
+
+  it('leaves nested items out of a list that passes through filter only', () => {
+    const raw = [
+      "const routes = [{ path: '/a', element: <A />, routes: [{ path: '/a/b', element: <B /> }] }];",
+      'export const App = () => (',
+      '  <Routes>{routes.filter(Boolean).map((r) => <Route path={r.path} element={r.element} />)}</Routes>',
+      ');',
+    ].join('\n');
+    const read = readRouterSource(raw);
+    expect(read.routes.map((route) => route.path)).toEqual(['/a']);
+    expect(read.assumed).toHaveLength(1);
+    expect(read.assumed[0]?.reason).toContain('filter');
+    expect(read.assumed[0]?.reason).toContain('nested');
+  });
+
   it('does not attribute a component the callback does not render', () => {
     const raw = [
       "const routes = [{ path: '/a', component: A, element: <B /> }];",

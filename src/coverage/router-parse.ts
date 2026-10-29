@@ -24,8 +24,10 @@
  *
  * A route config array rendered through `map` inside a router is read too, when the callback
  * returns one route element whose path is the item's `path`. Its objects are read like a data
- * router's, with nested `routes` or `children` lists. When the list reaches the map through code
- * the reader does not run, such as `reduce`, or a nested relative path was joined to its parent,
+ * router's. Nested `routes` or `children` lists are read only when the list passes through
+ * `reduce`, `flatMap`, or `flat`, because the callback renders only the items it is given. When the
+ * list reaches the map through code the reader does not run, such as `reduce`, when a nested
+ * relative path was joined to its parent, or when nested lists under a plain map were left out,
  * the read is an `assumed` entry with a line, so init can ask the operator to confirm it. The
  * router fallback reports the same entry as unreadable, because at check time nothing confirmed it.
  *
@@ -234,6 +236,9 @@ const NON_ROUTE_ELEMENTS = new Set(['Navigate', 'Redirect']);
 const CONFIG_LIST_METHODS = new Set(['reduce', 'flatMap', 'flat', 'filter']);
 // The keys under which a route config object nests more route objects.
 const CONFIG_NESTED_KEYS = ['routes', 'children'] as const;
+// The list methods that can bring nested route objects up to the top level. A map callback renders
+// one <Route> with no children per item, so nested objects reach it only through one of these.
+const FLATTENING_METHODS = new Set(['reduce', 'flatMap', 'flat']);
 // What React Router reads from a data route object to know what it renders, and how it reads each.
 const DATA_ROUTE_RENDER_KEYS: ReadonlyMap<string, RenderKind> = new Map<string, RenderKind>([
   ['element', 'element'],
@@ -747,6 +752,10 @@ class RouterReader {
       renderKeys: new Map(attribute && shape.renders !== null ? [[shape.renders.field, shape.renders.as]] : []),
       sink: this.jsxSites,
       joinedNested: false,
+      // The callback renders only the items it is given. Nested objects are read only when the list
+      // passes through a method that can flatten them; otherwise they are left out and named.
+      readNested: through.some((method) => FLATTENING_METHODS.has(method)),
+      skippedNested: false,
     };
     this.readDataRoutes(list, parent, call, base, mode);
     const reasons: string[] = [];
@@ -757,6 +766,11 @@ class RouterReader {
     if (mode.joinedNested) {
       reasons.push("usabl joined each nested relative path to its parent's path.");
     }
+    if (mode.skippedNested) {
+      reasons.push(
+        'Some route objects in this list nest more route objects under routes or children, and this map renders only the top-level objects, so usabl did not read the nested ones.',
+      );
+    }
     if (shape.elementName !== 'Route') {
       reasons.push(`Each route is rendered through <${shape.elementName}>, not <Route>.`);
     }
@@ -764,11 +778,16 @@ class RouterReader {
       const start = typeof call.start === 'number' ? call.start : 0;
       const end = typeof call.end === 'number' ? call.end : start;
       const basis = reasons.join(' ');
-      const checkReason = `${basis} usabl read every route object in the list as a route, and cannot confirm that the app renders each one at that path.`;
+      const checkReason = mode.skippedNested
+        ? `${basis} usabl read each top-level route object as a route, and cannot confirm that the app renders each one at that path or that it serves none of the nested ones.`
+        : `${basis} usabl read every route object in the list as a route, and cannot confirm that the app renders each one at that path.`;
+      const initReason = mode.skippedNested
+        ? `${basis} usabl read each top-level route object as a route. Check that the app renders each one at the path in the draft, and add by hand any nested route the app serves.`
+        : `${basis} usabl read every route object in the list as a route. Check that the app renders each one at the path in the draft.`;
       const text = this.raw.slice(start, end).replace(/\s+/g, ' ').trim();
       this.assumed.push({
         line: lineOf(call),
-        reason: `${basis} usabl read every route object in the list as a route. Check that the app renders each one at the path in the draft.`,
+        reason: initReason,
         checkReason,
         id: createHash('sha256').update(`${checkReason}\u0000${text}`).digest('hex').slice(0, 12),
         offset: start,
@@ -1014,7 +1033,12 @@ class RouterReader {
       }
       if (mode.nestedKeys.includes(keyName)) {
         const value = child(property, 'value');
-        if (value !== null) childLists.push(value);
+        if (value !== null && mode.readNested) {
+          childLists.push(value);
+        } else if (value !== null && !(value.type === 'ArrayExpression' && children(value, 'elements').length === 0)) {
+          // A nested list the map never renders is left out and named, not read as routes.
+          mode.skippedNested = true;
+        }
         nestedAt.set(keyName, i);
       }
       if (mode.renderKeys.has(keyName)) {
@@ -1069,6 +1093,8 @@ class RouterReader {
     renderKeys: DATA_ROUTE_RENDER_KEYS,
     sink: this.dataSites,
     joinedNested: false,
+    readNested: true,
+    skippedNested: false,
   };
 }
 
@@ -1083,6 +1109,10 @@ interface ObjectRouteMode {
   sink: ParsedRouteSite[];
   // Set when a nested relative path was joined to its parent's path.
   joinedNested: boolean;
+  // Whether nested lists are read as routes. When they are not, `skippedNested` is set if one was
+  // left out, so the read is named as an assumption.
+  readNested: boolean;
+  skippedNested: boolean;
 }
 
 /**
