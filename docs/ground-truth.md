@@ -1032,8 +1032,10 @@ file 0600, written to a temporary name and renamed. It saves nothing, and says s
 quits before usabl can read the session or the browser holds no cookies and no site storage. It
 prints only the path and how many cookies and sites the file holds. A run uses the saved file only
 when git ignores it: a file git tracks or would commit stops the run with no verdict (exit 4) and
-the fix, because in a CI checkout it can only be there if someone committed it. A saved file other
-users can read is used, with a warning on stderr that names `chmod 600`.
+the fix. The saved file is never loaded when a trusted ref is set or in CI (the `CI` variable),
+because there the code under review can write it and ignore it; only `USABL_STORAGE_STATE` signs
+in, and the run says once on stderr that it skipped the file. A saved file other users can read
+is used, with a warning on stderr that names `chmod 600`.
 
 **Before the browser opens.** When the session file, named by the variable or saved by `usabl session`, is one in which every cookie carries
 an expiry, every one of those is already past, no origin holds local storage or IndexedDB, and

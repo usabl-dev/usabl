@@ -50,12 +50,13 @@ async function workspace(state: string | null, mode = 0o600): Promise<string> {
 function resolveIn(
   cwd: string,
   ignore: GitIgnoreState,
-  extra: { env?: Record<string, string>; warnings?: string[] } = {},
+  extra: { env?: Record<string, string>; warnings?: string[]; trustedRef?: string } = {},
 ): Promise<string | null> {
   return resolveStorageStatePath({
     env: extra.env ?? {},
     now: NOW_MS,
     cwd,
+    ...(extra.trustedRef === undefined ? {} : { trustedRef: extra.trustedRef }),
     gitIgnoreState: async () => ignore,
     warn: (line) => extra.warnings?.push(line),
   });
@@ -120,6 +121,62 @@ describe('the saved session file', () => {
     await expect(resolveIn(cwd, 'ignored', { warnings })).resolves.toBe(join(cwd, SESSION_STATE_PATH));
     expect(warnings.join('\n')).toContain(`chmod 600 ${SESSION_STATE_PATH}`);
     expect(warnings.join('\n')).not.toContain('SECRETPOISON');
+  });
+});
+
+describe('the saved session file in a gated run', () => {
+  // In a pull request run, the code under review starts the app before the trusted judge scans it,
+  // so a file in the checkout can have been written by that code. Only the variable, which the
+  // trusted workflow sets from a secret, may sign the judge in.
+  it('is never loaded when a trusted ref is set, and the run says so once', async () => {
+    const cwd = await workspace(LIVE_STATE);
+    const warnings: string[] = [];
+    await expect(resolveIn(cwd, 'ignored', { warnings, trustedRef: 'main' })).resolves.toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('trusted ref');
+    expect(warnings[0]).toContain(STORAGE_STATE_ENV_VAR);
+    expect(warnings[0]).not.toContain('SECRETPOISON');
+  });
+
+  it('is never loaded in CI, and the run says so once', async () => {
+    const cwd = await workspace(LIVE_STATE);
+    const warnings: string[] = [];
+    await expect(resolveIn(cwd, 'ignored', { warnings, env: { CI: 'true' } })).resolves.toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('CI');
+    expect(warnings[0]).toContain(STORAGE_STATE_ENV_VAR);
+    expect(warnings[0]).not.toContain('SECRETPOISON');
+  });
+
+  it('is not judged at all in a gated run, so a tracked file neither signs in nor stops the run', async () => {
+    const cwd = await workspace(LIVE_STATE);
+    await expect(resolveIn(cwd, 'tracked', { env: { CI: '1' } })).resolves.toBeNull();
+    await expect(resolveIn(cwd, 'not-ignored', { trustedRef: 'origin/main' })).resolves.toBeNull();
+  });
+
+  it('says nothing when there is no saved file to skip', async () => {
+    const cwd = await workspace(null);
+    const warnings: string[] = [];
+    await expect(resolveIn(cwd, 'ignored', { warnings, trustedRef: 'main', env: { CI: 'true' } })).resolves.toBeNull();
+    expect(warnings).toEqual([]);
+  });
+
+  it('still uses USABL_STORAGE_STATE, which the trusted workflow sets', async () => {
+    const cwd = await workspace(LIVE_STATE);
+    const other = join(cwd, 'other-state.json');
+    await writeFile(other, LIVE_STATE);
+    const warnings: string[] = [];
+    await expect(
+      resolveIn(cwd, 'ignored', { warnings, trustedRef: 'main', env: { CI: 'true', [STORAGE_STATE_ENV_VAR]: other } }),
+    ).resolves.toBe(other);
+    expect(warnings).toEqual([]);
+  });
+
+  it('is loaded as before when CI is unset, empty, or false and no trusted ref is set', async () => {
+    const cwd = await workspace(LIVE_STATE);
+    for (const env of [{}, { CI: '' }, { CI: 'false' }, { CI: '0' }]) {
+      await expect(resolveIn(cwd, 'ignored', { env })).resolves.toBe(join(cwd, SESSION_STATE_PATH));
+    }
   });
 });
 

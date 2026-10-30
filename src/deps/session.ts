@@ -1,7 +1,7 @@
 /**
  * The authenticated session usabl scans with: a Playwright storage state file named by the
  * `USABL_STORAGE_STATE` environment variable, or, when that is unset, the file `usabl session`
- * saved at SESSION_STATE_PATH.
+ * saved at SESSION_STATE_PATH. The saved file is never loaded when a trusted ref is set or in CI.
  *
  * Why an environment variable and not a flag or a config field. Two of the three operator
  * surfaces have no argv at all (the Claude Stop hook and the Vite overlay both build Deps
@@ -121,6 +121,30 @@ export function readStorageStateEnv(env: EnvReader): string | null {
   }
   const trimmed = raw.trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+/**
+ * Why a run must not load the saved session file, or null when it may.
+ *
+ * A run with a trusted ref is the pull request gate, and a run in CI may be one. There the checkout
+ * holds the code under review, and the gate starts that code (npm run dev) before the judge scans.
+ * That code can write the saved file, and the same pull request can make git ignore it, so the
+ * ignore rule proves nothing. Loading it would let the pull request choose the signed-in state the
+ * judge scans. In those runs only USABL_STORAGE_STATE, which the trusted workflow sets from a
+ * secret, can sign the judge in.
+ *
+ * CI is the standard CI variable that hosted runners set. Any value other than empty, false, or 0
+ * counts, so an unusual spelling errs toward not loading the file.
+ */
+export function savedSessionBlock(options: { env: EnvReader; trustedRef?: string | undefined }): 'trusted-ref' | 'ci' | null {
+  if (options.trustedRef !== undefined) {
+    return 'trusted-ref';
+  }
+  const ci = options.env['CI']?.trim().toLowerCase();
+  if (ci !== undefined && ci !== '' && ci !== 'false' && ci !== '0') {
+    return 'ci';
+  }
+  return null;
 }
 
 /**
@@ -277,13 +301,24 @@ export async function resolveStorageStatePath(options: {
   gitIgnoreState?: (cwd: string, path: string) => Promise<GitIgnoreState>;
   // Where a warning goes, such as a session file other users can read.
   warn?: (line: string) => void;
+  // The ref the run is judged against. When it is set, or the run is in CI, the saved file is
+  // never loaded. See savedSessionBlock.
+  trustedRef?: string | undefined;
 }): Promise<string | null> {
   if (options.explicit !== undefined) {
     return options.explicit;
   }
   const path = readStorageStateEnv(options.env);
   if (path === null) {
-    return options.cwd === undefined ? null : resolveSavedSession(options as typeof options & { cwd: string });
+    if (options.cwd === undefined) {
+      return null;
+    }
+    const block = savedSessionBlock(options);
+    if (block !== null) {
+      await reportSkippedSavedSession(options.cwd, block, options.warn);
+      return null;
+    }
+    return resolveSavedSession(options as typeof options & { cwd: string });
   }
   let raw: string;
   try {
@@ -311,6 +346,27 @@ export async function resolveStorageStatePath(options: {
     );
   }
   return path;
+}
+
+/**
+ * Say once that a saved session file exists and was not used, so an operator knows why the run is
+ * signed out. Only the file's existence is checked. Nothing in it is read, and only the fixed path
+ * usabl chose is named.
+ */
+async function reportSkippedSavedSession(
+  cwd: string,
+  block: 'trusted-ref' | 'ci',
+  warn: ((line: string) => void) | undefined,
+): Promise<void> {
+  try {
+    await stat(join(cwd, SESSION_STATE_PATH));
+  } catch {
+    return;
+  }
+  const why = block === 'trusted-ref' ? 'this run has a trusted ref' : 'this run is in CI';
+  warn?.(
+    `usabl: not using the saved session at ${SESSION_STATE_PATH}, because ${why}. Here only ${STORAGE_STATE_ENV_VAR} can sign in, so this run scans signed out.`,
+  );
 }
 
 /**

@@ -563,7 +563,9 @@ it, or if usabl prints any of it in output, an error, or a Result.
   says git does not track it. This is checked before the browser opens and again right before the
   write. Otherwise it refuses and names the `.gitignore` line (`.usabl/`) or `git rm --cached`.
 - Use: a run loads the saved file only under the same rule. A tracked or unignored file stops the
-  run with no verdict, so a session committed into a pull request is never used by a CI checkout.
+  run with no verdict. The saved file is never loaded when a trusted ref is set or in CI, because
+  there the code under review can write it; only `USABL_STORAGE_STATE` signs in, and the run says
+  once on stderr that it skipped the file.
 - Permissions: the folder is 0700 and the file 0600, written to a temporary name and renamed so a
   looser mode left by an older file is replaced. A run that finds looser bits warns with
   `chmod 600`; doctor reports the file as drifted.

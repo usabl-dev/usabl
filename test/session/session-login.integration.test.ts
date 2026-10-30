@@ -136,6 +136,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('usabl session on an app 
   });
 
   beforeEach(() => {
+    // These cases are local runs. A CI runner sets CI, and a run in CI never loads the saved file.
+    vi.stubEnv('CI', undefined);
     originalCwd = process.cwd();
     process.chdir(repo);
     stdout = [];
@@ -152,6 +154,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('usabl session on an app 
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     process.chdir(originalCwd);
   });
 
@@ -239,6 +242,124 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('usabl session on an app 
       expect(stdout.join('') + stderr.join('')).not.toContain('SECRETPOISON');
     } finally {
       await writeFile(join(repo, '.gitignore'), '.usabl/\n');
+    }
+  });
+});
+
+// The pull request gate runs the code under review (npm run dev) before the trusted judge scans it,
+// so that code can write the saved session file and its own .gitignore can ignore it. The judge
+// must scan signed out, not in a state the pull request chose.
+describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the CI gate and a saved session the pull request wrote', { timeout: 180_000 }, () => {
+  let app: Server;
+  let repo: string;
+  let originalCwd: string;
+  let stdout: string[];
+  let stderr: string[];
+
+  beforeAll(async () => {
+    app = await startApp();
+    const base = `http://127.0.0.1:${(app.address() as AddressInfo).port}`;
+    repo = await mkdtemp(join(tmpdir(), 'usabl-session-ci-'));
+    await mkdir(join(repo, 'src'));
+    await writeFile(join(repo, 'src', 'App.tsx'), "import { Orders } from './Orders'\nexport const App = () => <Orders />\n");
+    await writeFile(join(repo, 'src', 'Orders.tsx'), 'export const Orders = () => <main />\n');
+    await writeFile(
+      join(repo, 'usabl.config.json'),
+      `${JSON.stringify(
+        {
+          appBaseUrl: base,
+          uiFileGlobs: ['src/**'],
+          discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
+          surfaces: [{ id: 'orders', url: `${base}/orders`, files: ['src/Orders.tsx'], reachedWhen: '#orders' }],
+          guardedPaths: [],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await git(repo, 'init', '--quiet', '--initial-branch=main');
+    await git(repo, 'config', 'user.name', 'usabl test');
+    await git(repo, 'config', 'user.email', 'test@usabl.invalid');
+    await git(repo, 'add', '.');
+    await git(repo, 'commit', '--quiet', '-m', 'base');
+    // The pull request ignores usabl's folder and changes the orders screen.
+    await git(repo, 'checkout', '--quiet', '-b', 'pr');
+    await writeFile(join(repo, '.gitignore'), '.usabl/\n');
+    await appendFile(join(repo, 'src', 'Orders.tsx'), '// changed\n');
+    await git(repo, 'add', '.');
+    await git(repo, 'commit', '--quiet', '-m', 'pr');
+  }, 60_000);
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => app.close(() => resolve()));
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('CI', 'true');
+    vi.stubEnv('GITHUB_EVENT_NAME', 'pull_request');
+    vi.stubEnv('USABL_STORAGE_STATE', undefined);
+    originalCwd = process.cwd();
+    process.chdir(repo);
+    stdout = [];
+    stderr = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      stdout.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      stderr.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    process.chdir(originalCwd);
+  });
+
+  async function gate(): Promise<Captured> {
+    stdout.length = 0;
+    stderr.length = 0;
+    const code = await main(['check', '--ci', '--trusted-ref', 'main', '--json']);
+    return { code, stdout: stdout.join(''), stderr: stderr.join('') };
+  }
+
+  interface Verdict {
+    verdict: string;
+    findings: Array<{ rule: string; screenId: string }>;
+    coverage: { gaps: Array<{ reason: string }> };
+  }
+
+  it('scans signed out whether or not the pull request wrote a saved session, and says why', async () => {
+    const without = await gate();
+    const signedOut = JSON.parse(without.stdout) as Verdict;
+    expect(without.code).toBe(3);
+    expect(signedOut.verdict).toBe('not_covered');
+    expect(signedOut.coverage.gaps.some((gap) => /sign-in page/.test(gap.reason))).toBe(true);
+    expect(without.stderr).not.toMatch(/saved session/);
+
+    await mkdir(join(repo, '.usabl', 'session'), { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(repo, SESSION_STATE_PATH),
+      JSON.stringify({
+        cookies: [{ name: 'sid', value: 'SECRETPOISON', domain: '127.0.0.1', path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Lax' }],
+        origins: [],
+      }),
+      { mode: 0o600 },
+    );
+    expect(await gitIgnoreState(repo, SESSION_STATE_PATH)).toBe('ignored');
+
+    const withFile = await gate();
+    const stillSignedOut = JSON.parse(withFile.stdout) as Verdict;
+    expect(withFile.code).toBe(3);
+    expect(stillSignedOut.verdict).toBe('not_covered');
+    expect(stillSignedOut.findings.some((finding) => finding.rule === 'button-name')).toBe(false);
+    expect(stillSignedOut.coverage.gaps.some((gap) => /sign-in page/.test(gap.reason))).toBe(true);
+    expect(withFile.stderr.match(/saved session/g)).toHaveLength(1);
+    for (const run of [without, withFile]) {
+      expect(run.stdout + run.stderr).not.toContain('SECRETPOISON');
     }
   });
 });
