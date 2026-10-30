@@ -1171,3 +1171,35 @@ describe('the session file usabl session saved', () => {
     }
   });
 });
+
+describe('doctor overlay on a webpack app', () => {
+  const seed = {
+    'package.json': JSON.stringify({ scripts: { 'start:dev': 'webpack serve --config webpack.dev.js', test: 'vitest run' } }),
+    'webpack.common.js': 'module.exports = () => ({});\n',
+    'webpack.dev.js': "module.exports = { mode: 'development' };\n",
+  };
+  const overlayOf = async (files: Record<string, string>): Promise<SurfaceReport | undefined> =>
+    (
+      await collectDoctorReport(doctorDeps({ fs: readOnlyFs(files), gh: GH_UNAVAILABLE, configPath: 'usabl.config.json' }))
+    ).find((report) => report.id === 'overlay');
+
+  it('reports a wired webpack dev config as wired', async () => {
+    const wired =
+      "const { UsablWebpackPlugin } = require('usabl/webpack');\nmodule.exports = { mode: 'development', plugins: [new UsablWebpackPlugin({ cwd: __dirname })] };\n";
+    expect((await overlayOf({ ...seed, 'webpack.dev.js': wired }))?.state).toBe('wired');
+  });
+
+  it('reports an unwired webpack dev config as drifted and names it', async () => {
+    const report = await overlayOf(seed);
+    expect(report?.state).toBe('drifted');
+    expect(report?.nextStep).toContain('webpack.dev.js');
+    expect(report?.nextStep).not.toContain('vite.config');
+  });
+
+  it('reports an app with both Vite and webpack as unknown, never wired', async () => {
+    const report = await overlayOf({ ...seed, 'vite.config.ts': "export default {}\n" });
+    expect(report?.state).toBe('unknown');
+    expect(report?.nextStep).toContain('vite.config.ts');
+    expect(report?.nextStep).toContain('webpack.dev.js');
+  });
+});

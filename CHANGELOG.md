@@ -486,6 +486,14 @@
 
 ### Added
 
+- The dev overlay now runs in webpack apps. Add `new UsablWebpackPlugin({ cwd: __dirname })`
+  from `usabl/webpack` to the development webpack config and run `webpack serve`. It shows
+  the same panel as the Vite plugin, behind the same Host and Origin checks, and findings
+  point to their exact source line. In any mode but `development` the plugin adds nothing,
+  so a production build carries no source attributes and no overlay loader. webpack is an
+  optional peer dependency and is never installed with usabl. rspack, Next.js, and other
+  bundlers are not supported.
+
 - `usabl docs --all` documents every in-scope surface, not only the ones the change
   touched. It plans the run from every UI file, every surface file, and every docs page
   source, so a clean tree no longer yields an empty page. It still exits 0, mints no
@@ -530,6 +538,13 @@
   screen ends in about 17.1 seconds with the default cap.
 
 ### Changed
+
+- `usabl install --overlay` now detects whether the app uses Vite or webpack, from config
+  files and `package.json` scripts. In a webpack app it prints the two lines to add to the
+  dev config and writes nothing. When it finds both bundlers or neither, it refuses with
+  exit 2 and names what it saw. Before, an app with no Vite config got a new
+  `vite.config.ts`, even a webpack app where nothing reads that file. A Vite app with no
+  config still gets the draft. `usabl doctor` reports the overlay for either bundler.
 
 - The user name and password check for configured URLs is now one shared function, used by
   `usabl.config.json` (`surfaces[].url`, `appBaseUrl`) and `usabl.docs.json`

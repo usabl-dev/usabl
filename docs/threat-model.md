@@ -474,7 +474,7 @@ still true of the supported package surface, as verified against the packed and 
 package: `Object.keys(await import('usabl'))` contains neither name, and every subpath form,
 `usabl/surfaces/stop-hook.js`, `usabl/dist/surfaces/stop-hook.js`, `usabl/stop-hook`, and
 `usabl/dist/index.js`, fails to resolve with `ERR_PACKAGE_PATH_NOT_EXPORTED`, because the
-`exports` map lists only the root, `./vite`, `./playwright`, `./docs`, and `./measure`. It did
+`exports` map lists only the root, `./vite`, `./webpack`, `./playwright`, `./docs`, and `./measure`. It did
 not cover the authors inside that process. A library caller can hand `run()` a check runner of
 its own, so a rule is whatever that runner wrote, and a pull request author chooses the name of
 any file they add under a guarded directory, so a guarded path is text that author wrote.
@@ -547,6 +547,31 @@ finding.
 
 **Status:** [x] Paths, announcements, table rows, the focus and style reads, and the zoom write
 run in isolated worlds. [ ] The readiness element count and axe's target selectors are open.
+
+---
+
+## Threat 11: Dev overlay endpoints read from another site
+
+**Attack:** The dev overlay answers on the app's dev server. Its result endpoint carries the
+workspace root, source paths, guarded paths, and findings. A page on another site reaches it with
+a cross-origin request or through DNS rebinding, and reads it. The same applies to the overlay
+client and, for webpack, to the refresh event stream.
+
+**Controls:** Both plugins, Vite and webpack, serve these paths from one shared host
+(`src/surfaces/overlay-host.ts`), so the rules cannot differ between bundlers. A request must
+carry exactly one Host header that names a local host or the configured bind host on the server's
+own port, and any Origin must be a browser's exact serialization matching that origin. Anything
+else gets 403. The Result is scrubbed before it is projected, and a failed run's reason stays in
+the dev server log. The webpack event stream carries only the event name, never a result, path,
+or page text. The webpack plugin does nothing outside development mode, so a production bundle
+has no overlay loader, no endpoints, and no source attributes.
+
+**Tests:** `test/surfaces/vite-plugin.test.ts` (Host, Origin, duplicate Host, IPv6, live port),
+`test/surfaces/webpack-plugin.test.ts` (foreign Host, foreign Origin, and other port refused on
+the result, client, and event paths; production and no-mode builds carry nothing), and
+`test/surfaces/webpack-overlay.integration.test.ts` (a real dev server).
+
+**Status:** [x] Shipped for Vite and webpack-dev-server 5.
 
 ---
 

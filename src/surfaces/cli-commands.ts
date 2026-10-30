@@ -117,7 +117,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     usage: 'usabl install <one target flag> [options]',
     summary: 'Set up one integration. Name exactly one target flag.',
     flags: [
-      { name: '--overlay', help: 'Target: the browser overlay in the Vite dev server.' },
+      { name: '--overlay', help: 'Target: the browser overlay in the Vite or webpack dev server.' },
       { name: '--claude', help: 'Target: the Claude Code Stop hook.' },
       { name: '--claude-skill', help: 'Target: the /usabl-check and /usabl-fix skills.' },
       { name: '--cursor', help: 'Target: the Cursor stop hook, command, and rule.' },

@@ -292,7 +292,8 @@ src/
   surfaces/
     cli.ts pr-comment.ts policy-enforce.ts scrub.ts receipt-store.ts
     stop-hook.ts stop-hook-runner.ts stop-hook-bin.ts
-    vite-plugin.ts overlay-client.ts playwright-helper.ts
+    overlay-host.ts vite-plugin.ts webpack-plugin.ts webpack-loader.ts overlay-client.ts
+    playwright-helper.ts
     self-check.ts docs.ts docs-html.ts
   run.ts cli.ts cli-bin.ts index.ts
 fixtures/
@@ -2154,6 +2155,39 @@ tags in the syntax tree and are never touched. A namespaced tag such as `<svg:re
 written. A file the parser cannot read is served unchanged, with one warning in the dev server log
 that names the file. Its elements carry no source line, and the application still runs.
 
+The webpack plugin (`usabl/webpack`, `UsablWebpackPlugin`) serves the same overlay to an app
+that `webpack serve` (webpack-dev-server 5) runs. Both plugins sit on one shared host
+(`src/surfaces/overlay-host.ts`), so the client, the result projection, the cached run, the
+Host and Origin checks, and the source transform are the same code. The webpack plugin acts only
+when webpack's mode is `development`. In `production`, in `none`, and with no mode at all (which
+webpack treats as production), it adds nothing: no loader, no entry, no dev server hook, so the
+built bundle carries no source attributes and no overlay loader. In development it adds a
+pre-loader for `.tsx` and `.jsx` files outside `node_modules` that applies the same transform,
+before ts-loader or babel-loader rewrite the JSX. It adds an entry to every bundle that loads
+the client as a module script, with the same `navigator.webdriver` and `?usabl=off` rules. It
+wraps `devServer.setupMiddlewares` so the overlay paths answer before the app's own middleware.
+`webpack serve` reads the dev server options from the compiler after plugins are applied, which
+is why one plugin entry is enough. A dev server started from code must be given
+`compiler.options.devServer` for the same reason. webpack-dev-server has no channel a plugin can
+send its own event on, so the plugin serves `/__usabl/events`, a server-sent event stream that
+carries the refresh event name and nothing else, under the same Host and Origin checks. A change
+webpack reports (`invalid`) drops the cached result. webpack watches only the module graph, so
+the plugin also adds `usabl.config.json`, `usabl.routes.json`, `.usabl-evidence.json`, and
+`.usabl-waivers.json` to each compilation's file dependencies. webpack is an optional peer
+dependency: usabl imports nothing from it, and `require('usabl/webpack')` from a CommonJS
+config needs Node.js 22.12 or later. rspack, Next.js, and other bundlers are not supported.
+
+`usabl install --overlay` first works out which bundler the app uses. It counts a Vite config
+(`vite.config.*`) or a `package.json` script that runs the `vite` command as Vite, and a webpack
+config (`webpack.config.*` or `webpack.*.*` at the root, or a config a script names with
+`--config`) or a script that runs `webpack` or `webpack-dev-server` as webpack. `vitest` and
+`vite-node` are not Vite. When it finds both or neither it refuses with exit 2 and names
+everything it saw, or everything it looked for. It never writes a `vite.config.ts` into an app
+that does not run Vite. A Vite app with no config gets the draft, which Vite then loads. A webpack
+app always has a config, and install never edits one: it names the dev config (the one a
+`webpack serve` script names, else a `webpack.dev.*` file, else `webpack.config.*`) and prints
+the two lines to add, in `require` or `import` form to match the file.
+
 ### 11.4 CI/PR comment (trusted-ref policy read)
 
 Reads policy from the protected branch (or the trusted ref), never the working tree.
@@ -2401,7 +2435,7 @@ optional. There is no "partial" mode and no per-surface strictness.
 Onboarding uses two distinct commands. `usabl init` scaffolds policy: it writes
 `usabl.config.json` and `usabl.routes.json` only (never the evidence floor or waivers)
 and refuses to overwrite without `--force`. `usabl install <target>` wires integrations,
-exactly one per run: `--overlay` (vite plugin), `--claude` (a Stop hook running `npx usabl
+exactly one per run: `--overlay` (the Vite or webpack plugin; see section 11.3), `--claude` (a Stop hook running `npx usabl
 stop-hook` in `.claude/settings.json`), `--ci` (the generated PR-gate workflow), or
 `--branch-rule` (a read-only check that the protected branch and the `usabl-required`
 required status check exist). `init` does not wire CI or overlays, and `install` does not
