@@ -76,6 +76,7 @@ describe('usabl help', () => {
         'help',
         'init',
         'install',
+        'session',
         'stop-hook',
       ].sort(),
     );

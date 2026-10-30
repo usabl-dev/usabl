@@ -10,7 +10,7 @@ import { operatorText } from '../intake/config-error.js';
 import type { RouteEntry, RouteManifest } from '../coverage/route-manifest.js';
 import { isRouterSource, readRouterSource, screenIdFromUrl } from '../coverage/router-parse.js';
 import { validateId } from '../intake/id-grammar.js';
-import { STORAGE_STATE_ENV_VAR } from '../deps/session.js';
+import { SESSION_STATE_PATH, STORAGE_STATE_ENV_VAR } from '../deps/session.js';
 import { APP_INIT_REFUSAL, unusableIdsError, type UnusableId } from './unusable-ids.js';
 import { loadAliasConfig, resolveAliasSpecifier, type AliasMapping } from '../coverage/alias-config.js';
 import { readViteServer } from './vite-server.js';
@@ -633,12 +633,17 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
   };
 
   const signInRoute = signInRoutePath(routes);
+  // A session `usabl session` saved is the same statement as the variable: scans run signed in.
+  // Its presence is all that is read here. The file holds live cookies and init never opens it.
+  const savedSession = (await fs.glob([SESSION_STATE_PATH])).includes(SESSION_STATE_PATH);
   const loginReason =
     options.sessionConfigured === true
       ? `${STORAGE_STATE_ENV_VAR} is set, so scans run signed in`
-      : signInRoute === null
-        ? null
-        : `the router has a sign-in route, ${operatorText(signInRoute)}`;
+      : savedSession
+        ? `usabl session saved a session at ${SESSION_STATE_PATH}, so scans run signed in`
+        : signInRoute === null
+          ? null
+          : `the router has a sign-in route, ${operatorText(signInRoute)}`;
   if (loginReason !== null) {
     notes.push(...readinessRecommendation(loginReason, surfaces));
   }

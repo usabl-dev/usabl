@@ -248,6 +248,47 @@ describe("buildDeps", () => {
     }
   });
 
+  it("never opens the saved session in a run with a trusted ref or in CI", async () => {
+    // A pull request run starts the app from the code under review before the trusted judge
+    // scans, so that code can write the saved session file and ignore it in its own .gitignore.
+    // The seam every surface funnels through has to pass the trusted ref on and read CI itself.
+    const repo = await mkdtemp(join(tmpdir(), "usabl-builddeps-saved-"));
+    try {
+      await execFileAsync("git", ["init", "--quiet"], { cwd: repo });
+      await execFileAsync("git", ["config", "user.name", "usabl test"], { cwd: repo });
+      await execFileAsync("git", ["config", "user.email", "test@usabl.invalid"], { cwd: repo });
+      await writeFile(join(repo, ".gitignore"), ".usabl/\n", "utf8");
+      await execFileAsync("git", ["add", "."], { cwd: repo });
+      await execFileAsync("git", ["commit", "--quiet", "-m", "seed"], { cwd: repo });
+      await mkdir(join(repo, ".usabl", "session"), { recursive: true, mode: 0o700 });
+      await writeFile(
+        join(repo, ".usabl", "session", "storage-state.json"),
+        JSON.stringify({
+          cookies: [{ name: "sid", value: "SECRETPOISON", domain: "127.0.0.1", path: "/", expires: -1 }],
+          origins: [],
+        }),
+        { encoding: "utf8", mode: 0o600 },
+      );
+      const opened: Array<string | undefined> = [];
+      const warnings: string[] = [];
+      const browserFor = (options: { storageStatePath?: string }): BrowserDriver => {
+        opened.push(options.storageStatePath);
+        return { open: async () => makeFakePage({}), close: async () => {} };
+      };
+      const build = (extra: { env: Record<string, string>; trustedRef?: string }) =>
+        buildDeps(testConfig(), { cwd: repo, browserFor, warn: (line) => warnings.push(line), ...extra });
+
+      await build({ env: {} });
+      await build({ env: {}, trustedRef: "HEAD" });
+      await build({ env: { CI: "true" } });
+      expect(opened).toEqual([join(repo, ".usabl", "session", "storage-state.json"), undefined, undefined]);
+      expect(warnings).toHaveLength(2);
+      expect(warnings.join("\n")).not.toContain("SECRETPOISON");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it("accepts storageStatePath and keeps browser launch lazy", async () => {
     const launchSpy = vi.spyOn(chromium, "launch");
     const storageStatePath = "/tmp/fleet-insights-session.json";

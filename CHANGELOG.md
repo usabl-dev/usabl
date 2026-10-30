@@ -4,6 +4,17 @@
 
 ### Added
 
+- `usabl session` signs you in once for screens behind a login. It opens a browser at the
+  app; you sign in and press Enter, or close the tab. It saves the Playwright storage state
+  to `.usabl/session/storage-state.json`, readable only by you, and only where git ignores
+  it; otherwise it refuses and says what to add to `.gitignore`. It never prints anything
+  in the file. `usabl check`, `usabl baseline`, the dev overlay, and the Stop hook then
+  sign in with it while it exists, unless `USABL_STORAGE_STATE` names another file. A run
+  stops, with the fix, on a saved session git would commit or one that has expired.
+  `usabl doctor` flags a session file git would commit, one other users can read, and an
+  expired one, and names each fix. `usabl init` recommends a `reachedWhen` signal for every
+  screen when a session is saved.
+
 - `usabl init --app <dir>` drafts the config for one app folder in a monorepo, such as
   `usabl init --app packages/web`. Every path it writes stays relative to the repository
   root, so CODEOWNERS and the trusted-ref guard still match the policy files, and a change

@@ -1071,6 +1071,107 @@ describe('formatDoctorReport neutralization', () => {
   });
 });
 
+describe('the session file usabl session saved', () => {
+  const SAVED = '.usabl/session/storage-state.json';
+  const LIVE = JSON.stringify({
+    cookies: [{ name: 'sid', value: 'SECRETPOISON', domain: '127.0.0.1', path: '/', expires: -1 }],
+    origins: [],
+  });
+  const nowMs = Date.UTC(2026, 9, 29);
+  const EXPIRED = JSON.stringify({
+    cookies: [{ name: 'sid', value: 'SECRETPOISON', domain: '127.0.0.1', path: '/', expires: nowMs / 1000 - 60 }],
+    origins: [],
+  });
+
+  async function sessionReport(options: {
+    files: Record<string, string>;
+    env?: Record<string, string | undefined>;
+    ignore?: 'ignored' | 'tracked' | 'not-ignored' | 'outside' | 'unknown';
+    mode?: number;
+  }): Promise<SurfaceReport> {
+    const reports = await collectDoctorReport(
+      doctorDeps({
+        fs: readOnlyFs(options.files),
+        gh: GH_UNAVAILABLE,
+        configPath: 'usabl.config.json',
+        env: options.env ?? NO_SESSION,
+        now: () => nowMs,
+        sessionFile: {
+          ignoreState: async () => options.ignore ?? 'ignored',
+          mode: async () => options.mode ?? 0o600,
+        },
+      }),
+    );
+    return byId(reports, 'session');
+  }
+
+  it('reports a saved, ignored, private, live session as wired', async () => {
+    const report = await sessionReport({ files: { [SAVED]: LIVE } });
+    expect(report.state).toBe('wired');
+    expect(report.nextStep).toContain(SAVED);
+  });
+
+  it('says to run usabl session when there is no session at all', async () => {
+    const report = await sessionReport({ files: {} });
+    expect(report.state).toBe('missing');
+    expect(report.nextStep).toContain('usabl session');
+  });
+
+  it('flags a session file git would commit, and names the .gitignore line', async () => {
+    const report = await sessionReport({ files: { [SAVED]: LIVE }, ignore: 'not-ignored' });
+    expect(report.state).toBe('drifted');
+    expect(report.nextStep).toContain('.usabl/');
+    expect(report.nextStep).toContain('.gitignore');
+  });
+
+  it('flags a session file git already tracks, and names the command that untracks it', async () => {
+    const report = await sessionReport({ files: { [SAVED]: LIVE }, ignore: 'tracked' });
+    expect(report.state).toBe('drifted');
+    expect(report.nextStep).toContain(`git rm --cached ${SAVED}`);
+  });
+
+  it('flags a session file with mode 0644, and names the chmod that fixes it', async () => {
+    const report = await sessionReport({ files: { [SAVED]: LIVE }, mode: 0o100644 });
+    expect(report.state).toBe('drifted');
+    expect(report.nextStep).toContain(`chmod 600 ${SAVED}`);
+  });
+
+  it('names every problem at once, so one doctor run lists every fix', async () => {
+    const report = await sessionReport({ files: { [SAVED]: LIVE }, ignore: 'not-ignored', mode: 0o644 });
+    expect(report.state).toBe('drifted');
+    expect(report.nextStep).toContain('.gitignore');
+    expect(report.nextStep).toContain('chmod 600');
+  });
+
+  it('flags an expired saved session, and says to sign in again', async () => {
+    const report = await sessionReport({ files: { [SAVED]: EXPIRED } });
+    expect(report.state).toBe('drifted');
+    expect(report.nextStep).toContain('usabl session');
+  });
+
+  it('checks the mode of a file USABL_STORAGE_STATE names without printing its path', async () => {
+    const path = '/home/operator/private/state.json';
+    const report = await sessionReport({
+      files: { [path]: LIVE },
+      env: { USABL_STORAGE_STATE: path },
+      ignore: 'outside',
+      mode: 0o644,
+    });
+    expect(report.state).toBe('drifted');
+    expect(report.nextStep).toContain('chmod 600 "$USABL_STORAGE_STATE"');
+    expect(report.nextStep).not.toContain(path);
+  });
+
+  it('never prints what is in the session file, in any state', async () => {
+    for (const files of [{ [SAVED]: LIVE }, { [SAVED]: EXPIRED }, { [SAVED]: 'sid=SECRETPOISON' }]) {
+      for (const ignore of ['ignored', 'not-ignored', 'tracked', 'unknown'] as const) {
+        const report = await sessionReport({ files, ignore, mode: 0o644 });
+        expect(report.nextStep).not.toContain('SECRETPOISON');
+      }
+    }
+  });
+});
+
 describe('doctor overlay on a webpack app', () => {
   const seed = {
     'package.json': JSON.stringify({ scripts: { 'start:dev': 'webpack serve --config webpack.dev.js', test: 'vitest run' } }),
