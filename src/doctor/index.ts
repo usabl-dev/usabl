@@ -52,7 +52,7 @@ const SESSION_LABEL = `authenticated session (${STORAGE_STATE_ENV_VAR})`;
 const ROUTES_LABEL = 'route manifest (usabl.routes.json)';
 const EVIDENCE_FLOOR_LABEL = `evidence floor (${EVIDENCE_FLOOR_PATH})`;
 const WAIVERS_LABEL = `waiver ledger (${WAIVERS_PATH})`;
-const OVERLAY_LABEL = 'vite overlay plugin';
+const OVERLAY_LABEL = 'dev overlay plugin (Vite or webpack)';
 const STOP_HOOK_LABEL = 'claude stop hook (.claude/settings.json)';
 // One report per installed skill, so a missing or drifted usabl-fix skill is not hidden behind
 // the usabl-check skill's state. The id and label are derived from the descriptor so a new skill
@@ -401,26 +401,44 @@ async function collectWaivers(deps: DoctorDeps): Promise<SurfaceReport> {
 }
 
 async function collectOverlay(deps: DoctorDeps): Promise<SurfaceReport> {
-  // already-wired is the only wired mapping. A config present but not wired is drifted, and
-  // no config at all is missing. This drives off the same string-aware recognizer install
-  // uses, so a commented-out or quoted mention never reads as wired.
+  // already-wired is the only wired mapping. A config present but not wired is drifted, an app
+  // that shows both bundlers is unknown because install will not guess which one serves it, and
+  // no bundler at all is missing. This drives off the same string-aware recognizers install uses,
+  // so a commented-out or quoted mention never reads as wired.
   const plan = await planOverlay(deps.fs);
   if (plan.action === 'already-wired') {
     return { id: 'overlay', label: OVERLAY_LABEL, state: 'wired', nextStep: '' };
   }
   if (plan.action === 'refuse') {
+    const bundler = plan.bundler === 'webpack' ? 'webpack' : 'Vite';
     return {
       id: 'overlay',
       label: OVERLAY_LABEL,
       state: 'drifted',
-      nextStep: `${plan.path} is present but does not wire the overlay. Run "usabl install --overlay" for the exact two lines, or add them by hand.`,
+      nextStep: `${plan.path} is the ${bundler} config but does not wire the overlay. Run "usabl install --overlay" for the exact two lines, or add them by hand.`,
+    };
+  }
+  if (plan.action === 'undetected' && plan.reason === 'both') {
+    return {
+      id: 'overlay',
+      label: OVERLAY_LABEL,
+      state: 'unknown',
+      nextStep: `This app shows both Vite and webpack (${plan.seen.join(', ')}), so usabl cannot tell which one serves it in development. Add the overlay by hand to the dev config of the one you use.`,
+    };
+  }
+  if (plan.action === 'write') {
+    return {
+      id: 'overlay',
+      label: OVERLAY_LABEL,
+      state: 'missing',
+      nextStep: 'The app runs Vite and has no Vite config. Run "usabl install --overlay" to write a draft.',
     };
   }
   return {
     id: 'overlay',
     label: OVERLAY_LABEL,
     state: 'missing',
-    nextStep: 'No Vite config wires the overlay. Run "usabl install --overlay" to write a draft.',
+    nextStep: 'No Vite or webpack setup found, so no overlay is wired. The overlay supports Vite and webpack-dev-server.',
   };
 }
 

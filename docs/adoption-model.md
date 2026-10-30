@@ -142,9 +142,11 @@ that, and what to do.
 
 ### Phase 4: install the surfaces (human, one draft per run)
 
-11. (automatic, `usabl install --overlay`) Drafts the advisory Vite plugin so the
-    browser inspector appears during development. It refuses to clobber an existing
-    config and prints the exact lines to add.
+11. (automatic, `usabl install --overlay`) Wires the advisory overlay so the browser
+    inspector appears during development. It detects whether the app uses Vite or webpack.
+    For a Vite app with no config it drafts `vite.config.ts`. For an existing config, Vite
+    or webpack, it refuses to edit it and prints the exact lines to add. When it finds both
+    bundlers or neither, it refuses and names what it saw.
 12. (automatic, `usabl install --claude`) Merges a Stop hook running
     `npx usabl stop-hook` into `.claude/settings.json`, so an assistant's first stop on a
     blocking verdict is blocked unless a one-use bypass was issued. Its companion `usabl install --claude-skill`
@@ -284,7 +286,7 @@ pin the engine and turn on branch protection.
 | Entry point | Command | What it wires | Value |
 |---|---|---|---|
 | **CI gate** | `usabl install --ci` | Writes `.github/workflows/usabl-gate.yml`, a three-job draft (`gate-comment`, `usabl-policy`, and the required `usabl-required` aggregate). The engine ref is left as the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel for you to replace with a full commit SHA. | Sticky PR comment plus a fail-closed gate |
-| **Dev-server overlay** | `usabl install --overlay` | Wires the advisory Vite plugin into `vite.config.ts`. Writes a draft when no config exists, no-ops when already wired, and refuses to clobber a hand-tuned config. | Advisory findings badge while coding |
+| **Dev-server overlay** | `usabl install --overlay` | Wires the advisory Vite or webpack plugin. Detects the bundler first. Writes a Vite draft when a Vite app has no config, no-ops when already wired, refuses to edit an existing config and prints the lines instead, and refuses when it finds both bundlers or neither. | Advisory findings badge while coding |
 | **Assistant hook** | `usabl install --claude` | Wires a Stop hook running `npx usabl stop-hook` into `.claude/settings.json`. | Blocks the first stop on a blocking verdict unless a one-use bypass was issued |
 | **Assistant skill** | `usabl install --claude-skill` | Writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`, running the advisory `npx usabl check --self-check`. Writes a draft when absent, no-ops when it matches, and refuses to clobber a differing file. | The assistant can self-check mid-task without leaving the editor |
 | **Cursor hook** | `usabl install --cursor` | Writes `.cursor/hooks.json` with an adapter script, the `/usabl-check` command, and a UI-scoped rule, each as a whole-file draft that refuses to clobber a differing file. | Blocks the agent's stop through Cursor's `followup_message` protocol, up to a loop limit |
