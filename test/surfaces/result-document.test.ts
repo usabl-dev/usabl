@@ -109,7 +109,8 @@ function validResult(): Record<string, unknown> {
       },
     ],
     receipt: {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      historyHead: null,
       sourceTree: 'tree',
       baseRevision: null,
       policyHash: 'hash',

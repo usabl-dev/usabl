@@ -3,7 +3,8 @@ import type { Receipt, Result, ScreenScan } from '../../src/contracts/index.js';
 import { generateKeyboardPaths } from '../../src/docs/keyboard-paths.js';
 
 const receiptFixture: Receipt = {
-  schemaVersion: 1,
+  schemaVersion: 2,
+  historyHead: null,
   sourceTree: 'tree-123',
   baseRevision: null,
   policyHash: 'policy-1',

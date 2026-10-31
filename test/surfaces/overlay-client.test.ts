@@ -1059,7 +1059,8 @@ describe('overlay states', { timeout: 30_000 }, () => {
           summary: 'verified: 0 gating findings',
           findings: [],
           receipt: {
-            schemaVersion: 1,
+            schemaVersion: 2,
+            historyHead: null,
             sourceTree: 'abcdef1234567890',
             baseRevision: 'origin/main',
             policyHash: 'policy1234567890',

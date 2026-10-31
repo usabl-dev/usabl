@@ -54,7 +54,8 @@ const baseResult = (over: Partial<Result>): Result => ({
     }),
   ],
   receipt: {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    historyHead: null,
     sourceTree: 'tree-abc',
     baseRevision: 'origin/main',
     policyHash: 'policy-123',

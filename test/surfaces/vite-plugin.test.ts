@@ -180,7 +180,8 @@ describe('projectOverlay', () => {
         exitCode: 0,
         findings: [{ ...finding, status: 'fixed' }],
         receipt: {
-          schemaVersion: 1,
+          schemaVersion: 2,
+          historyHead: null,
           sourceTree: 'abcdef1234567890',
           baseRevision: 'base123',
           policyHash: 'policy123',
