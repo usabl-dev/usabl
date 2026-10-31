@@ -298,3 +298,18 @@ describe('markUnseenScreens', () => {
     expect(pass.screens[0]?.gaps.map((gap) => gap.state)).toEqual(['capability-denied', 'not-covered']);
   });
 });
+
+describe('markUnseenScreens and page images', () => {
+  it('drops the images of a screen it did not see, and keeps them on a screen it did', () => {
+    const images = [{ elementPath: '#logo', name: 'Company logo', role: 'img', decorative: false }];
+    const pass = markUnseenScreens([
+      scan({ screenId: 'blank', url: 'http://app/blank', stops: [stop('body')], images, imagesNotListed: 2 }),
+      scan({ screenId: 'seen', url: 'http://app/seen', stops: [stop('#save')], images }),
+    ]);
+
+    expect(pass.unseenScreenIds).toEqual(['blank']);
+    expect('images' in (pass.screens[0] ?? {})).toBe(false);
+    expect('imagesNotListed' in (pass.screens[0] ?? {})).toBe(false);
+    expect(pass.screens[1]?.images).toEqual(images);
+  });
+});

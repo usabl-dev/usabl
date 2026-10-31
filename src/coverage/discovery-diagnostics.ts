@@ -36,6 +36,13 @@ export function selectDiscoveryDetails(
   return [...shown, `(${remaining} more import resolution issue(s) not shown)`];
 }
 
+// The two ways an operator places a file on a screen. Printed after the reason, so a person who
+// meets an unplaced file, often a shared layout that every route imports in a way usabl cannot
+// follow, learns what to change without reading the docs.
+export const UNPLACED_FILE_FIX =
+  'To fix it, add it to the files of a surface in usabl.config.json, or add the route that renders it ' +
+  'to usabl.routes.json with an entryFile that imports it.';
+
 export function buildUnresolvedReason(
   file: string,
   unresolvable: UnresolvableImport[],
@@ -44,8 +51,10 @@ export function buildUnresolvedReason(
   const base =
     'changed UI file was not in any route closure, wide-blast glob, or manual surface mapping';
   const details = selectDiscoveryDetails(file, unresolvable, visitedFiles);
+  // The fix goes before the detail. Surfaces bound a printed reason, and the detail is the part
+  // that can run long, so it is the part a bound may cut.
   if (details.length === 0) {
-    return base;
+    return `${base}. ${UNPLACED_FILE_FIX}`;
   }
-  return `${base}. Discovery detail: ${details.join('; ')}`;
+  return `${base}. ${UNPLACED_FILE_FIX} Discovery detail: ${details.join('; ')}`;
 }

@@ -239,6 +239,50 @@ describe('computeCoverage', () => {
     expect(cov.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['src/router.tsx:5', 'skipped']]);
   });
 
+  describe('a route config list rendered through map, with no sidecar', () => {
+    // The router is src/App.tsx, and a change to it is a wide-blast change.
+    const appConfig: UsablConfig = { ...baseConfig, discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: ['src/App.tsx'] } };
+    const app = (list: string, mapped: string): string =>
+      [
+        "import { Routes, Route } from 'react-router-dom';",
+        "import { Home } from './Home';",
+        "import { Beta } from './Beta';",
+        '',
+        `const routes = ${list};`,
+        '',
+        'export function App() {',
+        '  return (',
+        `    <Routes>{${mapped}.map((r) => <Route key={r.path} path={r.path} element={r.element} />)}</Routes>`,
+        '  );',
+        '}',
+      ].join('\n');
+    const list = "[{ path: '/', element: <Home /> }, { path: '/beta', element: <Beta />, enabled: false }]";
+
+    it('records a list that passes through filter as a skipped gap with the file and line', async () => {
+      // usabl does not run the filter, so it cannot tell that /beta is left out. The routes it read
+      // are queued, and the run cannot read as covered.
+      const fs = fsOf({ 'src/App.tsx': app(list, 'routes.filter((r) => r.enabled !== false)') });
+      const cov = await computeCoverage(fs, appConfig, ['src/App.tsx']);
+      expect(cov.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['src/App.tsx:9', 'skipped']]);
+      expect(cov.gaps[0]?.reason).toContain('filter');
+      expect(cov.gaps[0]?.reason).toMatch(/usabl\.routes\.json/);
+    });
+
+    it('records a list flattened with reduce as a skipped gap', async () => {
+      const fs = fsOf({ 'src/App.tsx': app(list, 'routes.reduce((all, r) => [...all, r], [])') });
+      const cov = await computeCoverage(fs, appConfig, ['src/App.tsx']);
+      expect(cov.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['src/App.tsx:9', 'skipped']]);
+      expect(cov.gaps[0]?.reason).toContain('reduce');
+    });
+
+    it('queues a plain mapped list with no gap, because nothing was assumed', async () => {
+      const fs = fsOf({ 'src/App.tsx': app(list, 'routes') });
+      const cov = await computeCoverage(fs, appConfig, ['src/App.tsx']);
+      expect(cov.affected.map((screen) => screen.screenId)).toEqual(['root', 'beta']);
+      expect(cov.gaps).toEqual([]);
+    });
+  });
+
   it('reports both the skipped route and the unresolved file when the only fallback route is unusable', async () => {
     const fs = fsOf({
       'src/router.tsx': `export const App = () => <Routes><Route path="/acct\u202eadmin" element={<Admin />} /></Routes>;`,

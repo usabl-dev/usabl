@@ -18,7 +18,9 @@ import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { makeCoreProviders } from '../../src/providers/core-stack.js';
+import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
+import { attachRowScopeToDrafts } from '../../src/providers/row-scope.js';
 import { run } from '../../src/run.js';
 import { checkPage } from '../../src/surfaces/playwright-helper.js';
 
@@ -121,8 +123,15 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('row identity edge cases 
   }
 
   /** A baseline over `before`, then a run over `after` at the same address. */
-  async function swap(path: string, before: string, after: string): Promise<{ baselineFloor: string | null; baselineExit: number; result: Result }> {
-    const url = fixture.set(path, page(before));
+  async function swap(
+    path: string,
+    before: string,
+    after: string,
+    headScript = '',
+    setPhase: (phase: 'before' | 'after') => void = () => {},
+  ): Promise<{ baselineFloor: string | null; baselineExit: number; result: Result }> {
+    setPhase('before');
+    const url = fixture.set(path, page(before, headScript));
     const config = configFor(url);
     let floorJson: string | null = null;
     const outcome = await runBaseline(depsFor(config, null), config, {
@@ -130,7 +139,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('row identity edge cases 
         floorJson = contents;
       },
     });
-    fixture.set(path, page(after));
+    setPhase('after');
+    fixture.set(path, page(after, headScript));
     const result = await run(depsFor(config, floorJson), config);
     return { baselineFloor: floorJson, baselineExit: outcome.exitCode, result };
   }
@@ -376,6 +386,156 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('row identity edge cases 
       await browser.close();
     }
   }, 120_000);
+
+  // Findings the row read used to lose: an element inside a shadow root or a frame, whose axe
+  // selector is one part per boundary, a walk stop with no path, and a data table inside a layout
+  // table. Each must be keyed by its row, or found outside every row, never left a gap for good.
+  describe('across shadow roots, frames, walk stops, and layout tables', () => {
+    // A web component whose button lives in its shadow root. It has no name when the host carries
+    // the broken attribute. It renders on connect: a parser-created element has no attributes yet
+    // when its constructor runs.
+    const SHADOW_BUTTON =
+      "customElements.define('x-act', class extends HTMLElement { connectedCallback() {" +
+      " const root = this.shadowRoot ?? this.attachShadow({ mode: 'open' });" +
+      " root.innerHTML = this.hasAttribute('broken')" +
+      " ? '<button type=\"button\"><svg aria-hidden=\"true\" width=\"12\" height=\"12\"></svg></button>'" +
+      " : '<button type=\"button\" aria-label=\"Open actions\">Actions</button>'; } });";
+    const shadowRow = (key: string, broken: boolean): string =>
+      `<tr data-row-key="${key}"><td>job</td><td><x-act${broken ? ' broken' : ''}></x-act></td></tr>`;
+
+    it('keys a button inside a shadow root by the keyed row its host sits in', async () => {
+      // A named button outside the table, as most screens have. A selector built by joining the
+      // host part and the shadow part matches it too, so it names more than one element.
+      const toolbar = '<p><button type="button">Add job</button></p>';
+      const out = await swap(
+        '/shadow-row',
+        toolbar + table(shadowRow('r1', true) + shadowRow('r2', false), ' id="jobs"'),
+        toolbar + table(shadowRow('r1', false) + shadowRow('r2', true), ' id="jobs"'),
+        SHADOW_BUTTON,
+      );
+      expect(out.baselineExit).toBe(0);
+      expect(out.result.verdict).toBe('regression');
+      expect(out.result.coverage.gaps.filter((g) => g.reason.includes('rule button-name'))).toEqual([]);
+      expect(out.result.findings.some((f) => f.rule === 'button-name' && f.identityBasis === 'row' && f.status === 'new')).toBe(true);
+    }, 180_000);
+
+    it('keys a button inside a same-origin frame by the keyed row it sits in there', async () => {
+      const frameRows = (first: boolean, second: boolean): string =>
+        page(table(keyedRow('r1', first) + keyedRow('r2', second), ' id="frame-jobs"'));
+      const out = await swap(
+        '/frame-row',
+        '<iframe title="Jobs" src="/frame-row-inner"></iframe>',
+        '<iframe title="Jobs" src="/frame-row-inner"></iframe>',
+        '',
+        (phase) => {
+          fixture.set('/frame-row-inner', phase === 'before' ? frameRows(true, false) : frameRows(false, true));
+        },
+      );
+      expect(out.baselineExit).toBe(0);
+      expect(out.result.verdict).toBe('regression');
+      expect(out.result.coverage.gaps.filter((g) => g.reason.includes('rule button-name'))).toEqual([]);
+    }, 180_000);
+
+    it('keys a button in a frame by the keyed row the frame sits in', async () => {
+      fixture.set('/frame-cell-broken', page(BROKEN));
+      fixture.set('/frame-cell-named', page(NAMED));
+      const frameRow = (key: string, broken: boolean): string =>
+        `<tr data-row-key="${key}"><td>job</td><td><iframe title="Actions ${key}" src="/frame-cell-${broken ? 'broken' : 'named'}"></iframe></td></tr>`;
+      const out = await swap(
+        '/frame-in-row',
+        table(frameRow('r1', true) + frameRow('r2', false), ' id="jobs"'),
+        table(frameRow('r1', false) + frameRow('r2', true), ' id="jobs"'),
+      );
+      expect(out.baselineExit).toBe(0);
+      expect(out.result.verdict).toBe('regression');
+      expect(out.result.coverage.gaps.filter((g) => g.reason.includes('rule button-name'))).toEqual([]);
+    }, 180_000);
+
+    it('resolves a target one part per boundary, and reads a frame it cannot open as unreadable', async () => {
+      // The frame's own script lies about its row keys. The row read runs in usabl's world in the
+      // frame too, so the lie changes nothing it reads.
+      const spoof =
+        'const read = Element.prototype.getAttribute;' +
+        'Element.prototype.getAttribute = function (name) { return name === "data-row-key" ? "spoofed" : read.call(this, name); };';
+      fixture.set('/resolve-inner', page(table(keyedRow('f1', true), ' id="inner-jobs"'), spoof));
+      const crossOrigin = fixture.origin.replace('127.0.0.1', 'localhost');
+      const url = fixture.set(
+        '/resolve',
+        page(
+          table(shadowRow('r1', true) + shadowRow('r2', false), ' id="jobs"') +
+            '<p><x-act broken id="loose"></x-act></p>' +
+            '<iframe id="same" title="Same" src="/resolve-inner"></iframe>' +
+            `<iframe id="other" title="Other" src="${crossOrigin}/resolve-inner"></iframe>`,
+          SHADOW_BUTTON,
+        ),
+      );
+      const p = await driver.open(url);
+      try {
+        await p.gotoReady();
+        const inShadowRow = await p.rowContext([['tr[data-row-key="r1"] > td > x-act', 'button']]);
+        expect(inShadowRow).toMatchObject({ kind: 'keyed', key: 'r1', role: 'button' });
+        expect(await p.rowContext([['#loose', 'button']])).toEqual({ kind: 'none' });
+        expect(await p.rowContext([['#same'], ['button']])).toMatchObject({ kind: 'keyed', key: 'f1' });
+        expect(await p.rowContext([['#other'], ['button']])).toEqual({ kind: 'unreadable', reason: 'frame-unreadable' });
+        expect(await p.rowContext([['#loose', 'nothing']])).toEqual({ kind: 'unreadable', reason: 'element-missing' });
+        expect(await p.rowContext([['#loose'], ['button']])).toEqual({ kind: 'unreadable', reason: 'frame-unreadable' });
+      } finally {
+        await p.close();
+      }
+    }, 120_000);
+
+    it('keys a walk stop with no path by the row of the element the walk focused', async () => {
+      const url = fixture.set('/walk-no-path', page(table(keyedRow('r1', true) + keyedRow('r2', true), ' id="jobs"')));
+      const real = await driver.open(url);
+      // The walk reads the focused element's path from the page. Here the page gives none, the way
+      // a stop looks when its path cannot be computed. The focus itself is real.
+      const pathless: typeof real = { ...real, activePath: async () => '' };
+      try {
+        await pathless.gotoReady();
+        const screen = { id: 'rows', url };
+        const drafts = await makeKeyboardWalkProvider({ tabCap: 10 }).run({
+          page: pathless,
+          screen,
+          config: configFor(url),
+        });
+        const unnamed = (Array.isArray(drafts) ? drafts : drafts.drafts).filter((d) => d.rule === 'keyboard-walk-unnamed-interactive');
+        expect(unnamed).toHaveLength(2);
+        const rows = await attachRowScopeToDrafts(pathless, screen, unnamed);
+        expect(rows.gaps).toEqual([]);
+        const scopes = rows.drafts.map((d) => (d.evidence.extra?.['rowScope'] as { row?: string } | undefined)?.row ?? null);
+        expect(scopes.every((row) => typeof row === 'string')).toBe(true);
+        expect(new Set(scopes).size).toBe(2);
+      } finally {
+        await real.close();
+      }
+    }, 120_000);
+
+    for (const role of ['presentation', 'none']) {
+      it(`keys a data table inside a role="${role}" layout table by its own rows`, async () => {
+        const layout = (rows: string): string =>
+          `<table role="${role}"><tbody><tr><td>${table(rows, ' id="jobs"')}</td><td>side</td></tr></tbody></table>`;
+        const out = await swap(
+          `/layout-${role}`,
+          layout(keyedRow('r1', true) + keyedRow('r2', false)),
+          layout(keyedRow('r1', false) + keyedRow('r2', true)),
+        );
+        expect(out.baselineExit).toBe(0);
+        expect(out.result.verdict).toBe('regression');
+        expect(out.result.coverage.gaps.filter((g) => g.reason.includes('rule button-name'))).toEqual([]);
+      }, 180_000);
+    }
+
+    it('still keys the rows of a role="presentation" table whose rows carry keys', async () => {
+      const keyedLayout = (rows: string): string => `<table role="presentation" id="jobs"><tbody>${rows}</tbody></table>`;
+      const out = await swap(
+        '/keyed-layout',
+        keyedLayout(keyedRow('r1', true) + keyedRow('r2', false)),
+        keyedLayout(keyedRow('r1', false) + keyedRow('r2', true)),
+      );
+      expect(out.result.verdict).not.toBe('verified');
+      expect(out.result.verdict).toBe('regression');
+    }, 180_000);
+  });
 
   // A page whose own script lies about the DOM. usabl reads the row in a world of its own, which
   // shares the DOM with the page but not its prototypes, so these patches change nothing it reads.

@@ -396,6 +396,23 @@ describe('runBaseline', () => {
     expect(result.message).toContain('guarded path');
   });
 
+  it('names the fix when other guarded files are dirty', async () => {
+    const config = testConfig();
+    const deps = makeFakeDeps({
+      ...withPolicyFiles(
+        { 'usabl.config.json': '{"appBaseUrl":"http://evil.test"}' },
+        { 'usabl.config.json': '{}', 'fixtures/app/src/ClustersPage.tsx': 'export {};\n' },
+      ),
+      scans: { clusters: scanWith([draft()]) },
+    });
+
+    const result = await runBaseline(deps, config, new MemoryBaselineFs());
+
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain('  - usabl.config.json');
+    expect(result.message).toContain('commit or revert them, then run usabl baseline again');
+  });
+
   it('allows dirty .usabl-evidence.json alone and rewrites the floor', async () => {
     const config = testConfig();
     const deps = makeFakeDeps({
@@ -462,6 +479,20 @@ describe('runBaseline', () => {
     expect(result.wrote).toBe(false);
     expect(writer.writes).toHaveLength(0);
     expect(result.message).toContain('no UI files matched');
+  });
+
+  it('names the config field to fix when no UI files match the configured globs', async () => {
+    const config: UsablConfig = testConfig({ uiFileGlobs: ['src/**/*.tsx'] });
+    const deps = makeFakeDeps({
+      ...withPolicyFiles({ README: '# docs\n' }),
+      scans: { clusters: scanWith([draft()]) },
+    });
+
+    const result = await runBaseline(deps, config, new MemoryBaselineFs());
+
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain('uiFileGlobs in usabl.config.json');
+    expect(result.message).toContain('usabl baseline again');
   });
 
   it('refuses with exit 3 and writes nothing when the run reports a coverage gap', async () => {

@@ -34,12 +34,24 @@ export interface LiveAttributes {
   role: string | null;
 }
 
+/**
+ * The three attributes that decide whether one element hides itself and everything under it from
+ * assistive technology, as read from the DOM. inert and hidden are true when the attribute is
+ * present, whatever its value.
+ */
+export interface HiddenAttributes {
+  ariaHidden: string | null;
+  inert: boolean;
+  hidden: boolean;
+}
+
 /** The resolver's functions. See createLiveResolver. */
 export interface LiveResolver {
   firstRecognizedRole(role: string | null): string | null;
   ownLiveValue(node: LiveAttributes): LiveValue | null;
   nearestLiveSetter(chain: readonly LiveAttributes[]): number;
   effectiveLiveValue(chain: readonly LiveAttributes[]): LiveValue;
+  hiddenInChain(chain: readonly HiddenAttributes[]): boolean;
 }
 
 /**
@@ -138,7 +150,28 @@ export function createLiveResolver(): LiveResolver {
     return index < 0 ? 'off' : (ownLiveValue(chain[index] as LiveAttributes) ?? 'off');
   }
 
-  return { firstRecognizedRole, ownLiveValue, nearestLiveSetter, effectiveLiveValue };
+  // aria-hidden values that leave an element exposed. Chromium 151 hides an element for every other
+  // non-empty value, "true" and "banana" and " false" alike, and matches these two without regard to
+  // ASCII case. Reading any other value as hidden matches the browser.
+  const ARIA_HIDDEN_SHOWN: ReadonlySet<string> = new Set(['false', 'undefined']);
+
+  /**
+   * True when any element in a chain hides its subtree from assistive technology: an aria-hidden
+   * value the browser reads as true, an inert attribute, or a hidden attribute. Content inside such
+   * an element is silent even inside a live region. aria-hidden="false" does not bring back content
+   * an ancestor hides, so one hiding element anywhere in the chain is enough. A hidden attribute
+   * that page CSS overrides is still read as hidden. That can only make the capture hear less.
+   */
+  function hiddenInChain(chain: readonly HiddenAttributes[]): boolean {
+    return chain.some(
+      (node) =>
+        node.inert ||
+        node.hidden ||
+        (node.ariaHidden !== null && node.ariaHidden !== '' && !ARIA_HIDDEN_SHOWN.has(asciiLower(node.ariaHidden))),
+    );
+  }
+
+  return { firstRecognizedRole, ownLiveValue, nearestLiveSetter, effectiveLiveValue, hiddenInChain };
 }
 
 const resolver = createLiveResolver();

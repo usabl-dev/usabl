@@ -45,6 +45,19 @@ const KIND_COLUMNS: Record<DocArtifact['kind'], [string, string]> = {
   'alt-text-manifest': ['Selector', 'Expected text'],
 };
 
+// Columns for entries usabl drafted from the page because no content requirement covered it.
+const PAGE_DRAFTED_COLUMNS: [string, string] = ['Element', 'Text on the page'];
+
+// Shown on every card with page-drafted entries. A fixed string, never page-derived.
+const PAGE_DRAFTED_NOTE =
+  `<p class="status status--drafted">` +
+  `<span class="status__mark" aria-hidden="true">✎</span> ` +
+  `<span class="status__label">Drafted from the page.</span> ` +
+  `No content requirement covers this surface, so usabl listed the images the page showed and ` +
+  `the text each one has now. That text comes from the page, and usabl did not check it. ` +
+  `A person must review every entry before it is used as alt text or as a requirement.` +
+  `</p>`;
+
 // The three honesty states an artifact can be in. The gate is the only verdict
 // authority, so these describe how much proof an artifact carries, never a verdict
 // the page invents.
@@ -115,7 +128,9 @@ function renderStatus(artifact: DocArtifact, hasEvidence: boolean): string {
 /** One artifact rendered as a captioned, scoped table (or an empty note). */
 function renderArtifact(artifact: DocArtifact): string {
   const label = KIND_LABEL[artifact.kind];
-  const [firstCol, secondCol] = KIND_COLUMNS[artifact.kind];
+  const drafted = artifact.entries.some((entry) => entry.origin === 'page');
+  // Text drafted from the page is what the page says now, not an expectation anyone wrote.
+  const [firstCol, secondCol] = drafted ? PAGE_DRAFTED_COLUMNS : KIND_COLUMNS[artifact.kind];
   const hasEvidence = artifact.entries.some((entry) => Boolean(entry.evidenceRef));
 
   // The h3 gives this block structure; it is not a named landmark, so it does not
@@ -124,6 +139,7 @@ function renderArtifact(artifact: DocArtifact): string {
   parts.push('<section class="artifact">');
   parts.push(`<h3 class="artifact__title">${escapeHtml(label)}</h3>`);
   parts.push(renderStatus(artifact, hasEvidence));
+  if (drafted) parts.push(PAGE_DRAFTED_NOTE);
 
   if (artifact.entries.length === 0) {
     parts.push(`<p class="artifact__empty">No entries were generated for this surface.</p>`);
@@ -221,6 +237,7 @@ const STYLE = `
     .status__label { font-weight: 750; }
     .status--bound { border-left-color: var(--green); }
     .status--intake { border-left-color: var(--slate); }
+    .status--drafted { border-left-color: var(--slate); }
     .status--observation { border-left-style: dashed; border-left-color: var(--amber); border-left-width: 6px; }
     table { border-collapse: collapse; width: 100%; background: var(--white); border: 1px solid var(--line); }
     caption { text-align: left; font-weight: 700; padding: .5rem .2rem; }

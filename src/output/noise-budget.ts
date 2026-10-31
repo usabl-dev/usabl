@@ -5,6 +5,7 @@
  * only; it never mints a verdict or drops findings from the gated Result.
  */
 import type { Finding, NoiseBudgetConfig, UsablConfig } from '../contracts/index.js';
+import { isGradientContrastReview } from '../primitives/gradient-contrast.js';
 import { sortBy } from '../primitives/sortKey.js';
 import { configError } from '../intake/config-error.js';
 import { describeIdProblem } from '../intake/id-grammar.js';
@@ -71,8 +72,18 @@ const EVIDENCE_RANK: Record<Finding['evidenceClass'], number> = {
 // part of the key so a deterministic finding and an advisory finding of the same rule never merge.
 // status is part of it because a group prints one status: a new and a waived finding on one rule
 // would otherwise read as two new barriers.
+//
+// A contrast result axe could not measure because of a gradient background gets a group of its
+// own, so it never merges with, or stands for, a contrast result axe did measure.
 function groupKey(finding: Finding): string {
-  return JSON.stringify([finding.screenId, finding.layer, finding.rule, finding.evidenceClass, finding.status]);
+  return JSON.stringify([
+    finding.screenId,
+    finding.layer,
+    finding.rule,
+    finding.evidenceClass,
+    finding.status,
+    isGradientContrastReview(finding),
+  ]);
 }
 
 function groupRank(group: CollapsedFindingGroup): string {
@@ -83,6 +94,8 @@ function groupRank(group: CollapsedFindingGroup): string {
     group.screenId,
     group.layer,
     group.rule,
+    // Measured results before the gradient group, so two groups of one rule never tie.
+    isGradientContrastReview(group.representative) ? '1' : '0',
   ].join('\0');
 }
 

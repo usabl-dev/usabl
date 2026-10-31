@@ -8,6 +8,7 @@ import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
 import { expandBraces } from '../primitives/match-glob.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
+import { carriesUserinfo } from '../primitives/url-userinfo.js';
 
 function expectObject(value: unknown, label: string): object {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -188,39 +189,18 @@ function parseReachedWhen(raw: unknown, index: number): string | ReachedWhenSign
   };
 }
 
-// A configured URL is printed as written in every report. A gap ref, a screen url, and an affected
-// url all carry it, and the pull request comment publishes them, so a credential written into one
-// is published with it. The url is not rewritten to remove one, because the overlay matches a gap
+// A configured URL is carried as written in the Result. A gap ref, a screen url, and an affected
+// url all carry it, and the overlay and the stop hook print it, so a credential written into one
+// reaches their readers. The url is not rewritten to remove one, because the overlay matches a gap
 // to its screen by comparing the exact url, and a rewritten url would orphan the gap. It is
 // refused instead, and the message names the field and never the value.
 //
-// Userinfo is read three ways, and any one of them refuses the value. URL parsing finds it in the
-// spellings a browser accepts, such as a backslash for a slash or a tab inside the name. The two
-// shape checks below run on every value, with backslashes read as slashes, because a person or
-// another parser can read a credential where URL parsing finds none. The first finds an @ in the
-// authority after "//". The second finds an @ before the first slash, query, or fragment, which
-// covers a value with no "//" at all: URL parsing reads "admin:" in "admin:secret@host" as a
-// scheme and reports no password.
-const USERINFO_SHAPE = /^[^/?#]*\/\/[^/?#]*@/;
-const LEADING_USERINFO_SHAPE = /^[^/?#]*@/;
-
-function carriesUserinfo(raw: string): boolean {
-  try {
-    const url = new URL(raw);
-    if (url.username !== '' || url.password !== '') {
-      return true;
-    }
-  } catch {
-    // Not a URL the parser accepts. The shape checks below still apply.
-  }
-  const slashed = raw.replace(/\\/g, '/');
-  return USERINFO_SHAPE.test(slashed) || LEADING_USERINFO_SHAPE.test(slashed);
-}
-
+// Userinfo is found by the one shared reading in src/primitives/url-userinfo.ts, the same one the
+// docs manifest uses for docsBaseUrl.
 function parseConfiguredUrl(raw: unknown, label: string): string {
   const value = expectString(raw, label);
   if (carriesUserinfo(value)) {
-    throw configError`${label} has a user name or password in it. usabl prints this URL in every report, including pull request comments, so it refuses a URL with credentials. Remove them, and reach a protected screen with a storage state (USABL_STORAGE_STATE) instead.`;
+    throw configError`${label} has a user name or password in it. usabl prints this URL as written in the dev-server overlay and the stop hook, so it refuses a URL with credentials. Remove them, and reach a protected screen with a storage state (USABL_STORAGE_STATE) instead.`;
   }
   return value;
 }
@@ -229,21 +209,31 @@ function parseConfiguredUrl(raw: unknown, label: string): string {
  * Warnings about configured URLs that load but may publish something they should not.
  *
  * A query string or a fragment is accepted, because applications select screens by both, and the
- * url is kept as written so the overlay can match gaps to screens. It is still printed in every
- * report, so a token or a session value in it is published. Each warning names the field and
- * never the value. Text only: this never refuses a config and never decides a verdict.
+ * url is kept as written so the overlay can match gaps to screens. The CLI output, the JSON Result,
+ * and the pull request comment drop both, but the overlay and the stop hook print the url as
+ * written, so a token or a session value in it still reaches their readers. Each warning names
+ * the field and never the value. Text only: this never refuses a config and never decides a verdict.
  */
 export function configUrlWarnings(config: UsablConfig): string[] {
+  return configUrlWarningsByUrl(config).map(({ warning }) => warning);
+}
+
+/**
+ * The same warnings, each with the url it is about, so a caller that loads the config many times,
+ * such as a dev server on every save, can say each one once. The url is for that comparison only
+ * and must never be printed.
+ */
+export function configUrlWarningsByUrl(config: UsablConfig): Array<{ url: string; warning: string }> {
   const fields: Array<{ label: string; url: string }> = [
     { label: 'appBaseUrl', url: config.appBaseUrl },
     ...config.surfaces.map((surface, index) => ({ label: `surfaces[${index}].url`, url: surface.url })),
   ];
   return fields
     .filter(({ url }) => url.includes('?') || url.includes('#'))
-    .map(
-      ({ label }) =>
-        `usabl: warning: ${label} has a query string or a fragment. usabl prints this URL as written in every report, including pull request comments, so anything in the query or the fragment is published. If it carries a token or a session value, remove it and reach the screen with a storage state (USABL_STORAGE_STATE) instead.`,
-    );
+    .map(({ label, url }) => ({
+      url,
+      warning: `usabl: warning: ${label} has a query string or a fragment. usabl drops the query and the fragment from its CLI output, its JSON Result, and pull request comments, but the dev-server overlay and the stop hook print this URL as written, so anything in them still reaches those readers. If it carries a token or a session value, remove it and reach the screen with a storage state (USABL_STORAGE_STATE) instead.`,
+    }));
 }
 
 // A surface id and a discovered route screen id are one namespace. This declaration is how an

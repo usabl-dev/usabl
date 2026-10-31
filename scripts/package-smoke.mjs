@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -165,6 +166,37 @@ try {
   const measure = run(process.execPath, ['--input-type=module', '-e', measureProbe], { cwd: consumer });
   assert.equal(measure.status, 0, failure('usabl/measure import', measure));
   assert.match(measure.stdout, /measure-ok/);
+
+  // The webpack overlay plugin ships as usabl/webpack, and webpack stays the app's own dependency.
+  // This consumer has no webpack installed, so both probes also prove the plugin loads without it.
+  // The require form is the one a CommonJS webpack config, such as patternfly-react-seed's, uses.
+  assert.equal(
+    existsSync(join(consumer, 'node_modules', 'webpack')),
+    false,
+    'webpack was installed with usabl; it must stay an optional peer dependency',
+  );
+  const webpackImportProbe = [
+    "const m = await import('usabl/webpack');",
+    "if (typeof m.UsablWebpackPlugin !== 'function') throw new Error('UsablWebpackPlugin not exported');",
+    "process.stdout.write('webpack-import-ok');",
+  ].join('\n');
+  const webpackImport = run(process.execPath, ['--input-type=module', '-e', webpackImportProbe], { cwd: consumer });
+  assert.equal(webpackImport.status, 0, failure('usabl/webpack import', webpackImport));
+  assert.match(webpackImport.stdout, /webpack-import-ok/);
+  const webpackRequireProbe = [
+    "const { UsablWebpackPlugin } = require('usabl/webpack');",
+    "if (typeof UsablWebpackPlugin !== 'function') throw new Error('UsablWebpackPlugin not exported');",
+    "process.stdout.write('webpack-require-ok');",
+  ].join('\n');
+  const webpackRequire = run(process.execPath, ['--input-type=commonjs', '-e', webpackRequireProbe], { cwd: consumer });
+  assert.equal(webpackRequire.status, 0, failure('usabl/webpack require', webpackRequire));
+  assert.match(webpackRequire.stdout, /webpack-require-ok/);
+  // The plugin loads its loader from the file next to it, so the loader must be in the package.
+  assert.equal(
+    existsSync(join(consumer, 'node_modules', 'usabl', 'dist', 'webpack-loader.js')),
+    true,
+    'dist/webpack-loader.js is missing from the package',
+  );
 
   const installedPackage = join(consumer, 'node_modules', 'usabl');
   const installedStopHook = join(installedPackage, 'dist', 'stop-hook-runner.js');

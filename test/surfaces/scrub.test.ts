@@ -7,6 +7,7 @@ import {
   frameUntrusted,
   redactSecrets,
   removeFrameMarkers,
+  scrubPublishedResult,
   scrubResult,
   scrubString,
 } from '../../src/surfaces/scrub.js';
@@ -811,6 +812,105 @@ describe('egress redaction of credential shapes the patterns used to miss', () =
     for (const text of [`key ${githubToken}`, githubToken, `pat=${githubPat}`]) {
       expect(egress(text), text).not.toContain(POISON);
     }
+  });
+
+  it('redacts a quoted password or secret that has spaces in it, up to its closing quote', () => {
+    for (const text of [
+      `password: "two ${POISON} words"`,
+      `password = 'two ${POISON}'`,
+      `"password": "a b ${POISON}"`,
+      `secret: "x ${POISON} y"`,
+    ]) {
+      expect(egress(text), text).not.toContain(POISON);
+    }
+    expect(redactSecrets(`password: "two ${POISON} words" after`)).toBe('password: "[REDACTED]" after');
+  });
+
+  it('redacts a value on an indented next line, as in YAML', () => {
+    expect(egress(`password:\n  ${POISON}`)).not.toContain(POISON);
+  });
+
+  it('keeps a quoted label word, its colon, and the text after the closing quote', () => {
+    // A label such as "Password :" is page text, not a credential. The quote after its colon
+    // closes the label, so what follows it is not a value.
+    for (const text of [
+      'input[aria-label="Password :"]',
+      'input[aria-label="Password:"]',
+      'The field "Password :" has no name',
+      "The field 'Secret :' has no name",
+      '{"label":"Password :","hint":"Use 8 characters"}',
+      'Password :',
+    ]) {
+      expect(redactSecrets(text), text).toBe(text);
+      expect(scrubString(text), text).toBe(text);
+    }
+  });
+
+  it('redacts a quoted value after a key word that follows a quote', () => {
+    // The quote after the separator closes a label only when it repeats the quote before the
+    // key word on the same line and nothing that could be a value follows it. The token value is
+    // assembled at run time so no token-shaped string appears in the source.
+    const tokenValue = ['abcdefgh', '12345678'].join('');
+    for (const [text, secret] of [
+      [`<input data-cfg="password='hunter2'">`, 'hunter2'],
+      [`"PASSWORD: 'hunter2'"`, 'hunter2'],
+      [`"secret='s3cr3t value'"`, 's3cr3t'],
+      [`const cfg = 'token="${tokenValue}"'`, tokenValue],
+      [`Error: "password: "hunter2" rejected`, 'hunter2'],
+      [`x"password:\n"hunter2"`, 'hunter2'],
+    ] as const) {
+      expect(scrubString(text), text).not.toContain(secret);
+      expect(egress(text), text).not.toContain(secret);
+    }
+  });
+
+  it('keeps a label in an attribute or JSON whose closing quote follows its colon', () => {
+    for (const text of ['<input aria-label="Password :">', '{"label":"Password:"}', '[aria-label="Secret:"]']) {
+      expect(scrubString(text), text).toBe(text);
+    }
+  });
+
+  it('redacts userinfo that contains a backslash, as in a domain user name', () => {
+    const text = 'HTTP_PROXY=http://CORP\\jdoe:P4ss@proxy:8080';
+    expect(redactSecrets(text)).toBe('HTTP_PROXY=http://[REDACTED]@proxy:8080');
+    expect(scrubString(text)).toBe('HTTP_PROXY=http://[REDACTED]@proxy:8080');
+    const published = JSON.stringify(
+      scrubPublishedResult(
+        baseResult({
+          coverage: {
+            changedFiles: [],
+            affected: [],
+            unresolvedFiles: [],
+            gaps: [{ ref: 'home', state: 'not-covered', reason: `proxy refused: ${text}` }],
+            nothingToCheck: false,
+          },
+        }),
+      ),
+    );
+    expect(published).not.toContain('P4ss');
+    expect(published).not.toContain('jdoe');
+  });
+
+  it('reads a long run of backslashes once, not once from every backslash in it', () => {
+    // A blowup detector, not a measurement. A shape that rescans the run from every backslash
+    // takes about half a minute here; the linear one takes milliseconds.
+    const startedAt = Date.now();
+    scrubString('\\'.repeat(40000));
+    scrubString('\\\\a'.repeat(15000));
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  }, 60_000);
+
+  it('redacts userinfo after an escaped or backslash authority opener', () => {
+    for (const text of [
+      `https:\\\\user:${POISON}@host.local/x`,
+      `https:\\/\\/user:${POISON}@host.local\\/x`,
+      `{"url":"http:\\/\\/u:${POISON}@h"}`,
+      `https:\\\\\\\\user:${POISON}@host.local`,
+      `http:/\\${POISON}@proxy.local:3128`,
+    ]) {
+      expect(egress(text), text).not.toContain(POISON);
+    }
+    expect(redactSecrets(`https:\\/\\/user:${POISON}@host.local`)).toBe('https:\\/\\/[REDACTED]@host.local');
   });
 
   it('leaves an @ outside a URL authority, and a URL with no credentials, alone', () => {

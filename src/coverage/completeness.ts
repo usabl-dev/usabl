@@ -12,6 +12,30 @@
  */
 import type { AccessibilityExitCode, AccessibilityVerdict, Coverage } from '../contracts/index.js';
 
+/**
+ * The exit code each accessibility verdict carries. decideAccessibilityVerdict below reads it, so
+ * the gate writes these codes, and the Result reader checks a document against the same table, so
+ * a document that shows one outcome and exits with another is refused.
+ */
+export const ACCESSIBILITY_EXIT_CODES: Readonly<Record<AccessibilityVerdict, AccessibilityExitCode>> = {
+  verified: 0,
+  regression: 1,
+  not_covered: 3,
+};
+
+/**
+ * The exit code of an approval_required run. The gate decides that verdict and writes this code
+ * itself. The golden Results tie the two together: each one is read back through the Result
+ * reader, which checks the pair against this value.
+ */
+export const APPROVAL_REQUIRED_EXIT_CODE = 2;
+
+/**
+ * The exit codes of a run with no verdict: 0 when it had nothing to check, and 4 when it crashed
+ * and failed open. A run with no accessibility verdict carries the same two.
+ */
+export const NO_VERDICT_EXIT_CODES: readonly AccessibilityExitCode[] = [0, 4];
+
 /** The two parts of a Coverage that record what the run did not evaluate. */
 type NotEvaluated = Pick<Coverage, 'unresolvedFiles' | 'gaps'>;
 
@@ -58,11 +82,10 @@ export function decideAccessibilityVerdict(input: { hasBlockingFailure: boolean;
   verdict: AccessibilityVerdict;
   exitCode: AccessibilityExitCode;
 } {
-  if (input.hasBlockingFailure) {
-    return { verdict: 'regression', exitCode: 1 };
-  }
-  if (input.hasUnverified) {
-    return { verdict: 'not_covered', exitCode: 3 };
-  }
-  return { verdict: 'verified', exitCode: 0 };
+  const verdict: AccessibilityVerdict = input.hasBlockingFailure
+    ? 'regression'
+    : input.hasUnverified
+      ? 'not_covered'
+      : 'verified';
+  return { verdict, exitCode: ACCESSIBILITY_EXIT_CODES[verdict] };
 }

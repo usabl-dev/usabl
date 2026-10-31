@@ -91,6 +91,26 @@ function makeStop(index: number, text: string): TranscriptStop {
 }
 
 describe('projectPrComment', () => {
+  it('drops the query and the fragment of a screen url in a gap', () => {
+    const url = 'http://127.0.0.1:5173/clusters?preview=SECRETPOISON#state=SECRETPOISON';
+    const markdown = projectPrComment(
+      baseResult({
+        verdict: 'not_covered',
+        exitCode: 3,
+        coverage: {
+          changedFiles: ['src/app.tsx'],
+          affected: [{ screenId: 'clusters', url, provenance: 'manual' }],
+          unresolvedFiles: [],
+          gaps: [{ ref: url, state: 'not-covered', reason: `timeout loading ${url}` }],
+          nothingToCheck: false,
+        },
+      }),
+    );
+
+    expect(markdown).not.toContain('SECRETPOISON');
+    expect(markdown).toContain('http://127.0.0.1:5173/clusters');
+  });
+
   it('prints marker and receipt metadata when receipt exists', () => {
     const markdown = projectPrComment(baseResult({}));
 

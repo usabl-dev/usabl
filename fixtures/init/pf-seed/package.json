@@ -1,0 +1,7 @@
+{
+  "name": "pf-seed-shape",
+  "private": true,
+  "scripts": {
+    "start": "webpack serve --config webpack.dev.js"
+  }
+}

@@ -238,6 +238,58 @@ describe('makeCheckRunner', () => {
     expect(scan.gaps[0]?.reason).toContain('page did not stop changing');
   });
 
+  it('names surfaces[].url as the fix when nothing answers at a surface url', async () => {
+    const runner = makeCheckRunner({
+      browser: {
+        open: async (): Promise<Page> => {
+          throw new Error(`page.goto: net::ERR_CONNECTION_REFUSED at ${SCREEN.url}`);
+        },
+        close: async () => {},
+      },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.drafts).toEqual([]);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]).toMatchObject({ ref: SCREEN.url, state: 'not-covered' });
+    const reason = scan.gaps[0]?.reason ?? '';
+    expect(reason).toMatch(/^screen failed to open: nothing answered at /);
+    expect(reason).toContain('Start the app');
+    expect(reason).toContain('set surfaces[].url for screen clusters in usabl.config.json');
+    expect(reason).not.toContain('appBaseUrl');
+    expect(reason).toContain('ERR_CONNECTION_REFUSED');
+  });
+
+  it('names no setting when the runner cannot tell where the screen url came from', async () => {
+    const runner = makeCheckRunner({
+      browser: {
+        open: async (): Promise<Page> => {
+          throw new Error(`page.goto: net::ERR_CONNECTION_REFUSED at ${SCREEN.url}`);
+        },
+        close: async () => {},
+      },
+      providers: [],
+      config: testConfig({ surfaces: [] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    const reason = scan.gaps[0]?.reason ?? '';
+    expect(reason).toMatch(/^screen failed to open: nothing answered at /);
+    expect(reason).toContain('Start the app');
+    expect(reason).toContain('or fix the URL configured for this screen.');
+    expect(reason).not.toContain('appBaseUrl');
+    expect(reason).not.toContain('surfaces[]');
+    expect(reason).toContain('ERR_CONNECTION_REFUSED');
+  });
+
   it('returns a not-covered gap when browser.open throws and never rejects', async () => {
     const runner = makeCheckRunner({
       browser: {
@@ -666,5 +718,76 @@ describe('makeCheckRunner', () => {
 
     expect(scan.reachedSelectorPresent).toBe(false);
     expect(scan.gaps).toEqual([]);
+  });
+});
+
+describe('makeCheckRunner page images for the docs generator', () => {
+  function imagePage(page: Page): Page {
+    return Object.assign(page, {
+      queryAll: async (selector: string) =>
+        selector.includes('img') ? [{ selector: '#logo' }, { selector: '#chart' }] : [],
+      axAt: async (selector: string): Promise<AxNode | null> =>
+        selector === '#logo' ? { name: 'Company logo', role: 'img', states: {} } : null,
+    });
+  }
+
+  it('reads the images on the screen only when the caller asks for them', async () => {
+    const page = imagePage(await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] }));
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      collectPageImages: true,
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.images).toEqual([
+      { elementPath: '#logo', name: 'Company logo', role: 'img', decorative: false },
+      { elementPath: '#chart', name: null, role: null, decorative: false },
+    ]);
+    expect(scan.imagesNotListed).toBeUndefined();
+  });
+
+  it('leaves a gating scan exactly as it was when nobody asked for images', async () => {
+    const page = imagePage(await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] }));
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect('images' in scan).toBe(false);
+    expect('imagesNotListed' in scan).toBe(false);
+  });
+
+  it('adds no gap and keeps the scan when the image read fails', async () => {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    Object.assign(page, {
+      queryAll: async (selector: string) => {
+        if (selector.includes('img')) throw new Error('page went away');
+        return [];
+      },
+    });
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      collectPageImages: true,
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.stops.length).toBeGreaterThan(0);
+    expect('images' in scan).toBe(false);
   });
 });

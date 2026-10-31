@@ -160,7 +160,8 @@ describe('makeKeyboardWalkProvider', () => {
         'A focusable element exists but its accessible role and name cannot be determined.',
       why: 'Keyboard users reach this element but AT cannot announce what it is.',
       fix: 'Give the element a semantic HTML role or an explicit ARIA role, plus an accessible name.',
-      evidence: {},
+      // The row of the element the walk focused, read at the stop. The scripted page has no table.
+      evidence: { extra: { rowRead: { kind: 'none' } } },
       confidence: 'unverified',
     });
   });
@@ -208,6 +209,7 @@ describe('makeKeyboardWalkProvider', () => {
       fix: 'Add aria-label or visible text to the element.',
       evidence: {
         role: { value: 'link', source: 'ax-tree', fromTree: true },
+        extra: { rowRead: { kind: 'none' } },
       },
       confidence: 'fail',
     });

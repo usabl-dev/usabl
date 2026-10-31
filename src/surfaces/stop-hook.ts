@@ -3,7 +3,7 @@
  * This unit maps an existing Result into block or allow messages only.
  * It must never mint verdicts or bypass gate ownership of verdict authority.
  */
-import type { Result, UsablConfig, Verdict } from '../contracts/index.js';
+import type { Result, UsablConfig } from '../contracts/index.js';
 import { assembleBoundedMessage, boundField } from '../output/bounded-text.js';
 import { isBlockingBarrier } from '../output/disclosure.js';
 import { applyNoiseBudget, resolveNoiseBudgetDefault } from '../output/noise-budget.js';
@@ -32,8 +32,6 @@ export interface StopDecision {
   block: boolean;
   message: string;
 }
-
-const BLOCKING_VERDICTS: ReadonlySet<Verdict> = new Set(['regression', 'approval_required', 'not_covered']);
 
 /**
  * What the model should do next for each blocking verdict.
@@ -312,7 +310,10 @@ export function evaluateStopDecision(
     };
   }
 
-  if (safe.verdict === null && safe.coverage.nothingToCheck) {
+  // Idle only when run() said so with the boolean true, the same test describeVerdict and
+  // unrecognizedRunLine apply. Any other value under a null verdict is a run that proved nothing,
+  // and it blocks below.
+  if (safe.verdict === null && safe.coverage.nothingToCheck === true) {
     const verdict = describeVerdict(safe);
     return {
       block: false,
@@ -343,21 +344,9 @@ export function evaluateStopDecision(
     };
   }
 
-  const shouldBlock = safe.verdict !== null && BLOCKING_VERDICTS.has(safe.verdict);
-  if (!shouldBlock) {
-    // Every state that does not block was handled above. This is a guard, not a path: anything
-    // that reaches it is treated as a run that proved nothing, and the stop blocks.
-    return {
-      block: true,
-      message: assembleBoundedMessage({
-        scaffold: [`${formatVerdictWord(describeVerdict(safe))}: NOT verified. usabl did not reach a verdict for this change.`],
-        keep: 1,
-        pieces: [summaryPiece(safe)],
-        keepPieces: 1,
-        frame: frameUntrustedBlock,
-      }),
-    };
-  }
+  // Every state left here is a blocking verdict. Verified, a failed run, and an idle run returned
+  // above, and unrecognizedRunLine caught every other null verdict and every verdict usabl does
+  // not know, so regression, not_covered, and approval_required are all that reach this point.
 
   if (ctx.stopHookActive) {
     // A second block while continuation is active can loop the model and hide the real operator

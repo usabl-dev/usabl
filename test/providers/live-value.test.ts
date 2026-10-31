@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createLiveResolver,
   effectiveLiveValue,
+  type HiddenAttributes,
   type LiveAttributes,
   type LiveResolver,
 } from '../../src/providers/rulepack/live-value.js';
@@ -66,5 +67,45 @@ describe('createLiveResolver', () => {
       'polite in off wrapper': 'polite',
       'explicit off beats status role': 'off',
     });
+  });
+});
+
+describe('hiddenInChain', () => {
+  const shown = (ariaHidden: string | null = null): HiddenAttributes => ({ ariaHidden, inert: false, hidden: false });
+
+  // Chromium 151 leaves an element out of the accessibility tree for every non-empty aria-hidden
+  // value except "false" and "undefined" in any ASCII case. A value with spaces around "false"
+  // still hides. The rule has to hide at least as much as the browser does.
+  it('hides content the way Chromium reads aria-hidden', () => {
+    const resolver = createLiveResolver();
+    const hiddenBy = (value: string): boolean => resolver.hiddenInChain([shown(value)]);
+    expect(['true', 'TRUE', 'banana', '0', ' ', ' false', 'false '].map(hiddenBy)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(['', 'false', 'FALSE', 'undefined', 'UNDEFINED'].map(hiddenBy)).toEqual([false, false, false, false, false]);
+  });
+
+  it('hides content when any element in the chain hides its subtree', () => {
+    const resolver = createLiveResolver();
+    expect(resolver.hiddenInChain([])).toBe(false);
+    expect(resolver.hiddenInChain([shown(), shown('false'), shown()])).toBe(false);
+    expect(resolver.hiddenInChain([shown(), shown('true')])).toBe(true);
+    // aria-hidden="false" does not bring back content an ancestor hides.
+    expect(resolver.hiddenInChain([shown('false'), shown('true')])).toBe(true);
+    expect(resolver.hiddenInChain([shown(), { ariaHidden: null, inert: true, hidden: false }])).toBe(true);
+    expect(resolver.hiddenInChain([{ ariaHidden: null, inert: false, hidden: true }, shown()])).toBe(true);
+  });
+
+  it('answers the same from its own source alone', () => {
+    const fromSource = resolverFromSource();
+    for (const chain of [[], [shown('true')], [shown('false')], [shown(), { ariaHidden: null, inert: true, hidden: false }]]) {
+      expect(fromSource.hiddenInChain(chain)).toBe(createLiveResolver().hiddenInChain(chain));
+    }
   });
 });

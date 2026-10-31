@@ -93,4 +93,31 @@ requirements:
       verdict: 'approval_required',
     });
   });
+
+  it('names the line and the problem of a YAML error without quoting the source text', () => {
+    // The parser's own message quotes the offending source line. Only pattern redaction stood
+    // between that line and the terminal, so the reason now names where and what, never the bytes.
+    const raw = ['version: 1', 'requirements:', '  - id: SECRETPOISON', '    broken: [SECRETPOISON, 2', ''].join('\n');
+
+    const result = normalize(raw);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).not.toContain('SECRETPOISON');
+    expect(result.reason).toMatch(/line \d+/);
+    expect(result.reason).toContain('unexpected end of the stream within a flow collection');
+  });
+
+  it('keeps a value the parser names inside its problem out of the reason', () => {
+    // Some parser problems carry source text themselves, such as the name of an unknown alias.
+    const result = normalize(['version: 1', 'requirements: *SECRETPOISON', ''].join('\n'));
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.reason).not.toContain('SECRETPOISON');
+    expect(result.reason).toContain('line 2');
+    expect(result.reason).toContain('unidentified alias');
+  });
 });

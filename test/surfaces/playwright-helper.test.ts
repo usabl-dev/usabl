@@ -1,10 +1,12 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CoverageGap, Draft, Requirement, RequirementBundle, Result } from '../../src/contracts/index.js';
+import { InputRefusedError } from '../../src/intake/input-refusal.js';
 import {
   assertUsablVerdict,
+  checkPage,
   loadProjectIntake,
   requirementGapsForPage,
   summarizePageCheck,
@@ -287,6 +289,26 @@ describe('loadProjectIntake', () => {
     });
   });
 
+  it('names the refused requirements file as the gap ref', async () => {
+    await withDir(async (dir) => {
+      const config = {
+        appBaseUrl: 'http://127.0.0.1:5173',
+        uiFileGlobs: ['src/**'],
+        discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
+        surfaces: [{ id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['src/Clusters.tsx'] }],
+        guardedPaths: [],
+        requirements: 'design',
+      };
+      await writeFile(join(dir, 'usabl.config.json'), JSON.stringify(config));
+      await mkdir(join(dir, 'design'));
+      await writeFile(join(dir, 'design', 'broken.yaml'), 'version: 1\nrequirements: [1, 2\n');
+      const intake = await loadProjectIntake(dir, true);
+      expect(intake.requirements).toBeNull();
+      expect(intake.gaps.map((gap) => gap.ref)).toEqual(['design/broken.yaml']);
+      expect(intake.gaps[0]?.state).toBe('not-covered');
+    });
+  });
+
   it('does not search parent directories for a config', async () => {
     await withDir(async (dir) => {
       const config = {
@@ -307,4 +329,38 @@ describe('loadProjectIntake', () => {
       expect(parent.gaps).toEqual([]);
     });
   });
+});
+
+describe('checkPage refuses a screenId outside the id grammar', () => {
+  // The id is checked before checkPage reads the project or touches the page, so a page that
+  // throws on every call shows nothing ran.
+  const untouchedPage = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error('checkPage used the page before it checked screenId');
+      },
+    },
+  ) as Parameters<typeof checkPage>[0];
+
+  const refused: Array<[string, unknown]> = [
+    ['a zero-width space', 'leakme\u200b'],
+    ['a right-to-left override', 'leakme\u202e'],
+    ['a space', 'leak me'],
+    ['an empty id', ''],
+    ['a value that is not a string', 7],
+  ];
+
+  for (const [name, screenId] of refused) {
+    it(`refuses ${name}, naming the field and never the value`, async () => {
+      const err = await checkPage(untouchedPage, { screenId: screenId as string }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(err).toBeInstanceOf(InputRefusedError);
+      expect((err as InputRefusedError).field).toBe('screenId');
+      expect((err as InputRefusedError).message).toContain('screenId');
+      expect((err as InputRefusedError).message).not.toContain('leak');
+    });
+  }
 });

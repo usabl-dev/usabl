@@ -27,9 +27,13 @@ function memoryFs(files: Record<string, string>): InstallFs & { store: Record<st
   };
 }
 
+// A Vite app with no Vite config: its dev script runs the vite command, which reads vite.config.ts
+// when one appears. Install writes the draft only when it can see the app runs Vite.
+const VITE_APP_PACKAGE = JSON.stringify({ scripts: { dev: 'vite', build: 'vite build' } });
+
 describe('planOverlay', () => {
-  it('plans a full draft when no vite config exists', async () => {
-    const plan = await planOverlay(memoryFs({}));
+  it('plans a full draft when the app runs Vite and no vite config exists', async () => {
+    const plan = await planOverlay(memoryFs({ 'package.json': VITE_APP_PACKAGE }));
     expect(plan.action).toBe('write');
     expect(plan.path).toBe('vite.config.ts');
     if (plan.action === 'write') {
@@ -88,7 +92,7 @@ export default defineConfig({
 
 describe('writeOverlay', () => {
   it('writes the draft when absent and stays idempotent on a second run', async () => {
-    const fs = memoryFs({});
+    const fs = memoryFs({ 'package.json': VITE_APP_PACKAGE });
     const first = await writeOverlay(fs, await planOverlay(fs));
     expect(first.exitCode).toBe(0);
     expect(first.action).toBe('written');
@@ -245,5 +249,127 @@ export default defineConfig({
 `;
     const plan = await planOverlay(memoryFs({ 'vite.config.ts': multiLine }));
     expect(plan.action).toBe('already-wired');
+  });
+});
+
+// The patternfly-react-seed layout: three webpack configs, Vite present only for Vitest, and no
+// Vite config at all. Writing vite.config.ts here produced a file nothing reads.
+const SEED_PACKAGE = JSON.stringify({
+  scripts: {
+    build: 'webpack --config webpack.prod.js',
+    'start:dev': 'webpack serve --color --progress --config webpack.dev.js',
+    test: 'vitest run',
+    'bundle-profile:analyze': 'npm run build:bundle-profile && webpack-bundle-analyzer ./stats.json',
+  },
+  devDependencies: { vite: '^6.4.1', vitest: '^4.0.5', webpack: '^5.97.0' },
+});
+const SEED_FILES = {
+  'package.json': SEED_PACKAGE,
+  'webpack.common.js': "const path = require('path');\nmodule.exports = (env) => ({ plugins: [] });\n",
+  'webpack.dev.js':
+    "const { merge } = require('webpack-merge');\nconst common = require('./webpack.common.js');\nmodule.exports = merge(common('development'), { mode: 'development', devServer: {} });\n",
+  'webpack.prod.js':
+    "const { merge } = require('webpack-merge');\nconst common = require('./webpack.common.js');\nmodule.exports = merge(common('production'), { mode: 'production' });\n",
+  'vitest.config.ts': "import { defineConfig } from 'vitest/config'\nexport default defineConfig({})\n",
+};
+
+const WIRED_WEBPACK_DEV = `const { merge } = require('webpack-merge');
+const { UsablWebpackPlugin } = require('usabl/webpack');
+const common = require('./webpack.common.js');
+module.exports = merge(common('development'), {
+  mode: 'development',
+  plugins: [new UsablWebpackPlugin({ cwd: __dirname })],
+});
+`;
+
+describe('planOverlay picks the bundler the app uses', () => {
+  it('detects webpack in the seed layout and refuses with the lines for its dev config', async () => {
+    const fs = memoryFs(SEED_FILES);
+    const plan = await planOverlay(fs);
+    expect(plan).toMatchObject({ action: 'refuse', bundler: 'webpack', path: 'webpack.dev.js' });
+
+    const result = await writeOverlay(fs, plan);
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('refused');
+    expect(result.message).toContain("const { UsablWebpackPlugin } = require('usabl/webpack')");
+    expect(result.message).toContain('new UsablWebpackPlugin({ cwd: __dirname }),');
+    expect(result.message).toContain('webpack.dev.js');
+    // Nothing is written, and above all no Vite config that nothing would read.
+    expect(Object.keys(fs.store).sort()).toEqual(Object.keys(SEED_FILES).sort());
+    expect(fs.store['vite.config.ts']).toBeUndefined();
+  });
+
+  it('reports a wired webpack dev config as already wired', async () => {
+    const fs = memoryFs({ ...SEED_FILES, 'webpack.dev.js': WIRED_WEBPACK_DEV });
+    const plan = await planOverlay(fs);
+    expect(plan).toMatchObject({ action: 'already-wired', bundler: 'webpack', path: 'webpack.dev.js' });
+  });
+
+  it('does not count a commented-out webpack plugin as wiring', async () => {
+    const commented = WIRED_WEBPACK_DEV.replace('plugins: [new', '// plugins: [new');
+    const plan = await planOverlay(memoryFs({ ...SEED_FILES, 'webpack.dev.js': commented }));
+    expect(plan.action).toBe('refuse');
+  });
+
+  it('hands over import lines for an ES module webpack config', async () => {
+    const fs = memoryFs({ 'webpack.config.mjs': 'export default { mode: "development" };\n' });
+    const result = await writeOverlay(fs, await planOverlay(fs));
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain("import { UsablWebpackPlugin } from 'usabl/webpack'");
+    expect(result.message).toContain('new UsablWebpackPlugin({ cwd: import.meta.dirname }),');
+  });
+
+  it('finds a webpack config named by a script outside the repository root', async () => {
+    const fs = memoryFs({
+      'package.json': JSON.stringify({ scripts: { start: 'webpack serve --config config/webpack.dev.cjs' } }),
+      'config/webpack.dev.cjs': 'module.exports = { mode: "development" };\n',
+    });
+    const plan = await planOverlay(fs);
+    expect(plan).toMatchObject({ action: 'refuse', bundler: 'webpack', path: 'config/webpack.dev.cjs' });
+    const result = await writeOverlay(fs, plan);
+    // The config is one folder down, so the app root is its parent.
+    expect(result.message).toContain("cwd: require('node:path').resolve(__dirname, '..')");
+  });
+
+  it('refuses and names every file it saw when it finds both Vite and webpack', async () => {
+    const fs = memoryFs({
+      'vite.config.ts': "import { defineConfig } from 'vite'\nexport default defineConfig({})\n",
+      'webpack.config.js': 'module.exports = {};\n',
+    });
+    const plan = await planOverlay(fs);
+    expect(plan.action).toBe('undetected');
+    const result = await writeOverlay(fs, plan);
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('refused');
+    expect(result.message).toContain('vite.config.ts');
+    expect(result.message).toContain('webpack.config.js');
+    expect(Object.keys(fs.store).sort()).toEqual(['vite.config.ts', 'webpack.config.js']);
+  });
+
+  it('refuses and says what it looked for when it finds neither', async () => {
+    const fs = memoryFs({ 'package.json': JSON.stringify({ scripts: { test: 'vitest run' } }) });
+    const plan = await planOverlay(fs);
+    expect(plan.action).toBe('undetected');
+    const result = await writeOverlay(fs, plan);
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain('vite.config.ts');
+    expect(result.message).toContain('webpack.config.js');
+    expect(fs.store['vite.config.ts']).toBeUndefined();
+  });
+
+  it('writes vite.config.ts when a script runs Vite and no config exists, because Vite reads it', async () => {
+    const fs = memoryFs({ 'package.json': JSON.stringify({ scripts: { dev: 'vite', test: 'vitest' } }) });
+    const plan = await planOverlay(fs);
+    expect(plan).toMatchObject({ action: 'write', bundler: 'vite', path: 'vite.config.ts' });
+    const result = await writeOverlay(fs, plan);
+    expect(result.exitCode).toBe(0);
+    expect(fs.store['vite.config.ts']).toBe(OVERLAY_DRAFT);
+  });
+
+  it('does not take vite-node or vitest for Vite', async () => {
+    const fs = memoryFs({
+      'package.json': JSON.stringify({ scripts: { a: 'vite-node scripts/x.ts', b: 'vitest run' } }),
+    });
+    expect((await planOverlay(fs)).action).toBe('undetected');
   });
 });

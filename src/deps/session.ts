@@ -1,6 +1,7 @@
 /**
  * The authenticated session usabl scans with: a Playwright storage state file named by the
- * `USABL_STORAGE_STATE` environment variable.
+ * `USABL_STORAGE_STATE` environment variable, or, when that is unset, the file `usabl session`
+ * saved at SESSION_STATE_PATH. The saved file is never loaded when a trusted ref is set or in CI.
  *
  * Why an environment variable and not a flag or a config field. Two of the three operator
  * surfaces have no argv at all (the Claude Stop hook and the Vite overlay both build Deps
@@ -14,9 +15,96 @@
  * session from a dead one. It never puts the path, a cookie value, or any other content into a
  * message, because all of them can be private.
  */
-import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { readFile, stat } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
+import { promisify } from 'node:util';
 
 export const STORAGE_STATE_ENV_VAR = 'USABL_STORAGE_STATE';
+
+// Where `usabl session` saves the signed-in state, relative to the repository root. The folder is
+// usabl's local state folder, which a repository ignores as a whole. The folder is made 0700 and
+// the file 0600, because the file holds live session cookies.
+export const SESSION_STATE_DIR = '.usabl/session';
+export const SESSION_STATE_PATH = `${SESSION_STATE_DIR}/storage-state.json`;
+// The one line a repository adds to .gitignore so the session file can never be committed.
+export const SESSION_GITIGNORE_LINE = '.usabl/';
+
+/**
+ * What git says about a path, for the one question that matters for a credential: could it be
+ * committed? `ignored` is the only answer that lets a session file be written or loaded inside a
+ * repository. `tracked` means git already holds the file, whatever .gitignore says. `outside`
+ * means the path is not in this repository, so this repository cannot commit it. `unknown` means
+ * git could not answer (no repository, or no git), and is never read as ignored.
+ */
+export type GitIgnoreState = 'ignored' | 'tracked' | 'not-ignored' | 'outside' | 'unknown';
+
+const execFileAsync = promisify(execFile);
+
+function exitCodeOf(error: unknown): number | null {
+  if (typeof error !== 'object' || error === null) {
+    return null;
+  }
+  const code = Reflect.get(error, 'code');
+  return typeof code === 'number' ? code : null;
+}
+
+export async function gitIgnoreState(cwd: string, path: string): Promise<GitIgnoreState> {
+  let root: string;
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
+    root = stdout.trim();
+  } catch {
+    return 'unknown';
+  }
+  const absolute = resolve(cwd, path);
+  const fromRoot = relative(root, absolute);
+  if (fromRoot === '' || fromRoot.startsWith('..') || isAbsolute(fromRoot)) {
+    return 'outside';
+  }
+  // A tracked file is never reported by check-ignore, so ask about tracking first. That way the
+  // message can name the command that untracks it, not only the .gitignore line.
+  try {
+    await execFileAsync('git', ['ls-files', '--error-unmatch', '--', fromRoot], { cwd: root });
+    return 'tracked';
+  } catch (error) {
+    if (exitCodeOf(error) !== 1) {
+      return 'unknown';
+    }
+  }
+  try {
+    await execFileAsync('git', ['check-ignore', '--quiet', '--', fromRoot], { cwd: root });
+    return 'ignored';
+  } catch (error) {
+    return exitCodeOf(error) === 1 ? 'not-ignored' : 'unknown';
+  }
+}
+
+/**
+ * Why a session file inside the repository must not be written or loaded, with the fix, or null
+ * when git ignores it. The path in the message is the fixed repository path, never a private one.
+ */
+export function sessionIgnoreProblem(state: GitIgnoreState, path: string): string | null {
+  if (state === 'ignored' || state === 'outside') {
+    return null;
+  }
+  if (state === 'tracked') {
+    return `git already tracks ${path}, so the session in it would be committed. Run git rm --cached ${path}, add the line ${SESSION_GITIGNORE_LINE} to .gitignore, and sign in again with usabl session.`;
+  }
+  if (state === 'not-ignored') {
+    return `git does not ignore ${path}, so the session in it could be committed. Add the line ${SESSION_GITIGNORE_LINE} to .gitignore.`;
+  }
+  return `usabl could not confirm that git ignores ${path}: this folder is not a git repository, or git is not installed. usabl keeps a session file only where git ignores it. Run usabl from the repository root.`;
+}
+
+// Group and other permission bits. Any of them set means another account on the machine can read
+// or change the session file. Windows has no such bits, so the check is skipped there.
+export function sessionModeProblem(mode: number, pathForFix: string): string | null {
+  if (process.platform === 'win32' || (mode & 0o077) === 0) {
+    return null;
+  }
+  return `other users on this machine can read ${pathForFix === SESSION_STATE_PATH ? pathForFix : 'the session file'}, and it holds live session cookies. Run chmod 600 ${pathForFix}.`;
+}
 
 export type EnvReader = Readonly<Record<string, string | undefined>>;
 
@@ -33,6 +121,30 @@ export function readStorageStateEnv(env: EnvReader): string | null {
   }
   const trimmed = raw.trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+/**
+ * Why a run must not load the saved session file, or null when it may.
+ *
+ * A run with a trusted ref is the pull request gate, and a run in CI may be one. There the checkout
+ * holds the code under review, and the gate starts that code (npm run dev) before the judge scans.
+ * That code can write the saved file, and the same pull request can make git ignore it, so the
+ * ignore rule proves nothing. Loading it would let the pull request choose the signed-in state the
+ * judge scans. In those runs only USABL_STORAGE_STATE, which the trusted workflow sets from a
+ * secret, can sign the judge in.
+ *
+ * CI is the standard CI variable that hosted runners set. Any value other than empty, false, or 0
+ * counts, so an unusual spelling errs toward not loading the file.
+ */
+export function savedSessionBlock(options: { env: EnvReader; trustedRef?: string | undefined }): 'trusted-ref' | 'ci' | null {
+  if (options.trustedRef !== undefined) {
+    return 'trusted-ref';
+  }
+  const ci = options.env['CI']?.trim().toLowerCase();
+  if (ci !== undefined && ci !== '' && ci !== 'false' && ci !== '0') {
+    return 'ci';
+  }
+  return null;
 }
 
 /**
@@ -182,13 +294,31 @@ export async function resolveStorageStatePath(options: {
   explicit?: string | undefined;
   env: EnvReader;
   now?: number;
+  // The repository root. When it is given and the variable is unset, the file `usabl session`
+  // saved there is used if it exists. When it is absent, only the variable is read, as before.
+  cwd?: string;
+  // Asks git whether a path could be committed. A port so tests need no repository.
+  gitIgnoreState?: (cwd: string, path: string) => Promise<GitIgnoreState>;
+  // Where a warning goes, such as a session file other users can read.
+  warn?: (line: string) => void;
+  // The ref the run is judged against. When it is set, or the run is in CI, the saved file is
+  // never loaded. See savedSessionBlock.
+  trustedRef?: string | undefined;
 }): Promise<string | null> {
   if (options.explicit !== undefined) {
     return options.explicit;
   }
   const path = readStorageStateEnv(options.env);
   if (path === null) {
-    return null;
+    if (options.cwd === undefined) {
+      return null;
+    }
+    const block = savedSessionBlock(options);
+    if (block !== null) {
+      await reportSkippedSavedSession(options.cwd, block, options.warn);
+      return null;
+    }
+    return resolveSavedSession(options as typeof options & { cwd: string });
   }
   let raw: string;
   try {
@@ -216,4 +346,77 @@ export async function resolveStorageStatePath(options: {
     );
   }
   return path;
+}
+
+/**
+ * Say once that a saved session file exists and was not used, so an operator knows why the run is
+ * signed out. Only the file's existence is checked. Nothing in it is read, and only the fixed path
+ * usabl chose is named.
+ */
+async function reportSkippedSavedSession(
+  cwd: string,
+  block: 'trusted-ref' | 'ci',
+  warn: ((line: string) => void) | undefined,
+): Promise<void> {
+  try {
+    await stat(join(cwd, SESSION_STATE_PATH));
+  } catch {
+    return;
+  }
+  const why = block === 'trusted-ref' ? 'this run has a trusted ref' : 'this run is in CI';
+  warn?.(
+    `usabl: not using the saved session at ${SESSION_STATE_PATH}, because ${why}. Here only ${STORAGE_STATE_ENV_VAR} can sign in, so this run scans signed out.`,
+  );
+}
+
+/**
+ * The session file `usabl session` saved, checked the same way the variable's file is, plus one
+ * rule of its own: it sits inside the repository, so it is used only when git ignores it. A file
+ * git would commit stops the run with the fix. Loading it would put a credential one `git add`
+ * away from a pull request, and in a CI checkout it can only be there because someone committed
+ * it. A file other users can read is used, with a warning that names the fix.
+ */
+async function resolveSavedSession(options: {
+  cwd: string;
+  now?: number;
+  gitIgnoreState?: (cwd: string, path: string) => Promise<GitIgnoreState>;
+  warn?: (line: string) => void;
+}): Promise<string | null> {
+  const absolute = join(options.cwd, SESSION_STATE_PATH);
+  let raw: string;
+  try {
+    raw = await readFile(absolute, 'utf8');
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && Reflect.get(error, 'code') === 'ENOENT') {
+      return null;
+    }
+    throw new Error(
+      `usabl cannot read the saved session at ${SESSION_STATE_PATH}. Check its permissions, or delete it and sign in again with usabl session.`,
+    );
+  }
+  const ignoreState = await (options.gitIgnoreState ?? gitIgnoreState)(options.cwd, SESSION_STATE_PATH);
+  const ignoreProblem = sessionIgnoreProblem(ignoreState, SESSION_STATE_PATH);
+  if (ignoreProblem !== null) {
+    throw new Error(`usabl will not use the saved session: ${ignoreProblem}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Contents are never quoted back: this file holds live session tokens.
+    throw new Error(
+      `The saved session at ${SESSION_STATE_PATH} is not JSON, so it is not a Playwright storage state. Delete it and sign in again with usabl session.`,
+    );
+  }
+  if (isStorageStateExpired(parsed, options.now ?? Date.now())) {
+    throw new Error(
+      `The saved session at ${SESSION_STATE_PATH} has expired: every cookie in it is past its expiry and it holds nothing else that could sign in. Sign in again with usabl session, or delete the file to scan signed out on purpose.`,
+    );
+  }
+  const mode = (await stat(absolute)).mode;
+  const modeProblem = sessionModeProblem(mode, SESSION_STATE_PATH);
+  if (modeProblem !== null) {
+    options.warn?.(`usabl: warning: ${modeProblem}`);
+  }
+  return absolute;
 }

@@ -11,6 +11,7 @@
     "ci",
     "testing",
     "vite",
+    "webpack",
     "patternfly"
   ],
   "license": "Apache-2.0",
@@ -39,6 +40,11 @@
       "types": "./dist/vite-plugin.d.ts",
       "import": "./dist/vite-plugin.js"
     },
+    "./webpack": {
+      "types": "./dist/webpack-plugin.d.ts",
+      "import": "./dist/webpack-plugin.js",
+      "default": "./dist/webpack-plugin.js"
+    },
     "./playwright": {
       "types": "./dist/playwright-helper.d.ts",
       "import": "./dist/playwright-helper.js"
@@ -61,7 +67,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "test:integration": "USABL_INTEGRATION=1 vitest run test/deps/real.integration.test.ts test/deps/readiness.real.test.ts test/deps/menu-state.real.integration.test.ts test/surfaces/playwright-page-check.integration.test.ts && USABL_INTEGRATION=1 vitest run test/baseline/row-stability.real.integration.test.ts test/baseline/row-identity.real.integration.test.ts",
+    "test:integration": "USABL_INTEGRATION=1 vitest run test/deps/real.integration.test.ts test/deps/readiness.real.test.ts test/deps/menu-state.real.integration.test.ts test/surfaces/playwright-page-check.integration.test.ts test/surfaces/webpack-overlay.integration.test.ts test/session/session-login.integration.test.ts && USABL_INTEGRATION=1 vitest run test/baseline/row-stability.real.integration.test.ts test/baseline/row-identity.real.integration.test.ts",
     "test:demo-integration": "vite-node scripts/run-demo-integration.ts --",
     "test:package": "node scripts/package-smoke.mjs",
     "test:watch": "vitest",
@@ -79,11 +85,14 @@
   "devDependencies": {
     "@types/js-yaml": "4.0.9",
     "@types/node": "^22.0.0",
+    "ts-loader": "9.5.4",
     "tsup": "^8.0.0",
     "typescript": "^5.5.0",
     "vite": "6.4.3",
     "vite-node": "3.2.4",
-    "vitest": "3.2.7"
+    "vitest": "3.2.7",
+    "webpack": "5.112.2",
+    "webpack-dev-server": "5.2.7"
   },
   "dependencies": {
     "@axe-core/playwright": "4.13.0",
@@ -92,6 +101,14 @@
     "js-yaml": "4.3.2",
     "playwright": "1.62.1",
     "zod": "3.25.76"
+  },
+  "peerDependencies": {
+    "webpack": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "webpack": {
+      "optional": true
+    }
   },
   "overrides": {
     "esbuild": "0.28.1"

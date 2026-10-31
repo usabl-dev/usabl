@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Draft, Page, RowContextRead } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
-import { attachRowScopeToDrafts } from '../../src/providers/row-scope.js';
+import { attachRowScopeToDrafts, readFocusedRow } from '../../src/providers/row-scope.js';
 
 function draft(over: Partial<Draft> = {}): Draft {
   return {
@@ -123,5 +123,109 @@ describe('attachRowScopeToDrafts', () => {
       return ALPHA;
     }, [draft({ elementPath: '' })]);
     expect(asked).toBe(0);
+  });
+});
+
+// Two keys a provider leaves on a draft for the row read: a target for an element past a frame or a
+// shadow root, and a row the provider already read at the element. Both are read and removed.
+describe('attachRowScopeToDrafts with a target or a carried row', () => {
+  it('reads the row through the target, not the joined element path', async () => {
+    const seen: unknown[] = [];
+    const page = makeFakePage({
+      rowContext: async (target) => {
+        seen.push(target);
+        return ALPHA;
+      },
+    });
+    const target = [['x-row-actions'], ['button']];
+    const out = await attachRowScopeToDrafts(page, SCREEN, [
+      draft({ elementPath: 'x-row-actions,button', evidence: { extra: { html: '<button>', rowTarget: target } } }),
+    ]);
+    expect(seen).toEqual([target]);
+    expect(out.gaps).toEqual([]);
+    expect(rowScopeOf(out.drafts[0]!)['row']).toMatch(/^[0-9a-f]{16}$/);
+    expect(out.drafts[0]!.evidence.extra?.['rowTarget']).toBeUndefined();
+    expect(out.drafts[0]!.evidence.extra?.['html']).toBe('<button>');
+  });
+
+  it('reads a target that is not a list of selector lists as a failed read, with a gap', async () => {
+    let asked = false;
+    const page = makeFakePage({
+      rowContext: async () => {
+        asked = true;
+        return { kind: 'none' };
+      },
+    });
+    const out = await attachRowScopeToDrafts(page, SCREEN, [draft({ evidence: { extra: { rowTarget: ['button', 7] } } })]);
+    expect(asked).toBe(false);
+    expect(out.drafts[0]!.confidence).toBe('unverified');
+    expect(out.gaps).toHaveLength(1);
+    expect(out.gaps[0]!.reason).toContain('could not read the row');
+  });
+
+  it('uses a carried row scope without reading the page again', async () => {
+    let asked = false;
+    const page = makeFakePage({
+      rowContext: async () => {
+        asked = true;
+        return { kind: 'unreadable', reason: 'element-missing' };
+      },
+    });
+    const rowScope = { table: 'a'.repeat(16), row: 'b'.repeat(16), role: 'button', path: 'td:nth-child(2)>button:nth-child(1)' };
+    const out = await attachRowScopeToDrafts(page, SCREEN, [
+      draft({ elementPath: 'tab-stop-3', evidence: { extra: { rowRead: { kind: 'scoped', rowScope } } } }),
+    ]);
+    expect(asked).toBe(false);
+    expect(out.gaps).toEqual([]);
+    expect(out.drafts[0]!.evidence).toEqual({ extra: { rowScope } });
+  });
+
+  it('leaves a draft with a carried row of none as it was, with no extra record left behind', async () => {
+    const out = await attachRowScopeToDrafts(makeFakePage(), SCREEN, [
+      draft({ elementPath: 'tab-stop-0', evidence: { extra: { rowRead: { kind: 'none' } } } }),
+    ]);
+    expect(out.gaps).toEqual([]);
+    expect(out.drafts[0]).toEqual(draft({ elementPath: 'tab-stop-0' }));
+  });
+
+  it('discloses a carried reason as a gap and marks the finding unverified', async () => {
+    const out = await attachRowScopeToDrafts(makeFakePage(), SCREEN, [
+      draft({ evidence: { extra: { rowRead: { kind: 'unkeyed', reason: 'frame-unreadable' } } } }),
+    ]);
+    expect(out.drafts[0]!.confidence).toBe('unverified');
+    expect(out.gaps[0]!.reason).toContain('frame usabl could not look inside');
+  });
+
+  it('reads a carried row of any other shape as a failed read, never as no row', async () => {
+    const shapes: unknown[] = [
+      'none',
+      { kind: 'scoped', rowScope: { table: 't', row: '', role: 'button', path: '' } },
+      { kind: 'unkeyed', reason: 'banana' },
+      { kind: 'keyed' },
+    ];
+    for (const rowRead of shapes) {
+      const out = await attachRowScopeToDrafts(makeFakePage(), SCREEN, [draft({ evidence: { extra: { rowRead } } })]);
+      expect(out.drafts[0]!.confidence).toBe('unverified');
+      expect(out.gaps).toHaveLength(1);
+    }
+  });
+});
+
+describe('readFocusedRow', () => {
+  it('hashes the focused row at once and keeps no row text', async () => {
+    const row = await readFocusedRow(makeFakePage({ focusedRowContext: async () => ALPHA }));
+    expect(row.kind).toBe('scoped');
+    expect(JSON.stringify(row)).not.toContain('nightly');
+  });
+
+  it('carries a read that throws as a failed read, never as no row', async () => {
+    const row = await readFocusedRow(
+      makeFakePage({
+        focusedRowContext: async () => {
+          throw new Error('page closed');
+        },
+      }),
+    );
+    expect(row).toEqual({ kind: 'unkeyed', reason: 'read-failed' });
   });
 });
