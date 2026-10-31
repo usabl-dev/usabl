@@ -9,7 +9,7 @@
  * Sample `usabl.config.json` URLs (`http://127.0.0.1:5173`) are the fixture app's
  * Vite origin, not a hardcoded engine target. The engine always reads operator config.
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -18,7 +18,8 @@ import { run } from './run.js';
 import type { Result, UsablConfig } from './contracts/index.js';
 import { buildDeps } from './deps/build.js';
 import { makeFsGlob } from './deps/fs.js';
-import { readStorageStateEnv } from './deps/session.js';
+import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
+import { openSessionBrowser, runSession, waitForPerson } from './session/index.js';
 import { formatInitReport, inferInit, writeInitDrafts, type InitFs } from './init/index.js';
 import {
   formatDocsInitReport,
@@ -29,8 +30,17 @@ import {
 import { runBaseline, type BaselineFs } from './baseline/index.js';
 import { runFloorPrune, type FloorPruneFs } from './floor/prune.js';
 import { makeGitReader } from './deps/git.js';
-import { configUrlWarnings, parseUsablConfig } from './intake/config.js';
-import { ciRefusal, installRefusal, mergeChangedPaths, parseCliArgs, projectCli, type CliOptions } from './surfaces/cli.js';
+import { configUrlWarningsByUrl, parseUsablConfig } from './intake/config.js';
+import {
+  ciRefusal,
+  installRefusal,
+  localApprovalNextSteps,
+  mergeChangedPaths,
+  parseCliArgs,
+  projectCli,
+  type CliOptions,
+} from './surfaces/cli.js';
+import { preflightCli } from './surfaces/cli-commands.js';
 import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
 import { planOverlay, writeOverlay } from './install/overlay.js';
@@ -40,7 +50,7 @@ import { planCursor, readCursorUiFileGlobs, writeCursor } from './install/cursor
 import { planDocsCi, writeDocsCi } from './install/ci.js';
 import { installCi } from './install/history-ci.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
-import { projectDocs } from './surfaces/docs.js';
+import { generateDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
 import { collectReviews, enforceAccessibility, enforcePolicy, parsePullRequestEvent, parseResultText } from './surfaces/policy-enforce.js';
@@ -55,6 +65,10 @@ import { serializeRecord } from './history/record.js';
 import { recordMainScan } from './history/record-run.js';
 import { runDebt } from './history/report.js';
 
+// The configured url warnings this process has already printed. It holds config urls, which may
+// carry a query, so it is never printed and never leaves the process.
+const warnedConfigUrls = new Set<string>();
+
 export async function loadConfig(
   path = 'usabl.config.json',
   warn: (line: string) => void = (line) => {
@@ -62,10 +76,26 @@ export async function loadConfig(
   },
 ): Promise<UsablConfig> {
   // Targets come from config so the same engine can run in local, CI, and preview environments.
-  const config = parseUsablConfig(await readFile(path, 'utf8'));
-  // A configured URL with a query or a fragment loads, and the operator is told it is published.
-  for (const warning of configUrlWarnings(config)) {
-    warn(warning);
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      // The first error a new user meets. Name the command that writes the file.
+      throw new Error(`${path} not found. Run "usabl init" to draft it, or pass --config <path>.`);
+    }
+    throw error;
+  }
+  const config = parseUsablConfig(raw);
+  // A configured URL with a query or a fragment loads, and the operator is told where it is
+  // printed. Once per process for each field and url: the dev-server plugin loads the config on
+  // every save, and the same warning on every save buries the output it sits in.
+  for (const { url, warning } of configUrlWarningsByUrl(config)) {
+    const key = `${warning}\u0000${url}`;
+    if (!warnedConfigUrls.has(key)) {
+      warnedConfigUrls.add(key);
+      warn(warning);
+    }
   }
   return config;
 }
@@ -290,6 +320,18 @@ async function runHistory(opts: CliOptions): Promise<number> {
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
+  // Help and unknown flags are answered before anything runs, so asking how to use a command
+  // never loads config, opens a browser, reads stdin, or writes a file.
+  const preflight = preflightCli(argv);
+  if (preflight !== null && preflight.kind === 'help') {
+    process.stdout.write(preflight.text);
+    return 0;
+  }
+  if (preflight !== null) {
+    process.stderr.write(`usabl: ${preflight.message}\n`);
+    return 2;
+  }
+
   let opts;
   try {
     opts = parseCliArgs(argv);
@@ -313,9 +355,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'doctor' &&
     opts.command !== 'docs' &&
     opts.command !== 'history' &&
-    opts.command !== 'debt'
+    opts.command !== 'debt' &&
+    opts.command !== 'session'
   ) {
-    process.stderr.write(`unknown command: ${opts.command}\n`);
+    // The command table names a command this dispatch does not run. Refuse it the same way.
+    process.stderr.write('usabl: unknown command. Run "usabl help" to list the commands.\n');
     return 2;
   }
 
@@ -378,10 +422,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     };
     let draft;
     try {
-      // Init throws when a derived screen id is one the parser would refuse. A draft without
-      // that route would hide it from coverage, so the refusal surfaces as an error and nothing
-      // is written, the same way docs init refuses.
-      draft = await inferInit(initFs, { sessionConfigured: readStorageStateEnv(process.env) !== null });
+      // Init throws when a derived screen id is one the parser would refuse, when it finds more
+      // than one app and no --app, and when it finds no UI files. Each of those drafts would hide
+      // a screen or read as idle, so the refusal surfaces as an error and nothing is written, the
+      // same way docs init refuses.
+      draft = await inferInit(initFs, {
+        sessionConfigured: readStorageStateEnv(process.env) !== null,
+        ...(opts.app === undefined ? {} : { appDir: opts.app }),
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`usabl: ${message}\n`);
@@ -390,6 +438,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const result = await writeInitDrafts(initFs, draft, { force: opts.force });
     process.stdout.write(formatInitReport(draft, result));
     return result.ok ? 0 : 2;
+  }
+
+  if (opts.command === 'session') {
+    // Saves a signed-in storage state for later scans. It runs no check and mints no verdict.
+    return runSession({
+      cwd: process.cwd(),
+      configPath: opts.configPath,
+      loadConfig: (path) => loadConfig(path),
+      gitIgnoreState,
+      openBrowser: (url) => openSessionBrowser(url),
+      waitForConfirmation: waitForPerson,
+      out: (line) => {
+        process.stdout.write(`${line}\n`);
+      },
+      err: (line) => {
+        process.stderr.write(`${line}\n`);
+      },
+    });
   }
 
   if (opts.command === 'bypass') {
@@ -527,6 +593,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       configPath: opts.configPath,
       env: process.env,
       probePlaywrightChromium,
+      // Read-only: git ls-files and check-ignore, and a stat for the permission bits.
+      sessionFile: {
+        ignoreState: (path) => gitIgnoreState(process.cwd(), path),
+        mode: async (path) => {
+          try {
+            return (await stat(path)).mode;
+          } catch {
+            return null;
+          }
+        },
+      },
     };
     const outcome = await runDoctor(deps);
     process.stdout.write(outcome.stdout);
@@ -565,13 +642,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // Docs is a generator, not a gate. It projects design-intake and transcript artifacts
     // from a full run and always exits 0. Artifact honesty comes from receipt binding
     // (unverified surfaces carry no evidenceRef), never from a verdict this command invents.
+    // --all documents every in-scope surface, not only the ones the change touched.
     const config = await loadConfig(opts.configPath);
     const deps = await buildDeps(config, {
       allowedCapabilities: opts.staticOnly ? [] : ['live'],
+      // The alt-text manifest drafts from the page's images when no content requirement covers
+      // a screen, so the docs run reads them. Gating runs never do.
+      collectPageImages: true,
     });
     try {
-      const result = await run(deps, config);
-      const projected = projectDocs(result, deps.requirements);
+      const projected = await generateDocs(deps, config, { all: opts.all });
       // --html renders the same artifacts as one accessible, self-contained page.
       // The page carries the honesty invariant on its face: only receipt-bound
       // cards are shown as verified; everything else is labelled an observation.
@@ -628,7 +708,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return advisory.advisoryExitCode;
     }
     const projected = projectCli(result);
-    process.stdout.write((opts.json ? projected.json : projected.text) + '\n');
+    if (opts.json) {
+      process.stdout.write(projected.json + '\n');
+      return projected.exitCode;
+    }
+    // A local run has no pull request to approve on, so it also says how to clear the state here.
+    const nextSteps = opts.trustedRef === null ? localApprovalNextSteps(result) : [];
+    process.stdout.write([projected.text, ...nextSteps].join('\n') + '\n');
     return projected.exitCode;
   } finally {
     // Always close browser resources, even when run() throws before returning a Result.

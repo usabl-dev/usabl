@@ -98,6 +98,34 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage on a live Play
       await context.close();
     }
   });
+
+  it('detaches its CDP session and removes its listeners when it is done, and keeps the page open', async () => {
+    const { context, page } = await openPage(CLEAN_HTML);
+    try {
+      const sessions: Array<Awaited<ReturnType<BrowserContext['newCDPSession']>>> = [];
+      const original = context.newCDPSession.bind(context);
+      context.newCDPSession = async (target) => {
+        const session = await original(target);
+        sessions.push(session);
+        return session;
+      };
+      // Playwright's page is an event emitter at run time; its types leave listenerCount out.
+      const emitter = page as unknown as { listenerCount(event: string): number };
+      const listeners = (): number => emitter.listenerCount('request') + emitter.listenerCount('response');
+      const listenersBefore = listeners();
+
+      await checkPage(page, { tabCap: 5 });
+
+      expect(sessions).toHaveLength(1);
+      // A detached session refuses every command.
+      await expect(sessions[0]?.send('Runtime.evaluate', { expression: '1' })).rejects.toThrow();
+      expect(listeners()).toBe(listenersBefore);
+      expect(page.isClosed()).toBe(false);
+      await expect(page.evaluate(() => document.title)).resolves.toBe('Reports');
+    } finally {
+      await context.close();
+    }
+  });
 });
 
 // A page whose heading text breaks an authored design requirement. Nothing else on it fails, so
@@ -294,7 +322,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage runs the desig
     try {
       const result = await checkPage(page, { screenId: 'clusters', projectRoot: dir, tabCap: 10 });
       expect(result.verdict).toBe('not_covered');
-      expect(result.gaps.map((g) => g.ref)).toContain('requirements');
+      expect(result.gaps.map((g) => g.ref)).toEqual(['requirements/broken.yaml']);
     } finally {
       await context.close();
       await rm(dir, { recursive: true, force: true });

@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { Result } from '../../src/contracts/index.js';
+import type { Coverage, Draft, EvidenceFloor, Result } from '../../src/contracts/index.js';
+import { gate } from '../../src/gate/index.js';
 import {
   ciRefusal,
+  localApprovalNextSteps,
   mergeChangedPaths,
   parseCliArgs,
   projectCli,
 } from '../../src/surfaces/cli.js';
+import { parseResultJson } from '../../src/surfaces/policy-enforce.js';
 
 const baseResult = (over: Partial<Result>): Result => ({
   schemaVersion: 'usabl.result.v1',
@@ -50,6 +53,7 @@ describe('parseCliArgs', () => {
       command: 'check',
       staticOnly: false,
       html: false,
+      all: false,
       docs: false,
       trustedRef: null,
       json: false,
@@ -87,6 +91,7 @@ describe('parseCliArgs', () => {
       command: 'check',
       staticOnly: true,
       html: true,
+      all: false,
       docs: false,
       trustedRef: 'origin/main',
       json: true,
@@ -111,6 +116,11 @@ describe('parseCliArgs', () => {
     const parsed = parseCliArgs(['docs', '--html']);
     expect(parsed.command).toBe('docs');
     expect(parsed.html).toBe(true);
+  });
+
+  it('parses --all for the docs command and defaults it to false', () => {
+    expect(parseCliArgs(['docs', '--all']).all).toBe(true);
+    expect(parseCliArgs(['docs']).all).toBe(false);
   });
 
   it('defaults html to false', () => {
@@ -156,6 +166,7 @@ describe('parseCliArgs', () => {
       command: 'check',
       staticOnly: false,
       html: false,
+      all: false,
       docs: false,
       trustedRef: null,
       json: false,
@@ -253,6 +264,90 @@ describe('projectCli', () => {
     expect(projected.json).not.toContain('super-secret-value');
   });
 
+  it('drops the query and the fragment of every screen url from the text and the JSON', () => {
+    // A configured url can carry a preview token in its query. The CLI output and the JSON
+    // Result are what CI publishes, so they lose it the way checkPage output already does.
+    const url = 'http://127.0.0.1:5173/clusters?preview=SECRETPOISON#state=SECRETPOISON';
+    const raw = baseResult({
+      verdict: 'not_covered',
+      exitCode: 3,
+      accessibilityVerdict: 'not_covered',
+      accessibilityExitCode: 3,
+      screens: [
+        { screenId: 'clusters', url, stops: [], drafts: [], gaps: [], applicability: [], reachedSelectorPresent: null },
+      ],
+      coverage: {
+        changedFiles: ['src/Clusters.tsx'],
+        affected: [{ screenId: 'clusters', url, provenance: 'manual' }],
+        unresolvedFiles: [],
+        gaps: [{ ref: url, state: 'not-covered', reason: `timeout loading ${url}` }],
+        nothingToCheck: false,
+      },
+    });
+    const projected = projectCli(raw);
+
+    expect(projected.text).not.toContain('SECRETPOISON');
+    expect(projected.json).not.toContain('SECRETPOISON');
+    const parsed = parseResultJson(JSON.parse(projected.json));
+    expect(parsed.screens[0]?.url).toBe('http://127.0.0.1:5173/clusters');
+    expect(parsed.coverage.affected[0]?.url).toBe('http://127.0.0.1:5173/clusters');
+    expect(parsed.coverage.gaps[0]?.ref).toBe('http://127.0.0.1:5173/clusters');
+    expect(projected.text).toContain('http://127.0.0.1:5173/clusters');
+    // The raw Result keeps the url as written, for the overlay and for receipts.
+    expect(raw.screens[0]?.url).toBe(url);
+  });
+
+  it('publishes finding identity keys unchanged, so a waiver copied from the JSON still matches', () => {
+    // A structural key holds the element path, and an axe selector can hold an absolute URL with
+    // a query. Waivers match the key exactly, so the published key has to be the real one.
+    const coverage: Coverage = {
+      changedFiles: ['src/Home.tsx'],
+      affected: [{ screenId: 'home', url: 'http://127.0.0.1:5173/', provenance: 'manual' }],
+      unresolvedFiles: [],
+      gaps: [],
+      nothingToCheck: false,
+    };
+    const floor: EvidenceFloor = { version: 3, entries: [] };
+    const draft: Draft = {
+      rule: 'link-name', layer: 'axe', severity: 'serious', evidenceClass: 'deterministic',
+      screenId: 'home', elementPath: 'a[href="https://t.co/?ref=nav"]', elementName: null, role: 'link',
+      whatUserExperiences: '', why: '', fix: '', evidence: {}, confidence: 'fail',
+    };
+    const input = { guardDivergedPaths: [] as string[], coverage, floor, drafts: [draft], cleanlyScannedScreens: new Set<string>(), now: '2026-06-01T00:00:00.000Z' };
+    const first = gate({ ...input, waivers: [] });
+    expect(first.verdict).toBe('regression');
+    const realKey = first.findings[0]?.elementKey;
+    expect(realKey).toBe('home|link-name|struct:link:a[href="https://t.co/?ref=nav"]');
+
+    const published = parseResultJson(
+      JSON.parse(
+        projectCli(
+          baseResult({
+            verdict: 'regression',
+            exitCode: 1,
+            accessibilityVerdict: 'regression',
+            accessibilityExitCode: 1,
+            coverage,
+            findings: first.findings,
+          }),
+        ).json,
+      ),
+    );
+    const publishedKey = published.findings[0]?.elementKey ?? '';
+    expect(publishedKey).toBe(realKey);
+
+    const waived = gate({
+      ...input,
+      waivers: [
+        {
+          rule: 'link-name', surface: 'home', scope: publishedKey, reason: 'tracked', owner: 'team', approvedBy: 'owner',
+          created: '2026-01-01T00:00:00.000Z', expires: '2026-12-31T00:00:00.000Z',
+        },
+      ],
+    });
+    expect(waived.verdict).toBe('verified');
+  });
+
   it('projects idle headline when verdict is null', () => {
     const projected = projectCli(
       baseResult({
@@ -274,5 +369,119 @@ describe('mergeChangedPaths', () => {
       ),
     ).toEqual(['src/a.ts', 'src/b.ts', 'src/z.ts']);
     expect(mergeChangedPaths([], [])).toEqual([]);
+  });
+});
+
+describe('localApprovalNextSteps', () => {
+  const approval = (over: Partial<Result>): Result =>
+    baseResult({
+      verdict: 'approval_required',
+      summary: 'approval required: 2 guarded path(s) changed',
+      dirtyGuardedPaths: ['usabl.config.json', 'usabl.routes.json'],
+      exitCode: 2,
+      ...over,
+    });
+
+  it('tells a first-run user to commit the new policy files and how to get the report', () => {
+    const lines = localApprovalNextSteps(
+      approval({ coverage: { changedFiles: [], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true } }),
+    );
+    const text = lines.join('\n');
+    expect(text).toContain('next: usabl trusts policy files only after they are committed.');
+    expect(text).toContain('commit them');
+    expect(text).toContain('usabl baseline');
+    expect(text).toContain('accessibility barriers');
+    expect(text).not.toMatch(/\u2014|--(?!\w)/);
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(80);
+    }
+  });
+
+  it('says the touched screens were still scanned when they were', () => {
+    const text = localApprovalNextSteps(
+      approval({
+        screens: [
+          {
+            screenId: 'home',
+            url: 'http://127.0.0.1:5173/',
+            stops: [],
+            drafts: [],
+            gaps: [],
+            applicability: [],
+            reachedSelectorPresent: null,
+            reachedWhenSelector: null,
+          },
+        ],
+      }),
+    ).join('\n');
+    expect(text).toContain('commit them');
+    expect(text).toContain('were still scanned');
+    expect(text).not.toContain('usabl baseline');
+  });
+
+  const scanOf = (screenId: string, gaps: Result['screens'][number]['gaps']): Result['screens'][number] => ({
+    screenId,
+    url: `http://127.0.0.1:59999/${screenId}`,
+    stops: [],
+    drafts: [],
+    gaps,
+    applicability: [],
+    reachedSelectorPresent: null,
+    reachedWhenSelector: null,
+  });
+  const openFailure = (screenId: string): Result['screens'][number]['gaps'][number] => ({
+    ref: `http://127.0.0.1:59999/${screenId}`,
+    state: 'not-covered',
+    reason: 'screen failed to open: nothing answered at http://127.0.0.1:59999/',
+  });
+
+  it('says no screen was measured when no touched screen opened', () => {
+    const failed = scanOf('home', [openFailure('home')]);
+    const lines = localApprovalNextSteps(
+      approval({
+        screens: [failed],
+        coverage: { changedFiles: ['src/Home.tsx'], affected: [], unresolvedFiles: [], gaps: failed.gaps, nothingToCheck: false },
+        accessibilityVerdict: 'not_covered',
+        accessibilityExitCode: 3,
+      }),
+    );
+    const text = lines.join('\n');
+    expect(text).toContain('commit them');
+    expect(text).not.toContain('were still scanned');
+    expect(text).not.toContain('were scanned');
+    expect(text).toContain('no screen was measured');
+    expect(text).toContain('"not evaluated"');
+    expect(text).not.toMatch(/\u2014|--(?!\w)/);
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(80);
+    }
+  });
+
+  it('counts the touched screens that opened and the ones that did not', () => {
+    const failed = scanOf('settings', [openFailure('settings')]);
+    const lines = localApprovalNextSteps(
+      approval({
+        screens: [scanOf('home', []), failed],
+        coverage: { changedFiles: ['src/Home.tsx'], affected: [], unresolvedFiles: [], gaps: failed.gaps, nothingToCheck: false },
+        accessibilityVerdict: 'not_covered',
+        accessibilityExitCode: 3,
+      }),
+    );
+    const text = lines.join('\n');
+    expect(text).not.toContain('were still scanned');
+    const flat = text.replace(/\s+/g, ' ');
+    expect(flat).toContain('1 of the 2 screens this change touches was scanned.');
+    expect(flat).toContain('Any accessibility barriers found there are listed above.');
+    expect(flat).toContain('1 screen did not open or was not fully measured.');
+    expect(text).toContain('"not evaluated"');
+    expect(text).not.toMatch(/\u2014|--(?!\w)/);
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(80);
+    }
+  });
+
+  it('adds nothing for any other verdict', () => {
+    expect(localApprovalNextSteps(baseResult({}))).toEqual([]);
+    expect(localApprovalNextSteps(baseResult({ verdict: 'regression', exitCode: 1 }))).toEqual([]);
   });
 });

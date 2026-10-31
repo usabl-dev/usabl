@@ -14,6 +14,13 @@ import type {
   RuleOutcome,
   Severity,
 } from '../../contracts/index.js';
+import {
+  GRADIENT_CONTRAST_CHECK,
+  GRADIENT_CONTRAST_EXPERIENCE,
+  GRADIENT_CONTRAST_WHY,
+  isGradientContrastReview,
+} from '../../primitives/gradient-contrast.js';
+import { ROW_TARGET_KEY } from '../row-scope.js';
 import { noteFor } from './notes.js';
 
 export interface AxeCheck {
@@ -22,6 +29,9 @@ export interface AxeCheck {
 
 export interface AxeNode {
   target: string[];
+  // The target one part per boundary, present only for an element inside a frame or a shadow
+  // root. See ElementTarget.
+  targetParts?: string[][];
   html?: string;
   failureSummary?: string;
   any?: AxeCheck[];
@@ -110,12 +120,17 @@ function mapNodeToDraft(
   if (firstAny?.data !== undefined) {
     extra.axeData = firstAny.data;
   }
+  // The joined element path names nothing, or the wrong element, past a frame or a shadow root.
+  // The row read uses these parts instead. See ROW_TARGET_KEY.
+  if (node.targetParts !== undefined) {
+    extra[ROW_TARGET_KEY] = node.targetParts;
+  }
 
   const evidence = Object.keys(extra).length === 0 ? {} : { extra };
   const whatUserExperiences =
     confidence === 'unverified' ? `Needs review: ${issue.description}` : issue.description;
 
-  return {
+  const draft: Draft = {
     rule: issue.id,
     layer: 'axe',
     severity: mapSeverity(issue.impact),
@@ -130,6 +145,12 @@ function mapNodeToDraft(
     evidence,
     confidence,
   };
+  // A gradient background is the one needs-review reason with its own words, because the generic
+  // contrast text tells a person to fix a ratio nobody measured. Only the prose changes. The rule,
+  // element, severity, evidence, and confidence stay as they are, so identity and the verdict do too.
+  return isGradientContrastReview(draft)
+    ? { ...draft, whatUserExperiences: GRADIENT_CONTRAST_EXPERIENCE, why: GRADIENT_CONTRAST_WHY, fix: GRADIENT_CONTRAST_CHECK }
+    : draft;
 }
 
 function mapIssueToDrafts(

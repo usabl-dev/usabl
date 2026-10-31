@@ -18,7 +18,9 @@ import { computeIdentity, identityKey } from '../../src/primitives/identity.js';
 import { LIVE_WORLD, adoptPage, makeRealBrowserDriver } from '../../src/deps/real.js';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
 import { axeProvider } from '../../src/providers/axe/index.js';
+import { isGradientContrastReview } from '../../src/primitives/gradient-contrast.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
+import { readPageImages } from '../../src/providers/page-images.js';
 import { markUnseenScreens } from '../../src/coverage/unseen.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import { testConfig } from '../helpers.js';
@@ -352,6 +354,35 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     await fixture.close();
   });
 
+  it('reads the images a page shows with the name and role the accessibility tree gives them', async () => {
+    const pixel = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+    const html =
+      '<!doctype html><html lang="en"><head><title>Images</title></head><body><main>' +
+      `<img id="logo" src="${pixel}" alt="Company logo">` +
+      `<img id="divider" src="${pixel}" alt="">` +
+      `<img id="bare" src="${pixel}">` +
+      '<span id="rating" role="img" aria-label="Rated 4 of 5">****</span>' +
+      '<button id="save">Save</button>' +
+      '</main></body></html>';
+    const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    try {
+      await page.gotoReady();
+      const read = await readPageImages(page);
+      const byId = (id: string) => read.images.find((image) => image.elementPath.includes(id));
+
+      expect(read.images).toHaveLength(4);
+      expect(read.notListed).toBe(0);
+      expect(byId('logo')).toMatchObject({ name: 'Company logo', role: 'image' });
+      expect(byId('logo')?.decorative).toBe(false);
+      expect(byId('divider')).toMatchObject({ decorative: true });
+      expect(byId('bare')).toMatchObject({ decorative: false });
+      expect(byId('bare')?.name ?? '').toBe('');
+      expect(byId('rating')).toMatchObject({ name: 'Rated 4 of 5', decorative: false });
+    } finally {
+      await page.close();
+    }
+  });
+
   it('resolves aria-labelledby through the AX tree', async () => {
     const page = await driver.open(fixture.url);
     try {
@@ -471,6 +502,33 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
           "<script>customElements.define('x-off-slot', class extends HTMLElement { constructor() { super();" +
           " this.attachShadow({ mode: 'open' }).innerHTML = '<div aria-live=\"off\"><slot></slot></div>'; } });</script>",
       ],
+      // Content hidden from assistive technology is silent even inside a live region. Orca says
+      // nothing for a polite status inside aria-hidden="true", so the capture must not record it.
+      [
+        'a polite region inside an aria-hidden="true" subtree',
+        '<div aria-hidden="true"><div aria-live="polite" id="message"></div></div>',
+      ],
+      [
+        'an aria-hidden="true" wrapper between a polite region and the change',
+        '<div aria-live="polite"><div aria-hidden="true"><span id="message"></span></div></div>',
+      ],
+      ['a role="status" region that is itself aria-hidden="true"', '<div role="status" aria-hidden="true" id="message"></div>'],
+      [
+        'a polite region inside aria-hidden="TRUE", which Chromium hides',
+        '<div aria-hidden="TRUE"><div aria-live="polite" id="message"></div></div>',
+      ],
+      [
+        'a polite region inside aria-hidden="false" under aria-hidden="true"',
+        '<div aria-hidden="true"><div aria-hidden="false"><div aria-live="polite" id="message"></div></div></div>',
+      ],
+      ['a polite region inside an inert subtree', '<div inert><div aria-live="polite" id="message"></div></div>'],
+      ['a polite region inside hidden content', '<div hidden><div aria-live="polite" id="message"></div></div>'],
+      [
+        'an aria-hidden wrapper around a slot inside a polite region',
+        '<div aria-live="polite"><x-hidden-slot><span id="message"></span></x-hidden-slot></div>' +
+          "<script>customElements.define('x-hidden-slot', class extends HTMLElement { constructor() { super();" +
+          " this.attachShadow({ mode: 'open' }).innerHTML = '<div aria-hidden=\"true\"><slot></slot></div>'; } });</script>",
+      ],
     ];
 
     for (const [name, region] of cases) {
@@ -494,6 +552,12 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
         'a polite region inside an off wrapper',
         '<div aria-live="off"><div aria-live="polite" id="message"></div></div>',
       ],
+      ['a polite region with aria-hidden="false"', '<div aria-live="polite" aria-hidden="false" id="message"></div>'],
+      [
+        'a polite region inside an aria-hidden="false" wrapper',
+        '<div aria-hidden="false"><div aria-live="polite"><span id="message"></span></div></div>',
+      ],
+      ['a polite region with an empty aria-hidden', '<div aria-live="polite" aria-hidden="" id="message"></div>'],
     ];
 
     // A light element slotted into a live region inside a shadow root. The region's own text in the
@@ -534,6 +598,21 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
           regionPage('<div aria-live="polite"><div aria-live="off"><span id="message"></span></div></div>'),
           { waitUntil: 'domcontentloaded' },
         );
+        const page = await adoptPage(pw);
+        await page.click('#save');
+        expect(await page.drainAnnouncements()).toEqual(['Heard']);
+      } finally {
+        await browser.close();
+      }
+    });
+
+    it('does not hear a polite region inside aria-hidden="true" on an adopted page', async () => {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const pw = await browser.newPage();
+        await pw.setContent(regionPage('<div aria-hidden="true"><div aria-live="polite" id="message"></div></div>'), {
+          waitUntil: 'domcontentloaded',
+        });
         const page = await adoptPage(pw);
         await page.click('#save');
         expect(await page.drainAnnouncements()).toEqual(['Heard']);
@@ -659,6 +738,33 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
       state: 'capability-denied',
       reason: 'provider net-only denied capability: network',
     });
+  });
+
+  it('names a real gradient background with the exact axe reason, and nothing else with it', async () => {
+    const html =
+      '<!doctype html><html lang="en"><head><title>Gradient</title></head><body><main>' +
+      '<button id="gradient" style="background: linear-gradient(90deg, #0066cc, #004080); color: #fff">Save</button>' +
+      '<button id="flat" style="background: #fff; color: #999999">Cancel</button>' +
+      '</main></body></html>';
+    const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [axeProvider],
+      config: testConfig({ surfaces: [] }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+      transcriptTabCap: 2,
+    });
+
+    const scan = await runner.scan({ id: 'gradient-screen', url });
+    const contrast = scan.drafts.filter((draft) => draft.rule === 'color-contrast');
+    const gradient = contrast.filter((draft) => isGradientContrastReview(draft));
+
+    expect(gradient.map((draft) => draft.elementPath)).toEqual(['#gradient']);
+    expect(gradient[0]?.whatUserExperiences).toContain('because the background is a gradient');
+    expect(contrast.filter((draft) => !isGradientContrastReview(draft)).map((draft) => draft.elementPath)).toEqual([
+      '#flat',
+    ]);
   });
 
   it('measures reachedSelectorPresent true when the selector is in the rendered DOM', async () => {
@@ -1514,6 +1620,27 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
         await page.close();
       }
     });
+  });
+
+  // A page that swallows every inline style write and says its root is not an element, so a zoom
+  // written from the page's own world never lands.
+  const ZOOM_REFUSING_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Zoom</title></head><body>
+    <main><p>Text</p></main>
+    <script>
+      Object.defineProperty(CSSStyleDeclaration.prototype, 'zoom', { get() { return ''; }, set() {}, configurable: true });
+      Object.defineProperty(HTMLElement, Symbol.hasInstance, { value: () => false });
+    </script>
+  </body></html>`;
+
+  it('setZoom sets the zoom on a page that redefines style writes', async () => {
+    const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(ZOOM_REFUSING_PAGE)}`);
+    try {
+      await page.setZoom(200);
+      // getComputedStyle runs in an isolated world, so it reads what the browser applied.
+      await expect(page.getComputedStyle('html', 'zoom')).resolves.toBe('2');
+    } finally {
+      await page.close();
+    }
   });
 
   it('returns null for ignored or missing AX nodes', async () => {

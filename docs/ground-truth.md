@@ -285,6 +285,7 @@ src/
   floor/            prune.ts
   init/             index.ts docs/index.ts docs/asciidoc-modular.ts docs/asciibinder.ts
   baseline/         index.ts
+  session/          index.ts   (usabl session: sign in once, save the storage state)
   install/          overlay.ts claude.ts ci.ts history-ci.ts branch-rule.ts index.ts
   history/          record.ts read.ts track.ts tracking.ts append.ts git.ts record-run.ts report.ts
   voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts   (built, not wired; section 7.5)
@@ -292,7 +293,8 @@ src/
   surfaces/
     cli.ts pr-comment.ts policy-enforce.ts scrub.ts receipt-store.ts
     stop-hook.ts stop-hook-runner.ts stop-hook-bin.ts
-    vite-plugin.ts overlay-client.ts playwright-helper.ts
+    overlay-host.ts vite-plugin.ts webpack-plugin.ts webpack-loader.ts overlay-client.ts
+    playwright-helper.ts
     self-check.ts docs.ts docs-html.ts
   run.ts cli.ts cli-bin.ts index.ts
 fixtures/
@@ -511,6 +513,7 @@ export interface DocArtifact {
     content: string;
     status: 'draft' | 'approved';
     evidenceRef?: string;
+    origin?: 'page';               // drafted from the page; always a draft, never evidence
   }>;
   generatedAt: string;
   boundToReceipt?: string;
@@ -630,6 +633,22 @@ Wraps axe-core so it returns `Draft[]`. It owns color contrast, alt text, and ge
 WCAG-mapped checks. A curated notes table overrides axe's default `why`/`fix` text for
 common rules with plain-language PatternFly-specific guidance. Every Draft has
 `evidenceClass: 'deterministic'`.
+
+A color-contrast result axe could not measure because the element's background is a
+gradient is still a needs-review draft (`confidence: 'unverified'`) with the same rule,
+element, severity, and evidence. It is the result whose `color-contrast` check data has
+`messageKey: 'bgGradient'`, the axe-core 4.13.0 reason for a background gradient, matched
+exactly. Only its words differ: it says axe could not measure the contrast because the
+background is a gradient, and that a person should check the text against the lightest
+and the darkest part of the gradient (4.5:1, or 3:1 for large text). PatternFly 6 buttons
+draw a gradient, so a screen can carry many of these. The terminal summary prints them as
+one entry per screen and status, with the count and every element path, after the other
+findings in the same list. The collapsed views (pull request comment, Stop hook, self
+check) give them a group of their own, so they never merge with a contrast result axe did
+measure. Every other contrast result, including other needs-review reasons, is printed as
+before. None of this changes a finding, an identity, the floor, a verdict, an exit code,
+or a receipt: new ones still block as not covered, and recorded ones still do not. `usabl
+check --json` lists each one as its own finding.
 
 ### 7.2 PatternFly rulepack
 
@@ -762,6 +781,18 @@ Given a set of changed files, discover which surfaces they affect:
 5. Manual surface globs in config are an additive fallback, never a replacement.
 6. Anything resolving to nothing stays in `unresolvedFiles` and forces `not_covered`.
 
+**Files usabl cannot place.** Each file in `unresolvedFiles` gets an `unresolved` gap whose ref
+is its repository path. The reason says why usabl could not place it, then the fix: add it to the
+`files` of a surface in `usabl.config.json`, or add the route that renders it to
+`usabl.routes.json` with an `entryFile` that imports it. Any import usabl could not follow on the
+way comes last, as discovery detail. A docs source gets the docs form of the fix: add it to a
+page's `sources` in `usabl.docs.json`, or to its `sharedGlobs`. The common case is a shared file,
+such as a layout every route imports through an alias usabl does not resolve. `usabl check` names
+the first such file in its gap list and then lists every other one with its reason, sorted.
+`usabl baseline` scans every UI file, so it is where these show up first: its refusal on
+incomplete coverage, and its `--partial` report, list every such file with its reason, sorted. No
+page text is printed in either list.
+
 An import with no extension is probed against a fixed list: `.mjs`, `.js`, `.mts`, `.ts`, `.jsx`,
 `.tsx`, `.vue`, and `.svelte`, then the same names as `index` files in a directory. usabl does not
 read `resolve.extensions` from the Vite config, because it cannot run the config. When more than
@@ -828,7 +859,17 @@ never read as router code.
   as `import { createBrowserRouter as makeRouter }`, a `const` that holds one, and a `const` made
   by a call that takes one, such as `Sentry.wrapCreateBrowserRouterV6(createBrowserRouter)`;
 - the argument of `useRoutes`, read the same way as a route object list;
-- the JSX passed to `createRoutesFromElements` or `createRoutesFromChildren`.
+- the JSX passed to `createRoutesFromElements` or `createRoutesFromChildren`;
+- a route config array rendered through `map` inside one of the routers above, as in the
+  PatternFly seed: `{routes.map(({ path, element }) => <Route path={path} element={element} />)}`.
+  The callback must return one element, with no children and no spread, whose `path` is the
+  item's `path` (a destructured name or `item.path`). The list must be a `const` array literal in
+  the module, reached directly or through `reduce`, `flatMap`, `flat`, or `filter`. Its objects
+  are read like data router objects. The callback renders only the items it is given, so nested
+  lists under `routes` or `children` are read only when the list passes through `reduce`,
+  `flatMap`, or `flat`, which can bring them to the top level. Then an object with only a `label`
+  and nested `routes` is a group, and its children keep its parent's path. Otherwise usabl reads
+  the top-level objects, leaves the nested ones out, and reports the list as `assumed` (below).
 
 A path object anywhere else in the module is not part of the router and is not read. A `<Route>`
 anywhere else is not scanned either, because it may be a decoy, but it is named as an unreadable
@@ -857,6 +898,20 @@ not-found page, which is not a screen, and is skipped. A path that ends in `*` a
 segments, such as `/app/*`, matches many URLs and usually mounts routes declared in another
 file, so it is reported (below) rather than scanned as the literal URL `/app/*`.
 
+**What it assumes.** usabl does not run code, so a route config list that reaches the map through
+`reduce`, `flatMap`, `flat`, or `filter` is read as if every route object in it is rendered. So
+is a list whose nested relative paths it joins to their parent's path, a plain list whose nested
+route objects it left out, and a list rendered through an element that is not `<Route>`, such
+as a v5 wrapper inside `<Switch>`. Each such list
+is an `assumed` entry with the line of the map call. `usabl init` writes it as a `Review:` note
+with the file and line and keeps the routes in the draft. When the code does more than flatten or
+select, for example when it rewrites paths, the draft can name URLs the app does not serve, which
+is why init asks the operator to check. With no sidecar, nothing has checked the assumption, so
+the router fallback reports each `assumed` entry as an `unreadable` entry (below) with its own
+reason and an id. The planner still queues the routes it read on a wide-blast change, and records
+the entry as a `skipped` gap, so the run is not covered. `usabl drift routes` refuses on it until
+the sidecar acknowledges its id.
+
 **What it reports.** A route it finds but cannot read is never dropped. Each one is an
 `unreadable` entry with the router file, the line, and the reason: a path it cannot resolve (an
 import, an expression, a template with expressions, a `let`), a route that takes its props from a
@@ -879,18 +934,45 @@ the syntax error, and no routes. So is a file with routes but no router. Then:
 - `usabl init` writes a `Review:` note for each entry with its file and line, because the draft
   sidecar does not list that route and usabl never scans a route the sidecar leaves out.
 
-**Entry files.** `usabl init` attributes an entry file only to a JSX route that sits in a router
-the module defines, has no child routes, and names its component as `element={<Name />}` imported
-from a relative path. A layout route with children gets no entry file, because its component
-also renders on every child's URL, and a change to it must not read as covered by one screen.
-This holds for JSX passed to `createRoutesFromElements` and `createRoutesFromChildren` too. Route
-objects, in a router factory call or in `useRoutes`, never get one. When two routes with the same
-path name different components, neither is attributed.
+**Entry files.** `usabl init` attributes an entry file only to a leaf route, one with no child
+routes, that sits in a router the module defines. A layout route with children gets no entry
+file, because its component also renders on every child's URL, and a change to it must not read
+as covered by one screen. The route names what it renders in one of these ways:
+
+- a JSX route's `element={<Name />}`, including JSX passed to `createRoutesFromElements` and
+  `createRoutesFromChildren`;
+- a route object's `element: <Name />` or `Component: Name`, in a router factory call or in
+  `useRoutes`;
+- a data router route object's `lazy: () => import('./module')`, which names the module itself.
+  The loader must make exactly one dynamic import of a plain string; `.then(...)` and an async
+  function that awaits it count;
+- a route config item's field that its map callback renders: `element={item.element}` reads the
+  item's `element: <Name />`, and `element={<C />}` or `component={component}` reads the item's
+  `component: Name`. A field the callback does not render is never read.
+
+`<Suspense>` around one element counts as that element. A lower-case name is an HTML element, not
+a component. `Name` must be imported, or be a `const` made by React's `lazy` from one dynamic
+import, such as `const Reports = React.lazy(() => import('./pages/Reports'))`. A relative
+specifier is resolved from the router file. Any other is resolved only through a tsconfig
+`paths` entry or a Vite `resolve.alias` the project configures, such as `@app/*` to `src/app/*`;
+a package import resolves to nothing. When two sources for one path name different components
+or modules, neither is attributed.
+
+An import is tried the way bundlers try it. A written `.js` names `.js`, `.ts`, or `.tsx`, the
+TypeScript ESM style; `.jsx` names `.jsx` or `.tsx`; `.mjs` names `.mjs` or `.mts`; `.cjs` names
+`.cjs` or `.cts`. An import without an extension is tried as `.tsx`, `.ts`, `.jsx`, and `.js`,
+and then as a directory's `index` file with the same extensions. A file always wins over a
+directory index. When more than one file matches at the same step, the route gets no entry file
+and a `Review:` note names every candidate, sorted, because the bundler's pick depends on an
+extension order init cannot read. Every route init cannot attribute is named in a `Review:` note
+with the router file and the line of its path.
 
 **What it still does not see.** These leave no gap, so check for them:
 
 - routes kept in another module, such as an imported route array. The router file's reference
   to it is reported, but the routes inside are not read;
+- file-system routers, such as Next.js `app/` and `pages/` folders. There is no router file to
+  read;
 - a descendant `<Routes>` element in another file, which only exists at run time;
 - a router file with no router and nothing route-shaped: no `<Routes>`, no router call, no
   `<Route>`, and no `path:` object. It reads as no routes, the same as a missing router file;
@@ -940,7 +1022,24 @@ password field is reliable on its own. Its own API calls to identity endpoints a
 
 Two layers now stand against this, and neither closes the hole completely.
 
-**Before the browser opens.** When `USABL_STORAGE_STATE` names a file in which every cookie carries
+**Where the session comes from.** In order: a storage state path a library caller passes, then the
+file the `USABL_STORAGE_STATE` environment variable names, then the file `usabl session` saved at
+`.usabl/session/storage-state.json`, when it exists. `buildDeps` resolves it, so the CLI, the dev
+overlay, and the Stop hook all use the same one. `usabl session` opens a headed Chromium at the
+origin of `appBaseUrl` (never its path or query), waits for the person to press Enter or close the
+tab, and saves the Playwright storage state. It refuses with exit 2 before the browser opens, and
+again right before the write, unless git ignores the path, and the refusal names the line to add to
+`.gitignore` (`.usabl/`) or, for a tracked file, `git rm --cached`. The folder is made 0700 and the
+file 0600, written to a temporary name and renamed. It saves nothing, and says so, when the browser
+quits before usabl can read the session or the browser holds no cookies and no site storage. It
+prints only the path and how many cookies and sites the file holds. A run uses the saved file only
+when git ignores it: a file git tracks or would commit stops the run with no verdict (exit 4) and
+the fix. The saved file is never loaded when a trusted ref is set or in CI (the `CI` variable),
+because there the code under review can write it and ignore it; only `USABL_STORAGE_STATE` signs
+in, and the run says once on stderr that it skipped the file. A saved file other users can read
+is used, with a warning on stderr that names `chmod 600`.
+
+**Before the browser opens.** When the session file, named by the variable or saved by `usabl session`, is one in which every cookie carries
 an expiry, every one of those is already past, no origin holds local storage or IndexedDB, and
 there are no stored credentials, there is nothing left in it that could authenticate. The run stops
 with no verdict (exit 4). The bar is deliberately "nothing here could possibly work" rather than
@@ -1147,7 +1246,8 @@ counts, not controls. A run that was itself graded on the shell would write the 
 record. The answer for a screen with a late or slow mount is to declare `reachedWhen`.
 
 `usabl init` recommends a signal for every surface it drafts when the application looks
-login-gated: when `USABL_STORAGE_STATE` is set while init runs, or when a discovered route has a
+login-gated: when `USABL_STORAGE_STATE` is set while init runs, when `usabl session` has saved a
+session (init checks only that the file exists), or when a discovered route has a
 sign-in path segment such as `login`, `sign-in`, `logout`, `auth`, or `sso`. It writes none itself,
 because only the operator knows what each screen shows, and a guessed selector that a sign-in page
 also matches would read as proof.
@@ -1203,7 +1303,7 @@ for a screen Rule B fires on wrongly, and for a screen whose identity call is re
 token refresh. It is only as good as what it names: see the paragraphs above on what a shell
 selector and a public shell cost.
 
-#### A credential in a configured surface URL is refused, and a query is echoed
+#### A credential in a configured surface URL is refused, and a query is dropped where it is published
 
 Text that comes off the page is sanitized before it is published. A coverage gap reason strips the
 userinfo, the query, and the fragment from every address it names, and shortens a refused request
@@ -1220,11 +1320,14 @@ secret that is short, lowercase, and sitting in either of the first two path seg
 printed. `/reset/<token>` is cut because a token is normally mixed case or long, not because the
 position is protected.
 
-Configured surface URLs are not page text and are not sanitized. `gap.ref`, `ScreenScan.url`, and
+Configured surface URLs are not page text. `gap.ref`, `ScreenScan.url`, and
 `coverage.affected[].url` carry the operator's own `usabl.config.json` value verbatim into the
-Result, and from there into the CLI output, the overlay, and the pull request comment. That is
-deliberate: the overlay attributes a gap to a screen by comparing these values exactly, so
-rewriting one would silently orphan the gap it belongs to.
+Result, and from there into the overlay and the stop hook. That is deliberate: the overlay
+attributes a gap to a screen by comparing these values exactly, so rewriting one would silently
+orphan the gap it belongs to. The surfaces CI publishes are different. The CLI text, the JSON
+Result that `usabl check --json` writes, and the pull request comment drop the userinfo, the query,
+and the fragment from every URL in the Result, the same way `checkPage` output does. Nothing reads
+those surfaces back to match a gap to a screen, so dropping them costs no match.
 
 So the loader keeps the value and refuses what must not be published. A `surfaces[].url` or an
 `appBaseUrl` that carries userinfo (`https://user:pass@host/screen`, or a user name alone) is
@@ -1237,13 +1340,15 @@ with backslashes read as slashes: an `@` in the authority after `//`, and an `@`
 where URL parsing reads `admin:` as a scheme and finds no password. An `@` later in the path, the
 query, or the fragment is accepted.
 
-A query string or a fragment is accepted, because applications select screens by both, and it is
-still printed as written. The CLI, the stop hook, and the dev-server plugin print a warning on
-stderr each time they load the config. It names the field, never the value, and says that anything
-in the query or the fragment is published. The residual an operator has to know about: a preview token in the query, or anything
-in the fragment, is still echoed by every surface that renders a Result, including a comment
-posted to a public pull request. Do not put one in `usabl.config.json`. Reach a protected
-environment with a storage state, which never enters committed config, instead.
+A query string or a fragment is accepted, because applications select screens by both. The CLI,
+the stop hook, and the dev-server plugin print a warning on stderr when they load the config,
+once per process for each field and URL, so the dev-server plugin does not repeat it on every
+save. It names the field, never the value, and says where the query and the fragment are still
+printed.
+The residual an operator has to know about: a preview token in the query, or anything in the
+fragment, is still echoed by the overlay and the stop hook, and so reaches an agent transcript.
+Do not put one in `usabl.config.json`. Reach a protected environment with a storage state, which
+never enters committed config, instead.
 
 ### Documentation coverage
 
@@ -1370,6 +1475,26 @@ the walk, not an element, and has no row. A table is a `table` or an element wit
 is that table, so a row of a nested table is never one of the outer table's rows. Header and footer
 rows (inside `thead` or `tfoot`, or holding a column header) are not body rows.
 
+**Shadow roots, frames, and focus stops.** The row is read on the tree the element is drawn in. The
+walk goes up from an element in a shadow root to its host, and up out of a same-origin frame to the
+frame element, so a button in a web component, or in a frame, that sits in a keyed row belongs to
+that row. Searches for rows and tables go down into every open shadow root and every same-origin
+frame. axe names an element past a boundary with one selector per boundary, and its joined element
+path names nothing, or more than one element, in the top document, so the axe provider keeps the
+parts and the row read follows them: the host, then into its shadow root, or the frame, then into
+its document. The element path stays as it was. A frame from another origin cannot be looked inside,
+so a finding in one is unreadable. The keyboard walk reads the row of the element it focused at the
+stop itself, through open shadow roots and same-origin frames, instead of going back through the
+stop's path later: a stop whose path could not be computed has only a placeholder, which names
+nothing. A step out of a shadow root or a frame is marked in the path from the row to the control,
+so the path of an element in a web component never reads as one in the same light tree.
+
+**Layout tables.** A `table` whose first role token is `presentation` or `none` is a layout table
+and is not a table here. Its rows are not rows, so a data table inside a layout table is not nested
+in an unkeyed row, and a control in a layout row looks for a row further up. A layout table whose
+own rows carry a key source is still a table: rows a user can tell apart are a list, whatever the
+role says, and leaving them out would key their controls the old way.
+
 **How a table keys its rows.** The table's key source is the first of these that any of its body
 rows has:
 
@@ -1439,7 +1564,9 @@ or element path can meet, so a fixed row barrier is paid down only when the scre
 signal held.
 
 What row keys do not cover: a control outside any table row, a control in a table none of whose
-rows has a key, and a grid built without row roles. Those keep the name, structural, or count key
+rows has a key, a grid built without row roles, rows inside a closed shadow root, and a row in a
+shadow tree that a light element is slotted into. A finding inside a frame from another origin is
+a not-covered gap. Those keep the name, structural, or count key
 and the residual described under Evidence floor.
 
 #### Which keys a comparison uses
@@ -1944,15 +2071,32 @@ coverage honesty, and optional receipt minting.
 
 **Command surface.** `main` recognizes exactly twelve commands: `check`, `comment`,
 `bypass`, `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`,
-`doctor`, `docs`. `check` is the default when no command is given. There is no `--help`
-and no `--version`, and unrecognized flags are silently ignored (the parser has no
-catch-all for unknown `-` tokens); an unknown *command* exits 2.
+`doctor`, `docs`, plus `help`. `check` is the default when no command is given, so `usabl`
+alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
+`usabl help <command>` print help and exit 0 before anything else runs: no config is read, no
+browser opens, stdin is not read, and no file is written. The top-level help lists every
+command with one line each. A command's help lists every flag it takes. Both come from one
+command table in `src/surfaces/cli-commands.ts`, and a flag the table does not list for that
+command is refused with exit 2 and a pointer to `usabl <command> --help`, instead of being
+ignored. An unknown command exits 2 and points to `usabl help`. There is no `--version`.
+
+A local `usabl check` that ends in `approval_required` also prints the next step: commit the
+guarded files (a code owner approves them on a pull request). When no UI file changed, it
+says no screen was scanned and that `usabl baseline`, after the commit, scans every mapped
+screen. When every touched screen opened and was measured, it says their accessibility
+barriers are listed above. A screen that did not open, or was not fully measured, is still in
+`screens`, as a scan with a gap. Only a scan with no gap counts as measured. When some touched
+screens were measured and some were not, it gives both counts and points to the "not evaluated"
+lines. When none was measured, it says no screen was measured and points to the same lines. The
+verdict and the exit code do not change. A run with `--trusted-ref` or `--json` prints no such
+lines.
 
 **Typical uses:**
 
 - Local: `usabl check` (the default) on changed files or named surfaces.
 - First-run policy drafts: `usabl init` infers and writes `usabl.config.json` and
-  `usabl.routes.json` only. It never calls the gate and never consumes the files it just
+  `usabl.routes.json` only. `--app <dir>` drafts one app folder in a repository that holds
+  several (see section 12). It never calls the gate and never consumes the files it just
   wrote, and it refuses to overwrite existing files unless `--force` is given (`--force`
   is init-only draft overwrite, not a gate bypass).
 - Integration wiring: `usabl install <target>` wires exactly one integration surface per
@@ -1960,6 +2104,9 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   `--docs-ci`, and `--branch-rule`; zero or more
   than one refuses with exit 2. `init` scaffolds policy; `install` wires integrations; they
   are different commands (see section 12).
+- Sign in once: `usabl session` opens a browser at the app, the person signs in, and it saves the
+  Playwright storage state to `.usabl/session/storage-state.json` (0600, in a 0700 folder) only
+  where git ignores it. Later runs sign in with it (see "Where the session comes from").
 - Baseline drafts: `usabl baseline` runs two full UI scans and writes `.usabl-evidence.json`
   as a reviewable working-tree diff, holding only what both scans found. It lists the rest as
   intermittent, by screen and rule, and says how to handle them (see Evidence floor). A floored
@@ -2011,9 +2158,17 @@ catch-all for unknown `-` tokens); an unknown *command* exits 2.
   contract gives it. A field the contract does not name is dropped. A document that does not
   match, or text that is not JSON, exits 4 with a plain reason on stderr that names the field by
   its path, for example `findings[0].severity`, and never repeats the value. `usabl comment`
-  prints no comment in that case. The check is of shape only. It does not test whether the values
-  agree with each other, so a well-formed document is still only as true as whoever wrote it, and
-  the receipt, not the document, is what proves a run happened.
+  prints no comment in that case. The check is of shape, plus two agreements. Each verdict must
+  carry the exit code the engine writes for it (verified 0, regression 1, approval_required 2,
+  not_covered 3), and a Result with no verdict must exit 0 or 4. The same holds for
+  `accessibilityVerdict` and `accessibilityExitCode`. A document that shows one outcome and exits
+  with another exits 4 and names the exit code field. And `verdict` and `accessibilityVerdict`
+  must be a pair the engine writes: without a policy hold the two are the same verdict, or both
+  null with the same exit code, and `approval_required` sits over any accessibility outcome,
+  an idle scan included (`accessibilityVerdict` null, exit 0), but never over exit 4. Any other
+  pair exits 4 and names `verdict`. The check does not test whether the other
+  values agree with each other, so a well-formed document is still only as true as whoever wrote
+  it, and the receipt, not the document, is what proves a run happened.
 - Library: the stop hook, overlay, and an optional MCP wrapper import `run()` directly.
   No MCP surface is built today (section 11.5).
 
@@ -2060,8 +2215,9 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   usabl did not reach a verdict for this change, so the run proved nothing about it.", followed by
   a next step to run the check again and the gate's summary inside the untrusted frame. The
   carried verdict is never printed. During an active continuation it allows once, marked NOT
-  verified, like every other blocking state. The self-check prints the same words, and prints IDLE
-  only when `nothingToCheck` is true.
+  verified, like every other blocking state. The self-check prints the same words. The stop hook
+  and the self-check both read a run as idle only when `nothingToCheck` is the boolean `true`; a
+  null verdict with any other value, such as `1` or `"true"`, blocks.
 - `not_covered`: default block. Recalibrate from real-repo measurement
   (section 25) if this drives persistent bypass behavior.
 - Policy mismatch against git anchor: block.
@@ -2116,6 +2272,39 @@ again with Flow types. Strings, comments, types, and generic arrow functions are
 tags in the syntax tree and are never touched. A namespaced tag such as `<svg:rect>` is left as
 written. A file the parser cannot read is served unchanged, with one warning in the dev server log
 that names the file. Its elements carry no source line, and the application still runs.
+
+The webpack plugin (`usabl/webpack`, `UsablWebpackPlugin`) serves the same overlay to an app
+that `webpack serve` (webpack-dev-server 5) runs. Both plugins sit on one shared host
+(`src/surfaces/overlay-host.ts`), so the client, the result projection, the cached run, the
+Host and Origin checks, and the source transform are the same code. The webpack plugin acts only
+when webpack's mode is `development`. In `production`, in `none`, and with no mode at all (which
+webpack treats as production), it adds nothing: no loader, no entry, no dev server hook, so the
+built bundle carries no source attributes and no overlay loader. In development it adds a
+pre-loader for `.tsx` and `.jsx` files outside `node_modules` that applies the same transform,
+before ts-loader or babel-loader rewrite the JSX. It adds an entry to every bundle that loads
+the client as a module script, with the same `navigator.webdriver` and `?usabl=off` rules. It
+wraps `devServer.setupMiddlewares` so the overlay paths answer before the app's own middleware.
+`webpack serve` reads the dev server options from the compiler after plugins are applied, which
+is why one plugin entry is enough. A dev server started from code must be given
+`compiler.options.devServer` for the same reason. webpack-dev-server has no channel a plugin can
+send its own event on, so the plugin serves `/__usabl/events`, a server-sent event stream that
+carries the refresh event name and nothing else, under the same Host and Origin checks. A change
+webpack reports (`invalid`) drops the cached result. webpack watches only the module graph, so
+the plugin also adds `usabl.config.json`, `usabl.routes.json`, `.usabl-evidence.json`, and
+`.usabl-waivers.json` to each compilation's file dependencies. webpack is an optional peer
+dependency: usabl imports nothing from it, and `require('usabl/webpack')` from a CommonJS
+config needs Node.js 22.12 or later. rspack, Next.js, and other bundlers are not supported.
+
+`usabl install --overlay` first works out which bundler the app uses. It counts a Vite config
+(`vite.config.*`) or a `package.json` script that runs the `vite` command as Vite, and a webpack
+config (`webpack.config.*` or `webpack.*.*` at the root, or a config a script names with
+`--config`) or a script that runs `webpack` or `webpack-dev-server` as webpack. `vitest` and
+`vite-node` are not Vite. When it finds both or neither it refuses with exit 2 and names
+everything it saw, or everything it looked for. It never writes a `vite.config.ts` into an app
+that does not run Vite. A Vite app with no config gets the draft, which Vite then loads. A webpack
+app always has a config, and install never edits one: it names the dev config (the one a
+`webpack serve` script names, else a `webpack.dev.*` file, else `webpack.config.*`) and prints
+the two lines to add, in `require` or `import` form to match the file.
 
 ### 11.4 CI/PR comment (trusted-ref policy read)
 
@@ -2228,7 +2417,8 @@ config and nothing would be checked. When the root is the default and there is n
 adds no gap, because a project that does not use usabl config has none. Either way the result's
 `project` field holds the absolute root that was read and whether a config was found there, so
 a caller can tell an empty project from the wrong folder. A config or requirements directory
-that is present and cannot be read is a gap.
+that is present and cannot be read is a gap. A requirements file that does not load is a gap
+whose ref is that file, the same ref `usabl check` gives it.
 
 `checkPage` is not a merge gate. Its verdict is advisory output for a test suite; the gate is
 the only verdict authority. It also acts on the caller's page: the keyboard walk presses Tab,
@@ -2244,17 +2434,30 @@ loses its sign-in credentials, query string, and fragment.
 On an adopted page the capture starts at adoption, not at document start, and it also starts in
 any document the page navigates to afterwards.
 
+When `checkPage` is done with the page, it releases what adoption added and nothing else: it
+detaches its CDP session, which also ends the live-region capture and the accessibility domain
+that session started, and removes its network listeners. The caller's page and context stay
+open, so a test can go on using the page, and repeated checks on one page do not pile up
+sessions or listeners.
+
 The capture hears a change only when the region it falls in is live. It resolves the effective
 live value with the same resolver `pf-toast-live-region` uses, carried into the browser as that
 resolver's own source, so the two cannot disagree: the nearest element that sets a value wins,
 an explicit `aria-live` beats the role, only the exact tokens `polite` and `assertive` are live,
 and roles match without regard to case. A change inside `aria-live="off"`, inside an off wrapper
-within a polite region, or inside a region whose token is `POLITE` or `banana` is not heard. The
-walk climbs through a slot the way the rule's walk does, but it runs in page script, so it sees
-only slots in open shadow roots. When the live region it reaches sits inside a shadow root and the
-changed element is slotted into it from outside, the change is not recorded. That region's own text
-leaves out the slotted text that changed and holds text the change did not make speakable, such as
-slot fallback text, so recording it could pass a flow requirement on words no screen reader spoke.
+within a polite region, or inside a region whose token is `POLITE` or `banana` is not heard. Nor is
+a change inside content hidden from assistive technology: anything on the walk with `inert`, with
+`hidden`, or with an `aria-hidden` value Chromium reads as true. That is every non-empty value
+except `false` and `undefined` in any case. It covers a region inside `aria-hidden="true"`, an
+`aria-hidden` wrapper between the region and the change, and a region that is itself hidden. Orca
+says nothing for a polite status inside `aria-hidden="true"`. `aria-hidden="false"` does not bring
+back content an ancestor hides. A `hidden` attribute that page CSS overrides still counts as
+hidden, which can only make the capture hear less. The walk climbs through a slot the way the
+rule's walk does, but it runs in page script, so it sees only slots in open shadow roots. When
+the live region it reaches sits inside a shadow root and the changed element is slotted into it
+from outside, the change is not recorded. That region's own text leaves out the slotted text that
+changed and holds text the change did not make speakable, such as slot fallback text, so recording
+it could pass a flow requirement on words no screen reader spoke.
 
 The capture and the element path function run in isolated worlds, which share the DOM with the
 page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
@@ -2278,7 +2481,9 @@ ref `requirement:<id>`: the page is labeled with no known surface, or the requir
 surface that matches no configured or discovered surface. A call with no `screenId` is an
 unlabeled page. Its findings carry the label `page`, but it counts as no surface, even in a
 project that has a surface named `page`, so every runtime requirement is a gap and none is
-judged on it. So a page that regresses on a requirement in the CLI also regresses in
+judged on it. A `screenId` the shared id grammar refuses, such as one with a space or an
+invisible character, throws `InputRefusedError` before `checkPage` reads the project or touches
+the page. The error names the field and never repeats the id. So a page that regresses on a requirement in the CLI also regresses in
 `checkPage` when it is labeled with its surface id, and is `not_covered`, never `verified`,
 when it is not.
 
@@ -2335,13 +2540,18 @@ that held is one way, and a matching element seen on the run is the other (secti
 cannot declare a signal, and a surfaces entry with its id is refused, so doctor names docs pages
 with floored debt in a note of their own that points to `usabl floor prune --unconfirmed` for a
 barrier known to be fixed. The session surface reads the
-`USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file:
-unset is missing, a readable JSON file that still holds something which could authenticate
+`USABL_STORAGE_STATE` environment variable, which names a Playwright storage state file, and
+when it is unset, the file `usabl session` saved at `.usabl/session/storage-state.json`:
+neither is missing, a readable JSON file that still holds something which could authenticate
 is wired, and a path that names no file, names a file that is not JSON, or names a state
 holding nothing that could authenticate (no unexpired or undated cookie, no local storage,
-no IndexedDB, and no stored credential) is drifted. Doctor reads the same expiry rule
-`usabl check` refuses on, so the two surfaces cannot disagree about one file. Doctor
-reports whether a session is set and never prints the path or the file contents. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
+no IndexedDB, and no stored credential) is drifted. It is also drifted when git would commit
+the file (`git ls-files` and `git check-ignore`; a file outside the repository cannot be
+committed) or when its group or other permission bits are set, and the next step names every
+fix at once: the `.gitignore` line, `git rm --cached`, `chmod 600`, or `usabl session`. Doctor
+reads the same expiry rule `usabl check` refuses on, so the two surfaces cannot disagree about
+one file. Doctor reports whether a session is set and never prints the variable's path or the
+file contents. The saved file's fixed path is printed, because usabl chose it. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
 engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the pin
 sentinel), or `drifted` (any other shape). Doctor never mints a verdict or a receipt.
 
@@ -2358,11 +2568,72 @@ optional. There is no "partial" mode and no per-surface strictness.
 Onboarding uses two distinct commands. `usabl init` scaffolds policy: it writes
 `usabl.config.json` and `usabl.routes.json` only (never the evidence floor or waivers)
 and refuses to overwrite without `--force`. `usabl install <target>` wires integrations,
-exactly one per run: `--overlay` (vite plugin), `--claude` (a Stop hook running `npx usabl
+exactly one per run: `--overlay` (the Vite or webpack plugin; see section 11.3), `--claude` (a Stop hook running `npx usabl
 stop-hook` in `.claude/settings.json`), `--ci` (the generated PR-gate workflow), or
 `--branch-rule` (a read-only check that the protected branch and the `usabl-required`
 required status check exist). `init` does not wire CI or overlays, and `install` does not
 scaffold policy.
+
+`usabl init` looks for the router in `src/App.tsx`, `src/App.jsx`, `src/routes.tsx`,
+`src/router.tsx`, `src/app/routes.tsx`, and `src/app/routes.jsx`, in that order, under the app
+folder (below), and takes the first that holds route code. It reads routes from it as described
+in [Reading routes out of router source](#reading-routes-out-of-router-source). The draft's
+`wideBlastGlobs` list the router file and whichever of `src/main.tsx`, `src/main.ts`,
+`src/index.tsx`, `src/App.tsx`, `src/App.jsx`, `index.html`, `src/index.html`, the Vite config, and
+the CSS files under `src/` exist in the app folder, because a change to any of them can reach
+every screen. Path aliases come from the `tsconfig.json`, `tsconfig.app.json`, and Vite config in
+the app folder, the configs that app's compiler and bundler read.
+
+**Which app `init` drafts.** `usabl init --app <dir>` drafts the app in that folder, written
+relative to the repository root, such as `usabl init --app packages/web`. A folder outside the
+repository, one with no files, and one written with a glob character (`*`, `?`, `[`, `]`, `{`,
+`}`, or `!`) are refused, because a glob could name several apps at once. With no flag, `init`
+drafts the root app when the root has a Vite config, a router file, or `src/**/*.tsx` or
+`src/**/*.jsx` files. Otherwise it
+looks below the root: a folder with a Vite config two levels down anywhere, or three under
+`packages/` or `apps/`, and a folder under `packages/` or `apps/` with a router file. It skips
+`node_modules`, `dist`, `build`, `coverage`, and hidden folders. When it finds one app, it drafts
+that app and says so in a `Review:` note. When it finds more than one, it refuses, writes
+nothing, lists every app it found, sorted, and names the `--app` flag to use, because a config
+drafted for the wrong app checks the wrong files.
+
+Every path `init` writes stays relative to the repository root: `uiFileGlobs`, the router file,
+`wideBlastGlobs`, and each entry file carry the app folder, such as `packages/web/src/**/*.tsx`.
+`usabl.config.json` and `usabl.routes.json` are written at the root, and `guardedPaths` names
+them there, so CODEOWNERS and the trusted-ref guard still match them. A config drafted for one
+app treats a change in another app as no UI change. That includes a workspace package the app
+renders components from, so when the app's `package.json` depends on a package found under
+`packages/` or `apps/`, a `Review:` note names it and says to add its files to `uiFileGlobs`.
+`init` does not add them itself, because it cannot tell which of the package's files the app
+renders.
+
+**The dev server URL.** `init` parses the app's Vite config, without running it, and reads
+`server.port` and `server.https` from the exported config: `export default { ... }`,
+`defineConfig({ ... })`, a function that returns the config, or a `const` that holds one. The
+port counts when it is a number literal. https counts when `server.https` is `true` or an options
+object, or when the plugins list calls `basicSsl()`. A setting that is absent takes Vite's
+default, port 5173 over http. A setting written as code, such as `Number(process.env.PORT)`, or a
+`server` block it cannot see into, such as a spread or a variable, is never guessed: `init` uses
+the default and a `Review:` note names the setting it could not read and says to set
+`appBaseUrl` by hand. A port in another block, such as `preview.port`, or in a comment or a
+string, is never read as the dev server port.
+
+**Drafts that would read as idle.** A config with empty `uiFileGlobs` treats no change as a UI
+change, so every run reads as nothing to check and no run can ever produce a verdict. `init`
+drafts `src/**/*.tsx` and `src/**/*.jsx` under the app folder when those files exist. When
+neither exists, it refuses, writes nothing, and says to use `--app` or to set `uiFileGlobs` by
+hand. When it derives no route at all, it writes `usabl.config.json` but not
+`usabl.routes.json`, because an empty sidecar takes precedence over the router and lists no
+screens. It says so and points to the manual mapping: a surface in `surfaces` with its id, url,
+and files, or routes written into `usabl.routes.json`. Until then a changed UI file is
+reported as not covered. When no route is derived and a `usabl.routes.json` already exists,
+`init` refuses even with `--force` and writes nothing, because usabl reads that sidecar instead
+of the router: the new config would be checked against routes `init` did not derive, possibly
+another app's after `--app` names a different folder. The refusal names the file to review, and
+says to delete it and run `init --force` again if it does not list this app's screens.
+
+`usabl check` itself does not refuse a config with empty `uiFileGlobs` yet. Such a config,
+written by hand or by an older `init`, still reads as nothing to check on every run.
 
 ### Brownfield adoption (prove what you touch)
 
@@ -2473,8 +2744,12 @@ file at once, since each file can be valid on its own, and names both files and 
 positions. A requirement id, and the surface it names, follow the same character grammar as a
 surface id (section 22). A refused character is reported by position and code point, never
 printed back. Either failure is `approval_required`, returned from the loader rather than
-thrown, and every reason the loader returns is scrubbed before it leaves, including the YAML
-parser's own message and the file path, because both can carry file bytes.
+thrown, and every reason the loader returns is scrubbed before it leaves, including the file
+path, because it can carry file bytes. A YAML syntax error names the file, the line, and the
+parser's problem, such as `intake YAML is invalid at line 5: unexpected end of the stream within
+a flow collection`. The parser's own message is never used, because it quotes the source line,
+and a problem that carries source text after its fixed wording, such as an alias name, is cut
+before that text.
 
 Any loader failure stops every scan, and the run shows the loader's reason as a `not-covered`
 coverage gap whose ref is the refused file, or the configured root when the loader named none.
@@ -2522,6 +2797,32 @@ manifest comes from configured content requirements. Surfaces the run did not ve
 carry no `evidenceRef`, so unverified state cannot masquerade as proof. The same
 projection is available to library callers as `projectDocs` and `collectDocArtifacts`
 from the `usabl/docs` export.
+
+By default `usabl docs` documents the surfaces the working-tree change touched, the same
+scope `usabl check` uses, so a clean tree yields an empty `artifacts` list. `usabl docs
+--all` documents every in-scope surface instead. It plans the run from every file the
+`uiFileGlobs` match, every file a surface names, and every source of a docs page, so every
+screen the planners can reach is scanned, whatever git status says. Nothing else about
+coverage changes: a file no screen owns is still a coverage gap, and that gap still stops
+the run from minting a receipt. It is still a generator. It exits 0, mints no verdict of
+its own, and takes every honesty state from receipt binding, exactly as the per-change
+mode does.
+
+When no content requirement covers a scanned screen, the alt-text manifest for that
+screen is drafted from the page instead. The docs run reads each image on the screen
+(`img`, `role="img"`, `role="image"`, and `input type="image"`) and its accessible name
+and role from the accessibility tree. Gating runs never read them. Each entry is the
+image's element path and the text it has now. An image with no name reads `Marked
+decorative on the page.` when its own `alt` is empty or its role is `none` or
+`presentation`, and `No text alternative on the page.` otherwise.
+That text is untrusted page text. It passes the surface scrubber, each string is cut to a
+fixed length and marked `(shortened)` when cut, and at most 200 images are listed per
+screen, with one more entry that counts the rest. Every drafted entry has `origin:
+'page'` and `status: 'draft'`, and never an `evidenceRef`. It never becomes a check, a
+requirement, or an approval. The HTML page labels such a card "Drafted from the page" and
+says a person must review every entry. A screen that has content requirements keeps the
+manifest built from them, and a screen whose images could not be read, or that usabl did
+not see, gets no drafted manifest.
 
 ### Not v1
 

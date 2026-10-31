@@ -169,3 +169,129 @@ describe('projectDocs', () => {
     expect(projected.artifacts.length).toBeGreaterThan(0);
   });
 });
+
+describe('collectDocArtifacts alt-text manifest drafted from the page', () => {
+  const noRequirements: RequirementBundle = { version: 1, requirements: [] };
+
+  function withImages(): Result {
+    return resultFixture({
+      screens: [
+        {
+          ...screenFixture('clusters', []),
+          images: [
+            { elementPath: '#logo', name: 'Company logo', role: 'img', decorative: false },
+            { elementPath: '#divider', name: '', role: null, decorative: true },
+            { elementPath: '#chart', name: null, role: null, decorative: false },
+          ],
+        },
+        { ...screenFixture('settings', []), images: [{ elementPath: '#avatar', name: 'Your photo', role: 'img', decorative: false }] },
+      ],
+    });
+  }
+
+  it('drafts one manifest per screen from the page when there are no content requirements', () => {
+    const manifests = collectDocArtifacts(withImages(), noRequirements).filter(
+      (artifact) => artifact.kind === 'alt-text-manifest',
+    );
+
+    expect(manifests.map((manifest) => manifest.surface)).toEqual(['clusters', 'settings']);
+    expect(manifests[0]?.entries).toEqual([
+      { element: '#logo', content: 'Company logo', status: 'draft', origin: 'page' },
+      { element: '#divider', content: 'Marked decorative on the page.', status: 'draft', origin: 'page' },
+      { element: '#chart', content: 'No text alternative on the page.', status: 'draft', origin: 'page' },
+    ]);
+  });
+
+  it('never marks a page-drafted entry approved or gives it evidence, even on a verified run', () => {
+    const manifests = collectDocArtifacts(withImages(), noRequirements).filter(
+      (artifact) => artifact.kind === 'alt-text-manifest',
+    );
+
+    // Bound to the receipt as a whole, so the card reads as bound without evidence, never verified.
+    expect(manifests.every((manifest) => manifest.boundToReceipt === 'tree-123')).toBe(true);
+    for (const entry of manifests.flatMap((manifest) => manifest.entries)) {
+      expect(entry.status).toBe('draft');
+      expect(entry.origin).toBe('page');
+      expect(entry.evidenceRef).toBeUndefined();
+    }
+  });
+
+  it('binds nothing when the run minted no receipt', () => {
+    const manifests = collectDocArtifacts({ ...withImages(), receipt: null, verdict: 'regression' }, noRequirements).filter(
+      (artifact) => artifact.kind === 'alt-text-manifest',
+    );
+
+    expect(manifests).toHaveLength(2);
+    expect(manifests.every((manifest) => manifest.boundToReceipt === undefined)).toBe(true);
+  });
+
+  it('keeps the content requirements for a surface that has them and drafts only the others', () => {
+    const manifests = collectDocArtifacts(withImages(), bundleFixture).filter(
+      (artifact) => artifact.kind === 'alt-text-manifest',
+    );
+
+    expect(manifests.map((manifest) => [manifest.surface, manifest.entries[0]?.origin ?? 'intake'])).toEqual([
+      ['clusters', 'intake'],
+      ['settings', 'page'],
+    ]);
+  });
+
+  it('drafts nothing for a screen whose images were not read', () => {
+    const artifacts = collectDocArtifacts(resultFixture(), noRequirements);
+
+    expect(artifacts.filter((artifact) => artifact.kind === 'alt-text-manifest')).toHaveLength(0);
+  });
+
+  it('says how many images were not listed', () => {
+    const result = resultFixture({
+      screens: [{ ...screenFixture('clusters', []), images: [], imagesNotListed: 7 }],
+    });
+
+    const manifest = collectDocArtifacts(result, noRequirements).find((artifact) => artifact.kind === 'alt-text-manifest');
+
+    expect(manifest?.entries).toEqual([
+      {
+        element: '(not listed)',
+        content: '7 more images on this screen were not listed. usabl lists at most 200 images per screen.',
+        status: 'draft',
+        origin: 'page',
+      },
+    ]);
+  });
+
+  it('scrubs and shortens page text before it reaches a manifest', () => {
+    const token = 'ghp_' + 'a'.repeat(36);
+    const result = resultFixture({
+      screens: [
+        {
+          ...screenFixture('clusters', []),
+          images: [
+            { elementPath: '#x\u001b[31m', name: `Logo \u001b[2J${token}`, role: 'img', decorative: false },
+            { elementPath: '#long', name: 'word '.repeat(200), role: 'img', decorative: false },
+          ],
+        },
+      ],
+    });
+
+    const manifest = collectDocArtifacts(result, noRequirements).find((artifact) => artifact.kind === 'alt-text-manifest');
+    const [first, second] = manifest?.entries ?? [];
+
+    expect(first?.element).toBe('#x');
+    expect(first?.content).not.toContain(token);
+    expect(first?.content).not.toContain('\u001b');
+    expect(second?.content.length).toBeLessThanOrEqual(200);
+    expect(second?.content.endsWith('(shortened)')).toBe(true);
+  });
+
+  it('does not add page text to the requirement bundle', () => {
+    const bundle: RequirementBundle = { version: 1, requirements: [] };
+
+    collectDocArtifacts(withImages(), bundle);
+
+    expect(bundle).toEqual({ version: 1, requirements: [] });
+  });
+
+  it('is deterministic for the same input', () => {
+    expect(collectDocArtifacts(withImages(), noRequirements)).toEqual(collectDocArtifacts(withImages(), noRequirements));
+  });
+});

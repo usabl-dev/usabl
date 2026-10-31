@@ -6,7 +6,7 @@
  * still exit 0: a missing surface is information, not a doctor failure.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { main } from '../../src/cli.js';
@@ -69,14 +69,17 @@ describe('usabl doctor command wiring', () => {
     // an injected value, so only the command wiring proves an operator's exported session is
     // the one being reported on. The path stays out of stdout in every state.
     const sessionPath = join(workspace, 'storage-state.json');
-    await writeFile(sessionPath, JSON.stringify({ cookies: [], origins: [] }), 'utf8');
+    // A session file is a credential, so a wired one is readable by its owner only.
+    await writeFile(sessionPath, JSON.stringify({ cookies: [], origins: [] }), { encoding: 'utf8', mode: 0o600 });
+    await chmod(sessionPath, 0o600);
     vi.stubEnv('USABL_STORAGE_STATE', sessionPath);
 
     const code = await main(['doctor']);
 
     expect(code).toBe(0);
     const out = stdout.join('');
-    expect(out).toContain('[wired] authenticated session (USABL_STORAGE_STATE)');
+    // The label names the variable first; it may also name the file usabl session saves.
+    expect(out).toContain('[wired] authenticated session (USABL_STORAGE_STATE');
     expect(out).not.toContain(sessionPath);
   });
 
@@ -87,6 +90,6 @@ describe('usabl doctor command wiring', () => {
 
     expect(code).toBe(0);
     const out = stdout.join('');
-    expect(out).toContain('[missing] authenticated session (USABL_STORAGE_STATE)');
+    expect(out).toContain('[missing] authenticated session (USABL_STORAGE_STATE');
   });
 });

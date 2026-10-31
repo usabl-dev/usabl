@@ -272,6 +272,87 @@ describe('parseResultJson validates the whole Result against the contract', () =
   });
 });
 
+describe('parseResultJson refuses a verdict that disagrees with its exit code', () => {
+  const withFields = (fields: Record<string, unknown>): Record<string, unknown> => ({ ...validResult(), ...fields });
+
+  // usabl enforce exits on the exit code and usabl comment shows the verdict. A document where the
+  // two disagree would show one outcome and exit with another.
+  const refused: Array<[string, string, Record<string, unknown>]> = [
+    ['a regression that exits 0', 'exitCode', { verdict: 'regression', exitCode: 0 }],
+    ['a verified run that exits 1', 'exitCode', { verdict: 'verified', exitCode: 1, accessibilityVerdict: 'verified', accessibilityExitCode: 0 }],
+    ['an approval_required run that exits 0', 'exitCode', { verdict: 'approval_required', exitCode: 0 }],
+    ['a not_covered run that exits 2', 'exitCode', { verdict: 'not_covered', exitCode: 2, accessibilityVerdict: 'not_covered', accessibilityExitCode: 3 }],
+    ['a run with no verdict that exits 1', 'exitCode', { verdict: null, exitCode: 1 }],
+    ['a run with no verdict that exits 3', 'exitCode', { verdict: null, exitCode: 3 }],
+    ['a regression that exits 5', 'exitCode', { verdict: 'regression', exitCode: 5 }],
+    ['a run with no verdict that exits 5', 'exitCode', { verdict: null, exitCode: 5 }],
+    ['an accessibility regression that exits 0', 'accessibilityExitCode', { accessibilityVerdict: 'regression', accessibilityExitCode: 0 }],
+    ['an accessibility verified that exits 3', 'accessibilityExitCode', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: 'verified', accessibilityExitCode: 3 }],
+    ['an accessibility not_covered that exits 4', 'accessibilityExitCode', { verdict: null, exitCode: 4, accessibilityVerdict: 'not_covered', accessibilityExitCode: 4 }],
+    ['no accessibility verdict that exits 1', 'accessibilityExitCode', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: null, accessibilityExitCode: 1 }],
+  ];
+  for (const [name, field, fields] of refused) {
+    it(`refuses ${name}, naming ${field}`, () => {
+      const err = refusal(withFields(fields));
+      expect(err.field).toBe(field);
+      expect(err.message).toContain(field);
+    });
+  }
+
+  // Every pair the engine writes: each verdict with its own code, an idle run (no verdict, 0), a
+  // run that crashed and failed open (no verdict, 4), and an approval hold over each scan outcome.
+  const accepted: Array<[string, Record<string, unknown>]> = [
+    ['a verified run', { verdict: 'verified', exitCode: 0, accessibilityVerdict: 'verified', accessibilityExitCode: 0 }],
+    ['a regression', { verdict: 'regression', exitCode: 1, accessibilityVerdict: 'regression', accessibilityExitCode: 1 }],
+    ['a not_covered run', { verdict: 'not_covered', exitCode: 3, accessibilityVerdict: 'not_covered', accessibilityExitCode: 3 }],
+    ['an idle run', { verdict: null, exitCode: 0, accessibilityVerdict: null, accessibilityExitCode: 0 }],
+    ['a run that crashed', { verdict: null, exitCode: 4, accessibilityVerdict: null, accessibilityExitCode: 4 }],
+    ['an approval hold over an idle scan', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: null, accessibilityExitCode: 0 }],
+    ['an approval hold over a regression', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: 'regression', accessibilityExitCode: 1 }],
+    ['an approval hold over a verified scan', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: 'verified', accessibilityExitCode: 0 }],
+    ['an approval hold over a not_covered scan', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: 'not_covered', accessibilityExitCode: 3 }],
+  ];
+  for (const [name, fields] of accepted) {
+    it(`accepts ${name}`, () => {
+      expect(() => parseResultJson(withFields(fields))).not.toThrow();
+    });
+  }
+
+  // Each half is a valid verdict with its own code, but the engine never writes the two together.
+  // Without a policy hold the verdict is the accessibility verdict. A hold sits over a scan that
+  // finished, so never over a crash. usabl comment shows the verdict and usabl enforce
+  // accessibility exits on the other half, so such a document would report two different runs.
+  const unpaired: Array<[string, Record<string, unknown>]> = [
+    ['a verified run over an accessibility regression', { verdict: 'verified', exitCode: 0, accessibilityVerdict: 'regression', accessibilityExitCode: 1 }],
+    ['a regression over an accessibility verified', { verdict: 'regression', exitCode: 1, accessibilityVerdict: 'verified', accessibilityExitCode: 0 }],
+    ['a not_covered run over no accessibility verdict', { verdict: 'not_covered', exitCode: 3, accessibilityVerdict: null, accessibilityExitCode: 0 }],
+    ['an idle run over an accessibility verified', { verdict: null, exitCode: 0, accessibilityVerdict: 'verified', accessibilityExitCode: 0 }],
+    ['an idle run over an accessibility crash', { verdict: null, exitCode: 0, accessibilityVerdict: null, accessibilityExitCode: 4 }],
+    ['a crashed run over an idle accessibility half', { verdict: null, exitCode: 4, accessibilityVerdict: null, accessibilityExitCode: 0 }],
+    ['an approval hold over a crash', { verdict: 'approval_required', exitCode: 2, accessibilityVerdict: null, accessibilityExitCode: 4 }],
+  ];
+  for (const [name, fields] of unpaired) {
+    it(`refuses ${name}, naming verdict`, () => {
+      const err = refusal(withFields(fields));
+      expect(err.field).toBe('verdict');
+      expect(err.message).toContain('accessibilityVerdict');
+    });
+  }
+
+  it('usabl enforce accessibility exits 4 on a regression that claims exit 0', async () => {
+    const restore = withStdin(JSON.stringify(withFields({ accessibilityVerdict: 'regression', accessibilityExitCode: 0 })));
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      expect(await main(['enforce', 'accessibility'])).toBe(4);
+      expect(stderr.mock.calls.map((call) => String(call[0])).join('')).toContain('accessibilityExitCode');
+    } finally {
+      restore();
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 function withStdin(text: string): () => void {
   const original = Object.getOwnPropertyDescriptor(process, 'stdin');
   Object.defineProperty(process, 'stdin', { value: Readable.from([text]), configurable: true });

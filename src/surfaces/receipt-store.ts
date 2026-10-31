@@ -23,6 +23,12 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
 }
 
+// A count is a whole number, zero or more. JSON can hold a fraction, a negative number, and, from
+// an exponent too large for a double, Infinity, and none of them is a count of anything.
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
 function isApplicabilitySummary(value: unknown): value is Receipt['applicability'] {
   return (
     Array.isArray(value) &&
@@ -30,8 +36,8 @@ function isApplicabilitySummary(value: unknown): value is Receipt['applicability
       (entry) =>
         isRecord(entry) &&
         typeof entry['screenId'] === 'string' &&
-        typeof entry['applied'] === 'number' &&
-        typeof entry['abstained'] === 'number',
+        isCount(entry['applied']) &&
+        isCount(entry['abstained']),
     )
   );
 }
@@ -63,11 +69,11 @@ function isReceipt(value: unknown): value is Receipt {
     isApplicabilitySummary(value['applicability']) &&
     value['verdict'] === 'verified' &&
     isRecord(findingsSummary) &&
-    typeof findingsSummary['new'] === 'number' &&
-    typeof findingsSummary['carried'] === 'number' &&
-    typeof findingsSummary['fixed'] === 'number' &&
-    typeof findingsSummary['unverified'] === 'number' &&
-    typeof value['activeWaivers'] === 'number' &&
+    isCount(findingsSummary['new']) &&
+    isCount(findingsSummary['carried']) &&
+    isCount(findingsSummary['fixed']) &&
+    isCount(findingsSummary['unverified']) &&
+    isCount(value['activeWaivers']) &&
     typeof value['mintedAt'] === 'string'
   );
 }

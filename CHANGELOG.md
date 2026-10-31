@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+### Added
+
+- Automatic debt tracking. `usabl install --ci` now also writes
+  `.github/workflows/usabl-history.yml`, which scans main after each merge and once a day
+  and appends what it saw to month files on a `usabl/history` branch in your repository. A
+  record holds identity hashes, rules, and counts, never an element key or page text. The
+  scan job reads only; the append job runs no application code and holds the one permission
+  tracking needs, `contents: write`. The jobs run `usabl history record --out <file>` and
+  `usabl history append <file>`. Pull requests read the branch they fetched, never the pull
+  request tree.
+
+- `usabl debt` lists the remaining accessibility debt by screen and rule, with the date each
+  was first seen on main, its age, its trend, and how many barriers are intermittent. With
+  tracking off it lists the floor and says how to turn tracking on. `--json` prints the
+  same data. The pull request comment gains an `### Accessibility debt` line, for example
+  "This PR fixes 2 accessibility barriers. 14 remain; the oldest has been open 41 days. 1
+  is intermittent."
+
+- `usabl session` signs you in once for screens behind a login. It opens a browser at the
+  app; you sign in and press Enter, or close the tab. It saves the Playwright storage state
+  to `.usabl/session/storage-state.json`, readable only by you, and only where git ignores
+  it; otherwise it refuses and says what to add to `.gitignore`. It never prints anything
+  in the file. `usabl check`, `usabl baseline`, the dev overlay, and the Stop hook then
+  sign in with it while it exists, unless `USABL_STORAGE_STATE` names another file. A run
+  stops, with the fix, on a saved session git would commit or one that has expired.
+  `usabl doctor` flags a session file git would commit, one other users can read, and an
+  expired one, and names each fix. `usabl init` recommends a `reachedWhen` signal for every
+  screen when a session is saved.
+
+- `usabl init --app <dir>` drafts the config for one app folder in a monorepo, such as
+  `usabl init --app packages/web`. Every path it writes stays relative to the repository
+  root, so CODEOWNERS and the trusted-ref guard still match the policy files, and a change
+  in another app is not a UI change for this config. With no flag, `init` drafts the root
+  app, or the one app it finds below the root. When it finds more than one, it lists them,
+  names the flag to use, and writes nothing. In a monorepo, the router, alias, and shell
+  files `init` reads, such as `src/app/routes.tsx` and the app's own `tsconfig.json`, are
+  read inside the app folder. `--app` takes one existing folder: a path with glob
+  characters, such as `packages/*`, is refused.
+
+- `usabl init` now reads the router shapes real apps use. A route config array rendered
+  through `map`, as in the PatternFly seed, is read with its nested `routes` when the list
+  is flattened with `reduce`, `flatMap`, or `flat`, and each item is attributed to the
+  component its map renders. Under a plain `map`, nested route objects are left out and
+  named in a note. Lazy routes are attributed too: a component made with
+  `React.lazy(() => import('./Page'))`, and a data router route with
+  `lazy: () => import('./route')`. A leaf
+  data router route object now gets the entry file its `element` or `Component` names, the
+  same as a JSX route. Entry imports resolve through a configured tsconfig or Vite path
+  alias, a directory's `index` file, and the `./Page.js` form for `Page.ts`. More than one
+  match at one step still gets no entry file and a note. `init` also looks for the router in
+  `src/app/routes.tsx`. Every route it cannot attribute, and every route list it read on an
+  assumption, such as one flattened with `reduce`, is a `Review:` note with the file and
+  line. With no `usabl.routes.json`, such a list is not proven: `usabl check` records it as
+  a skipped gap on a wide-blast change, and `usabl drift routes` refuses on it until the
+  sidecar acknowledges its id.
+
 ### Fixed
 
 - A fixed barrier no longer leaves a slot a new barrier can take. The floor's count is a
@@ -16,6 +72,130 @@
   barrier that comes back on an unchanged tree keeps its slot, is labelled intermittent,
   and blocks no pull request. Only a version 3 floor is tracked. The receipt now binds the
   history head (receipt schema version 2), so a stored version 1 receipt costs one full run.
+
+- `usabl comment` and `usabl enforce` now refuse a Result whose `verdict` and
+  `accessibilityVerdict` are a pair the engine never writes, such as `verified` over an
+  accessibility `regression`, with exit 4 and a reason that names `verdict`. Before, each
+  half was checked only against its own exit code, so the comment could show one outcome
+  while the accessibility check exited on another. An approval hold over any scan outcome,
+  an idle scan included, is still accepted.
+
+- The stop hook now reads a run as idle only when `coverage.nothingToCheck` is `true`, as
+  the verdict line and the self-check do. Before, a hand-composed Result with a null verdict
+  and any truthy value there, such as `1`, let the stop through with "You may stop". It now
+  blocks as a run that proved nothing. An unreachable fallback branch was removed.
+
+- `checkPage` now detaches the CDP session it opens on the caller's page, and removes its
+  network listeners, when it is done. Before, each call left a session and four listeners
+  attached for the life of the page. The caller's page stays open.
+
+- The warning about a query string or a fragment in a configured URL now prints once per
+  process for each URL. Before, the dev-server plugin printed it again on every save.
+
+- When `checkPage` cannot load a requirements file, its gap now names that file, such as
+  `design/broken.yaml`, as `usabl check` does. Before, the ref was the word
+  `requirements`.
+
+- A requirements file with a YAML syntax error is now reported by file, line, and problem,
+  and the reason no longer quotes the source line. Before, the parser's message, which
+  repeats the offending line, reached the coverage gap with only pattern redaction on it.
+
+- The CLI text, the JSON Result from `usabl check --json`, and the pull request comment now
+  drop the query string and the fragment from every URL, as `checkPage` output already did.
+  Before, a preview token in a configured screen URL was printed in each of them. The
+  dev-server overlay and the stop hook still print the URL as written, because the overlay
+  matches a gap to its screen by the exact URL, and the config warning now says so.
+
+- Egress redaction now removes a quoted password or secret with spaces in it whole, such as
+  `password: "two words"`. Before, only the first word was removed. It also removes the user
+  name and password from an address written with backslashes (`https:\\user:pass@host`) or
+  with JSON-escaped slashes (`https:\/\/user:pass@host`). A quoted label such as
+  `aria-label="Password :"` is no longer cut after its colon, so element paths and page text
+  that only name a password field come out as written.
+
+- `setZoom` now writes the zoom from an isolated world, like the focus and style reads. Before,
+  it ran in the page's own world, so a page that redefined style writes could stop the zoom
+  from landing. No check calls it yet.
+
+- `usabl init` reads the dev server port and https setting from the parsed Vite config.
+  Before, a pattern match took the first `port:` after `server:`, so a `preview.port`
+  could become the draft's port, and https was never read. A setting written as code is
+  now named in a `Review:` note with how to set `appBaseUrl`.
+
+- `usabl init` no longer writes a config that can never produce a verdict. With no UI
+  files it refuses and writes nothing, because empty `uiFileGlobs` make every run read as
+  nothing to check. With no route derived, it skips `usabl.routes.json`, because an empty
+  sidecar lists no screens, and says how to map screens by hand. If a `usabl.routes.json`
+  already exists then, it refuses even with `--force` and names the file to review or
+  delete, because the old sidecar would pair the new config with routes it did not derive.
+  A JSX app now gets `src/**/*.jsx` as its UI glob.
+
+- `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
+  `usabl help <command>` now print help and exit 0 without running anything. Before,
+  `--help` was ignored and a check ran, and `help` was an unknown command. The top-level
+  help lists every command, and each command's help lists its flags. A flag a command
+  does not take is now refused with exit 2 and a pointer to that command's help, instead
+  of being ignored. `usabl` with no command still runs `check`, as the docs say.
+
+- A local `usabl check` that needs approval now says what to do next: review and commit
+  the guarded files. When no UI file changed, it says no screen was scanned and that
+  `usabl baseline` scans every mapped screen once the files are committed. It says a
+  touched screen was scanned only when the screen opened and was measured; otherwise it
+  says how many did not and points to the "not evaluated" lines. The verdict does not
+  change.
+
+- First-run errors now name the fix: a missing `usabl.config.json` points to
+  `usabl init` or `--config`; a repository with no commits, or a trusted ref git cannot
+  read, says to make a first commit or fetch the ref; a screen where nothing answers says
+  to start the app or set its `surfaces[].url`, or to fix the screen's configured URL when
+  usabl cannot tell which setting it came from; `usabl baseline` refused on other dirty policy
+  files says to commit or revert them, and refused on empty `uiFileGlobs` says which
+  field to set. A flag missing its value gives an example.
+
+- A file usabl cannot place on any screen, such as a shared layout every route imports
+  through an alias usabl does not resolve, is now named with its path, why it could not be
+  placed, and the fix: add it to a surface's `files` in `usabl.config.json`, or add the
+  route that renders it to `usabl.routes.json`. Before, `usabl baseline` printed only a
+  count of unresolved files, and `usabl check` named one file and counted the rest. Both
+  now list every such file, sorted. Docs sources that no page lists get the docs form of
+  the fix.
+
+- `usabl init` no longer picks one entry file when a route's import matches more than one
+  file, such as `Page.tsx` and `Page.ts`. Before, it took the first by extension order and
+  wrote it into the draft `usabl.routes.json`, so a change to the file the route really
+  renders could miss its screen. Now the route's entry file is empty and a `Review:` note
+  names every candidate.
+
+- Row keys now reach findings inside shadow roots, frames, and layout tables, so their
+  screens no longer read as not covered on every run. Before, axe's selector for an element
+  in a shadow root or a frame was joined into one string that named nothing, or several
+  elements, and a keyboard-walk stop with no path was looked up by a placeholder that named
+  nothing. Now the row read follows axe's target part by part, into the shadow root or the
+  same-origin frame, and climbs back out to the host or the frame element, so a button in a
+  web component in a keyed row belongs to that row. The keyboard walk reads the row of the
+  element it focused at the stop itself. A `table` whose role is `presentation` or `none`
+  is a layout table and no longer makes a data table inside it read as nested in an unkeyed
+  row, unless its own rows carry keys. A finding in a frame from another origin, or one that
+  still cannot be found, stays a not-covered gap. The element path of every finding is
+  unchanged.
+
+- Three input checks that were missing. `checkPage` now refuses a `screenId` the shared id
+  grammar refuses, such as one with a space or an invisible character, with
+  `InputRefusedError` before it reads the project or touches the page. The stop hook's local
+  receipt now counts only as a receipt when every count in it is a whole number, zero or
+  more; any other receipt is ignored and the hook checks again. `usabl comment` and
+  `usabl enforce` now refuse a Result whose verdict does not carry the exit code the engine
+  writes for it, or whose accessibility verdict does not, and exit 4 naming the field.
+  Before, a document could show a regression and exit 0. Each refusal names the field and
+  never repeats the value.
+
+- The announcement capture no longer records a change inside content hidden from
+  assistive technology. Before, a polite status inside `aria-hidden="true"` was recorded as
+  announced, though Orca says nothing for it, so a flow requirement that expected its text
+  passed. Now a change is not recorded when anything between it and the top of the page,
+  the live region included, has `inert`, `hidden`, or an `aria-hidden` value Chromium reads
+  as true (every non-empty value but `false` and `undefined`). The walk follows the flat
+  tree, so an `aria-hidden` wrapper around a slot counts. `aria-hidden="false"` is heard.
 
 - The focus and style reads now run in an isolated world, the way element paths and the
   announcement capture already did. These are `focusBody`, `activeElementIs`,
@@ -335,21 +515,31 @@
 
 ### Added
 
-- Automatic debt tracking. `usabl install --ci` now also writes
-  `.github/workflows/usabl-history.yml`, which scans main after each merge and once a day
-  and appends what it saw to month files on a `usabl/history` branch in your repository. A
-  record holds identity hashes, rules, and counts, never an element key or page text. The
-  scan job reads only; the append job runs no application code and holds the one permission
-  tracking needs, `contents: write`. The jobs run `usabl history record --out <file>` and
-  `usabl history append <file>`. Pull requests read the branch they fetched, never the pull
-  request tree.
+- The dev overlay now runs in webpack apps. Add `new UsablWebpackPlugin({ cwd: __dirname })`
+  from `usabl/webpack` to the development webpack config and run `webpack serve`. It shows
+  the same panel as the Vite plugin, behind the same Host and Origin checks, and findings
+  point to their exact source line. In any mode but `development` the plugin adds nothing,
+  so a production build carries no source attributes and no overlay loader. webpack is an
+  optional peer dependency and is never installed with usabl. rspack, Next.js, and other
+  bundlers are not supported.
 
-- `usabl debt` lists the remaining accessibility debt by screen and rule, with the date each
-  was first seen on main, its age, its trend, and how many barriers are intermittent. With
-  tracking off it lists the floor and says how to turn tracking on. `--json` prints the
-  same data. The pull request comment gains an `### Accessibility debt` line, for example
-  "This PR fixes 2 accessibility barriers. 14 remain; the oldest has been open 41 days. 1
-  is intermittent."
+- `usabl docs --all` documents every in-scope surface, not only the ones the change
+  touched. It plans the run from every UI file, every surface file, and every docs page
+  source, so a clean tree no longer yields an empty page. It still exits 0, mints no
+  verdict of its own, and takes every honesty state from the receipt, as before.
+
+- The alt-text manifest is drafted from the page when no content requirement covers a
+  screen. The docs run reads each image on the screen and the text it has now. Every such
+  entry is marked `origin: 'page'`, stays a draft, carries no evidence, and is scrubbed and
+  shortened like other page text. The HTML page says a person must review it. Gating runs
+  do not read images, so `usabl check` output is unchanged.
+
+- Color-contrast results that axe could not measure because the background is a gradient,
+  as on PatternFly 6 buttons, now say why and what a person should check. The terminal
+  summary prints them as one entry per screen with the count and every element, and the
+  collapsed views give them a group of their own. Only axe's exact reason for a background
+  gradient is grouped. No finding is dropped, and no verdict, exit code, floor, or receipt
+  changes.
 
 - `usabl doctor` reports a readiness signals surface. It is missing when a screen holds
   floored debt and declares no `reachedWhen` signal, and its next step names those
@@ -377,6 +567,17 @@
   screen ends in about 17.1 seconds with the default cap.
 
 ### Changed
+
+- `usabl install --overlay` now detects whether the app uses Vite or webpack, from config
+  files and `package.json` scripts. In a webpack app it prints the two lines to add to the
+  dev config and writes nothing. When it finds both bundlers or neither, it refuses with
+  exit 2 and names what it saw. Before, an app with no Vite config got a new
+  `vite.config.ts`, even a webpack app where nothing reads that file. A Vite app with no
+  config still gets the draft. `usabl doctor` reports the overlay for either bundler.
+
+- The user name and password check for configured URLs is now one shared function, used by
+  `usabl.config.json` (`surfaces[].url`, `appBaseUrl`) and `usabl.docs.json`
+  (`docsBaseUrl`). What it refuses is unchanged.
 
 - `usabl baseline` now scans twice and records only the barriers both scans found, at the
   smaller of the two counts. The rest are listed as intermittent, by screen and rule and

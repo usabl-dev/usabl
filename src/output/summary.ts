@@ -3,7 +3,7 @@
  * This unit renders operator-facing text only.
  * It must never mutate Result, mint a verdict, or pass through untrusted text unsanitized.
  */
-import type { Finding, Result } from '../contracts/index.js';
+import type { CoverageGap, Finding, Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
 import {
   discloseGaps,
@@ -13,6 +13,11 @@ import {
   isBlockingBarrier,
 } from './disclosure.js';
 import { boundField } from './bounded-text.js';
+import {
+  GRADIENT_CONTRAST_CHECK,
+  GRADIENT_CONTRAST_WHY,
+  isGradientContrastReview,
+} from '../primitives/gradient-contrast.js';
 import { UNCONFIRMED_HEADING, unconfirmedNotice } from './floor-notice.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from './source-location.js';
 import { describeVerdict, formatVerdictLine } from './verdict-line.js';
@@ -59,6 +64,34 @@ function renderNotEvaluated(result: Result): string[] {
       });
       return `    ${gapHeadline(disclosure)} ${detail}`;
     }),
+    ...renderOtherUnplacedFiles(gaps),
+  ];
+}
+
+/**
+ * Every file usabl could not place on a screen, after the one the gap list above already named.
+ *
+ * The gap list names one example per state so every surface stays bounded. A file that is not
+ * placed is fixed one file at a time, in config or in the routes sidecar, so the terminal names
+ * each one with its own reason, which carries the fix. Refs are repository paths and reasons are
+ * usabl's own words about the source tree; both are neutralized like any printed field.
+ */
+function renderOtherUnplacedFiles(gaps: readonly CoverageGap[]): string[] {
+  const unplaced = gaps.filter((gap) => gap.state === 'unresolved');
+  if (unplaced.length < 2) {
+    return [];
+  }
+  // The gap list above named the first one. Sort the rest so the output is the same on every run.
+  const rest = [...unplaced.slice(1)].sort((left, right) =>
+    left.ref < right.ref ? -1 : left.ref > right.ref ? 1 : 0,
+  );
+  return [
+    `    other files not placed on any screen: ${rest.length}`,
+    ...rest.map(
+      (gap) =>
+        `      ${boundField(neutralizePrintedText(gap.ref), 'gapRef')}: ` +
+        `${boundField(neutralizePrintedText(gap.reason), 'gapReason')}`,
+    ),
   ];
 }
 
@@ -210,6 +243,61 @@ function renderFinding(finding: Finding, fixLabel: string): string[] {
   return lines;
 }
 
+const SEVERITY_ORDER: Finding['severity'][] = ['critical', 'serious', 'moderate', 'minor'];
+
+/**
+ * One entry for every contrast result axe could not measure on one screen because of a gradient
+ * background, with the count, the reason, what to check, and every element.
+ *
+ * PatternFly 6 draws its buttons on a gradient, so a screen can carry dozens of these, one per
+ * button, each saying the same thing. Printed one by one they bury the results that differ. The
+ * entry stands for all of them and names each element on its own line. Each path is bounded on its
+ * own, so a long list never cuts an element off. `usabl check --json` still lists each finding.
+ * The findings, their count in the heading, and the verdict are untouched: this changes how they
+ * are printed, never what they are.
+ */
+function renderGradientGroup(findings: Finding[]): string[] {
+  const first = findings[0];
+  if (first === undefined) return [];
+  const count = findings.length;
+  const severity =
+    SEVERITY_ORDER.find((level) => findings.some((finding) => finding.severity === level)) ?? first.severity;
+  const screenId = boundField(neutralizePrintedText(first.screenId), 'screenId');
+  const elements = findings.map((finding) => neutralizePrintedText(finding.elementPath)).sort();
+  const subject = count === 1 ? '1 element, because it has' : `${String(count)} elements, because each has`;
+  return [
+    `    [${first.status}] ${screenId} · axe/color-contrast (${severity}): Needs review: axe could not ` +
+      `measure the color contrast of ${subject} a gradient background.`,
+    `        why: ${GRADIENT_CONTRAST_WHY}`,
+    `        check: ${GRADIENT_CONTRAST_CHECK}`,
+    `        elements (${String(count)}):`,
+    ...elements.map((element) => `          ${boundField(element, 'source')}`),
+    '        usabl check --json lists each one as its own finding.',
+  ];
+}
+
+/**
+ * One list of findings: each finding on its own, in the order the gate gave them, then one entry
+ * per screen and status for the gradient contrast results, sorted by screen.
+ */
+function renderFindingList(findings: Finding[], fixLabel: string): string[] {
+  const lines: string[] = [];
+  const groups = new Map<string, Finding[]>();
+  for (const finding of findings) {
+    if (!isGradientContrastReview(finding)) {
+      lines.push(...renderFinding(finding, fixLabel));
+      continue;
+    }
+    const key = JSON.stringify([finding.screenId, finding.status]);
+    groups.set(key, [...(groups.get(key) ?? []), finding]);
+  }
+  const keys = [...groups.keys()].sort();
+  for (const key of keys) {
+    lines.push(...renderGradientGroup(groups.get(key) ?? []));
+  }
+  return lines;
+}
+
 /**
  * Human CLI projection of a Result. Never re-derives findings or a verdict.
  *
@@ -242,16 +330,12 @@ export function formatSummary(result: Result): string {
   const recorded = result.findings.filter(isRecordedNotBlocking);
   if (blocking.length > 0) {
     lines.push(`  ${BLOCKING_HEADING}: ${blocking.length} finding(s)`);
-    for (const finding of blocking) {
-      lines.push(...renderFinding(finding, BLOCKING_FIX_LABEL));
-    }
+    lines.push(...renderFindingList(blocking, BLOCKING_FIX_LABEL));
   }
   if (recorded.length > 0) {
     lines.push(`  ${RECORDED_HEADING}: ${recorded.length} finding(s)`);
     lines.push(`    ${RECORDED_NOTE}`);
-    for (const finding of recorded) {
-      lines.push(...renderFinding(finding, RECORDED_FIX_LABEL));
-    }
+    lines.push(...renderFindingList(recorded, RECORDED_FIX_LABEL));
   }
   lines.push(...renderFloorHeadroom(result));
   lines.push(...renderFloorUnconfirmed(result));

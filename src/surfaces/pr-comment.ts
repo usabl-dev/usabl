@@ -28,7 +28,7 @@ import {
 import { formatAppSourceLocation, formatDocsSourceLocation } from '../output/source-location.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
 import {
-  scrubResult,
+  scrubPublishedResult,
   scrubString,
   UNTRUSTED_FRAME_END,
   UNTRUSTED_FRAME_START,
@@ -564,8 +564,9 @@ function newSplit(summary: ConformanceSummary): string {
 }
 
 export function projectPrComment(result: Result, config?: UsablConfig): string {
-  // Scrub first because PR comments are public egress for page-derived text.
-  const safe = scrubResult(result);
+  // Scrub first because PR comments are public egress for page-derived text, and for the query
+  // and the fragment of a configured screen url.
+  const safe = scrubPublishedResult(result);
   if (safe.verdict === null) {
     return renderNoVerdict(safe).join('\n');
   }

@@ -5,7 +5,7 @@
  */
 import type { Result } from '../contracts/index.js';
 import { formatSummary } from '../output/summary.js';
-import { scrubResult } from './scrub.js';
+import { scrubPublishedResult } from './scrub.js';
 
 // The one integration each install run wires. Exactly one per invocation.
 export type InstallTarget = 'overlay' | 'claude' | 'claude-skill' | 'cursor' | 'ci' | 'docs-ci' | 'branch-rule';
@@ -25,6 +25,9 @@ export interface CliOptions {
   // Render the docs artifacts as an accessible HTML page instead of JSON.
   // Only the docs command reads this; every other command ignores it.
   html: boolean;
+  // Document every in-scope surface, not only the ones the change touched. Only the docs command
+  // reads this; every other command ignores it.
+  all: boolean;
   // Select the docs-manifest onboarding for `usabl init --docs`. Only the init command
   // reads this; every other command ignores it.
   docs: boolean;
@@ -34,6 +37,9 @@ export interface CliOptions {
   configPath: string;
   selfCheck: boolean;
   force: boolean;
+  // Init-only: the app folder to draft, relative to the repository root, from `--app <dir>`.
+  // Absent unless the flag was given.
+  app?: string;
   enforceCheck: 'accessibility' | 'policy' | null;
   floorSubcommand: 'prune' | null;
   // Baseline-only: write a partial floor from only the cleanly scanned screens instead of
@@ -100,6 +106,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let command: 'check' | 'comment' | 'enforce' | 'floor' | 'drift' | string = 'check';
   let staticOnly = false;
   let html = false;
+  let all = false;
   let docs = false;
   let trustedRef: string | null = null;
   let json = false;
@@ -107,6 +114,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let configPath = 'usabl.config.json';
   let selfCheck = false;
   let force = false;
+  let app: string | undefined;
   let enforceCheck: 'accessibility' | 'policy' | null = null;
   let floorSubcommand: 'prune' | null = null;
   let partial = false;
@@ -175,6 +183,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
       html = true;
       continue;
     }
+    if (token === '--all') {
+      // docs-only: document the whole app instead of the change.
+      all = true;
+      continue;
+    }
     if (token === '--docs') {
       // init-only: draft a usabl.docs.json for the detected docs format.
       docs = true;
@@ -235,10 +248,20 @@ export function parseCliArgs(argv: string[]): CliOptions {
       force = true;
       continue;
     }
+    if (token === '--app') {
+      // init-only: draft the config for one app folder in a repository that holds several.
+      const value = argv[index + 1];
+      if (value === undefined || isFlag(value)) {
+        throw new Error('--app requires a value: the app folder, relative to the repository root');
+      }
+      app = value;
+      index += 1;
+      continue;
+    }
     if (token === '--trusted-ref') {
       const value = argv[index + 1];
       if (value === undefined || isFlag(value)) {
-        throw new Error('--trusted-ref requires a value');
+        throw new Error('--trusted-ref requires a value, such as --trusted-ref origin/main');
       }
       trustedRef = value;
       index += 1;
@@ -256,7 +279,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     if (token === '--config') {
       const value = argv[index + 1];
       if (value === undefined || isFlag(value)) {
-        throw new Error('--config requires a value');
+        throw new Error('--config requires a value, such as --config usabl.config.json');
       }
       configPath = value;
       index += 1;
@@ -268,7 +291,30 @@ export function parseCliArgs(argv: string[]): CliOptions {
   // target flag and cursorStopHook stays false so the two uses never collide.
   const cursorStopHook = command === 'stop-hook' && cursor;
 
-  return { command, staticOnly, html, docs, trustedRef, json, ci, configPath, selfCheck, force, enforceCheck, floorSubcommand, partial, unconfirmed, driftSubcommand, historySubcommand, historyFile, outPath, installTarget, cursorStopHook };
+  return {
+    command,
+    staticOnly,
+    html,
+    all,
+    docs,
+    trustedRef,
+    json,
+    ci,
+    configPath,
+    selfCheck,
+    force,
+    ...(app === undefined ? {} : { app }),
+    enforceCheck,
+    floorSubcommand,
+    partial,
+    unconfirmed,
+    driftSubcommand,
+    historySubcommand,
+    historyFile,
+    outPath,
+    installTarget,
+    cursorStopHook,
+  };
 }
 
 export function installRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {
@@ -290,13 +336,94 @@ export function installRefusal(opts: CliOptions): { exitCode: 2; message: string
 export function ciRefusal(opts: CliOptions): { exitCode: 2; message: string } | null {
   // CI must pin a trusted ref so a PR cannot edit policy and self-accept in one run.
   return opts.ci && opts.trustedRef === null
-    ? { exitCode: 2, message: 'CI mode requires --trusted-ref <git-ref>' }
+    ? { exitCode: 2, message: 'CI mode requires --trusted-ref <git-ref>, such as --trusted-ref origin/main' }
     : null;
 }
 
+const REPORT_LABEL = '  accessibility report:';
+const REPORT_INDENT = '    ';
+const REPORT_WIDTH = 80;
+
+function countOf(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+// Wraps the report sentences at 80 columns under the "accessibility report:" label, so a count of
+// any width still fits a terminal.
+function wrapReport(text: string): string[] {
+  const lines: string[] = [];
+  let line = REPORT_LABEL;
+  for (const word of text.split(' ')) {
+    if (line.length + 1 + word.length > REPORT_WIDTH) {
+      lines.push(line);
+      line = `${REPORT_INDENT}${word}`;
+    } else {
+      line = `${line} ${word}`;
+    }
+  }
+  lines.push(line);
+  return lines;
+}
+
+/**
+ * What the run measured on the screens this change touches. A screen that failed to open, or was
+ * not seen, is still in the Result's screens, as a scan with a gap. Only a scan with no gap was
+ * opened and measured, which is the same test the run uses for the screens a receipt covers.
+ */
+function touchedScreenReport(result: Result): string[] {
+  const total = result.screens.length;
+  const measured = result.screens.filter((screen) => screen.gaps.length === 0).length;
+  const unmeasured = total - measured;
+  if (unmeasured === 0) {
+    return [
+      '  accessibility report: the screens this change touches were still scanned.',
+      '    Any accessibility barriers found there are listed above.',
+    ];
+  }
+  const why = (subject: string): string =>
+    `${subject} did not open or ${unmeasured === 1 ? 'was' : 'were'} not fully measured. ` +
+    'The "not evaluated" lines above say why.';
+  if (measured === 0) {
+    return wrapReport(`no screen was measured. ${why(`${countOf(total, 'screen')} this change touches`)}`);
+  }
+  return wrapReport(
+    `${measured} of the ${total} screens this change touches ${measured === 1 ? 'was' : 'were'} scanned. ` +
+      `Any accessibility barriers found there are listed above. ${why(countOf(unmeasured, 'screen'))}`,
+  );
+}
+
+/**
+ * The next step for a local run that needs approval. On a pull request a code owner approves the
+ * change, and the comment there says so. A local run has no pull request, and its most common
+ * cause is a new user whose drafted policy files are not committed yet, so it says what clears the
+ * state and what the run still reported. It reads the Result and never changes the verdict.
+ */
+export function localApprovalNextSteps(result: Result): string[] {
+  if (result.verdict !== 'approval_required') {
+    return [];
+  }
+  const lines = [
+    '  next: usabl trusts policy files only after they are committed.',
+    '    Review the guarded paths above, then commit them. On a pull request,',
+    '    a code owner approves them there.',
+  ];
+  if (result.coverage.nothingToCheck) {
+    lines.push(
+      '  accessibility report: none yet. No UI file changed, so no screen was',
+      '    scanned. After you commit the policy files, run usabl baseline. It',
+      '    scans every mapped screen and records the accessibility barriers it',
+      '    finds in .usabl-evidence.json.',
+    );
+  } else if (result.screens.length > 0) {
+    lines.push(...touchedScreenReport(result));
+  }
+  return lines;
+}
+
 export function projectCli(result: Result): { exitCode: number; text: string; json: string } {
-  // Scrub before any egress so page text and credential-shaped values cannot hijack output.
-  const safe = scrubResult(result);
+  // Scrub before any egress so page text and credential-shaped values cannot hijack output. This
+  // text and this JSON are what CI publishes, so URLs also lose their query and fragment.
+  const safe = scrubPublishedResult(result);
   return {
     exitCode: safe.exitCode,
     text: formatSummary(safe),

@@ -199,6 +199,19 @@ comments.
   tokens by their prefix. Any other lone base64 JSON, such as `?state=eyJ...` in a screen URL, is
   kept as written, because the overlay matches screen URLs and gap refs against the live location. The last one matters for config errors: a token pasted into the
   wrong key used to be repeated back in full in the unknown-key message.
+- A quoted password or secret value is redacted to its closing quote on the same line, so a
+  value with spaces in it (`password: "two words"`) is removed whole. Userinfo is also found
+  after a backslash authority opener (`https:\\user:pass@host`) and after JSON-escaped slashes
+  (`https:\/\/user:pass@host`).
+- A label word inside a quote that is still open is not a key. In `aria-label="Password :"` or
+  `{"label":"Password:"}` the quote after the colon closes the label, so the text after it is
+  kept. A bare label followed by more text, such as `Password : Enter a new one`, is still
+  redacted, because it reads the same as `secret : value`.
+- The surfaces CI publishes, the CLI text, the JSON Result, and the pull request comment, drop
+  the userinfo, the query, and the fragment of every URL in the Result, as `checkPage` output
+  already did. A preview token in a configured screen URL no longer reaches a pull request. The
+  overlay and the stop hook keep the URL as written, because the overlay matches a gap to its
+  screen by the exact URL, and the config loader warns about that.
 
 **Status:** [x] Local-first; egress redaction and neutralization ship, with anchors matched
 through invisible characters and redaction on both sides of the strip. [ ] Telemetry decision
@@ -421,6 +434,14 @@ JSON parser's own message, which quotes the input back. The per-number checks an
 above stay in place behind it, so a projector called from inside the process with a Result
 that skipped this check is still bounded.
 
+A verdict must also carry the exit code the engine writes for it, for both the verdict and the
+accessibility verdict, and a Result with no verdict must exit 0 or 4. A document that shows a
+regression and exits 0 is refused with exit 4, so `usabl comment` and `usabl enforce` cannot
+report two different outcomes from one document. For the same reason the verdict and the
+accessibility verdict must be a pair the engine writes. A document that says `verified` over an
+accessibility `regression` is refused, so the comment cannot show a pass while the
+accessibility check fails, or the reverse.
+
 **Not handled:** the check is of shape, not of truth. A well-formed document can still say
 anything the contract allows: a verdict that its findings do not support, counts that do not
 add up, or a receipt for a run that never happened. The counts, the sections, and the verdict
@@ -454,7 +475,7 @@ still true of the supported package surface, as verified against the packed and 
 package: `Object.keys(await import('usabl'))` contains neither name, and every subpath form,
 `usabl/surfaces/stop-hook.js`, `usabl/dist/surfaces/stop-hook.js`, `usabl/stop-hook`, and
 `usabl/dist/index.js`, fails to resolve with `ERR_PACKAGE_PATH_NOT_EXPORTED`, because the
-`exports` map lists only the root, `./vite`, `./playwright`, `./docs`, and `./measure`. It did
+`exports` map lists only the root, `./vite`, `./webpack`, `./playwright`, `./docs`, and `./measure`. It did
 not cover the authors inside that process. A library caller can hand `run()` a check runner of
 its own, so a rule is whatever that runner wrote, and a pull request author chooses the name of
 any file they add under a guarded directory, so a guarded path is text that author wrote.
@@ -501,6 +522,8 @@ outside every table as the control in an accepted row. Either way a new barrier 
 - The table row read runs in an isolated world of its own over CDP, for a page usabl opens and for
   a page `checkPage` adopts, so page script cannot change the `getAttribute`, `closest`,
   `parentElement`, or `querySelectorAll` calls a row key and a table identity are read through.
+  It reads same-origin frames from that world too, so a frame's own page script cannot change
+  them there either.
 - The path function and the row read are sent with every query, so there is no installed helper
   to trust. The
   capture is started at document start on a page usabl opens and at adoption on a caller's page,
@@ -513,18 +536,89 @@ outside every table as the control in an accepted row. Either way a new barrier 
   getters, `contains`, `focus`, or `getComputedStyle` in its own world does not change what they
   report.
 
-**Not handled:** two page operations still run in the page's own world: the zoom write
-(`setZoom`) and the element count that readiness polls to tell when the DOM stopped changing. A
-page can change what those see by redefining DOM methods. No provider calls `setZoom` today. axe
-also computes its target selectors in the page's own world, so a page that patches DOM accessors
-can still change the selector, and with it the identity key, of an axe finding.
+- The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
+  that redefines style writes, or says its root is not an element, cannot stop the zoom from
+  landing. No provider calls `setZoom` today; the planned resize check (WCAG 1.4.4) will.
 
-**Status:** [x] Paths, announcements, table rows, and the focus and style reads run in isolated
-worlds. [ ] The zoom write, the readiness element count, and axe's target selectors are open.
+**Not handled:** one page operation still runs in the page's own world: the element count that
+readiness polls to tell when the DOM stopped changing. A page can change what it sees by
+redefining DOM methods. axe also computes its target selectors in the page's own world, so a page
+that patches DOM accessors can still change the selector, and with it the identity key, of an axe
+finding.
+
+**Status:** [x] Paths, announcements, table rows, the focus and style reads, and the zoom write
+run in isolated worlds. [ ] The readiness element count and axe's target selectors are open.
 
 ---
 
-## Threat 11: A forged or broken debt history
+## Threat 11: Dev overlay endpoints read from another site
+
+**Attack:** The dev overlay answers on the app's dev server. Its result endpoint carries the
+workspace root, source paths, guarded paths, and findings. A page on another site reaches it with
+a cross-origin request or through DNS rebinding, and reads it. The same applies to the overlay
+client and, for webpack, to the refresh event stream.
+
+**Controls:** Both plugins, Vite and webpack, serve these paths from one shared host
+(`src/surfaces/overlay-host.ts`), so the rules cannot differ between bundlers. A request must
+carry exactly one Host header that names a local host or the configured bind host on the server's
+own port, and any Origin must be a browser's exact serialization matching that origin. Anything
+else gets 403. The Result is scrubbed before it is projected, and a failed run's reason stays in
+the dev server log. The webpack event stream carries only the event name, never a result, path,
+or page text. The webpack plugin does nothing outside development mode, so a production bundle
+has no overlay loader, no endpoints, and no source attributes.
+
+**Tests:** `test/surfaces/vite-plugin.test.ts` (Host, Origin, duplicate Host, IPv6, live port),
+`test/surfaces/webpack-plugin.test.ts` (foreign Host, foreign Origin, and other port refused on
+the result, client, and event paths; production and no-mode builds carry nothing), and
+`test/surfaces/webpack-overlay.integration.test.ts` (a real dev server).
+
+**Status:** [x] Shipped for Vite and webpack-dev-server 5.
+
+---
+
+## Threat 12: The saved session file
+
+**Attack:** `usabl session` writes a live credential, a Playwright storage state with session
+cookies and site storage, into the repository folder. It leaks if it is committed and pushed, if
+it rides into a CI artifact or a pull request comment, if another account on the machine reads
+it, or if usabl prints any of it in output, an error, or a Result.
+
+**Controls:**
+
+- Git: the file is written only where `git check-ignore` says git ignores it and `git ls-files`
+  says git does not track it. This is checked before the browser opens and again right before the
+  write. Otherwise it refuses and names the `.gitignore` line (`.usabl/`) or `git rm --cached`.
+- Use: a run loads the saved file only under the same rule. A tracked or unignored file stops the
+  run with no verdict. The saved file is never loaded when a trusted ref is set or in CI, because
+  there the code under review can write it; only `USABL_STORAGE_STATE` signs in, and the run says
+  once on stderr that it skipped the file.
+- Permissions: the folder is 0700 and the file 0600, written to a temporary name and renamed so a
+  looser mode left by an older file is replaced. A run that finds looser bits warns with
+  `chmod 600`; doctor reports the file as drifted.
+- Output: nothing in the file is printed by `usabl session`, `usabl check`, `usabl doctor`, or
+  `usabl init`. Messages name the fixed path, counts, and fixes only. A browser error is replaced
+  by a fixed sentence, and `redactStorageStatePath` already keeps the path out of browser errors.
+  `usabl init` checks only that the file exists. The opened URL is the origin of `appBaseUrl`, so
+  a query string in the config is not shown.
+- CI: the generated workflows upload `usabl-result.json` and nothing else, and the Result never
+  names the session file or holds anything from it.
+- Fixtures use low-entropy values (`SECRETPOISON`), because CI runs gitleaks on the whole history.
+
+**Tests:** `test/session/session.test.ts` (refusals before the browser and before the write,
+0600 and 0700, nothing printed), `test/deps/session-file.test.ts` (load only when ignored,
+tracked and unknown refused, expired and non-JSON refused without quoting, mode warning, real
+`git` states), `test/doctor/doctor.test.ts` (each problem and every fix named, nothing printed),
+`test/install/ci.test.ts` (uploads), and `test/session/session-login.integration.test.ts` (a real
+login, then `usabl check` signed in, then doctor on mode 0644 and on a file git would commit).
+
+**Not handled:** the file is plain JSON on disk. Anyone who runs as the same user, and any backup
+of the folder, can read it. Delete it when the session is no longer needed.
+
+**Status:** [x] Shipped with `usabl session`.
+
+---
+
+## Threat 13: A forged or broken debt history
 
 **Attack:** someone who can push to the `usabl/history` branch writes records that claim a barrier
 was fixed, claim more barriers than the floor accepts, or name identities the floor does not hold,

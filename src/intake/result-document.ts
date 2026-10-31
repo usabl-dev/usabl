@@ -19,8 +19,11 @@
  * The draft and coverage readers are also exported for the gate, which checks the drafts and the
  * coverage a library caller hands it against the same contract, with its own wording.
  *
- * This unit checks shape only. It must never decide a verdict, and it does not judge whether the
- * values agree with each other: the receipt, not the document, is what proves a run happened.
+ * This unit checks shape, and two agreements. Each verdict must carry the exit code the engine
+ * writes for it, because usabl enforce exits on the code while usabl comment shows the verdict.
+ * And the verdict and the accessibility verdict must be a pair the engine writes, for the same
+ * reason. It must never decide a verdict, and it does not judge whether the other values agree
+ * with each other: the receipt, not the document, is what proves a run happened.
  */
 import type {
   AffectedScreen,
@@ -42,6 +45,14 @@ import type {
   ScreenScan,
   TranscriptStop,
 } from '../contracts/index.js';
+import {
+  ACCESSIBILITY_EXIT_CODES,
+  APPROVAL_REQUIRED_EXIT_CODE,
+  NO_VERDICT_EXIT_CODES,
+} from '../coverage/completeness.js';
+
+// The code of a run with nothing to check, the first of the two no-verdict codes.
+const IDLE_EXIT_CODE = NO_VERDICT_EXIT_CODES[0];
 import { InputRefusedError } from './input-refusal.js';
 
 type Json = Record<string, unknown>;
@@ -462,6 +473,35 @@ export function parseResultDocument(value: unknown): Result {
   return worded(() => readResult(value), resultWording);
 }
 
+/** The exit codes a Result may carry with a verdict, from the table the gate writes them by. */
+function exitCodesFor(verdict: Result['verdict']): readonly number[] {
+  if (verdict === null) return NO_VERDICT_EXIT_CODES;
+  if (verdict === 'approval_required') return [APPROVAL_REQUIRED_EXIT_CODE];
+  return [ACCESSIBILITY_EXIT_CODES[verdict]];
+}
+
+/**
+ * Whether the engine writes this verdict over this accessibility verdict, by the gate's own rules.
+ *
+ * Without a policy hold the gate returns the accessibility outcome as the verdict, so the two
+ * halves are one state: the same verdict, or no verdict on both with the same code, 0 for an idle
+ * run and 4 for a run that failed. With a hold the verdict is approval_required over whatever the
+ * scan reached, including an idle scan (no accessibility verdict, exit 0). A run that failed, or
+ * one that saw none of its screens, returns before the gate with no verdict at all, so no hold is
+ * ever written over exit 4. The golden Results hold one of each written kind.
+ */
+function enginePair(
+  verdict: Result['verdict'],
+  exitCode: Result['exitCode'],
+  accessibilityVerdict: Result['accessibilityVerdict'],
+  accessibilityExitCode: Result['accessibilityExitCode'],
+): boolean {
+  if (verdict === 'approval_required') {
+    return accessibilityVerdict !== null || accessibilityExitCode === IDLE_EXIT_CODE;
+  }
+  return verdict === accessibilityVerdict && exitCode === accessibilityExitCode;
+}
+
 function readResult(value: unknown): Result {
   const source = record(value, '');
   if (source['schemaVersion'] !== 'usabl.result.v1') {
@@ -474,13 +514,34 @@ function readResult(value: unknown): Result {
   if (source['accessibilityVerdict'] === 'approval_required') {
     refuse('accessibilityVerdict', 'must not be approval_required, because that verdict is policy, not an accessibility outcome');
   }
+  const accessibilityVerdict = oneOfOrNull(source['accessibilityVerdict'], 'accessibilityVerdict', ['verified', 'regression', 'not_covered'] as const);
+  const verdict = oneOfOrNull(source['verdict'], 'verdict', ['verified', 'regression', 'not_covered', 'approval_required'] as const);
+  const summary = text(source['summary'], 'summary');
+  const exitCode = oneOf(source['exitCode'], 'exitCode', [0, 1, 2, 3, 4, 5] as const);
+  // usabl enforce exits on the code and usabl comment shows the verdict, so a document where the
+  // two disagree would show one outcome and exit with another. Neither value is repeated: both are
+  // already known to be values of their sets, but the rule is the same for every refusal.
+  if (!exitCodesFor(accessibilityVerdict).includes(accessibilityExitCode)) {
+    refuse('accessibilityExitCode', 'does not match accessibilityVerdict. Each verdict has one exit code, and no verdict exits 0 or 4');
+  }
+  if (!exitCodesFor(verdict).includes(exitCode)) {
+    refuse('exitCode', 'does not match verdict. Each verdict has one exit code, and no verdict exits 0 or 4');
+  }
+  // usabl comment shows the verdict and usabl enforce accessibility exits on the other half, so a
+  // pair the engine never writes would report two different runs.
+  if (!enginePair(verdict, exitCode, accessibilityVerdict, accessibilityExitCode)) {
+    refuse(
+      'verdict',
+      'does not agree with accessibilityVerdict. Without a policy hold the two are the same, and approval_required is held over a scan that finished, never over a run that failed',
+    );
+  }
   return {
     schemaVersion: 'usabl.result.v1',
     accessibilityExitCode,
-    accessibilityVerdict: oneOfOrNull(source['accessibilityVerdict'], 'accessibilityVerdict', ['verified', 'regression', 'not_covered'] as const),
-    verdict: oneOfOrNull(source['verdict'], 'verdict', ['verified', 'regression', 'not_covered', 'approval_required'] as const),
-    summary: text(source['summary'], 'summary'),
-    exitCode: oneOf(source['exitCode'], 'exitCode', [0, 1, 2, 3, 4, 5] as const),
+    accessibilityVerdict,
+    verdict,
+    summary,
+    exitCode,
     paidDownCount: whole(source['paidDownCount'], 'paidDownCount'),
     dirtyGuardedPaths: texts(source['dirtyGuardedPaths'], 'dirtyGuardedPaths'),
     screens: list(source['screens'], 'screens', screen),

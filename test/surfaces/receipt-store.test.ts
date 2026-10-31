@@ -87,6 +87,40 @@ describe('receipt-store', () => {
     await expect(loadReceipt(fs)).resolves.toBeNull();
   });
 
+  // A count is a whole number, zero or more. JSON can carry a fraction, a negative number, and,
+  // through an exponent too large for a double, Infinity, so each of these must read as no receipt.
+  const badCounts: Array<[string, string]> = [
+    ['a fractional new count', '"findingsSummary":{"new":0.5,"carried":0,"fixed":0,"unverified":0}'],
+    ['a negative carried count', '"findingsSummary":{"new":0,"carried":-1,"fixed":0,"unverified":0}'],
+    ['an infinite fixed count', '"findingsSummary":{"new":0,"carried":0,"fixed":1e400,"unverified":0}'],
+    ['a fractional unverified count', '"findingsSummary":{"new":0,"carried":0,"fixed":0,"unverified":1.5}'],
+    ['a negative activeWaivers count', '"activeWaivers":-2'],
+    ['a fractional applied count', '"applicability":[{"screenId":"clusters","applied":1.5,"abstained":0}]'],
+    ['a negative abstained count', '"applicability":[{"screenId":"clusters","applied":1,"abstained":-1}]'],
+    ['an unsafe integer applied count', '"applicability":[{"screenId":"clusters","applied":9007199254740993,"abstained":0}]'],
+  ];
+  for (const [name, field] of badCounts) {
+    it(`rejects a stored receipt with ${name}`, async () => {
+      const fs = new MemoryReceiptFs();
+      const key = field.slice(1, field.indexOf('"', 1));
+      const base = JSON.stringify({ ...receiptFixture, [key]: null });
+      fs.writeRaw(RECEIPT_PATH, base.replace(`"${key}":null`, field));
+      await expect(loadReceipt(fs)).resolves.toBeNull();
+    });
+  }
+
+  it('accepts whole counts of zero and more', async () => {
+    const fs = new MemoryReceiptFs();
+    const receipt: Receipt = {
+      ...receiptFixture,
+      applicability: [{ screenId: 'clusters', applied: 3, abstained: 0 }],
+      findingsSummary: { new: 0, carried: 2, fixed: 1, unverified: 0 },
+      activeWaivers: 4,
+    };
+    await saveReceipt(fs, receipt);
+    await expect(loadReceipt(fs)).resolves.toEqual(receipt);
+  });
+
   it('keeps .usabl state ignored by git', async () => {
     const gitignorePath = new URL('../../.gitignore', import.meta.url);
     const gitignore = await readFile(gitignorePath, 'utf8');

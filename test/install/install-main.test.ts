@@ -48,11 +48,37 @@ describe('usabl install command wiring', () => {
   });
 
   it('routes --overlay to the overlay generator and writes vite.config.ts', async () => {
+    // The app runs Vite and has no Vite config yet, so the draft is a file Vite will read.
+    await writeFile(join(workspace, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
     const code = await main(['install', '--overlay']);
     expect(code).toBe(0);
     const written = await readFile(join(workspace, 'vite.config.ts'), 'utf8');
     expect(written).toContain("import { usablVitePluginFromConfig } from 'usabl/vite'");
     expect(written).toContain('usablVitePluginFromConfig({ cwd: import.meta.dirname })');
+  });
+
+  it('refuses --overlay in a seed-shaped webpack app and writes no Vite file', async () => {
+    // patternfly-react-seed: three webpack configs, Vite present only for Vitest, no Vite config.
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        scripts: { 'start:dev': 'webpack serve --config webpack.dev.js', build: 'webpack --config webpack.prod.js', test: 'vitest run' },
+        devDependencies: { vite: '^6.4.1', vitest: '^4.0.5', webpack: '^5.97.0' },
+      }),
+    );
+    await writeFile(join(workspace, 'webpack.common.js'), 'module.exports = () => ({});\n');
+    await writeFile(join(workspace, 'webpack.dev.js'), "module.exports = { mode: 'development' };\n");
+    await writeFile(join(workspace, 'webpack.prod.js'), "module.exports = { mode: 'production' };\n");
+    await writeFile(join(workspace, 'vitest.config.ts'), 'export default {}\n');
+    const stderr = vi.mocked(process.stderr.write);
+
+    const code = await main(['install', '--overlay']);
+    expect(code).toBe(2);
+    const message = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(message).toContain('webpack.dev.js');
+    expect(message).toContain("require('usabl/webpack')");
+    await expect(readFile(join(workspace, 'vite.config.ts'), 'utf8')).rejects.toThrow();
+    expect(await readFile(join(workspace, 'webpack.dev.js'), 'utf8')).toBe("module.exports = { mode: 'development' };\n");
   });
 
   it('routes --claude to the claude generator and writes .claude/settings.json', async () => {
