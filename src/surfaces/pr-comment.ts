@@ -18,6 +18,7 @@ import { NOT_A_LIST, ownEntry, wholeNumberText } from '../output/carried.js';
 import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence, isBlockingBarrier } from '../output/disclosure.js';
 import { unconfirmedNotice } from '../output/floor-notice.js';
+import { debtSentence, trackingOffSentence } from '../output/debt.js';
 import {
   applyNoiseBudget,
   formatCollapsedGroupCount,
@@ -439,6 +440,30 @@ function renderFloorUnconfirmed(result: Result): string[] {
   ];
 }
 
+// What this change did to the accepted debt, and whether automatic tracking is on. Printed only
+// when the floor holds debt or the change fixed some, because a line about no debt is noise. The
+// sentences are this file's own prose and are escaped; the detail of an unreadable history is a
+// value the Result carried, so it is written as a code span.
+function renderDebt(result: Result): string[] {
+  const debt: unknown = result.debt;
+  if (typeof debt !== 'object' || debt === null) {
+    return [];
+  }
+  const status = result.debt!;
+  const line = debtSentence(status, 'This PR');
+  const off = trackingOffSentence(status);
+  if (line === null && off === null) {
+    return [];
+  }
+  const detail = off !== null && typeof status.off?.detail === 'string' ? [`- detail: ${inlineCode(status.off.detail)}`] : [];
+  return [
+    '### Accessibility debt',
+    ...(line === null ? [] : [escapeMarkdown(line)]),
+    ...(off === null ? [] : ['', escapeMarkdown(off), ...detail]),
+    '',
+  ];
+}
+
 function renderCoverageGaps(result: Result): string[] {
   if (!Array.isArray(result.coverage.gaps)) {
     return ['### Coverage gaps', NOT_A_LIST];
@@ -589,6 +614,7 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
     '',
     ...renderConformance(safe),
     '',
+    ...renderDebt(safe),
     ...findingSections,
     '',
     ...renderFloorUnconfirmed(safe),

@@ -185,7 +185,8 @@ for (const surface of SURFACES) {
           accessibilityVerdict: 'verified',
           accessibilityExitCode: 0,
           receipt: {
-            schemaVersion: 1,
+            schemaVersion: 2,
+            historyHead: null,
             sourceTree: PAYLOAD,
             baseRevision: null,
             policyHash: PAYLOAD,

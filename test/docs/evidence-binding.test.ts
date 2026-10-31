@@ -3,7 +3,8 @@ import type { Receipt, Result } from '../../src/contracts/index.js';
 import { buildEvidenceBinding, surfaceWasChecked } from '../../src/docs/evidence-binding.js';
 
 const receiptFixture: Receipt = {
-  schemaVersion: 1,
+  schemaVersion: 2,
+  historyHead: null,
   sourceTree: 'tree-123',
   baseRevision: null,
   policyHash: 'policy-1',

@@ -35,6 +35,19 @@ const baseResult = (over: Partial<Result>): Result => ({
 });
 
 describe('parseCliArgs', () => {
+  it('reads the history subcommands, the record file, and --out', () => {
+    expect(parseCliArgs(['history', 'record', '--out', 'record.json'])).toMatchObject({
+      command: 'history', historySubcommand: 'record', outPath: 'record.json', historyFile: null,
+    });
+    expect(parseCliArgs(['history', 'append', 'record.json'])).toMatchObject({
+      command: 'history', historySubcommand: 'append', historyFile: 'record.json',
+    });
+    expect(parseCliArgs(['debt', '--json', '--trusted-ref', 'origin/main'])).toMatchObject({
+      command: 'debt', json: true, trustedRef: 'origin/main', historySubcommand: null,
+    });
+    expect(() => parseCliArgs(['history', 'record', '--out'])).toThrow('--out requires a value');
+  });
+
   it('defaults to check command and baseline flags', () => {
     expect(parseCliArgs([])).toEqual({
       command: 'check',
@@ -53,6 +66,9 @@ describe('parseCliArgs', () => {
       partial: false,
       unconfirmed: false,
       driftSubcommand: null,
+      historySubcommand: null,
+      historyFile: null,
+      outPath: null,
       installTarget: null,
       cursorStopHook: false,
     });
@@ -88,6 +104,9 @@ describe('parseCliArgs', () => {
       partial: false,
       unconfirmed: false,
       driftSubcommand: null,
+      historySubcommand: null,
+      historyFile: null,
+      outPath: null,
       installTarget: null,
       cursorStopHook: false,
     });
@@ -160,6 +179,9 @@ describe('parseCliArgs', () => {
       partial: false,
       unconfirmed: false,
       driftSubcommand: null,
+      historySubcommand: null,
+      historyFile: null,
+      outPath: null,
       installTarget: null,
       cursorStopHook: false,
     });

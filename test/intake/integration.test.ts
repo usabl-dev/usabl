@@ -55,7 +55,8 @@ function fixtureResult(stops: ScreenScan['stops']): Result {
     },
     findings: [],
     receipt: {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      historyHead: null,
       sourceTree: 'tree-intake',
       baseRevision: null,
       policyHash: 'policy-intake',

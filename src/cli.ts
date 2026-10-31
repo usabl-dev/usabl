@@ -47,7 +47,8 @@ import { planOverlay, writeOverlay } from './install/overlay.js';
 import { planClaude, writeClaude } from './install/claude.js';
 import { installClaudeSkills } from './install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs, writeCursor } from './install/cursor.js';
-import { planCi, planDocsCi, writeCi, writeDocsCi } from './install/ci.js';
+import { planDocsCi, writeDocsCi } from './install/ci.js';
+import { installCi } from './install/history-ci.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { generateDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
@@ -58,6 +59,11 @@ import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './su
 import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
+import { appendRecord } from './history/append.js';
+import { makeHistoryGit } from './history/git.js';
+import { serializeRecord } from './history/record.js';
+import { recordMainScan } from './history/record-run.js';
+import { runDebt } from './history/report.js';
 
 // The configured url warnings this process has already printed. It holds config urls, which may
 // carry a query, so it is never printed and never leaves the process.
@@ -256,7 +262,8 @@ async function runInstall(opts: CliOptions): Promise<number> {
   } else if (opts.installTarget === 'docs-ci') {
     result = await writeDocsCi(installFs, await planDocsCi(installFs));
   } else {
-    result = await writeCi(installFs, await planCi(installFs));
+    // The pull request gate and the default-branch history workflow that turns on debt tracking.
+    result = await installCi(installFs);
   }
 
   // Exit 0 (written or already wired) goes to stdout; a refusal (exit 2) goes to stderr,
@@ -264,6 +271,52 @@ async function runInstall(opts: CliOptions): Promise<number> {
   const stream = result.exitCode === 0 ? process.stdout : process.stderr;
   stream.write(formatInstallReport(result));
   return result.exitCode;
+}
+
+// `usabl history record` runs in the default-branch job that scans main and holds read access only.
+// `usabl history append` runs in the job that may write the history branch and runs no application
+// code. Neither pushes; the workflow pushes, without force.
+async function runHistory(opts: CliOptions): Promise<number> {
+  if (opts.historySubcommand === 'append') {
+    if (opts.historyFile === null) {
+      process.stderr.write('usabl: history append requires the record file written by usabl history record\n');
+      return 2;
+    }
+    let text: string;
+    try {
+      text = await readFile(opts.historyFile, 'utf8');
+    } catch {
+      process.stderr.write('usabl: refused: the record file could not be read. Nothing was appended.\n');
+      return 2;
+    }
+    const outcome = await appendRecord(makeHistoryGit(), text);
+    (outcome.exitCode === 0 ? process.stdout : process.stderr).write(`${outcome.message}\n`);
+    return outcome.exitCode;
+  }
+  if (opts.historySubcommand !== 'record') {
+    process.stderr.write('usabl: history supports the record and append subcommands\n');
+    return 2;
+  }
+  if (opts.outPath === null) {
+    process.stderr.write('usabl: history record requires --out <file>\n');
+    return 2;
+  }
+  const config = await loadConfig(opts.configPath);
+  const deps = await buildDeps(config, {
+    ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
+  });
+  try {
+    const outcome = await recordMainScan(deps, config, {
+      ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
+    });
+    if (outcome.record !== null) {
+      await writeFile(opts.outPath, `${serializeRecord(outcome.record)}\n`, 'utf8');
+    }
+    (outcome.exitCode === 0 ? process.stdout : process.stderr).write(`${outcome.message}\n`);
+    return outcome.exitCode;
+  } finally {
+    await deps.browser.close();
+  }
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -301,6 +354,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'stop-hook' &&
     opts.command !== 'doctor' &&
     opts.command !== 'docs' &&
+    opts.command !== 'history' &&
+    opts.command !== 'debt' &&
     opts.command !== 'session'
   ) {
     // The command table names a command this dispatch does not run. Refuse it the same way.
@@ -475,6 +530,32 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     } finally {
       await deps.browser.close();
     }
+  }
+
+  if (opts.command === 'debt') {
+    // A projection of the floor and the history. It scans nothing and never decides a verdict.
+    const git = makeGitReader();
+    const readFloor = async (): Promise<string | null> => {
+      if (opts.trustedRef !== null) {
+        return git.show(opts.trustedRef, '.usabl-evidence.json');
+      }
+      try {
+        return await readFile('.usabl-evidence.json', 'utf8');
+      } catch (error) {
+        if (isErrnoException(error) && error.code === 'ENOENT') {
+          return null;
+        }
+        throw error;
+      }
+    };
+    const outcome = await runDebt(makeHistoryGit(), readFloor, opts.trustedRef ?? 'HEAD', new Date().toISOString());
+    const stream = outcome.exitCode === 0 ? process.stdout : process.stderr;
+    stream.write(`${opts.json ? outcome.json : outcome.text}\n`);
+    return outcome.exitCode;
+  }
+
+  if (opts.command === 'history') {
+    return runHistory(opts);
   }
 
   if (opts.command === 'drift') {

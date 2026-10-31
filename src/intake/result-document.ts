@@ -31,6 +31,7 @@ import type {
   AppSourceMapping,
   Coverage,
   CoverageGap,
+  DebtStatus,
   DocsSourceMapping,
   Draft,
   EvidenceFacts,
@@ -378,9 +379,10 @@ function receipt(value: unknown, field: string): Receipt {
   const summary = record(source['findingsSummary'], at(field, 'findingsSummary'));
   const summaryField = at(field, 'findingsSummary');
   const out: Receipt = {
-    schemaVersion: oneOf(source['schemaVersion'], at(field, 'schemaVersion'), [1] as const),
+    schemaVersion: oneOf(source['schemaVersion'], at(field, 'schemaVersion'), [2] as const),
     sourceTree: text(source['sourceTree'], at(field, 'sourceTree')),
     baseRevision: textOrNull(source['baseRevision'], at(field, 'baseRevision')),
+    historyHead: textOrNull(source['historyHead'], at(field, 'historyHead')),
     policyHash: text(source['policyHash'], at(field, 'policyHash')),
     runnerVersion: text(source['runnerVersion'], at(field, 'runnerVersion')),
     scannerVersions: {
@@ -431,6 +433,31 @@ function unconfirmed(value: unknown, field: string): FloorUnconfirmed {
     screenId: text(source['screenId'], at(field, 'screenId')),
     rules: texts(source['rules'], at(field, 'rules')),
     barriers: whole(source['barriers'], at(field, 'barriers')),
+  };
+}
+
+const TRACKING_OFF = ['no-reader', 'no-history', 'unreadable', 'old-floor', 'no-base'] as const;
+
+function debt(value: unknown, field: string): DebtStatus {
+  const source = record(value, field);
+  const off = source['off'];
+  return {
+    tracking: oneOf(source['tracking'], at(field, 'tracking'), ['on', 'off'] as const),
+    off:
+      off === null
+        ? null
+        : {
+            cause: oneOf(record(off, at(field, 'off'))['cause'], at(at(field, 'off'), 'cause'), TRACKING_OFF),
+            detail: textOrNull(record(off, at(field, 'off'))['detail'], at(at(field, 'off'), 'detail')),
+          },
+    historyHead: textOrNull(source['historyHead'], at(field, 'historyHead')),
+    floorBarriers: whole(source['floorBarriers'], at(field, 'floorBarriers')),
+    acceptedBarriers: whole(source['acceptedBarriers'], at(field, 'acceptedBarriers')),
+    confirmedFixed: whole(source['confirmedFixed'], at(field, 'confirmedFixed')),
+    fixedThisRun: whole(source['fixedThisRun'], at(field, 'fixedThisRun')),
+    remaining: whole(source['remaining'], at(field, 'remaining')),
+    oldestOpenDays: wholeOrNull(source['oldestOpenDays'], at(field, 'oldestOpenDays')),
+    intermittent: whole(source['intermittent'], at(field, 'intermittent')),
   };
 }
 
@@ -523,5 +550,6 @@ function readResult(value: unknown): Result {
     receipt: source['receipt'] === null ? null : receipt(source['receipt'], 'receipt'),
     floorHeadroom: list(source['floorHeadroom'], 'floorHeadroom', headroom),
     floorUnconfirmed: list(source['floorUnconfirmed'], 'floorUnconfirmed', unconfirmed),
+    ...(has(source, 'debt') ? { debt: debt(source['debt'], 'debt') } : {}),
   };
 }

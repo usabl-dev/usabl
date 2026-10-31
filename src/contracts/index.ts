@@ -221,6 +221,41 @@ export interface FloorHeadroom {
  *
  * Screen id, rule names and a count. Never an element key, because a key carries page text.
  */
+/**
+ * Why automatic debt tracking was off on a run. A code, not a sentence, so a surface writes its own
+ * words and the only text a Result carries here is `detail`, which a surface prints as a value.
+ *
+ * - `no-reader`: the caller passed no history reader (a library call).
+ * - `no-history`: there is no history branch to read.
+ * - `unreadable`: the history branch exists and could not be read. `detail` says where and why.
+ * - `old-floor`: the evidence floor predates row keys, so history records cannot be matched to it.
+ * - `no-base`: the base commit could not be resolved, so usabl cannot tell which records apply.
+ */
+export type DebtTrackingOff = 'no-reader' | 'no-history' | 'unreadable' | 'old-floor' | 'no-base';
+
+/**
+ * The accessibility debt a run worked against, for the pull request comment and `usabl debt`.
+ *
+ * Barrier counts, never element keys. `floorBarriers` is what the committed floor accepts.
+ * `acceptedBarriers` is what this run accepted after the fixes main confirmed, so it is never above
+ * `floorBarriers`. `fixedThisRun` is what this run did not see of the accepted debt, which counts
+ * as fixed in this change until main confirms it. `remaining` is accepted minus fixed this run.
+ */
+export interface DebtStatus {
+  tracking: 'on' | 'off';
+  off: { cause: DebtTrackingOff; detail: string | null } | null;
+  historyHead: string | null;
+  floorBarriers: number;
+  acceptedBarriers: number;
+  confirmedFixed: number;
+  fixedThisRun: number;
+  remaining: number;
+  // Whole days since the oldest remaining barrier was first seen on main, or null when unknown.
+  oldestOpenDays: number | null;
+  // Barriers whose fix came back on an unchanged tree. They keep their slot and are not released.
+  intermittent: number;
+}
+
 export interface FloorUnconfirmed {
   screenId: string;
   rules: string[]; // sorted, each rule once
@@ -243,9 +278,14 @@ export interface Coverage {
 // ---- receipt (re-checkable proof of a verified run) ----
 // Receipts exist only for verified deterministic outcomes. Preview and model-judgment never mint one.
 export interface Receipt {
-  schemaVersion: 1;
+  // Version 2 added historyHead. A version 1 receipt is not read, so it triggers one full run.
+  schemaVersion: 2;
   sourceTree: string;
   baseRevision: string | null;
+  // The commit of the debt history branch when this receipt was minted, or null when there was
+  // none. The history lowers the debt a run accepts, so a receipt minted before the history moved
+  // must not stand for a run after it. See src/history/.
+  historyHead: string | null;
   policyHash: string;
   runnerVersion: string;
   scannerVersions: { axeCore: string; playwright: string; chromium: string };
@@ -298,6 +338,11 @@ export interface Result {
   // were rendered, so they are not claimed fixed. Required for the same reason as floorHeadroom.
   // Projection only. The gate never consumes it and it never influences a verdict.
   floorUnconfirmed: FloorUnconfirmed[];
+  // What the debt history did on this run: whether automatic tracking was on, and the counts the
+  // pull request comment reports. Projection only. The gate never reads it. Optional because a
+  // Result from an older engine, or one a library caller composed, has none, and a surface then
+  // says nothing about tracking.
+  debt?: DebtStatus;
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);
@@ -651,10 +696,30 @@ export interface CheckRunner {
   // profile picks the per-surface provider configuration for this scan target. Absent means 'app'.
   scan(screen: { id: string; url: string; profile?: ProfileName }): Promise<ScreenScan>;
 }
+/**
+ * Reads the debt history branch as git objects, never from a working tree. See src/history/.
+ * The history can only lower the debt a run accepts, so a reader that returns nothing, or that a
+ * caller leaves out, gives exactly the verdicts a run without history gives.
+ */
+export interface HistoryReader {
+  // The ref the history is read from, for disclosures, for example "origin/usabl/history".
+  readonly ref: string;
+  // The commit a ref names, or null when there is no such ref.
+  resolveCommit(ref: string): Promise<string | null>;
+  // The file names at the top of a history commit.
+  listFiles(commit: string): Promise<string[]>;
+  // One file at a history commit, or null when it is not there.
+  readFile(commit: string, path: string): Promise<string | null>;
+  // Whether `commit` is `of` or one of its ancestors.
+  isAncestor(commit: string, of: string): Promise<boolean>;
+}
+
 export interface Deps {
   clock: () => string;
   browser: BrowserDriver;
   git: GitReader;
+  // The debt history reader. Absent means automatic tracking is off for this run, and it says so.
+  history?: HistoryReader;
   fs: FsGlob;
   checkRunner: CheckRunner;
   runnerVersion: string;

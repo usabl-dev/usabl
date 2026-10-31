@@ -23,6 +23,7 @@ returns one gate-owned verdict, or an honest gap when it could not check.
 | `src/providers/`                                           | Evidence collectors: `axe/`, `rulepack/` (PatternFly), `keyboard-walk/`, `docs-rulepack/`. They emit drafts only. |
 | `src/deps/`                                                | Adapters for git, the file system, and the browser, plus fakes for tests.                                         |
 | `src/evidence/`                                            | The evidence floor and the verified receipt.                                                                      |
+| `src/history/`                                             | The debt history: records of main scans, the effective floor, and `usabl debt`.                                   |
 | `src/intake/`                                              | Config, route, and requirement loading and validation.                                                            |
 | `src/surfaces/`                                            | CLI, overlay, stop hook, pull request comment, Playwright helper, docs output, and `scrub.ts`.                    |
 | `src/output/`                                              | Text projections of a Result: summary, verdict line, disclosure.                                                  |
