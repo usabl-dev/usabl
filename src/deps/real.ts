@@ -4,11 +4,11 @@
  * This unit never mints a verdict, never approximates names from the DOM, and never hides AX read failures.
  * Missing or ignored AX nodes stay null so downstream layers disclose not-covered and unverified honestly.
  */
-import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
 import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, ElementTarget, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
-import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
+import { applyAxeTags, type AxeIssue, type AxeRuleSummary, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
+import { runAxeInIsolatedWorld } from './axe-world.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
 // Ansible Automation Platform screen measured 12.4 s to network idle plus 13.3 s to a DOM that
@@ -1524,13 +1524,24 @@ async function signalHolds(holds: () => Promise<boolean>): Promise<boolean> {
   }
 }
 
-function attachAxeBridge(page: Page, pw: PwPage): void {
+// axe run options built the way applyAxeTags decides them, so the rule for tags stays in one place.
+class AxeRunOptions {
+  constructor(readonly value: Record<string, unknown> = {}) {}
+  withTags(tags: string[]): AxeRunOptions {
+    return new AxeRunOptions({ runOnly: { type: 'tag', values: tags } });
+  }
+}
+
+function attachAxeBridge(page: Page, pw: PwPage, cdp: CDPSession): void {
   Object.assign(page, {
-    runAxe: async (options?: { tags?: readonly string[] }): Promise<AxeResult> => {
+    runAxe: async (options?: { tags?: readonly string[] }): Promise<AxeResult & { uncheckedFrames: AxeUncheckedFrame[] }> => {
       // Tags apply only when the docs profile passes them. No tags means axe keeps its default
-      // ruleset, so the app path builds and analyzes exactly as before.
-      const builder = applyAxeTags(new AxeBuilder({ page: pw }), options);
-      return mapAxeResults(await builder.analyze());
+      // ruleset, so the app path runs axe exactly as before.
+      const runOptions = applyAxeTags(new AxeRunOptions(), options).value;
+      // axe runs in an isolated world in every frame, so page script cannot change what it reads
+      // or reports. A frame it could not check comes back named, and the provider discloses it.
+      const run = await runAxeInIsolatedWorld(pw, cdp, runOptions);
+      return { ...mapAxeResults(run.results), uncheckedFrames: run.uncheckedFrames };
     },
   });
 }
@@ -1665,7 +1676,7 @@ function wrapPage(
     },
   };
 
-  attachAxeBridge(page, pw);
+  attachAxeBridge(page, pw, cdp);
   return page;
 }
 

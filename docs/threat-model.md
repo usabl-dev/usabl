@@ -538,15 +538,28 @@ outside every table as the control in an accepted row. Either way a new barrier 
 - The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
   that redefines style writes, or says its root is not an element, cannot stop the zoom from
   landing. No provider calls `setZoom` today; the planned resize check (WCAG 1.4.4) will.
+- axe runs in an isolated world in every frame, for a page usabl opens and for a page `checkPage`
+  adopts. Before this, axe ran in the page's own world. A page that patched
+  `Element.prototype.getAttribute` so one button's id read as another's had two findings named by
+  one selector, and a new barrier in one keyed row read as the carried barrier of another row. A
+  page that defined a `window.axe` getter could hand back a clean result. Neither reaches axe now.
+  A child frame axe cannot check is a coverage gap that names the frame's origin and the reason,
+  where axe's own Playwright runner dropped it without a word, including a frame that took more
+  than one second to load axe.
 
 **Not handled:** one page operation still runs in the page's own world: the element count that
 readiness polls to tell when the DOM stopped changing. A page can change what it sees by
-redefining DOM methods. axe also computes its target selectors in the page's own world, so a page
-that patches DOM accessors can still change the selector, and with it the identity key, of an axe
-finding.
+redefining DOM methods. The semantics a custom element sets through `ElementInternals` reach axe
+from the browser's accessibility tree, because the internals object lives in page script. The
+tree is what assistive technology reads, so a page cannot use this to tell axe something the
+browser does not expose. Where the browser exposes nothing, axe is told nothing and reports more.
 
-**Status:** [x] Paths, announcements, table rows, the focus and style reads, and the zoom write
-run in isolated worlds. [ ] The readiness element count and axe's target selectors are open.
+**Tests:** `test/deps/axe-world.real.integration.test.ts` (patched `getAttribute`, a `window.axe`
+getter, a sandboxed frame, a frame in another process, a frame that stops answering), and
+`test/deps/axe-world-compare.harness.test.ts` with its summary.
+
+**Status:** [x] Paths, announcements, table rows, the focus and style reads, the zoom write, and
+axe's selectors and results run in isolated worlds. [ ] The readiness element count is open.
 
 ---
 

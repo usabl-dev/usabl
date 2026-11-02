@@ -48,7 +48,6 @@ export interface AxeWorldResult {
 }
 
 export interface AxeWorldOptions {
-  tags?: readonly string[];
   // Only tests set this, to reach the timeout path without waiting the full budget.
   stepTimeoutMs?: number;
 }
@@ -432,6 +431,14 @@ class AxeWorldRun {
     if (objectId === null) {
       throw new FrameError('its frame element was gone before axe reached it');
     }
+    const described: unknown = await this.step(parent.session.send('DOM.describeNode', { objectId }), 'reading the frame element');
+    const frameId = readString(getProp(getProp(described, 'node'), 'frameId'));
+    if (frameId === null) {
+      throw new FrameError('its frame element holds no frame');
+    }
+    const tree: unknown = await this.step(parent.session.send('Page.getFrameTree'), 'reading the frame tree');
+    const treeUrl = findFrameUrl(getProp(tree, 'frameTree'), frameId) ?? '';
+    seen.url = treeUrl;
     // axe waits on timers, and no timer runs in a frame sandboxed without scripts, not even in
     // usabl's world. Such a frame is named at once rather than after the whole step budget.
     const sandboxed = getProp(
@@ -448,14 +455,6 @@ class AxeWorldRun {
     if (getProp(sandboxed, 'value') === true) {
       throw new FrameError('it is sandboxed without scripts, so axe cannot run in it');
     }
-    const described: unknown = await this.step(parent.session.send('DOM.describeNode', { objectId }), 'reading the frame element');
-    const frameId = readString(getProp(getProp(described, 'node'), 'frameId'));
-    if (frameId === null) {
-      throw new FrameError('its frame element holds no frame');
-    }
-    const tree: unknown = await this.step(parent.session.send('Page.getFrameTree'), 'reading the frame tree');
-    const treeUrl = findFrameUrl(getProp(tree, 'frameTree'), frameId) ?? '';
-    seen.url = treeUrl;
     // A frame in the parent's process takes a world through the parent's session. One in another
     // process does not: the parent's process does not hold its document.
     const inProcess: FrameTarget = { session: parent.session, frameId, url: treeUrl };
@@ -529,7 +528,7 @@ export async function runAxeInIsolatedWorld(
   pw: PwPage,
   cdp: CDPSession,
   runOptions: Record<string, unknown>,
-  options: Pick<AxeWorldOptions, 'stepTimeoutMs'> = {},
+  options: AxeWorldOptions = {},
 ): Promise<AxeWorldResult> {
   const stepTimeoutMs = options.stepTimeoutMs ?? AXE_STEP_TIMEOUT_MS;
   const run = new AxeWorldRun(pw, runOptions, stepTimeoutMs);

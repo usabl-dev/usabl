@@ -633,6 +633,32 @@ WCAG-mapped checks. A curated notes table overrides axe's default `why`/`fix` te
 common rules with plain-language PatternFly-specific guidance. Every Draft has
 `evidenceClass: 'deterministic'`.
 
+axe runs in an isolated world in every frame (`src/deps/axe-world.ts`), not in the page's own
+world. An isolated world shares the DOM with the page but not its globals or prototypes, so page
+script that patches `getAttribute` or defines a `window.axe` getter does not change axe's
+selectors or results. The frame walk is the one `@axe-core/playwright` does: `axe.runPartial` in
+each frame, child frames found through axe's own frame contexts, a frame in another process
+reached through its own CDP session, and `axe.finishRun` in the top frame's world. A child frame
+axe cannot be loaded into or run in, because a step ran out its 60 second budget, the frame was
+sandboxed without scripts, it was detached, or no session reached it, is a `not-covered` gap
+named by the frame's origin and the reason. axe's own Playwright runner dropped such a frame
+without a gap, and gave a child frame one second to load axe.
+
+axe reads the semantics a custom element sets through `ElementInternals` from page-world
+properties such as `_internals`, which an isolated world cannot see. usabl gives axe what the
+browser's accessibility tree computed for each custom element instead: its role, when the element
+has no role attribute and the tree exposes a role that is not generic, and a name set through an
+internals `aria-label`. On the comparison fixtures this matches axe in the page world for list
+items, buttons, tabs, headings, labelled form controls, images, hidden items, and lists in shadow
+roots. Three cases differ, and all are recorded in `test/deps/axe-world-compare.summary.json`. A
+role kept in a private field is invisible to axe in the page world, which then reports a list
+with no items; the browser exposes the items, and so does usabl. An element the browser does not
+expose, such as one whose role attribute is `presentation` or not a role, has no computed role,
+so usabl reports the list as missing items where the page world did not. An ARIA state set only
+through internals is not carried, because the tree reports a default state, such as unchecked,
+whether or not the element set one, so usabl reports a required state as missing where the page
+world did not. Both of those are stricter than before, never more lenient.
+
 A color-contrast result axe could not measure because the element's background is a
 gradient is still a needs-review draft (`confidence: 'unverified'`) with the same rule,
 element, severity, and evidence. It is the result whose `color-contrast` check data has

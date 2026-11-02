@@ -6,6 +6,7 @@
  * coverage, not a judgment: nothing here decides whether an outcome is expected.
  */
 import type {
+  CoverageGap,
   Draft,
   Provider,
   ProviderContext,
@@ -58,11 +59,20 @@ export interface AxeRuleSummary {
   nodeCount: number;
 }
 
+/** A frame axe could not check: its origin, never its full address, and why. */
+export interface AxeUncheckedFrame {
+  origin: string;
+  why: string;
+}
+
 export interface AxeRunResult {
   violations: AxeIssue[];
   incomplete: AxeIssue[];
   passes: AxeRuleSummary[];
   inapplicable: AxeRuleSummary[];
+  // Frames axe could not load into or run in. Their findings are not in the buckets above, so each
+  // one is disclosed as a gap. Absent means every frame was checked.
+  uncheckedFrames?: AxeUncheckedFrame[];
 }
 
 export interface AxePage {
@@ -163,6 +173,16 @@ function mapIssueToDrafts(
 
 const AXE_LAYER = 'axe';
 
+// A frame axe could not check is a gap on the screen, never a silent drop: the screen's result
+// would otherwise read as if the frame had nothing wrong with it.
+function uncheckedFrameGap(frame: AxeUncheckedFrame): CoverageGap {
+  return {
+    ref: 'provider:axe-core',
+    state: 'not-covered',
+    reason: `provider axe-core could not check a frame from ${frame.origin}: ${frame.why}. Its findings are not in this result.`,
+  };
+}
+
 function issueApplicability(
   issue: AxeIssue,
   outcome: RuleOutcome,
@@ -229,6 +249,7 @@ export const axeProvider: Provider = {
       applicability.push(summaryApplicability(summary, 'inapplicable', ctx));
     }
 
-    return { drafts, applicability };
+    const gaps = (axeResult.uncheckedFrames ?? []).map((frame) => uncheckedFrameGap(frame));
+    return { drafts, applicability, gaps };
   },
 };
