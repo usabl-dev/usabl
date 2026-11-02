@@ -8,6 +8,7 @@ import type { AffectedScreen, Coverage, CoverageGap, FsGlob, UsablConfig } from 
 import { loadAliasConfig } from './alias-config.js';
 import { buildUnresolvedReason } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
+import { workspaceDependencyGaps } from './workspace-packages.js';
 import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
 import { parseDocsManifest, type DocsManifest } from './docs-manifest.js';
 import { assertSurfaceIds } from '../intake/surface-ids.js';
@@ -163,13 +164,24 @@ export async function computeCoverage(
   const uiFiles = changedFiles.filter(
     (file) => !isTestFile(file) && config.uiFileGlobs.some((glob) => matchGlob(glob, file)),
   );
+  // In a monorepo, a change in a workspace package the app depends on matches none of the app's
+  // uiFileGlobs, while the app may render it. It is written down as a gap, so it never reads as
+  // idle. See workspace-packages.ts for why it is not mapped to screens.
+  const workspaceGaps = await workspaceDependencyGaps(
+    fs,
+    config,
+    changedFiles.filter((file) => !isTestFile(file) && !uiFiles.includes(file)),
+  );
   // No UI-touching files means idle. That is not the same claim as "covered".
-  if (uiFiles.length === 0) {
+  if (uiFiles.length === 0 && workspaceGaps.length === 0) {
     return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
   }
+  const unresolvedFiles: string[] = workspaceGaps.map((gap) => gap.ref);
+  const gaps: CoverageGap[] = [...workspaceGaps];
+  if (uiFiles.length === 0) {
+    return { changedFiles, affected: [], unresolvedFiles, gaps, nothingToCheck: false };
+  }
   const affectedByScreen = new Map<string, AffectedScreen>();
-  const unresolvedFiles: string[] = [];
-  const gaps: CoverageGap[] = [];
 
   const hasWideBlast = uiFiles.some((file) => isWideBlastFile(file, config.discovery.wideBlastGlobs));
   let wideBlastAttributedAnyScreen = false;

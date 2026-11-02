@@ -2615,11 +2615,31 @@ Every path `init` writes stays relative to the repository root: `uiFileGlobs`, t
 `wideBlastGlobs`, and each entry file carry the app folder, such as `packages/web/src/**/*.tsx`.
 `usabl.config.json` and `usabl.routes.json` are written at the root, and `guardedPaths` names
 them there, so CODEOWNERS and the trusted-ref guard still match them. A config drafted for one
-app treats a change in another app as no UI change. That includes a workspace package the app
-renders components from, so when the app's `package.json` depends on a package found under
-`packages/` or `apps/`, a `Review:` note names it and says to add its files to `uiFileGlobs`.
-`init` does not add them itself, because it cannot tell which of the package's files the app
-renders.
+app treats a change in another app as no UI change. A workspace package the app depends on is
+different, because the app may render components from it. When the app's `package.json` depends
+on a package found under `packages/` or `apps/`, a `Review:` note names it and says to add its
+files to `uiFileGlobs`. `init` does not add them itself, because it cannot tell which of the
+package's files the app renders.
+
+**Workspace packages at check time.** `check` does not rely on that note. When the root
+`package.json` declares `workspaces` (a list, or Yarn's `{ "packages": [...] }`), or
+`pnpm-workspace.yaml` lists `packages`, the planner reads every pattern, with `!` patterns
+excluded, and each workspace package's `package.json`. The configured app is the package the
+router file, the `uiFileGlobs` folders, and the surface files sit in, which is the root package
+for a root app. A changed file in a workspace package the app depends on, by name in
+`dependencies`, `devDependencies`, `peerDependencies`, or `optionalDependencies`, directly or
+through another workspace package, is a `not-covered` gap and an unmapped file when it is
+outside `uiFileGlobs`. The gap names the package and the fix: add the package's source to
+`uiFileGlobs` and list the file in the files of each surface that renders it. Test files and
+Markdown files are left out, as are files in the app's own package. A package whose
+`package.json` cannot be read counts as one the app depends on. A change in a package the app
+does not depend on, and any change in a repository with no workspaces, reads as before.
+
+The change is not mapped to screens through imports. The import graph follows relative and alias
+imports only. A package import resolves through the package's own manifest, its `exports`
+conditions and `main` field, often to built output that is not in the repository, so usabl
+cannot resolve it soundly from source, and a wrong guess would scan fewer screens than render the
+change while the run reads as covered.
 
 **The dev server URL.** `init` parses the app's Vite config, without running it, and reads
 `server.port` and `server.https` from the exported config: `export default { ... }`,

@@ -261,6 +261,15 @@ the tool errored, not because the page is accessible.
   that is not HTML. A selector, or recovery alone, never stands it down. See ground-truth
   section 8.
 
+- In a monorepo, a change in a workspace package the configured app depends on is a coverage
+  gap, never nothing to check. Before, a config drafted for one app folder matched none of the
+  shared package's files, so a change to a component the app renders exited 0 with nothing
+  scanned. The planner reads the workspace and package manifests from the tree it plans, the
+  same as the router file and the import graph. A change that also edits the app's
+  `package.json` to drop the dependency therefore plans as nothing to check for that package.
+  That is the same exposure as a change that edits the router file to unmap a screen, and it
+  shows in the diff.
+
 **Status:** [x] The `not_covered` gap path and exit-4 fail-open ship. [ ] A per-surface
 time budget is not yet a config knob; the shipped bound is the keyboard-walk 15s wall clock.
 

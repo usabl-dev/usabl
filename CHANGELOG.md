@@ -60,6 +60,15 @@
 
 ### Fixed
 
+- In a monorepo, `usabl check` no longer reads a change in a workspace package the app depends
+  on as nothing to check. With a config for `packages/admin`, a change in `packages/shared`,
+  which admin imports, matched none of the app's `uiFileGlobs`, so the run exited 0 while the
+  app could render the changed component. Such a change is now a not-covered gap that names the
+  package and the fix. The planner reads every `workspaces` pattern in the root `package.json`
+  and the `packages` of `pnpm-workspace.yaml`, and follows dependencies through other workspace
+  packages. A change in a package the app does not depend on, and a repository with no
+  workspaces, plan as before.
+
 - The scan browser now starts with Chromium's sandbox. Before, usabl never asked for it,
   so Playwright added `--no-sandbox` and every page a scan opened ran without it. When
   Chromium reports that it cannot start its sandbox, as on Ubuntu 23.10 and later or in
