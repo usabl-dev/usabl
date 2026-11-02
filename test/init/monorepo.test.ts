@@ -154,8 +154,14 @@ describe('usabl init --app on a monorepo', () => {
     expect(webChange.nothingToCheck).toBe(true);
     expect(webChange.affected).toEqual([]);
 
+    // admin depends on @mono/shared, so a change there may change what admin renders. It is not
+    // idle: it is a gap that names the package, because usabl cannot tell which screens render it.
     const sharedChange = await computeCoverage(planFs, config, ['packages/shared/src/Button.tsx']);
-    expect(sharedChange.nothingToCheck).toBe(true);
+    expect(sharedChange.nothingToCheck).toBe(false);
+    expect(sharedChange.affected).toEqual([]);
+    expect(sharedChange.unresolvedFiles).toEqual(['packages/shared/src/Button.tsx']);
+    expect(sharedChange.gaps.map((gap) => [gap.ref, gap.state])).toEqual([['packages/shared/src/Button.tsx', 'not-covered']]);
+    expect(sharedChange.gaps[0]?.reason).toContain('@mono/shared');
 
     const adminChange = await computeCoverage(planFs, config, ['packages/admin/src/pages/Users.tsx']);
     expect(adminChange.affected.map((screen) => screen.screenId)).toEqual(['users']);
