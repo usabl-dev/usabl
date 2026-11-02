@@ -1,0 +1,924 @@
+{
+  "axeCore": "4.13.0",
+  "playwright": "1.62.1",
+  "fixtures": {
+    "pages": 63,
+    "withoutInternals": {
+      "pages": 51,
+      "pagesWithDifferences": 0,
+      "unstablePages": 0,
+      "comparedEntries": {
+        "violation": 141,
+        "incomplete": 20,
+        "pass": 3156,
+        "inapplicable": 3377
+      }
+    },
+    "withInternals": {
+      "pages": 12,
+      "pagesWithDifferences": 3,
+      "comparedEntries": {
+        "violation": 6,
+        "incomplete": 0,
+        "pass": 301,
+        "inapplicable": 857
+      }
+    },
+    "perPage": [
+      {
+        "fixture": "cell: broken",
+        "internals": false,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 17,
+          "inapplicable": 73
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "cell: named",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 23,
+          "inapplicable": 69
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "frame: cross origin",
+        "internals": false,
+        "counts": {
+          "violation": 12,
+          "incomplete": 0,
+          "pass": 64,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "frame: cross origin, own process",
+        "internals": false,
+        "counts": {
+          "violation": 12,
+          "incomplete": 0,
+          "pass": 64,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "frame: frameset",
+        "internals": false,
+        "counts": {
+          "violation": 8,
+          "incomplete": 0,
+          "pass": 45,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "frame: hidden and lazy",
+        "internals": false,
+        "counts": {
+          "violation": 6,
+          "incomplete": 0,
+          "pass": 42,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "frame: inner page",
+        "internals": false,
+        "counts": {
+          "violation": 5,
+          "incomplete": 0,
+          "pass": 27,
+          "inapplicable": 66
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "frame: nested inner page",
+        "internals": false,
+        "counts": {
+          "violation": 7,
+          "incomplete": 0,
+          "pass": 42,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "frame: same origin",
+        "internals": false,
+        "counts": {
+          "violation": 7,
+          "incomplete": 0,
+          "pass": 42,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "frame: sandboxed without scripts",
+        "internals": false,
+        "counts": {
+          "violation": 6,
+          "incomplete": 1,
+          "pass": 43,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": [
+          "an unnamed frame: it is sandboxed without scripts, so axe cannot run in it"
+        ]
+      },
+      {
+        "fixture": "frame: srcdoc and blank",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 31,
+          "inapplicable": 70
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "frame: three deep, mixed origins",
+        "internals": false,
+        "counts": {
+          "violation": 13,
+          "incomplete": 2,
+          "pass": 96,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "frame: three deep, mixed origins, own process",
+        "internals": false,
+        "counts": {
+          "violation": 13,
+          "incomplete": 2,
+          "pass": 96,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "inline: gradient background",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 1,
+          "pass": 17,
+          "inapplicable": 75
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: buttons named and unnamed",
+        "internals": true,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 27,
+          "inapplicable": 73
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: custom elements without internals",
+        "internals": true,
+        "counts": {
+          "violation": 3,
+          "incomplete": 0,
+          "pass": 41,
+          "inapplicable": 68
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: heading",
+        "internals": true,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 16,
+          "inapplicable": 76
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: hidden items",
+        "internals": true,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 24,
+          "inapplicable": 70
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: image role",
+        "internals": true,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 16,
+          "inapplicable": 75
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: labelled checkbox",
+        "internals": true,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 26,
+          "inapplicable": 73
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: list in a shadow root",
+        "internals": true,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 25,
+          "inapplicable": 71
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: listitem role in a list",
+        "internals": true,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 24,
+          "inapplicable": 71
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: role attribute over internals",
+        "internals": true,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 31,
+          "inapplicable": 70
+        },
+        "differences": 4,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: role in a private field",
+        "internals": true,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 23,
+          "inapplicable": 71
+        },
+        "differences": 2,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: state on a role attribute",
+        "internals": true,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 27,
+          "inapplicable": 64
+        },
+        "differences": 2,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: tabs",
+        "internals": true,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 21,
+          "inapplicable": 75
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: auth-wall.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 22,
+          "inapplicable": 72
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: details-after-signal.html",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 38,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: expired-session-app.html",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 13,
+          "inapplicable": 77
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: fetch-on-focus.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 20,
+          "inapplicable": 72
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: frozen-pause.html",
+        "internals": false,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 42,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: hanging-request.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 20,
+          "inapplicable": 72
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: labelledby.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 42,
+          "inapplicable": 61
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: labelledby.html, docs tags",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 27,
+          "inapplicable": 45
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: late-mount.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 432,
+          "inapplicable": 72
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: late-unauthorized.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 24,
+          "inapplicable": 72
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: magic-link.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 30,
+          "inapplicable": 67
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: never-settles.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 452,
+          "inapplicable": 74
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: orders-screen.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 39,
+          "inapplicable": 68
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: partial-render.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 31,
+          "inapplicable": 65
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: passkey-sign-in.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 22,
+          "inapplicable": 72
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: shadow-sign-in.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 38,
+          "inapplicable": 68
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: sign-in.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 39,
+          "inapplicable": 67
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: spa-fallback.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 20,
+          "inapplicable": 72
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: swap-to-sign-in.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 42,
+          "inapplicable": 60
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "live: tooltip-on-focus.html",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 24,
+          "inapplicable": 72
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "pf6: rendered markup",
+        "internals": false,
+        "counts": {
+          "violation": 8,
+          "incomplete": 6,
+          "pass": 255,
+          "inapplicable": 54
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "pf6: rendered markup, docs tags",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 8,
+          "pass": 153,
+          "inapplicable": 41
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "rows: buttons in shadow roots",
+        "internals": false,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 56,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "rows: data table in a layout table",
+        "internals": false,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 61,
+          "inapplicable": 58
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "rows: frames inside rows",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 77,
+          "inapplicable": 59
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "rows: keyed rows",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 56,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "rows: keys that differ in case",
+        "internals": false,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 49,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "rows: nested table in a keyed row",
+        "internals": false,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 55,
+          "inapplicable": 68
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "rows: role grid",
+        "internals": false,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 63,
+          "inapplicable": 62
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "rows: row headers",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 47,
+          "inapplicable": 68
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "rows: same-origin frame with rows",
+        "internals": false,
+        "counts": {
+          "violation": 3,
+          "incomplete": 0,
+          "pass": 70,
+          "inapplicable": 59
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "rows: sibling tables with captions",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 62,
+          "inapplicable": 68
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "shadow: frame inside a shadow root",
+        "internals": false,
+        "counts": {
+          "violation": 6,
+          "incomplete": 0,
+          "pass": 41,
+          "inapplicable": 63
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "shadow: nested open roots with slots",
+        "internals": false,
+        "counts": {
+          "violation": 4,
+          "incomplete": 0,
+          "pass": 30,
+          "inapplicable": 68
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "shell: init/monorepo/packages/admin/index.html",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 5,
+          "inapplicable": 82
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "shell: init/pf-seed/src/index.html",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 5,
+          "inapplicable": 82
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "shell: webpack-app/src/index.html",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 5,
+          "inapplicable": 82
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      }
+    ],
+    "differences": [
+      {
+        "fixture": "internals: role attribute over internals",
+        "internals": true,
+        "differences": [
+          {
+            "entry": {
+              "category": "inapplicable",
+              "rule": "presentation-role-conflict",
+              "target": null,
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "aria-required-children",
+              "target": "[\"div\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "presentation-role-conflict",
+              "target": "[\"x-li[role=\\\"presentation\\\"]\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "violation",
+              "rule": "aria-required-children",
+              "target": "[\"div\"]",
+              "impact": "critical",
+              "elementKey": "compare|aria-required-children|struct:unknown:div"
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          }
+        ]
+      },
+      {
+        "fixture": "internals: role in a private field",
+        "internals": true,
+        "differences": [
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "aria-required-children",
+              "target": "[\"div\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          },
+          {
+            "entry": {
+              "category": "violation",
+              "rule": "aria-required-children",
+              "target": "[\"div\"]",
+              "impact": "critical",
+              "elementKey": "compare|aria-required-children|struct:unknown:div"
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          }
+        ]
+      },
+      {
+        "fixture": "internals: state on a role attribute",
+        "internals": true,
+        "differences": [
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "aria-required-attr",
+              "target": "[\"x-state\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "violation",
+              "rule": "aria-required-attr",
+              "target": "[\"x-state\"]",
+              "impact": "critical",
+              "elementKey": "compare|aria-required-attr|struct:unknown:x-state"
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          }
+        ]
+      }
+    ]
+  },
+  "sweep": {
+    "comparisons": 119,
+    "byFile": {
+      "test/surfaces/overlay-client.test.ts": 17,
+      "test/surfaces/playwright-page-check.integration.test.ts": 20,
+      "test/session/session-login.integration.test.ts": 1,
+      "test/surfaces/webpack-overlay.integration.test.ts": 1,
+      "test/baseline/row-stability.real.integration.test.ts": 12,
+      "test/baseline/row-identity.real.integration.test.ts": 56,
+      "test/deps/real.integration.test.ts": 12
+    },
+    "comparedEntries": {
+      "violation": 112,
+      "incomplete": 49,
+      "pass": 10416,
+      "inapplicable": 7437
+    },
+    "withDifferences": [],
+    "withUncheckedFrames": [],
+    "errors": [
+      {
+        "file": "test/deps/real.integration.test.ts",
+        "test": "real browser driver integration > names a real gradient background with the exact axe reason, and nothing else with it",
+        "page": "data URL 465044a88a68",
+        "error": "axe could not run on the page: cdpSession.send: Target page, context or browser has been closed"
+      }
+    ]
+  }
+}
