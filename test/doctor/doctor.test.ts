@@ -210,6 +210,7 @@ function doctorDeps(
 ): DoctorDeps {
   return {
     probePlaywrightChromium: async () => 'wired',
+    probeChromiumSandbox: async () => 'available',
     env: NO_SESSION,
     ...base,
   };
@@ -338,6 +339,7 @@ describe('collectDoctorReport', () => {
         gh: GH_NOT_PROTECTED,
         configPath: 'usabl.config.json',
         probePlaywrightChromium: async () => 'missing',
+        probeChromiumSandbox: async () => 'unavailable',
       }),
     );
 
@@ -989,6 +991,42 @@ export default defineConfig({
         }),
       ),
     ).rejects.toThrow('programmer error');
+  });
+});
+
+describe('the chromium sandbox report', () => {
+  const sandboxReport = async (probe: 'available' | 'unavailable' | 'unknown'): Promise<SurfaceReport> =>
+    byId(
+      await collectDoctorReport(
+        doctorDeps({
+          fs: readOnlyFs({}),
+          gh: GH_UNAVAILABLE,
+          configPath: 'usabl.config.json',
+          probeChromiumSandbox: async () => probe,
+        }),
+      ),
+      'chromium-sandbox',
+    );
+
+  it('is wired when Chromium starts with its sandbox', async () => {
+    const report = await sandboxReport('available');
+    expect(report.state).toBe('wired');
+    expect(report.nextStep).toBe('');
+  });
+
+  it('is missing, with the fix and what usabl does meanwhile, when Chromium cannot start its sandbox', async () => {
+    const report = await sandboxReport('unavailable');
+    expect(report.state).toBe('missing');
+    expect(report.nextStep).toContain('apparmor-userns-restrictions');
+    expect(report.nextStep).toContain('container');
+    expect(report.nextStep).toContain('without');
+    expect(report.nextStep).toContain('"require"');
+  });
+
+  it('is unknown, never wired, when the probe cannot tell', async () => {
+    const report = await sandboxReport('unknown');
+    expect(report.state).toBe('unknown');
+    expect(report.nextStep.length).toBeGreaterThan(0);
   });
 });
 

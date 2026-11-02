@@ -11,6 +11,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { main } from '../../src/cli.js';
 
+// The sandbox probe starts a real Chromium. These tests check the command wiring, so the probe
+// answers at once instead. The real probe is checked against a real browser in the integration
+// suite.
+vi.mock('../../src/doctor/sandbox-probe.js', () => ({ probeChromiumSandbox: async () => 'available' }));
+
 describe('usabl doctor command wiring', () => {
   let workspace: string;
   let originalCwd: string;

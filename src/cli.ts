@@ -59,6 +59,7 @@ import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './su
 import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
+import { probeChromiumSandbox } from './doctor/sandbox-probe.js';
 import { appendRecord } from './history/append.js';
 import { makeHistoryGit } from './history/git.js';
 import { serializeRecord } from './history/record.js';
@@ -593,6 +594,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       configPath: opts.configPath,
       env: process.env,
       probePlaywrightChromium,
+      probeChromiumSandbox: () => probeChromiumSandbox(),
       // Read-only: git ls-files and check-ignore, and a stat for the permission bits.
       sessionFile: {
         ignoreState: (path) => gitIgnoreState(process.cwd(), path),
