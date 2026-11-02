@@ -298,7 +298,7 @@ const COMPUTED_STYLE_FUNCTION = `function (query, cssProperty) {
 }`;
 
 
-interface AxeResult {
+export interface AxeResult {
   violations: AxeIssue[];
   incomplete: AxeIssue[];
   // axe classifies every rule it loaded, not only the ones that produced findings. Keeping the
@@ -402,6 +402,20 @@ export function mapAxeRuleSummaries(rawRules: unknown): AxeRuleSummary[] {
   }
 
   return summaries;
+}
+
+/**
+ * Maps the results object axe returns to the record the axe provider reads. The same defensive
+ * contract as the bucket mappings above: anything that is not the expected shape reads as empty.
+ * Exported so a test can map the results of an axe run it made itself the same way.
+ */
+export function mapAxeResults(raw: unknown): AxeResult {
+  return {
+    violations: mapAxeIssues(getProp(raw, 'violations')),
+    incomplete: mapAxeIssues(getProp(raw, 'incomplete')),
+    passes: mapAxeRuleSummaries(getProp(raw, 'passes')),
+    inapplicable: mapAxeRuleSummaries(getProp(raw, 'inapplicable')),
+  };
 }
 
 function getProp(value: unknown, key: string): unknown {
@@ -1516,13 +1530,7 @@ function attachAxeBridge(page: Page, pw: PwPage): void {
       // Tags apply only when the docs profile passes them. No tags means axe keeps its default
       // ruleset, so the app path builds and analyzes exactly as before.
       const builder = applyAxeTags(new AxeBuilder({ page: pw }), options);
-      const result = await builder.analyze();
-      return {
-        violations: mapAxeIssues(result.violations),
-        incomplete: mapAxeIssues(result.incomplete),
-        passes: mapAxeRuleSummaries(result.passes),
-        inapplicable: mapAxeRuleSummaries(result.inapplicable),
-      };
+      return mapAxeResults(await builder.analyze());
     },
   });
 }
