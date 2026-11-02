@@ -60,6 +60,12 @@
 
 ### Fixed
 
+- The announcement capture no longer hears a live region outside an open modal dialog. While a
+  dialog opened with `showModal()` is open, Chromium hides everything outside it from assistive
+  technology, so a screen reader says nothing there. Before, a flow requirement could pass on
+  that text. A change inside the open modal is still heard, a dialog opened with `show()` hides
+  nothing, and content outside is heard again once the modal closes.
+
 - The scan browser now starts with Chromium's sandbox. Before, usabl never asked for it,
   so Playwright added `--no-sandbox` and every page a scan opened ran without it. When
   Chromium reports that it cannot start its sandbox, as on Ubuntu 23.10 and later or in

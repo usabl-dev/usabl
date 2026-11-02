@@ -2470,6 +2470,17 @@ from outside, the change is not recorded. That region's own text leaves out the 
 changed and holds text the change did not make speakable, such as slot fallback text, so recording
 it could pass a flow requirement on words no screen reader spoke.
 
+Nor is a change outside an open modal dialog heard. While a dialog opened with `showModal()` is
+open, Chromium leaves everything outside the top one out of the accessibility tree, with the
+ignored reason `activeModalDialog`, so a screen reader says nothing for a live region there. The
+capture reads the open modal dialogs when it observes the change, by the browser's own
+`dialog:modal` state, in the document and in every open shadow root. A change is heard only when
+it sits inside every open modal dialog on the flat tree walk. Which open modal is on top is not in
+the DOM, so with two sibling modals open nothing is heard, while the browser still exposes the top
+one. That can only make the capture hear less. A dialog opened with `show()` hides nothing, and
+once the modal closes, the content outside it is heard again. A modal dialog inside a closed
+shadow root cannot be found from the capture's world, so content outside it is still heard.
+
 The capture and the element path function run in isolated worlds, which share the DOM with the
 page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
 page that defines `window.__usablDrain` or `window.__usablPathFor` before adoption, or replaces

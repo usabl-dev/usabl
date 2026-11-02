@@ -540,7 +540,14 @@ outside every table as the control in an accepted row. Either way a new barrier 
   that redefines style writes, or says its root is not an element, cannot stop the zoom from
   landing. No provider calls `setZoom` today; the planned resize check (WCAG 1.4.4) will.
 
-**Not handled:** one page operation still runs in the page's own world: the element count that
+- The live-region capture reads open modal dialogs by the browser's `dialog:modal` state, from its
+  isolated world, when it observes a change. A page cannot make a change outside an open modal
+  dialog count as heard by redefining `matches`, `querySelectorAll`, or the `open` attribute in its
+  own world. Before, a flow requirement could pass on a polite region outside the modal the same
+  step opened, which Chromium leaves out of the accessibility tree.
+
+**Not handled:** a modal dialog inside a closed shadow root is not found by the capture, so a change
+outside it is still heard. One page operation still runs in the page's own world: the element count that
 readiness polls to tell when the DOM stopped changing. A page can change what it sees by
 redefining DOM methods. axe also computes its target selectors in the page's own world, so a page
 that patches DOM accessors can still change the selector, and with it the identity key, of an axe

@@ -109,3 +109,34 @@ describe('hiddenInChain', () => {
     }
   });
 });
+
+describe('blockedByModal', () => {
+  const inModal = { modal: true };
+  const plain = { modal: false };
+
+  it('blocks nothing while no modal dialog is open', () => {
+    const resolver = createLiveResolver();
+    expect(resolver.blockedByModal([], 0)).toBe(false);
+    expect(resolver.blockedByModal([plain, plain], 0)).toBe(false);
+  });
+
+  it('blocks content outside the open modal and keeps content inside it', () => {
+    const resolver = createLiveResolver();
+    expect(resolver.blockedByModal([plain, plain], 1)).toBe(true);
+    expect(resolver.blockedByModal([plain, inModal, plain], 1)).toBe(false);
+  });
+
+  // Which open modal is on top is not in the DOM, so content counts only inside every one of them.
+  it('blocks content that is not inside every open modal', () => {
+    const resolver = createLiveResolver();
+    expect(resolver.blockedByModal([plain, inModal, plain], 2)).toBe(true);
+    expect(resolver.blockedByModal([inModal, plain, inModal], 2)).toBe(false);
+  });
+
+  it('answers the same from its own source alone', () => {
+    const fromSource = resolverFromSource();
+    for (const [chain, open] of [[[], 0], [[plain], 1], [[inModal], 1], [[inModal, plain], 2]] as const) {
+      expect(fromSource.blockedByModal(chain, open)).toBe(createLiveResolver().blockedByModal(chain, open));
+    }
+  });
+});

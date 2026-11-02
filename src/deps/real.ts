@@ -127,7 +127,11 @@ const LIVE_CAPTURE_IMPL = `
   // the walk hides its subtree from assistive technology: the changed element, a wrapper between it
   // and the region, the region itself, or anything above the region. A screen reader says nothing
   // for that change, so recording it would let a flow requirement pass on words no one heard.
-  const liveHost = (start) => {
+  //
+  // A change outside an open modal dialog is not recorded either. While a dialog opened with
+  // showModal() is open, Chromium leaves everything outside the top one out of the accessibility
+  // tree. openModals gives the open modal dialogs, read when the change is observed.
+  const liveHost = (start, openModals) => {
     const elements = [];
     const chain = [];
     for (let current = start; current instanceof Element; current = flatParent(current)) {
@@ -143,7 +147,32 @@ const LIVE_CAPTURE_IMPL = `
     if (liveResolver.hiddenInChain(chain) || liveResolver.effectiveLiveValue(chain) === 'off') {
       return null;
     }
+    const modals = openModals();
+    if (modals.size > 0) {
+      const modalChain = elements.map((element) => ({ modal: modals.has(element) }));
+      if (liveResolver.blockedByModal(modalChain, modals.size)) {
+        return null;
+      }
+    }
     return elements[liveResolver.nearestLiveSetter(chain)] ?? null;
+  };
+  // Every modal dialog open now, by the browser's own :modal state, in the document and in every
+  // open shadow root, because a modal dialog in a web component blocks the whole document too. A
+  // modal dialog inside a closed shadow root cannot be found from here; see the threat model.
+  const findOpenModals = () => {
+    const found = new Set();
+    const scopes = [document];
+    for (let scope = scopes.pop(); scope !== undefined; scope = scopes.pop()) {
+      for (const dialog of scope.querySelectorAll('dialog:modal')) {
+        found.add(dialog);
+      }
+      for (const element of scope.querySelectorAll('*')) {
+        if (element.shadowRoot) {
+          scopes.push(element.shadowRoot);
+        }
+      }
+    }
+    return found;
   };
   const buffer = [];
   const toText = (value) => {
@@ -164,9 +193,17 @@ const LIVE_CAPTURE_IMPL = `
     if (document.readyState === 'loading') {
       return;
     }
+    // Read once for the whole batch, and only when a change would be recorded.
+    let modals = null;
+    const openModals = () => {
+      if (modals === null) {
+        modals = findOpenModals();
+      }
+      return modals;
+    };
     for (const mutation of mutations) {
       const target = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
-      const host = target ? liveHost(target) : null;
+      const host = target ? liveHost(target, openModals) : null;
       // A host in another tree is a live region inside a shadow root that the changed element is
       // slotted into. Its own text leaves out the slotted text that changed and holds text the
       // change did not make speakable, such as slot fallback text and shadow-only text. A flow
