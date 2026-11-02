@@ -3,7 +3,7 @@
  * It must never mint a verdict, and it must never guess when the AX node is missing.
  * Missing focus metadata stays unverified so the gate can disclose uncertainty honestly.
  */
-import type { AxNode, Draft, Fact, Page, Provider } from '../../contracts/index.js';
+import type { AxNode, Draft, Fact, FocusUnreadable, Page, Provider } from '../../contracts/index.js';
 import { ROW_READ_KEY, readFocusedRow } from '../row-scope.js';
 import { makeStepRunner } from './steps.js';
 
@@ -100,12 +100,33 @@ function unnamedInteractiveDraft(screenId: string, elementPath: string, node: Ax
 }
 
 // Why the walk stopped. Only 'complete' means the focus order itself ended, by cycling back to a
-// path already seen or by handing focus to the body. The other two mean evidence is missing.
-type StopReason = 'complete' | 'wall-clock' | 'tab-cap';
+// path already seen or by handing focus to the body. The others mean evidence is missing: the
+// budget ran out, or focus moved somewhere the walk cannot tell one control from another.
+type StopReason = 'complete' | 'wall-clock' | 'tab-cap' | FocusUnreadable;
 
-const TRUNCATION_CAUSE: Record<Exclude<StopReason, 'complete'>, string> = {
-  'wall-clock': 'The keyboard walk ran out of its time budget',
-  'tab-cap': 'The keyboard walk reached its limit on tab stops',
+const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number) => string> = {
+  'wall-clock': (stops) =>
+    `The keyboard walk ran out of its time budget after ${stops} tab stop(s), before focus reached the end of the page.`,
+  'tab-cap': (stops) =>
+    `The keyboard walk reached its limit on tab stops after ${stops} tab stop(s), before focus reached the end of the page.`,
+  'closed-shadow-root': (stops) =>
+    `After ${stops} tab stop(s), focus moved into a closed shadow root, where the keyboard walk cannot tell one control from another.`,
+  'frame-unreadable': (stops) =>
+    `After ${stops} tab stop(s), focus moved into a frame from another origin, which the keyboard walk cannot read.`,
+  'focus-too-deep': (stops) =>
+    `After ${stops} tab stop(s), focus moved under more shadow roots and frames than the keyboard walk follows.`,
+};
+
+const BUDGET_FIX = 'Raise the keyboard walk budget for this screen, or split the screen so its focus order fits one walk.';
+const UNREADABLE_FIX =
+  'Check the controls past this point by hand. To let usabl walk them, use an open shadow root, or serve the frame from the same origin as the screen.';
+
+const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, string> = {
+  'wall-clock': BUDGET_FIX,
+  'tab-cap': BUDGET_FIX,
+  'closed-shadow-root': UNREADABLE_FIX,
+  'frame-unreadable': UNREADABLE_FIX,
+  'focus-too-deep': UNREADABLE_FIX,
 };
 
 function truncatedWalkDraft(
@@ -123,9 +144,9 @@ function truncatedWalkDraft(
     elementName: null,
     role: null,
     whatUserExperiences:
-      'Part of the keyboard path through this screen was never walked, so barriers past that point are unknown.',
-    why: `${TRUNCATION_CAUSE[reason]} after ${stopsWalked} tab stop(s), before focus reached the end of the page.`,
-    fix: 'Raise the keyboard walk budget for this screen, or split the screen so its focus order fits one walk.',
+      'Part of the keyboard path through this screen was never walked, so accessibility barriers past that point are unknown.',
+    why: TRUNCATION_WHY[reason](stopsWalked),
+    fix: TRUNCATION_FIX[reason],
     evidence: {},
     confidence: 'unverified',
   };
@@ -166,6 +187,14 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
         }
 
         const stops = await stepRunner.run(ctx.page, [{ do: 'tab' }]);
+        // Inside a closed shadow root or a frame the walk cannot read, every control has the path
+        // of the host or the frame, so a repeated path proves nothing. The walk ends there and says
+        // so, rather than read the second control as a completed cycle.
+        const unreadable = await ctx.page.activeFocusUnreadable();
+        if (unreadable !== null) {
+          stopReason = unreadable;
+          break;
+        }
         const path = tabStopPath(stops[0]?.elementPath ?? '', i);
         if (seenPaths.has(path)) {
           stopReason = 'complete';

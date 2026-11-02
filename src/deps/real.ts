@@ -6,7 +6,7 @@
  */
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, ElementTarget, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, ElementTarget, FocusUnreadable, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
 import { BrowserSandboxRequiredError, isBrowserSandboxRefusal, isSandboxLaunchFailure, type BrowserSandboxPolicy } from './sandbox.js';
@@ -50,44 +50,111 @@ const PATH_FOR_IMPL = `
     }
     return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => '\\\\' + ch);
   };
-  const idNamesOnly = (element) => {
+  // The scope is the tree the element sits in: a document, or a shadow root. Ids are looked up in it,
+  // because an id names an element only inside its own tree. Node types are compared by number,
+  // because an element in a frame has that frame's own constructors.
+  const ELEMENT_NODE = 1;
+  const FRAGMENT_NODE = 11;
+  const idNamesOnly = (element, scope) => {
     let matches;
     try {
-      matches = document.querySelectorAll('#' + escapeCss(element.id));
+      matches = scope.querySelectorAll('#' + escapeCss(element.id));
     } catch (_error) {
       return false;
     }
     return matches.length === 1 && matches[0] === element;
   };
-  const pathFor = (element) => {
-    if (!(element instanceof Element)) {
-      return '';
-    }
-    if (element.id && idNamesOnly(element)) {
+  const pathIn = (element, scope) => {
+    if (element.id && idNamesOnly(element, scope)) {
       return '#' + escapeCss(element.id);
     }
     const segments = [];
     let current = element;
-    while (current instanceof Element) {
-      if (current.id && idNamesOnly(current)) {
+    while (current !== null && current.nodeType === ELEMENT_NODE) {
+      if (current.id && idNamesOnly(current, scope)) {
         segments.unshift('#' + escapeCss(current.id));
-        break;
-      }
-      const parent = current.parentElement;
-      if (!parent) {
-        segments.unshift(current.tagName.toLowerCase());
         break;
       }
       let index = 1;
       let sibling = current.previousElementSibling;
-      while (sibling instanceof Element) {
+      while (sibling !== null) {
         index += 1;
         sibling = sibling.previousElementSibling;
+      }
+      const parent = current.parentElement;
+      if (!parent) {
+        // The top of a document is its one root element, named by its tag. The top of a shadow
+        // root can hold several elements, so the position stays in the path.
+        const tag = current.tagName.toLowerCase();
+        segments.unshift(scope.nodeType === FRAGMENT_NODE ? tag + ':nth-child(' + String(index) + ')' : tag);
+        break;
       }
       segments.unshift(current.tagName.toLowerCase() + ':nth-child(' + String(index) + ')');
       current = parent;
     }
     return segments.join(' > ');
+  };
+  const pathFor = (element) => {
+    if (!(element instanceof Element)) {
+      return '';
+    }
+    return pathIn(element, document);
+  };
+`;
+
+// Browser-side helper that follows focus from the document into open shadow roots and same-origin
+// frames, to the element that really has focus. document.activeElement stops at the host of a
+// shadow root and at a frame, so every control inside one has the host's or the frame's path. A walk
+// then reads the second control as a return to the first, ends as if the focus order were done, and
+// never reaches the controls after it. The path joins the path of each tree in turn, so every
+// control has its own. An element outside every shadow root and frame keeps its path from pathFor.
+// A frame whose document cannot be read, such as one from another origin, is reported, never
+// guessed. A closed shadow root cannot be seen from here at all; see readFocus.
+const DEEP_FOCUS_IMPL = `
+  ${PATH_FOR_IMPL}
+  const FOCUS_DEPTH_LIMIT = 1024;
+  const SHADOW_STEP = ' >> ';
+  const FRAME_STEP = ' >> internal:control=enter-frame >> ';
+  const deepFocus = () => {
+    const first = document.activeElement;
+    if (!(first instanceof Element)) {
+      return { element: null, path: '', unreadable: null };
+    }
+    let element = first;
+    let path = pathFor(first);
+    for (let depth = 0; ; depth += 1) {
+      if (depth >= FOCUS_DEPTH_LIMIT) {
+        return { element, path, unreadable: 'focus-too-deep' };
+      }
+      const root = element.shadowRoot;
+      const inShadow = root ? root.activeElement : null;
+      if (inShadow) {
+        path += SHADOW_STEP + pathIn(inShadow, root);
+        element = inShadow;
+        continue;
+      }
+      const tag = element.tagName.toLowerCase();
+      if (tag !== 'iframe' && tag !== 'frame') {
+        break;
+      }
+      let inner = null;
+      try {
+        inner = element.contentDocument;
+      } catch (_error) {
+        inner = null;
+      }
+      if (!inner) {
+        return { element, path, unreadable: 'frame-unreadable' };
+      }
+      const active = inner.activeElement;
+      // A focused frame whose own document has nothing focused is itself the focused element.
+      if (!active || active === inner.body || active === inner.documentElement) {
+        break;
+      }
+      path += FRAME_STEP + pathIn(active, inner);
+      element = active;
+    }
+    return { element, path, unreadable: null };
   };
 `;
 
@@ -246,11 +313,20 @@ export const PATHS_FOR_SELECTOR_FUNCTION = `function (query) {
   return Array.from(document.querySelectorAll(query), (element) => pathFor(element));
 }`;
 
-// The path of the focused element, or the empty string when there is none.
+// The path of the focused element, followed into open shadow roots and same-origin frames, or the
+// empty string when there is none.
 const ACTIVE_PATH_FUNCTION = `function () {
-  ${PATH_FOR_IMPL}
-  return pathFor(document.activeElement instanceof Element ? document.activeElement : null);
+  ${DEEP_FOCUS_IMPL}
+  return deepFocus().path;
 }`;
+
+// The focused element, followed the same way, or the reason it cannot be read as a string. Null
+// when nothing has focus.
+const DEEP_FOCUS_EXPRESSION = `(function () {
+  ${DEEP_FOCUS_IMPL}
+  const focus = deepFocus();
+  return focus.unreadable !== null ? focus.unreadable : focus.element;
+})()`;
 
 // The world the focus and style reads run in, for the same reason as the path world. A page that
 // redefines querySelector, the activeElement or body getters, contains, focus, or getComputedStyle
@@ -437,26 +513,95 @@ async function backendNodeIdForSelector(cdp: CDPSession, selector: string): Prom
   return readNumber(getProp(getProp(described, 'node'), 'backendNodeId'));
 }
 
-async function backendNodeIdForActiveElement(cdp: CDPSession): Promise<number | null> {
-  // Read in the read world, so a page that redefines the activeElement getter cannot point the
-  // accessibility read at an element that does not hold focus.
+// What a focus read found: the element that has focus, nothing focused, or a reason the element
+// cannot be read.
+type FocusRead =
+  | { kind: 'element'; backendNodeId: number }
+  | { kind: 'none' }
+  | { kind: 'unreadable'; reason: FocusUnreadable };
+
+const FOCUS_UNREADABLE: ReadonlySet<string> = new Set<FocusUnreadable>(['closed-shadow-root', 'frame-unreadable', 'focus-too-deep']);
+
+// Whether any closed shadow root of an element holds focus. Page script, and every world, sees a
+// closed root as no root at all, so only the browser's own DOM read can reach it. A root is asked
+// for its focused element in the read world, so page script cannot answer for it. Anything but a
+// clear "no" counts as holding focus: a wrong "no" would let the walk read a control inside the root
+// as its host.
+async function closedRootHoldsFocus(cdp: CDPSession, shadowRoots: unknown, contextId: number): Promise<boolean> {
+  if (!Array.isArray(shadowRoots)) {
+    return false;
+  }
+  for (const root of shadowRoots) {
+    // A browser's own shadow root, such as the one inside a date input, is not page content.
+    if (getProp(root, 'shadowRootType') !== 'closed') {
+      continue;
+    }
+    const backendNodeId = readNumber(getProp(root, 'backendNodeId'));
+    if (backendNodeId === null) {
+      return true;
+    }
+    const resolved: unknown = await cdp.send('DOM.resolveNode', { backendNodeId, executionContextId: contextId, objectGroup: 'usabl-focus' });
+    const objectId = readString(getProp(getProp(resolved, 'object'), 'objectId'));
+    if (objectId === null) {
+      return true;
+    }
+    try {
+      const answered: unknown = await cdp.send('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: 'function () { return this.activeElement === null; }',
+        returnByValue: true,
+      });
+      if (getProp(getProp(answered, 'result'), 'value') !== true) {
+        return true;
+      }
+    } finally {
+      await cdp.send('Runtime.releaseObject', { objectId }).catch(() => undefined);
+    }
+  }
+  return false;
+}
+
+/**
+ * Reads the element that has focus, followed into open shadow roots and same-origin frames, and
+ * checks that it is not the host of a closed shadow root that holds focus. Read in the read world,
+ * so a page that redefines the activeElement or shadowRoot getters cannot point the read at an
+ * element that does not hold focus.
+ */
+async function readFocus(cdp: CDPSession): Promise<FocusRead> {
   const contextId = await isolatedWorldContextId(cdp, READ_WORLD, 'read the focused element');
   const evaluated: unknown = await cdp.send('Runtime.evaluate', {
-    expression: 'document.activeElement',
+    expression: DEEP_FOCUS_EXPRESSION,
     contextId,
     objectGroup: 'usabl-active-node',
     includeCommandLineAPI: false,
   });
+  const exception = getProp(evaluated, 'exceptionDetails');
+  if (exception !== undefined) {
+    const description = readString(getProp(getProp(exception, 'exception'), 'description'))?.split('\n')[0];
+    throw new Error(`the browser could not read the focused element: ${description ?? readString(getProp(exception, 'text')) ?? 'unknown error'}`);
+  }
 
   const result = getProp(evaluated, 'result');
+  const reason = readString(getProp(result, 'value'));
+  if (reason !== null) {
+    if (!FOCUS_UNREADABLE.has(reason)) {
+      throw new Error('the browser could not read the focused element: the read returned an unknown reason');
+    }
+    return { kind: 'unreadable', reason: reason as FocusUnreadable };
+  }
   const objectId = readString(getProp(result, 'objectId'));
   if (objectId === null) {
-    return null;
+    return { kind: 'none' };
   }
 
   try {
-    const described: unknown = await cdp.send('DOM.describeNode', { objectId });
-    return readNumber(getProp(getProp(described, 'node'), 'backendNodeId'));
+    const described: unknown = await cdp.send('DOM.describeNode', { objectId, depth: 1, pierce: true });
+    const node = getProp(described, 'node');
+    if (await closedRootHoldsFocus(cdp, getProp(node, 'shadowRoots'), contextId)) {
+      return { kind: 'unreadable', reason: 'closed-shadow-root' };
+    }
+    const backendNodeId = readNumber(getProp(node, 'backendNodeId'));
+    return backendNodeId === null ? { kind: 'none' } : { kind: 'element', backendNodeId };
   } finally {
     await cdp.send('Runtime.releaseObject', { objectId }).catch(() => undefined);
   }
@@ -1602,14 +1747,18 @@ function wrapPage(
       return Array.isArray(drained) ? drained.filter((entry): entry is string => typeof entry === 'string') : [];
     },
     async activeNode(): Promise<AxNode | null> {
-      const backendNodeId = await backendNodeIdForActiveElement(cdp);
-      if (backendNodeId === null) {
+      const focus = await readFocus(cdp);
+      if (focus.kind !== 'element') {
         return null;
       }
-      return axFromBackendId(cdp, backendNodeId);
+      return axFromBackendId(cdp, focus.backendNodeId);
     },
     async activePath(): Promise<string> {
       return stablePathForActiveElement(cdp);
+    },
+    async activeFocusUnreadable(): Promise<FocusUnreadable | null> {
+      const focus = await readFocus(cdp);
+      return focus.kind === 'unreadable' ? focus.reason : null;
     },
     async axAt(selector: string): Promise<AxNode | null> {
       const backendNodeId = await backendNodeIdForSelector(cdp, selector);

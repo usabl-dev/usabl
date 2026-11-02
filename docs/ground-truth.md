@@ -728,6 +728,23 @@ and `assert-announced(region, contains)`.
 Marks any focus it cannot confirm as `unverified` rather than passing. Does not hang
 on a focus trap.
 
+**Shadow roots and frames.** `document.activeElement` stops at the host of a shadow root
+and at a frame, so every control inside one would get the host's or the frame's path. The
+walk would read the second control as a return to the first, end as if the focus order were
+done, and never reach the controls after it. The focus read therefore follows focus into
+every open shadow root and every same-origin frame, in an isolated world, to the element
+that really has focus. Its accessible name and role are read from that element, and its
+path joins the path of each tree in turn: ` >> ` before the path inside a shadow root, and
+` >> internal:control=enter-frame >> ` before the path inside a frame. Both forms are
+Playwright locators that name the element. An element outside every shadow root and frame
+keeps the path it had before, so its identity key does not change. The walk ends as
+complete only when a path repeats or focus reaches the body. When focus moves into a closed
+shadow root, into a frame from another origin, or under more than 1024 shadow roots and
+frames, the walk cannot tell one control there from another. It stops and emits
+`keyboard-walk-truncated` as `unverified`, which names the cause, so the screen is not
+covered instead of passing. A closed shadow root that does not hold focus, such as one
+inside a focusable host, is walked past as usual.
+
 ### 7.4 Declarative interaction probes
 
 Multi-step interactions expressed as data (JSON steps a generic runner executes). A
