@@ -735,12 +735,18 @@ done, and never reach the controls after it. The focus read therefore follows fo
 every open shadow root and every same-origin frame, in an isolated world, to the element
 that really has focus. Its accessible name and role are read from that element, and its
 path joins the path of each tree in turn: ` >> ` before the path inside a shadow root, and
-` >> internal:control=enter-frame >> ` before the path inside a frame. Both forms are
-Playwright locators that name the element. An element outside every shadow root and frame
+` >> internal:control=enter-frame >> ` before the path inside a frame. These joined paths
+are identity strings, not selectors or locators: no code looks an element up by them, and a
+locator built from one can match more than one element, because Playwright's CSS engine also
+searches open shadow roots. An element outside every shadow root and frame
 keeps the path it had before, so its identity key does not change. The walk ends as
-complete only when a path repeats or focus reaches the body. When focus moves into a closed
-shadow root, into a frame from another origin, or under more than 1024 shadow roots and
-frames, the walk cannot tell one control there from another. It stops and emits
+complete only when a path repeats or focus reaches the body. The read enters `iframe` and
+`frame` elements only. Any other element that holds a frame, such as an `object` or `embed`
+element that shows a document, or a `fencedframe`, is found through the browser's own DOM read
+over CDP (the browser gives a frame owner a frame id or a content document), and focus on it
+counts as a frame the read cannot see into. When focus moves into a closed shadow root, into
+a frame from another origin, into such a frame owner, or under more than 1024 shadow roots
+and frames, the walk cannot tell one control there from another. It stops and emits
 `keyboard-walk-truncated` as `unverified`, which names the cause, so the screen is not
 covered instead of passing. A closed shadow root that does not hold focus, such as one
 inside a focusable host, is walked past as usual.

@@ -65,9 +65,9 @@
   walk read the second control as a completed cycle and stopped. It never reached the
   controls after it, and an unnamed button there was never reported. Each control now has
   its own path and its own accessible name and role. A path outside every shadow root and
-  frame is unchanged. When focus moves into a closed shadow root or a frame from another
-  origin, the walk stops with `keyboard-walk-truncated`, so the screen is not covered
-  instead of passing.
+  frame is unchanged. When focus moves into a closed shadow root, a frame from another
+  origin, or the frame of an `object`, `embed`, or `fencedframe` element, the walk stops
+  with `keyboard-walk-truncated`, so the screen is not covered instead of passing.
 
 - The interaction contract tiers and flow requirements no longer report a barrier on a
   control they could not read. When focus is inside a closed shadow root or a frame usabl

@@ -540,9 +540,10 @@ outside every table as the control in an accepted row. Either way a new barrier 
   hide a control inside a component or a frame. Before, every control inside one had the host's
   or the frame's path, so the walk read the second as a completed cycle and passed a screen whose
   later controls it never reached. A closed shadow root is seen only through the browser's own
-  DOM read over CDP, and its focused element is asked for in the read world. Focus inside a
-  closed shadow root or a frame from another origin ends the walk with an `unverified`
-  truncation draft, never a pass.
+  DOM read over CDP, and its focused element is asked for in the read world. So is a frame
+  owner other than an `iframe` or `frame`, such as an `object`, `embed`, or `fencedframe`
+  element. Focus inside a closed shadow root, a frame from another origin, or such a frame
+  owner ends the walk with an `unverified` truncation draft, never a pass.
 
 - The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
   that redefines style writes, or says its root is not an element, cannot stop the zoom from

@@ -112,14 +112,14 @@ const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number) =>
   'closed-shadow-root': (stops) =>
     `After ${stops} tab stop(s), focus moved into a closed shadow root, where the keyboard walk cannot tell one control from another.`,
   'frame-unreadable': (stops) =>
-    `After ${stops} tab stop(s), focus moved into a frame from another origin, which the keyboard walk cannot read.`,
+    `After ${stops} tab stop(s), focus moved into a frame the keyboard walk cannot read, such as a frame from another origin or the frame of an object, embed, or fencedframe element.`,
   'focus-too-deep': (stops) =>
     `After ${stops} tab stop(s), focus moved under more shadow roots and frames than the keyboard walk follows.`,
 };
 
 const BUDGET_FIX = 'Raise the keyboard walk budget for this screen, or split the screen so its focus order fits one walk.';
 const UNREADABLE_FIX =
-  'Check the controls past this point by hand. To let usabl walk them, use an open shadow root, or serve the frame from the same origin as the screen.';
+  'Check the controls past this point by hand. To let usabl walk them, use an open shadow root, or show the frame in an iframe served from the same origin as the screen.';
 
 const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, string> = {
   'wall-clock': BUDGET_FIX,

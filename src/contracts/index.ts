@@ -497,7 +497,8 @@ export interface DocArtifact {
 // host or the frame that holds it, the same for every control inside, so a walk could read the second
 // control as a return to the first.
 // 'closed-shadow-root': focus is inside a closed shadow root.
-// 'frame-unreadable': focus is inside a frame usabl cannot look inside, such as one from another origin.
+// 'frame-unreadable': focus is inside a frame usabl cannot look inside, such as one from another origin,
+// or the frame of an object, embed, or fencedframe element, which the read does not enter.
 // 'focus-too-deep': focus sits under more shadow roots and frames than the read follows.
 export type FocusUnreadable = 'closed-shadow-root' | 'frame-unreadable' | 'focus-too-deep';
 

@@ -28,6 +28,13 @@ function page(body: string): string {
 
 const FRAME_DOC = '<!doctype html><html lang="en"><head><title>Inner</title></head><body><button>Inner one</button><button>Inner two</button></body></html>';
 
+// A whole document for a frame, with the given body.
+function frameDoc(body: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Inner</title></head><body>${body}</body></html>`;
+}
+
+const FRAME_STEP = ' >> internal:control=enter-frame >> ';
+
 function pages(crossOrigin: string): Record<string, string> {
   return {
     // The case the walk got wrong: both shadow buttons read as the host, the second read as a
@@ -82,6 +89,32 @@ function pages(crossOrigin: string): Record<string, string> {
       `<button type="button">First</button><iframe title="Inner" src="${crossOrigin}/frame"></iframe><button type="button" id="trailing"></button>`,
     ),
     '/frame': FRAME_DOC,
+    // A frame inside an open shadow root.
+    '/frame-in-shadow': page(
+      '<x-framer></x-framer><button type="button" id="trailing"></button>' +
+        openElement('x-framer', '<iframe title="Inner" src="/frame"></iframe>'),
+    ),
+    // An open shadow root inside a frame.
+    '/shadow-frame-doc': frameDoc(
+      '<x-pair></x-pair>' + openElement('x-pair', '<button type="button">Alpha</button><button type="button">Beta</button>'),
+    ),
+    '/shadow-in-frame': page('<iframe title="Inner" src="/shadow-frame-doc"></iframe><button type="button" id="trailing"></button>'),
+    // A frame inside a frame, each with more than one control.
+    '/outer-frame-doc': frameDoc('<button type="button">Outer</button><iframe title="Innermost" src="/frame"></iframe>'),
+    '/nested-frames': page('<iframe title="Outer" src="/outer-frame-doc"></iframe><button type="button" id="trailing"></button>'),
+    // A closed shadow root inside a same-origin frame.
+    '/closed-shadow-frame-doc': frameDoc(
+      '<x-closed></x-closed>' + closedElement('x-closed', '<button type="button">Alpha</button><button type="button">Beta</button>'),
+    ),
+    '/closed-shadow-in-frame': page(
+      '<iframe title="Inner" src="/closed-shadow-frame-doc"></iframe><button type="button" id="trailing"></button>',
+    ),
+    // A same-origin document shown by an object element. document.activeElement reads the object
+    // for every control inside it, so the second control would read as a completed cycle.
+    '/object-frame': page(
+      '<button type="button">First</button><object data="/frame" type="text/html" aria-label="Form" width="300" height="80"></object>' +
+        '<button type="button" id="trailing"></button>',
+    ),
     // Light markup only, with ids that name one element and ids that do not.
     '/light-only': page(
       '<nav><a href="#a" id="nav-link">Home</a></nav><div><span><button type="button">One</button></span>' +
@@ -299,6 +332,93 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       const drafts = await walk(opened);
       expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
       expect(drafts[0]?.why).toContain('frame from another origin');
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('walks a frame inside a shadow root to the control after it', async () => {
+    const opened = await open('/frame-in-shadow');
+    try {
+      const stops = await paths(opened, 2);
+      expect(new Set(stops).size).toBe(2);
+      for (const stop of stops) expect(stop).toContain(' >> iframe:nth-child(1)' + FRAME_STEP);
+      const drafts = await walk(opened);
+      expect(summary(drafts)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('walks a shadow root inside a frame to the control after it', async () => {
+    const opened = await open('/shadow-in-frame');
+    try {
+      const stops = await paths(opened, 2);
+      expect(new Set(stops).size).toBe(2);
+      for (const stop of stops) {
+        expect(stop).toContain(FRAME_STEP);
+        expect(stop.indexOf(' >> button:nth-child(')).toBeGreaterThan(stop.indexOf(FRAME_STEP));
+      }
+      await opened.focusBody();
+      await opened.tab();
+      expect(await opened.activeNode()).toMatchObject({ name: 'Alpha', role: 'button' });
+      const drafts = await walk(opened);
+      expect(summary(drafts)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('walks a frame inside a frame to the control after it', async () => {
+    const opened = await open('/nested-frames');
+    try {
+      const stops = await paths(opened, 3);
+      expect(new Set(stops).size).toBe(3);
+      expect(stops[0]?.split(FRAME_STEP)).toHaveLength(2);
+      expect(stops[1]?.split(FRAME_STEP)).toHaveLength(3);
+      expect(stops[2]?.split(FRAME_STEP)).toHaveLength(3);
+      await opened.focusBody();
+      await opened.tab();
+      await opened.tab();
+      expect(await opened.activeNode()).toMatchObject({ name: 'Inner one', role: 'button' });
+      const drafts = await walk(opened);
+      expect(summary(drafts)).toEqual([['keyboard-walk-unnamed-interactive', '#trailing']]);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('discloses a truncated walk when focus moves into a closed shadow root inside a frame', async () => {
+    const opened = await open('/closed-shadow-in-frame');
+    try {
+      await opened.focusBody();
+      await opened.tab();
+      expect(await opened.activeFocusUnreadable()).toBe('closed-shadow-root');
+      expect(await opened.activeNode()).toBeNull();
+      const drafts = await walk(opened);
+      expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
+      expect(drafts[0]?.why).toContain('closed shadow root');
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('discloses a truncated walk when focus moves into the frame of an object element', async () => {
+    const opened = await open('/object-frame');
+    try {
+      const drafts = await walk(opened);
+      expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
+      expect(drafts[0]?.confidence).toBe('unverified');
+      expect(drafts[0]?.why).toContain('object');
+      // Wherever the object's controls sit in the tab order, a stop inside them reads as unreadable.
+      await opened.focusBody();
+      const reasons: Array<string | null> = [];
+      for (let i = 0; i < 4; i += 1) {
+        await opened.tab();
+        reasons.push(await opened.activeFocusUnreadable());
+      }
+      expect(reasons[0]).toBeNull();
+      expect(reasons).toContain('frame-unreadable');
     } finally {
       await opened.close();
     }

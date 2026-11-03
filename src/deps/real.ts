@@ -109,7 +109,9 @@ const PATH_FOR_IMPL = `
 // never reaches the controls after it. The path joins the path of each tree in turn, so every
 // control has its own. An element outside every shadow root and frame keeps its path from pathFor.
 // A frame whose document cannot be read, such as one from another origin, is reported, never
-// guessed. A closed shadow root cannot be seen from here at all; see readFocus.
+// guessed. A closed shadow root cannot be seen from here at all, nor can a frame owner other than
+// an iframe or a frame; see readFocus. Keep this the only implementation: the row read uses it
+// too, so row keys and walk paths always name the same element.
 const DEEP_FOCUS_IMPL = `
   ${PATH_FOR_IMPL}
   const FOCUS_DEPTH_LIMIT = 1024;
@@ -561,6 +563,27 @@ async function closedRootHoldsFocus(cdp: CDPSession, shadowRoots: unknown, conte
   return false;
 }
 
+// The frame elements the focus read enters. When one of them is the element it returns, the read
+// already looked inside its document and found nothing focused there.
+const ENTERED_FRAME_TAGS: ReadonlySet<string> = new Set(['iframe', 'frame']);
+
+// Whether the focused element, as the browser's own DOM read describes it, holds a frame the focus
+// read did not enter. An object or embed element that shows a document is a frame owner like an
+// iframe, and document.activeElement reads it for every control inside, so the walk would read the
+// second control as a completed cycle. Any frame owner counts, whatever its tag: the browser gives
+// it a frame id or a content document. The root element of a document also carries a frame id,
+// and it owns no frame. A fencedframe counts by its tag, since its inner page may not show here.
+function ownsFrameNotEntered(node: unknown): boolean {
+  const tag = readString(getProp(node, 'localName'))?.toLowerCase() ?? '';
+  if (tag === 'fencedframe') {
+    return true;
+  }
+  if (ENTERED_FRAME_TAGS.has(tag) || tag === 'html') {
+    return false;
+  }
+  return getProp(node, 'frameId') !== undefined || getProp(node, 'contentDocument') !== undefined;
+}
+
 /**
  * Reads the element that has focus, followed into open shadow roots and same-origin frames, and
  * checks that it is not the host of a closed shadow root that holds focus. Read in the read world,
@@ -597,6 +620,9 @@ async function readFocus(cdp: CDPSession): Promise<FocusRead> {
   try {
     const described: unknown = await cdp.send('DOM.describeNode', { objectId, depth: 1, pierce: true });
     const node = getProp(described, 'node');
+    if (ownsFrameNotEntered(node)) {
+      return { kind: 'unreadable', reason: 'frame-unreadable' };
+    }
     if (await closedRootHoldsFocus(cdp, getProp(node, 'shadowRoots'), contextId)) {
       return { kind: 'unreadable', reason: 'closed-shadow-root' };
     }
@@ -871,9 +897,13 @@ interface RowReadArgs {
   nestingLimit: number;
 }
 
+// What the shared focus read (DEEP_FOCUS_IMPL) hands the row read.
+type DeepFocus = () => { element: Element | null; unreadable: string | null };
+
 // The row read, as a function sent to the row world with each call. It must use nothing from
-// outside its own body: it runs in the browser from its source text.
-const READ_ROW_CONTEXT = ({ target, limit, textLimit, nestingLimit }: RowReadArgs) => {
+// outside its own body and its arguments: it runs in the browser from its source text. The focus
+// read is passed in from DEEP_FOCUS_IMPL, so row keys and walk paths name the same element.
+const READ_ROW_CONTEXT = ({ target, limit, textLimit, nestingLimit }: RowReadArgs, deepFocus: DeepFocus) => {
   const CANDIDATE_TABLE = 'table, [role="table"], [role="grid"], [role="treegrid"]';
   const ROW = 'tr, [role="row"]';
   // Node types are compared by number. An element in a frame has that frame's own constructors, so
@@ -881,9 +911,6 @@ const READ_ROW_CONTEXT = ({ target, limit, textLimit, nestingLimit }: RowReadArg
   const ELEMENT_NODE = 1;
   const DOCUMENT_NODE = 9;
   const FRAGMENT_NODE = 11;
-  // How many shadow roots and frames the focused element is looked for through. A bound, so a
-  // read always ends.
-  const FOCUS_DEPTH_LIMIT = 1024;
   const GENERATED = /^OUIA-Generated-|pf-random-id-|:r[0-9a-z]+:|«r[0-9a-z]+»|_r_[0-9a-z]+_/i;
   const ROW_ATTRIBUTES = ['data-row-key', 'data-key', 'data-id', 'data-ouia-component-id', 'id'];
   const TABLE_ATTRIBUTES = ['id', 'data-ouia-component-id', 'data-table-key'];
@@ -978,26 +1005,12 @@ const READ_ROW_CONTEXT = ({ target, limit, textLimit, nestingLimit }: RowReadArg
     return found === null ? unreadable('element-missing') : { element: found };
   };
 
-  // The element that has focus, followed into open shadow roots and same-origin frames. A focused
-  // frame whose own document has nothing focused is itself the focused element.
+  // The element that has focus, from the same read the walk takes its paths from.
   const focusedElement = (): Resolved => {
-    let current: Element | null = document.activeElement;
-    for (let depth = 0; current !== null; depth += 1) {
-      if (depth >= FOCUS_DEPTH_LIMIT) return unreadable('element-missing');
-      const inShadow: Element | null = current.shadowRoot?.activeElement ?? null;
-      if (inShadow !== null) {
-        current = inShadow;
-        continue;
-      }
-      const tag = current.tagName.toLowerCase();
-      if (tag !== 'iframe' && tag !== 'frame') break;
-      const inner = frameDocument(current);
-      if (inner === null) return unreadable('frame-unreadable');
-      const active = inner.activeElement;
-      if (active === null || active === inner.body || active === inner.documentElement) break;
-      current = active;
-    }
-    return current === null ? unreadable('element-missing') : { element: current };
+    const focus = deepFocus();
+    if (focus.unreadable === 'frame-unreadable') return unreadable('frame-unreadable');
+    if (focus.unreadable !== null || focus.element === null) return unreadable('element-missing');
+    return { element: focus.element };
   };
 
   // The result is wrapped, so an element can never be read as a refusal: a track element has a
@@ -1276,10 +1289,16 @@ const READ_ROW_CONTEXT = ({ target, limit, textLimit, nestingLimit }: RowReadArg
 // every call.
 const ROW_WORLD = 'usabl-rows';
 
+// The row read with the shared focus read beside it.
+const READ_ROW_FUNCTION = `function (args) {
+  ${DEEP_FOCUS_IMPL}
+  return (${READ_ROW_CONTEXT.toString()})(args, deepFocus);
+}`;
+
 async function rowContextFor(cdp: CDPSession, target: ElementTarget | null): Promise<RowContextRead> {
   const levels = target === null ? null : typeof target === 'string' ? [[target]] : target.map((level) => [...level]);
   const args: RowReadArgs = { target: levels, limit: ROW_KEY_LIMIT, textLimit: ROW_CONTEXT_TEXT_LIMIT, nestingLimit: TABLE_NESTING_LIMIT };
-  return (await callInWorld(cdp, ROW_WORLD, 'read the table row', READ_ROW_CONTEXT.toString(), [args])) as RowContextRead;
+  return (await callInWorld(cdp, ROW_WORLD, 'read the table row', READ_ROW_FUNCTION, [args])) as RowContextRead;
 }
 
 async function stablePathsForSelector(cdp: CDPSession, selector: string): Promise<string[]> {
