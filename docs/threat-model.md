@@ -274,7 +274,11 @@ the tool errored, not because the page is accessible.
 
   Not handled: a tsconfig `paths` entry that names one file rather than a `/*` pair, and paths
   inherited through `extends` from a file such as `tsconfig.base.json`, are not read. An import
-  of the package by its name still counts.
+  of the package by its name still counts. A workspace package that declares its own
+  `workspaces`, a nested workspace root as Yarn Berry allows, is not read as a root, so the
+  packages it lists are found only when a root pattern also matches them. Markdown files in a
+  dependency are exempt and never gap. That is an accepted miss for a package that ships Markdown
+  the app renders, such as help text read with a `?raw` import.
 
 **Status:** [x] The `not_covered` gap path and exit-4 fail-open ship. [ ] A per-surface
 time budget is not yet a config knob; the shipped bound is the keyboard-walk 15s wall clock.

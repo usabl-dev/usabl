@@ -2644,7 +2644,9 @@ another workspace package, is a `not-covered` gap and an unmapped file when it i
 The source and alias checks run only for a package that leaves a changed package unreached by
 its declarations. The gap names the package and the fix: add the package's source to
 `uiFileGlobs` and list the file in the files of each surface that renders it. Test files and
-Markdown files are left out, as are files in the app's own package. A package whose
+Markdown files are left out, as are files in the app's own package. Leaving Markdown out is an
+accepted miss: a package can ship Markdown the app renders, and a change to it reads as nothing
+to check. A workspace package that declares its own `workspaces` is not read as a nested root. A package whose
 `package.json` cannot be read counts as one the app depends on. A file belongs to the deepest
 workspace package folder it sits in. A change in a package the app does not depend on, and any
 change in a repository with no workspaces, reads as before.
