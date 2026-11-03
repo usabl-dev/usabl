@@ -10,12 +10,14 @@ import type {
   ContentAssertion,
   Draft,
   FlowAssertion,
+  FocusUnreadable,
   Page,
   Provider,
   Requirement,
   RequirementBundle,
   Step,
 } from '../contracts/index.js';
+import { FOCUS_UNREADABLE_FIX, focusUnreadableCause } from '../primitives/focus-unreadable.js';
 
 function hasNonEmptyName(name: string | null): boolean {
   return name !== null && name.trim().length > 0;
@@ -89,6 +91,32 @@ function flowFailureDraft(
       announcements,
     }),
     confidence: 'fail',
+  };
+}
+
+// The expected text was not heard in an announcement, and the focused control could not be read,
+// so whether its name matches is unknown. That is a gap, never a fail.
+function flowUnreadableDraft(
+  requirement: Requirement,
+  elementPath: string,
+  expectedAnnouncement: string,
+  announcements: string[],
+  reason: FocusUnreadable,
+): Draft {
+  return {
+    rule: `intake:${requirement.id}`,
+    layer: 'intake-flow',
+    severity: 'moderate',
+    evidenceClass: 'deterministic',
+    screenId: requirement.surface,
+    elementPath,
+    elementName: null,
+    role: null,
+    whatUserExperiences: `Whether users hear "${expectedAnnouncement}" is unknown: it was not in a live-region announcement, and the focused control could not be read.`,
+    why: `The expected text may be the focused control's name, but ${focusUnreadableCause(reason)}.`,
+    fix: FOCUS_UNREADABLE_FIX,
+    evidence: evidenceFromNode(null, { expectedAnnouncement, announcements, focusUnreadable: reason }),
+    confidence: 'unverified',
   };
 }
 
@@ -262,6 +290,11 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
 
       if (heardInAnnouncements) {
         return [];
+      }
+
+      const unreadable = await ctx.page.activeFocusUnreadable();
+      if (unreadable !== null) {
+        return [flowUnreadableDraft(requirement, await ctx.page.activePath(), expectedAnnouncement, announcements, unreadable)];
       }
 
       return [

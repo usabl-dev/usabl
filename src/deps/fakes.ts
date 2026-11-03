@@ -77,6 +77,8 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     },
     activeNode: async () => null,
     activePath: async () => 'body',
+    // A fake page has no shadow roots or frames, so focus is always where its path says.
+    activeFocusUnreadable: async () => null,
     axAt: async () => null,
     getAttribute: async () => null,
     // A fake page has no DOM, so it cannot find the element. That is not a chain with no live region.
