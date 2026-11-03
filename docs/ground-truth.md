@@ -2224,6 +2224,14 @@ lines.
   workflow (section 9, Debt history). Record refuses a run that never saw the application, a run
   with nothing to check, and a checkout whose guarded files differ from HEAD. Append refuses a
   record or a history it cannot read and writes nothing then.
+- Judge build: `usabl extract-build --archive <file> --into <dir>` reads every tar header first
+  and unpacks only regular files and directories into a new, empty directory, refusing the whole
+  archive on a link, a device, an absolute path, or a `..` segment (exit 1; exit 2 on bad
+  arguments). `usabl serve-build --dir <dir>` serves it with GET and HEAD only, realpath
+  containment, nosniff, and the root `index.html` for an extensionless path that has no file.
+  With `--trusted-ref <ref>` it binds the loopback origin of `appBaseUrl` at that ref and refuses
+  any other; with `--port` (and `--host`, default `127.0.0.1`) it binds what it was given. Both
+  run only in the generated CI judge (section 11.4).
 - Routes drift: `usabl drift routes` compares `usabl.routes.json` against the app router.
   `routes` is the only subcommand; anything else exits 2.
 - Health check: `usabl doctor` is a read-only projection over the wired surfaces and always
@@ -2415,54 +2423,61 @@ headline. Its hint calls the findings gating only when every one of them gates. 
 matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 `approval_required` the comment stays loud after the policy check is green.
 
-**One shape, two renderings.** `usabl install --ci` *generates* a three-job workflow at
-`.github/workflows/usabl-gate.yml` in the consuming repo: a `gate-comment` job fenced to
-`pull_request` that clones and pins the engine at the `PIN_TO_A_TRUSTED_USABL_COMMIT`
-sentinel (the operator must replace it with a full 40-char SHA), runs the scan, posts the
-comment, uploads the Result as an artifact, and runs `usabl enforce accessibility` as a
-final step that never exits 2; and a `usabl-policy` job (`needs: gate-comment`,
-`if: always()`) that also fires on `pull_request_review`, checks out the trusted base
-only, fetches the head as git objects, runs `usabl enforce accessibility` over the
-downloaded Result to publish an `accessibility` job output, and runs `usabl enforce policy
---trusted-ref`, never executing PR head code; and a `usabl-required` job
-(`needs: [gate-comment, usabl-policy]`, `if: always()`) that sets the required status from
-those two verdicts and runs no head code at all. The engine's own repo checks in the same three
-jobs, with the same fences, artifact handoff, and policy isolation. One thing differs: a consuming repo
-has no engine, so the draft clones `usabl-dev/usabl` at a pinned commit using
-`USABL_ENGINE_CHECKOUT_TOKEN`, while in the engine repo the checked-out tree already is
-the engine, so each job builds that tree with `npm ci && npm run build` and there is no
-engine pin and no token. Because `classifyGateWorkflow` compares a workflow line for line
-against the draft, `usabl doctor` reads the engine's own gate as `drifted`. That is the
-expected reading for the one repository that is its own engine. The required status check
-named in branch protection is `usabl-required` (the workflow *file* is named `usabl-gate`),
-and the protected branch is `main`. Requiring `usabl-policy` instead is the defect that job
-exists to close: accessibility is enforced inside `gate-comment`, which is fenced to
-`pull_request` and so cannot be required on a review event, and `usabl-policy` returns
-success whenever no guarded path diverged, so on its own it can be green while the scan is
-red. Both `enforce` commands read Result JSON from stdin and never call the gate.
+**Two shapes.** `usabl install --ci` and `usabl install --docs-ci` *generate* a six-job
+workflow in the consuming repo. `usabl-engine` checks out the public `usabl-dev/usabl` at the
+`PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel (the operator replaces it with a full 40-char SHA),
+with no token, builds it, and hands it on as an archive with an `engine_digest` output.
+`build-app`, fenced to `pull_request`, is the only job that runs head code and holds no secret;
+it packs the build output (repository variables `USABL_APP_BUILD_COMMAND`, default
+`npm run build`, and `USABL_APP_BUILD_DIR`, default `dist`) with a `build_digest` output.
+`usabl-scan`, the trusted judge, runs on both events: it unpacks the build with
+`usabl extract-build`, serves it with `usabl serve-build` on the loopback origin of the trusted
+`appBaseUrl`, runs `check --ci --trusted-ref origin/<base> --isolated-browser`, and publishes
+`verdict` and `result_digest` outputs. `gate-comment` posts the comment from the digest-checked
+Result, or writes it to the run summary on a pull request from a fork. `usabl-policy` runs
+`usabl enforce policy --trusted-ref` with the head read only as git objects. `usabl-required`
+(`if: always()`, needs all five) sets the required status. See `docs/threat-model.md` (Threat 15
+and "CI trust boundary") for what each job holds. The engine's own repo checks in the earlier
+three-job shape (`gate-comment`, `usabl-policy`, `usabl-required`), because it has no app to
+build. Because `classifyGateWorkflow` compares a workflow line for line against the draft,
+`usabl doctor` reads the engine's own gate as `drifted`. That is the expected reading for the
+one repository that is its own engine. The required status check named in branch protection is
+`usabl-required` (the workflow *file* is named `usabl-gate`), and the protected branch is
+`main`. Both `enforce` commands read Result JSON from stdin and never call the gate.
 
-`usabl-required` reads three values and nothing else: the event name, the `gate-comment`
-job result, and `usabl-policy`'s `accessibility` output. The scan job result is an
-event-shape check, never a verdict, because the fence means the scan cannot run on a review
-event: on `pull_request` it must be `success`, on `pull_request_review` it must be
-`skipped`. The accessibility verdict itself comes from the Result artifact for that exact
-head, which `usabl-policy` already resolves on both events, so the verdict is data and not
-something inferred from a GitHub job status. Anything else, an unknown event, a cancelled
-job, a missing or unparseable artifact, or any verdict that is not exactly `pass`, blocks.
-The rule is one string, `REQUIRED_GATE_SCRIPT` in `src/install/ci.ts`, embedded verbatim in
-all three workflows so the rule that is tested is the rule that runs.
+In the generated gates, `usabl-required` reads seven values and nothing else: the event name,
+the five job results, and the judge's `verdict` output. Every job result is an event-shape
+check: on `pull_request` all five must be `success`; on `pull_request_review` `build-app` and
+`gate-comment` must be `skipped` and the other three `success`. The verdict is a job output,
+which only the judge's own steps can set, so code that replaces artifacts in the run cannot
+change it. Anything else, an unknown event, a cancelled job, or any verdict that is not exactly
+`pass`, blocks. The rule is one string, `REQUIRED_GATE_SCRIPT` in `src/install/ci.ts`, embedded
+verbatim in both generated workflows; the engine's own gate embeds `ENGINE_SELF_GATE_SCRIPT`, its
+three-job rule.
+
+**The judge's browser.** `check --isolated-browser` reads the origins the browser may reach from
+the trusted ref: the `appBaseUrl` origin, the `docsBaseUrl` origin when `usabl.docs.json` exists,
+and `judge.allowOrigins` in `usabl.config.json` (bare http or https origins, dropped when the
+trusted config cannot be read). It requires Chromium's sandbox whatever `browserSandbox` says,
+blocks service workers, and aborts every request and WebSocket to any other origin. A screen on
+which anything was blocked gets a `not-covered` gap that names the blocked origins, never the
+path or query, and keeps its drafts. The Result gains a `judge` block (`isolatedBrowser: true`,
+`blockedRequests`, and `buildDigest`, the sha256 from `USABL_BUILD_DIGEST` or null). It is
+disclosure only: the gate never reads it, the Result reader refuses a malformed one, and the
+summary and the comment show it in one line.
 
 **The history workflow.** `usabl install --ci` also writes `.github/workflows/usabl-history.yml`,
 the default-branch workflow that feeds the debt history (section 9). It runs on a push to main,
-once a day, and by hand, one run at a time. Its `history-scan` job checks out main, starts the
-application, runs `usabl history record`, and uploads the record. It runs application code, so it
-reads only. Its `history-append` job needs the scan, runs only the trusted engine, appends the
-record with `usabl history append`, and pushes `usabl/history` without force, fetching and trying
-again when a push loses a race. It is the one job that holds `contents: write`, the one permission
-tracking needs. GitHub cannot narrow that permission to one branch; a ruleset on `usabl/history`
-can. A team that cannot grant it leaves the file out and keeps the floor-only behavior, and every
-run says tracking is off. The gate workflow is unchanged, and this repository's own workflows do
-not run it.
+once a day, and by hand, one run at a time. It builds the engine with the same `usabl-engine` job
+as the gate, and each later job checks the archive against `engine_digest` before it runs it. Its
+`history-scan` job checks out main, starts the application, runs `usabl history record`, and
+uploads the record. It runs application code, so it reads only. Its `history-append` job needs
+the scan, runs only the checked engine and no npm, appends the record with
+`usabl history append`, and pushes `usabl/history` without force, fetching and trying again when
+a push loses a race. It is the one job that holds `contents: write`, the one permission tracking
+needs. GitHub cannot narrow that permission to one branch; a ruleset on `usabl/history` can. A
+team that cannot grant it leaves the file out and keeps the floor-only behavior, and every run
+says tracking is off. This repository's own workflows do not run it.
 
 ### 11.5 Mid-task self-check (CLI; MCP optional)
 

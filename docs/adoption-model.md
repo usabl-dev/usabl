@@ -161,10 +161,12 @@ that, and what to do.
     writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`,
     so the assistant can run the advisory self-check during work. The engine ships the
     skill body, so the installed command cannot drift from the CLI it calls.
-13. (automatic, `usabl install --ci`) Writes the three-job
-    `.github/workflows/usabl-gate.yml` draft: `gate-comment` for the sticky PR comment,
-    `usabl-policy` for the policy verdict, and `usabl-required`, the aggregate that is red
-    unless the accessibility verdict and the policy verdict both pass. Replace the
+13. (automatic, `usabl install --ci`) Writes the six-job
+    `.github/workflows/usabl-gate.yml` draft: `usabl-engine` builds the pinned engine,
+    `build-app` builds the head with no secrets, `usabl-scan` judges the build without running
+    head code, `gate-comment` posts the sticky PR comment, `usabl-policy` gives the policy
+    verdict, and `usabl-required` is the aggregate that is red unless every job has the right
+    shape and the judge's verdict passes. Replace the
     `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel with a full engine SHA. The workflow runs
     `usabl check --ci --trusted-ref origin/<base-ref>`; the trusted ref is what stops a
     PR from rewriting the floor and approving itself, because policy is read from the
@@ -307,7 +309,7 @@ pin the engine and turn on branch protection.
 
 | Entry point | Command | What it wires | Value |
 |---|---|---|---|
-| **CI gate** | `usabl install --ci` | Writes `.github/workflows/usabl-gate.yml`, a three-job draft (`gate-comment`, `usabl-policy`, and the required `usabl-required` aggregate), and `.github/workflows/usabl-history.yml`, which records each scan of main on the `usabl/history` branch. The engine ref is left as the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel for you to replace with a full commit SHA. | Sticky PR comment, a fail-closed gate, and automatic debt tracking |
+| **CI gate** | `usabl install --ci` | Writes `.github/workflows/usabl-gate.yml`, a six-job draft (an untrusted `build-app`, the trusted judge `usabl-scan`, `gate-comment`, `usabl-policy`, and the required `usabl-required` aggregate, fed by `usabl-engine`), and `.github/workflows/usabl-history.yml`, which records each scan of main on the `usabl/history` branch. The engine ref is left as the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel for you to replace with a full commit SHA. | Sticky PR comment, a fail-closed gate, and automatic debt tracking |
 | **Dev-server overlay** | `usabl install --overlay` | Wires the advisory Vite or webpack plugin. Detects the bundler first. Writes a Vite draft when a Vite app has no config, no-ops when already wired, refuses to edit an existing config and prints the lines instead, and refuses when it finds both bundlers or neither. | Advisory findings badge while coding |
 | **Assistant hook** | `usabl install --claude` | Wires a Stop hook running `npx usabl stop-hook` into `.claude/settings.json`. | Blocks the first stop on a blocking verdict unless a one-use bypass was issued |
 | **Assistant skill** | `usabl install --claude-skill` | Writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`, running the advisory `npx usabl check --self-check`. Writes a draft when absent, no-ops when it matches, and refuses to clobber a differing file. | The assistant can self-check mid-task without leaving the editor |

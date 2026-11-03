@@ -909,8 +909,8 @@ kbd {
     </div>
     <div class="card">
       <h4>4 &middot; On the pull request</h4>
-      <p>A three job GitHub Actions workflow posts a report comment, separately enforces code owner approval for policy changes, and exposes a single required check that branch protection can be set against.</p>
-      <p>Why three jobs and not one is a real security question, and it is answered in the engineering tab.</p>
+      <p>A six job GitHub Actions workflow builds the pull request with no secrets, judges the built app with the pinned engine, posts a report comment, separately enforces code owner approval for policy changes, and exposes a single required check that branch protection can be set against.</p>
+      <p>Why six jobs and not one is a real security question, and it is answered in the engineering tab.</p>
     </div>
   </div>
 </section>
@@ -2187,53 +2187,69 @@ usabl.routes.json      <span class="c">// the route manifest</span></code></pre>
     <li>Review pagination is capped at 10 pages of 100. A full last page is treated as an error, not as the end of the list. The comment in the source is blunt: a missed <em>changes requested</em> would be a fake green.</li>
   </ul>
 
-  <h3>Why the CI workflow is three jobs</h3>
+  <h3>Why the CI workflow is six jobs</h3>
 
   <figure>
     <div class="fig-frame" style="background:var(--night-2);border-color:var(--on-night-2)">
-      <svg viewBox="0 0 1000 310" class="dg" role="img" aria-labelledby="f14t f14d">
-        <title id="f14t">The three job CI gate and why it is split</title>
-        <desc id="f14d">Three job boxes. Job one, gate comment, runs the head code to produce the report comment, and is fenced to the pull request event only. Job two, usabl policy, checks out the base commit and fetches the head only as git objects, so untrusted head code never executes while policy is being decided. Job three, usabl required, runs with the always condition and is the single job branch protection requires. An explanatory note states that job three must exist because GitHub counts a skipped job as satisfying a required check, so if the enforcement job could be skipped, the merge would be allowed.</desc>
+      <svg viewBox="0 0 1000 460" class="dg" role="img" aria-labelledby="f14t f14d">
+        <title id="f14t">The six job CI gate and why it is split</title>
+        <desc id="f14d">Six job boxes in two rows. Job one, usabl engine, builds the pinned engine and publishes its digest, and runs no pull request code. Job two, build app, runs the pull request build, holds no secret, and is fenced to the pull request event only. Job three, usabl scan, is the judge: it serves the build to an isolated browser and publishes the verdict as a job output, and never executes head code. Job four, gate comment, checks the Result against its digest and posts the report comment, and decides nothing. Job five, usabl policy, checks out the base commit and fetches the head only as git objects, so untrusted head code never executes while policy is being decided. Job six, usabl required, runs with the always condition, reads every job and the verdict, and is the single job branch protection requires. An explanatory note states that job six must exist because GitHub counts a skipped job as satisfying a required check, and that the verdict travels as a job output because a job that runs head code may be able to replace artifacts in the run.</desc>
 
         <text x="20" y="28" font-family="var(--mono)" font-size="10.5" fill="#E8724F" letter-spacing="0.14em">.github/workflows/usabl-gate.yml</text>
 
         <rect x="20" y="42" width="300" height="118" fill="none" stroke="#BDB5A2" stroke-width="1.6"/>
-        <text x="40" y="70" font-size="14" font-weight="600" fill="#F3F0E7">1 · gate-comment</text>
+        <text x="40" y="70" font-size="14" font-weight="600" fill="#F3F0E7">1 · usabl-engine</text>
         <g font-size="11.5" fill="#BDB5A2">
-          <text x="40" y="94">runs head code in a container</text>
-          <text x="40" y="114">scans, posts the report comment</text>
-          <text x="40" y="140" fill="#E8724F">fenced to pull_request only</text>
+          <text x="40" y="94">builds the pinned engine</text>
+          <text x="40" y="114">publishes its digest</text>
+          <text x="40" y="140" fill="#6FBF9D">no pull request code</text>
+        </g>
+        <rect x="348" y="42" width="300" height="118" fill="none" stroke="#BDB5A2" stroke-width="1.6"/>
+        <text x="368" y="70" font-size="14" font-weight="600" fill="#F3F0E7">2 · build-app</text>
+        <g font-size="11.5" fill="#BDB5A2">
+          <text x="368" y="94">runs the pull request build</text>
+          <text x="368" y="114">holds no secret</text>
+          <text x="368" y="140" fill="#E8724F">fenced to pull_request only</text>
+        </g>
+        <rect x="676" y="42" width="304" height="118" fill="none" stroke="#6FBF9D" stroke-width="1.6"/>
+        <text x="696" y="70" font-size="14" font-weight="600" fill="#F3F0E7">3 · usabl-scan</text>
+        <g font-size="11.5" fill="#BDB5A2">
+          <text x="696" y="94">serves the build, isolated browser</text>
+          <text x="696" y="114">verdict as a job output</text>
+          <text x="696" y="140" fill="#6FBF9D">head code is never executed here</text>
+        </g>
+        <rect x="20" y="190" width="300" height="118" fill="none" stroke="#BDB5A2" stroke-width="1.6"/>
+        <text x="40" y="218" font-size="14" font-weight="600" fill="#F3F0E7">4 · gate-comment</text>
+        <g font-size="11.5" fill="#BDB5A2">
+          <text x="40" y="242">checks the Result digest</text>
+          <text x="40" y="262">posts the report comment</text>
+          <text x="40" y="288" fill="#BDB5A2">decides nothing</text>
+        </g>
+        <rect x="348" y="190" width="300" height="118" fill="none" stroke="#6FBF9D" stroke-width="1.6"/>
+        <text x="368" y="218" font-size="14" font-weight="600" fill="#F3F0E7">5 · usabl-policy</text>
+        <g font-size="11.5" fill="#BDB5A2">
+          <text x="368" y="242">checks out the BASE commit</text>
+          <text x="368" y="262">fetches head as objects only</text>
+          <text x="368" y="288" fill="#6FBF9D">head code is never executed here</text>
+        </g>
+        <rect x="676" y="190" width="304" height="118" fill="none" stroke="#E8724F" stroke-width="2.4"/>
+        <text x="696" y="218" font-size="14" font-weight="600" fill="#F3F0E7">6 · usabl-required</text>
+        <g font-size="11.5" fill="#BDB5A2">
+          <text x="696" y="242">if: always()</text>
+          <text x="696" y="262">reads every job and the verdict</text>
+          <text x="696" y="288" fill="#E8724F">the one required check</text>
         </g>
 
-        <rect x="348" y="42" width="300" height="118" fill="none" stroke="#6FBF9D" stroke-width="1.6"/>
-        <text x="368" y="70" font-size="14" font-weight="600" fill="#F3F0E7">2 · usabl-policy</text>
-        <g font-size="11.5" fill="#BDB5A2">
-          <text x="368" y="94">checks out the BASE commit</text>
-          <text x="368" y="114">fetches head as objects only</text>
-          <text x="368" y="140" fill="#6FBF9D">head code is never executed here</text>
-        </g>
-
-        <rect x="676" y="42" width="304" height="118" fill="none" stroke="#E8724F" stroke-width="2.4"/>
-        <text x="696" y="70" font-size="14" font-weight="600" fill="#F3F0E7">3 · usabl-required</text>
-        <g font-size="11.5" fill="#BDB5A2">
-          <text x="696" y="94">if: always()</text>
-          <text x="696" y="114">reads both jobs' outcomes</text>
-          <text x="696" y="140" fill="#E8724F">the one required check</text>
-        </g>
-
-        <path d="M324 101 H344" stroke="#BDB5A2" fill="none"/>
-        <path d="M652 101 H672" stroke="#BDB5A2" fill="none"/>
-
-        <path d="M20 196 H980" stroke="#3a342b"/>
-        <text x="20" y="224" font-family="var(--mono)" font-size="10.5" fill="#E8724F" letter-spacing="0.14em">WHY JOB 3 EXISTS</text>
+        <path d="M20 340 H980" stroke="#3a342b"/>
+        <text x="20" y="368" font-family="var(--mono)" font-size="10.5" fill="#E8724F" letter-spacing="0.14em">WHY JOB 6 EXISTS, AND WHY THE VERDICT IS A JOB OUTPUT</text>
         <g font-size="12.5" fill="#BDB5A2">
-          <text x="20" y="250">GitHub counts a SKIPPED job as satisfying a required status check.</text>
-          <text x="20" y="272">So if enforcement could ever be skipped, by a path filter or a condition, the merge is allowed.</text>
-          <text x="20" y="294">Job 3 runs unconditionally and fails if either upstream job did not actually succeed.</text>
+          <text x="20" y="394">GitHub counts a SKIPPED job as satisfying a required status check, so job 6 always runs.</text>
+          <text x="20" y="416">A job that runs head code may be able to replace artifacts in the run, so no trusted job</text>
+          <text x="20" y="438">believes an artifact by name. Only the judge's own steps can set its verdict output.</text>
         </g>
       </svg>
     </div>
-    <figcaption style="color:var(--on-night-2)"><b style="color:var(--on-night)">Fig. 14</b> Splitting the jobs separates the untrusted execution from the trusted decision. Job 1 runs pull request code, so it is fenced to the <code>pull_request</code> event and never sees elevated credentials. Job 2 decides policy from base code only. Job 3 exists solely because of a GitHub behaviour that turns a skipped job into a green check.</figcaption>
+    <figcaption style="color:var(--on-night-2)"><b style="color:var(--on-night)">Fig. 14</b> Splitting the jobs separates the untrusted execution from the trusted decision. Job 2 runs pull request code, so it is fenced to the <code>pull_request</code> event and holds no secret. Job 3 judges the built output with the engine from the pinned commit, in a sandboxed browser that may reach only the trusted origins. Job 5 decides policy from base code only. Job 6 exists because of a GitHub behaviour that turns a skipped job into a green check.</figcaption>
   </figure>
 
   <p>All actions in the generated workflow are pinned to commit SHAs, and <code>usabl install --ci</code> deliberately writes the placeholder <code>PIN_TO_A_TRUSTED_USABL_COMMIT</code> rather than a floating tag. An operator has to replace it with a real 40 character SHA. The tool refuses to make the insecure choice easy.</p>

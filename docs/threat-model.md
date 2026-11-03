@@ -768,6 +768,27 @@ pipe only. [ ] The default still scans without the sandbox where the system cann
 
 ---
 
+## Threat 15: A pull request that writes its own verdict in CI
+
+**Attack:** a pull request's own code runs in CI, through its build script, its dependencies, or
+its page script, and uses that to overwrite the Result, replace an artifact, poison a cache, or
+load its own copy of a package the engine imports, so the gate reads a clean verdict for a change
+that adds a barrier.
+
+**Controls:** the generated gate splits the work so that head code runs only in `build-app`,
+which holds no secret and decides nothing, and as page script in the judge's sandboxed,
+request-filtered browser. The judge runs the engine from the pinned commit, unpacked outside the
+head tree, and publishes the verdict as a job output, which only its own steps can set. Every
+artifact a trusted job reads is checked against a digest from a job output, and no trusted job
+uses a cache. The details, and the hostile rehearsal that tests them, are under "CI trust
+boundary" below.
+
+**What stays open:** workflow edits by someone with write access (code-owner review until an
+organization-level required workflow exists), a build that differs from its source, and a page
+that detects the scanner. See the residual risks under "CI trust boundary".
+
+---
+
 ## Decision: Stop hook fail-open on exit 4
 
 After the guard runs before any coverage, floor, or waiver parse, a diverged
@@ -803,65 +824,125 @@ pass.
 
 ## CI trust boundary: the generated gate draft
 
-`usabl install --ci` writes a three-job workflow to `.github/workflows/usabl-gate.yml`
-(`src/install/ci.ts`). The jobs split trust deliberately:
+`usabl install --ci` writes `.github/workflows/usabl-gate.yml`, and `usabl install --docs-ci`
+writes `.github/workflows/usabl-docs-gate.yml` (`src/install/ci.ts`). Both are the same six
+jobs. The rule they hold: no job that decides a verdict, or holds a write token, runs pull
+request head code in Node or a shell. Head code runs only in `build-app`, and as page script
+inside the judge's Chromium.
 
-- **`gate-comment`** is the only job allowed to run PR head code, and it is fenced to the
-  `pull_request` event (`if: github.event_name == 'pull_request'`). It starts the fixture
-  with `npm run dev` (head code) and runs the accessibility scan. A `pull_request_review`
-  event carries base-repo secrets, so head code must never run on it. Before the fixture
-  starts, the trusted engine is cloned from `usabl-dev/usabl` pinned by a full 40-character
-  commit SHA (the draft ships the sentinel `PIN_TO_A_TRUSTED_USABL_COMMIT`, which the
-  operator must replace), checked out with `persist-credentials: false`, and snapshotted to
-  a read-only `/opt/usabl-trusted` so the fixture cannot overwrite the checker. The scan
-  runs `check --ci --trusted-ref "origin/<base>"` from that snapshot.
-- **`usabl-policy`** decides the policy verdict and resolves the Result artifact for the
-  head. It checks out the base commit only, fetches the head as git objects, and runs
-  `enforce policy --trusted-ref "origin/<base>"`, which reads blobs with `git show` and
-  `git ls-tree` and never checks out or executes head code. It also runs
-  `enforce accessibility` over the downloaded Result and publishes the outcome as its
-  `accessibility` job output, so the accessibility verdict travels as data rather than being
-  inferred from a job status. It is not the required check on its own: it returns success
-  when no guarded path diverged and the run produced a result (a run with no verdict,
-  exit 4, makes it fail), which says nothing about accessibility.
-- **`usabl-required`** is the required status check. It runs with `if: always()`, depends on
-  both other jobs, and is red unless the accessibility verdict and the policy verdict both
-  pass. It checks nothing out and runs no head code. Its rule handles the event split that
-  the `gate-comment` fence creates: on `pull_request` the scan must have succeeded, on
-  `pull_request_review` the scan must have been skipped by the fence and the artifact-derived
-  accessibility verdict is the authority, and any other event, a cancelled job, or a missing
-  verdict blocks. `always()` is load-bearing, because GitHub counts a skipped job as a
+What runs where, and what each job holds:
+
+| Job | Runs head code? | Token | Secrets | Checks out |
+|---|---|---|---|---|
+| `usabl-engine` | No | `contents: read` | None | The pinned commit of the public engine repository |
+| `build-app` | Yes (`npm ci --ignore-scripts` and the build command), `pull_request` only | `contents: read` | None | The head |
+| `usabl-scan` (the judge) | Only as page script in a sandboxed Chromium | `contents: read`, `actions: read` | None | The head, as data, into `head/` |
+| `gate-comment` | No | `contents: read`, `pull-requests: write` | None | `usabl.config.json` at the base commit |
+| `usabl-policy` | No | `contents: read`, `pull-requests: read` | `GITHUB_TOKEN` for the reviews API | The base commit; the head as git objects only |
+| `usabl-required` | No | `contents: read` | None | Nothing |
+
+- **`usabl-engine`** checks out `usabl-dev/usabl` at the pinned commit. The draft ships the
+  sentinel `PIN_TO_A_TRUSTED_USABL_COMMIT`, which the operator replaces with a full commit SHA,
+  so the engine that judges a pull request is code the operator chose, never the pull request's.
+  The engine repository is public, so the checkout needs no token. The job builds the engine,
+  packs `package.json`, `dist`, and the production `node_modules` into one archive, and
+  publishes its sha256 as the job output `engine_digest`. Every other job takes the engine from
+  that archive and checks it against that output.
+- **`build-app`** runs the head's build and packs the output directory into a tar, leaving
+  `.usabl/` out. Its `build_digest` output is the head's own word.
+- **`usabl-scan`** is the judge. It unpacks the engine under `$RUNNER_TEMP`, outside the head
+  tree, so a `node_modules` directory or `.npmrc` the head commits is never on the engine's
+  resolution path. It checks the build archive against `build_digest`, unpacks it with
+  `usabl extract-build` (regular files and directories only, no absolute path, no `..`, a new
+  empty directory), and serves it with `usabl serve-build`, which reads `appBaseUrl` from the
+  trusted base ref and binds only a loopback host with an explicit port. It then runs
+  `check --ci --trusted-ref origin/<base> --isolated-browser`: Chromium's sandbox required
+  whatever `browserSandbox` says (the job sets the AppArmor sysctl first, see Threat 14),
+  service workers blocked, and every request and WebSocket outside the trusted app origin and
+  the trusted `judge.allowOrigins` aborted. Any blocked request makes that screen a coverage
+  gap, so a blocked script can never turn into a clean screen. The judge publishes the verdict
+  as the job output `verdict` (fail unless a valid Result and a clean `enforce accessibility`),
+  and the Result's sha256 as `result_digest`. The Result records the build digest it scanned,
+  so the verdict is bound to those bytes. On `pull_request_review` the judge runs again on the
+  same head and downloads the build from that head's `pull_request` run. With a trusted ref the
+  saved session from `usabl session` is never loaded (Threat 12).
+- **`gate-comment`** and **`usabl-policy`** check the Result against `result_digest` before they
+  read it. Neither runs head code. On a pull request from a fork the run's token cannot write
+  to the pull request, so `gate-comment` writes the comment to the run summary instead. The
+  comment decides nothing either way.
+- **`usabl-required`** is the required status check. It runs with `if: always()` and is red
+  unless every job has the exact shape for the event and the judge's `verdict` output is
+  `pass`. On `pull_request` all five jobs must succeed. On `pull_request_review` the build and
+  the comment must be skipped and the other three must succeed. Any other event, including
+  `merge_group`, blocks. `always()` is load-bearing, because GitHub counts a skipped job as a
   satisfied required check.
 
-Requiring `usabl-policy` instead of `usabl-required` reopens the hole this split closes:
-accessibility enforcement lives in `gate-comment`, which is fenced to `pull_request` and so
-cannot be required on a review event, and `usabl-policy` alone can be green while the scan
-is red.
+Why artifacts are checked against job outputs. A job that runs head code on a hosted runner has
+passwordless sudo, so it may be able to read the runner's own token and upload, delete, or
+replace artifacts in the run, and write to the Actions cache. So no trusted job believes an
+artifact by name: each download goes into its own new directory, must be exactly one regular
+file, and must match a digest from a job output, which only the producing job's own steps can
+set. No trusted job uses a cache. The one exception is the build on a review, which comes from
+another run whose job outputs are out of reach. A replaced build gains the author nothing,
+because the author already controls what the build emits, and the judge records the digest it
+scanned.
 
-**Accepted residual risk:** within `gate-comment`, the fixture process and the sticky
-comment step share a job, so a hostile PR could try to spoof the comment. That job posts
-the comment but does not decide the gate; the `usabl-policy` and `usabl-required` jobs are
-isolated and do not trust the comment. That same job boundary now carries a required
-verdict: on a `pull_request` event `usabl-result.json` is written and uploaded from
-`gate-comment`, which is also the job that runs head code through `npm ci` and the fixture
-server, so a hostile author has a window in which to overwrite their own Result before it
-is uploaded. The `pull_request_review` path is stronger, because it downloads the artifact
-from a completed run for that exact head and executes no head code at all. This is not a
-new opening: before `usabl-required` existed, accessibility was not a required check at
-all and a regression merged with no effort, whereas now one merges only if the author
-actively tampers. Accepted for the private team fixture.
+Forks. Nothing in the gate needs a repository secret, and GitHub gives a fork's pull request
+none, so a pull request from a fork runs the same six jobs and gets the same verdict. Only the
+comment moves, to the run summary.
 
-The engine's own checked-in `.github/workflows/usabl-gate.yml` runs the same three jobs with
-the same event fence, the same numeric PR guard, the same artifact handoff, and the same
-policy isolation. It differs in one way, because the engine is the repository: there is no
-external-engine pin and no `USABL_ENGINE_CHECKOUT_TOKEN`. `usabl-policy` builds the base
-commit it has already checked out, which is trusted by definition, and `gate-comment`
-builds the head tree it is fenced to. It also starts no fixture server and needs no
-read-only `/opt/usabl-trusted` snapshot, because that job runs no separate application
-alongside the checker.
+A local rehearsal (`test/judge/rehearsal.real.integration.test.ts`) plays these jobs with the
+workflow's own step scripts against a hostile head: forged Results in the build output, the
+workspace, and the runner temp directory, a background process rewriting them, and packages
+planted under the engine's own dependency names. The judge reports the real barrier, tampered
+archives and a replaced Result fail closed, the planted packages never load, and a clean head
+from a fork passes with its comment in the run summary. It runs on one machine, so it shows the
+judge never reads what the build wrote; job isolation on hosted runners comes from each job
+being its own VM.
 
-**Status:** [x] Recorded. The generated draft already isolates the policy decision; the
-operator must set the engine SHA before the gate can run.
+Residual risks that remain:
+
+- **Workflow edits.** The split protects the judge and its verdict for a pull request from a
+  fork, and from anyone without write access, as long as the workflow file that runs is the one
+  on the base branch. Someone with write access can push a branch whose own edited workflow runs
+  on `pull_request` before any review. Until an organization-level required workflow pinned to a
+  protected ref exists (human task H9), workflow edits rely on code-owner review: a CODEOWNERS
+  entry for `.github/workflows/`, the branch rule "Require review from Code Owners", "dismiss
+  stale approvals", `CODEOWNERS` itself owned, and no bypass actors. That stops an edited
+  workflow from merging. It does not stop it from running on its own branch.
+- **The author controls the build script.** The build can differ from the source, so the judge
+  can be shown a page the source does not produce. The verdict is bound to the build digest in
+  the Result. That digest names the bytes that were judged. It does not prove they match the
+  source. The control is to guard the build configuration (the `package.json` scripts, the
+  bundler config such as `vite.config.ts` or `webpack.config.js`, and any script they call)
+  under CODEOWNERS and in `guardedPaths`, so a change to them needs owner approval.
+- **A page that detects the scanner.** Page script can notice it is being scanned and behave
+  differently. Nothing here closes that. It is the same class as the build script above.
+- **A Chromium renderer escape inside the judge.** The judge holds no secret and no write token.
+  It has its job token (`contents: read`, `actions: read`), which an escape could use for the
+  rest of the run.
+- **Request filtering is not full network confinement.** The filter covers requests that pass
+  through Chromium's request routing, and WebSockets through their own filter. A redirect from
+  an allowed origin to another origin is not seen by the route handler, and WebRTC and DNS
+  prefetch are not routed at all. The default allows only the app origin, which `serve-build`
+  serves without redirects.
+
+The engine's own checked-in `.github/workflows/usabl-gate.yml` keeps the earlier three-job
+shape, unchanged. It still runs `npm ci` and the build on the head inside `gate-comment`, where
+it also writes the Result. Its config targets a fixture directory that does not exist in this
+repository, so there is no app for a judge to serve here, and every scan reaches no screen. Its
+policy job builds the base commit and decides policy from it. The tests hold it to its own rule,
+`ENGINE_SELF_GATE_SCRIPT`.
+
+`usabl install --ci` also writes `.github/workflows/usabl-history.yml`. It builds the engine with
+the same `usabl-engine` job, and both later jobs check the archive against `engine_digest`. Its
+scan job runs main's own application, which was merged through the gate, so it does not get the
+judge split. The record it uploads is believed by name, which is safe for the reason Threat 13
+gives: the history can only make a run stricter, never greener.
+
+**Status:** [x] The generated gates run the judge split, with no engine token, and forks run
+them. [ ] A live run on GitHub of the hostile cases and a fork pull request. [ ] An
+organization-level required workflow (human task H9).
 
 ---
 

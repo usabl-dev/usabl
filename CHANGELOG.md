@@ -675,6 +675,26 @@
 
 ### Security
 
+- The CI gate that `usabl install --ci` and `usabl install --docs-ci` write no longer lets a
+  pull request grade itself. Before, one job ran the pull request's own `npm ci` and dev server
+  and, in the same job, wrote and uploaded the Result the required check read, so a hostile
+  build could overwrite its own Result. The gate is now six jobs. `build-app` is the only job
+  that runs pull request code, and it holds no secret. `usabl-scan`, the judge, never runs that
+  code in Node or a shell: it unpacks the build with `usabl extract-build`, serves it with
+  `usabl serve-build`, and scans it with `usabl check --isolated-browser`, which requires
+  Chromium's sandbox and blocks every request and WebSocket outside the trusted app origin and
+  the new trusted-only `judge.allowOrigins`. A screen with a blocked request is a coverage gap.
+  The engine comes from one pinned commit of the public engine repository, with no token, and
+  every artifact a trusted job reads is checked against a digest from a job output; no trusted
+  job uses a cache. The verdict reaches `usabl-required` as the judge's job output. A pull
+  request from a fork now runs the gate; its comment goes to the run summary. The build reads
+  two repository variables, `USABL_APP_BUILD_COMMAND` (default `npm run build`) and
+  `USABL_APP_BUILD_DIR` (default `dist`), and `appBaseUrl` must be a loopback address with a
+  port. The history workflow builds the engine with the same job. The Result gains an optional
+  `judge` block (the blocked request count and the build digest), which the summary and the
+  comment show in one line. Workflow edits still rely on code-owner review until an
+  organization-level required workflow exists.
+
 - axe runs in an isolated world in every frame, not in the page's own world. Page script
   shares the DOM with that world but not its globals or prototypes. A page that patched
   `Element.prototype.getAttribute` so one button's id read as another's could give two
