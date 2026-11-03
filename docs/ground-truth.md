@@ -2503,6 +2503,54 @@ from outside, the change is not recorded. That region's own text leaves out the 
 changed and holds text the change did not make speakable, such as slot fallback text, so recording
 it could pass a flow requirement on words no screen reader spoke.
 
+Nor is a change outside an open modal dialog heard. While a dialog opened with `showModal()` is
+open, Chromium leaves everything outside the top one out of the accessibility tree, with the
+ignored reason `activeModalDialog`, so a screen reader says nothing for a live region there. The
+capture reads the open modal dialogs when it observes the change, by the browser's own
+`dialog:modal` state, in the document and in every open shadow root. A change is heard only when
+it sits inside every open modal dialog on the flat tree walk. Which open modal is on top is not in
+the DOM, so with two sibling modals open nothing is heard, while the browser still exposes the top
+one. That can only make the capture hear less. A dialog opened with `show()` hides nothing, and
+once the modal closes, the content outside it is heard again.
+
+An ARIA modal dialog counts as an open modal too: an element whose first recognized role is
+`dialog` or `alertdialog`, with `aria-modal` true, while it is connected and shown. Shown means
+rendered and not hidden by `visibility` (`checkVisibility({ visibilityProperty: true })`), and
+not under `aria-hidden`, `inert`, or `hidden` on the flat tree. `aria-modal` is read as Chromium
+reads an ARIA boolean: true for any value but empty, `undefined`, or `false`, in any ASCII case.
+The role and attribute rule is Chromium's `AXObject::IsModal`. Whether content outside such a
+dialog is spoken depends on the platform:
+
+- Safari with VoiceOver, on macOS and iOS, hides content outside a shown `aria-modal` dialog.
+- Chromium prunes the accessibility tree for `aria-modal` only on Mac and Android
+  (`content/renderer/accessibility/render_accessibility_impl.cc` sets
+  `SetAriaModalPrunesAXTree(true)` under `BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)`; the
+  setting is off by default in `third_party/blink/renderer/core/frame/settings.json5`). It
+  prunes only while focus is on an element inside the dialog
+  (`AXObjectCacheImpl::UpdateActiveAriaModalDialog` and `AncestorAriaModalDialog` in
+  `third_party/blink/renderer/modules/accessibility/ax_object_cache_impl.cc`).
+- Chromium on Linux and Windows does not prune, so a screen reader there may still speak a
+  region outside the dialog.
+
+The capture applies the rule whenever the dialog is shown, wherever focus is. A requirement met
+only by a region outside such a dialog fails for VoiceOver users, so hearing it would pass on
+words some users never get. Hearing less on the other platforms can only fail a requirement,
+never pass one.
+
+The modal state is read again when the announcements are drained. A page can write a region and
+open a modal in a later task, before the browser updates the accessibility tree, so a screen
+reader likely hears nothing. A change outside a modal open at drain is dropped, so the answer
+does not depend on which task ran first. When a modal is open at drain and a recorded change sits
+on an element that has left the document, the drain cannot check it and says so
+(`changed-element-removed`). A modal dialog inside a closed shadow root cannot be found from the
+capture's world. When a flow requirement drains, usabl also reads the document through the
+browser's own DOM read over CDP and asks each `dialog` element and each element with
+`aria-modal` inside a closed shadow root, in the live world, whether it is an open modal by the
+same rule. If one is open, the drain says so (`closed-shadow-modal`). Either way,
+the flow requirement emits an `unverified` draft that names the cause instead of a pass or a fail,
+unless the focused control's own name is the expected text. A modal inside a frame blocks only
+that frame, and frames are not drained, so it changes nothing here.
+
 The capture and the element path function run in isolated worlds, which share the DOM with the
 page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
 page that defines `window.__usablDrain` or `window.__usablPathFor` before adoption, or replaces

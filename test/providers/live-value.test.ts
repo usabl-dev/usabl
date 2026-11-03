@@ -109,3 +109,62 @@ describe('hiddenInChain', () => {
     }
   });
 });
+
+describe('blockedByModal', () => {
+  const inModal = { modal: true };
+  const plain = { modal: false };
+
+  it('blocks nothing while no modal dialog is open', () => {
+    const resolver = createLiveResolver();
+    expect(resolver.blockedByModal([], 0)).toBe(false);
+    expect(resolver.blockedByModal([plain, plain], 0)).toBe(false);
+  });
+
+  it('blocks content outside the open modal and keeps content inside it', () => {
+    const resolver = createLiveResolver();
+    expect(resolver.blockedByModal([plain, plain], 1)).toBe(true);
+    expect(resolver.blockedByModal([plain, inModal, plain], 1)).toBe(false);
+  });
+
+  // Which open modal is on top is not in the DOM, so content counts only inside every one of them.
+  it('blocks content that is not inside every open modal', () => {
+    const resolver = createLiveResolver();
+    expect(resolver.blockedByModal([plain, inModal, plain], 2)).toBe(true);
+    expect(resolver.blockedByModal([inModal, plain, inModal], 2)).toBe(false);
+  });
+
+  it('answers the same from its own source alone', () => {
+    const fromSource = resolverFromSource();
+    for (const [chain, open] of [[[], 0], [[plain], 1], [[inModal], 1], [[inModal, plain], 2]] as const) {
+      expect(fromSource.blockedByModal(chain, open)).toBe(createLiveResolver().blockedByModal(chain, open));
+    }
+  });
+});
+
+// The ARIA half of Chromium's AXObject::IsModal: the first role the browser recognizes is dialog or
+// alertdialog, and aria-modal is true, which Chromium reads as any value but empty, "undefined",
+// or "false", without regard to ASCII case.
+describe('ariaModalDialog', () => {
+  const cases: Array<[string | null, string | null, boolean]> = [
+    ['dialog', 'true', true],
+    ['alertdialog', 'true', true],
+    ['Dialog', 'TRUE', true],
+    ['banana dialog', 'true', true],
+    ['dialog', 'yes', true],
+    ['region dialog', 'true', false],
+    ['dialog', 'false', false],
+    ['dialog', 'FALSE', false],
+    ['dialog', 'undefined', false],
+    ['dialog', '', false],
+    ['dialog', null, false],
+    [null, 'true', false],
+    ['banana', 'true', false],
+  ];
+
+  for (const [role, ariaModal, expected] of cases) {
+    it(`reads role ${JSON.stringify(role)} with aria-modal ${JSON.stringify(ariaModal)} as ${expected ? 'modal' : 'not modal'}`, () => {
+      expect(createLiveResolver().ariaModalDialog({ role, ariaModal })).toBe(expected);
+      expect(resolverFromSource().ariaModalDialog({ role, ariaModal })).toBe(expected);
+    });
+  }
+});

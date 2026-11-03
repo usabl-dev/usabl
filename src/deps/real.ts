@@ -6,7 +6,7 @@
  */
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, ElementTarget, FocusUnreadable, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import type { AncestorAttributesRead, AnnouncementDrain, AnnouncementUndecidable, ApiResponse, AxNode, BrowserDriver, ElementTarget, FocusUnreadable, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
 import { BrowserSandboxRequiredError, isBrowserSandboxRefusal, isSandboxLaunchFailure, type BrowserSandboxPolicy } from './sandbox.js';
@@ -176,7 +176,9 @@ const DEEP_FOCUS_IMPL = `
 // from it is not recorded; see the observer below. Nor is a change inside content hidden from
 // assistive technology, by aria-hidden, inert, or hidden anywhere on that walk. The same resolver
 // holds that rule.
-const LIVE_CAPTURE_IMPL = `
+// The resolver, the flat-tree parent, and the open-modal test, shared by the capture and the
+// closed shadow root check at drain, so both read a modal the same way.
+const MODAL_RULE_IMPL = `
   const liveResolver = (${createLiveResolver.toString()})();
   const flatParent = (element) => {
     if (element.assignedSlot) {
@@ -191,12 +193,46 @@ const LIVE_CAPTURE_IMPL = `
     }
     return null;
   };
+  // Whether an element is a modal dialog open now. A dialog opened with showModal() is one, by the
+  // browser's own :modal state. So is an element whose first recognized role is dialog or
+  // alertdialog with aria-modal true, while it is connected and shown: rendered, not hidden by
+  // visibility, and not under aria-hidden, inert, or hidden on the flat tree. Safari with VoiceOver
+  // hides everything outside such a dialog while it is shown, and Chromium does on Mac and Android
+  // while focus is inside it, so content outside it may not be spoken at all.
+  const isOpenModal = (element) => {
+    if (element.localName === 'dialog' && element.matches(':modal')) {
+      return true;
+    }
+    if (!element.isConnected || !liveResolver.ariaModalDialog({ role: element.getAttribute('role'), ariaModal: element.getAttribute('aria-modal') })) {
+      return false;
+    }
+    if (!element.checkVisibility({ visibilityProperty: true })) {
+      return false;
+    }
+    const chain = [];
+    for (let current = element; current instanceof Element; current = flatParent(current)) {
+      chain.push({
+        ariaHidden: current.getAttribute('aria-hidden'),
+        inert: current.hasAttribute('inert'),
+        hidden: current.hasAttribute('hidden'),
+      });
+    }
+    return !liveResolver.hiddenInChain(chain);
+  };
+`;
+
+const LIVE_CAPTURE_IMPL = `
+  ${MODAL_RULE_IMPL}
   // The element whose region the change belongs to: the nearest one that sets a live value, when
   // that value is polite or assertive. Null when the change is not live, and null when anything on
   // the walk hides its subtree from assistive technology: the changed element, a wrapper between it
   // and the region, the region itself, or anything above the region. A screen reader says nothing
   // for that change, so recording it would let a flow requirement pass on words no one heard.
-  const liveHost = (start) => {
+  //
+  // A change outside an open modal dialog is not recorded either. While a dialog opened with
+  // showModal() is open, Chromium leaves everything outside the top one out of the accessibility
+  // tree. openModals gives the open modal dialogs, read when the change is observed.
+  const liveHost = (start, openModals) => {
     const elements = [];
     const chain = [];
     for (let current = start; current instanceof Element; current = flatParent(current)) {
@@ -212,20 +248,77 @@ const LIVE_CAPTURE_IMPL = `
     if (liveResolver.hiddenInChain(chain) || liveResolver.effectiveLiveValue(chain) === 'off') {
       return null;
     }
+    if (outsideModals(elements, openModals())) {
+      return null;
+    }
     return elements[liveResolver.nearestLiveSetter(chain)] ?? null;
+  };
+  // Whether a flat-tree chain, the element first, sits outside any of the open modal dialogs.
+  const outsideModals = (elements, modals) =>
+    modals.size > 0 && liveResolver.blockedByModal(elements.map((element) => ({ modal: modals.has(element) })), modals.size);
+  const flatChain = (start) => {
+    const elements = [];
+    for (let current = start; current instanceof Element; current = flatParent(current)) {
+      elements.push(current);
+    }
+    return elements;
+  };
+  // Every modal dialog open now (see isOpenModal), in the document and in every open shadow root,
+  // because a modal dialog in a web component blocks the whole document too. A modal dialog inside
+  // a closed shadow root cannot be found from here; see closedShadowModalOpen.
+  const findOpenModals = () => {
+    const found = new Set();
+    const scopes = [document];
+    for (let scope = scopes.pop(); scope !== undefined; scope = scopes.pop()) {
+      for (const dialog of scope.querySelectorAll('dialog:modal, [aria-modal]')) {
+        if (isOpenModal(dialog)) {
+          found.add(dialog);
+        }
+      }
+      for (const element of scope.querySelectorAll('*')) {
+        if (element.shadowRoot) {
+          scopes.push(element.shadowRoot);
+        }
+      }
+    }
+    return found;
   };
   const buffer = [];
   const toText = (value) => {
     const normalized = (value ?? '').trim();
     return normalized.length > 0 ? normalized : null;
   };
-  const push = (value) => {
+  // Each entry keeps the element whose change it records, so the drain can check it again.
+  const push = (value, start) => {
     const text = toText(value);
     if (text !== null) {
-      buffer.push(text);
+      buffer.push({ text, start });
     }
   };
-  window.__usablDrain = () => buffer.splice(0, buffer.length);
+  // Modal state is read when a change is observed, and again here. A page can write a region and
+  // open a modal in a later task, before the browser updates the accessibility tree, so a screen
+  // reader likely hears nothing. The state at drain decides, so the answer does not depend on which
+  // ran first. A change on an element that has left the document cannot be checked against a modal
+  // open now, so the drain says so instead of guessing.
+  window.__usablDrain = () => {
+    const entries = buffer.splice(0, buffer.length);
+    const texts = [];
+    let undecidable = null;
+    if (entries.length === 0) {
+      return { texts, undecidable };
+    }
+    const modals = findOpenModals();
+    for (const entry of entries) {
+      if (modals.size === 0) {
+        texts.push(entry.text);
+      } else if (!entry.start.isConnected) {
+        undecidable = 'changed-element-removed';
+      } else if (!outsideModals(flatChain(entry.start), modals)) {
+        texts.push(entry.text);
+      }
+    }
+    return { texts, undecidable };
+  };
   const observer = new MutationObserver((mutations) => {
     // Text the parser is still writing is the page being built, not an announcement, and the
     // capture has never counted it. The check reads the document's own state, so page script
@@ -233,9 +326,17 @@ const LIVE_CAPTURE_IMPL = `
     if (document.readyState === 'loading') {
       return;
     }
+    // Read once for the whole batch, and only when a change would be recorded.
+    let modals = null;
+    const openModals = () => {
+      if (modals === null) {
+        modals = findOpenModals();
+      }
+      return modals;
+    };
     for (const mutation of mutations) {
       const target = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
-      const host = target ? liveHost(target) : null;
+      const host = target ? liveHost(target, openModals) : null;
       // A host in another tree is a live region inside a shadow root that the changed element is
       // slotted into. Its own text leaves out the slotted text that changed and holds text the
       // change did not make speakable, such as slot fallback text and shadow-only text. A flow
@@ -243,7 +344,7 @@ const LIVE_CAPTURE_IMPL = `
       // reader spoke for this change. The change is dropped instead: hearing less can only fail a
       // requirement, never pass one.
       if (host && host.getRootNode() === target.getRootNode()) {
-        push(host.textContent);
+        push(host.textContent, target);
       }
     }
   });
@@ -283,8 +384,98 @@ const DRAIN_FUNCTION = `function () {
     throw new Error('the announcement capture is not running in this document');
   }
   const drained = drain();
-  return Array.isArray(drained) ? drained.filter((entry) => typeof entry === 'string') : [];
+  const texts = drained !== null && typeof drained === 'object' && Array.isArray(drained.texts) ? drained.texts : [];
+  return {
+    texts: texts.filter((entry) => typeof entry === 'string'),
+    undecidable: drained !== null && typeof drained === 'object' ? drained.undecidable : null,
+  };
 }`;
+
+const UNDECIDABLE_REASONS: ReadonlySet<string> = new Set<AnnouncementUndecidable>(['closed-shadow-modal', 'changed-element-removed']);
+
+async function drainCapture(cdp: CDPSession): Promise<AnnouncementDrain> {
+  const drained = await callInWorld(cdp, LIVE_WORLD, 'read announcements', DRAIN_FUNCTION);
+  const texts = getProp(drained, 'texts');
+  const undecidable = getProp(drained, 'undecidable');
+  if (undecidable !== null && (typeof undecidable !== 'string' || !UNDECIDABLE_REASONS.has(undecidable))) {
+    throw new Error('the browser could not read announcements: the capture returned an unknown reason');
+  }
+  return {
+    texts: Array.isArray(texts) ? texts.filter((entry): entry is string => typeof entry === 'string') : [],
+    undecidable: undecidable as AnnouncementUndecidable | null,
+  };
+}
+
+// Whether the element it is called on is a modal dialog open now, by the capture's own rule.
+const OPEN_MODAL_FUNCTION = `function () {
+  ${MODAL_RULE_IMPL}
+  return isOpenModal(this);
+}`;
+
+// Whether a node from the browser's DOM read carries an attribute. CDP lists attributes as name,
+// value, name, value.
+function hasAttribute(node: unknown, name: string): boolean {
+  const attributes = getProp(node, 'attributes');
+  if (!Array.isArray(attributes)) return false;
+  for (let index = 0; index < attributes.length; index += 2) {
+    if (attributes[index] === name) return true;
+  }
+  return false;
+}
+
+// Whether a modal dialog inside a closed shadow root is open now. The capture cannot see into a
+// closed shadow root, so it cannot tell which regions such a modal hides from assistive
+// technology. Only the browser's own DOM read over CDP reaches it. Each dialog element and each
+// element with aria-modal there is asked whether it is an open modal (see isOpenModal) in the live
+// world, so page script cannot answer for it. Anything but a clear "no" counts as open. A frame's
+// document is not searched: a modal there blocks only its frame, and frames are not drained.
+async function closedShadowModalOpen(cdp: CDPSession): Promise<boolean> {
+  const documentTree: unknown = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+  const candidates: unknown[] = [];
+  const stack: Array<{ node: unknown; closed: boolean }> = [{ node: getProp(documentTree, 'root'), closed: false }];
+  for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
+    const { node, closed } = next;
+    if (closed && (readString(getProp(node, 'localName')) === 'dialog' || hasAttribute(node, 'aria-modal'))) {
+      candidates.push(getProp(node, 'backendNodeId'));
+    }
+    const children = getProp(node, 'children');
+    if (Array.isArray(children)) {
+      for (const child of children) stack.push({ node: child, closed });
+    }
+    const shadowRoots = getProp(node, 'shadowRoots');
+    if (Array.isArray(shadowRoots)) {
+      for (const root of shadowRoots) stack.push({ node: root, closed: closed || getProp(root, 'shadowRootType') === 'closed' });
+    }
+  }
+  if (candidates.length === 0) {
+    return false;
+  }
+  const contextId = await isolatedWorldContextId(cdp, LIVE_WORLD, 'check modal dialogs');
+  for (const candidate of candidates) {
+    const backendNodeId = readNumber(candidate);
+    if (backendNodeId === null) {
+      return true;
+    }
+    const resolved: unknown = await cdp.send('DOM.resolveNode', { backendNodeId, executionContextId: contextId, objectGroup: 'usabl-modal' });
+    const objectId = readString(getProp(getProp(resolved, 'object'), 'objectId'));
+    if (objectId === null) {
+      return true;
+    }
+    try {
+      const answered: unknown = await cdp.send('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: OPEN_MODAL_FUNCTION,
+        returnByValue: true,
+      });
+      if (getProp(getProp(answered, 'result'), 'value') !== false) {
+        return true;
+      }
+    } finally {
+      await cdp.send('Runtime.releaseObject', { objectId }).catch(() => undefined);
+    }
+  }
+  return false;
+}
 
 /**
  * Starts the live-region capture in the live world: in every document the page loads from now on,
@@ -1762,8 +1953,14 @@ function wrapPage(
       return Promise.resolve();
     },
     async drainAnnouncements(): Promise<string[]> {
-      const drained = await callInWorld(cdp, LIVE_WORLD, 'read announcements', DRAIN_FUNCTION);
-      return Array.isArray(drained) ? drained.filter((entry): entry is string => typeof entry === 'string') : [];
+      return (await drainCapture(cdp)).texts;
+    },
+    async drainAnnouncementRecord(): Promise<AnnouncementDrain> {
+      const drained = await drainCapture(cdp);
+      if (drained.undecidable === null && (await closedShadowModalOpen(cdp))) {
+        return { ...drained, undecidable: 'closed-shadow-modal' };
+      }
+      return drained;
     },
     async activeNode(): Promise<AxNode | null> {
       const focus = await readFocus(cdp);

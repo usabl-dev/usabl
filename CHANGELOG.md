@@ -60,6 +60,22 @@
 
 ### Fixed
 
+- The announcement capture no longer hears a live region outside an open modal dialog. While a
+  dialog opened with `showModal()` is open, Chromium hides everything outside it from assistive
+  technology, so a screen reader says nothing there. Before, a flow requirement could pass on
+  that text. A change inside the open modal is still heard, a dialog opened with `show()` hides
+  nothing, and content outside is heard again once the modal closes.
+
+- The announcement capture reads the modal state again at drain, so text written outside a modal
+  that a later task opens is not heard. A flow requirement is now an `unverified` gap, never a
+  pass, when a modal dialog is open inside a closed shadow root, or when a changed region left
+  the document while a modal is open.
+
+- The announcement capture also treats a shown `aria-modal` dialog as a modal. An element whose
+  first recognized role is `dialog` or `alertdialog`, with `aria-modal` true, hides the regions
+  outside it from the capture while it is shown, because Safari with VoiceOver does not speak
+  them. Before, a flow requirement could pass on a region outside a custom modal.
+
 - The keyboard walk now follows focus into open shadow roots and same-origin frames. Before,
   every control inside a web component or a frame had the path of its host or frame, so the
   walk read the second control as a completed cycle and stopped. It never reached the

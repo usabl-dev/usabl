@@ -502,6 +502,18 @@ export interface DocArtifact {
 // 'focus-too-deep': focus sits under more shadow roots and frames than the read follows.
 export type FocusUnreadable = 'closed-shadow-root' | 'frame-unreadable' | 'focus-too-deep';
 
+// Why a drain cannot say which announcements a screen reader heard.
+// 'closed-shadow-modal': a modal dialog is open inside a closed shadow root. The capture cannot see
+// it, so it cannot tell which regions it leaves out of the accessibility tree.
+// 'changed-element-removed': a modal dialog is open now, and a change was recorded on an element
+// that is no longer in the document, so whether the modal hid it cannot be read.
+export type AnnouncementUndecidable = 'closed-shadow-modal' | 'changed-element-removed';
+
+export interface AnnouncementDrain {
+  texts: string[];
+  undecidable: AnnouncementUndecidable | null;
+}
+
 export interface AxNode {
   name: string | null;
   role: string | null;
@@ -669,6 +681,9 @@ export interface Page {
   activeElementWithin(selector: string): Promise<boolean>;
   armAnnouncementCapture(): Promise<void>;
   drainAnnouncements(): Promise<string[]>;
+  // The same drain, with the reason the texts cannot be trusted to be what a screen reader heard,
+  // or null when they can. See AnnouncementDrain.
+  drainAnnouncementRecord(): Promise<AnnouncementDrain>;
   // The accessibility node of the element that has focus, followed into open shadow roots and
   // same-origin frames. Null when the node is missing or ignored, and null when activeFocusUnreadable
   // reports a reason, because the node read then would be the host or the frame, not the control.

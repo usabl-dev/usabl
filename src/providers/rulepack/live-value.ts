@@ -45,6 +45,17 @@ export interface HiddenAttributes {
   hidden: boolean;
 }
 
+/** Whether one element is a modal dialog that is open now, as the browser's :modal reads it. */
+export interface ModalState {
+  modal: boolean;
+}
+
+/** The attributes that make an element an ARIA modal dialog. */
+export interface AriaModalAttributes {
+  role: string | null;
+  ariaModal: string | null;
+}
+
 /** The resolver's functions. See createLiveResolver. */
 export interface LiveResolver {
   firstRecognizedRole(role: string | null): string | null;
@@ -52,6 +63,8 @@ export interface LiveResolver {
   nearestLiveSetter(chain: readonly LiveAttributes[]): number;
   effectiveLiveValue(chain: readonly LiveAttributes[]): LiveValue;
   hiddenInChain(chain: readonly HiddenAttributes[]): boolean;
+  blockedByModal(chain: readonly ModalState[], openModals: number): boolean;
+  ariaModalDialog(node: AriaModalAttributes): boolean;
 }
 
 /**
@@ -171,7 +184,39 @@ export function createLiveResolver(): LiveResolver {
     );
   }
 
-  return { firstRecognizedRole, ownLiveValue, nearestLiveSetter, effectiveLiveValue, hiddenInChain };
+  /**
+   * True when a modal dialog is open and the chain is not inside every open one. While a dialog
+   * opened with showModal() is open, Chromium leaves everything outside the top one out of the
+   * accessibility tree, so a screen reader says nothing for a live region there. Which open modal
+   * is on top is not in the DOM, so content must sit inside all of them to count. The top one is
+   * always among them, so this hides at least what the browser hides. Content in a lower modal
+   * that the top one is nested in is hidden here and by the browser alike. The chain is the
+   * element and the elements above it in the flat tree, each listed once, and openModals counts
+   * the open modal dialogs in the document.
+   */
+  function blockedByModal(chain: readonly ModalState[], openModals: number): boolean {
+    if (openModals <= 0) {
+      return false;
+    }
+    return chain.filter((node) => node.modal).length < openModals;
+  }
+
+  /**
+   * Whether an element's attributes make it an ARIA modal dialog, as Chromium's AXObject::IsModal
+   * reads them: the first recognized role is dialog or alertdialog, and aria-modal is true. Chromium
+   * reads an ARIA boolean as true for any value but empty, "undefined", or "false", without regard
+   * to ASCII case. Whether the dialog is shown is read in the browser, not here.
+   */
+  function ariaModalDialog(node: AriaModalAttributes): boolean {
+    const role = firstRecognizedRole(node.role);
+    if (role !== 'dialog' && role !== 'alertdialog') {
+      return false;
+    }
+    const value = node.ariaModal === null ? '' : asciiLower(node.ariaModal);
+    return value !== '' && value !== 'undefined' && value !== 'false';
+  }
+
+  return { firstRecognizedRole, ownLiveValue, nearestLiveSetter, effectiveLiveValue, hiddenInChain, blockedByModal, ariaModalDialog };
 }
 
 const resolver = createLiveResolver();

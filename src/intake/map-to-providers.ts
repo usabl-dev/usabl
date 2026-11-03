@@ -5,6 +5,7 @@
  * Documentation requirements emit no Provider because they define output artifacts, not checks.
  */
 import type {
+  AnnouncementUndecidable,
   AxNode,
   ContentAssertion,
   Draft,
@@ -115,6 +116,40 @@ function flowUnreadableDraft(
     why: `The expected text may be the focused control's name, but ${focusUnreadableCause(reason)}.`,
     fix: FOCUS_UNREADABLE_FIX,
     evidence: evidenceFromNode(null, { expectedAnnouncement, announcements, focusUnreadable: reason }),
+    confidence: 'unverified',
+  };
+}
+
+const UNDECIDABLE_CAUSE: Record<AnnouncementUndecidable, string> = {
+  'closed-shadow-modal':
+    'a modal dialog is open inside a closed shadow root, so usabl cannot tell which live regions it hides from assistive technology',
+  'changed-element-removed':
+    'a modal dialog is open, and a live region that changed was removed before usabl could check whether the modal hid it',
+};
+
+// The drain cannot say which announcements a screen reader heard, so the flow is neither a pass
+// nor a fail. It is a gap that names the cause.
+function flowUndecidableDraft(
+  requirement: Requirement,
+  node: AxNode | null,
+  elementPath: string,
+  expectedAnnouncement: string,
+  announcements: string[],
+  reason: AnnouncementUndecidable,
+): Draft {
+  return {
+    rule: `intake:${requirement.id}`,
+    layer: 'intake-flow',
+    severity: 'moderate',
+    evidenceClass: 'deterministic',
+    screenId: requirement.surface,
+    elementPath,
+    elementName: node?.name ?? null,
+    role: node?.role ?? null,
+    whatUserExperiences: `Whether users hear "${expectedAnnouncement}" is unknown.`,
+    why: `usabl cannot tell which live-region announcements a screen reader spoke: ${UNDECIDABLE_CAUSE[reason]}.`,
+    fix: 'Check this announcement by hand. To let usabl check it, keep modal dialogs out of closed shadow roots, and keep the live region in the document until the step ends.',
+    evidence: evidenceFromNode(node, { expectedAnnouncement, announcements, undecidable: reason }),
     confidence: 'unverified',
   };
 }
@@ -236,13 +271,24 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
       const expectedAnnouncement = assertion.expectedAnnouncement;
 
       const node = await ctx.page.activeNode();
-      const announcements = await ctx.page.drainAnnouncements();
+      const drain = await ctx.page.drainAnnouncementRecord();
+      const announcements = drain.texts;
       const heardOnFocus = trimEqual(node?.name ?? null, expectedAnnouncement);
+      if (heardOnFocus) {
+        return [];
+      }
+      // The focused control's name does not depend on the drain. Past this point the answer does,
+      // so a drain that cannot say what was heard decides nothing, either way.
+      if (drain.undecidable !== null) {
+        return [
+          flowUndecidableDraft(requirement, node, await ctx.page.activePath(), expectedAnnouncement, announcements, drain.undecidable),
+        ];
+      }
       const heardInAnnouncements = announcements.some((announcement) =>
         trimEqual(announcement, expectedAnnouncement),
       );
 
-      if (heardOnFocus || heardInAnnouncements) {
+      if (heardInAnnouncements) {
         return [];
       }
 
