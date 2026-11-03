@@ -62,6 +62,9 @@ export interface CliOptions {
   cursorStopHook: boolean;
 }
 
+// The value flags of serve-build and extract-build. Those commands parse their own arguments.
+const BUILD_COMMAND_VALUE_FLAGS: ReadonlySet<string> = new Set(['--dir', '--host', '--port', '--archive', '--into']);
+
 function isFlag(value: string): boolean {
   return value.startsWith('-');
 }
@@ -274,6 +277,15 @@ export function parseCliArgs(argv: string[]): CliOptions {
       }
       outPath = value;
       index += 1;
+      continue;
+    }
+    if (BUILD_COMMAND_VALUE_FLAGS.has(token)) {
+      // serve-build and extract-build read these with their own strict parsers. Here the value is
+      // only stepped over, so a path such as "--dir build" is never taken for a command name.
+      const value = argv[index + 1];
+      if (value !== undefined && !isFlag(value)) {
+        index += 1;
+      }
       continue;
     }
     if (token === '--config') {

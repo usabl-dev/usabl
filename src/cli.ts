@@ -65,6 +65,8 @@ import { makeHistoryGit } from './history/git.js';
 import { serializeRecord } from './history/record.js';
 import { recordMainScan } from './history/record-run.js';
 import { runDebt } from './history/report.js';
+import { runServeBuild } from './judge/serve-build.js';
+import { runExtractBuild } from './judge/extract-build.js';
 
 // The configured url warnings this process has already printed. It holds config urls, which may
 // carry a query, so it is never printed and never leaves the process.
@@ -357,7 +359,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'docs' &&
     opts.command !== 'history' &&
     opts.command !== 'debt' &&
-    opts.command !== 'session'
+    opts.command !== 'session' &&
+    opts.command !== 'serve-build' &&
+    opts.command !== 'extract-build'
   ) {
     // The command table names a command this dispatch does not run. Refuse it the same way.
     process.stderr.write('usabl: unknown command. Run "usabl help" to list the commands.\n');
@@ -374,6 +378,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   if (opts.command === 'install') {
     return runInstall(opts);
+  }
+
+  // serve-build and extract-build handle a pull request's untrusted build for the CI judge. Each
+  // has its own strict parser, so it gets the arguments after the command name.
+  if (opts.command === 'serve-build' || opts.command === 'extract-build') {
+    const commandAt = argv.indexOf(opts.command);
+    const rest = argv.filter((_, index) => index !== commandAt);
+    const io = {
+      stdout: (text: string) => process.stdout.write(text),
+      stderr: (text: string) => process.stderr.write(text),
+    };
+    if (opts.command === 'extract-build') {
+      return runExtractBuild(rest, io);
+    }
+    // On success the server keeps the process alive until the workflow stops it.
+    return (await runServeBuild(rest, io)).exitCode;
   }
 
   if (opts.command === 'init') {

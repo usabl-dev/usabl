@@ -73,11 +73,13 @@ describe('usabl help', () => {
         'doctor',
         'drift',
         'enforce',
+        'extract-build',
         'floor',
         'help',
         'history',
         'init',
         'install',
+        'serve-build',
         'session',
         'stop-hook',
       ].sort(),
@@ -144,6 +146,18 @@ describe('usabl help', () => {
   it('refuses a real flag given to a command that ignores it', async () => {
     expect(await main(['init', '--json'])).toBe(2);
     expect(stderr.join('')).toContain('init does not take --json');
+    await nothingWritten();
+  });
+
+  it('refuses a flag serve-build does not take before it serves anything', async () => {
+    expect(await main(['serve-build', '--dir', 'build', '--port', '0', '--frobnicate'])).toBe(2);
+    expect(stderr.join('')).toContain('serve-build does not take --frobnicate');
+    await nothingWritten();
+  });
+
+  it('refuses a flag extract-build does not take before it unpacks anything', async () => {
+    expect(await main(['extract-build', '--archive', 'build.tar', '--into', 'out', '--force'])).toBe(2);
+    expect(stderr.join('')).toContain('extract-build does not take --force');
     await nothingWritten();
   });
 
