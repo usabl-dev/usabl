@@ -2626,14 +2626,40 @@ package's files the app renders.
 `pnpm-workspace.yaml` lists `packages`, the planner reads every pattern, with `!` patterns
 excluded, and each workspace package's `package.json`. The configured app is the package the
 router file, the `uiFileGlobs` folders, and the surface files sit in, which is the root package
-for a root app. A changed file in a workspace package the app depends on, by name in
-`dependencies`, `devDependencies`, `peerDependencies`, or `optionalDependencies`, directly or
-through another workspace package, is a `not-covered` gap and an unmapped file when it is
-outside `uiFileGlobs`. The gap names the package and the fix: add the package's source to
+for a root app. A changed file in a workspace package the app depends on, directly or through
+another workspace package, is a `not-covered` gap and an unmapped file when it is outside
+`uiFileGlobs`. A package depends on another when any of these holds:
+
+- Its `dependencies`, `devDependencies`, `peerDependencies`, or `optionalDependencies` name it,
+  by key, or by an alias value: `workspace:<name>@<range>`, `npm:<name>@<range>`, or a
+  `file:`, `link:`, `portal:`, or `workspace:` path that points at its folder, read from the
+  declaring package's folder.
+- One of its source files names it, or a subpath of it, as a quoted module specifier. npm,
+  Yarn classic, and Bun hoisting let a package import another it does not list. Any quoted
+  match counts, on one line or several, so the check can over-count but not miss an import
+  written in source. A source file that cannot be read counts every package.
+- A path alias in its own `tsconfig.json`, `tsconfig.app.json`, or Vite config, or in the
+  repository root's, points into its folder.
+
+The source and alias checks run only for a package that leaves a changed package unreached by
+its declarations. The gap names the package and the fix: add the package's source to
 `uiFileGlobs` and list the file in the files of each surface that renders it. Test files and
 Markdown files are left out, as are files in the app's own package. A package whose
-`package.json` cannot be read counts as one the app depends on. A change in a package the app
-does not depend on, and any change in a repository with no workspaces, reads as before.
+`package.json` cannot be read counts as one the app depends on. A file belongs to the deepest
+workspace package folder it sits in. A change in a package the app does not depend on, and any
+change in a repository with no workspaces, reads as before.
+
+When the root `package.json` or `pnpm-workspace.yaml` exists and does not parse, or holds its
+workspace field in a shape no package manager reads, the workspace packages are unknown. Every
+changed file that is not a test, not UI, and not Markdown is then a `not-covered` gap whose
+reason names the file usabl could not read. A workspace pattern with `..` in a brace group is
+refused, and a glob result that is absolute or leaves the repository is never read.
+
+The workspace patterns and every package's dependencies are read from the trusted ref as well
+as from the tree, and the union counts. A change that removes `workspaces` from the root
+`package.json`, or the app's dependency on a package, in the same change that edits the
+package, still gaps that edit. A `package.json` the trusted ref does not have adds nothing, and
+a trusted root manifest that does not parse makes every such file a gap.
 
 The change is not mapped to screens through imports. The import graph follows relative and alias
 imports only. A package import resolves through the package's own manifest, its `exports`

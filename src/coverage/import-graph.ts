@@ -68,6 +68,18 @@ function extractSpecifiers(source: string): string[] {
   return found;
 }
 
+/**
+ * Whether source text names a package, or a subpath of it, as a quoted module specifier: in an
+ * import or export from, a dynamic import, a require, or a bare import for its side effects, on one
+ * line or across several. It matches the quoted name anywhere, so a string that only looks like an
+ * import also counts. That can only over-count, which is the safe direction for a caller asking
+ * whether a package is used. The single-line patterns above would miss a multi-line import.
+ */
+export function mentionsPackage(source: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  return new RegExp(`(["'\`])${escaped}(?:/[^"'\`]*)?\\1`).test(source);
+}
+
 function isRelativeSpecifier(specifier: string): boolean {
   return specifier.startsWith('.');
 }

@@ -66,8 +66,14 @@
   app could render the changed component. Such a change is now a not-covered gap that names the
   package and the fix. The planner reads every `workspaces` pattern in the root `package.json`
   and the `packages` of `pnpm-workspace.yaml`, and follows dependencies through other workspace
-  packages. A change in a package the app does not depend on, and a repository with no
-  workspaces, plan as before.
+  packages. A dependency counts when it is declared under an alias (`workspace:<name>@...`,
+  `npm:<name>@...`, or a `file:`, `link:`, or `portal:` path to its folder), when the app's
+  source imports it without declaring it, or when a tsconfig `paths` or Vite alias points into
+  it. The manifests are also read at the trusted ref, so a change that drops `workspaces` does
+  not make itself idle. A root `package.json` or `pnpm-workspace.yaml` that does not parse makes
+  every non-UI change a gap, and workspace patterns cannot reach files above the repository. A
+  change in a package the app does not depend on, and a repository with no workspaces, plan as
+  before.
 
 - The scan browser now starts with Chromium's sandbox. Before, usabl never asked for it,
   so Playwright added `--no-sandbox` and every page a scan opened ran without it. When

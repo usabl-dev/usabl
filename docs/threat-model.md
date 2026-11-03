@@ -264,11 +264,17 @@ the tool errored, not because the page is accessible.
 - In a monorepo, a change in a workspace package the configured app depends on is a coverage
   gap, never nothing to check. Before, a config drafted for one app folder matched none of the
   shared package's files, so a change to a component the app renders exited 0 with nothing
-  scanned. The planner reads the workspace and package manifests from the tree it plans, the
-  same as the router file and the import graph. A change that also edits the app's
-  `package.json` to drop the dependency therefore plans as nothing to check for that package.
-  That is the same exposure as a change that edits the router file to unmap a screen, and it
-  shows in the diff.
+  scanned. The planner reads the workspace and package manifests from the tree and from the
+  trusted ref, and counts the union, so a change that also drops `workspaces` or the app's
+  dependency still gaps its edit to the package. A dependency declared under an alias, an
+  undeclared import that hoisting lets resolve, and a path alias into the package count too. A
+  root manifest that does not parse makes every non-UI change a gap. Workspace patterns cannot
+  read above the repository: a brace group with `..` is refused, and a glob result that is
+  absolute or leaves the repository is dropped.
+
+  Not handled: a tsconfig `paths` entry that names one file rather than a `/*` pair, and paths
+  inherited through `extends` from a file such as `tsconfig.base.json`, are not read. An import
+  of the package by its name still counts.
 
 **Status:** [x] The `not_covered` gap path and exit-4 fail-open ship. [ ] A per-surface
 time budget is not yet a config knob; the shipped bound is the keyboard-walk 15s wall clock.

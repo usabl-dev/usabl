@@ -8,7 +8,7 @@ import type { AffectedScreen, Coverage, CoverageGap, FsGlob, UsablConfig } from 
 import { loadAliasConfig } from './alias-config.js';
 import { buildUnresolvedReason } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
-import { workspaceDependencyGaps } from './workspace-packages.js';
+import { type TrustedRead, workspaceDependencyGaps } from './workspace-packages.js';
 import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
 import { parseDocsManifest, type DocsManifest } from './docs-manifest.js';
 import { assertSurfaceIds } from '../intake/surface-ids.js';
@@ -146,6 +146,9 @@ export async function computeCoverage(
   config: UsablConfig,
   changedFiles: string[],
   docsManifest?: DocsManifest | null,
+  // Reads a file at the trusted ref. The workspace manifests are read from it as well as from the
+  // tree, so a change cannot unlink the app from a workspace package it also edits.
+  trustedRead?: TrustedRead,
 ): Promise<Coverage> {
   // affectedByScreen below is keyed by surface id, so a blank or repeated id silently drops a
   // screen while its changed files still read as mapped. Config parsing refuses that document,
@@ -171,6 +174,7 @@ export async function computeCoverage(
     fs,
     config,
     changedFiles.filter((file) => !isTestFile(file) && !uiFiles.includes(file)),
+    trustedRead,
   );
   // No UI-touching files means idle. That is not the same claim as "covered".
   if (uiFiles.length === 0 && workspaceGaps.length === 0) {
