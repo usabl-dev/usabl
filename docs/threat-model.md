@@ -554,12 +554,36 @@ outside every table as the control in an accepted row. Either way a new barrier 
   and `getComputedStyle`. A page that redefines `querySelector`, the `activeElement` or `body`
   getters, `contains`, `focus`, or `getComputedStyle` in its own world does not change what they
   report.
+- The keyboard walk follows focus into open shadow roots and same-origin frames from those worlds,
+  so a page that redefines the `shadowRoot`, `activeElement`, or `contentDocument` getters cannot
+  hide a control inside a component or a frame. Before, every control inside one had the host's
+  or the frame's path, so the walk read the second as a completed cycle and passed a screen whose
+  later controls it never reached. A closed shadow root is seen only through the browser's own
+  DOM read over CDP, and its focused element is asked for in the read world. So is a frame
+  owner other than an `iframe` or `frame`, such as an `object`, `embed`, or `fencedframe`
+  element. Focus inside a closed shadow root, a frame from another origin, or such a frame
+  owner ends the walk with an `unverified` truncation draft, never a pass.
 
 - The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
   that redefines style writes, or says its root is not an element, cannot stop the zoom from
   landing. No provider calls `setZoom` today; the planned resize check (WCAG 1.4.4) will.
 
-**Not handled:** one page operation still runs in the page's own world: the element count that
+- The live-region capture reads open modal dialogs from its isolated world, when it observes a
+  change and again at drain: a `dialog` in the browser's `:modal` state, and an element whose first
+  recognized role is `dialog` or `alertdialog` with `aria-modal` true while it is shown. A page
+  cannot make a change outside an open modal dialog count as heard by redefining `matches`,
+  `querySelectorAll`, `getAttribute`, or the `open` attribute in its own world. Before, a flow
+  requirement could pass on a polite region outside the modal the same step opened, which Chromium
+  leaves out of the accessibility tree for a `showModal()` dialog and Safari with VoiceOver hides
+  for an `aria-modal` dialog. See ground-truth for the platform facts.
+
+- A modal dialog inside a closed shadow root, native or `aria-modal`, is found at drain for a flow
+  requirement through the browser's own DOM read over CDP, and asked in the live world whether it
+  is open. While one is open, the flow requirement is an `unverified` gap, never a pass.
+
+**Not handled:** the interaction contract tiers drain through the keyboard step runner, which does
+not run the closed shadow root check, so a change outside a modal there can still count as heard.
+One page operation still runs in the page's own world: the element count that
 readiness polls to tell when the DOM stopped changing. A page can change what it sees by
 redefining DOM methods. axe also computes its target selectors in the page's own world, so a page
 that patches DOM accessors can still change the selector, and with it the identity key, of an axe

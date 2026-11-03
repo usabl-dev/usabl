@@ -6,6 +6,7 @@
  * Gate remains the only verdict authority.
  */
 import type { AnnouncementToken, Draft, InteractionContract, SpeechObligation, TranscriptStop } from '../contracts/index.js';
+import { focusUnreadableCause } from '../primitives/focus-unreadable.js';
 import { obligationSatisfied } from './normalize.js';
 
 function nonEmptyText(text: string | null): text is string {
@@ -42,19 +43,24 @@ function makeMissingAnnouncementDraft(
   const roleToken = stop ? firstNonEmptyToken(stop.announcement, 'role') : null;
   const nameToken = stop ? firstNonEmptyToken(stop.announcement, 'name') : null;
   const observed = observedTextQuote(stop);
+  // When focus at the window cannot be read, the name and role words were never collected, so a
+  // miss proves nothing about what assistive technology said. It stays a gap even when promoted.
+  const unreadable = stop?.focusUnreadable;
+  const counted = promoted && unreadable === undefined;
+  const cause = unreadable === undefined ? '' : ` This is unknown, not a miss: ${focusUnreadableCause(unreadable)}.`;
   return {
     rule: 'voicing/missing-announcement',
     layer: 'voicing',
     severity: 'moderate',
     // Promotion flips only classes the caller listed in config. This tier still never
     // decides verdicts and never writes config state.
-    evidenceClass: promoted ? 'deterministic' : 'preview',
+    evidenceClass: counted ? 'deterministic' : 'preview',
     screenId,
     elementPath,
     elementName: nameToken?.text ?? null,
     role: roleToken?.text ?? null,
     whatUserExperiences: `After step ${obligation.afterStep}, the expected announcement words were missing. Observed announcement text: ${observed}.`,
-    why: `Obligation "${obligation.class}" requires tokens "${obligation.requiredTokens.join(', ')}" in this window, but they were not all present in the raw observed announcement text: ${observed}.`,
+    why: `Obligation "${obligation.class}" requires tokens "${obligation.requiredTokens.join(', ')}" in this window, but they were not all present in the raw observed announcement text: ${observed}.${cause}`,
     fix: 'Ensure this interaction announces the required words in the same window, using visible naming and live-region updates where needed.',
     evidence: {
       ...(nameToken
@@ -65,7 +71,7 @@ function makeMissingAnnouncementDraft(
         : {}),
     },
     // Unverified keeps advisory misses out of gate authority unless caller promotion says otherwise.
-    confidence: promoted ? 'fail' : 'unverified',
+    confidence: counted ? 'fail' : 'unverified',
   };
 }
 

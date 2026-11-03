@@ -335,6 +335,54 @@ describe('mapRequirementsToProviders', () => {
     });
   });
 
+  it('returns an unverified draft naming the cause when the focused element cannot be read', async () => {
+    const bundle = flowBundle({
+      type: 'flow',
+      steps: [{ do: 'tab' }],
+      expectedAnnouncement: 'Saved',
+    });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        tab: vi.fn(async () => {}),
+        activeNode: vi.fn(async () => null),
+        activePath: vi.fn(async () => 'x-host'),
+        activeFocusUnreadable: vi.fn(async () => 'closed-shadow-root' as const),
+        drainAnnouncements: vi.fn(async () => []),
+      }),
+    });
+
+    const drafts = draftsOf(await provider!.run(context));
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      rule: 'intake:flow-save',
+      layer: 'intake-flow',
+      confidence: 'unverified',
+      elementPath: 'x-host',
+    });
+    expect(drafts[0]?.why).toContain('closed shadow root');
+  });
+
+  it('passes on a heard announcement even when the focused element cannot be read', async () => {
+    const bundle = flowBundle({
+      type: 'flow',
+      steps: [{ do: 'tab' }],
+      expectedAnnouncement: 'Saved',
+    });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        tab: vi.fn(async () => {}),
+        activeNode: vi.fn(async () => null),
+        activeFocusUnreadable: vi.fn(async () => 'frame-unreadable' as const),
+        drainAnnouncements: vi.fn(async () => ['Saved']),
+      }),
+    });
+
+    await expect(provider!.run(context)).resolves.toEqual([]);
+  });
+
   it('returns a fail draft when flow announcement appears only as substring in live region events', async () => {
     const bundle = flowBundle({
       type: 'flow',
@@ -431,5 +479,51 @@ describe('mapRequirementsToProviders', () => {
     });
 
     await expect(provider!.run(context)).resolves.toEqual([]);
+  });
+
+  describe('when the drain cannot say what a screen reader heard', () => {
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+
+    it('does not pass on a heard announcement, and names the cause', async () => {
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext({
+        page: makeFakePage({
+          activePath: vi.fn(async () => '#save'),
+          drainAnnouncementRecord: vi.fn(async () => ({ texts: ['Saved'], undecidable: 'closed-shadow-modal' as const })),
+        }),
+      });
+
+      const drafts = draftsOf(await provider!.run(context));
+
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]).toMatchObject({ rule: 'intake:flow-save', layer: 'intake-flow', confidence: 'unverified', elementPath: '#save' });
+      expect(drafts[0]?.why).toContain('closed shadow root');
+    });
+
+    it('does not fail on a missing announcement either', async () => {
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext({
+        page: makeFakePage({
+          drainAnnouncementRecord: vi.fn(async () => ({ texts: [], undecidable: 'changed-element-removed' as const })),
+        }),
+      });
+
+      const drafts = draftsOf(await provider!.run(context));
+
+      expect(drafts.map((draft) => draft.confidence)).toEqual(['unverified']);
+      expect(drafts[0]?.why).toContain('removed');
+    });
+
+    it('still passes when the focused control itself says the text', async () => {
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext({
+        page: makeFakePage({
+          activeNode: vi.fn(async () => axNode('Saved')),
+          drainAnnouncementRecord: vi.fn(async () => ({ texts: [], undecidable: 'closed-shadow-modal' as const })),
+        }),
+      });
+
+      await expect(provider!.run(context)).resolves.toEqual([]);
+    });
   });
 });

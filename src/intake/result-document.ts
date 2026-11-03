@@ -306,11 +306,19 @@ function token(value: unknown, field: string): AnnouncementToken {
 
 function stop(value: unknown, field: string): TranscriptStop {
   const source = record(value, field);
-  return {
+  const out: TranscriptStop = {
     index: whole(source['index'], at(field, 'index')),
     elementPath: text(source['elementPath'], at(field, 'elementPath')),
     announcement: list(source['announcement'], at(field, 'announcement'), token),
   };
+  if (has(source, 'focusUnreadable')) {
+    out.focusUnreadable = oneOf(source['focusUnreadable'], at(field, 'focusUnreadable'), [
+      'closed-shadow-root',
+      'frame-unreadable',
+      'focus-too-deep',
+    ] as const);
+  }
+  return out;
 }
 
 function ruleApplicability(value: unknown, field: string): RuleApplicability {
