@@ -367,15 +367,15 @@ describe.skipIf(!ENABLED)('axe in the page world and in the isolated world', () 
   );
 });
 
-// The ElementInternals differences, as measured. The isolated world reads the role and the
-// aria-label name a custom element set through internals from the browser's accessibility tree,
-// which matches the page world on every fixture not listed with a difference here. Three differ.
-// An element the browser does not expose, here one whose role attribute is presentation or not a
-// role, has no computed role to read, so the isolated run reports the list as missing its items. An
-// ARIA state set only through internals is not carried, because the tree reports a default state
-// whether or not one was set, so the isolated run reports the state as missing. Both are stricter
-// than the page world. A role kept in a private field is invisible to axe in the page world, which
-// then reports a list with no items. The browser exposes those items, and so does the isolated run.
+// The ElementInternals differences, as measured. The isolated world reads the role, the
+// aria-label name, and the required ARIA states a custom element set through internals from the
+// browser's accessibility tree, which matches the page world on every fixture not listed with a
+// difference here. Two differ. A role attribute of presentation, or one that is not a role,
+// overrides the internals role in Chrome, which then exposes no list items. The isolated run
+// reports the list as missing its items, which is what assistive technology meets. The page world
+// read the internals role instead and passed the list, a false pass. A role kept in a private
+// field is invisible to axe in the page world, which then reports a list with no items. The
+// browser exposes those items, and so does the isolated run.
 const EXPECTED_INTERNALS_DIFFERENCES: Record<string, string[]> = {
   'internals: buttons named and unnamed': [],
   'internals: custom elements without internals': [],
@@ -395,9 +395,6 @@ const EXPECTED_INTERNALS_DIFFERENCES: Record<string, string[]> = {
     'pass aria-required-children ["div"]: page world 0, isolated 1',
     'violation aria-required-children ["div"]: page world 1, isolated 0',
   ],
-  'internals: state on a role attribute': [
-    'pass aria-required-attr ["x-state"]: page world 1, isolated 0',
-    'violation aria-required-attr ["x-state"]: page world 0, isolated 1',
-  ],
+  'internals: state on a role attribute': [],
   'internals: tabs': [],
 };

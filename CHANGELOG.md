@@ -635,12 +635,14 @@
   findings one selector, so a new barrier in one table row read as the carried barrier of
   another row and the run verified. A page that defined a `window.axe` getter could hand
   back a clean result. Neither changes what axe reports now. Custom elements that set their
-  role or name through `ElementInternals` are read from the browser's accessibility tree.
-  On the comparison fixtures this gives the same findings as before in all but three
-  cases. A role kept in a private field, which axe could not see before, now counts the way
-  the browser exposes it. An element the browser does not expose, and an ARIA state set only
-  through internals, now report a barrier where they did not. See
-  `test/deps/axe-world-compare.summary.json`.
+  role, name, or a required ARIA state through `ElementInternals` are read from the
+  browser's accessibility tree. A state reaches axe only when the tree reports a value other
+  than the role's default, such as checked, since the tree reports unchecked whether or not
+  the element set it. On the comparison fixtures this gives the same findings as before in
+  all but two cases. A role kept in a private field, which axe could not see before, now
+  counts the way the browser exposes it. A role attribute that overrides the internals role,
+  such as `presentation`, now reports the list items the browser does not expose, where
+  before it passed. See `test/deps/axe-world-compare.summary.json`.
 
 - A frame axe cannot check is now a `not-covered` gap that names the frame's origin and
   why, such as a frame sandboxed without scripts or one that stops answering. axe's own
