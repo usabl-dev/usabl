@@ -3,7 +3,8 @@
  * This unit emits deterministic Draft observations only.
  * It must never mint a verdict and must never perform word-level obligation matching.
  */
-import type { AnnouncementToken, Draft, InteractionContract, TranscriptStop } from '../contracts/index.js';
+import type { AnnouncementToken, Draft, InteractionContract, SpeechObligation, TranscriptStop } from '../contracts/index.js';
+import { FOCUS_UNREADABLE_FIX, focusUnreadableCause } from '../primitives/focus-unreadable.js';
 
 function nonEmptyText(text: string | null): text is string {
   return text !== null && text.trim().length > 0;
@@ -58,6 +59,38 @@ function makeDraft(
   };
 }
 
+// Name and role checks run only at obligation windows. Nameless targets outside these windows
+// can be legitimate navigation waypoints, and blanket checks here would duplicate walk findings.
+function pushNameAndRoleDrafts(drafts: Draft[], obligation: SpeechObligation, windowStop: TranscriptStop, screenId: string): void {
+  if (!hasNonEmptyToken(windowStop.announcement, 'name')) {
+    drafts.push(
+      makeDraft(
+        'voicing/missing-name',
+        screenId,
+        windowStop.elementPath,
+        `After step ${obligation.afterStep}, focus landed on an element without an accessible name.`,
+        `Obligation "${obligation.class}" requires a named target at this window.`,
+        'Add an accessible name by using visible text, aria-label, or aria-labelledby.',
+        windowStop,
+      ),
+    );
+  }
+
+  if (obligation.focusedRole !== undefined && !hasFocusedRole(windowStop.announcement, obligation.focusedRole)) {
+    drafts.push(
+      makeDraft(
+        'voicing/missing-role',
+        screenId,
+        windowStop.elementPath,
+        `After step ${obligation.afterStep}, focus did not expose the required "${obligation.focusedRole}" role.`,
+        `Obligation "${obligation.class}" expects focusedRole "${obligation.focusedRole}" at this window.`,
+        `Ensure the target element exposes role "${obligation.focusedRole}" or the equivalent semantic element.`,
+        windowStop,
+      ),
+    );
+  }
+}
+
 export function runStructuralTier(contract: InteractionContract, stops: TranscriptStop[], screenId: string): Draft[] {
   const drafts: Draft[] = [];
 
@@ -92,34 +125,24 @@ export function runStructuralTier(contract: InteractionContract, stops: Transcri
       continue;
     }
 
-    // Name and role checks run only at obligation windows. Nameless targets outside these windows
-    // can be legitimate navigation waypoints, and blanket checks here would duplicate walk findings.
-    if (!hasNonEmptyToken(windowStop.announcement, 'name')) {
-      drafts.push(
-        makeDraft(
-          'voicing/missing-name',
+    // When the focused element cannot be read, the stop holds no name or role of the control, so
+    // their absence proves nothing. The window is a gap, never a missing-name or missing-role fail.
+    // The live check below still runs: what the capture heard does not depend on the focus read.
+    if (windowStop.focusUnreadable !== undefined) {
+      drafts.push({
+        ...makeDraft(
+          'voicing/focus-unreadable',
           screenId,
           windowStop.elementPath,
-          `After step ${obligation.afterStep}, focus landed on an element without an accessible name.`,
-          `Obligation "${obligation.class}" requires a named target at this window.`,
-          'Add an accessible name by using visible text, aria-label, or aria-labelledby.',
+          `After step ${obligation.afterStep}, usabl could not read the focused control, so whether it has a name and role is unknown.`,
+          `Obligation "${obligation.class}" needs the focused control at this window, but ${focusUnreadableCause(windowStop.focusUnreadable)}.`,
+          FOCUS_UNREADABLE_FIX,
           windowStop,
         ),
-      );
-    }
-
-    if (obligation.focusedRole !== undefined && !hasFocusedRole(windowStop.announcement, obligation.focusedRole)) {
-      drafts.push(
-        makeDraft(
-          'voicing/missing-role',
-          screenId,
-          windowStop.elementPath,
-          `After step ${obligation.afterStep}, focus did not expose the required "${obligation.focusedRole}" role.`,
-          `Obligation "${obligation.class}" expects focusedRole "${obligation.focusedRole}" at this window.`,
-          `Ensure the target element exposes role "${obligation.focusedRole}" or the equivalent semantic element.`,
-          windowStop,
-        ),
-      );
+        confidence: 'unverified',
+      });
+    } else {
+      pushNameAndRoleDrafts(drafts, obligation, windowStop, screenId);
     }
 
     // mustAnnounce is structural here: a live token proves AT received any update.

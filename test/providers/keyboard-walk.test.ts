@@ -122,6 +122,20 @@ describe('keyboard walk StepRunner', () => {
     ]);
   });
 
+  it('records on the stop why the focused element cannot be read', async () => {
+    const runner = makeStepRunner();
+    const page = await makeScriptedPage({
+      activePaths: ['x-host'],
+      activeNodes: [null],
+      announcements: [[]],
+      unreadable: ['closed-shadow-root'],
+    });
+
+    const stops = await runner.run(page, [{ do: 'tab' }]);
+
+    expect(stops).toEqual([{ index: 0, elementPath: 'x-host', announcement: [], focusUnreadable: 'closed-shadow-root' }]);
+  });
+
   it('throws when a step kind is unknown', async () => {
     const runner = makeStepRunner();
     const page = await makeScriptedPage({

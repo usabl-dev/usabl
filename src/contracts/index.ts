@@ -110,6 +110,10 @@ export interface TranscriptStop {
   index: number;
   elementPath: string;
   announcement: AnnouncementToken[];
+  // Set only when the element that has focus at this stop cannot be read. The path is then the
+  // host or the frame, and the announcement holds no name, role, or state of the control, so a
+  // check must not read their absence as a barrier.
+  focusUnreadable?: FocusUnreadable;
 }
 // ---- applicability (what a rule did on a screen, recorded and never judged) ----
 // Silence from a check has two meanings that look identical in a findings list: the rule ran

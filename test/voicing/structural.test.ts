@@ -141,4 +141,23 @@ describe('runStructuralTier', () => {
     );
     expect(missingWindowDrafts.some((draft) => draft.rule === 'voicing/unreachable-focus')).toBe(true);
   });
+
+  it('emits an unverified focus-unreadable draft instead of missing-name and missing-role when focus cannot be read', () => {
+    const unreadable: TranscriptStop = { ...stopAt(1, 'x-host', []), focusUnreadable: 'closed-shadow-root' };
+    const drafts = runStructuralTier(contract([dialogObligation]), [unreadable], 'screen-1');
+
+    expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['voicing/focus-unreadable', 'unverified']]);
+    expect(drafts[0]?.why).toContain('closed shadow root');
+    expect(drafts[0]?.elementPath).toBe('x-host');
+  });
+
+  it('still checks the live announcement at a window where focus cannot be read', () => {
+    const unreadable: TranscriptStop = { ...stopAt(1, 'iframe', []), focusUnreadable: 'frame-unreadable' };
+    const drafts = runStructuralTier(contract([toastObligation]), [unreadable], 'screen-1');
+
+    expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([
+      ['voicing/focus-unreadable', 'unverified'],
+      ['voicing/missing-live-announcement', 'fail'],
+    ]);
+  });
 });

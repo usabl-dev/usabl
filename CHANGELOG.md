@@ -69,6 +69,12 @@
   origin, the walk stops with `keyboard-walk-truncated`, so the screen is not covered
   instead of passing.
 
+- The interaction contract tiers and flow requirements no longer report a barrier on a
+  control they could not read. When focus is inside a closed shadow root or a frame usabl
+  cannot read, the focus read returns no name or role. Before, the contract tier reported
+  `voicing/missing-name` as `fail` there, and a flow requirement whose text was the control's
+  name failed. Both now emit an `unverified` draft that names the cause.
+
 - The scan browser now starts with Chromium's sandbox. Before, usabl never asked for it,
   so Playwright added `--no-sandbox` and every page a scan opened ran without it. When
   Chromium reports that it cannot start its sandbox, as on Ubuntu 23.10 and later or in

@@ -745,6 +745,16 @@ frames, the walk cannot tell one control there from another. It stops and emits
 covered instead of passing. A closed shadow root that does not hold focus, such as one
 inside a focusable host, is walked past as usual.
 
+The other checks that read focus treat an unreadable focus the same way. Each transcript
+stop records why its focused element could not be read. At such a stop, the interaction
+contract tier emits `voicing/focus-unreadable` as `unverified` instead of
+`voicing/missing-name` or `voicing/missing-role`, and the word-level tier keeps a missing-words
+draft `unverified` even for a promoted obligation class. A flow requirement whose text was not
+heard in an announcement emits its draft as `unverified`, with the cause, instead of `fail`,
+because the text may be the name of the control it could not read. The live announcement
+check still runs at such a stop, since what the capture heard does not depend on the focus
+read.
+
 ### 7.4 Declarative interaction probes
 
 Multi-step interactions expressed as data (JSON steps a generic runner executes). A
