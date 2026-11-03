@@ -6,7 +6,7 @@
  */
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { AncestorAttributesRead, ApiResponse, AxNode, BrowserDriver, ElementTarget, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import type { AncestorAttributesRead, AnnouncementDrain, AnnouncementUndecidable, ApiResponse, AxNode, BrowserDriver, ElementTarget, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary } from '../providers/axe/index.js';
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
 import { BrowserSandboxRequiredError, isBrowserSandboxRefusal, isSandboxLaunchFailure, type BrowserSandboxPolicy } from './sandbox.js';
@@ -147,14 +147,20 @@ const LIVE_CAPTURE_IMPL = `
     if (liveResolver.hiddenInChain(chain) || liveResolver.effectiveLiveValue(chain) === 'off') {
       return null;
     }
-    const modals = openModals();
-    if (modals.size > 0) {
-      const modalChain = elements.map((element) => ({ modal: modals.has(element) }));
-      if (liveResolver.blockedByModal(modalChain, modals.size)) {
-        return null;
-      }
+    if (outsideModals(elements, openModals())) {
+      return null;
     }
     return elements[liveResolver.nearestLiveSetter(chain)] ?? null;
+  };
+  // Whether a flat-tree chain, the element first, sits outside any of the open modal dialogs.
+  const outsideModals = (elements, modals) =>
+    modals.size > 0 && liveResolver.blockedByModal(elements.map((element) => ({ modal: modals.has(element) })), modals.size);
+  const flatChain = (start) => {
+    const elements = [];
+    for (let current = start; current instanceof Element; current = flatParent(current)) {
+      elements.push(current);
+    }
+    return elements;
   };
   // Every modal dialog open now, by the browser's own :modal state, in the document and in every
   // open shadow root, because a modal dialog in a web component blocks the whole document too. A
@@ -179,13 +185,37 @@ const LIVE_CAPTURE_IMPL = `
     const normalized = (value ?? '').trim();
     return normalized.length > 0 ? normalized : null;
   };
-  const push = (value) => {
+  // Each entry keeps the element whose change it records, so the drain can check it again.
+  const push = (value, start) => {
     const text = toText(value);
     if (text !== null) {
-      buffer.push(text);
+      buffer.push({ text, start });
     }
   };
-  window.__usablDrain = () => buffer.splice(0, buffer.length);
+  // Modal state is read when a change is observed, and again here. A page can write a region and
+  // open a modal in a later task, before the browser updates the accessibility tree, so a screen
+  // reader likely hears nothing. The state at drain decides, so the answer does not depend on which
+  // ran first. A change on an element that has left the document cannot be checked against a modal
+  // open now, so the drain says so instead of guessing.
+  window.__usablDrain = () => {
+    const entries = buffer.splice(0, buffer.length);
+    const texts = [];
+    let undecidable = null;
+    if (entries.length === 0) {
+      return { texts, undecidable };
+    }
+    const modals = findOpenModals();
+    for (const entry of entries) {
+      if (modals.size === 0) {
+        texts.push(entry.text);
+      } else if (!entry.start.isConnected) {
+        undecidable = 'changed-element-removed';
+      } else if (!outsideModals(flatChain(entry.start), modals)) {
+        texts.push(entry.text);
+      }
+    }
+    return { texts, undecidable };
+  };
   const observer = new MutationObserver((mutations) => {
     // Text the parser is still writing is the page being built, not an announcement, and the
     // capture has never counted it. The check reads the document's own state, so page script
@@ -211,7 +241,7 @@ const LIVE_CAPTURE_IMPL = `
       // reader spoke for this change. The change is dropped instead: hearing less can only fail a
       // requirement, never pass one.
       if (host && host.getRootNode() === target.getRootNode()) {
-        push(host.textContent);
+        push(host.textContent, target);
       }
     }
   });
@@ -251,8 +281,81 @@ const DRAIN_FUNCTION = `function () {
     throw new Error('the announcement capture is not running in this document');
   }
   const drained = drain();
-  return Array.isArray(drained) ? drained.filter((entry) => typeof entry === 'string') : [];
+  const texts = drained !== null && typeof drained === 'object' && Array.isArray(drained.texts) ? drained.texts : [];
+  return {
+    texts: texts.filter((entry) => typeof entry === 'string'),
+    undecidable: drained !== null && typeof drained === 'object' ? drained.undecidable : null,
+  };
 }`;
+
+const UNDECIDABLE_REASONS: ReadonlySet<string> = new Set<AnnouncementUndecidable>(['closed-shadow-modal', 'changed-element-removed']);
+
+async function drainCapture(cdp: CDPSession): Promise<AnnouncementDrain> {
+  const drained = await callInWorld(cdp, LIVE_WORLD, 'read announcements', DRAIN_FUNCTION);
+  const texts = getProp(drained, 'texts');
+  const undecidable = getProp(drained, 'undecidable');
+  if (undecidable !== null && (typeof undecidable !== 'string' || !UNDECIDABLE_REASONS.has(undecidable))) {
+    throw new Error('the browser could not read announcements: the capture returned an unknown reason');
+  }
+  return {
+    texts: Array.isArray(texts) ? texts.filter((entry): entry is string => typeof entry === 'string') : [],
+    undecidable: undecidable as AnnouncementUndecidable | null,
+  };
+}
+
+// Whether a dialog inside a closed shadow root is open as a modal now. The capture cannot see into
+// a closed shadow root, so it cannot tell which regions such a modal leaves out of the
+// accessibility tree. Only the browser's own DOM read over CDP reaches it, and each dialog there is
+// asked for its :modal state in the live world, so page script cannot answer for it. Anything but a
+// clear "no" counts as open. A frame's document is not searched: a modal there blocks only its
+// frame, and frames are not drained.
+async function closedShadowModalOpen(cdp: CDPSession): Promise<boolean> {
+  const documentTree: unknown = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+  const candidates: unknown[] = [];
+  const stack: Array<{ node: unknown; closed: boolean }> = [{ node: getProp(documentTree, 'root'), closed: false }];
+  for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
+    const { node, closed } = next;
+    if (closed && readString(getProp(node, 'localName')) === 'dialog') {
+      candidates.push(getProp(node, 'backendNodeId'));
+    }
+    const children = getProp(node, 'children');
+    if (Array.isArray(children)) {
+      for (const child of children) stack.push({ node: child, closed });
+    }
+    const shadowRoots = getProp(node, 'shadowRoots');
+    if (Array.isArray(shadowRoots)) {
+      for (const root of shadowRoots) stack.push({ node: root, closed: closed || getProp(root, 'shadowRootType') === 'closed' });
+    }
+  }
+  if (candidates.length === 0) {
+    return false;
+  }
+  const contextId = await isolatedWorldContextId(cdp, LIVE_WORLD, 'check modal dialogs');
+  for (const candidate of candidates) {
+    const backendNodeId = readNumber(candidate);
+    if (backendNodeId === null) {
+      return true;
+    }
+    const resolved: unknown = await cdp.send('DOM.resolveNode', { backendNodeId, executionContextId: contextId, objectGroup: 'usabl-modal' });
+    const objectId = readString(getProp(getProp(resolved, 'object'), 'objectId'));
+    if (objectId === null) {
+      return true;
+    }
+    try {
+      const answered: unknown = await cdp.send('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: "function () { return this.matches(':modal'); }",
+        returnByValue: true,
+      });
+      if (getProp(getProp(answered, 'result'), 'value') !== false) {
+        return true;
+      }
+    } finally {
+      await cdp.send('Runtime.releaseObject', { objectId }).catch(() => undefined);
+    }
+  }
+  return false;
+}
 
 /**
  * Starts the live-region capture in the live world: in every document the page loads from now on,
@@ -1635,8 +1738,14 @@ function wrapPage(
       return Promise.resolve();
     },
     async drainAnnouncements(): Promise<string[]> {
-      const drained = await callInWorld(cdp, LIVE_WORLD, 'read announcements', DRAIN_FUNCTION);
-      return Array.isArray(drained) ? drained.filter((entry): entry is string => typeof entry === 'string') : [];
+      return (await drainCapture(cdp)).texts;
+    },
+    async drainAnnouncementRecord(): Promise<AnnouncementDrain> {
+      const drained = await drainCapture(cdp);
+      if (drained.undecidable === null && (await closedShadowModalOpen(cdp))) {
+        return { ...drained, undecidable: 'closed-shadow-modal' };
+      }
+      return drained;
     },
     async activeNode(): Promise<AxNode | null> {
       const backendNodeId = await backendNodeIdForActiveElement(cdp);

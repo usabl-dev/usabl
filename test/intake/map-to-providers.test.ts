@@ -432,4 +432,50 @@ describe('mapRequirementsToProviders', () => {
 
     await expect(provider!.run(context)).resolves.toEqual([]);
   });
+
+  describe('when the drain cannot say what a screen reader heard', () => {
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+
+    it('does not pass on a heard announcement, and names the cause', async () => {
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext({
+        page: makeFakePage({
+          activePath: vi.fn(async () => '#save'),
+          drainAnnouncementRecord: vi.fn(async () => ({ texts: ['Saved'], undecidable: 'closed-shadow-modal' as const })),
+        }),
+      });
+
+      const drafts = draftsOf(await provider!.run(context));
+
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]).toMatchObject({ rule: 'intake:flow-save', layer: 'intake-flow', confidence: 'unverified', elementPath: '#save' });
+      expect(drafts[0]?.why).toContain('closed shadow root');
+    });
+
+    it('does not fail on a missing announcement either', async () => {
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext({
+        page: makeFakePage({
+          drainAnnouncementRecord: vi.fn(async () => ({ texts: [], undecidable: 'changed-element-removed' as const })),
+        }),
+      });
+
+      const drafts = draftsOf(await provider!.run(context));
+
+      expect(drafts.map((draft) => draft.confidence)).toEqual(['unverified']);
+      expect(drafts[0]?.why).toContain('removed');
+    });
+
+    it('still passes when the focused control itself says the text', async () => {
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext({
+        page: makeFakePage({
+          activeNode: vi.fn(async () => axNode('Saved')),
+          drainAnnouncementRecord: vi.fn(async () => ({ texts: [], undecidable: 'closed-shadow-modal' as const })),
+        }),
+      });
+
+      await expect(provider!.run(context)).resolves.toEqual([]);
+    });
+  });
 });

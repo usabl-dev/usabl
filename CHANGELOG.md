@@ -66,6 +66,11 @@
   that text. A change inside the open modal is still heard, a dialog opened with `show()` hides
   nothing, and content outside is heard again once the modal closes.
 
+- The announcement capture reads the modal state again at drain, so text written outside a modal
+  that a later task opens is not heard. A flow requirement is now an `unverified` gap, never a
+  pass, when a modal dialog is open inside a closed shadow root, or when a changed region left
+  the document while a modal is open.
+
 - The scan browser now starts with Chromium's sandbox. Before, usabl never asked for it,
   so Playwright added `--no-sandbox` and every page a scan opened ran without it. When
   Chromium reports that it cannot start its sandbox, as on Ubuntu 23.10 and later or in

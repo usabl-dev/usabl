@@ -70,6 +70,11 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     activeElementWithin: async () => false,
     armAnnouncementCapture: async () => {},
     drainAnnouncements: async () => [],
+    // A fake page has no modal dialogs, so what it drains is always decidable. It drains through
+    // the page's own drainAnnouncements, so a test that scripts that one scripts both.
+    async drainAnnouncementRecord(this: Page) {
+      return { texts: await this.drainAnnouncements(), undecidable: null };
+    },
     activeNode: async () => null,
     activePath: async () => 'body',
     axAt: async () => null,

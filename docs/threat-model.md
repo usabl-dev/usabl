@@ -546,8 +546,13 @@ outside every table as the control in an accepted row. Either way a new barrier 
   own world. Before, a flow requirement could pass on a polite region outside the modal the same
   step opened, which Chromium leaves out of the accessibility tree.
 
-**Not handled:** a modal dialog inside a closed shadow root is not found by the capture, so a change
-outside it is still heard. One page operation still runs in the page's own world: the element count that
+- A modal dialog inside a closed shadow root is found at drain for a flow requirement through the
+  browser's own DOM read over CDP, and its `:modal` state is asked for in the live world. While one
+  is open, the flow requirement is an `unverified` gap, never a pass.
+
+**Not handled:** the interaction contract tiers drain through the keyboard step runner, which does
+not run the closed shadow root check, so a change outside a modal there can still count as heard.
+One page operation still runs in the page's own world: the element count that
 readiness polls to tell when the DOM stopped changing. A page can change what it sees by
 redefining DOM methods. axe also computes its target selectors in the page's own world, so a page
 that patches DOM accessors can still change the selector, and with it the identity key, of an axe

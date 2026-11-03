@@ -489,6 +489,18 @@ export interface DocArtifact {
 }
 
 // ---- injected dependencies (all I/O enters here; run() has none of its own) ----
+// Why a drain cannot say which announcements a screen reader heard.
+// 'closed-shadow-modal': a modal dialog is open inside a closed shadow root. The capture cannot see
+// it, so it cannot tell which regions it leaves out of the accessibility tree.
+// 'changed-element-removed': a modal dialog is open now, and a change was recorded on an element
+// that is no longer in the document, so whether the modal hid it cannot be read.
+export type AnnouncementUndecidable = 'closed-shadow-modal' | 'changed-element-removed';
+
+export interface AnnouncementDrain {
+  texts: string[];
+  undecidable: AnnouncementUndecidable | null;
+}
+
 export interface AxNode {
   name: string | null;
   role: string | null;
@@ -656,6 +668,9 @@ export interface Page {
   activeElementWithin(selector: string): Promise<boolean>;
   armAnnouncementCapture(): Promise<void>;
   drainAnnouncements(): Promise<string[]>;
+  // The same drain, with the reason the texts cannot be trusted to be what a screen reader heard,
+  // or null when they can. See AnnouncementDrain.
+  drainAnnouncementRecord(): Promise<AnnouncementDrain>;
   activeNode(): Promise<AxNode | null>;
   activePath(): Promise<string>;
   axAt(selector: string): Promise<AxNode | null>;

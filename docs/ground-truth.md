@@ -2478,8 +2478,20 @@ capture reads the open modal dialogs when it observes the change, by the browser
 it sits inside every open modal dialog on the flat tree walk. Which open modal is on top is not in
 the DOM, so with two sibling modals open nothing is heard, while the browser still exposes the top
 one. That can only make the capture hear less. A dialog opened with `show()` hides nothing, and
-once the modal closes, the content outside it is heard again. A modal dialog inside a closed
-shadow root cannot be found from the capture's world, so content outside it is still heard.
+once the modal closes, the content outside it is heard again.
+
+The modal state is read again when the announcements are drained. A page can write a region and
+open a modal in a later task, before the browser updates the accessibility tree, so a screen
+reader likely hears nothing. A change outside a modal open at drain is dropped, so the answer
+does not depend on which task ran first. When a modal is open at drain and a recorded change sits
+on an element that has left the document, the drain cannot check it and says so
+(`changed-element-removed`). A modal dialog inside a closed shadow root cannot be found from the
+capture's world. When a flow requirement drains, usabl also reads the document through the
+browser's own DOM read over CDP and asks each dialog inside a closed shadow root for its `:modal`
+state in the live world. If one is open, the drain says so (`closed-shadow-modal`). Either way,
+the flow requirement emits an `unverified` draft that names the cause instead of a pass or a fail,
+unless the focused control's own name is the expected text. A modal inside a frame blocks only
+that frame, and frames are not drained, so it changes nothing here.
 
 The capture and the element path function run in isolated worlds, which share the DOM with the
 page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
