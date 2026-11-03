@@ -126,6 +126,28 @@ async function callIn(
   return getProp(called, 'result');
 }
 
+/** Calls a function declaration on an object in a world, as callIn does for a whole world. */
+async function callOn(
+  target: FrameTarget,
+  objectId: string,
+  functionDeclaration: string,
+  args: readonly unknown[],
+  returnByValue: boolean,
+): Promise<unknown> {
+  const called: unknown = await target.session.send('Runtime.callFunctionOn', {
+    objectId,
+    functionDeclaration,
+    arguments: args.map((value) => ({ value })),
+    returnByValue,
+  });
+  const exception = getProp(called, 'exceptionDetails');
+  if (exception !== undefined) {
+    const description = readString(getProp(getProp(exception, 'exception'), 'description'));
+    throw new FrameError(firstLine(description ?? readString(getProp(exception, 'text')) ?? 'unknown error'));
+  }
+  return getProp(called, 'result');
+}
+
 async function createWorld(target: FrameTarget): Promise<number> {
   const world: unknown = await target.session.send('Page.createIsolatedWorld', {
     frameId: target.frameId,
@@ -197,6 +219,75 @@ const SANDBOXED_WITHOUT_SCRIPTS_FUNCTION = `function () {
   return this.hasAttribute('sandbox') && !(this.sandbox && this.sandbox.contains('allow-scripts'));
 }`;
 
+/**
+ * What usabl reads of one custom element in its own world, to tell a role set through internals
+ * from one Chrome derives itself. Chromium's AXNodeObject::NativeRoleIgnoringAria ends, for an
+ * element with no specific tag, in RoleFromLayoutObjectOrNode (ax_node_object.cc). That gives:
+ * - list item for a `display: list-item` layout, and a table, row group, row, or cell role for a
+ *   table display (through DetermineTableSectionRole, DetermineTableRowRole, DetermineTableCellRole);
+ * - image for an image layout, and image or static text for CSS alt text (CSS `content`);
+ * - tab panel for the originating element of a `::scroll-marker` in tabs mode;
+ * - group as a minimum role for a popover, an `autofocus` or `draggable` element, a focusable
+ *   element, or a custom element with any ARIA relation.
+ * DetermineRoleValue can also infer a role for a `focusgroup` owner. Each of these reads computed
+ * style or DOM state, which page script cannot fake to this world.
+ */
+export interface LayoutFacts {
+  display: string;
+  content: string;
+  focusable: boolean;
+  minimumRoleAttribute: boolean;
+  relations: boolean;
+  focusgroup: boolean;
+  scrollMarker: boolean;
+}
+
+// The layout facts of each element in a list, in its order. Run on the list in usabl's world.
+export const LAYOUT_FACTS_FUNCTION = `function () {
+  const relationAttributes = ['aria-activedescendant', 'aria-actions', 'aria-controls', 'aria-describedby', 'aria-details', 'aria-errormessage', 'aria-flowto', 'aria-labelledby', 'aria-owns'];
+  const relationProperties = ['ariaActiveDescendantElement', 'ariaActionsElements', 'ariaControlsElements', 'ariaDescribedByElements', 'ariaDetailsElements', 'ariaErrorMessageElements', 'ariaFlowToElements', 'ariaLabelledByElements', 'ariaOwnsElements'];
+  const isSet = (value) => value !== null && value !== undefined && !(Array.isArray(value) && value.length === 0);
+  const shown = (value) => typeof value === 'string' && value !== '' && value !== 'none' && value !== 'normal';
+  return Array.from(this, (element) => {
+    const style = getComputedStyle(element);
+    const marker = getComputedStyle(element, '::scroll-marker');
+    return {
+      display: style.display,
+      content: style.content,
+      focusable: element.tabIndex >= 0,
+      minimumRoleAttribute: element.hasAttribute('popover') || element.hasAttribute('autofocus') || element.hasAttribute('draggable'),
+      relations: relationAttributes.some((name) => element.hasAttribute(name)) || relationProperties.some((name) => isSet(element[name])),
+      focusgroup: element.hasAttribute('focusgroup'),
+      scrollMarker: shown(marker.content) || shown(style.getPropertyValue('scroll-marker-group')),
+    };
+  });
+}`;
+
+// The tree properties Chromium reports for an ARIA relation.
+const RELATION_PROPERTIES = new Set(['activedescendant', 'controls', 'describedby', 'details', 'errormessage', 'flowto', 'labelledby', 'owns']);
+
+// Whether Chrome could have given the element this role from its layout or focus. When it could,
+// the role is not carried: a role dropped is at worst a false barrier, a role carried that did not
+// come from internals can hide one.
+function layoutCouldExplain(role: string, facts: LayoutFacts, axNode: unknown): boolean {
+  const tokens = facts.display.split(/\s+/);
+  if (tokens.some((token) => token === 'list-item' || token === 'table' || token === 'inline-table' || token.startsWith('table-'))) {
+    return true;
+  }
+  if (facts.content !== '' && facts.content !== 'normal' && facts.content !== 'none') {
+    return true;
+  }
+  if (facts.focusgroup) {
+    return true;
+  }
+  if (role === 'group') {
+    const properties = getProp(axNode, 'properties');
+    const treeRelation = Array.isArray(properties) && properties.some((property: unknown) => RELATION_PROPERTIES.has(String(getProp(property, 'name'))));
+    return facts.focusable || facts.minimumRoleAttribute || facts.relations || treeRelation;
+  }
+  return role === 'tabpanel' && facts.scrollMarker;
+}
+
 // Chromium names a few roles differently from ARIA. Only the ones a custom element can take
 // through internals are listed.
 const CHROMIUM_ROLE_TO_ARIA: Record<string, string> = { image: 'img' };
@@ -251,9 +342,10 @@ function attributesOf(flat: unknown): Map<string, string> {
 
 /**
  * The semantics one custom element shows in the accessibility tree that its attributes do not
- * explain, or null. A custom element with no internals is exposed as generic or not at all, so a
- * role here came from internals. A name read from aria-label on an element with no aria-label
- * attribute came from internals too.
+ * explain, or null. A role is carried only when the element has no role attribute and Chrome could
+ * not have derived the role itself from the element's layout or focus (see LayoutFacts). Then only
+ * internals can explain it. When usabl could not read the layout, no role is carried. A name read
+ * from aria-label on an element with no aria-label attribute came from internals too.
  *
  * The tree reports a default value for some states whether or not the element set one, such as
  * unchecked for a checkbox. So a state is carried only when the element has no attribute for it
@@ -270,13 +362,13 @@ function attributesOf(flat: unknown): Map<string, string> {
  * wrong default would be carried and hide a missing state, so the real-browser test in
  * test/deps/axe-world.real.integration.test.ts pins each one.
  */
-export function internalsRecord(axNode: unknown, attributes: Map<string, string>): InternalsRecord | null {
+export function internalsRecord(axNode: unknown, attributes: Map<string, string>, facts: LayoutFacts | undefined): InternalsRecord | null {
   if (axNode === undefined || getProp(axNode, 'ignored') === true) {
     return null;
   }
   const record: InternalsRecord = {};
   const role = readString(getProp(getProp(axNode, 'role'), 'value'));
-  if (!attributes.has('role') && role !== null && role !== 'generic' && role !== 'none') {
+  if (!attributes.has('role') && role !== null && role !== 'generic' && role !== 'none' && facts !== undefined && !layoutCouldExplain(role, facts, axNode)) {
     record.role = CHROMIUM_ROLE_TO_ARIA[role] ?? role;
   }
   const sources = getProp(getProp(axNode, 'name'), 'sources');
@@ -345,8 +437,10 @@ async function fillInternals(target: FrameTarget, contextId: number, isTop: bool
       }
     }
   }
+  const layout = getProp(await callOn(target, listId, LAYOUT_FACTS_FUNCTION, [], true), 'value');
+  const facts: unknown[] = Array.isArray(layout) ? layout : [];
   const records = await Promise.all(
-    Array.from(elementIds, async (objectId): Promise<InternalsRecord | null> => {
+    Array.from(elementIds, async (objectId, index): Promise<InternalsRecord | null> => {
       if (objectId === undefined) {
         return null;
       }
@@ -356,14 +450,36 @@ async function fillInternals(target: FrameTarget, contextId: number, isTop: bool
       if (backendId === null) {
         return null;
       }
-      return internalsRecord(byBackendId.get(backendId), attributesOf(getProp(node, 'attributes')));
+      return internalsRecord(byBackendId.get(backendId), attributesOf(getProp(node, 'attributes')), layoutFactsOf(facts[index]));
     }),
   );
-  await target.session.send('Runtime.callFunctionOn', {
-    objectId: listId,
-    functionDeclaration: SET_INTERNALS_FUNCTION,
-    arguments: [{ value: records }],
-  });
+  // Without this map axe would read no internals at all and skip the checks they decide, so a
+  // failure here is a failure of the frame, never a quiet run without them.
+  try {
+    await callOn(target, listId, SET_INTERNALS_FUNCTION, [records], false);
+  } catch (error) {
+    throw new FrameError(`usabl could not hand axe the semantics custom elements set: ${firstLine(error)}`);
+  }
+}
+
+// The layout facts read for one element, or undefined when they are not the expected shape.
+function layoutFactsOf(value: unknown): LayoutFacts | undefined {
+  const display = readString(getProp(value, 'display'));
+  const content = readString(getProp(value, 'content'));
+  const flags = ['focusable', 'minimumRoleAttribute', 'relations', 'focusgroup', 'scrollMarker'] as const;
+  if (display === null || content === null || flags.some((flag) => typeof getProp(value, flag) !== 'boolean')) {
+    return undefined;
+  }
+  const read = (flag: (typeof flags)[number]): boolean => getProp(value, flag) === true;
+  return {
+    display,
+    content,
+    focusable: read('focusable'),
+    minimumRoleAttribute: read('minimumRoleAttribute'),
+    relations: read('relations'),
+    focusgroup: read('focusgroup'),
+    scrollMarker: read('scrollMarker'),
+  };
 }
 
 // The origin of a frame address, for a reader of the gap. Never a path, a query, or a fragment.

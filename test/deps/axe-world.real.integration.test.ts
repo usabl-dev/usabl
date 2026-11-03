@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import type { Deps, Page, UsablConfig } from '../../src/contracts/index.js';
 import { runBaseline } from '../../src/baseline/index.js';
-import { internalsRecord, runAxeInIsolatedWorld } from '../../src/deps/axe-world.js';
+import { LAYOUT_FACTS_FUNCTION, internalsRecord, runAxeInIsolatedWorld, type LayoutFacts } from '../../src/deps/axe-world.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
@@ -313,7 +313,13 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('axe in an isolated world
 
     // What the tree reports for one element, and what internalsRecord makes of it. The tree is
     // read the way the isolated run reads it: one full tree, matched to the element by backend id.
-    async function readStates(url: string, ids: string[]): Promise<Record<string, { tree: TreeStates; record: unknown }>> {
+    interface Read {
+      role: unknown;
+      tree: TreeStates;
+      record: unknown;
+    }
+
+    async function readStates(url: string, ids: string[]): Promise<Record<string, Read>> {
       const context = await browser.newContext();
       try {
         const pw = await context.newPage();
@@ -321,8 +327,11 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('axe in an isolated world
         const cdp = await context.newCDPSession(pw);
         const tree = await cdp.send('Accessibility.getFullAXTree');
         const document = await cdp.send('DOM.getDocument', { depth: 0 });
-        const read: Record<string, { tree: TreeStates; record: unknown }> = {};
-        for (const id of ids) {
+        // The layout facts the isolated run reads, read the same way. The fixture pages run no
+        // script that could change them.
+        const facts = await pw.evaluate<LayoutFacts[]>(`(${LAYOUT_FACTS_FUNCTION}).call(${JSON.stringify(ids)}.map((id) => document.getElementById(id)))`);
+        const read: Record<string, Read> = {};
+        for (const [position, id] of ids.entries()) {
           const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: document.root.nodeId, selector: `#${id}` });
           const { node } = await cdp.send('DOM.describeNode', { nodeId });
           const axNode = tree.nodes.find((entry) => entry.backendDOMNodeId === node.backendNodeId);
@@ -337,7 +346,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('axe in an isolated world
           }
           const value: unknown = axNode?.value?.value;
           if (value !== undefined) states.value = value;
-          read[id] = { tree: states, record: internalsRecord(axNode, attributes) };
+          read[id] = { role: axNode?.role?.value, tree: states, record: internalsRecord(axNode, attributes, facts[position]) };
         }
         return read;
       } finally {
@@ -348,7 +357,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('axe in an isolated world
     it(
       'reports the default each carried state assumes when the element sets none, and carries only set values',
       async () => {
-        const measured: Record<string, { tree: TreeStates; record: unknown }> = {};
+        const measured: Record<string, Read> = {};
         for (const group of STATE_GROUPS) {
           const url = fixture.set(`/states-${group}`, page(stateGroupBody(group), X_ARIA_SCRIPT));
           const ids = STATE_CASES.filter((entry) => entry.group === group).map((entry) => entry.id);
@@ -359,13 +368,52 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('axe in an isolated world
         const shown = Object.fromEntries(
           Object.entries(measured).map(([id, read]) => {
             const entry = STATE_CASES.find((candidate) => candidate.id === id);
-            return [id, entry?.defaults === null ? { record: read.record } : read];
+            return [id, entry?.defaults === null ? { record: read.record } : { tree: read.tree, record: read.record }];
           }),
         );
         const expected = Object.fromEntries(
           STATE_CASES.map((entry) => [entry.id, entry.defaults === null ? { record: entry.record } : { tree: entry.defaults, record: entry.record }]),
         );
         expect(shown).toEqual(expected);
+      },
+      BUDGET_MS,
+    );
+
+    it(
+      'carries no role Chrome derives from layout or focus, on custom elements with no internals',
+      async () => {
+        const define =
+          "for (const name of ['x-item', 'x-t', 'x-row', 'x-cell', 'x-f', 'x-pic']) customElements.define(name, class extends HTMLElement {});" +
+          "customElements.define('x-li', class extends HTMLElement { constructor() { super(); this.attachInternals().role = 'listitem'; } });";
+        const url = fixture.set(
+          '/layout-roles',
+          page(
+            '<ul><x-item id="list-item" style="display:list-item">A</x-item></ul>' +
+              '<div role="table" aria-label="Jobs"><x-row id="aria-row" style="display:table-row"><x-cell id="aria-cell" style="display:table-cell">a</x-cell></x-row></div>' +
+              '<x-t id="layout-table" style="display:table"><x-row id="layout-row" style="display:table-row"><x-cell id="layout-cell" style="display:table-cell">b</x-cell></x-row></x-t>' +
+              '<p id="note">Note</p><x-f id="focusable" tabindex="0">c</x-f><x-f id="described" aria-describedby="note">d</x-f><x-f id="draggable" draggable="true">e</x-f>' +
+              '<x-pic id="content-image" style="display:inline-block;width:20px;height:20px;content:linear-gradient(red, blue)"></x-pic>' +
+              '<ul><x-li id="internals-list-item" style="display:list-item">f</x-li></ul>',
+            define,
+          ),
+        );
+        const ids = ['list-item', 'aria-row', 'aria-cell', 'layout-table', 'layout-row', 'layout-cell', 'focusable', 'described', 'draggable', 'content-image', 'internals-list-item'];
+        const read = await readStates(url, ids);
+        const roles = Object.fromEntries(ids.map((id) => [id, { role: read[id]?.role, record: read[id]?.record }]));
+        // The role Chrome reports for each, pinned, and nothing carried to axe for any of them.
+        expect(roles).toEqual({
+          'list-item': { role: 'listitem', record: null },
+          'aria-row': { role: 'row', record: null },
+          'aria-cell': { role: 'cell', record: null },
+          'layout-table': { role: 'LayoutTable', record: null },
+          'layout-row': { role: 'LayoutTableRow', record: null },
+          'layout-cell': { role: 'LayoutTableCell', record: null },
+          focusable: { role: 'generic', record: null },
+          described: { role: 'generic', record: null },
+          draggable: { role: 'group', record: null },
+          'content-image': { role: 'image', record: null },
+          'internals-list-item': { role: 'listitem', record: null },
+        });
       },
       BUDGET_MS,
     );

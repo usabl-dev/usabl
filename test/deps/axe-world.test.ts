@@ -5,7 +5,7 @@
  * nodes shaped as Accessibility.getFullAXTree returns them, so no browser starts.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { SET_INTERNALS_FUNCTION, internalsRecord } from '../../src/deps/axe-world.js';
+import { LAYOUT_FACTS_FUNCTION, SET_INTERNALS_FUNCTION, internalsRecord, type LayoutFacts } from '../../src/deps/axe-world.js';
 import { STATE_CASES } from '../support/internals-states.js';
 
 interface Property {
@@ -30,51 +30,150 @@ const level = (value: number): Property => ({ name: 'level', type: 'integer', va
 const valuemin = (value: number): Property => ({ name: 'valuemin', type: 'number', value });
 const valuemax = (value: number): Property => ({ name: 'valuemax', type: 'number', value });
 
+// A custom element whose layout and focus give Chrome no role of its own to derive.
+const PLAIN: LayoutFacts = {
+  display: 'inline',
+  content: 'normal',
+  focusable: false,
+  minimumRoleAttribute: false,
+  relations: false,
+  focusgroup: false,
+  scrollMarker: false,
+};
+const recordOf = (node: unknown, attributes: Map<string, string>, facts: LayoutFacts = PLAIN): unknown =>
+  internalsRecord(node, attributes, facts);
+const named = (role: string): unknown => ({ ignored: false, role: { type: 'role', value: role }, properties: [] });
+
+describe('internalsRecord: roles', () => {
+  it('carries a role the tree reports for an element whose layout and focus explain none', () => {
+    expect(recordOf(named('listitem'), attrs())).toEqual({ role: 'listitem' });
+    expect(recordOf(named('button'), attrs(), { ...PLAIN, focusable: true })).toEqual({ role: 'button' });
+    expect(recordOf(named('image'), attrs())).toEqual({ role: 'img' });
+  });
+
+  it('carries no role when usabl could not read the layout of the element', () => {
+    expect(internalsRecord(named('listitem'), attrs(), undefined)).toBeNull();
+  });
+
+  it('drops every role on an element displayed as a list item, which Chrome exposes as a list item', () => {
+    expect(recordOf(named('listitem'), attrs(), { ...PLAIN, display: 'list-item' })).toBeNull();
+    expect(recordOf(named('listitem'), attrs(), { ...PLAIN, display: 'inline list-item' })).toBeNull();
+    expect(recordOf(named('button'), attrs(), { ...PLAIN, display: 'list-item' })).toBeNull();
+  });
+
+  it('drops every role on an element with a table display, which Chrome exposes as a table part', () => {
+    for (const display of ['table', 'inline-table', 'table-row', 'table-cell', 'table-row-group', 'table-header-group', 'table-footer-group', 'table-caption']) {
+      expect(recordOf(named('row'), attrs(), { ...PLAIN, display })).toBeNull();
+      expect(recordOf(named('cell'), attrs(), { ...PLAIN, display })).toBeNull();
+    }
+  });
+
+  it('drops every role on an element whose CSS content replaces it, which Chrome exposes as an image or text', () => {
+    expect(recordOf(named('image'), attrs(), { ...PLAIN, content: 'linear-gradient(rgb(255, 0, 0), rgb(0, 0, 255))' })).toBeNull();
+    expect(recordOf(named('button'), attrs(), { ...PLAIN, content: 'url("x.png") / "Chart"' })).toBeNull();
+  });
+
+  it('drops every role on a focusgroup owner, whose role Chrome can infer', () => {
+    expect(recordOf(named('toolbar'), attrs(), { ...PLAIN, focusgroup: true })).toBeNull();
+  });
+
+  it('drops a group role on an element Chrome gives a minimum group role', () => {
+    for (const facts of [{ focusable: true }, { minimumRoleAttribute: true }, { relations: true }]) {
+      expect(recordOf(named('group'), attrs(), { ...PLAIN, ...facts })).toBeNull();
+    }
+    expect(recordOf({ ...(named('group') as object), properties: [{ name: 'describedby', value: { type: 'nodeList', value: [] } }] }, attrs())).toBeNull();
+    expect(recordOf(named('group'), attrs())).toEqual({ role: 'group' });
+  });
+
+  it('drops a tabpanel role on an element with a scroll marker, which Chrome can expose as a tab panel', () => {
+    expect(recordOf(named('tabpanel'), attrs(), { ...PLAIN, scrollMarker: true })).toBeNull();
+    expect(recordOf(named('tabpanel'), attrs())).toEqual({ role: 'tabpanel' });
+  });
+
+  it('keeps the states and the name when it drops a role', () => {
+    const node = { ...(axNode('listitem', [checked('true')]) as object), name: { sources: [{ type: 'attribute', attribute: 'aria-label', attributeValue: { value: 'A' } }] } };
+    expect(recordOf(node, attrs(), { ...PLAIN, display: 'list-item' })).toEqual({ ariaLabel: 'A', ariaChecked: 'true' });
+  });
+});
+
+describe('the layout facts read in usabl\'s world', () => {
+  const scope = globalThis as Record<string, unknown>;
+
+  afterEach(() => {
+    delete scope.getComputedStyle;
+  });
+
+  function element(attributes: Record<string, string>, tabIndex: number, properties: Record<string, unknown> = {}): object {
+    return { tabIndex, hasAttribute: (name: string) => name in attributes, ...properties };
+  }
+
+  it('reads display, content, focus, relations, and scroll markers for each element in order', () => {
+    const styles = new Map<object, { element: Record<string, string>; marker: Record<string, string> }>();
+    scope.getComputedStyle = (target: object, pseudo?: string) => {
+      const style = styles.get(target);
+      const values = (pseudo === '::scroll-marker' ? style?.marker : style?.element) ?? {};
+      return { ...values, getPropertyValue: (name: string) => values[name] ?? '' };
+    };
+    const plain = element({}, -1);
+    const listItem = element({ draggable: 'true' }, 0, { ariaControlsElements: [{}] });
+    const marked = element({ focusgroup: '' }, -1, { ariaOwnsElements: [] });
+    styles.set(plain, { element: { display: 'inline', content: 'normal', 'scroll-marker-group': 'none' }, marker: { content: 'none' } });
+    styles.set(listItem, { element: { display: 'list-item', content: 'normal', 'scroll-marker-group': 'none' }, marker: { content: 'none' } });
+    styles.set(marked, { element: { display: 'block', content: 'normal', 'scroll-marker-group': 'after tabs' }, marker: { content: '""' } });
+    const read = new Function(`return (${LAYOUT_FACTS_FUNCTION})`)() as (this: unknown[]) => unknown;
+    expect(read.call([plain, listItem, marked])).toEqual([
+      { display: 'inline', content: 'normal', focusable: false, minimumRoleAttribute: false, relations: false, focusgroup: false, scrollMarker: false },
+      { display: 'list-item', content: 'normal', focusable: true, minimumRoleAttribute: true, relations: true, focusgroup: false, scrollMarker: false },
+      { display: 'block', content: 'normal', focusable: false, minimumRoleAttribute: false, relations: false, focusgroup: true, scrollMarker: true },
+    ]);
+  });
+});
+
 describe('internalsRecord: ARIA states', () => {
   it('carries a checked state that differs from the default as ariaChecked', () => {
-    expect(internalsRecord(axNode('checkbox', [checked('true')]), attrs({ role: 'checkbox', 'aria-label': 'Agree' }))).toEqual({
+    expect(recordOf(axNode('checkbox', [checked('true')]), attrs({ role: 'checkbox', 'aria-label': 'Agree' }))).toEqual({
       ariaChecked: 'true',
     });
-    expect(internalsRecord(axNode('switch', [checked('mixed')]), attrs({ role: 'switch' }))).toEqual({ ariaChecked: 'mixed' });
+    expect(recordOf(axNode('switch', [checked('mixed')]), attrs({ role: 'switch' }))).toEqual({ ariaChecked: 'mixed' });
   });
 
   it('drops the default checked state, which the tree reports when nothing set one', () => {
-    expect(internalsRecord(axNode('checkbox', [checked('false')]), attrs({ role: 'checkbox' }))).toBeNull();
+    expect(recordOf(axNode('checkbox', [checked('false')]), attrs({ role: 'checkbox' }))).toBeNull();
   });
 
   it('carries a checked state alongside a role read from the tree', () => {
-    expect(internalsRecord(axNode('checkbox', [checked('true')]), attrs())).toEqual({ role: 'checkbox', ariaChecked: 'true' });
+    expect(recordOf(axNode('checkbox', [checked('true')]), attrs())).toEqual({ role: 'checkbox', ariaChecked: 'true' });
   });
 
   it('leaves a state to its attribute when the element has one', () => {
-    expect(internalsRecord(axNode('checkbox', [checked('true')]), attrs({ role: 'checkbox', 'aria-checked': 'true' }))).toBeNull();
-    expect(internalsRecord(axNode('combobox', [expanded(true)]), attrs({ role: 'combobox', 'aria-expanded': 'true' }))).toBeNull();
-    expect(internalsRecord(axNode('heading', [level(3)]), attrs({ role: 'heading', 'aria-level': '3' }))).toBeNull();
-    expect(internalsRecord(axNode('slider', [valuemin(0), valuemax(100)], 30), attrs({ role: 'slider', 'aria-valuenow': '30' }))).toBeNull();
+    expect(recordOf(axNode('checkbox', [checked('true')]), attrs({ role: 'checkbox', 'aria-checked': 'true' }))).toBeNull();
+    expect(recordOf(axNode('combobox', [expanded(true)]), attrs({ role: 'combobox', 'aria-expanded': 'true' }))).toBeNull();
+    expect(recordOf(axNode('heading', [level(3)]), attrs({ role: 'heading', 'aria-level': '3' }))).toBeNull();
+    expect(recordOf(axNode('slider', [valuemin(0), valuemax(100)], 30), attrs({ role: 'slider', 'aria-valuenow': '30' }))).toBeNull();
   });
 
   it('carries an expanded state of true as ariaExpanded and drops false', () => {
-    expect(internalsRecord(axNode('combobox', [expanded(true)]), attrs({ role: 'combobox' }))).toEqual({ ariaExpanded: 'true' });
-    expect(internalsRecord(axNode('combobox', [expanded(false)]), attrs({ role: 'combobox' }))).toBeNull();
+    expect(recordOf(axNode('combobox', [expanded(true)]), attrs({ role: 'combobox' }))).toEqual({ ariaExpanded: 'true' });
+    expect(recordOf(axNode('combobox', [expanded(false)]), attrs({ role: 'combobox' }))).toBeNull();
   });
 
   it('carries a heading level other than 2 as ariaLevel', () => {
-    expect(internalsRecord(axNode('heading', [level(3)]), attrs({ role: 'heading' }))).toEqual({ ariaLevel: '3' });
-    expect(internalsRecord(axNode('heading', [level(2)]), attrs({ role: 'heading' }))).toBeNull();
+    expect(recordOf(axNode('heading', [level(3)]), attrs({ role: 'heading' }))).toEqual({ ariaLevel: '3' });
+    expect(recordOf(axNode('heading', [level(2)]), attrs({ role: 'heading' }))).toBeNull();
   });
 
   it('does not carry a level the browser computes from position, such as a tree item depth', () => {
-    expect(internalsRecord(axNode('treeitem', [level(3)]), attrs({ role: 'treeitem' }))).toBeNull();
+    expect(recordOf(axNode('treeitem', [level(3)]), attrs({ role: 'treeitem' }))).toBeNull();
   });
 
   it('carries a slider or scrollbar value other than the midpoint of its range as ariaValueNow', () => {
-    expect(internalsRecord(axNode('slider', [valuemin(0), valuemax(100)], 30), attrs({ role: 'slider' }))).toEqual({ ariaValueNow: '30' });
-    expect(internalsRecord(axNode('slider', [valuemin(0), valuemax(100)], 50), attrs({ role: 'slider' }))).toBeNull();
-    expect(internalsRecord(axNode('slider', [valuemin(0), valuemax(10)], 5), attrs({ role: 'slider' }))).toBeNull();
-    expect(internalsRecord(axNode('slider', [valuemin(0), valuemax(10)], 8), attrs({ role: 'slider' }))).toEqual({ ariaValueNow: '8' });
-    expect(internalsRecord(axNode('slider', [], 50), attrs({ role: 'slider' }))).toBeNull();
-    expect(internalsRecord(axNode('scrollbar', [valuemin(0), valuemax(100)], 50), attrs({ role: 'scrollbar' }))).toBeNull();
-    expect(internalsRecord(axNode('scrollbar', [valuemin(0), valuemax(100)], 10), attrs({ role: 'scrollbar' }))).toEqual({
+    expect(recordOf(axNode('slider', [valuemin(0), valuemax(100)], 30), attrs({ role: 'slider' }))).toEqual({ ariaValueNow: '30' });
+    expect(recordOf(axNode('slider', [valuemin(0), valuemax(100)], 50), attrs({ role: 'slider' }))).toBeNull();
+    expect(recordOf(axNode('slider', [valuemin(0), valuemax(10)], 5), attrs({ role: 'slider' }))).toBeNull();
+    expect(recordOf(axNode('slider', [valuemin(0), valuemax(10)], 8), attrs({ role: 'slider' }))).toEqual({ ariaValueNow: '8' });
+    expect(recordOf(axNode('slider', [], 50), attrs({ role: 'slider' }))).toBeNull();
+    expect(recordOf(axNode('scrollbar', [valuemin(0), valuemax(100)], 50), attrs({ role: 'scrollbar' }))).toBeNull();
+    expect(recordOf(axNode('scrollbar', [valuemin(0), valuemax(100)], 10), attrs({ role: 'scrollbar' }))).toEqual({
       ariaValueNow: '10',
     });
   });
@@ -83,24 +182,24 @@ describe('internalsRecord: ARIA states', () => {
     const min = Math.fround(0.1);
     const max = Math.fround(0.2);
     const midpoint = Math.fround(Math.fround(min + max) / 2);
-    expect(internalsRecord(axNode('slider', [valuemin(min), valuemax(max)], midpoint), attrs({ role: 'slider' }))).toBeNull();
+    expect(recordOf(axNode('slider', [valuemin(min), valuemax(max)], midpoint), attrs({ role: 'slider' }))).toBeNull();
   });
 
   it('carries a meter value other than its minimum, and a separator value other than 50', () => {
-    expect(internalsRecord(axNode('meter', [valuemin(0), valuemax(100)], 0), attrs({ role: 'meter' }))).toBeNull();
-    expect(internalsRecord(axNode('meter', [valuemin(10), valuemax(100)], 10), attrs({ role: 'meter' }))).toBeNull();
-    expect(internalsRecord(axNode('meter', [valuemin(10), valuemax(100)], 40), attrs({ role: 'meter' }))).toEqual({ ariaValueNow: '40' });
-    expect(internalsRecord(axNode('separator', [], 50), attrs({ role: 'separator' }))).toBeNull();
-    expect(internalsRecord(axNode('splitter', [], 20), attrs({ role: 'separator' }))).toEqual({ ariaValueNow: '20' });
+    expect(recordOf(axNode('meter', [valuemin(0), valuemax(100)], 0), attrs({ role: 'meter' }))).toBeNull();
+    expect(recordOf(axNode('meter', [valuemin(10), valuemax(100)], 10), attrs({ role: 'meter' }))).toBeNull();
+    expect(recordOf(axNode('meter', [valuemin(10), valuemax(100)], 40), attrs({ role: 'meter' }))).toEqual({ ariaValueNow: '40' });
+    expect(recordOf(axNode('separator', [], 50), attrs({ role: 'separator' }))).toBeNull();
+    expect(recordOf(axNode('splitter', [], 20), attrs({ role: 'separator' }))).toEqual({ ariaValueNow: '20' });
   });
 
   it('never reads a text value as a range value', () => {
-    expect(internalsRecord(axNode('slider', [], '30'), attrs({ role: 'slider' }))).toBeNull();
-    expect(internalsRecord(axNode('textbox', [], 'typed text'), attrs({ role: 'textbox' }))).toBeNull();
+    expect(recordOf(axNode('slider', [], '30'), attrs({ role: 'slider' }))).toBeNull();
+    expect(recordOf(axNode('textbox', [], 'typed text'), attrs({ role: 'textbox' }))).toBeNull();
   });
 
   it('carries nothing for an ignored node', () => {
-    expect(internalsRecord({ ...(axNode('checkbox', [checked('true')]) as object), ignored: true }, attrs())).toBeNull();
+    expect(recordOf({ ...(axNode('checkbox', [checked('true')]) as object), ignored: true }, attrs())).toBeNull();
   });
 });
 
@@ -115,7 +214,7 @@ describe('internalsRecord: the defaults the real-browser test pins', () => {
       const { value, ...named } = entry.defaults ?? {};
       const properties = Object.entries(named).map(([name, propertyValue]) => ({ name, type: typeof propertyValue, value: propertyValue }));
       const attributes = attrs({ role, 'aria-label': 'Name' });
-      expect(internalsRecord(axNode(role, properties, value), attributes)).toBeNull();
+      expect(recordOf(axNode(role, properties, value), attributes)).toBeNull();
     });
   }
 });

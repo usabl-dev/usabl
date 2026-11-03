@@ -2,26 +2,26 @@
   "axeCore": "4.13.0",
   "playwright": "1.62.1",
   "fixtures": {
-    "pages": 70,
+    "pages": 75,
     "withoutInternals": {
-      "pages": 51,
+      "pages": 55,
       "pagesWithDifferences": 0,
       "unstablePages": 0,
       "comparedEntries": {
-        "violation": 140,
+        "violation": 144,
         "incomplete": 20,
-        "pass": 3127,
-        "inapplicable": 3377
+        "pass": 3249,
+        "inapplicable": 3650
       }
     },
     "withInternals": {
-      "pages": 19,
-      "pagesWithDifferences": 3,
+      "pages": 20,
+      "pagesWithDifferences": 4,
       "comparedEntries": {
         "violation": 19,
         "incomplete": 0,
-        "pass": 802,
-        "inapplicable": 1309
+        "pass": 824,
+        "inapplicable": 1383
       }
     },
     "perPage": [
@@ -328,6 +328,18 @@
         "uncheckedFrames": []
       },
       {
+        "fixture": "internals: listitem role with a list-item display",
+        "internals": true,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 22,
+          "inapplicable": 74
+        },
+        "differences": 2,
+        "uncheckedFrames": []
+      },
+      {
         "fixture": "internals: meter states",
         "internals": true,
         "counts": {
@@ -419,6 +431,54 @@
           "incomplete": 0,
           "pass": 21,
           "inapplicable": 75
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "layout: CSS content image",
+        "internals": false,
+        "counts": {
+          "violation": 0,
+          "incomplete": 0,
+          "pass": 16,
+          "inapplicable": 75
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "layout: focusable and related custom elements",
+        "internals": false,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 41,
+          "inapplicable": 64
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "layout: list-item display in a list",
+        "internals": false,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 29,
+          "inapplicable": 69
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "layout: table displays",
+        "internals": false,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 36,
+          "inapplicable": 65
         },
         "differences": 0,
         "uncheckedFrames": []
@@ -891,6 +951,34 @@
               "target": "[\"#heading-two\"]",
               "impact": "critical",
               "elementKey": "compare|aria-required-attr|struct:unknown:#heading-two"
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          }
+        ]
+      },
+      {
+        "fixture": "internals: listitem role with a list-item display",
+        "internals": true,
+        "differences": [
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "list",
+              "target": "[\"ul\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "violation",
+              "rule": "list",
+              "target": "[\"ul\"]",
+              "impact": "serious",
+              "elementKey": "compare|list|struct:unknown:ul"
             },
             "pageWorld": 0,
             "isolated": 1

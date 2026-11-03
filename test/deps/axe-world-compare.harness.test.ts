@@ -73,6 +73,12 @@ customElements.define('x-plain', class extends HTMLElement {});
 ${X_ARIA_SCRIPT}
 </script>`;
 
+// Custom elements with no ElementInternals at all. Chrome still gives some of them a role from
+// their CSS layout or their focus, and none of those roles may reach axe as an internals role.
+const LAYOUT = `<script>
+for (const name of ['x-item', 'x-t', 'x-row', 'x-cell', 'x-f', 'x-pic']) customElements.define(name, class extends HTMLElement {});
+</script>`;
+
 interface Fixture {
   name: string;
   path: string;
@@ -250,6 +256,37 @@ function fixtures(other: string): Fixture[] {
     { name: 'internals: list in a shadow root', path: '/int-shadow', internals: true, html: page('<x-host></x-host>', INTERNALS) },
     { name: 'internals: custom elements without internals', path: '/int-none', internals: true, html: page('<x-plain>text</x-plain><div role="list"><x-plain>bad</x-plain></div><x-plain contenteditable>e</x-plain><x-plain tabindex="0" title="T">f</x-plain><ul><x-plain>a</x-plain><li>b</li></ul><div role="list"><x-nope>c</x-nope></div>', INTERNALS) },
   );
+  // Roles Chrome derives from layout or focus, on pages with no ElementInternals, so the isolated
+  // run must match the page world exactly.
+  list.push(
+    { name: 'layout: list-item display in a list', path: '/layout-list', html: page('<ul><x-item style="display:list-item">A</x-item><x-item style="display:list-item">B</x-item></ul><div role="list"><x-item style="display:list-item">C</x-item></div>', LAYOUT) },
+    {
+      name: 'layout: table displays',
+      path: '/layout-table',
+      html: page(
+        '<div role="table" aria-label="Jobs"><x-row style="display:table-row"><x-cell style="display:table-cell">a</x-cell></x-row></div>' +
+          '<x-t style="display:table"><x-row style="display:table-row"><x-cell style="display:table-cell">b</x-cell></x-row></x-t>',
+        LAYOUT,
+      ),
+    },
+    {
+      name: 'layout: focusable and related custom elements',
+      path: '/layout-focus',
+      html: page(
+        '<p id="note">Note</p><div role="list"><x-f tabindex="0">a</x-f><x-f aria-describedby="note">b</x-f><x-f aria-controls="note">c</x-f><x-f draggable="true">d</x-f></div>',
+        LAYOUT,
+      ),
+    },
+    { name: 'layout: CSS content image', path: '/layout-content', html: page('<x-pic style="display:inline-block;width:20px;height:20px;content:linear-gradient(red, blue)"></x-pic>', LAYOUT) },
+  );
+  // A role set through internals on an element displayed as a list item. Chrome would give it the
+  // same role from its layout, so the isolated run cannot tell where the role came from and drops it.
+  list.push({
+    name: 'internals: listitem role with a list-item display',
+    path: '/int-list-display',
+    internals: true,
+    html: page('<ul><x-li style="display:list-item">One</x-li><x-li style="display:list-item">Two</x-li></ul>', INTERNALS),
+  });
   // One page per ARIA state the isolated run carries: for each role, an element that sets no state
   // and one that sets a value other than the default, all with the role as an attribute.
   for (const group of STATE_GROUPS) {
@@ -377,15 +414,18 @@ describe.skipIf(!ENABLED)('axe in the page world and in the isolated world', () 
 // The ElementInternals differences, as measured. The isolated world reads the role, the
 // aria-label name, and the required ARIA states a custom element set through internals from the
 // browser's accessibility tree, which matches the page world on every fixture not listed with a
-// difference here. Three differ. A role attribute of presentation, or one that is not a role,
+// difference here. Four differ. A role attribute of presentation, or one that is not a role,
 // overrides the internals role in Chrome, which then exposes no list items. The isolated run
 // reports the list as missing its items, which is what assistive technology meets. The page world
 // read the internals role instead and passed the list, a false pass. A role kept in a private
 // field is invisible to axe in the page world, which then reports a list with no items. The
 // browser exposes those items, and so does the isolated run.
+// An element that sets the listitem role through internals and is displayed as a list item would
+// get the same role from its layout, so the isolated run cannot tell the two apart. It drops the
+// role and reports the list as missing its items, a false barrier, never a missed one.
 //
 // The state pages show that a state reaches axe in the isolated run exactly when the page world
-// sees it, except on the third: a heading that sets level 2 through internals. The tree reports level 2 for
+// sees it, except on one: a heading that sets level 2 through internals. The tree reports level 2 for
 // every heading that sets none, so the isolated run cannot tell the two apart and reports the level
 // as missing. That is a false barrier. A default carried by mistake would show here as a pass in
 // the isolated run where the page world reports the state missing.
@@ -410,6 +450,10 @@ const EXPECTED_INTERNALS_DIFFERENCES: Record<string, string[]> = {
   ],
   'internals: state on a role attribute': [],
   'internals: tabs': [],
+  'internals: listitem role with a list-item display': [
+    'pass list ["ul"]: page world 1, isolated 0',
+    'violation list ["ul"]: page world 0, isolated 1',
+  ],
   'internals: checked states': [],
   'internals: heading states': [
     'pass aria-required-attr ["#heading-two"]: page world 1, isolated 0',
