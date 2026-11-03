@@ -3,13 +3,14 @@
  * main and records what it saw on the usabl/history branch, which is what lets a fixed barrier close
  * its slot in the accepted debt without anyone running `usabl floor prune`.
  *
- * Two jobs, so the job that runs the application never holds write access:
+ * Three jobs, so the job that runs the application never holds write access:
+ * - usabl-engine builds the pinned engine, with the same job the pull request gate uses.
  * - history-scan checks out main, starts the application, runs `usabl history record`, and uploads
  *   the record. It runs application code, so it reads only.
  * - history-append downloads the record, adds it to the history branch with `usabl history append`,
- *   and pushes without force. It runs only the trusted engine, so it is the one job that writes. It
- *   needs `contents: write`, the one permission tracking needs. GitHub cannot narrow that to one
- *   branch; a ruleset on usabl/history can.
+ *   and pushes without force. It runs only the engine archive it checked against the engine job's
+ *   digest, so it is the one job that writes. It needs `contents: write`, the one permission
+ *   tracking needs. GitHub cannot narrow that to one branch; a ruleset on usabl/history can.
  *
  * Pull requests need nothing new. The gate job checks out with fetch-depth 0, which fetches every
  * branch, so origin/usabl/history is already there when the check reads it. A team that cannot
@@ -20,9 +21,24 @@
  * workflow that differs.
  */
 import type { InstallFs, InstallResult } from './index.js';
-import { ENGINE_REF_PLACEHOLDER, planCi, writeCi, type CiPlan } from './ci.js';
+import {
+  ENGINE_JOB,
+  ENGINE_REF_PLACEHOLDER,
+  planCi,
+  trustedEngineSteps,
+  UNPACK_ENGINE_IN_TEMP,
+  writeCi,
+  type CiPlan,
+} from './ci.js';
 
 export const USABL_HISTORY_WORKFLOW_PATH = '.github/workflows/usabl-history.yml';
+
+// The scan job also places the engine where the application's lockfile expects it.
+const HISTORY_SCAN_ENGINE_UNPACK = `${UNPACK_ENGINE_IN_TEMP}
+          # For now the lockfile pins usabl as file:../usabl, and Actions has no sibling folder.
+          # Later: npm ci installs usabl from the registry. Drop these two lines.
+          mkdir "\${GITHUB_WORKSPACE}/../usabl"
+          tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"`;
 
 export const USABL_HISTORY_WORKFLOW = `name: usabl-history
 
@@ -42,11 +58,18 @@ concurrency:
   group: usabl-history
   cancel-in-progress: false
 
+# The engine is built once, by the same job the pull request gate uses, and each later job checks
+# the archive against that job's digest output before it runs it. The scan job runs application
+# code, which on a hosted runner may be able to replace artifacts in the run, so the job that
+# writes never runs an engine it did not check. No job uses a cache.
 jobs:
+${ENGINE_JOB}
+
   history-scan:
     # Starts the application from main and scans every screen. It runs application code, so it
     # never gets write access. It writes the record to a file and nothing to git.
     if: github.ref == 'refs/heads/main'
+    needs: usabl-engine
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -57,52 +80,31 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout trusted usabl engine commit
-        # For now: usabl is not a published package, so clone the private repo.
-        # Later: npm install usabl from the registry. Drop this checkout and the token.
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: usabl-dev/usabl
-          ref: ${ENGINE_REF_PLACEHOLDER}
-          path: .usabl-engine
-          token: \${{ secrets.USABL_ENGINE_CHECKOUT_TOKEN }}
-          persist-credentials: false
-
       - name: Setup Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            .usabl-engine/package-lock.json
 
-      - name: Install and build trusted engine
-        working-directory: .usabl-engine
-        run: npm ci && npm run build
+${trustedEngineSteps('Verify and unpack trusted engine', HISTORY_SCAN_ENGINE_UNPACK)}
 
       - name: Install Chromium for engine checks
-        working-directory: .usabl-engine
-        run: npx playwright install --with-deps chromium
+        working-directory: \${{ runner.temp }}/usabl-engine
+        run: node node_modules/playwright/cli.js install --with-deps chromium
 
-      - name: Snapshot trusted engine for the scan
+      - name: Allow the Chromium sandbox
         run: |
-          # The checker must not live where npm run dev can overwrite it.
-          sudo cp -a "$GITHUB_WORKSPACE/.usabl-engine" /opt/usabl-trusted
-          sudo chown -R root:root /opt/usabl-trusted
-          sudo chmod -R a-w /opt/usabl-trusted
-          sudo chmod -R a+rX /opt/usabl-trusted
+          # Ubuntu runners restrict unprivileged user namespaces through AppArmor, and the Chromium
+          # sandbox needs them.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
       - name: Install application dependencies
-        run: |
-          # For now the lockfile pins usabl as file:../usabl, and Actions has no sibling folder.
-          # Later: npm ci installs usabl from the registry. Drop this symlink.
-          ln -sfn "$GITHUB_WORKSPACE/.usabl-engine" "$GITHUB_WORKSPACE/../usabl"
-          npm ci --ignore-scripts
+        run: npm ci --ignore-scripts
 
       - name: Start application on localhost
         run: |
-          npm run dev -- --host 127.0.0.1 --port 5173 > /tmp/usabl-vite.log 2>&1 &
+          npm run dev -- --host 127.0.0.1 --port 5173 > "\${RUNNER_TEMP}/usabl-vite.log" 2>&1 &
           echo "VITE_PID=$!" >> "$GITHUB_ENV"
 
       - name: Wait for application readiness
@@ -114,11 +116,11 @@ jobs:
             sleep 1
           done
           echo "application did not start on 127.0.0.1:5173"
-          cat /tmp/usabl-vite.log
+          cat "\${RUNNER_TEMP}/usabl-vite.log"
           exit 1
 
       - name: Scan main and write the history record
-        run: node /opt/usabl-trusted/dist/cli.js history record --out usabl-history-record.json
+        run: node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" history record --out usabl-history-record.json
 
       - name: Stop application server
         if: always()
@@ -136,9 +138,12 @@ jobs:
           retention-days: 1
 
   history-append:
-    # Adds the record to the usabl/history branch. It runs no application code, only the trusted
-    # engine, so it is the one job that may write. Pushes never force, so a record is never lost.
-    needs: history-scan
+    # Adds the record to the usabl/history branch. It runs no application code and no npm, only the
+    # checked engine, so it is the one job that may write. Pushes never force, so a record is never
+    # lost. The record itself came from a job that ran application code; a forged record can only
+    # make later runs stricter, never greener, because the history can only lower the debt a run
+    # accepts.
+    needs: [usabl-engine, history-scan]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -148,38 +153,28 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout trusted usabl engine commit
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: usabl-dev/usabl
-          ref: ${ENGINE_REF_PLACEHOLDER}
-          path: .usabl-engine
-          token: \${{ secrets.USABL_ENGINE_CHECKOUT_TOKEN }}
-          persist-credentials: false
-
       - name: Setup Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: .usabl-engine/package-lock.json
 
-      - name: Install and build trusted engine
-        working-directory: .usabl-engine
-        run: npm ci && npm run build
+${trustedEngineSteps('Verify and unpack trusted engine', UNPACK_ENGINE_IN_TEMP)}
 
       - name: Download the history record
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: usabl-history-record
+          path: \${{ runner.temp }}/usabl-download-record
 
       - name: Append the record and push the history branch
+        env:
+          RECORD_PATH: \${{ runner.temp }}/usabl-download-record/usabl-history-record.json
         run: |
           # Fetch the branch fresh on every try, append on top of it, and push without force. A
           # push that loses a race is refused, so the loop fetches the newer branch and tries again.
           for attempt in 1 2 3; do
             git fetch --no-tags origin "+refs/heads/usabl/history:refs/remotes/origin/usabl/history" || echo "no usabl/history branch yet; the first record starts it"
-            node .usabl-engine/dist/cli.js history append usabl-history-record.json
+            node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" history append "\${RECORD_PATH}"
             if git push origin "refs/heads/usabl/history:refs/heads/usabl/history"; then
               exit 0
             fi
@@ -203,7 +198,7 @@ export async function planHistoryCi(fs: InstallFs): Promise<CiPlan> {
 function historyWrittenReport(): string {
   return [
     `Wrote ${USABL_HISTORY_WORKFLOW_PATH}. Review this draft before you merge it.`,
-    `It scans main after each merge and once a day, and records what it saw on the usabl/history branch, so a fixed barrier closes its slot in the accepted debt on its own. Replace ${ENGINE_REF_PLACEHOLDER} (it appears twice) with the same commit SHA you pin in the gate.`,
+    `It scans main after each merge and once a day, and records what it saw on the usabl/history branch, so a fixed barrier closes its slot in the accepted debt on its own. Replace ${ENGINE_REF_PLACEHOLDER} (it appears once, in the usabl-engine job) with the same commit SHA you pin in the gate.`,
     'Its history-append job needs contents: write, the one permission tracking needs. It runs no application code. To keep that write on the history branch only, add a ruleset for usabl/history that blocks force pushes and deletion. If you cannot grant the permission, leave this file out: every run then says tracking is off and keeps today\'s behavior.',
   ].join('\n');
 }

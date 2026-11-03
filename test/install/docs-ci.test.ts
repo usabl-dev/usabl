@@ -1,6 +1,6 @@
 /**
  * The docs CI generator emits a security-critical gate workflow for rendered documentation.
- * It is the docs sibling of the app gate: same three-job fork-secrets model, same pinned action
+ * It is the docs sibling of the app gate: same six-job judge split, same pinned action
  * SHAs, same engine-ref sentinel that is never fabricated. The only differences are the build
  * and serve steps, because usabl does not serve the built docs itself. It writes only when the
  * file is absent, no-ops when byte-identical, and refuses when a hand-tuned workflow differs.
@@ -33,17 +33,14 @@ function memoryFs(files: Record<string, string>): InstallFs & { store: Record<st
 }
 
 describe('USABL_DOCS_GATE_WORKFLOW security properties', () => {
-  it('keeps the three-job pattern and every fork-safety property of the app gate', () => {
+  it('keeps the six-job judge split and every fork-safety property of the app gate', () => {
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('name: usabl-docs-gate');
-    // gate-comment is the only job allowed to run PR head code, fenced to pull_request.
     expect(USABL_DOCS_GATE_WORKFLOW).toContain("if: github.event_name == 'pull_request'");
-    // usabl-policy re-runs on review and reads head as objects only. The check an operator
-    // requires is the usabl-required aggregate; see gate-topology.test.ts for that shape.
-    expect(USABL_DOCS_GATE_WORKFLOW).toContain('usabl-policy:');
-    expect(USABL_DOCS_GATE_WORKFLOW).toContain('needs: gate-comment');
+    for (const job of ['usabl-engine', 'build-app', 'usabl-scan', 'gate-comment', 'usabl-policy', 'usabl-required']) {
+      expect(USABL_DOCS_GATE_WORKFLOW).toContain(`\n  ${job}:\n`);
+    }
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"');
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('persist-credentials: false');
-    // The numeric PR_NUMBER guard must survive.
     expect(USABL_DOCS_GATE_WORKFLOW).toContain("''|*[!0-9]*)");
     // Actions stay pinned to the same full commit SHAs the app gate uses.
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09');
@@ -51,24 +48,20 @@ describe('USABL_DOCS_GATE_WORKFLOW security properties', () => {
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd');
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e');
-    // The private-engine-clone form and its read-only snapshot must remain.
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('repository: usabl-dev/usabl');
-    expect(USABL_DOCS_GATE_WORKFLOW).toContain('cp -a "$GITHUB_WORKSPACE/.usabl-engine" /opt/usabl-trusted');
-    expect(USABL_DOCS_GATE_WORKFLOW).toContain('Later: npm install usabl');
-    // The sticky comment marker and the trusted-ref check must remain.
+    expect(USABL_DOCS_GATE_WORKFLOW).not.toContain('USABL_ENGINE_CHECKOUT_TOKEN');
+    expect(USABL_DOCS_GATE_WORKFLOW).not.toMatch(/^\s*token:/m);
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('<!-- usabl-report -->');
-    expect(USABL_DOCS_GATE_WORKFLOW).toContain('check --ci --trusted-ref "origin/${BASE_REF}"');
-    // The policy job resolves the scan by the docs workflow file name, not the app one.
+    expect(USABL_DOCS_GATE_WORKFLOW).toContain('check --ci --trusted-ref "origin/${BASE_REF}" --isolated-browser');
+    // The review path finds the build by the docs workflow file name, not the app one.
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('--workflow usabl-docs-gate.yml');
     expect(USABL_DOCS_GATE_WORKFLOW).not.toContain('--workflow usabl-gate.yml');
   });
 
-  it('builds and serves the docs instead of running the app dev server', () => {
-    // usabl does not serve the built docs, so the docs job serves them on localhost and scans
-    // that origin. The app-only dev server must be absent.
+  it('builds the docs in the untrusted job and serves them from the judge', () => {
     expect(USABL_DOCS_GATE_WORKFLOW).not.toContain('npm run dev');
-    expect(USABL_DOCS_GATE_WORKFLOW).toContain('python3 -m http.server');
-    expect(USABL_DOCS_GATE_WORKFLOW).toContain('--bind 127.0.0.1');
+    expect(USABL_DOCS_GATE_WORKFLOW).not.toContain('python3 -m http.server');
+    expect(USABL_DOCS_GATE_WORKFLOW).toContain('serve-build --dir "${RUNNER_TEMP}/usabl-app" --host 127.0.0.1 --port "${SERVE_PORT}"');
     // Operator-specific values are repo variables, so the file stays byte-stable and the engine
     // ref remains the only variable classifyDocsGateWorkflow has to reason about.
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('${{ vars.USABL_DOCS_BUILD_COMMAND }}');
@@ -80,10 +73,8 @@ describe('USABL_DOCS_GATE_WORKFLOW security properties', () => {
 
   it('emits a sentinel engine ref and never a fabricated SHA', () => {
     expect(USABL_DOCS_GATE_WORKFLOW).toContain(`ref: ${ENGINE_REF_PLACEHOLDER}`);
-    // The sentinel replaces the ref in both engine-checkout steps.
     const occurrences = USABL_DOCS_GATE_WORKFLOW.split(ENGINE_REF_PLACEHOLDER).length - 1;
-    expect(occurrences).toBe(2);
-    // A 40-char hex commit-shaped ref would be a fabricated pin. There must be none on a ref line.
+    expect(occurrences).toBe(1);
     expect(/^\s*ref: [0-9a-f]{40}\s*$/m.test(USABL_DOCS_GATE_WORKFLOW)).toBe(false);
   });
 });
@@ -122,10 +113,13 @@ describe('classifyDocsGateWorkflow', () => {
     expect(classifyDocsGateWorkflow(uppercasePinned)).toBe('drifted');
   });
 
-  it('reports an inconsistent pin (one engine-ref pinned, one still the sentinel) as drifted', () => {
-    const halfPinned = USABL_DOCS_GATE_WORKFLOW.replace(ENGINE_REF_PLACEHOLDER, TRUSTED_SHA);
-    expect(halfPinned).toContain(ENGINE_REF_PLACEHOLDER);
-    expect(classifyDocsGateWorkflow(halfPinned)).toBe('drifted');
+  it('reports a second engine checkout added beside the pinned one as drifted', () => {
+    const extra = PINNED_WORKFLOW.replace(
+      `          ref: ${TRUSTED_SHA}\n`,
+      `          ref: ${TRUSTED_SHA}\n          ref: ${TRUSTED_SHA}\n`,
+    );
+    expect(extra).not.toBe(PINNED_WORKFLOW);
+    expect(classifyDocsGateWorkflow(extra)).toBe('drifted');
   });
 });
 
@@ -138,7 +132,7 @@ describe('writeDocsCi', () => {
     expect(result.action).toBe('written');
     expect(fs.store[USABL_DOCS_GATE_WORKFLOW_PATH]).toBe(USABL_DOCS_GATE_WORKFLOW);
     expect(result.message).toContain(ENGINE_REF_PLACEHOLDER);
-    expect(result.message).toContain('USABL_ENGINE_CHECKOUT_TOKEN');
+    expect(result.message).not.toContain('USABL_ENGINE_CHECKOUT_TOKEN');
     // The docs gate needs three repo variables and a matching docsBaseUrl. The report must name them.
     expect(result.message).toContain('USABL_DOCS_BUILD_COMMAND');
     expect(result.message).toContain('USABL_DOCS_BUILT_ROOT');

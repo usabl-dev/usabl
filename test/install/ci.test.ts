@@ -36,13 +36,13 @@ function memoryFs(files: Record<string, string>): InstallFs & { store: Record<st
 }
 
 describe('USABL_GATE_WORKFLOW security properties', () => {
-  it('keeps the three-job pattern and every fork-safety property', () => {
-    // gate-comment is the only job allowed to run PR head code, fenced to pull_request.
+  it('keeps the six-job judge split and every fork-safety property', () => {
+    // build-app is the only job that runs head code, fenced to pull_request. The judge, the
+    // comment, and the policy job are trusted; gate-topology.test.ts holds their full shape.
     expect(USABL_GATE_WORKFLOW).toContain("if: github.event_name == 'pull_request'");
-    // usabl-policy re-runs on review and reads head as objects only. The check an operator
-    // requires is the usabl-required aggregate; see gate-topology.test.ts for that shape.
-    expect(USABL_GATE_WORKFLOW).toContain('usabl-policy:');
-    expect(USABL_GATE_WORKFLOW).toContain('needs: gate-comment');
+    for (const job of ['usabl-engine', 'build-app', 'usabl-scan', 'gate-comment', 'usabl-policy', 'usabl-required']) {
+      expect(USABL_GATE_WORKFLOW).toContain(`\n  ${job}:\n`);
+    }
     expect(USABL_GATE_WORKFLOW).toContain('git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"');
     expect(USABL_GATE_WORKFLOW).toContain('persist-credentials: false');
     // The numeric PR_NUMBER guard must survive.
@@ -50,17 +50,26 @@ describe('USABL_GATE_WORKFLOW security properties', () => {
     // Actions stay pinned to full commit SHAs.
     expect(USABL_GATE_WORKFLOW).toContain('actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09');
     expect(USABL_GATE_WORKFLOW).toContain('actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38');
-    // The private-engine-clone form and its read-only snapshot must remain.
+    // The public engine is checked out at the pinned commit with no token, built once, and handed
+    // on as a digest-checked archive.
     expect(USABL_GATE_WORKFLOW).toContain('repository: usabl-dev/usabl');
-    expect(USABL_GATE_WORKFLOW).toContain('cp -a "$GITHUB_WORKSPACE/.usabl-engine" /opt/usabl-trusted');
-    expect(USABL_GATE_WORKFLOW).toContain('Later: npm install usabl');
+    expect(USABL_GATE_WORKFLOW).toContain('engine_digest');
+    expect(USABL_GATE_WORKFLOW).not.toContain('USABL_ENGINE_CHECKOUT_TOKEN');
+    expect(USABL_GATE_WORKFLOW).not.toMatch(/^\s*token:/m);
+    // The judge serves the build itself and scans it with the isolated browser.
+    expect(USABL_GATE_WORKFLOW).toContain('serve-build --dir');
+    expect(USABL_GATE_WORKFLOW).toContain('--isolated-browser');
+    expect(USABL_GATE_WORKFLOW).not.toContain('npm run dev');
+    // Operator build settings are repository variables, so the file stays byte-stable.
+    expect(USABL_GATE_WORKFLOW).toContain('${{ vars.USABL_APP_BUILD_COMMAND }}');
+    expect(USABL_GATE_WORKFLOW).toContain('${{ vars.USABL_APP_BUILD_DIR }}');
   });
 
   it('emits a sentinel engine ref and never a fabricated SHA', () => {
     expect(USABL_GATE_WORKFLOW).toContain(`ref: ${ENGINE_REF_PLACEHOLDER}`);
-    // The sentinel replaces the ref in both engine-checkout steps.
+    // The sentinel replaces the ref in the one engine checkout, in usabl-engine.
     const occurrences = USABL_GATE_WORKFLOW.split(ENGINE_REF_PLACEHOLDER).length - 1;
-    expect(occurrences).toBe(2);
+    expect(occurrences).toBe(1);
     // A 40-char hex commit-shaped ref would be a fabricated pin. There must be none on a ref line.
     expect(/^\s*ref: [0-9a-f]{40}\s*$/m.test(USABL_GATE_WORKFLOW)).toBe(false);
   });
@@ -95,7 +104,7 @@ describe('classifyGateWorkflow', () => {
   });
 
   it('reports the draft with the sentinel still in place as unpinned, never wired', () => {
-    // The draft ships the sentinel at both engine-ref lines. It is structurally correct but
+    // The draft ships the sentinel at its engine-ref line. It is structurally correct but
     // not yet enforceable, so it must not read as wired. This is the honesty inversion the
     // rework fixes: byte-identical-to-draft is unpinned, not wired.
     expect(classifyGateWorkflow(USABL_GATE_WORKFLOW)).toBe('unpinned');
@@ -127,12 +136,15 @@ describe('classifyGateWorkflow', () => {
     expect(classifyGateWorkflow(uppercasePinned)).toBe('drifted');
   });
 
-  it('reports an inconsistent pin (one engine-ref pinned, one still the sentinel) as drifted', () => {
-    // Replace only the first sentinel occurrence, leaving the second unpinned. A half-pinned
-    // gate is not enforceable, so it is drifted, never wired.
-    const halfPinned = USABL_GATE_WORKFLOW.replace(ENGINE_REF_PLACEHOLDER, TRUSTED_SHA);
-    expect(halfPinned).toContain(ENGINE_REF_PLACEHOLDER);
-    expect(classifyGateWorkflow(halfPinned)).toBe('drifted');
+  it('reports a second engine checkout added beside the pinned one as drifted', () => {
+    // There is exactly one engine-ref line, so a half-pinned gate cannot exist. A copied
+    // checkout step is a structural change and must never read as wired.
+    const extra = PINNED_WORKFLOW.replace(
+      `          ref: ${TRUSTED_SHA}\n`,
+      `          ref: ${TRUSTED_SHA}\n          ref: ${TRUSTED_SHA}\n`,
+    );
+    expect(extra).not.toBe(PINNED_WORKFLOW);
+    expect(classifyGateWorkflow(extra)).toBe('drifted');
   });
 });
 
@@ -145,8 +157,10 @@ describe('writeCi', () => {
     expect(result.action).toBe('written');
     expect(fs.store[USABL_GATE_WORKFLOW_PATH]).toBe(USABL_GATE_WORKFLOW);
     expect(result.message).toContain(ENGINE_REF_PLACEHOLDER);
-    expect(result.message).toContain('USABL_ENGINE_CHECKOUT_TOKEN');
     expect(result.message).toContain('usabl-dev/usabl');
+    // The engine is public, so the operator sets up no engine secret, and a fork runs the gate.
+    expect(result.message).not.toContain('USABL_ENGINE_CHECKOUT_TOKEN');
+    expect(result.message).toContain('fork');
   });
 
   it('no-ops when the on-disk workflow is byte-identical', async () => {
@@ -188,15 +202,22 @@ describe('writeCi', () => {
 
 describe('the gate workflow and the saved session', () => {
   // The session `usabl session` saves is a credential under .usabl/. The workflow uploads the
-  // Result JSON and nothing else, so no artifact can carry it, and the Result never names it.
-  it('uploads only the Result JSON, never anything under .usabl/', () => {
+  // engine archive, the build archive, and the Result JSON, and nothing else. The build archive
+  // leaves .usabl out even when the build directory is the repository root, so no artifact can
+  // carry a session, and the Result never names it.
+  it('uploads only the engine, the build, and the Result, never anything under .usabl/', () => {
     for (const workflow of [USABL_GATE_WORKFLOW, USABL_DOCS_GATE_WORKFLOW]) {
       const uploads = [...workflow.matchAll(/uses: actions\/upload-artifact@[^\n]*\n\s+with:\n((?:\s+[a-z-]+:[^\n]*\n)+)/g)];
       expect(uploads.length).toBe(workflow.split('actions/upload-artifact@').length - 1);
-      for (const upload of uploads) {
-        const paths = /path: ([^\n]+)/.exec(upload[1] ?? '')?.[1]?.trim();
-        expect(paths).toBe('usabl-result.json');
-      }
+      const paths = uploads.map((upload) => /path: ([^\n]+)/.exec(upload[1] ?? '')?.[1]?.trim());
+      expect(paths).toEqual([
+        '${{ runner.temp }}/usabl-engine.tgz',
+        '${{ runner.temp }}/usabl-app-build.tar',
+        '${{ runner.temp }}/usabl-judge/usabl-result.json',
+      ]);
+      const packs = workflow.split('\n').filter((line) => line.includes('--file "${RUNNER_TEMP}/usabl-app-build.tar"'));
+      expect(packs).toHaveLength(1);
+      expect(packs[0]).toContain('--exclude=./.usabl');
       expect(workflow).not.toContain('.usabl/');
       expect(workflow).not.toContain('storage-state');
     }

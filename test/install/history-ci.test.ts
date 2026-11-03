@@ -22,8 +22,8 @@ function memoryFs(files: Record<string, string>): InstallFs & { store: Record<st
   };
 }
 
-interface Step { name?: string; run?: string; uses?: string; with?: Record<string, unknown> }
-interface Job { permissions?: Record<string, string>; needs?: string; if?: string; steps: Step[] }
+interface Step { name?: string; run?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, string> }
+interface Job { permissions?: Record<string, string>; needs?: string | string[]; if?: string; outputs?: Record<string, string>; steps: Step[] }
 const parsed = load(USABL_HISTORY_WORKFLOW) as { on: Record<string, unknown>; permissions: Record<string, string>; jobs: Record<string, Job> };
 
 describe('the history workflow', () => {
@@ -34,10 +34,40 @@ describe('the history workflow', () => {
   });
 
   it('scans with read access only, and writes in a job that needs the scan', () => {
-    expect(Object.keys(parsed.jobs)).toEqual(['history-scan', 'history-append']);
+    expect(Object.keys(parsed.jobs)).toEqual(['usabl-engine', 'history-scan', 'history-append']);
+    expect(parsed.jobs['usabl-engine']!.permissions).toEqual({ contents: 'read' });
     expect(parsed.jobs['history-scan']!.permissions).toEqual({ contents: 'read' });
     expect(parsed.jobs['history-append']!.permissions).toEqual({ contents: 'write' });
-    expect(parsed.jobs['history-append']!.needs).toBe('history-scan');
+    expect(parsed.jobs['history-append']!.needs).toEqual(['usabl-engine', 'history-scan']);
+  });
+
+  it('builds the engine with the same job as the gate, from the public repository with no token', () => {
+    const gate = load(USABL_GATE_WORKFLOW) as { jobs: Record<string, Job> };
+    expect(parsed.jobs['usabl-engine']).toEqual(gate.jobs['usabl-engine']);
+    expect(USABL_HISTORY_WORKFLOW).not.toContain('secrets.');
+  });
+
+  it('checks the engine archive against the engine job digest before either job runs it', () => {
+    for (const id of ['history-scan', 'history-append']) {
+      const steps = parsed.jobs[id]!.steps;
+      const download = steps.findIndex((step) => step.uses?.startsWith('actions/download-artifact') && step.with?.['name'] === 'usabl-engine');
+      expect(download, id).toBeGreaterThan(-1);
+      const verify = steps[download + 1];
+      expect(verify?.env?.['ENGINE_DIGEST'], id).toBe('${{ needs.usabl-engine.outputs.engine_digest }}');
+      expect(verify?.run, id).toContain('sha256sum -c -');
+      const firstEngineRun = steps.findIndex((step) => /usabl-engine\/dist\/cli\.js/.test(step.run ?? ''));
+      expect(firstEngineRun, id).toBeGreaterThan(download + 1);
+    }
+  });
+
+  it('gives the writing job no cache and no npm, so nothing the scan wrote can reach it', () => {
+    for (const step of parsed.jobs['history-append']!.steps) {
+      expect(step.uses ?? '').not.toMatch(/^actions\/cache/);
+      if (step.uses?.startsWith('actions/setup-node@')) {
+        expect(Object.keys(step.with ?? {})).toEqual(['node-version']);
+      }
+      expect(step.run ?? '').not.toMatch(/\bnpm\b/);
+    }
   });
 
   it('runs the application only in the job that cannot write', () => {
@@ -48,7 +78,7 @@ describe('the history workflow', () => {
     expect(scanRuns).toContain('history record --out usabl-history-record.json');
     expect(appendRuns).not.toContain('npm run dev');
     expect(appendRuns).not.toContain('npm ci --ignore-scripts');
-    expect(appendRuns).toContain('history append usabl-history-record.json');
+    expect(appendRuns).toContain('history append "${RECORD_PATH}"');
   });
 
   it('never forces a push and never persists the token where the application runs', () => {

@@ -643,7 +643,7 @@ async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
       // draft that command hits its already-wired path and prints "No change" without
       // reprinting the pin step, so it would not do what this instruction implies. The edit is
       // self-contained: replace the placeholder in place.
-      nextStep: `The gate workflow is present but the engine ref is still the placeholder. Edit ${USABL_GATE_WORKFLOW_PATH} and replace PIN_TO_A_TRUSTED_USABL_COMMIT (it appears twice) with a full 40-character commit SHA you trust.`,
+      nextStep: `The gate workflow is present but the engine ref is still the placeholder. Edit ${USABL_GATE_WORKFLOW_PATH} and replace PIN_TO_A_TRUSTED_USABL_COMMIT (it appears once, in the usabl-engine job) with a full 40-character commit SHA you trust.`,
     };
   }
   return {
