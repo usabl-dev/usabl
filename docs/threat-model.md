@@ -261,6 +261,25 @@ the tool errored, not because the page is accessible.
   that is not HTML. A selector, or recovery alone, never stands it down. See ground-truth
   section 8.
 
+- In a monorepo, a change in a workspace package the configured app depends on is a coverage
+  gap, never nothing to check. Before, a config drafted for one app folder matched none of the
+  shared package's files, so a change to a component the app renders exited 0 with nothing
+  scanned. The planner reads the workspace and package manifests from the tree and from the
+  trusted ref, and counts the union, so a change that also drops `workspaces` or the app's
+  dependency still gaps its edit to the package. A dependency declared under an alias, an
+  undeclared import that hoisting lets resolve, and a path alias into the package count too. A
+  root manifest that does not parse makes every non-UI change a gap. Workspace patterns cannot
+  read above the repository: a brace group with `..` is refused, and a glob result that is
+  absolute or leaves the repository is dropped.
+
+  Not handled: a tsconfig `paths` entry that names one file rather than a `/*` pair, and paths
+  inherited through `extends` from a file such as `tsconfig.base.json`, are not read. An import
+  of the package by its name still counts. A workspace package that declares its own
+  `workspaces`, a nested workspace root as Yarn Berry allows, is not read as a root, so the
+  packages it lists are found only when a root pattern also matches them. Markdown files in a
+  dependency are exempt and never gap. That is an accepted miss for a package that ships Markdown
+  the app renders, such as help text read with a `?raw` import.
+
 **Status:** [x] The `not_covered` gap path and exit-4 fail-open ship. [ ] A per-surface
 time budget is not yet a config knob; the shipped bound is the keyboard-walk 15s wall clock.
 
@@ -535,6 +554,15 @@ outside every table as the control in an accepted row. Either way a new barrier 
   and `getComputedStyle`. A page that redefines `querySelector`, the `activeElement` or `body`
   getters, `contains`, `focus`, or `getComputedStyle` in its own world does not change what they
   report.
+- The keyboard walk follows focus into open shadow roots and same-origin frames from those worlds,
+  so a page that redefines the `shadowRoot`, `activeElement`, or `contentDocument` getters cannot
+  hide a control inside a component or a frame. Before, every control inside one had the host's
+  or the frame's path, so the walk read the second as a completed cycle and passed a screen whose
+  later controls it never reached. A closed shadow root is seen only through the browser's own
+  DOM read over CDP, and its focused element is asked for in the read world. So is a frame
+  owner other than an `iframe` or `frame`, such as an `object`, `embed`, or `fencedframe`
+  element. Focus inside a closed shadow root, a frame from another origin, or such a frame
+  owner ends the walk with an `unverified` truncation draft, never a pass.
 
 - The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
   that redefines style writes, or says its root is not an element, cannot stop the zoom from
@@ -552,7 +580,22 @@ outside every table as the control in an accepted row. Either way a new barrier 
   `display: list-item`, is never handed to axe as an internals role, so CSS cannot make axe pass a
   check that the same page fails in the page world.
 
-**Not handled:** one page operation still runs in the page's own world: the element count that
+- The live-region capture reads open modal dialogs from its isolated world, when it observes a
+  change and again at drain: a `dialog` in the browser's `:modal` state, and an element whose first
+  recognized role is `dialog` or `alertdialog` with `aria-modal` true while it is shown. A page
+  cannot make a change outside an open modal dialog count as heard by redefining `matches`,
+  `querySelectorAll`, `getAttribute`, or the `open` attribute in its own world. Before, a flow
+  requirement could pass on a polite region outside the modal the same step opened, which Chromium
+  leaves out of the accessibility tree for a `showModal()` dialog and Safari with VoiceOver hides
+  for an `aria-modal` dialog. See ground-truth for the platform facts.
+
+- A modal dialog inside a closed shadow root, native or `aria-modal`, is found at drain for a flow
+  requirement through the browser's own DOM read over CDP, and asked in the live world whether it
+  is open. While one is open, the flow requirement is an `unverified` gap, never a pass.
+
+**Not handled:** the interaction contract tiers drain through the keyboard step runner, which does
+not run the closed shadow root check, so a change outside a modal there can still count as heard.
+One page operation still runs in the page's own world: the element count that
 readiness polls to tell when the DOM stopped changing. A page can change what it sees by
 redefining DOM methods. The semantics a custom element sets through `ElementInternals` reach axe
 from the browser's accessibility tree, because the internals object lives in page script. The

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AxNode, Page, ProviderContext, Step } from '../../src/contracts/index.js';
+import type { AxNode, FocusUnreadable, Page, ProviderContext, Step } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
@@ -11,6 +11,7 @@ interface ScriptedPageSpec {
   activePaths: string[];
   activeNodes: Array<AxNode | null>;
   announcements: string[][];
+  unreadable?: Array<FocusUnreadable | null>;
   onTab?: () => void;
 }
 
@@ -66,6 +67,7 @@ async function makeScriptedPage(spec: ScriptedPageSpec): Promise<Page> {
     activePath: async () => readAt(spec.activePaths, currentIndex(cursor), ''),
     activeNode: async () => readAt(spec.activeNodes, currentIndex(cursor), null),
     drainAnnouncements: async () => readAt(spec.announcements, currentIndex(cursor), []),
+    activeFocusUnreadable: async () => readAt(spec.unreadable ?? [], currentIndex(cursor), null),
   });
 }
 
@@ -118,6 +120,20 @@ describe('keyboard walk StepRunner', () => {
         source: 'attribute',
       },
     ]);
+  });
+
+  it('records on the stop why the focused element cannot be read', async () => {
+    const runner = makeStepRunner();
+    const page = await makeScriptedPage({
+      activePaths: ['x-host'],
+      activeNodes: [null],
+      announcements: [[]],
+      unreadable: ['closed-shadow-root'],
+    });
+
+    const stops = await runner.run(page, [{ do: 'tab' }]);
+
+    expect(stops).toEqual([{ index: 0, elementPath: 'x-host', announcement: [], focusUnreadable: 'closed-shadow-root' }]);
   });
 
   it('throws when a step kind is unknown', async () => {
@@ -318,4 +334,30 @@ describe('makeKeyboardWalkProvider', () => {
 
     expect(drafts).toEqual([]);
   });
+
+  // A closed shadow root or a frame from another origin gives every control inside it the path of
+  // the host or the frame. Read as paths alone, the second control is a return to the first and
+  // the walk ends as complete, with nothing said about the controls after it.
+  for (const [reason, where, words] of [
+    ['closed-shadow-root', 'into a closed shadow root', 'closed shadow root'],
+    ['frame-unreadable', 'into a frame from another origin', 'frame from another origin'],
+    ['focus-too-deep', 'deeper than the read follows', 'more shadow roots and frames'],
+  ] as const) {
+    it(`discloses truncation instead of a cycle when focus moves ${where}`, async () => {
+      const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+      const page = await makeScriptedPage({
+        ...unnamedLinkPage(['#first', '#host', '#host', '#after']),
+        unreadable: [null, reason, reason, null],
+      });
+
+      const drafts = draftsOf(await provider.run(makeContext(page)));
+
+      expect(rules(drafts)).toEqual(['keyboard-walk-unnamed-interactive', 'keyboard-walk-truncated']);
+      expect(drafts[0]?.elementPath).toBe('#first');
+      expect(drafts[1]).toMatchObject({ evidenceClass: 'deterministic', confidence: 'unverified', elementPath: '' });
+      expect(drafts[1]?.why).toContain(words);
+      expect(drafts[1]?.why).toContain('After 1 tab stop(s)');
+      expect(drafts[1]?.fix).toContain('by hand');
+    });
+  }
 });

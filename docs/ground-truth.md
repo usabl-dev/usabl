@@ -779,6 +779,39 @@ and `assert-announced(region, contains)`.
 Marks any focus it cannot confirm as `unverified` rather than passing. Does not hang
 on a focus trap.
 
+**Shadow roots and frames.** `document.activeElement` stops at the host of a shadow root
+and at a frame, so every control inside one would get the host's or the frame's path. The
+walk would read the second control as a return to the first, end as if the focus order were
+done, and never reach the controls after it. The focus read therefore follows focus into
+every open shadow root and every same-origin frame, in an isolated world, to the element
+that really has focus. Its accessible name and role are read from that element, and its
+path joins the path of each tree in turn: ` >> ` before the path inside a shadow root, and
+` >> internal:control=enter-frame >> ` before the path inside a frame. These joined paths
+are identity strings, not selectors or locators: no code looks an element up by them, and a
+locator built from one can match more than one element, because Playwright's CSS engine also
+searches open shadow roots. An element outside every shadow root and frame
+keeps the path it had before, so its identity key does not change. The walk ends as
+complete only when a path repeats or focus reaches the body. The read enters `iframe` and
+`frame` elements only. Any other element that holds a frame, such as an `object` or `embed`
+element that shows a document, or a `fencedframe`, is found through the browser's own DOM read
+over CDP (the browser gives a frame owner a frame id or a content document), and focus on it
+counts as a frame the read cannot see into. When focus moves into a closed shadow root, into
+a frame from another origin, into such a frame owner, or under more than 1024 shadow roots
+and frames, the walk cannot tell one control there from another. It stops and emits
+`keyboard-walk-truncated` as `unverified`, which names the cause, so the screen is not
+covered instead of passing. A closed shadow root that does not hold focus, such as one
+inside a focusable host, is walked past as usual.
+
+The other checks that read focus treat an unreadable focus the same way. Each transcript
+stop records why its focused element could not be read. At such a stop, the interaction
+contract tier emits `voicing/focus-unreadable` as `unverified` instead of
+`voicing/missing-name` or `voicing/missing-role`, and the word-level tier keeps a missing-words
+draft `unverified` even for a promoted obligation class. A flow requirement whose text was not
+heard in an announcement emits its draft as `unverified`, with the cause, instead of `fail`,
+because the text may be the name of the control it could not read. The live announcement
+check still runs at such a stop, since what the capture heard does not depend on the focus
+read.
+
 ### 7.4 Declarative interaction probes
 
 Multi-step interactions expressed as data (JSON steps a generic runner executes). A
@@ -2521,6 +2554,54 @@ from outside, the change is not recorded. That region's own text leaves out the 
 changed and holds text the change did not make speakable, such as slot fallback text, so recording
 it could pass a flow requirement on words no screen reader spoke.
 
+Nor is a change outside an open modal dialog heard. While a dialog opened with `showModal()` is
+open, Chromium leaves everything outside the top one out of the accessibility tree, with the
+ignored reason `activeModalDialog`, so a screen reader says nothing for a live region there. The
+capture reads the open modal dialogs when it observes the change, by the browser's own
+`dialog:modal` state, in the document and in every open shadow root. A change is heard only when
+it sits inside every open modal dialog on the flat tree walk. Which open modal is on top is not in
+the DOM, so with two sibling modals open nothing is heard, while the browser still exposes the top
+one. That can only make the capture hear less. A dialog opened with `show()` hides nothing, and
+once the modal closes, the content outside it is heard again.
+
+An ARIA modal dialog counts as an open modal too: an element whose first recognized role is
+`dialog` or `alertdialog`, with `aria-modal` true, while it is connected and shown. Shown means
+rendered and not hidden by `visibility` (`checkVisibility({ visibilityProperty: true })`), and
+not under `aria-hidden`, `inert`, or `hidden` on the flat tree. `aria-modal` is read as Chromium
+reads an ARIA boolean: true for any value but empty, `undefined`, or `false`, in any ASCII case.
+The role and attribute rule is Chromium's `AXObject::IsModal`. Whether content outside such a
+dialog is spoken depends on the platform:
+
+- Safari with VoiceOver, on macOS and iOS, hides content outside a shown `aria-modal` dialog.
+- Chromium prunes the accessibility tree for `aria-modal` only on Mac and Android
+  (`content/renderer/accessibility/render_accessibility_impl.cc` sets
+  `SetAriaModalPrunesAXTree(true)` under `BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)`; the
+  setting is off by default in `third_party/blink/renderer/core/frame/settings.json5`). It
+  prunes only while focus is on an element inside the dialog
+  (`AXObjectCacheImpl::UpdateActiveAriaModalDialog` and `AncestorAriaModalDialog` in
+  `third_party/blink/renderer/modules/accessibility/ax_object_cache_impl.cc`).
+- Chromium on Linux and Windows does not prune, so a screen reader there may still speak a
+  region outside the dialog.
+
+The capture applies the rule whenever the dialog is shown, wherever focus is. A requirement met
+only by a region outside such a dialog fails for VoiceOver users, so hearing it would pass on
+words some users never get. Hearing less on the other platforms can only fail a requirement,
+never pass one.
+
+The modal state is read again when the announcements are drained. A page can write a region and
+open a modal in a later task, before the browser updates the accessibility tree, so a screen
+reader likely hears nothing. A change outside a modal open at drain is dropped, so the answer
+does not depend on which task ran first. When a modal is open at drain and a recorded change sits
+on an element that has left the document, the drain cannot check it and says so
+(`changed-element-removed`). A modal dialog inside a closed shadow root cannot be found from the
+capture's world. When a flow requirement drains, usabl also reads the document through the
+browser's own DOM read over CDP and asks each `dialog` element and each element with
+`aria-modal` inside a closed shadow root, in the live world, whether it is an open modal by the
+same rule. If one is open, the drain says so (`closed-shadow-modal`). Either way,
+the flow requirement emits an `unverified` draft that names the cause instead of a pass or a fail,
+unless the focused control's own name is the expected text. A modal inside a frame blocks only
+that frame, and frames are not drained, so it changes nothing here.
+
 The capture and the element path function run in isolated worlds, which share the DOM with the
 page but not its globals or prototypes. Page script cannot define, replace, or read either one. A
 page that defines `window.__usablDrain` or `window.__usablPathFor` before adoption, or replaces
@@ -2666,11 +2747,59 @@ Every path `init` writes stays relative to the repository root: `uiFileGlobs`, t
 `wideBlastGlobs`, and each entry file carry the app folder, such as `packages/web/src/**/*.tsx`.
 `usabl.config.json` and `usabl.routes.json` are written at the root, and `guardedPaths` names
 them there, so CODEOWNERS and the trusted-ref guard still match them. A config drafted for one
-app treats a change in another app as no UI change. That includes a workspace package the app
-renders components from, so when the app's `package.json` depends on a package found under
-`packages/` or `apps/`, a `Review:` note names it and says to add its files to `uiFileGlobs`.
-`init` does not add them itself, because it cannot tell which of the package's files the app
-renders.
+app treats a change in another app as no UI change. A workspace package the app depends on is
+different, because the app may render components from it. When the app's `package.json` depends
+on a package found under `packages/` or `apps/`, a `Review:` note names it and says to add its
+files to `uiFileGlobs`. `init` does not add them itself, because it cannot tell which of the
+package's files the app renders.
+
+**Workspace packages at check time.** `check` does not rely on that note. When the root
+`package.json` declares `workspaces` (a list, or Yarn's `{ "packages": [...] }`), or
+`pnpm-workspace.yaml` lists `packages`, the planner reads every pattern, with `!` patterns
+excluded, and each workspace package's `package.json`. The configured app is the package the
+router file, the `uiFileGlobs` folders, and the surface files sit in, which is the root package
+for a root app. A changed file in a workspace package the app depends on, directly or through
+another workspace package, is a `not-covered` gap and an unmapped file when it is outside
+`uiFileGlobs`. A package depends on another when any of these holds:
+
+- Its `dependencies`, `devDependencies`, `peerDependencies`, or `optionalDependencies` name it,
+  by key, or by an alias value: `workspace:<name>@<range>`, `npm:<name>@<range>`, or a
+  `file:`, `link:`, `portal:`, or `workspace:` path that points at its folder, read from the
+  declaring package's folder.
+- One of its source files names it, or a subpath of it, as a quoted module specifier. npm,
+  Yarn classic, and Bun hoisting let a package import another it does not list. Any quoted
+  match counts, on one line or several, so the check can over-count but not miss an import
+  written in source. A source file that cannot be read counts every package.
+- A path alias in its own `tsconfig.json`, `tsconfig.app.json`, or Vite config, or in the
+  repository root's, points into its folder.
+
+The source and alias checks run only for a package that leaves a changed package unreached by
+its declarations. The gap names the package and the fix: add the package's source to
+`uiFileGlobs` and list the file in the files of each surface that renders it. Test files and
+Markdown files are left out, as are files in the app's own package. Leaving Markdown out is an
+accepted miss: a package can ship Markdown the app renders, and a change to it reads as nothing
+to check. A workspace package that declares its own `workspaces` is not read as a nested root. A package whose
+`package.json` cannot be read counts as one the app depends on. A file belongs to the deepest
+workspace package folder it sits in. A change in a package the app does not depend on, and any
+change in a repository with no workspaces, reads as before.
+
+When the root `package.json` or `pnpm-workspace.yaml` exists and does not parse, or holds its
+workspace field in a shape no package manager reads, the workspace packages are unknown. Every
+changed file that is not a test, not UI, and not Markdown is then a `not-covered` gap whose
+reason names the file usabl could not read. A workspace pattern with `..` in a brace group is
+refused, and a glob result that is absolute or leaves the repository is never read.
+
+The workspace patterns and every package's dependencies are read from the trusted ref as well
+as from the tree, and the union counts. A change that removes `workspaces` from the root
+`package.json`, or the app's dependency on a package, in the same change that edits the
+package, still gaps that edit. A `package.json` the trusted ref does not have adds nothing, and
+a trusted root manifest that does not parse makes every such file a gap.
+
+The change is not mapped to screens through imports. The import graph follows relative and alias
+imports only. A package import resolves through the package's own manifest, its `exports`
+conditions and `main` field, often to built output that is not in the repository, so usabl
+cannot resolve it soundly from source, and a wrong guess would scan fewer screens than render the
+change while the run reads as covered.
 
 **The dev server URL.** `init` parses the app's Vite config, without running it, and reads
 `server.port` and `server.https` from the exported config: `export default { ... }`,

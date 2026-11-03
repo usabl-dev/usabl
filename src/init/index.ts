@@ -306,7 +306,8 @@ function packageJson(raw: string | null): Record<string, unknown> | null {
 
 /**
  * Review notes for the workspace packages an app folder depends on. Their files sit outside the
- * app's uiFileGlobs, so a change to a shared component the app renders reads as nothing to check.
+ * app's uiFileGlobs, so usabl check reports a change to a shared component the app renders as a
+ * coverage gap, because it cannot tell which screens render it.
  * init does not add their globs itself: it cannot tell which of a package's files the app renders,
  * and a glob that is too wide would queue scans for files the app never shows.
  */
@@ -327,8 +328,8 @@ async function workspaceDependencyNotes(fs: InitFs, appDir: string): Promise<str
     if (typeof name !== 'string' || !depends.has(name)) continue;
     notes.push(
       `Review: ${appDir} depends on ${operatorText(name)} in ${dir}, and its files are not in uiFileGlobs, so a ` +
-        'change there reads as nothing to check. If the app renders components from it, add their files to ' +
-        `uiFileGlobs, such as ${dir}/src/**/*.tsx.`,
+        'change there is a coverage gap, because usabl cannot tell which screens render it. If the app renders ' +
+        `components from it, add their files to uiFileGlobs, such as ${dir}/src/**/*.tsx, and to the files of the surfaces that render them.`,
     );
   }
   return notes;

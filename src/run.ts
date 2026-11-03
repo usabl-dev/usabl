@@ -110,7 +110,11 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
     // Parsed once and handed to both planners, so the screen id check and the docs plan read the
     // same manifest and the file is read once per run.
     const docsManifest = await parseDocsManifest(coverageFs);
-    const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed, docsManifest);
+    // The workspace manifests are read at the same trusted ref the guard compares against.
+    const trustedRef = opts.trustedRef ?? 'HEAD';
+    const discoveredCoverage = await computeCoverage(coverageFs, scanConfig, changed, docsManifest, (file) =>
+      deps.git.show(trustedRef, file),
+    );
     const docsCoverage = computeDocsCoverage(docsManifest, changed);
     const affected = [...discoveredCoverage.affected, ...docsCoverage.affected];
     // Idle means nothing UI-touching changed. A run whose scan configuration could not be read
