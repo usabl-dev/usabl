@@ -645,24 +645,28 @@ sandboxed without scripts, it was detached, or no session reached it, is a `not-
 named by the frame's origin and the reason. axe's own Playwright runner dropped such a frame
 without a gap, and gave a child frame one second to load axe.
 
-axe reads the semantics a custom element sets through `ElementInternals` from page-world
-properties such as `_internals`, which an isolated world cannot see. usabl gives axe what the
-browser's accessibility tree computed for each custom element instead: its role, when the element
-has no role attribute and the tree exposes a role that is not generic, a name set through an
-internals `aria-label`, and the states axe's `aria-required-attr` rule asks for. The tree reports
-a default state, such as unchecked, whether or not the element set one, so a state reaches axe
-only when the element has no attribute for it and the tree reports a value other than the role's
-default: checked or mixed, expanded, a heading level other than 2, and a slider, scrollbar,
-separator, or meter value other than the one the browser supplies when none is set. A state set
-through internals to its default value is not carried, so usabl can report it as missing, never
-the reverse. On the comparison fixtures this matches axe in the page world for list items,
-buttons, tabs, headings, labelled form controls, a state on an element with a role attribute,
-images, hidden items, and lists in shadow roots. Two cases differ, and both are recorded in
-`test/deps/axe-world-compare.summary.json`. A role kept in a private field is invisible to axe in
-the page world, which then reports a list with no items; the browser exposes the items, and so
-does usabl. A role attribute of `presentation`, or one that is not a role, overrides the internals
-role in Chrome, which then exposes no list items. usabl reports the list as missing its items; the
-page world read the internals role and passed it, which was a false pass.
+axe reads the semantics a custom element sets through `ElementInternals` from page-world properties
+such as `_internals`, which an isolated world cannot see. usabl gives axe what the browser's
+accessibility tree computed for each custom element instead: its role, when the element has no role
+attribute and the tree exposes a role that is not generic, a name set through an internals
+`aria-label`, and the states axe's `aria-required-attr` rule asks for. The tree reports a default
+state, such as unchecked, whether or not the element set one, so a state reaches axe only when the
+element has no attribute for it and the tree reports a value other than the role's default: checked
+or mixed, expanded, a heading level other than 2, and a slider, scrollbar, separator, or meter
+value other than the one the browser supplies when none is set. A state set through internals to
+its default value is not carried, so usabl can report it as missing, never the reverse.
+`test/deps/axe-world.real.integration.test.ts` pins in Chrome the default each of these states
+reports when an element sets none. On the comparison fixtures this matches axe in the page world
+for list items, buttons, tabs, headings, labelled form controls, a state on an element with a role
+attribute, images, hidden items, lists in shadow roots, and each carried state on its own page, set
+and not set. Three cases differ, and all are recorded in
+`test/deps/axe-world-compare.summary.json`. A heading that sets level 2 through internals reads
+like one that sets no level, so usabl reports its level as missing where the page world did not. A
+role kept in a private field is invisible to axe in the page world, which then reports a list with
+no items; the browser exposes the items, and so does usabl. A role attribute of `presentation`, or
+one that is not a role, overrides the internals role in Chrome, which then exposes no list items.
+usabl reports the list as missing its items; the page world read the internals role and passed it,
+which was a false pass.
 
 A color-contrast result axe could not measure because the element's background is a
 gradient is still a needs-review draft (`confidence: 'unverified'`) with the same rule,

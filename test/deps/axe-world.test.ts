@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { SET_INTERNALS_FUNCTION, internalsRecord } from '../../src/deps/axe-world.js';
+import { STATE_CASES } from '../support/internals-states.js';
 
 interface Property {
   name: string;
@@ -101,6 +102,22 @@ describe('internalsRecord: ARIA states', () => {
   it('carries nothing for an ignored node', () => {
     expect(internalsRecord({ ...(axNode('checkbox', [checked('true')]) as object), ignored: true }, attrs())).toBeNull();
   });
+});
+
+describe('internalsRecord: the defaults the real-browser test pins', () => {
+  // The defaults test/support/internals-states.ts expects the tree to report for an element that
+  // sets no state. The real-browser test checks them against Chrome; this checks the code drops
+  // each one, so the two cannot drift apart.
+  for (const entry of STATE_CASES.filter((candidate) => candidate.defaults !== null)) {
+    it(`drops every default the tree reports for ${entry.id}`, () => {
+      const role = /role="([^"]+)"/.exec(entry.html.replace(/^<div role="menu"[^>]*>/, ''))?.[1] ?? '';
+      expect(role).toBe(entry.id.split('-')[0]);
+      const { value, ...named } = entry.defaults ?? {};
+      const properties = Object.entries(named).map(([name, propertyValue]) => ({ name, type: typeof propertyValue, value: propertyValue }));
+      const attributes = attrs({ role, 'aria-label': 'Name' });
+      expect(internalsRecord(axNode(role, properties, value), attributes)).toBeNull();
+    });
+  }
 });
 
 describe('the internals handed to axe', () => {

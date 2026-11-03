@@ -2,26 +2,26 @@
   "axeCore": "4.13.0",
   "playwright": "1.62.1",
   "fixtures": {
-    "pages": 63,
+    "pages": 70,
     "withoutInternals": {
       "pages": 51,
       "pagesWithDifferences": 0,
       "unstablePages": 0,
       "comparedEntries": {
-        "violation": 141,
+        "violation": 140,
         "incomplete": 20,
-        "pass": 3156,
+        "pass": 3127,
         "inapplicable": 3377
       }
     },
     "withInternals": {
-      "pages": 12,
+      "pages": 19,
       "pagesWithDifferences": 3,
       "comparedEntries": {
-        "violation": 6,
+        "violation": 19,
         "incomplete": 0,
-        "pass": 301,
-        "inapplicable": 857
+        "pass": 802,
+        "inapplicable": 1309
       }
     },
     "perPage": [
@@ -144,7 +144,7 @@
         },
         "differences": 0,
         "uncheckedFrames": [
-          "an unnamed frame: it is sandboxed without scripts, so axe cannot run in it"
+          "http://127.0.0.1:<port>: it is sandboxed without scripts, so axe cannot run in it"
         ]
       },
       {
@@ -208,6 +208,18 @@
         "uncheckedFrames": []
       },
       {
+        "fixture": "internals: checked states",
+        "internals": true,
+        "counts": {
+          "violation": 5,
+          "incomplete": 0,
+          "pass": 187,
+          "inapplicable": 62
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
         "fixture": "internals: custom elements without internals",
         "internals": true,
         "counts": {
@@ -215,6 +227,18 @@
           "incomplete": 0,
           "pass": 41,
           "inapplicable": 68
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: expanded states",
+        "internals": true,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 91,
+          "inapplicable": 59
         },
         "differences": 0,
         "uncheckedFrames": []
@@ -229,6 +253,18 @@
           "inapplicable": 76
         },
         "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: heading states",
+        "internals": true,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 37,
+          "inapplicable": 72
+        },
+        "differences": 2,
         "uncheckedFrames": []
       },
       {
@@ -292,6 +328,18 @@
         "uncheckedFrames": []
       },
       {
+        "fixture": "internals: meter states",
+        "internals": true,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 48,
+          "inapplicable": 65
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
         "fixture": "internals: role attribute over internals",
         "internals": true,
         "counts": {
@@ -316,6 +364,42 @@
         "uncheckedFrames": []
       },
       {
+        "fixture": "internals: scrollbar states",
+        "internals": true,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 37,
+          "inapplicable": 65
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: separator states",
+        "internals": true,
+        "counts": {
+          "violation": 1,
+          "incomplete": 0,
+          "pass": 37,
+          "inapplicable": 65
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
+        "fixture": "internals: slider states",
+        "internals": true,
+        "counts": {
+          "violation": 2,
+          "incomplete": 0,
+          "pass": 64,
+          "inapplicable": 64
+        },
+        "differences": 0,
+        "uncheckedFrames": []
+      },
+      {
         "fixture": "internals: state on a role attribute",
         "internals": true,
         "counts": {
@@ -324,7 +408,7 @@
           "pass": 27,
           "inapplicable": 64
         },
-        "differences": 2,
+        "differences": 0,
         "uncheckedFrames": []
       },
       {
@@ -477,7 +561,7 @@
         "counts": {
           "violation": 0,
           "incomplete": 0,
-          "pass": 452,
+          "pass": 422,
           "inapplicable": 74
         },
         "differences": 0,
@@ -584,8 +668,8 @@
         "internals": false,
         "counts": {
           "violation": 8,
-          "incomplete": 6,
-          "pass": 255,
+          "incomplete": 7,
+          "pass": 254,
           "inapplicable": 54
         },
         "differences": 0,
@@ -595,9 +679,9 @@
         "fixture": "pf6: rendered markup, docs tags",
         "internals": false,
         "counts": {
-          "violation": 2,
-          "incomplete": 8,
-          "pass": 153,
+          "violation": 1,
+          "incomplete": 7,
+          "pass": 155,
           "inapplicable": 41
         },
         "differences": 0,
@@ -786,6 +870,34 @@
     ],
     "differences": [
       {
+        "fixture": "internals: heading states",
+        "internals": true,
+        "differences": [
+          {
+            "entry": {
+              "category": "pass",
+              "rule": "aria-required-attr",
+              "target": "[\"#heading-two\"]",
+              "impact": null,
+              "elementKey": null
+            },
+            "pageWorld": 1,
+            "isolated": 0
+          },
+          {
+            "entry": {
+              "category": "violation",
+              "rule": "aria-required-attr",
+              "target": "[\"#heading-two\"]",
+              "impact": "critical",
+              "elementKey": "compare|aria-required-attr|struct:unknown:#heading-two"
+            },
+            "pageWorld": 0,
+            "isolated": 1
+          }
+        ]
+      },
+      {
         "fixture": "internals: role attribute over internals",
         "internals": true,
         "differences": [
@@ -862,63 +974,28 @@
             "isolated": 0
           }
         ]
-      },
-      {
-        "fixture": "internals: state on a role attribute",
-        "internals": true,
-        "differences": [
-          {
-            "entry": {
-              "category": "pass",
-              "rule": "aria-required-attr",
-              "target": "[\"x-state\"]",
-              "impact": null,
-              "elementKey": null
-            },
-            "pageWorld": 1,
-            "isolated": 0
-          },
-          {
-            "entry": {
-              "category": "violation",
-              "rule": "aria-required-attr",
-              "target": "[\"x-state\"]",
-              "impact": "critical",
-              "elementKey": "compare|aria-required-attr|struct:unknown:x-state"
-            },
-            "pageWorld": 0,
-            "isolated": 1
-          }
-        ]
       }
     ]
   },
   "sweep": {
-    "comparisons": 119,
+    "comparisons": 118,
     "byFile": {
-      "test/surfaces/overlay-client.test.ts": 17,
-      "test/surfaces/playwright-page-check.integration.test.ts": 20,
-      "test/session/session-login.integration.test.ts": 1,
-      "test/surfaces/webpack-overlay.integration.test.ts": 1,
-      "test/baseline/row-stability.real.integration.test.ts": 12,
       "test/baseline/row-identity.real.integration.test.ts": 56,
-      "test/deps/real.integration.test.ts": 12
+      "test/surfaces/overlay-client.test.ts": 17,
+      "test/deps/real.integration.test.ts": 11,
+      "test/surfaces/playwright-page-check.integration.test.ts": 20,
+      "test/baseline/row-stability.real.integration.test.ts": 12,
+      "test/session/session-login.integration.test.ts": 1,
+      "test/surfaces/webpack-overlay.integration.test.ts": 1
     },
     "comparedEntries": {
       "violation": 112,
-      "incomplete": 49,
-      "pass": 10416,
+      "incomplete": 39,
+      "pass": 10421,
       "inapplicable": 7437
     },
     "withDifferences": [],
     "withUncheckedFrames": [],
-    "errors": [
-      {
-        "file": "test/deps/real.integration.test.ts",
-        "test": "real browser driver integration > names a real gradient background with the exact axe reason, and nothing else with it",
-        "page": "data URL 465044a88a68",
-        "error": "axe could not run on the page: cdpSession.send: Target page, context or browser has been closed"
-      }
-    ]
+    "errors": []
   }
 }

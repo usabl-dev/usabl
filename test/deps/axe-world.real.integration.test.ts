@@ -9,13 +9,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import type { Deps, Page, UsablConfig } from '../../src/contracts/index.js';
 import { runBaseline } from '../../src/baseline/index.js';
-import { runAxeInIsolatedWorld } from '../../src/deps/axe-world.js';
+import { internalsRecord, runAxeInIsolatedWorld } from '../../src/deps/axe-world.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { axeProvider, type AxeRunResult } from '../../src/providers/axe/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import { run } from '../../src/run.js';
+import { STATE_CASES, STATE_GROUPS, X_ARIA_SCRIPT, stateGroupBody, type TreeStates } from '../support/internals-states.js';
 
 const BUDGET_MS = 180_000;
 const PAGE_FILE = 'src/RowsPage.tsx';
@@ -294,6 +295,77 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('axe in an isolated world
         } finally {
           await context.close();
         }
+      },
+      BUDGET_MS,
+    );
+  });
+
+  describe('ARIA states set through ElementInternals', () => {
+    let browser: Browser;
+
+    beforeAll(async () => {
+      browser = await chromium.launch({ headless: true });
+    });
+
+    afterAll(async () => {
+      await browser?.close();
+    });
+
+    // What the tree reports for one element, and what internalsRecord makes of it. The tree is
+    // read the way the isolated run reads it: one full tree, matched to the element by backend id.
+    async function readStates(url: string, ids: string[]): Promise<Record<string, { tree: TreeStates; record: unknown }>> {
+      const context = await browser.newContext();
+      try {
+        const pw = await context.newPage();
+        await pw.goto(url, { waitUntil: 'load' });
+        const cdp = await context.newCDPSession(pw);
+        const tree = await cdp.send('Accessibility.getFullAXTree');
+        const document = await cdp.send('DOM.getDocument', { depth: 0 });
+        const read: Record<string, { tree: TreeStates; record: unknown }> = {};
+        for (const id of ids) {
+          const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: document.root.nodeId, selector: `#${id}` });
+          const { node } = await cdp.send('DOM.describeNode', { nodeId });
+          const axNode = tree.nodes.find((entry) => entry.backendDOMNodeId === node.backendNodeId);
+          const attributes = new Map<string, string>();
+          const flat = node.attributes ?? [];
+          for (let index = 0; index + 1 < flat.length; index += 2) attributes.set(flat[index] ?? '', flat[index + 1] ?? '');
+          const states: TreeStates = {};
+          const properties = axNode?.properties ?? [];
+          for (const name of ['checked', 'expanded', 'level', 'valuemin', 'valuemax'] as const) {
+            const property = properties.find((entry) => entry.name === name);
+            if (property !== undefined) states[name] = property.value.value as unknown;
+          }
+          const value: unknown = axNode?.value?.value;
+          if (value !== undefined) states.value = value;
+          read[id] = { tree: states, record: internalsRecord(axNode, attributes) };
+        }
+        return read;
+      } finally {
+        await context.close();
+      }
+    }
+
+    it(
+      'reports the default each carried state assumes when the element sets none, and carries only set values',
+      async () => {
+        const measured: Record<string, { tree: TreeStates; record: unknown }> = {};
+        for (const group of STATE_GROUPS) {
+          const url = fixture.set(`/states-${group}`, page(stateGroupBody(group), X_ARIA_SCRIPT));
+          const ids = STATE_CASES.filter((entry) => entry.group === group).map((entry) => entry.id);
+          Object.assign(measured, await readStates(url, ids));
+        }
+        // For an element that sets no state, the tree's default is pinned exactly. For one that
+        // sets a state, only what internalsRecord hands axe is pinned.
+        const shown = Object.fromEntries(
+          Object.entries(measured).map(([id, read]) => {
+            const entry = STATE_CASES.find((candidate) => candidate.id === id);
+            return [id, entry?.defaults === null ? { record: read.record } : read];
+          }),
+        );
+        const expected = Object.fromEntries(
+          STATE_CASES.map((entry) => [entry.id, entry.defaults === null ? { record: entry.record } : { tree: entry.defaults, record: entry.record }]),
+        );
+        expect(shown).toEqual(expected);
       },
       BUDGET_MS,
     );

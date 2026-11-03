@@ -27,6 +27,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page as PwPage } from 'playwright';
 import { DOCS_AXE_TAGS } from '../../src/providers/axe/index.js';
 import { compareAxeWorlds, type Comparison, type Difference } from '../support/axe-worlds.js';
+import { STATE_GROUPS, X_ARIA_SCRIPT, stateGroupBody } from '../support/internals-states.js';
 
 const ENABLED = process.env.USABL_AXE_COMPARE === '1';
 const BUDGET_MS = 600_000;
@@ -69,6 +70,7 @@ customElements.define('x-state', class extends Base { connectedCallback() { this
 customElements.define('x-img', class extends Base { connectedCallback() { this._internals.role = 'img'; } });
 customElements.define('x-host', class extends HTMLElement { connectedCallback() { const r = this.attachShadow({ mode: 'open' }); r.innerHTML = '<div role="list"><x-li>a</x-li><x-li>b</x-li></div>'; } });
 customElements.define('x-plain', class extends HTMLElement {});
+${X_ARIA_SCRIPT}
 </script>`;
 
 interface Fixture {
@@ -248,6 +250,11 @@ function fixtures(other: string): Fixture[] {
     { name: 'internals: list in a shadow root', path: '/int-shadow', internals: true, html: page('<x-host></x-host>', INTERNALS) },
     { name: 'internals: custom elements without internals', path: '/int-none', internals: true, html: page('<x-plain>text</x-plain><div role="list"><x-plain>bad</x-plain></div><x-plain contenteditable>e</x-plain><x-plain tabindex="0" title="T">f</x-plain><ul><x-plain>a</x-plain><li>b</li></ul><div role="list"><x-nope>c</x-nope></div>', INTERNALS) },
   );
+  // One page per ARIA state the isolated run carries: for each role, an element that sets no state
+  // and one that sets a value other than the default, all with the role as an attribute.
+  for (const group of STATE_GROUPS) {
+    list.push({ name: `internals: ${group} states`, path: `/int-states-${group}`, internals: true, html: page(stateGroupBody(group), INTERNALS) });
+  }
   return list;
 }
 
@@ -370,12 +377,18 @@ describe.skipIf(!ENABLED)('axe in the page world and in the isolated world', () 
 // The ElementInternals differences, as measured. The isolated world reads the role, the
 // aria-label name, and the required ARIA states a custom element set through internals from the
 // browser's accessibility tree, which matches the page world on every fixture not listed with a
-// difference here. Two differ. A role attribute of presentation, or one that is not a role,
+// difference here. Three differ. A role attribute of presentation, or one that is not a role,
 // overrides the internals role in Chrome, which then exposes no list items. The isolated run
 // reports the list as missing its items, which is what assistive technology meets. The page world
 // read the internals role instead and passed the list, a false pass. A role kept in a private
 // field is invisible to axe in the page world, which then reports a list with no items. The
 // browser exposes those items, and so does the isolated run.
+//
+// The state pages show that a state reaches axe in the isolated run exactly when the page world
+// sees it, except on the third: a heading that sets level 2 through internals. The tree reports level 2 for
+// every heading that sets none, so the isolated run cannot tell the two apart and reports the level
+// as missing. That is a false barrier. A default carried by mistake would show here as a pass in
+// the isolated run where the page world reports the state missing.
 const EXPECTED_INTERNALS_DIFFERENCES: Record<string, string[]> = {
   'internals: buttons named and unnamed': [],
   'internals: custom elements without internals': [],
@@ -397,4 +410,14 @@ const EXPECTED_INTERNALS_DIFFERENCES: Record<string, string[]> = {
   ],
   'internals: state on a role attribute': [],
   'internals: tabs': [],
+  'internals: checked states': [],
+  'internals: heading states': [
+    'pass aria-required-attr ["#heading-two"]: page world 1, isolated 0',
+    'violation aria-required-attr ["#heading-two"]: page world 0, isolated 1',
+  ],
+  'internals: slider states': [],
+  'internals: scrollbar states': [],
+  'internals: separator states': [],
+  'internals: meter states': [],
+  'internals: expanded states': [],
 };

@@ -266,7 +266,9 @@ function attributesOf(flat: unknown): Map<string, string> {
  *   (see defaultValueNow), as `ariaValueNow`. The tree reports it as the node's numeric `value`.
  *   A value on any other role is dropped, and so is a text value.
  * An element that set a state to its default value is still reported as missing it. That can be a
- * false barrier, never a missed one.
+ * false barrier, never a missed one, as long as each default here is the one Chrome reports. A
+ * wrong default would be carried and hide a missing state, so the real-browser test in
+ * test/deps/axe-world.real.integration.test.ts pins each one.
  */
 export function internalsRecord(axNode: unknown, attributes: Map<string, string>): InternalsRecord | null {
   if (axNode === undefined || getProp(axNode, 'ignored') === true) {
