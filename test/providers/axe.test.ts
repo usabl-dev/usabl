@@ -3,7 +3,7 @@ import type { Page, ProfileName, ProviderContext } from '../../src/contracts/ind
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import type { AxeIssue, AxeRunResult, AxeRuleSummary } from '../../src/providers/axe/index.js';
 import { applyAxeTags, axeProvider, DOCS_AXE_TAGS } from '../../src/providers/axe/index.js';
-import { applicabilityOf, draftsOf, testConfig } from '../helpers.js';
+import { applicabilityOf, draftsOf, gapsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 
@@ -186,6 +186,42 @@ describe('axeProvider', () => {
       ['html-has-lang', 'passed', 1],
       ['video-caption', 'inapplicable', 0],
     ]);
+  });
+
+  it('reports each frame axe could not check as a not-covered gap that names its origin and why', async () => {
+    const ctx = await makeContext({
+      violations: [VIOLATION],
+      uncheckedFrames: [
+        { origin: 'https://widgets.example.com', why: 'loading axe took longer than 60000 ms' },
+        { origin: 'about:srcdoc', why: 'it is sandboxed without scripts, so axe cannot run in it' },
+      ],
+    });
+
+    const output = await axeProvider.run(ctx);
+
+    // The frames axe did check still count. Only the frames it could not check become gaps.
+    expect(draftsOf(output).map((d) => d.rule)).toEqual(['button-name']);
+    expect(gapsOf(output)).toEqual([
+      {
+        ref: 'provider:axe-core',
+        state: 'not-covered',
+        reason:
+          'provider axe-core could not check a frame from https://widgets.example.com: loading axe took longer than ' +
+          '60000 ms. Its findings are not in this result.',
+      },
+      {
+        ref: 'provider:axe-core',
+        state: 'not-covered',
+        reason:
+          'provider axe-core could not check a frame from about:srcdoc: it is sandboxed without scripts, so axe ' +
+          'cannot run in it. Its findings are not in this result.',
+      },
+    ]);
+  });
+
+  it('reports no gap when axe checked every frame', async () => {
+    const output = await axeProvider.run(await makeContext({ violations: [VIOLATION], uncheckedFrames: [] }));
+    expect(gapsOf(output)).toEqual([]);
   });
 
   it('throws when the page does not provide runAxe', async () => {

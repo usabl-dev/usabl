@@ -567,6 +567,18 @@ outside every table as the control in an accepted row. Either way a new barrier 
 - The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
   that redefines style writes, or says its root is not an element, cannot stop the zoom from
   landing. No provider calls `setZoom` today; the planned resize check (WCAG 1.4.4) will.
+- axe runs in an isolated world in every frame, for a page usabl opens and for a page `checkPage`
+  adopts. Before this, axe ran in the page's own world. A page that patched
+  `Element.prototype.getAttribute` so one button's id read as another's had two findings named by
+  one selector, and a new barrier in one keyed row read as the carried barrier of another row. A
+  page that defined a `window.axe` getter could hand back a clean result. Neither reaches axe now.
+  A child frame axe cannot check is a coverage gap that names the frame's origin and the reason,
+  where axe's own Playwright runner dropped it without a word, including a frame that took more
+  than one second to load axe. So is a frame axe never found, such as one in a closed shadow root
+  or a document in an `object` element, and a frame whose frames changed between axe's two reads.
+- A role Chrome derives for a custom element from its layout or focus, such as `listitem` for
+  `display: list-item`, is never handed to axe as an internals role, so CSS cannot make axe pass a
+  check that the same page fails in the page world.
 
 - The live-region capture reads open modal dialogs from its isolated world, when it observes a
   change and again at drain: a `dialog` in the browser's `:modal` state, and an element whose first
@@ -585,12 +597,21 @@ outside every table as the control in an accepted row. Either way a new barrier 
 not run the closed shadow root check, so a change outside a modal there can still count as heard.
 One page operation still runs in the page's own world: the element count that
 readiness polls to tell when the DOM stopped changing. A page can change what it sees by
-redefining DOM methods. axe also computes its target selectors in the page's own world, so a page
-that patches DOM accessors can still change the selector, and with it the identity key, of an axe
-finding.
+redefining DOM methods. The semantics a custom element sets through `ElementInternals` reach axe
+from the browser's accessibility tree, because the internals object lives in page script. The
+tree is what assistive technology reads, so a page cannot use this to tell axe something the
+browser does not expose. Where the browser exposes nothing, axe is told nothing and reports more.
+Page script still shares the DOM and the main thread with axe's world, so it can change the DOM
+between axe's steps and can tell from the timing that axe runs.
 
-**Status:** [x] Paths, announcements, table rows, the focus and style reads, and the zoom write
-run in isolated worlds. [ ] The readiness element count and axe's target selectors are open.
+**Tests:** `test/deps/axe-world.real.integration.test.ts` (patched `getAttribute`, a `window.axe`
+getter, a sandboxed frame, a frame in another process, a chain of processes, a frame that stops
+answering, frames axe never finds, roles from layout), `test/deps/axe-world-frames.test.ts` (removed,
+navigating, and changed frames, frames no session reaches, results that are not results), and
+`test/deps/axe-world-compare.harness.test.ts` with its summary.
+
+**Status:** [x] Paths, announcements, table rows, the focus and style reads, the zoom write, and
+axe's selectors and results run in isolated worlds. [ ] The readiness element count is open.
 
 ---
 
