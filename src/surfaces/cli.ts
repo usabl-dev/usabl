@@ -60,6 +60,9 @@ export interface CliOptions {
   // When true, `stop-hook` emits Cursor's followup_message protocol instead of Claude's
   // decision: block. Set by --cursor on the stop-hook command.
   cursorStopHook: boolean;
+  // check-only: run the judge's browser. Chromium's sandbox required, service workers blocked, and
+  // every request outside the trusted origins aborted, so a blocked screen is a coverage gap.
+  isolatedBrowser: boolean;
 }
 
 // The value flags of serve-build and extract-build. Those commands parse their own arguments.
@@ -134,6 +137,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let cursor = false;
   let docsCi = false;
   let branchRule = false;
+  let isolatedBrowser = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -217,6 +221,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
     }
     if (token === '--ci') {
       ci = true;
+      continue;
+    }
+    if (token === '--isolated-browser') {
+      isolatedBrowser = true;
       continue;
     }
     if (token === '--self-check') {
@@ -326,6 +334,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     outPath,
     installTarget,
     cursorStopHook,
+    isolatedBrowser,
   };
 }
 

@@ -143,6 +143,53 @@ describe('makeCheckRunner', () => {
     expect(scan.gaps).toEqual([]);
   });
 
+  it('makes a screen not covered when the isolated browser blocked any of its requests', async () => {
+    // A blocked script or stylesheet can remove the very control that carries a barrier, so the
+    // page that was measured is not the page users get. That is never a pass: the screen is a
+    // coverage gap that names the origin, while its drafts are still reported.
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    Object.assign(page, {
+      blockedRequests: async () => ['https://cdn.example', 'https://evil.example'],
+    });
+    const draft = makeDraft('still-reported');
+    const provider: Provider = {
+      id: 'reporter',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<Draft[]> => [draft],
+    };
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [provider],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.drafts).toEqual([draft]);
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.state).toBe('not-covered');
+    expect(scan.gaps[0]?.ref).toBe(SCREEN.url);
+    expect(scan.gaps[0]?.reason).toContain('https://cdn.example');
+    expect(scan.gaps[0]?.reason).toContain('https://evil.example');
+    expect(scan.gaps[0]?.reason).toContain('judge.allowOrigins');
+  });
+
+  it('adds no gap when the isolated browser blocked nothing', async () => {
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    Object.assign(page, { blockedRequests: async () => [] });
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+    expect((await runner.scan(SCREEN)).gaps).toEqual([]);
+  });
+
   it('turns provider throws into not-covered gaps and closes the page', async () => {
     let closeCalls = 0;
     const page = await makeScriptedPage({

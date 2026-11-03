@@ -14,6 +14,7 @@ import type {
   Verdict,
 } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
+import { isJudgeDisclosure, judgeLine } from '../judge/disclosure.js';
 import { NOT_A_LIST, ownEntry, wholeNumberText } from '../output/carried.js';
 import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence, isBlockingBarrier } from '../output/disclosure.js';
@@ -223,7 +224,16 @@ function renderNoVerdict(result: Result): string[] {
     meaning,
     '',
     ...framedMarkdownLines([{ label: 'engine summary', value: result.summary }]),
+    ...renderJudge(result),
   ];
+}
+
+// One line saying the CI judge produced this Result. Disclosure only, never a verdict.
+function renderJudge(result: Result): string[] {
+  if (!isJudgeDisclosure(result.judge)) {
+    return [];
+  }
+  return ['', `Judge: ${judgeLine(result.judge)}`];
 }
 
 function renderAccessibilitySplit(result: Result): string[] {
@@ -609,6 +619,7 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
     COMMENT_MARKER,
     projectHeadline(safe.verdict),
     ...renderAccessibilitySplit(safe),
+    ...renderJudge(safe),
     '',
     ...renderReceipt(safe),
     '',

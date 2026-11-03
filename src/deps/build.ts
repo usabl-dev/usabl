@@ -18,6 +18,7 @@ import { loadRequirements } from "../intake/load.js";
 import { overlayRequirementsFs } from "../intake/overlay-fs.js";
 import { resolveIntakeConfig } from "../intake/trusted-config.js";
 import { makeRealBrowserDriver, type RealBrowserOptions } from "./real.js";
+import type { BrowserIsolation } from "../judge/request-filter.js";
 import { makeGitReader } from "./git.js";
 import { makeHistoryGit } from "../history/git.js";
 import { makeFsGlob } from "./fs.js";
@@ -188,6 +189,9 @@ export async function buildDeps(
     collectPageImages?: boolean;
     // Where a warning about the saved session goes. Defaults to stderr, so JSON on stdout stays clean.
     warn?: (line: string) => void;
+    // The judge's isolated browser: service workers blocked, every request outside the allowed
+    // origins aborted, and Chromium's sandbox required. Only `check --isolated-browser` sets it.
+    isolation?: BrowserIsolation;
   } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
@@ -220,10 +224,14 @@ export async function buildDeps(
       : { readyTimeoutMs: config.readyTimeoutMs }),
     // The sandbox policy is policy, so a pull request must not be able to turn a required sandbox
     // off for its own scan. With a trusted ref, require in either document wins.
+    // The judge runs a pull request's page script, so it always requires the sandbox, whatever
+    // either document says.
     ...(config.browserSandbox === "require" ||
-    intakeConfig.browserSandbox === "require"
+    intakeConfig.browserSandbox === "require" ||
+    options.isolation !== undefined
       ? { browserSandbox: "require" as const }
       : {}),
+    ...(options.isolation === undefined ? {} : { isolation: options.isolation }),
   };
   // Still lazy: nothing launches until the first screen opens.
   const browser =

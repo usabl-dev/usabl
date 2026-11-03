@@ -71,6 +71,7 @@ describe('parseCliArgs', () => {
       outPath: null,
       installTarget: null,
       cursorStopHook: false,
+      isolatedBrowser: false,
     });
   });
 
@@ -109,7 +110,14 @@ describe('parseCliArgs', () => {
       outPath: null,
       installTarget: null,
       cursorStopHook: false,
+      isolatedBrowser: false,
     });
+  });
+
+  it('parses --isolated-browser for the judge', () => {
+    const parsed = parseCliArgs(['check', '--ci', '--trusted-ref', 'origin/main', '--isolated-browser']);
+    expect(parsed.isolatedBrowser).toBe(true);
+    expect(parseCliArgs(['check']).isolatedBrowser).toBe(false);
   });
 
   it('parses --html for the docs command', () => {
@@ -184,6 +192,7 @@ describe('parseCliArgs', () => {
       outPath: null,
       installTarget: null,
       cursorStopHook: false,
+      isolatedBrowser: false,
     });
   });
 

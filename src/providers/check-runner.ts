@@ -92,6 +92,33 @@ function openFailureReason(screen: { id: string; url: string }, config: UsablCon
   return `screen failed to open: ${message}`;
 }
 
+// The judge's isolated browser aborts every request outside the trusted origins. The page that was
+// measured is then not the page users get: a blocked script or stylesheet can remove the very
+// control that carries a barrier. So any blocked request makes the screen a coverage gap, never a
+// pass. The drafts the scan did find are still reported. A read that fails counts as blocked.
+const MAX_BLOCKED_ORIGINS_NAMED = 5;
+
+async function readBlockedOrigins(page: Page): Promise<string | null> {
+  if (page.blockedRequests === undefined) {
+    return null;
+  }
+  let origins: string[];
+  try {
+    origins = await page.blockedRequests();
+  } catch (err) {
+    return `the isolated browser could not report which requests it blocked (${errorMessage(err)}), so this screen may not have loaded as users see it`;
+  }
+  if (origins.length === 0) {
+    return null;
+  }
+  const named = origins.slice(0, MAX_BLOCKED_ORIGINS_NAMED).join(', ');
+  const more = origins.length > MAX_BLOCKED_ORIGINS_NAMED ? ` and ${origins.length - MAX_BLOCKED_ORIGINS_NAMED} more` : '';
+  return (
+    `the isolated browser blocked requests to ${named}${more}, so this screen was not checked as users see it. ` +
+    'If the app needs an origin, add it to judge.allowOrigins in the trusted usabl.config.json.'
+  );
+}
+
 function failedScan(screen: { id: string; url: string }, reason: string): ScreenScan {
   // A scan that failed knows nothing about which rules applied, so it claims nothing. It also made
   // no reachability observation, so both reachability fields stay null. The gap here already tells
@@ -341,6 +368,11 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       } catch (err) {
         result = failedScan(screen, `scan failed: ${errorMessage(err)}`);
       } finally {
+        // Read before the page closes, after everything that could have triggered a request.
+        const blocked = await readBlockedOrigins(page);
+        if (blocked !== null) {
+          result = { ...result, gaps: [...result.gaps, notCoveredGap(screen.url, blocked)] };
+        }
         try {
           await page.close();
         } catch (err) {

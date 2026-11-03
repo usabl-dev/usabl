@@ -219,6 +219,23 @@ describe("buildDeps", () => {
     // Four builds and a real git repository; a loaded machine needs more than the default.
   }, 30_000);
 
+  it("gives the judge's isolated browser its filter and always requires the sandbox", async () => {
+    // The judge runs a pull request's page script. A config that allows the unsandboxed fallback
+    // must not weaken that, so isolation turns the sandbox policy to require on its own.
+    const seen: Array<{ browserSandbox: string | undefined; isolation: unknown }> = [];
+    const browserFor = (options: { browserSandbox?: string; isolation?: unknown }): BrowserDriver => {
+      seen.push({ browserSandbox: options.browserSandbox, isolation: options.isolation });
+      return { open: async () => makeFakePage(), close: async () => {} };
+    };
+    const isolation = { allowedOrigins: new Set(["http://127.0.0.1:5173"]), onBlocked: () => undefined };
+    await buildDeps({ ...testConfig(), browserSandbox: "auto" }, { browserFor, isolation });
+    await buildDeps(testConfig(), { browserFor });
+    expect(seen).toEqual([
+      { browserSandbox: "require", isolation },
+      { browserSandbox: undefined, isolation: undefined },
+    ]);
+  });
+
   it("tells the check runner that a session was configured, and that it was not", async () => {
     // Two of the three not-reached rules are claims about a session that was asserted and did not
     // work, so they are off unless someone asserted one. This is the only place in the product

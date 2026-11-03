@@ -67,6 +67,7 @@ import { recordMainScan } from './history/record-run.js';
 import { runDebt } from './history/report.js';
 import { runServeBuild } from './judge/serve-build.js';
 import { runExtractBuild } from './judge/extract-build.js';
+import { prepareJudge } from './judge/prepare.js';
 
 // The configured url warnings this process has already printed. It holds config urls, which may
 // carry a query, so it is never printed and never leaves the process.
@@ -691,11 +692,41 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return refusal.exitCode;
   }
 
+  // The judge's browser. The origins it may reach come from the trusted ref, and the build digest
+  // it records comes from the workflow, checked again here.
+  let judge: Extract<Awaited<ReturnType<typeof prepareJudge>>, { ok: true }> | null = null;
+  if (opts.isolatedBrowser) {
+    const git = makeGitReader();
+    const prepared = await prepareJudge({
+      trustedRef: opts.trustedRef,
+      configPath: opts.configPath,
+      buildDigestEnv: process.env.USABL_BUILD_DIGEST,
+      readAtRef: (ref, path) => git.show(ref, path),
+      readWorking: async (path) => {
+        try {
+          return await readFile(path, 'utf8');
+        } catch (error) {
+          if (isErrnoException(error) && error.code === 'ENOENT') {
+            return null;
+          }
+          throw error;
+        }
+      },
+      log: (text) => process.stderr.write(text),
+    });
+    if (!prepared.ok) {
+      process.stderr.write(`usabl: ${prepared.message}\n`);
+      return 2;
+    }
+    judge = prepared;
+  }
+
   const config = await loadConfig(opts.configPath);
   const deps = await buildDeps(config, {
     // Static-only denies live checks as explicit capability gaps instead of silent omission.
     allowedCapabilities: opts.staticOnly ? [] : ['live'],
     ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
+    ...(judge === null ? {} : { isolation: judge.isolation }),
   });
   try {
     let changedFiles: string[] | undefined;
@@ -706,10 +737,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       changedFiles = mergeChangedPaths(diffNames, statusPaths);
     }
 
-    const result = await run(deps, config, {
+    const ran = await run(deps, config, {
       ...(opts.trustedRef === null ? {} : { trustedRef: opts.trustedRef }),
       ...(changedFiles === undefined ? {} : { changedFiles }),
     });
+    const result = judge === null ? ran : judge.finish(ran);
     if (result.verdict === 'verified' && result.receipt !== null) {
       const receiptFs: ReceiptFs = {
         readFile: async () => null,

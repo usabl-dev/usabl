@@ -352,6 +352,17 @@ export interface Result {
   // Result from an older engine, or one a library caller composed, has none, and a surface then
   // says nothing about tracking.
   debt?: DebtStatus;
+  // Present only when the CI judge produced this Result with --isolated-browser. Disclosure only:
+  // the gate never reads it. A blocked request is already a coverage gap on its screen.
+  judge?: JudgeDisclosure;
+}
+
+export interface JudgeDisclosure {
+  isolatedBrowser: true;
+  // Requests the isolated browser aborted because their origin was not allowed, over the run.
+  blockedRequests: number;
+  // sha256 of the build archive the judge scanned, or null when no digest was supplied.
+  buildDigest: string | null;
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);
@@ -719,6 +730,10 @@ export interface Page {
   setReducedMotion(enabled: boolean): Promise<void>;
   getComputedStyle(selector: string, property: string): Promise<string>;
   screenshot(selector?: string): Promise<Buffer>;
+  // Present only on a page opened by the judge's isolated browser: the distinct origins of the
+  // requests it blocked since the page opened. A blocked script can remove the very control a
+  // barrier sits on, so any entry here makes the screen a coverage gap.
+  blockedRequests?(): Promise<string[]>;
 }
 export interface BrowserDriver {
   open(url: string): Promise<Page>;
@@ -847,6 +862,15 @@ export interface UsablConfig {
   // without it and says so in the run output and the Result. require refuses to scan: the run
   // ends with no verdict and exit 4.
   browserSandbox?: BrowserSandboxPolicy;
+  // Settings for the CI judge. Read from the trusted ref only.
+  judge?: JudgeConfig;
+}
+
+// Origins other than the app origin that the judge's isolated browser may reach, for example a
+// font host. Each entry is a bare origin such as https://fonts.example.com. A branch cannot widen
+// what its own scan may reach, because the judge reads this from the trusted ref.
+export interface JudgeConfig {
+  allowOrigins: string[];
 }
 
 // The values browserSandbox accepts.

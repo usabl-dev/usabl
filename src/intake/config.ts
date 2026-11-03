@@ -3,7 +3,7 @@
  * This unit validates shape only.
  * It must never mint a verdict or choose scan targets on its own.
  */
-import type { BrowserSandboxPolicy, ReachedWhenSignal, SurfaceConfig, UsablConfig } from '../contracts/index.js';
+import type { BrowserSandboxPolicy, JudgeConfig, ReachedWhenSignal, SurfaceConfig, UsablConfig } from '../contracts/index.js';
 import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
 import { expandBraces } from '../primitives/match-glob.js';
@@ -276,6 +276,31 @@ function parseBrowserSandbox(value: unknown): BrowserSandboxPolicy {
   return value;
 }
 
+// The origins the judge's isolated browser may reach besides the app origin. A bare origin only:
+// a path would read as a narrower allowance than the browser enforces, which works by origin.
+function parseJudge(raw: unknown): JudgeConfig {
+  const judge = expectObject(raw, 'judge');
+  for (const key of Object.keys(judge)) {
+    if (key !== 'allowOrigins') {
+      throw configError`judge has an unknown key "${key}". The key it accepts is allowOrigins.`;
+    }
+  }
+  const allowOrigins = expectStringArray(Reflect.get(judge, 'allowOrigins'), 'judge.allowOrigins');
+  for (const entry of allowOrigins) {
+    let origin: string | null = null;
+    try {
+      const url = new URL(entry);
+      origin = url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : null;
+    } catch {
+      origin = null;
+    }
+    if (origin === null || (entry !== origin && entry !== `${origin}/`)) {
+      throw configError`judge.allowOrigins entry "${entry}" must be a bare http or https origin such as https://fonts.example.com`;
+    }
+  }
+  return { allowOrigins };
+}
+
 export function parseUsablConfig(raw: string): UsablConfig {
   // A JSON.parse failure message quotes the offending input back, so it is operator text on the
   // same egress as every other message here and cannot be allowed to pass through unscrubbed.
@@ -325,6 +350,9 @@ export function parseUsablConfig(raw: string): UsablConfig {
   const browserSandbox =
     browserSandboxRaw === undefined ? undefined : parseBrowserSandbox(browserSandboxRaw);
 
+  const judgeRaw = Reflect.get(root, 'judge');
+  const judge = judgeRaw === undefined ? undefined : parseJudge(judgeRaw);
+
   return {
     appBaseUrl: parseConfiguredUrl(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
     uiFileGlobs: expectGlobArray(Reflect.get(root, 'uiFileGlobs'), 'uiFileGlobs'),
@@ -343,5 +371,6 @@ export function parseUsablConfig(raw: string): UsablConfig {
     ...(signalTimeoutMs === undefined ? {} : { signalTimeoutMs }),
     ...(noiseBudget === undefined ? {} : { noiseBudget }),
     ...(browserSandbox === undefined ? {} : { browserSandbox }),
+    ...(judge === undefined ? {} : { judge }),
   };
 }

@@ -55,6 +55,10 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
         help: 'Read policy from this git ref and check the files changed since it.',
       },
       { name: '--ci', help: 'Run as the CI gate. Needs --trusted-ref.' },
+      {
+        name: '--isolated-browser',
+        help: 'Scan as the CI judge: sandbox required, other origins blocked.',
+      },
       CONFIG_FLAG,
     ],
   },

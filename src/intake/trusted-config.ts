@@ -6,8 +6,10 @@
 import type { GitReader, UsablConfig } from '../contracts/index.js';
 import { parseUsablConfig } from './config.js';
 
-function withoutRequirements(config: UsablConfig): UsablConfig {
-  const { requirements: _requirements, ...rest } = config;
+// Without trusted policy, nothing that trusted policy alone may turn on is kept: the requirements
+// root, and the origins the judge's browser may reach.
+function withoutTrustedOnlyFields(config: UsablConfig): UsablConfig {
+  const { requirements: _requirements, judge: _judge, ...rest } = config;
   return rest;
 }
 
@@ -23,7 +25,7 @@ export async function resolveIntakeConfig(
   const raw = await git.show(trustedRef, 'usabl.config.json');
   if (raw === null) {
     // Fail closed for intake providers: missing trusted config cannot authorize PR requirement roots.
-    return withoutRequirements(config);
+    return withoutTrustedOnlyFields(config);
   }
 
   try {
@@ -31,6 +33,6 @@ export async function resolveIntakeConfig(
   } catch {
     // Parse failure means policy is untrusted. Keep scanning paths from caller config but
     // deny requirement provider loading by clearing the requirements root.
-    return withoutRequirements(config);
+    return withoutTrustedOnlyFields(config);
   }
 }

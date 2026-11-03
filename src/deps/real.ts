@@ -10,6 +10,7 @@ import { applyAxeTags, type AxeIssue, type AxeRuleSummary, type AxeUncheckedFram
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
 import { runAxeInIsolatedWorld } from './axe-world.js';
 import { BrowserSandboxRequiredError, isBrowserSandboxRefusal, isSandboxLaunchFailure, type BrowserSandboxPolicy } from './sandbox.js';
+import { blockedOriginLabel, decideRequest, decideWebSocket, type BrowserIsolation } from '../judge/request-filter.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
 // Ansible Automation Platform screen measured 12.4 s to network idle plus 13.3 s to a DOM that
@@ -2102,6 +2103,10 @@ export interface RealBrowserOptions {
   readyTimeoutMs?: number;
   // What this run allows when Chromium cannot start its sandbox. Absent means auto.
   browserSandbox?: BrowserSandboxPolicy;
+  // The judge's request filter. When set, every context blocks service workers and routes every
+  // request through the filter before any page exists. The judge also sets browserSandbox to
+  // require, so page script runs inside Chromium's sandbox or the scan is refused.
+  isolation?: BrowserIsolation;
 }
 
 /**
@@ -2301,11 +2306,14 @@ export function makeSharedBrowser(
     const launched = handle.process;
     const readyTimeoutMs = readyTimeoutMsFor(options);
 
+    const isolation = options.isolation;
     let context: Awaited<ReturnType<LaunchedBrowser['newContext']>>;
     try {
-      context = await launched.newContext(
-        options.storageStatePath === undefined ? {} : { storageState: options.storageStatePath },
-      );
+      context = await launched.newContext({
+        ...(options.storageStatePath === undefined ? {} : { storageState: options.storageStatePath }),
+        // A service worker's own fetches bypass context routing, so the judge allows none.
+        ...(isolation === undefined ? {} : { serviceWorkers: 'block' as const }),
+      });
     } catch (error) {
       handle.contextFailures += 1;
       // A process that has died, or one that stays connected but cannot make a context any more,
@@ -2320,6 +2328,35 @@ export function makeSharedBrowser(
     // From here a context exists. Any failure below must close it, or an authenticated page opened
     // from the run's storage state stays alive with nothing holding it.
     try {
+      // Context-wide routing is installed before any page exists, so the first navigation, its
+      // frames, its workers, and any popup all pass through the filter.
+      let blockedOrigins: (() => string[]) | null = null;
+      if (isolation !== undefined) {
+        const blocked = new Set<string>();
+        blockedOrigins = () => [...blocked].sort();
+        await context.route('**/*', async (route) => {
+          const requestUrl = route.request().url();
+          if (decideRequest(isolation.allowedOrigins, requestUrl) === 'allow') {
+            await route.continue();
+            return;
+          }
+          blocked.add(blockedOriginLabel(requestUrl));
+          isolation.onBlocked(requestUrl);
+          await route.abort('blockedbyclient');
+        });
+        // WebSockets bypass request routing, so they get their own filter. An allowed socket is
+        // connected through to its server; any other is closed before it reaches one.
+        await context.routeWebSocket(/.*/, (socket) => {
+          const socketUrl = socket.url();
+          if (decideWebSocket(isolation.allowedOrigins, socketUrl) === 'allow') {
+            socket.connectToServer();
+            return;
+          }
+          blocked.add(blockedOriginLabel(socketUrl));
+          isolation.onBlocked(socketUrl);
+          void socket.close({ code: 1008, reason: 'blocked by the usabl judge' }).catch(() => undefined);
+        });
+      }
       const page = await context.newPage();
       // Attach the in-flight tracker before navigating, so the navigation's own requests are
       // counted and readiness cannot read idle off a page whose first responses have not landed.
@@ -2332,7 +2369,9 @@ export function makeSharedBrowser(
       // open() owns navigation and gotoReady() only waits for readiness. Navigation takes the same
       // budget, so one config number covers the whole cost of reaching a screen.
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });
-      const wrapped = wrapPage(page, context, cdp, readyTimeoutMs, network);
+      const opened = wrapPage(page, context, cdp, readyTimeoutMs, network);
+      const wrapped: Page =
+        blockedOrigins === null ? opened : { ...opened, blockedRequests: async () => blockedOrigins() };
       // A page from a process without the sandbox says so, and the check runner carries that onto
       // the screen in the Result.
       return handle.sandboxed ? wrapped : { ...wrapped, browserSandbox: 'off' };
