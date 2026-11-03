@@ -181,6 +181,44 @@ describe("buildDeps", () => {
     }
   });
 
+  it("hands each run its sandbox policy, and a trusted ref that requires the sandbox wins", async () => {
+    // The policy is read from usabl.config.json, which is policy. A pull request must not be able
+    // to turn a required sandbox off for its own scan, so with a trusted ref the stricter of the
+    // two documents decides.
+    const repo = await mkdtemp(join(tmpdir(), "usabl-sandbox-policy-"));
+    const seen: Array<string | undefined> = [];
+    const browserFor = (options: { browserSandbox?: string }): BrowserDriver => {
+      seen.push(options.browserSandbox);
+      return { open: async () => makeFakePage(), close: async () => {} };
+    };
+    try {
+      await execFileAsync("git", ["init", "-q"], { cwd: repo });
+      await writeFile(
+        join(repo, "usabl.config.json"),
+        JSON.stringify({ ...testConfig(), browserSandbox: "require" }),
+        "utf8",
+      );
+      await execFileAsync("git", ["add", "usabl.config.json"], { cwd: repo });
+      await execFileAsync(
+        "git",
+        ["-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "base"],
+        { cwd: repo },
+      );
+
+      // No policy, or auto, leaves the run on the default: sandbox on, fallback allowed.
+      const auto = { ...testConfig(), browserSandbox: "auto" as const };
+      const required = { ...testConfig(), browserSandbox: "require" as const };
+      await buildDeps(testConfig(), { cwd: repo, browserFor });
+      await buildDeps(auto, { cwd: repo, browserFor });
+      await buildDeps(required, { cwd: repo, browserFor });
+      await buildDeps(auto, { cwd: repo, browserFor, trustedRef: "HEAD" });
+      expect(seen).toEqual([undefined, undefined, "require", "require"]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+    // Four builds and a real git repository; a loaded machine needs more than the default.
+  }, 30_000);
+
   it("tells the check runner that a session was configured, and that it was not", async () => {
     // Two of the three not-reached rules are claims about a session that was asserted and did not
     // work, so they are off unless someone asserted one. This is the only place in the product

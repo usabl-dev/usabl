@@ -38,6 +38,7 @@ function validResult(): Record<string, unknown> {
         reachedWhenSelector: '#clusters-table',
         reachedResponseSeen: null,
         reachedWhenResponse: null,
+        browserSandbox: 'off',
       },
     ],
     coverage: {
@@ -108,7 +109,8 @@ function validResult(): Record<string, unknown> {
       },
     ],
     receipt: {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      historyHead: null,
       sourceTree: 'tree',
       baseRevision: null,
       policyHash: 'hash',
@@ -197,6 +199,8 @@ describe('parseResultJson validates the whole Result against the contract', () =
     { field: 'screens[0].applicability[0].elementCount', doc: () => withValue(['screens', 0, 'applicability', 0, 'elementCount'], -1) },
     { field: 'screens[0].reachedSelectorPresent', doc: () => withValue(['screens', 0, 'reachedSelectorPresent'], LEAK) },
     { field: 'screens[0].reachedWhenSelector', doc: () => withValue(['screens', 0, 'reachedWhenSelector'], 3) },
+    { field: 'screens[0].browserSandbox', doc: () => withValue(['screens', 0, 'browserSandbox'], LEAK) },
+    { field: 'screens[0].browserSandbox', doc: () => withValue(['screens', 0, 'browserSandbox'], 'on') },
     { field: 'coverage', doc: () => withValue(['coverage'], LEAK) },
     { field: 'coverage.nothingToCheck', doc: () => without(['coverage', 'nothingToCheck']) },
     { field: 'coverage.affected[0].provenance', doc: () => withValue(['coverage', 'affected', 0, 'provenance'], LEAK) },
@@ -408,6 +412,12 @@ describe('usabl comment and usabl enforce refuse a malformed Result', () => {
     const out = await runWith(['comment', '--config', 'does-not-exist.json'], JSON.stringify(validResult()));
     expect(out.code).toBe(1);
     expect(out.stdout).toContain('<!-- usabl-report -->');
+  });
+
+  it('enforce accessibility reads a Result whose screen ran without the browser sandbox', async () => {
+    const out = await runWith(['enforce', 'accessibility'], JSON.stringify(validResult()));
+    expect(out.code).toBe(1);
+    expect(out.stderr).toBe('');
   });
 
   it('enforce accessibility exits 4 with the same reason', async () => {

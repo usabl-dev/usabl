@@ -13,6 +13,7 @@ import {
   isBlockingBarrier,
 } from './disclosure.js';
 import { boundField } from './bounded-text.js';
+import { SANDBOX_OFF_NOTICE } from './sandbox-notice.js';
 import {
   GRADIENT_CONTRAST_CHECK,
   GRADIENT_CONTRAST_WHY,
@@ -195,6 +196,18 @@ function renderFloorUnconfirmed(result: Result): string[] {
 }
 
 /**
+ * One line when any screen was scanned in a browser without Chromium's sandbox. It never changes
+ * the verdict, so it appears under any run. The words are usabl's own; only the count varies.
+ */
+function renderBrowserSandbox(result: Result): string[] {
+  const unsandboxed = result.screens.filter((screen) => screen.browserSandbox === 'off').length;
+  if (unsandboxed === 0) {
+    return [];
+  }
+  return [`  browser sandbox: off for ${unsandboxed} screen${unsandboxed === 1 ? '' : 's'}; ${SANDBOX_OFF_NOTICE}`];
+}
+
+/**
  * One finding, with its source mapping and its fix.
  *
  * Every free-text field is neutralized, then bounded on its own, so a huge page string prints its
@@ -340,6 +353,7 @@ export function formatSummary(result: Result): string {
   lines.push(...renderFloorHeadroom(result));
   lines.push(...renderFloorUnconfirmed(result));
   lines.push(...renderNotEvaluated(result));
+  lines.push(...renderBrowserSandbox(result));
   if (result.dirtyGuardedPaths.length > 0) {
     lines.push(`  guarded paths changed: ${result.dirtyGuardedPaths.join(', ')}`);
   }

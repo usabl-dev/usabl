@@ -19,6 +19,7 @@ import { overlayRequirementsFs } from "../intake/overlay-fs.js";
 import { resolveIntakeConfig } from "../intake/trusted-config.js";
 import { makeRealBrowserDriver, type RealBrowserOptions } from "./real.js";
 import { makeGitReader } from "./git.js";
+import { makeHistoryGit } from "../history/git.js";
 import { makeFsGlob } from "./fs.js";
 import { resolveStorageStatePath, type EnvReader } from "./session.js";
 
@@ -203,18 +204,6 @@ export async function buildDeps(
     trustedRef: options.trustedRef,
     warn: options.warn ?? ((line) => process.stderr.write(`${line}\n`)),
   });
-  const browserOptions: RealBrowserOptions = {
-    ...(storageStatePath === null ? {} : { storageStatePath }),
-    // The operator's app is what decides how long a screen takes to render, so the budget rides
-    // the config the run was started with.
-    ...(config.readyTimeoutMs === undefined
-      ? {}
-      : { readyTimeoutMs: config.readyTimeoutMs }),
-  };
-  const browser =
-    options.browserFor === undefined
-      ? makeRealBrowserDriver(browserOptions)
-      : options.browserFor(browserOptions);
   const fs = makeFsGlob({ cwd });
   const git = makeGitReader({ cwd });
   const intakeConfig = await resolveIntakeConfig(
@@ -222,6 +211,25 @@ export async function buildDeps(
     config,
     options.trustedRef,
   );
+  const browserOptions: RealBrowserOptions = {
+    ...(storageStatePath === null ? {} : { storageStatePath }),
+    // The operator's app is what decides how long a screen takes to render, so the budget rides
+    // the config the run was started with.
+    ...(config.readyTimeoutMs === undefined
+      ? {}
+      : { readyTimeoutMs: config.readyTimeoutMs }),
+    // The sandbox policy is policy, so a pull request must not be able to turn a required sandbox
+    // off for its own scan. With a trusted ref, require in either document wins.
+    ...(config.browserSandbox === "require" ||
+    intakeConfig.browserSandbox === "require"
+      ? { browserSandbox: "require" as const }
+      : {}),
+  };
+  // Still lazy: nothing launches until the first screen opens.
+  const browser =
+    options.browserFor === undefined
+      ? makeRealBrowserDriver(browserOptions)
+      : options.browserFor(browserOptions);
   const intakeFs = overlayRequirementsFs(
     fs,
     git,
@@ -245,6 +253,8 @@ export async function buildDeps(
     },
     browser,
     git,
+    // Read as git objects at the fetched history branch, never from the working tree.
+    history: makeHistoryGit({ cwd }),
     fs,
     // Expose the same bundle the providers were built from. Failed intake yields the empty
     // bundle here so the docs surface renders transcript artifacts without inventing content.

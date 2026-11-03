@@ -107,6 +107,22 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     flags: [CONFIG_FLAG],
   },
   {
+    name: 'debt',
+    usage: 'usabl debt [options]',
+    summary: 'List the accessibility debt that remains, by screen and rule.',
+    flags: [{ name: '--json', help: 'Print the debt as JSON instead of text.' }, TRUSTED_REF_FLAG],
+  },
+  {
+    name: 'history',
+    usage: 'usabl history record|append [options]',
+    summary: 'Write a scan of main to the debt history branch. CI runs this.',
+    flags: [
+      { name: '--out', value: '<file>', help: 'For record: the file to write the record to.' },
+      TRUSTED_REF_FLAG,
+      CONFIG_FLAG,
+    ],
+  },
+  {
     name: 'doctor',
     usage: 'usabl doctor [options]',
     summary: 'Report what is set up and what is missing. Writes nothing.',

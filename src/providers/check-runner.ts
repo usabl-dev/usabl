@@ -1,6 +1,8 @@
 /**
  * CheckRunner executes one screen scan and returns transcript stops, provider drafts, and coverage gaps.
- * It must never throw, never mint a verdict, and never drop a failed screen on the floor.
+ * It must never mint a verdict and never drop a failed screen on the floor. It never throws, with
+ * one exception: when the run requires Chromium's sandbox and the system cannot start it, the
+ * refusal goes through, so the run ends with no verdict and exit 4 instead of a coverage gap.
  * Transcript collection runs before providers because interaction probes can mutate focus order.
  *
  * A screen this run did not reach signed in is disclosed as a coverage gap and measured no
@@ -34,6 +36,7 @@ import {
 } from './reachability.js';
 import { readPageImages } from './page-images.js';
 import { observeLanding, readRefusedRequests, redirectedAwayGap } from './redirected.js';
+import { isBrowserSandboxRefusal } from '../deps/sandbox.js';
 import { waitForScannerArtifactsToClear } from './scanner-artifacts.js';
 import { runProviders } from './index.js';
 
@@ -184,6 +187,12 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       try {
         page = await deps.browser.open(screen.url);
       } catch (err) {
+        // The operator asked usabl not to scan without the sandbox. A coverage gap would read as
+        // one screen that could not be checked, and the next screen would be tried the same way,
+        // so the refusal ends the run instead.
+        if (isBrowserSandboxRefusal(err)) {
+          throw err;
+        }
         return failedScan(screen, openFailureReason(screen, deps.config, errorMessage(err)));
       }
 
@@ -342,7 +351,9 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
         }
       }
 
-      return result;
+      // Every scan of a page from a browser without the sandbox carries the note, whatever became
+      // of the scan, so the Result says which screens ran that way.
+      return page.browserSandbox === 'off' ? { ...result, browserSandbox: 'off' } : result;
     },
   };
 }

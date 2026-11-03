@@ -106,5 +106,10 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
+      # Ubuntu 24.04 runners stop unprivileged user namespaces through AppArmor, and Chromium's
+      # sandbox needs them. Without this the integration tests scan with the sandbox off.
+      - name: Let Chromium start its sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Real Chromium integration
         run: npm run test:integration

@@ -180,7 +180,8 @@ describe('projectOverlay', () => {
         exitCode: 0,
         findings: [{ ...finding, status: 'fixed' }],
         receipt: {
-          schemaVersion: 1,
+          schemaVersion: 2,
+          historyHead: null,
           sourceTree: 'abcdef1234567890',
           baseRevision: 'base123',
           policyHash: 'policy123',
@@ -1270,6 +1271,41 @@ describe('usablVitePluginFromConfig', () => {
     // A second shutdown is a no-op.
     await plugin.closeBundle?.();
     expect(warm.closeCalls()).toBe(1);
+  });
+
+  it('says once in the dev server output when a scan ran without the browser sandbox', async () => {
+    const warnings: string[] = [];
+    const unsandboxed = baseResult({
+      screens: [
+        {
+          screenId: 'users',
+          url: 'http://127.0.0.1:5173/users',
+          stops: [],
+          drafts: [],
+          gaps: [],
+          applicability: [],
+          reachedSelectorPresent: null,
+          browserSandbox: 'off',
+        },
+      ],
+    });
+    const plugin = usablVitePluginFromConfig(
+      { cwd: '/repo/app' },
+      {
+        ...makeFactoryPorts({ runEngine: async () => unsandboxed }),
+        logWarning: (line: string) => {
+          warnings.push(line);
+        },
+      },
+    );
+    const middleware = getMiddleware(plugin);
+
+    await callMiddleware(middleware, '/__usabl/result');
+    await callMiddleware(middleware, '/__usabl/result');
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('without Chromium');
+    expect(warnings[0]).toContain('usabl doctor');
   });
 
   it('hands each run its own storage state and ready timeout through the shared browser', async () => {

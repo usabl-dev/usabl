@@ -14,6 +14,7 @@ import { run } from '../run.js';
 import { unconfirmedNotice } from '../output/floor-notice.js';
 import { frameUntrusted, scrubResult } from './scrub.js';
 import { neutralize } from '../primitives/neutralize.js';
+import { SANDBOX_OFF_NOTICE } from '../output/sandbox-notice.js';
 import { injectJsxSourceAttributes, shouldInjectJsxSource } from './vite-jsx-source.js';
 
 export interface OverlayProjection {
@@ -308,6 +309,9 @@ export interface OverlayFactoryPorts {
   // Where a failed run's reason is written. A port for the same reason as the rest: a test reads it
   // instead of the suite's output.
   logError: (error: unknown) => void;
+  // Where a notice for the developer is written, such as a scan browser running without Chromium's
+  // sandbox. The dev server output, by default.
+  logWarning: (line: string) => void;
 }
 
 function makeOverlayFactoryPorts(overrides: Partial<OverlayFactoryPorts> = {}): OverlayFactoryPorts {
@@ -324,6 +328,7 @@ function makeOverlayFactoryPorts(overrides: Partial<OverlayFactoryPorts> = {}): 
     runEngine: overrides.runEngine ?? (async (deps: Deps, config: UsablConfig) => run(deps, config)),
     makeBrowser: overrides.makeBrowser ?? (() => makeSharedBrowser()),
     logError: overrides.logError ?? ((error: unknown) => console.error('[usabl]', error)),
+    logWarning: overrides.logWarning ?? ((line: string) => console.warn('[usabl]', line)),
   };
 }
 
@@ -784,6 +789,9 @@ export function makeConfigBackedOverlayRun(
   const configPath = opts.configPath ?? 'usabl.config.json';
   const resolvedConfigPath = resolvedPorts.resolvePath(cwd, configPath);
   let warmBrowser: SharedBrowser | null = null;
+  // Whether the dev server output has said the scan browser ran without its sandbox. Said once per
+  // dev session, not on every save.
+  let sandboxNoticeLogged = false;
 
   // Hosts should not assemble Deps. This keeps wiring in-package and still returns a
   // projection-only overlay backed by the gate-owned Result.
@@ -804,7 +812,12 @@ export function makeConfigBackedOverlayRun(
       // No browser teardown here on purpose. The process is shared across refresh waves and is
       // closed once at shutdown. Each open opens and closes its own context, so a run still leaves no
       // page or context state behind.
-      return resolvedPorts.runEngine(deps, config);
+      const result = await resolvedPorts.runEngine(deps, config);
+      if (!sandboxNoticeLogged && result.screens.some((screen) => screen.browserSandbox === 'off')) {
+        sandboxNoticeLogged = true;
+        resolvedPorts.logWarning(`browser sandbox: ${SANDBOX_OFF_NOTICE}`);
+      }
+      return result;
     },
     onClose: async () => {
       if (warmBrowser !== null) {

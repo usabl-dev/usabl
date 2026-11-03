@@ -34,7 +34,8 @@ describe('evaluateStopDecision', () => {
       baseResult({
         verdict: 'verified',
         receipt: {
-          schemaVersion: 1,
+          schemaVersion: 2,
+          historyHead: null,
           sourceTree: 'tree-verified',
           baseRevision: null,
           policyHash: 'hash',
@@ -472,7 +473,8 @@ describe('evaluateStopDecision', () => {
         baseResult({
           verdict: 'verified',
           receipt: {
-            schemaVersion: 1,
+            schemaVersion: 2,
+            historyHead: null,
             sourceTree: huge('tree'),
             baseRevision: null,
             policyHash: 'hash',

@@ -41,6 +41,25 @@ describe('parseUsablConfig readyTimeoutMs', () => {
   });
 });
 
+describe('parseUsablConfig browserSandbox', () => {
+  it('reads auto and require', () => {
+    expect(parseUsablConfig(configJson({ browserSandbox: 'auto' })).browserSandbox).toBe('auto');
+    expect(parseUsablConfig(configJson({ browserSandbox: 'require' })).browserSandbox).toBe('require');
+  });
+
+  it('leaves the policy unset when the operator does not name one', () => {
+    expect(parseUsablConfig(configJson()).browserSandbox).toBeUndefined();
+  });
+
+  it('refuses any other value, naming the field and the values it accepts', () => {
+    for (const bad of ['off', 'Require', 'required', '', true, 1, null, ['require']]) {
+      expect(() => parseUsablConfig(configJson({ browserSandbox: bad }))).toThrow(
+        /browserSandbox must be "auto" or "require"/,
+      );
+    }
+  });
+});
+
 describe('parseUsablConfig signalTimeoutMs', () => {
   it('reads the operator cap', () => {
     expect(parseUsablConfig(configJson({ signalTimeoutMs: 30_000 })).signalTimeoutMs).toBe(30_000);

@@ -39,6 +39,7 @@ import { loadRequirements } from './intake/load.js';
 import { overlayRequirementsFs } from './intake/overlay-fs.js';
 import { unknownSurfaceGapsForRun } from './intake/requirement-surfaces.js';
 import { checkGuard } from './trust/guard.js';
+import { debtStatusOf, loadDebtTracking } from './history/tracking.js';
 
 // Declared here rather than imported from baseline/, which imports run() and would cycle.
 const EVIDENCE_FLOOR_PATH = '.usabl-evidence.json';
@@ -174,6 +175,10 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
     };
     const floor = await readFloorOrEmpty(readTrustFile, policyUntrusted);
     const waivers = await readWaiversOrEmpty(readTrustFile, policyUntrusted);
+    // The floor lowered by the fixes main confirmed up to the base commit. It never holds an
+    // identity the floor does not, nor a count above the floor's, and it is the floor itself when
+    // there is no usable history. See src/history/.
+    const debt = await loadDebtTracking(deps.history, floor, opts.trustedRef ?? 'HEAD');
 
     const coverage: Coverage = {
       ...discoveredCoverage,
@@ -226,13 +231,14 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
       screens.filter((screen) => screen.gaps.length === 0).map((screen) => screen.screenId),
     );
 
+    const now = deps.clock();
     const gated = gate({
       coverage,
       guardDivergedPaths: policyDivergedPaths,
       drafts,
-      floor,
+      floor: debt.effectiveFloor,
       waivers,
-      now: deps.clock(),
+      now,
       cleanlyScannedScreens,
       // What each screen showed of itself, so the gate can tell a fixed floored barrier from one in
       // content that never mounted. See GateInput.renderEvidence.
@@ -267,6 +273,7 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
             applicability: summarizeApplicability(screens),
             findingsSummary: summarize(gated.findings),
             activeWaivers: gated.findings.filter((f) => f.status === 'waived').length,
+            historyHead: debt.read.head,
           })
         : null;
 
@@ -293,6 +300,7 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
       paidDownCount,
       floorHeadroom: gated.floorHeadroom,
       floorUnconfirmed: gated.floorUnconfirmed,
+      debt: debtStatusOf(debt, gated.floorHeadroom, now),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

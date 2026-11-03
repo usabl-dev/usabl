@@ -4,6 +4,22 @@
 
 ### Added
 
+- Automatic debt tracking. `usabl install --ci` now also writes
+  `.github/workflows/usabl-history.yml`, which scans main after each merge and once a day
+  and appends what it saw to month files on a `usabl/history` branch in your repository. A
+  record holds identity hashes, rules, and counts, never an element key or page text. The
+  scan job reads only; the append job runs no application code and holds the one permission
+  tracking needs, `contents: write`. The jobs run `usabl history record --out <file>` and
+  `usabl history append <file>`. Pull requests read the branch they fetched, never the pull
+  request tree.
+
+- `usabl debt` lists the remaining accessibility debt by screen and rule, with the date each
+  was first seen on main, its age, its trend, and how many barriers are intermittent. With
+  tracking off it lists the floor and says how to turn tracking on. `--json` prints the
+  same data. The pull request comment gains an `### Accessibility debt` line, for example
+  "This PR fixes 2 accessibility barriers. 14 remain; the oldest has been open 41 days. 1
+  is intermittent."
+
 - `usabl session` signs you in once for screens behind a login. It opens a browser at the
   app; you sign in and press Enter, or close the tab. It saves the Playwright storage state
   to `.usabl/session/storage-state.json`, readable only by you, and only where git ignores
@@ -43,6 +59,32 @@
   sidecar acknowledges its id.
 
 ### Fixed
+
+- The scan browser now starts with Chromium's sandbox. Before, usabl never asked for it,
+  so Playwright added `--no-sandbox` and every page a scan opened ran without it. When
+  Chromium reports that it cannot start its sandbox, as on Ubuntu 23.10 and later or in
+  many containers, usabl starts the browser again without it and says so: a line in the
+  `usabl check` output, a `browserSandbox: "off"` note on each screen in the Result, one
+  line in the dev server output for the overlay, and a new `usabl doctor` chromium sandbox
+  surface with the fix. The verdict does not change. A missing Chromium or a crash is not
+  read as a sandbox failure and is never retried without it. The new
+  `"browserSandbox": "require"` in `usabl.config.json` refuses to scan instead, with no
+  verdict and exit 4; any value other than `"auto"` or `"require"` is refused. A page a
+  caller passes to `checkPage` comes from the caller's own browser, which usabl does not
+  change.
+
+- A fixed barrier no longer leaves a slot a new barrier can take. The floor's count is a
+  high-water mark, so with a floor of two at one identity, one barrier fixed and a new one
+  added, the new one read as carried and the run was verified until someone ran
+  `usabl floor prune`. Now, once two scans of main, each with that screen fully scanned, see
+  fewer barriers at an identity, every later run accepts only what they saw, so the new
+  barrier is a regression with no human step. A pull request is judged against the base
+  commit's floor minus the fixes confirmed on main up to the base commit. The accepted
+  count is never above the floor's and the history never adds an identity, so a missing,
+  unreadable, or forged history gives the floor-only verdict and says tracking is off. A
+  barrier that comes back on an unchanged tree keeps its slot, is labelled intermittent,
+  and blocks no pull request. Only a version 3 floor is tracked. The receipt now binds the
+  history head (receipt schema version 2), so a stored version 1 receipt costs one full run.
 
 - `usabl comment` and `usabl enforce` now refuse a Result whose `verdict` and
   `accessibilityVerdict` are a pair the engine never writes, such as `verified` over an
