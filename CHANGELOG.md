@@ -60,6 +60,21 @@
 
 ### Fixed
 
+- In a monorepo, `usabl check` no longer reads a change in a workspace package the app depends
+  on as nothing to check. With a config for `packages/admin`, a change in `packages/shared`,
+  which admin imports, matched none of the app's `uiFileGlobs`, so the run exited 0 while the
+  app could render the changed component. Such a change is now a not-covered gap that names the
+  package and the fix. The planner reads every `workspaces` pattern in the root `package.json`
+  and the `packages` of `pnpm-workspace.yaml`, and follows dependencies through other workspace
+  packages. A dependency counts when it is declared under an alias (`workspace:<name>@...`,
+  `npm:<name>@...`, or a `file:`, `link:`, or `portal:` path to its folder), when the app's
+  source imports it without declaring it, or when a tsconfig `paths` or Vite alias points into
+  it. The manifests are also read at the trusted ref, so a change that drops `workspaces` does
+  not make itself idle. A root `package.json` or `pnpm-workspace.yaml` that does not parse makes
+  every non-UI change a gap, and workspace patterns cannot reach files above the repository. A
+  change in a package the app does not depend on, and a repository with no workspaces, plan as
+  before.
+
 - The announcement capture no longer hears a live region outside an open modal dialog. While a
   dialog opened with `showModal()` is open, Chromium hides everything outside it from assistive
   technology, so a screen reader says nothing there. Before, a flow requirement could pass on

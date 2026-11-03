@@ -261,6 +261,25 @@ the tool errored, not because the page is accessible.
   that is not HTML. A selector, or recovery alone, never stands it down. See ground-truth
   section 8.
 
+- In a monorepo, a change in a workspace package the configured app depends on is a coverage
+  gap, never nothing to check. Before, a config drafted for one app folder matched none of the
+  shared package's files, so a change to a component the app renders exited 0 with nothing
+  scanned. The planner reads the workspace and package manifests from the tree and from the
+  trusted ref, and counts the union, so a change that also drops `workspaces` or the app's
+  dependency still gaps its edit to the package. A dependency declared under an alias, an
+  undeclared import that hoisting lets resolve, and a path alias into the package count too. A
+  root manifest that does not parse makes every non-UI change a gap. Workspace patterns cannot
+  read above the repository: a brace group with `..` is refused, and a glob result that is
+  absolute or leaves the repository is dropped.
+
+  Not handled: a tsconfig `paths` entry that names one file rather than a `/*` pair, and paths
+  inherited through `extends` from a file such as `tsconfig.base.json`, are not read. An import
+  of the package by its name still counts. A workspace package that declares its own
+  `workspaces`, a nested workspace root as Yarn Berry allows, is not read as a root, so the
+  packages it lists are found only when a root pattern also matches them. Markdown files in a
+  dependency are exempt and never gap. That is an accepted miss for a package that ships Markdown
+  the app renders, such as help text read with a `?raw` import.
+
 **Status:** [x] The `not_covered` gap path and exit-4 fail-open ship. [ ] A per-surface
 time budget is not yet a config knob; the shipped bound is the keyboard-walk 15s wall clock.
 
