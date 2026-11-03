@@ -19,7 +19,7 @@
  * This unit never mints a verdict. It returns what axe returned, and the frames it could not check.
  */
 import axe from 'axe-core';
-import type { CDPSession, Page as PwPage } from 'playwright';
+import type { CDPSession, Frame as PwFrame, Page as PwPage } from 'playwright';
 
 /** The world axe runs in, in every frame. */
 export const AXE_WORLD = 'usabl-axe';
@@ -139,6 +139,7 @@ async function callOn(
     functionDeclaration,
     arguments: args.map((value) => ({ value })),
     returnByValue,
+    objectGroup: AXE_WORLD,
   });
   const exception = getProp(called, 'exceptionDetails');
   if (exception !== undefined) {
@@ -515,6 +516,86 @@ function findFrameUrl(tree: unknown, frameId: string): string | null {
   return null;
 }
 
+// Runs axe in a frame and takes the frame elements its result lists, in one call. The elements
+// are taken in the same task the run ends in, so no page task runs between the two.
+const RUN_PARTIAL_FUNCTION = `async function (context, options) {
+  const partial = await axe.runPartial(context, options);
+  const frames = partial !== null && typeof partial === 'object' && Array.isArray(partial.frames) ? partial.frames : [];
+  const elements = frames.map((frame) => {
+    try {
+      return axe.utils.shadowSelect(frame.ancestry[0]);
+    } catch (error) {
+      return null;
+    }
+  });
+  return { partial, elements };
+}`;
+
+const FRAMES_CHANGED = 'its frames changed while axe ran, so usabl could not tell which results came from which frame';
+const NOT_REACHED = 'axe did not reach it, as for a frame in a closed shadow root or one added while axe ran';
+
+// Whether the frame contexts axe read name the same frames, in the same order, as the frames
+// runPartial listed. Each frame context's selector is the ancestry runPartial records first.
+function sameFrames(frameContexts: unknown, frames: unknown[]): boolean {
+  if (!Array.isArray(frameContexts) || frameContexts.length !== frames.length) {
+    return false;
+  }
+  return frameContexts.every((frameContext: unknown, index) => {
+    const ancestry = getProp(frames[index], 'ancestry');
+    return Array.isArray(ancestry) && JSON.stringify(getProp(frameContext, 'frameSelector')) === JSON.stringify(ancestry[0]);
+  });
+}
+
+// Every frame in one session's frame tree, with its address and its parent.
+function collectFrames(
+  tree: unknown,
+  session: CDPSession,
+  into: Map<string, { url: string; parentId: string | null; session: CDPSession }>,
+  parentId: string | null = null,
+): void {
+  const frame = getProp(tree, 'frame');
+  const id = readString(getProp(frame, 'id'));
+  if (id === null) {
+    return;
+  }
+  if (!into.has(id)) {
+    into.set(id, { url: readString(getProp(frame, 'url')) ?? '', parentId: readString(getProp(frame, 'parentId')) ?? parentId, session });
+  }
+  const children = getProp(tree, 'childFrames');
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      collectFrames(child, session, into, id);
+    }
+  }
+}
+
+// Whether the accessibility tree ignores an element, as it does one hidden from assistive
+// technology. A node it cannot read is not taken as hidden.
+async function ownerHidden(session: CDPSession, backendNodeId: number): Promise<boolean> {
+  const tree: unknown = await session.send('Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: false }).catch(() => undefined);
+  const nodes = getProp(tree, 'nodes');
+  if (!Array.isArray(nodes)) {
+    return false;
+  }
+  const node: unknown = nodes.find((entry: unknown) => getProp(entry, 'backendDOMNodeId') === backendNodeId);
+  return getProp(node, 'ignored') === true;
+}
+
+async function nodeName(session: CDPSession, backendNodeId: number): Promise<string | null> {
+  const described: unknown = await session.send('DOM.describeNode', { backendNodeId }).catch(() => undefined);
+  return readString(getProp(getProp(described, 'node'), 'nodeName'));
+}
+
+// Whether a final axe result has the four lists every reader of it expects.
+function isAxeResult(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    ['violations', 'incomplete', 'passes', 'inapplicable'].every((bucket) => Array.isArray(getProp(value, bucket)))
+  );
+}
+
 /**
  * One run over one page. It holds the sessions it opened for frames in other processes, so each is
  * opened once and all are closed at the end.
@@ -523,6 +604,11 @@ class AxeWorldRun {
   private readonly frameSessions = new Map<string, CDPSession>();
   private readonly opened: CDPSession[] = [];
   readonly uncheckedFrames: UncheckedFrame[] = [];
+  // Frames by id: those axe ran in, and those disclosed as unchecked.
+  private readonly reached = new Set<string>();
+  private readonly disclosed = new Set<string>();
+  // The frames of the page a session was tried for, by Playwright frame.
+  private readonly tried = new Set<PwFrame>();
 
   constructor(
     private readonly pw: PwPage,
@@ -551,6 +637,7 @@ class AxeWorldRun {
    * nothing under it is visited, which is the shape finishRun reads a missing frame from.
    */
   async partials(target: FrameTarget, contextId: number, context: unknown): Promise<unknown[]> {
+    this.reached.add(target.frameId);
     const frameContexts = getProp(
       await this.step(
         callIn(target, contextId, 'function (context) { return axe.utils.getFrameContexts(context); }', [context], true),
@@ -558,69 +645,91 @@ class AxeWorldRun {
       ),
       'value',
     );
-    const partial = getProp(
-      await this.step(
-        callIn(
-          target,
-          contextId,
-          'function (context, options) { return axe.runPartial(context, options); }',
-          [context, this.runOptions],
-          true,
-        ),
-        'running axe',
-      ),
-      'value',
-    );
-    const all: unknown[] = [partial];
-    if (!Array.isArray(frameContexts)) {
-      return all;
+    const ran = await this.step(callIn(target, contextId, RUN_PARTIAL_FUNCTION, [context, this.runOptions], false), 'running axe');
+    const ranId = readString(getProp(ran, 'objectId'));
+    const partial = ranId === null ? undefined : getProp(await this.step(callOn(target, ranId, 'function () { return this.partial; }', [], true), 'reading what axe found'), 'value');
+    // finishRun reads a partial that is not an object as a frame that was not checked, and gives
+    // no sign of it, so such a result fails the frame here.
+    const frames = getProp(partial, 'frames');
+    if (ranId === null || partial === null || typeof partial !== 'object' || Array.isArray(partial) || !Array.isArray(frames)) {
+      throw new FrameError('axe returned no result in it');
     }
-    for (const frameContext of frameContexts) {
-      all.push(...(await this.childPartials(target, contextId, frameContext)));
+    // finishRun places each child's results by the frames runPartial listed, in order, and the
+    // children are found by the list read before it. Page script runs between the reads, so a
+    // frame added or removed between them would give one frame's results another frame's place.
+    if (!sameFrames(frameContexts, frames)) {
+      throw new FrameError(FRAMES_CHANGED);
+    }
+    // The frame elements were taken as the run ended, so each child is the frame runPartial listed
+    // in its place even if the page moves frames while the children are checked.
+    const elements = await this.step(this.frameElements(target, ranId, frames.length), 'reading the frame elements');
+    const all: unknown[] = [partial];
+    for (const [index, frameContext] of (frameContexts as unknown[]).entries()) {
+      all.push(...(await this.childPartials(target, elements[index] ?? null, frameContext)));
     }
     return all;
   }
 
-  private async childPartials(parent: FrameTarget, parentContextId: number, frameContext: unknown): Promise<unknown[]> {
+  // The object ids of the frame elements a run took, in its order. A frame it could not take is null.
+  private async frameElements(target: FrameTarget, ranId: string, count: number): Promise<Array<string | null>> {
+    const list = readString(getProp(await callOn(target, ranId, 'function () { return this.elements; }', [], false), 'objectId'));
+    const ids = Array.from({ length: count }, (): string | null => null);
+    if (list === null) {
+      return ids;
+    }
+    const properties: unknown = await target.session.send('Runtime.getProperties', { objectId: list, ownProperties: true });
+    const entries = getProp(properties, 'result');
+    if (Array.isArray(entries)) {
+      for (const entry of entries) {
+        const name = readString(getProp(entry, 'name'));
+        const objectId = readString(getProp(getProp(entry, 'value'), 'objectId'));
+        if (name !== null && /^\d+$/.test(name) && Number(name) < count) {
+          ids[Number(name)] = objectId;
+        }
+      }
+    }
+    return ids;
+  }
+
+  private async childPartials(parent: FrameTarget, element: string | null, frameContext: unknown): Promise<unknown[]> {
     // Filled in as soon as the frame's address is known, so a frame that fails later is still named.
-    const seen = { url: '' };
+    const seen = { url: '', frameId: '' };
     try {
-      const child = await this.childTarget(parent, parentContextId, getProp(frameContext, 'frameSelector'), seen);
+      const child = await this.childTarget(parent, element, seen);
       const contextId = await this.prepare(child, false);
       return await this.partials(child, contextId, getProp(frameContext, 'frameContext'));
     } catch (error) {
       const why = error instanceof FrameError ? error.message : `axe failed in it: ${firstLine(error)}`;
       this.uncheckedFrames.push({ origin: frameOrigin(seen.url), why });
+      if (seen.frameId !== '') {
+        this.disclosed.add(seen.frameId);
+      }
       return [null];
     }
   }
 
   /**
-   * The frame an axe frame selector names. A frame in the parent's process is reached through the
+   * The frame a frame element holds. A frame in the parent's process is reached through the
    * parent's session. A frame in another process has a session of its own, found by its frame id.
    */
-  private async childTarget(
-    parent: FrameTarget,
-    parentContextId: number,
-    frameSelector: unknown,
-    seen: { url: string },
-  ): Promise<FrameTarget> {
-    const element = await this.step(
-      callIn(parent, parentContextId, 'function (selector) { return axe.utils.shadowSelect(selector); }', [frameSelector], false),
-      'finding the frame element',
-    );
-    const objectId = readString(getProp(element, 'objectId'));
+  private async childTarget(parent: FrameTarget, objectId: string | null, seen: { url: string; frameId: string }): Promise<FrameTarget> {
     if (objectId === null) {
       throw new FrameError('its frame element was gone before axe reached it');
     }
     const described: unknown = await this.step(parent.session.send('DOM.describeNode', { objectId }), 'reading the frame element');
     const frameId = readString(getProp(getProp(described, 'node'), 'frameId'));
     if (frameId === null) {
-      throw new FrameError('its frame element holds no frame');
+      throw new FrameError('its frame was removed before axe reached it');
     }
     const tree: unknown = await this.step(parent.session.send('Page.getFrameTree'), 'reading the frame tree');
     const treeUrl = findFrameUrl(getProp(tree, 'frameTree'), frameId) ?? '';
     seen.url = treeUrl;
+    // Two frame elements that hold one frame mean the frames moved under the run, and one frame
+    // would be checked twice while another is not.
+    if (this.reached.has(frameId)) {
+      throw new FrameError('its frame element changed while axe ran');
+    }
+    seen.frameId = frameId;
     // axe waits on timers, and no timer runs in a frame sandboxed without scripts, not even in
     // usabl's world. Such a frame is named at once rather than after the whole step budget.
     const sandboxed = getProp(
@@ -667,27 +776,108 @@ class AxeWorldRun {
       return known;
     }
     for (const frame of this.pw.frames()) {
-      if (frame === this.pw.mainFrame()) {
+      if (frame === this.pw.mainFrame() || this.tried.has(frame)) {
         continue;
       }
-      let session: CDPSession;
-      try {
-        session = await this.pw.context().newCDPSession(frame);
-      } catch {
-        // A frame in its parent's process has no session of its own.
-        continue;
-      }
-      this.opened.push(session);
-      const info: unknown = await session.send('Target.getTargetInfo').catch(() => undefined);
-      const targetId = readString(getProp(getProp(info, 'targetInfo'), 'targetId'));
-      if (targetId !== null) {
-        this.frameSessions.set(targetId, session);
-      }
-      if (targetId === frameId) {
-        return session;
+      if ((await this.openSession(frame)) === frameId) {
+        return this.frameSessions.get(frameId) ?? null;
       }
     }
     return null;
+  }
+
+  // Opens the session of one frame, once, and returns its target id. A frame in its parent's
+  // process has no session of its own, and gives null. A frame tried before is never opened again,
+  // so a frame whose process stopped answering is not asked twice.
+  private async openSession(frame: PwFrame): Promise<string | null> {
+    this.tried.add(frame);
+    let session: CDPSession;
+    try {
+      session = await this.pw.context().newCDPSession(frame);
+    } catch {
+      return null;
+    }
+    this.opened.push(session);
+    const info: unknown = await session.send('Target.getTargetInfo').catch(() => undefined);
+    const targetId = readString(getProp(getProp(info, 'targetInfo'), 'targetId'));
+    if (targetId !== null && !this.frameSessions.has(targetId)) {
+      this.frameSessions.set(targetId, session);
+    }
+    return targetId;
+  }
+
+  /**
+   * The frames the walk neither checked nor disclosed, each as an unchecked frame. axe finds only
+   * iframes in its flattened tree, so it never finds one in a closed shadow root, a document in an
+   * object or embed element, or a frame added after it read the list. The browser's frame trees
+   * hold them all: the top session's, and each session of a frame in another process. A frame
+   * under a disclosed frame is covered by that disclosure. A frame whose owner element the
+   * accessibility tree ignores is one axe skips as hidden, and is skipped here too.
+   */
+  async unreachedFrames(top: CDPSession): Promise<UncheckedFrame[]> {
+    await this.openFrameSessions();
+    const frames = new Map<string, { url: string; parentId: string | null; session: CDPSession }>();
+    const topTree: unknown = await this.step(top.send('Page.getFrameTree'), 'reading the frame tree');
+    collectFrames(getProp(topTree, 'frameTree'), top, frames);
+    for (const [targetId, session] of this.frameSessions) {
+      // A disclosed frame covers every frame under it, so its tree is not needed, and its process
+      // may be the one that stopped answering.
+      if (this.disclosed.has(targetId)) {
+        continue;
+      }
+      const tree: unknown = await this.step(session.send('Page.getFrameTree'), 'reading the frame tree').catch(() => undefined);
+      collectFrames(getProp(tree, 'frameTree'), session, frames);
+    }
+    const found: UncheckedFrame[] = [];
+    const covered = (id: string | null): boolean => {
+      for (let at = id; at !== null; at = frames.get(at)?.parentId ?? null) {
+        if (this.disclosed.has(at)) return true;
+      }
+      return false;
+    };
+    for (const [id, frame] of frames) {
+      if (this.reached.has(id) || covered(id) || frame.parentId === null) {
+        continue;
+      }
+      const owner = frames.get(frame.parentId)?.session ?? frame.session;
+      // Each read is bounded and a failed one counts as not hidden, so the frame is disclosed.
+      const bounded = <T>(read: Promise<T>, fallback: T): Promise<T> => this.step(read, 'reading the frame element').catch(() => fallback);
+      const ownerNode = readNumber(getProp(await bounded(owner.send('DOM.getFrameOwner', { frameId: id }), undefined), 'backendNodeId'));
+      if (ownerNode !== null && (await bounded(ownerHidden(owner, ownerNode), false))) {
+        continue;
+      }
+      const ownerName = ownerNode === null ? null : await bounded(nodeName(owner, ownerNode), null);
+      const why = ownerName === 'OBJECT' || ownerName === 'EMBED' ? 'it is a document in an object or embed element, which axe does not check' : NOT_REACHED;
+      found.push({ origin: frameOrigin(frame.url), why });
+      this.disclosed.add(id);
+    }
+    // A frame the page holds that no frame tree usabl could read shows, and that the walk did not
+    // name, cannot be placed at all.
+    const known = new Set([...frames.keys(), ...this.reached, ...this.disclosed]);
+    const urls = [...frames.values()].map((frame) => frame.url);
+    let unknown = this.pw.frames().length - known.size;
+    for (const frame of this.pw.frames()) {
+      if (unknown <= 0) break;
+      const at = urls.indexOf(frame.url());
+      if (at !== -1) {
+        urls.splice(at, 1);
+        continue;
+      }
+      found.push({ origin: frameOrigin(frame.url()), why: 'usabl could not reach it to tell whether axe checked it' });
+      unknown -= 1;
+    }
+    return found;
+  }
+
+  // Opens a session for every frame in another process the page holds that has none yet. Each is
+  // bounded on its own, so a frame that stops answering costs one step and is left out.
+  private async openFrameSessions(): Promise<void> {
+    for (const frame of this.pw.frames()) {
+      if (frame === this.pw.mainFrame() || this.tried.has(frame)) {
+        continue;
+      }
+      await this.step(this.openSession(frame), 'opening a frame').catch(() => undefined);
+    }
   }
 
   // Detaching from a frame whose process stopped answering can wait forever, so each detach is
@@ -726,9 +916,11 @@ export async function runAxeInIsolatedWorld(
     const context = { exclude: [], include: [] };
     let partials: unknown[];
     let contextId: number;
+    let unreached: UncheckedFrame[];
     try {
       contextId = await run.prepare(top, true);
       partials = await run.partials(top, contextId, context);
+      unreached = await run.unreachedFrames(cdp);
     } catch (error) {
       throw new Error(`axe could not run on the page: ${firstLine(error)}`);
     }
@@ -745,7 +937,12 @@ export async function runAxeInIsolatedWorld(
     ).catch((error: unknown) => {
       throw new Error(`axe could not finish its run on the page: ${firstLine(error)}`);
     });
-    return { results: getProp(finished, 'value'), uncheckedFrames: run.uncheckedFrames };
+    const results = getProp(finished, 'value');
+    // A result that is not one would read as a page with no findings.
+    if (!isAxeResult(results)) {
+      throw new Error('axe finished its run on the page with no result usabl could read');
+    }
+    return { results, uncheckedFrames: [...run.uncheckedFrames, ...unreached] };
   } finally {
     await run.close();
     await cdp.send('Runtime.releaseObjectGroup', { objectGroup: AXE_WORLD }).catch(() => undefined);

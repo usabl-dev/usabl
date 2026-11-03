@@ -239,6 +239,47 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('axe in an isolated world
     BUDGET_MS,
   );
 
+  it(
+    'discloses a frame in a closed shadow root and a document in an object or embed element, and skips hidden frames',
+    async () => {
+      fixture.set('/hidden-inner', page(UNNAMED('hidden-button')));
+      fixture.set('/closed-inner', page(UNNAMED('closed-button')));
+      fixture.set('/object-inner', page(UNNAMED('object-button')));
+      const closedHost =
+        "customElements.define('x-closed', class extends HTMLElement { connectedCallback() {" +
+        " const root = this.attachShadow({ mode: 'closed' });" +
+        ` root.innerHTML = '<iframe title="Closed" src="${fixture.origin}/closed-inner"></iframe>'; } });`;
+      const url = fixture.set(
+        '/never-found',
+        page(
+          `${NAMED('outer', 'Open')}<x-closed></x-closed>` +
+            `<object title="Object" type="text/html" data="${fixture.origin}/object-inner"></object>` +
+            `<embed title="Embed" type="text/html" src="${fixture.origin}/object-inner">` +
+            `<iframe title="Gone" style="display:none" src="${fixture.origin}/hidden-inner"></iframe>` +
+            `<iframe title="Quiet" aria-hidden="true" src="${fixture.origin}/hidden-inner"></iframe>`,
+          closedHost,
+        ),
+      );
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const pw = await browser.newPage();
+        await pw.goto(url, { waitUntil: 'load' });
+        await expect.poll(() => pw.frames().length).toBe(6);
+        const cdp = await pw.context().newCDPSession(pw);
+        const result = await runAxeInIsolatedWorld(pw, cdp, {});
+        const objectWhy = 'it is a document in an object or embed element, which axe does not check';
+        expect(result.uncheckedFrames).toEqual([
+          { origin: fixture.origin, why: 'axe did not reach it, as for a frame in a closed shadow root or one added while axe ran' },
+          { origin: fixture.origin, why: objectWhy },
+          { origin: fixture.origin, why: objectWhy },
+        ]);
+      } finally {
+        await browser.close();
+      }
+    },
+    BUDGET_MS,
+  );
+
   describe('frames in other processes', () => {
     let browser: Browser;
 
@@ -266,6 +307,32 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('axe in an isolated world
           expect(violations.find((issue) => issue.id === 'button-name')?.nodes.map((node) => node.target)).toEqual([
             ['#far', '#far-button'],
           ]);
+          expect(result.uncheckedFrames).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      },
+      BUDGET_MS,
+    );
+
+    it(
+      'checks each frame of a chain that leaves the top process and comes back to it',
+      async () => {
+        // The top and the innermost frame share a site, the middle frame is on another, so with a
+        // process per site the innermost frame runs in the top's process under a frame that does not.
+        fixture.set('/chain-inner', page(UNNAMED('chain-button')));
+        fixture.set('/chain-middle', page(`<iframe id="back" title="Back" src="${fixture.origin}/chain-inner"></iframe>`));
+        const url = fixture.set('/chain', page(`<iframe id="away" title="Away" src="${fixture.other}/chain-middle"></iframe>`));
+        const context = await browser.newContext();
+        try {
+          const pw = await context.newPage();
+          await pw.goto(url, { waitUntil: 'load' });
+          await pw.waitForFunction(() => document.querySelector('iframe') !== null);
+          await expect.poll(() => pw.frames().length).toBe(3);
+          const cdp = await context.newCDPSession(pw);
+          const result = await runAxeInIsolatedWorld(pw, cdp, {});
+          const violations = (result.results as { violations: Array<{ id: string; nodes: Array<{ target: unknown }> }> }).violations;
+          expect(violations.find((issue) => issue.id === 'button-name')?.nodes.map((node) => node.target)).toEqual([['#away', '#back', '#chain-button']]);
           expect(result.uncheckedFrames).toEqual([]);
         } finally {
           await context.close();
