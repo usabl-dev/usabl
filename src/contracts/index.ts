@@ -110,6 +110,10 @@ export interface TranscriptStop {
   index: number;
   elementPath: string;
   announcement: AnnouncementToken[];
+  // Set only when the element that has focus at this stop cannot be read. The path is then the
+  // host or the frame, and the announcement holds no name, role, or state of the control, so a
+  // check must not read their absence as a barrier.
+  focusUnreadable?: FocusUnreadable;
 }
 // ---- applicability (what a rule did on a screen, recorded and never judged) ----
 // Silence from a check has two meanings that look identical in a findings list: the rule ran
@@ -489,6 +493,15 @@ export interface DocArtifact {
 }
 
 // ---- injected dependencies (all I/O enters here; run() has none of its own) ----
+// Why the element that has focus cannot be read. Its path and accessibility node would then be the
+// host or the frame that holds it, the same for every control inside, so a walk could read the second
+// control as a return to the first.
+// 'closed-shadow-root': focus is inside a closed shadow root.
+// 'frame-unreadable': focus is inside a frame usabl cannot look inside, such as one from another origin,
+// or the frame of an object, embed, or fencedframe element, which the read does not enter.
+// 'focus-too-deep': focus sits under more shadow roots and frames than the read follows.
+export type FocusUnreadable = 'closed-shadow-root' | 'frame-unreadable' | 'focus-too-deep';
+
 export interface AxNode {
   name: string | null;
   role: string | null;
@@ -656,8 +669,17 @@ export interface Page {
   activeElementWithin(selector: string): Promise<boolean>;
   armAnnouncementCapture(): Promise<void>;
   drainAnnouncements(): Promise<string[]>;
+  // The accessibility node of the element that has focus, followed into open shadow roots and
+  // same-origin frames. Null when the node is missing or ignored, and null when activeFocusUnreadable
+  // reports a reason, because the node read then would be the host or the frame, not the control.
   activeNode(): Promise<AxNode | null>;
+  // The path of the element that has focus, followed into open shadow roots and same-origin frames.
+  // An element outside every shadow root and frame keeps the path a selector read gives it. Past a
+  // boundary, the path of each tree is joined by ' >> ' for a shadow root and by
+  // ' >> internal:control=enter-frame >> ' for a frame, so each control has its own path.
   activePath(): Promise<string>;
+  // Why the element that has focus cannot be read, or null when it can. See FocusUnreadable.
+  activeFocusUnreadable(): Promise<FocusUnreadable | null>;
   axAt(selector: string): Promise<AxNode | null>;
   getAttribute(selector: string, name: string): Promise<string | null>;
   // The named attributes of the element a selector matches and of each element above it, nearest

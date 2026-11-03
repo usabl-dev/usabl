@@ -152,4 +152,14 @@ describe('runVoicingTier', () => {
     expect(unlisted?.evidenceClass).toBe('preview');
     expect(unlisted?.confidence).toBe('unverified');
   });
+
+  it('keeps a promoted miss unverified when focus at the window cannot be read', () => {
+    const unreadable: TranscriptStop = { ...stopAt(1, 'x-host', []), focusUnreadable: 'closed-shadow-root' };
+    const drafts = runVoicingTier(contract, [unreadable], 'screen-1', ['toast-announced']);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.evidenceClass).toBe('preview');
+    expect(drafts[0]?.why).toContain('closed shadow root');
+  });
 });

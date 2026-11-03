@@ -68,6 +68,7 @@ export function makeConcreteStepRunner(): StepRunner {
         await executeStep(page, step);
         const elementPath = await page.activePath();
         const node = await page.activeNode();
+        const focusUnreadable = await page.activeFocusUnreadable();
         const liveText = await page.drainAnnouncements();
         const announcement: AnnouncementToken[] = [];
 
@@ -85,7 +86,11 @@ export function makeConcreteStepRunner(): StepRunner {
           announcement.push(tokenFromLive(text));
         }
 
-        stops.push({ index, elementPath, announcement });
+        const stop: TranscriptStop = { index, elementPath, announcement };
+        if (focusUnreadable !== null) {
+          stop.focusUnreadable = focusUnreadable;
+        }
+        stops.push(stop);
       }
 
       return stops;

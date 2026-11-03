@@ -728,6 +728,39 @@ and `assert-announced(region, contains)`.
 Marks any focus it cannot confirm as `unverified` rather than passing. Does not hang
 on a focus trap.
 
+**Shadow roots and frames.** `document.activeElement` stops at the host of a shadow root
+and at a frame, so every control inside one would get the host's or the frame's path. The
+walk would read the second control as a return to the first, end as if the focus order were
+done, and never reach the controls after it. The focus read therefore follows focus into
+every open shadow root and every same-origin frame, in an isolated world, to the element
+that really has focus. Its accessible name and role are read from that element, and its
+path joins the path of each tree in turn: ` >> ` before the path inside a shadow root, and
+` >> internal:control=enter-frame >> ` before the path inside a frame. These joined paths
+are identity strings, not selectors or locators: no code looks an element up by them, and a
+locator built from one can match more than one element, because Playwright's CSS engine also
+searches open shadow roots. An element outside every shadow root and frame
+keeps the path it had before, so its identity key does not change. The walk ends as
+complete only when a path repeats or focus reaches the body. The read enters `iframe` and
+`frame` elements only. Any other element that holds a frame, such as an `object` or `embed`
+element that shows a document, or a `fencedframe`, is found through the browser's own DOM read
+over CDP (the browser gives a frame owner a frame id or a content document), and focus on it
+counts as a frame the read cannot see into. When focus moves into a closed shadow root, into
+a frame from another origin, into such a frame owner, or under more than 1024 shadow roots
+and frames, the walk cannot tell one control there from another. It stops and emits
+`keyboard-walk-truncated` as `unverified`, which names the cause, so the screen is not
+covered instead of passing. A closed shadow root that does not hold focus, such as one
+inside a focusable host, is walked past as usual.
+
+The other checks that read focus treat an unreadable focus the same way. Each transcript
+stop records why its focused element could not be read. At such a stop, the interaction
+contract tier emits `voicing/focus-unreadable` as `unverified` instead of
+`voicing/missing-name` or `voicing/missing-role`, and the word-level tier keeps a missing-words
+draft `unverified` even for a promoted obligation class. A flow requirement whose text was not
+heard in an announcement emits its draft as `unverified`, with the cause, instead of `fail`,
+because the text may be the name of the control it could not read. The live announcement
+check still runs at such a stop, since what the capture heard does not depend on the focus
+read.
+
 ### 7.4 Declarative interaction probes
 
 Multi-step interactions expressed as data (JSON steps a generic runner executes). A

@@ -60,6 +60,21 @@
 
 ### Fixed
 
+- The keyboard walk now follows focus into open shadow roots and same-origin frames. Before,
+  every control inside a web component or a frame had the path of its host or frame, so the
+  walk read the second control as a completed cycle and stopped. It never reached the
+  controls after it, and an unnamed button there was never reported. Each control now has
+  its own path and its own accessible name and role. A path outside every shadow root and
+  frame is unchanged. When focus moves into a closed shadow root, a frame from another
+  origin, or the frame of an `object`, `embed`, or `fencedframe` element, the walk stops
+  with `keyboard-walk-truncated`, so the screen is not covered instead of passing.
+
+- The interaction contract tiers and flow requirements no longer report a barrier on a
+  control they could not read. When focus is inside a closed shadow root or a frame usabl
+  cannot read, the focus read returns no name or role. Before, the contract tier reported
+  `voicing/missing-name` as `fail` there, and a flow requirement whose text was the control's
+  name failed. Both now emit an `unverified` draft that names the cause.
+
 - The scan browser now starts with Chromium's sandbox. Before, usabl never asked for it,
   so Playwright added `--no-sandbox` and every page a scan opened ran without it. When
   Chromium reports that it cannot start its sandbox, as on Ubuntu 23.10 and later or in
