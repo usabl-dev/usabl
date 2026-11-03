@@ -107,7 +107,9 @@ const PATH_FOR_IMPL = `
 // from it is not recorded; see the observer below. Nor is a change inside content hidden from
 // assistive technology, by aria-hidden, inert, or hidden anywhere on that walk. The same resolver
 // holds that rule.
-const LIVE_CAPTURE_IMPL = `
+// The resolver, the flat-tree parent, and the open-modal test, shared by the capture and the
+// closed shadow root check at drain, so both read a modal the same way.
+const MODAL_RULE_IMPL = `
   const liveResolver = (${createLiveResolver.toString()})();
   const flatParent = (element) => {
     if (element.assignedSlot) {
@@ -122,6 +124,36 @@ const LIVE_CAPTURE_IMPL = `
     }
     return null;
   };
+  // Whether an element is a modal dialog open now. A dialog opened with showModal() is one, by the
+  // browser's own :modal state. So is an element whose first recognized role is dialog or
+  // alertdialog with aria-modal true, while it is connected and shown: rendered, not hidden by
+  // visibility, and not under aria-hidden, inert, or hidden on the flat tree. Safari with VoiceOver
+  // hides everything outside such a dialog while it is shown, and Chromium does on Mac and Android
+  // while focus is inside it, so content outside it may not be spoken at all.
+  const isOpenModal = (element) => {
+    if (element.localName === 'dialog' && element.matches(':modal')) {
+      return true;
+    }
+    if (!element.isConnected || !liveResolver.ariaModalDialog({ role: element.getAttribute('role'), ariaModal: element.getAttribute('aria-modal') })) {
+      return false;
+    }
+    if (!element.checkVisibility({ visibilityProperty: true })) {
+      return false;
+    }
+    const chain = [];
+    for (let current = element; current instanceof Element; current = flatParent(current)) {
+      chain.push({
+        ariaHidden: current.getAttribute('aria-hidden'),
+        inert: current.hasAttribute('inert'),
+        hidden: current.hasAttribute('hidden'),
+      });
+    }
+    return !liveResolver.hiddenInChain(chain);
+  };
+`;
+
+const LIVE_CAPTURE_IMPL = `
+  ${MODAL_RULE_IMPL}
   // The element whose region the change belongs to: the nearest one that sets a live value, when
   // that value is polite or assertive. Null when the change is not live, and null when anything on
   // the walk hides its subtree from assistive technology: the changed element, a wrapper between it
@@ -162,15 +194,17 @@ const LIVE_CAPTURE_IMPL = `
     }
     return elements;
   };
-  // Every modal dialog open now, by the browser's own :modal state, in the document and in every
-  // open shadow root, because a modal dialog in a web component blocks the whole document too. A
-  // modal dialog inside a closed shadow root cannot be found from here; see the threat model.
+  // Every modal dialog open now (see isOpenModal), in the document and in every open shadow root,
+  // because a modal dialog in a web component blocks the whole document too. A modal dialog inside
+  // a closed shadow root cannot be found from here; see closedShadowModalOpen.
   const findOpenModals = () => {
     const found = new Set();
     const scopes = [document];
     for (let scope = scopes.pop(); scope !== undefined; scope = scopes.pop()) {
-      for (const dialog of scope.querySelectorAll('dialog:modal')) {
-        found.add(dialog);
+      for (const dialog of scope.querySelectorAll('dialog:modal, [aria-modal]')) {
+        if (isOpenModal(dialog)) {
+          found.add(dialog);
+        }
       }
       for (const element of scope.querySelectorAll('*')) {
         if (element.shadowRoot) {
@@ -303,19 +337,36 @@ async function drainCapture(cdp: CDPSession): Promise<AnnouncementDrain> {
   };
 }
 
-// Whether a dialog inside a closed shadow root is open as a modal now. The capture cannot see into
-// a closed shadow root, so it cannot tell which regions such a modal leaves out of the
-// accessibility tree. Only the browser's own DOM read over CDP reaches it, and each dialog there is
-// asked for its :modal state in the live world, so page script cannot answer for it. Anything but a
-// clear "no" counts as open. A frame's document is not searched: a modal there blocks only its
-// frame, and frames are not drained.
+// Whether the element it is called on is a modal dialog open now, by the capture's own rule.
+const OPEN_MODAL_FUNCTION = `function () {
+  ${MODAL_RULE_IMPL}
+  return isOpenModal(this);
+}`;
+
+// Whether a node from the browser's DOM read carries an attribute. CDP lists attributes as name,
+// value, name, value.
+function hasAttribute(node: unknown, name: string): boolean {
+  const attributes = getProp(node, 'attributes');
+  if (!Array.isArray(attributes)) return false;
+  for (let index = 0; index < attributes.length; index += 2) {
+    if (attributes[index] === name) return true;
+  }
+  return false;
+}
+
+// Whether a modal dialog inside a closed shadow root is open now. The capture cannot see into a
+// closed shadow root, so it cannot tell which regions such a modal hides from assistive
+// technology. Only the browser's own DOM read over CDP reaches it. Each dialog element and each
+// element with aria-modal there is asked whether it is an open modal (see isOpenModal) in the live
+// world, so page script cannot answer for it. Anything but a clear "no" counts as open. A frame's
+// document is not searched: a modal there blocks only its frame, and frames are not drained.
 async function closedShadowModalOpen(cdp: CDPSession): Promise<boolean> {
   const documentTree: unknown = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
   const candidates: unknown[] = [];
   const stack: Array<{ node: unknown; closed: boolean }> = [{ node: getProp(documentTree, 'root'), closed: false }];
   for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
     const { node, closed } = next;
-    if (closed && readString(getProp(node, 'localName')) === 'dialog') {
+    if (closed && (readString(getProp(node, 'localName')) === 'dialog' || hasAttribute(node, 'aria-modal'))) {
       candidates.push(getProp(node, 'backendNodeId'));
     }
     const children = getProp(node, 'children');
@@ -344,7 +395,7 @@ async function closedShadowModalOpen(cdp: CDPSession): Promise<boolean> {
     try {
       const answered: unknown = await cdp.send('Runtime.callFunctionOn', {
         objectId,
-        functionDeclaration: "function () { return this.matches(':modal'); }",
+        functionDeclaration: OPEN_MODAL_FUNCTION,
         returnByValue: true,
       });
       if (getProp(getProp(answered, 'result'), 'value') !== false) {

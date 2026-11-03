@@ -140,3 +140,31 @@ describe('blockedByModal', () => {
     }
   });
 });
+
+// The ARIA half of Chromium's AXObject::IsModal: the first role the browser recognizes is dialog or
+// alertdialog, and aria-modal is true, which Chromium reads as any value but empty, "undefined",
+// or "false", without regard to ASCII case.
+describe('ariaModalDialog', () => {
+  const cases: Array<[string | null, string | null, boolean]> = [
+    ['dialog', 'true', true],
+    ['alertdialog', 'true', true],
+    ['Dialog', 'TRUE', true],
+    ['banana dialog', 'true', true],
+    ['dialog', 'yes', true],
+    ['region dialog', 'true', false],
+    ['dialog', 'false', false],
+    ['dialog', 'FALSE', false],
+    ['dialog', 'undefined', false],
+    ['dialog', '', false],
+    ['dialog', null, false],
+    [null, 'true', false],
+    ['banana', 'true', false],
+  ];
+
+  for (const [role, ariaModal, expected] of cases) {
+    it(`reads role ${JSON.stringify(role)} with aria-modal ${JSON.stringify(ariaModal)} as ${expected ? 'modal' : 'not modal'}`, () => {
+      expect(createLiveResolver().ariaModalDialog({ role, ariaModal })).toBe(expected);
+      expect(resolverFromSource().ariaModalDialog({ role, ariaModal })).toBe(expected);
+    });
+  }
+});

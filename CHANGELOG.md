@@ -71,6 +71,11 @@
   pass, when a modal dialog is open inside a closed shadow root, or when a changed region left
   the document while a modal is open.
 
+- The announcement capture also treats a shown `aria-modal` dialog as a modal. An element whose
+  first recognized role is `dialog` or `alertdialog`, with `aria-modal` true, hides the regions
+  outside it from the capture while it is shown, because Safari with VoiceOver does not speak
+  them. Before, a flow requirement could pass on a region outside a custom modal.
+
 - The scan browser now starts with Chromium's sandbox. Before, usabl never asked for it,
   so Playwright added `--no-sandbox` and every page a scan opened ran without it. When
   Chromium reports that it cannot start its sandbox, as on Ubuntu 23.10 and later or in

@@ -19,6 +19,8 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><titl
     <dialog id="second"><p>Second</p><div aria-live="polite" id="in-second"></div></dialog>
     <x-shadow-dialog id="host"></x-shadow-dialog>
     <x-slot-dialog id="slot-host"><div aria-live="polite" id="slotted"></div></x-slot-dialog>
+    <div id="aria-wrap"><div role="dialog" aria-modal="true" aria-label="Aria" id="aria" hidden><p>Aria</p><div aria-live="polite" id="in-aria"></div></div></div>
+    <x-closed-aria id="closed-aria"></x-closed-aria>
     <iframe id="frame" title="Framed" srcdoc="<!doctype html><title>Framed</title><dialog id='framed'><p>Framed</p></dialog>"></iframe>
   </main>
   <script>
@@ -32,6 +34,14 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><titl
       constructor() {
         super();
         this.attachShadow({ mode: 'open' }).innerHTML = '<dialog><p>Slot</p><slot></slot></dialog>';
+      }
+    });
+    customElements.define('x-closed-aria', class extends HTMLElement {
+      constructor() {
+        super();
+        const root = this.attachShadow({ mode: 'closed' });
+        root.innerHTML = '<div role="dialog" aria-modal="true" aria-label="Closed" hidden><p>Closed</p></div>';
+        this.show = () => root.querySelector('[role=dialog]').removeAttribute('hidden');
       }
     });
     window.say = (id, text) => { document.getElementById(id).textContent = text; };
@@ -291,15 +301,74 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the announcement capture
     }
   });
 
+  // usabl's own rule for aria-modal, not Chromium's tree: Chromium prunes for aria-modal only on Mac
+  // and Android, so on Linux the tree still exposes the regions outside. Safari with VoiceOver hides
+  // them whenever the dialog is shown, so the capture does too. These cases check the rule only.
+  describe('a dialog with aria-modal', () => {
+    async function heard(setup: string, ids: readonly string[]): Promise<Record<string, boolean>> {
+      const state = await scenario(setup, ids);
+      return Object.fromEntries(Object.entries(state).map(([id, region]) => [id, region.heard]));
+    }
+    const show = `document.getElementById('aria').removeAttribute('hidden')`;
+
+    it('hears only inside a shown aria-modal dialog', async () => {
+      expect(await heard(show, ['outside', 'in-aria'])).toEqual({ outside: false, 'in-aria': true });
+    });
+
+    it('hears outside again once the dialog is hidden', async () => {
+      expect(await heard(`${show}; document.getElementById('aria').setAttribute('hidden', '')`, ['outside'])).toEqual({ outside: true });
+    });
+
+    for (const [why, setup] of [
+      ['aria-modal is false', `${show}; document.getElementById('aria').setAttribute('aria-modal', 'false')`],
+      ['its first recognized role is not dialog', `${show}; document.getElementById('aria').setAttribute('role', 'region dialog')`],
+      ['it is not rendered', `${show}; document.getElementById('aria').style.display = 'none'`],
+      ['it is hidden by visibility', `${show}; document.getElementById('aria').style.visibility = 'hidden'`],
+      ['an ancestor is aria-hidden', `${show}; document.getElementById('aria-wrap').setAttribute('aria-hidden', 'true')`],
+      ['an ancestor is inert', `${show}; document.getElementById('aria-wrap').inert = true`],
+    ] as const) {
+      it(`hears outside when ${why}`, async () => {
+        expect(await heard(setup, ['outside'])).toEqual({ outside: true });
+      });
+    }
+
+    for (const [why, setup] of [
+      ['its role list starts with an unknown token', `${show}; document.getElementById('aria').setAttribute('role', 'banana alertdialog')`],
+      ['aria-modal is TRUE', `${show}; document.getElementById('aria').setAttribute('aria-modal', 'TRUE')`],
+    ] as const) {
+      it(`does not hear outside when ${why}`, async () => {
+        expect(await heard(setup, ['outside'])).toEqual({ outside: false });
+      });
+    }
+
+    it('says it cannot decide while an aria-modal dialog inside a closed shadow root is shown', async () => {
+      const context = await browser.newContext();
+      try {
+        const pw = await context.newPage();
+        await pw.setContent(PAGE, { waitUntil: 'domcontentloaded' });
+        const page: Page = await adoptPage(pw);
+        expect((await page.drainAnnouncementRecord()).undecidable).toBeNull();
+        await pw.evaluate(`document.getElementById('closed-aria').show(); window.say('outside', 'said in outside')`);
+        expect((await page.drainAnnouncementRecord()).undecidable).toBe('closed-shadow-modal');
+      } finally {
+        await context.close();
+      }
+    });
+  });
+
   // The false green end to end: a flow requirement that expects "Saved" passed on a polite region
   // outside the modal the same click opened, which no screen reader speaks.
-  it('does not pass a flow requirement on a region outside the modal the step opened', async () => {
+  for (const [kind, opens, modal] of [
+    ['a dialog opened with showModal()', "document.getElementById('confirm').showModal();", '<dialog id="confirm"><p>Saving</p><button type="button">Close</button></dialog>'],
+    ['an aria-modal dialog', "document.getElementById('confirm').hidden = false;", '<div role="dialog" aria-modal="true" aria-label="Saving" id="confirm" hidden><button type="button">Close</button></div>'],
+  ] as const) {
+  it(`does not pass a flow requirement on a region outside ${kind} the step opened`, async () => {
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title></head><body>
       <main><button type="button" id="save">Save</button><div aria-live="polite" id="message"></div>
-      <dialog id="confirm"><p>Saving</p><button type="button">Close</button></dialog></main>
+      ${modal}</main>
       <script>
         document.getElementById('save').addEventListener('click', () => {
-          document.getElementById('confirm').showModal();
+          ${opens}
           document.getElementById('message').textContent = 'Saved';
         });
       </script>
@@ -333,4 +402,5 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the announcement capture
       await driver.close();
     }
   });
+  }
 });
