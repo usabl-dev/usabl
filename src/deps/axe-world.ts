@@ -165,12 +165,18 @@ const CUSTOM_ELEMENTS_FUNCTION = `function () {
   return found;
 }`;
 
+// The ARIA states the isolated run can hand axe, by the ElementInternals property axe reads for
+// each. They are the states axe's aria-required-attr rule asks for: aria-checked, aria-expanded,
+// aria-level, and aria-valuenow. axe's ariaAttrs standard names the property for each attribute,
+// and axe reads it from the internals object when the element has no attribute.
+const CARRIED_STATES = ['ariaChecked', 'ariaExpanded', 'ariaLevel', 'ariaValueNow'] as const;
+
 // Hands axe the semantics a custom element set through ElementInternals. axe finds internals by
 // reading page-world properties such as `_internals`, which this world cannot see, and it reads
 // `globalThis._elementInternals` first. Each record carries what the browser's accessibility tree
 // computed for the element, so axe sees the role the browser exposes. A role axe does not know is
 // left out, as it would be from real internals.
-const SET_INTERNALS_FUNCTION = `function (records) {
+export const SET_INTERNALS_FUNCTION = `function (records) {
   const map = new WeakMap();
   this.forEach((element, index) => {
     const record = records[index];
@@ -178,6 +184,9 @@ const SET_INTERNALS_FUNCTION = `function (records) {
     const internals = {};
     if (typeof record.role === 'string' && axe.commons.aria.isValidRole(record.role)) internals.role = record.role;
     if (typeof record.ariaLabel === 'string') internals.ariaLabel = record.ariaLabel;
+    for (const name of ${JSON.stringify(CARRIED_STATES)}) {
+      if (typeof record[name] === 'string') internals[name] = record[name];
+    }
     if (Object.keys(internals).length > 0) map.set(element, internals);
   });
   globalThis._elementInternals = map;
@@ -192,9 +201,37 @@ const SANDBOXED_WITHOUT_SCRIPTS_FUNCTION = `function () {
 // through internals are listed.
 const CHROMIUM_ROLE_TO_ARIA: Record<string, string> = { image: 'img' };
 
-interface InternalsRecord {
-  role?: string;
-  ariaLabel?: string;
+type InternalsRecord = { role?: string; ariaLabel?: string } & Partial<Record<(typeof CARRIED_STATES)[number], string>>;
+
+// The value of one named property of an accessibility node, or undefined.
+function axProperty(axNode: unknown, name: string): unknown {
+  const properties = getProp(axNode, 'properties');
+  if (!Array.isArray(properties)) {
+    return undefined;
+  }
+  const found: unknown = properties.find((property: unknown) => getProp(property, 'name') === name);
+  return getProp(getProp(found, 'value'), 'value');
+}
+
+// The value Chromium reports for a range role that set no aria-valuenow, at the single precision it
+// computes in, or null for a role this does not know. ARIA 1.1 defaults: a slider or scrollbar sits
+// halfway between its minimum and maximum, a separator at 50, and a meter at its minimum. The tree
+// reports the minimum and maximum, which default to 0 and 100.
+function defaultValueNow(role: string | null, axNode: unknown): number | null {
+  const min = readNumber(axProperty(axNode, 'valuemin')) ?? 0;
+  const max = readNumber(axProperty(axNode, 'valuemax')) ?? 100;
+  switch (role) {
+    case 'slider':
+    case 'scrollbar':
+      return Math.fround(Math.fround(Math.fround(min) + Math.fround(max)) / 2);
+    case 'separator':
+    case 'splitter':
+      return 50;
+    case 'meter':
+      return Math.fround(min);
+    default:
+      return null;
+  }
 }
 
 function attributesOf(flat: unknown): Map<string, string> {
@@ -216,11 +253,22 @@ function attributesOf(flat: unknown): Map<string, string> {
  * The semantics one custom element shows in the accessibility tree that its attributes do not
  * explain, or null. A custom element with no internals is exposed as generic or not at all, so a
  * role here came from internals. A name read from aria-label on an element with no aria-label
- * attribute came from internals too. ARIA states are not carried: the tree reports a default
- * state, such as unchecked, for a role whether or not the element set one, so a state read here
- * could tell axe a required attribute is present when it is not.
+ * attribute came from internals too.
+ *
+ * The tree reports a default value for some states whether or not the element set one, such as
+ * unchecked for a checkbox. So a state is carried only when the element has no attribute for it
+ * and the tree reports a value the role's default cannot explain, which only internals can set:
+ * - `checked` of `true` or `mixed`, as `ariaChecked`. `false` is the default and is dropped.
+ * - `expanded` of true, as `ariaExpanded` `'true'`. false is the default and is dropped.
+ * - On a heading, a `level` other than 2, as `ariaLevel`. 2 is the default and is dropped. A level
+ *   on any other role is dropped, because the browser computes it from position, as for a tree item.
+ * - On a slider, scrollbar, separator, or meter, a current value other than the role's default
+ *   (see defaultValueNow), as `ariaValueNow`. The tree reports it as the node's numeric `value`.
+ *   A value on any other role is dropped, and so is a text value.
+ * An element that set a state to its default value is still reported as missing it. That can be a
+ * false barrier, never a missed one.
  */
-function internalsRecord(axNode: unknown, attributes: Map<string, string>): InternalsRecord | null {
+export function internalsRecord(axNode: unknown, attributes: Map<string, string>): InternalsRecord | null {
   if (axNode === undefined || getProp(axNode, 'ignored') === true) {
     return null;
   }
@@ -239,6 +287,22 @@ function internalsRecord(axNode: unknown, attributes: Map<string, string>): Inte
         }
       }
     }
+  }
+  const checked = readString(axProperty(axNode, 'checked'));
+  if (!attributes.has('aria-checked') && (checked === 'true' || checked === 'mixed')) {
+    record.ariaChecked = checked;
+  }
+  if (!attributes.has('aria-expanded') && axProperty(axNode, 'expanded') === true) {
+    record.ariaExpanded = 'true';
+  }
+  const level = readNumber(axProperty(axNode, 'level'));
+  if (!attributes.has('aria-level') && role === 'heading' && level !== null && Number.isInteger(level) && level !== 2) {
+    record.ariaLevel = String(level);
+  }
+  const valueNow = readNumber(getProp(getProp(axNode, 'value'), 'value'));
+  const defaultNow = defaultValueNow(role, axNode);
+  if (!attributes.has('aria-valuenow') && valueNow !== null && defaultNow !== null && Math.fround(valueNow) !== defaultNow) {
+    record.ariaValueNow = String(valueNow);
   }
   return Object.keys(record).length === 0 ? null : record;
 }
