@@ -546,7 +546,11 @@ outside every table as the control in an accepted row. Either way a new barrier 
   page that defined a `window.axe` getter could hand back a clean result. Neither reaches axe now.
   A child frame axe cannot check is a coverage gap that names the frame's origin and the reason,
   where axe's own Playwright runner dropped it without a word, including a frame that took more
-  than one second to load axe.
+  than one second to load axe. So is a frame axe never found, such as one in a closed shadow root
+  or a document in an `object` element, and a frame whose frames changed between axe's two reads.
+- A role Chrome derives for a custom element from its layout or focus, such as `listitem` for
+  `display: list-item`, is never handed to axe as an internals role, so CSS cannot make axe pass a
+  check that the same page fails in the page world.
 
 **Not handled:** one page operation still runs in the page's own world: the element count that
 readiness polls to tell when the DOM stopped changing. A page can change what it sees by
@@ -554,9 +558,13 @@ redefining DOM methods. The semantics a custom element sets through `ElementInte
 from the browser's accessibility tree, because the internals object lives in page script. The
 tree is what assistive technology reads, so a page cannot use this to tell axe something the
 browser does not expose. Where the browser exposes nothing, axe is told nothing and reports more.
+Page script still shares the DOM and the main thread with axe's world, so it can change the DOM
+between axe's steps and can tell from the timing that axe runs.
 
 **Tests:** `test/deps/axe-world.real.integration.test.ts` (patched `getAttribute`, a `window.axe`
-getter, a sandboxed frame, a frame in another process, a frame that stops answering), and
+getter, a sandboxed frame, a frame in another process, a chain of processes, a frame that stops
+answering, frames axe never finds, roles from layout), `test/deps/axe-world-frames.test.ts` (removed,
+navigating, and changed frames, frames no session reaches, results that are not results), and
 `test/deps/axe-world-compare.harness.test.ts` with its summary.
 
 **Status:** [x] Paths, announcements, table rows, the focus and style reads, the zoom write, and

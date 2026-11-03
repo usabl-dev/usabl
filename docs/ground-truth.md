@@ -636,37 +636,54 @@ common rules with plain-language PatternFly-specific guidance. Every Draft has
 
 axe runs in an isolated world in every frame (`src/deps/axe-world.ts`), not in the page's own
 world. An isolated world shares the DOM with the page but not its globals or prototypes, so page
-script that patches `getAttribute` or defines a `window.axe` getter does not change axe's
-selectors or results. The frame walk is the one `@axe-core/playwright` does: `axe.runPartial` in
-each frame, child frames found through axe's own frame contexts, a frame in another process
-reached through its own CDP session, and `axe.finishRun` in the top frame's world. A child frame
-axe cannot be loaded into or run in, because a step ran out its 60 second budget, the frame was
-sandboxed without scripts, it was detached, or no session reached it, is a `not-covered` gap
-named by the frame's origin and the reason. axe's own Playwright runner dropped such a frame
-without a gap, and gave a child frame one second to load axe.
+script that patches `getAttribute` or defines a `window.axe` getter does not change axe's selectors
+or results. The frame walk is the one `@axe-core/playwright` does: `axe.runPartial` in each frame,
+child frames found through axe's own frame contexts, a frame in another process reached through its
+own CDP session, and `axe.finishRun` in the top frame's world. A child frame axe cannot be loaded
+into or run in, because a step ran out its 60 second budget, the frame was sandboxed without
+scripts, it was removed or navigated while axe ran, or no session reached it, is a `not-covered`
+gap named by the frame's origin and the reason. So is a frame whose list of frames changed between
+axe's read of it and its run, since axe would then place one frame's results under another, and a
+frame whose partial result is not an object. A top frame where either happens, or a final result
+that is not an axe result, fails the whole axe run, which is a gap for the screen. After the walk,
+usabl compares the frames it checked with the browser's frame trees. A frame axe never found, such
+as an iframe in a closed shadow root, a document in an `object` or `embed` element, or a frame
+added while axe ran, is a `not-covered` gap too, unless the accessibility tree ignores its frame
+element, which is how axe skips a hidden frame. axe's own Playwright runner dropped all of these
+without a gap, and gave a child frame one second to load axe. A frame added after that comparison
+is not seen.
 
 axe reads the semantics a custom element sets through `ElementInternals` from page-world properties
 such as `_internals`, which an isolated world cannot see. usabl gives axe what the browser's
 accessibility tree computed for each custom element instead: its role, when the element has no role
-attribute and the tree exposes a role that is not generic, a name set through an internals
-`aria-label`, and the states axe's `aria-required-attr` rule asks for. The tree reports a default
-state, such as unchecked, whether or not the element set one, so a state reaches axe only when the
-element has no attribute for it and the tree reports a value other than the role's default: checked
-or mixed, expanded, a heading level other than 2, and a slider, scrollbar, separator, or meter
-value other than the one the browser supplies when none is set. A state set through internals to
-its default value is not carried, so usabl can report it as missing, never the reverse.
+attribute, the tree exposes a role that is not generic, and Chrome could not have derived that role
+from the element's own layout or focus, a name set through an internals `aria-label`, and the
+states axe's `aria-required-attr` rule asks for. The tree reports a default state, such as
+unchecked, whether or not the element set one, so a state reaches axe only when the element has no
+attribute for it and the tree reports a value other than the role's default: checked or mixed,
+expanded, a heading level other than 2, and a slider, scrollbar, separator, or meter value other
+than the one the browser supplies when none is set. A state set through internals to its default
+value is not carried, so usabl can report it as missing, never the reverse.
 `test/deps/axe-world.real.integration.test.ts` pins in Chrome the default each of these states
-reports when an element sets none. On the comparison fixtures this matches axe in the page world
-for list items, buttons, tabs, headings, labelled form controls, a state on an element with a role
-attribute, images, hidden items, lists in shadow roots, and each carried state on its own page, set
-and not set. Three cases differ, and all are recorded in
-`test/deps/axe-world-compare.summary.json`. A heading that sets level 2 through internals reads
-like one that sets no level, so usabl reports its level as missing where the page world did not. A
-role kept in a private field is invisible to axe in the page world, which then reports a list with
-no items; the browser exposes the items, and so does usabl. A role attribute of `presentation`, or
-one that is not a role, overrides the internals role in Chrome, which then exposes no list items.
-usabl reports the list as missing its items; the page world read the internals role and passed it,
-which was a false pass.
+reports when an element sets none. Chrome gives a custom element a role of its own from a `display:
+list-item` or table display, from CSS `content`, from being a `focusgroup` owner, and a group role
+from focus, `popover`, `autofocus`, `draggable`, or an ARIA relation (`RoleFromLayoutObjectOrNode`
+in Chromium's `ax_node_object.cc`). usabl reads those facts in its own world and carries no role
+they could explain, so a list of elements displayed as list items fails as it does in the page
+world. A role set through internals on such an element is dropped too, which can report a barrier
+the page world did not, never the reverse. On the comparison fixtures this matches axe in the page
+world for list items, buttons, tabs, headings, labelled form controls, a state on an element with a
+role attribute, images, hidden items, lists in shadow roots, and each carried state on its own
+page, set and not set, and on the pages with list-item, table, focus, and CSS content layouts and
+no internals at all. Four cases differ, and all are recorded in
+`test/deps/axe-world-compare.summary.json`. A list item set through internals on an element
+displayed as a list item has its role dropped, so usabl reports the list as missing its items. A
+heading that sets level 2 through internals reads like one that sets no level, so usabl reports its
+level as missing where the page world did not. A role kept in a private field is invisible to axe
+in the page world, which then reports a list with no items; the browser exposes the items, and so
+does usabl. A role attribute of `presentation`, or one that is not a role, overrides the internals
+role in Chrome, which then exposes no list items. usabl reports the list as missing its items; the
+page world read the internals role and passed it, which was a false pass.
 
 A color-contrast result axe could not measure because the element's background is a
 gradient is still a needs-review draft (`confidence: 'unverified'`) with the same rule,

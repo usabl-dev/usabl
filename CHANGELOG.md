@@ -636,17 +636,21 @@
   another row and the run verified. A page that defined a `window.axe` getter could hand
   back a clean result. Neither changes what axe reports now. Custom elements that set their
   role, name, or a required ARIA state through `ElementInternals` are read from the
-  browser's accessibility tree. A state reaches axe only when the tree reports a value other
+  browser's accessibility tree. A role Chrome gives a custom element from its own layout or
+  focus, such as list item for `display: list-item`, is not taken as an internals role. A state reaches axe only when the tree reports a value other
   than the role's default, such as checked, since the tree reports unchecked whether or not
   the element set it. On the comparison fixtures this gives the same findings as before in
-  all but three cases. A role kept in a private field, which axe could not see before, now
+  all but four cases. A role kept in a private field, which axe could not see before, now
   counts the way the browser exposes it. A role attribute that overrides the internals role,
   such as `presentation`, now reports the list items the browser does not expose, where
   before it passed. A heading that sets level 2 through internals, the default, is reported
-  as missing its level. See `test/deps/axe-world-compare.summary.json`.
+  as missing its level, and a list item set through internals on an element displayed as a
+  list item is reported missing from its list. See `test/deps/axe-world-compare.summary.json`.
 
 - A frame axe cannot check is now a `not-covered` gap that names the frame's origin and
-  why, such as a frame sandboxed without scripts or one that stops answering. axe's own
+  why, such as a frame sandboxed without scripts, one that stops answering, one in a closed
+  shadow root, a document in an `object` or `embed` element, or one whose frames changed
+  while axe ran. axe's own
   Playwright runner dropped such a frame with no gap, and dropped any frame that took more
   than one second to load axe, so its barriers were missing from a result that could
   verify. A screen with a frame like this is no longer cleanly scanned.
