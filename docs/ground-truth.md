@@ -2521,7 +2521,13 @@ scan (see "Readiness waits for service workers"). It also catches what the route
 the allowed set, or a redirect response whose Location points there, a response whose server address the URL should not reach (an IP origin answered
 by another address or port, `localhost` off loopback or on another port, another hostname
 answered by a loopback, private, or link-local address), and a WebSocket a worker opens outside
-the allowed origins. A screen on which anything was blocked or caught gets a `not-covered` gap
+the allowed origins. Two worker paths pass no filter yet, so each makes the screen a gap whatever
+origin it reaches: a shared worker starting, seen through target discovery on a browser session,
+and a WebSocket a service worker opens, seen through the page's own debugging session, which
+attaches to each service worker paused at start and turns its network events on before its script
+runs. A service worker discovery saw that the session never watched is a gap too. Playwright
+reports a shared worker's script request and never its end, so readiness also runs out on such a
+page. A screen on which anything was blocked or caught gets a `not-covered` gap
 that names the origins, never the path or query, and keeps its drafts. The Result gains a `judge` block (`isolatedBrowser: true`,
 `blockedRequests`, and `buildDigest`, the sha256 from `USABL_BUILD_DIGEST` or null). It is
 disclosure only: the gate never reads it, the Result reader refuses a malformed one, and the

@@ -15,7 +15,8 @@
  * an allowed origin to another, an allowed hostname answered by a loopback server, and a socket
  * opened from a worker are each caught, so the screen is a coverage gap. And readiness waits for a
  * service worker whose install step gates the content, or makes the screen a gap when it does not
- * finish inside the budget.
+ * finish inside the budget. A shared worker starting, and a service worker opening a WebSocket, are
+ * each detected through the browser rather than page script, and make the screen a gap.
  */
 import { readdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -150,6 +151,20 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the judge isolated brows
       </script></main></html>`,
     );
     writeFileSync(join(buildDir, 'worker.js'), `new WebSocket('ws://127.0.0.1:${recorder.port}/from-worker');`);
+    // A shared worker that reaches the other origin, and a service worker that opens a socket to it.
+    // Neither passes the request filter, so each must make the screen a gap.
+    writeFileSync(join(buildDir, 'shared.js'), `fetch('${other}/from-shared').catch(() => undefined);`);
+    writeFileSync(
+      join(buildDir, 'shared.html'),
+      `<!doctype html><html lang="en"><title>shared</title><main><h1>Shared worker</h1>
+      <script>new SharedWorker('/shared.js');</script></main></html>`,
+    );
+    writeFileSync(join(buildDir, 'sw-socket.js'), `new WebSocket('ws://127.0.0.1:${recorder.port}/from-sw-socket');`);
+    writeFileSync(
+      join(buildDir, 'sw-socket.html'),
+      `<!doctype html><html lang="en"><title>sw socket</title><main><h1>Worker socket</h1>
+      <script>navigator.serviceWorker.register('/sw-socket.js');</script></main></html>`,
+    );
     writeFileSync(
       join(buildDir, 'worker.html'),
       `<!doctype html><html lang="en"><title>worker</title><main><h1>Worker socket</h1>
@@ -471,6 +486,50 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the judge isolated brows
     } finally {
       await driver.close();
       await app.close();
+    }
+  }, 60_000);
+
+  function judgedRunner(readyTimeoutMs?: number): { runner: ReturnType<typeof makeCheckRunner>; driver: ReturnType<typeof makeRealBrowserDriver> } {
+    const { isolation: iso } = isolation();
+    const driver = makeRealBrowserDriver({
+      isolation: iso,
+      browserSandbox: 'require',
+      ...(readyTimeoutMs === undefined ? {} : { readyTimeoutMs }),
+    });
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [axeProvider],
+      config: testConfig({ appBaseUrl: app.url }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+    return { runner, driver };
+  }
+
+  it('makes the screen a coverage gap when a shared worker starts, since its requests are not filtered', async () => {
+    // Playwright reports the shared worker's script request and never its end, so readiness runs
+    // out on this page. A short budget keeps the test quick; the gap that matters is the one that
+    // names the shared worker, not the readiness timeout.
+    const { runner, driver } = judgedRunner(5000);
+    try {
+      const scan = await runner.scan({ id: 'shared', url: `${app.url}/shared.html` });
+      const gap = scan.gaps.find((entry) => entry.reason.includes('isolated browser blocked'));
+      expect(gap?.state).toBe('not-covered');
+      expect(gap?.reason ?? '').toContain('shared worker');
+    } finally {
+      await driver.close();
+    }
+  }, 60_000);
+
+  it('makes the screen a coverage gap when a service worker opens a WebSocket', async () => {
+    const { runner, driver } = judgedRunner();
+    try {
+      const scan = await runner.scan({ id: 'sw-socket', url: `${app.url}/sw-socket.html` });
+      const gap = scan.gaps.find((entry) => entry.reason.includes('isolated browser blocked'));
+      expect(gap?.state).toBe('not-covered');
+      expect(gap?.reason ?? '').toContain(`ws://127.0.0.1:${recorder.port} (opened by a service worker`);
+    } finally {
+      await driver.close();
     }
   }, 60_000);
 

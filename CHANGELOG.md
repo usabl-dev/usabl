@@ -755,6 +755,12 @@
   installing or activating. A worker that does not finish inside `readyTimeoutMs` makes the
   screen a `not-covered` gap that names it. This applies to every scan, the judge included.
 
+- The isolated judge now makes a screen a coverage gap when a shared worker starts or a service
+  worker opens a WebSocket. Neither passes the request filter: Playwright drops shared workers, and
+  it watches sockets only where there is a page. Before, a shared worker's fetch to another origin
+  and a service worker's socket reached their servers with no gap. The judge now sees both through
+  the browser's debugging protocol, outside page script.
+
 - `usabl extract-build` bounds the archive size, each long-name or pax record, the member
   count, and the extracted bytes, and refuses an archive past any bound before it allocates or
   writes.

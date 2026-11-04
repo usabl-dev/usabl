@@ -2245,7 +2245,117 @@ export interface RealBrowserOptions {
  * The part of a launched Playwright browser this module uses. Narrow so a test can stand in a fake
  * and drive the launch, disconnect, and relaunch logic without a real Chromium.
  */
-export type LaunchedBrowser = Pick<Browser, 'newContext' | 'isConnected' | 'close'>;
+export type LaunchedBrowser = Pick<Browser, 'newContext' | 'isConnected' | 'close'> &
+  // Optional so a fake needs it only when it serves the judge, which watches worker targets with it.
+  Partial<Pick<Browser, 'newBrowserCDPSession'>>;
+
+/**
+ * Watches, for the judge, the worker traffic its request filter cannot reach, from outside page
+ * script.
+ *
+ * Playwright detaches a shared worker, so its requests are never routed or reported, and it
+ * listens for WebSockets only where there is a page, so a service worker's socket passes no filter.
+ * Neither can be filtered yet, so each makes the screen a coverage gap:
+ * - a shared worker is seen through target discovery on a browser session, filtered to this
+ *   context, the moment it is created;
+ * - a service worker is attached from the page's own session, which the browser pauses at start
+ *   until it is released, so its Network domain is on before its script runs and every socket it
+ *   opens is reported. A service worker that discovery saw but this session never watched could
+ *   have opened a socket unseen, so it is a gap too.
+ * Every target the page session attaches to, a frame or a dedicated worker included, is released
+ * at once, so the page runs as it would. The page session uses the non-flat protocol, because
+ * Playwright does not route messages for a child session it did not create itself.
+ */
+async function watchUnfilteredWorkers(
+  browser: LaunchedBrowser,
+  page: CDPSession,
+  caught: (url: string, why: string) => void,
+): Promise<{ checkWatched: () => void; detach: () => Promise<void> }> {
+  if (browser.newBrowserCDPSession === undefined) {
+    throw new Error('the isolated browser cannot watch worker targets, so it cannot confirm their traffic is filtered');
+  }
+  const contextId = (await page.send('Target.getTargetInfo')).targetInfo.browserContextId;
+  const browserSession = await browser.newBrowserCDPSession();
+  const discovered = new Map<string, string>();
+  const watched = new Set<string>();
+  // The page session's child sessions on service workers, and the Network.enable request sent to
+  // each, by message id.
+  const workerSessions = new Map<string, { targetId: string; url: string }>();
+  const enabling = new Map<number, { targetId: string; url: string }>();
+  let messageId = 0;
+  const sendTo = (sessionId: string, method: string): { id: number; sent: Promise<unknown> } => {
+    messageId += 1;
+    const id = messageId;
+    return { id, sent: page.send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id, method, params: {} }) }) };
+  };
+  try {
+    browserSession.on('Target.targetCreated', ({ targetInfo }) => {
+      if (targetInfo.browserContextId !== contextId) {
+        return;
+      }
+      if (targetInfo.type === 'shared_worker') {
+        caught(targetInfo.url, 'a shared worker started, and its requests cannot be filtered');
+      } else if (targetInfo.type === 'service_worker') {
+        discovered.set(targetInfo.targetId, targetInfo.url);
+      }
+    });
+    await browserSession.send('Target.setDiscoverTargets', {
+      discover: true,
+      filter: [{ type: 'service_worker' }, { type: 'shared_worker' }],
+    });
+    page.on('Target.attachedToTarget', ({ sessionId, targetInfo }) => {
+      if (targetInfo.type === 'service_worker') {
+        const worker = { targetId: targetInfo.targetId, url: targetInfo.url };
+        workerSessions.set(sessionId, worker);
+        const enable = sendTo(sessionId, 'Network.enable');
+        enabling.set(enable.id, worker);
+        enable.sent.catch(() => caught(worker.url, 'a service worker that could not be watched for sockets'));
+      }
+      // Sent after Network.enable on the same session, so the target handles that first.
+      sendTo(sessionId, 'Runtime.runIfWaitingForDebugger').sent.catch(() => undefined);
+    });
+    page.on('Target.receivedMessageFromTarget', ({ sessionId, message }) => {
+      const worker = workerSessions.get(sessionId);
+      if (worker === undefined) {
+        return;
+      }
+      let parsed: { id?: unknown; error?: unknown; method?: unknown; params?: { url?: unknown } };
+      try {
+        parsed = JSON.parse(message) as typeof parsed;
+      } catch {
+        caught(worker.url, 'a service worker whose messages could not be read');
+        return;
+      }
+      if (typeof parsed.id === 'number' && enabling.has(parsed.id)) {
+        enabling.delete(parsed.id);
+        if (parsed.error === undefined) {
+          watched.add(worker.targetId);
+        } else {
+          caught(worker.url, 'a service worker that could not be watched for sockets');
+        }
+        return;
+      }
+      if (parsed.method === 'Network.webSocketCreated') {
+        const url = typeof parsed.params?.url === 'string' ? parsed.params.url : worker.url;
+        caught(url, 'opened by a service worker, and its sockets cannot be filtered');
+      }
+    });
+    await page.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: false });
+  } catch (error) {
+    await browserSession.detach().catch(() => undefined);
+    throw error;
+  }
+  return {
+    checkWatched: () => {
+      for (const [targetId, url] of [...discovered].sort(([a], [b]) => a.localeCompare(b))) {
+        if (!watched.has(targetId)) {
+          caught(url, 'a service worker that could not be watched for sockets');
+        }
+      }
+    },
+    detach: () => browserSession.detach().catch(() => undefined),
+  };
+}
 
 /**
  * One browser process shared across runs.
@@ -2461,22 +2571,27 @@ export function makeSharedBrowser(
 
     // From here a context exists. Any failure below must close it, or an authenticated page opened
     // from the run's storage state stays alive with nothing holding it.
+    // Set once the page's session exists, in the judge: the worker targets the filter cannot reach.
+    let workerWatch: { checkWatched: () => void; detach: () => Promise<void> } | null = null;
     try {
       // Context-wide routing is installed before any page exists, so the first navigation, its
       // frames, its workers, and any popup all pass through the filter.
       let blockedOrigins: (() => Promise<string[]>) | null = null;
+      let caughtByJudge: ((url: string, why: string) => void) | null = null;
       if (isolation !== undefined) {
         const blocked = new Set<string>();
         // Address checks wait on the browser, so the list is read only after they settle.
         const pending = new Set<Promise<void>>();
         blockedOrigins = async () => {
           while (pending.size > 0) await Promise.all([...pending]);
+          workerWatch?.checkWatched();
           return [...blocked].sort();
         };
         const caught = (url: string, why: string): void => {
           blocked.add(`${blockedOriginLabel(url)} (${why})`);
           isolation.onBlocked(url);
         };
+        caughtByJudge = caught;
         await context.route('**/*', async (route) => {
           const requestUrl = route.request().url();
           if (decideRequest(isolation.allowedOrigins, requestUrl) === 'allow') {
@@ -2564,6 +2679,10 @@ export function makeSharedBrowser(
       // so readiness waits for them too. Both are attached before navigating, like the page's.
       const workers = makeWorkerActivityTracker(context);
       const cdp = await context.newCDPSession(page);
+      if (caughtByJudge !== null) {
+        // Before navigating, so a worker the page starts at once is already watched.
+        workerWatch = await watchUnfilteredWorkers(launched, cdp, caughtByJudge);
+      }
       cdp.on('ServiceWorker.workerVersionUpdated', (event) => workers.versionsUpdated(event.versions));
       // A browser that cannot report its workers cannot show that they finished, so the open fails
       // and the screen becomes a gap rather than a scan that may have read a shell.
@@ -2576,12 +2695,26 @@ export function makeSharedBrowser(
       // budget, so one config number covers the whole cost of reaching a screen.
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });
       const opened = wrapPage(page, context, cdp, readyTimeoutMs, network, workers);
+      const watch = workerWatch;
       const wrapped: Page =
-        blockedOrigins === null ? opened : { ...opened, blockedRequests: () => blockedOrigins() };
+        blockedOrigins === null
+          ? opened
+          : {
+              ...opened,
+              blockedRequests: () => blockedOrigins(),
+              close: async () => {
+                try {
+                  await opened.close();
+                } finally {
+                  await watch?.detach();
+                }
+              },
+            };
       // A page from a process without the sandbox says so, and the check runner carries that onto
       // the screen in the Result.
       return handle.sandboxed ? wrapped : { ...wrapped, browserSandbox: 'off' };
     } catch (error) {
+      await workerWatch?.detach();
       await context.close().catch(() => undefined);
       // A failure with the process gone means the process died under us. Forget it so the next
       // open relaunches instead of failing against a dead reference. A failure with the process

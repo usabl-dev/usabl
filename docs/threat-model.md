@@ -993,7 +993,14 @@ Residual risks that remain:
   address at its port, so an allowed hostname whose DNS answer points at a loopback or private
   service, or another loopback port, is a gap. A WebSocket a dedicated worker opens bypasses the
   socket filter, which patches only the page, and is caught the same way. A shared worker's
-  requests are not routed or reported at all, and WebRTC and DNS prefetch are not routed either.
+  requests are not routed or reported at all, and a service worker's WebSockets pass no filter,
+  because Playwright watches sockets only where there is a page. Until they are filtered, the
+  judge detects both from outside page script and makes the screen a coverage gap: a shared worker
+  through target discovery on a browser session, as soon as it is created in the scan's context;
+  a service worker through the page's own debugging session, which attaches to it paused at start
+  and turns on its network events before its script runs, so every socket it opens is reported. A
+  service worker that discovery saw but that session never watched is a gap too. WebRTC and DNS
+  prefetch are not routed either.
   The default allows only the app origin, which `serve-build` serves without redirects.
 
 The engine's own checked-in `.github/workflows/usabl-gate.yml` keeps the earlier three-job
