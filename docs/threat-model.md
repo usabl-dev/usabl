@@ -969,8 +969,11 @@ Residual risks that remain:
 - **Request filtering is not full network confinement.** The filter covers requests that pass
   through Chromium's request routing, a service worker's included, and WebSockets through their
   own filter. Playwright continues a redirect hop without the route handler, so a hop to another
-  origin cannot be stopped; the judge checks every hop the browser reports, and a hop outside the
-  allowed origins makes the screen a coverage gap after the request was sent. The judge checks the
+  origin cannot be stopped; the judge checks every hop the browser reports, and the Location of
+  every redirect response, and a hop outside the allowed origins makes the screen a coverage gap
+  after the request was sent. Playwright now and then reports no hop and gives the final response
+  under the first URL; that response then comes from the other server's address, and the address
+  check below catches it. The judge checks the
   server address of every response: an allowed origin given as an IP address must be answered by
   that address and port, `localhost` on loopback at its port, and any other hostname by a public
   address at its port, so an allowed hostname whose DNS answer points at a loopback or private

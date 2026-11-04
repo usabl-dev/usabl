@@ -2496,7 +2496,7 @@ run with `readyTimeoutMs`, `signalTimeoutMs`, `browserSandbox`, and `judge` remo
 is allowed. It requires Chromium's sandbox whatever `browserSandbox` says, and aborts every
 request and WebSocket to any other origin. Service workers are allowed, and their requests pass
 the same filter. It also catches what the route cannot stop: a redirect hop to an origin outside
-the allowed set, a response whose server address the URL should not reach (an IP origin answered
+the allowed set, or a redirect response whose Location points there, a response whose server address the URL should not reach (an IP origin answered
 by another address or port, `localhost` off loopback or on another port, another hostname
 answered by a loopback, private, or link-local address), and a WebSocket a worker opens outside
 the allowed origins. A screen on which anything was blocked or caught gets a `not-covered` gap

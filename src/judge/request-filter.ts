@@ -135,6 +135,38 @@ export function decideServerAddress(
   return ipVersion(ip) !== 0 && !isNonPublicIp(ip) ? 'expected' : 'unexpected';
 }
 
+/**
+ * A redirect response, judged on its own. The hop it asks for is checked against the allowed
+ * origins, so a redirect off the allowed set is caught even when the browser reports the next
+ * request late or not at all; a Location that is not a URL is caught too. Its server address is
+ * accepted when it matches the redirect's own URL, or the allowed origin it points to, because
+ * the browser can report a redirect response with the address of the connection it moves to.
+ */
+export function decideRedirectResponse(
+  allowedOrigins: ReadonlySet<string>,
+  url: string,
+  location: string | null,
+  address: ServerAddress | null,
+): { hop: 'allow' | 'block'; address: 'expected' | 'unexpected' } {
+  let target: string | null = null;
+  if (location !== null) {
+    try {
+      target = new URL(location, url).href;
+    } catch {
+      return { hop: 'block', address: address === null ? 'expected' : decideServerAddress(allowedOrigins, url, address) };
+    }
+  }
+  const hop = target === null ? 'allow' : decideRequest(allowedOrigins, target);
+  if (address === null) {
+    return { hop, address: 'expected' };
+  }
+  const own = decideServerAddress(allowedOrigins, url, address);
+  // Only a network target can lend its address: a data: or blob: target names none.
+  const networkTarget = target !== null && /^https?:/.test(target);
+  const next = networkTarget && hop === 'allow' ? decideServerAddress(allowedOrigins, target as string, address) : 'unexpected';
+  return { hop, address: own === 'expected' || next === 'expected' ? 'expected' : 'unexpected' };
+}
+
 // What a coverage gap says about a blocked request: its origin only. The path and query are
 // page-chosen and can carry anything, so they never reach a report.
 export function blockedOriginLabel(url: string): string {

@@ -10,6 +10,7 @@ import { resolveIntakeConfig } from '../../src/intake/trusted-config.js';
 import {
   allowedOriginsFrom,
   blockedOriginLabel,
+  decideRedirectResponse,
   decideRequest,
   decideServerAddress,
   decideWebSocket,
@@ -177,5 +178,42 @@ describe('decideServerAddress', () => {
 
   it('has nothing to check for a response that did not come from the network', () => {
     expect(decideServerAddress(allowed, 'data:text/plain,x', { ipAddress: '', port: 0 })).toBe('expected');
+  });
+});
+
+describe('decideRedirectResponse', () => {
+  const allowed = new Set(['http://127.0.0.1:5173', 'http://127.0.0.1:6000']);
+
+  it('catches a redirect whose Location leaves the allowed origins', () => {
+    expect(decideRedirectResponse(allowed, 'http://127.0.0.1:5173/hop', 'http://127.0.0.1:9999/away', { ipAddress: '127.0.0.1', port: 5173 })).toEqual({
+      hop: 'block',
+      address: 'expected',
+    });
+    // A relative Location resolves against the response URL.
+    expect(decideRedirectResponse(allowed, 'http://127.0.0.1:5173/hop', '/login', { ipAddress: '127.0.0.1', port: 5173 })).toEqual({
+      hop: 'allow',
+      address: 'expected',
+    });
+  });
+
+  it('accepts a redirect response reported at the address of its own server or of the allowed origin it points to', () => {
+    expect(
+      decideRedirectResponse(allowed, 'http://127.0.0.1:5173/hop', 'http://127.0.0.1:6000/next', { ipAddress: '127.0.0.1', port: 6000 }).address,
+    ).toBe('expected');
+    expect(
+      decideRedirectResponse(allowed, 'http://127.0.0.1:5173/hop', 'http://127.0.0.1:6000/next', { ipAddress: '127.0.0.1', port: 7000 }).address,
+    ).toBe('unexpected');
+    // An address that matches only a target outside the allowed set is still unexpected.
+    expect(
+      decideRedirectResponse(allowed, 'http://127.0.0.1:5173/hop', 'http://127.0.0.1:9999/away', { ipAddress: '127.0.0.1', port: 9999 }).address,
+    ).toBe('unexpected');
+  });
+
+  it('checks a redirect with no readable Location by its own URL only', () => {
+    expect(decideRedirectResponse(allowed, 'http://127.0.0.1:5173/hop', null, { ipAddress: '127.0.0.1', port: 5173 })).toEqual({
+      hop: 'allow',
+      address: 'expected',
+    });
+    expect(decideRedirectResponse(allowed, 'http://127.0.0.1:5173/hop', 'http://[not-a-host/', null)).toEqual({ hop: 'block', address: 'expected' });
   });
 });

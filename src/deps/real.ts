@@ -12,6 +12,7 @@ import { runAxeInIsolatedWorld } from './axe-world.js';
 import { BrowserSandboxRequiredError, isBrowserSandboxRefusal, isSandboxLaunchFailure, type BrowserSandboxPolicy } from './sandbox.js';
 import {
   blockedOriginLabel,
+  decideRedirectResponse,
   decideRequest,
   decideServerAddress,
   decideWebSocket,
@@ -2383,10 +2384,29 @@ export function makeSharedBrowser(
         });
         // An allowed origin can still be answered by a server it should not reach: an allowed
         // hostname whose DNS answer is a loopback or private address, or another loopback port.
+        // A redirect response is also judged on its own Location, so a hop off the allowed set is
+        // caught even if the browser reports the next request late.
         context.on('response', (response) => {
-          const check = response
-            .serverAddr()
-            .then((address) => {
+          const status = response.status();
+          const redirect = status >= 300 && status < 400;
+          const check = Promise.all([response.serverAddr(), redirect ? response.headerValue('location') : Promise.resolve(null)])
+            .then(([address, location]) => {
+              if (redirect) {
+                const judged = decideRedirectResponse(isolation.allowedOrigins, response.url(), location, address);
+                if (judged.hop === 'block') {
+                  let target = response.url();
+                  try {
+                    target = new URL(location ?? '', response.url()).href;
+                  } catch {
+                    // A Location that is not a URL is named by the redirect that sent it.
+                  }
+                  caught(target, 'reached by a redirect');
+                }
+                if (judged.address === 'unexpected') {
+                  caught(response.url(), 'answered from an unexpected address');
+                }
+                return;
+              }
               if (address !== null && decideServerAddress(isolation.allowedOrigins, response.url(), address) === 'unexpected') {
                 caught(response.url(), 'answered from an unexpected address');
               }

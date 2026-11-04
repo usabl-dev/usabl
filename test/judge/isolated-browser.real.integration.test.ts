@@ -330,7 +330,12 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the judge isolated brows
       const scan = await runner.scan({ id: 'redirect', url: `${origin}/` });
       const gap = scan.gaps.find((entry) => entry.reason.includes('isolated browser blocked'));
       expect(gap?.state).toBe('not-covered');
-      expect(gap?.reason).toContain(`http://127.0.0.1:${recorder.port} (reached by a redirect)`);
+      // Playwright usually reports the hop. Now and then it reports no hop and gives the final
+      // response under the first URL; that response then comes from the other server's address,
+      // and the address check catches it. Either way the screen is a gap.
+      expect([`http://127.0.0.1:${recorder.port} (reached by a redirect)`, `${origin} (answered from an unexpected address)`].some(
+        (label) => gap?.reason.includes(label) === true,
+      )).toBe(true);
     } finally {
       await driver.close();
       await new Promise<void>((resolve) => redirecting.close(() => resolve()));
