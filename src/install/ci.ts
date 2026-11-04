@@ -389,11 +389,11 @@ function waitForServer(): string {
 const APP_SERVE_STEP = `      - name: Serve the build on the trusted app origin
         working-directory: head
         run: |
-          # The engine reads appBaseUrl from the trusted base ref, never from the head, and binds
+          # The engine reads appBaseUrl from the trusted base commit, never from the head, and binds
           # only a loopback host with an explicit port. A pull request cannot move the judge to a
           # server of its own.
 ${ENGINE_CHECK}
-          node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" serve-build --dir "\${RUNNER_TEMP}/usabl-app" --trusted-ref "origin/\${BASE_REF}" > "\${RUNNER_TEMP}/usabl-serve.log" 2>&1 &
+          node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" serve-build --dir "\${RUNNER_TEMP}/usabl-app" --trusted-ref "\${BASE_SHA}" > "\${RUNNER_TEMP}/usabl-serve.log" 2>&1 &
 ${waitForServer()}`;
 
 const DOCS_SERVE_STEP = `      - name: Serve the built documentation on localhost
@@ -527,7 +527,9 @@ ${variant.buildSteps}
       verdict: \${{ steps.verdict.outputs.verdict }}
       result_digest: \${{ steps.verdict.outputs.result_digest }}
     env:
-      BASE_REF: \${{ github.event.pull_request.base.ref }}
+      # The base commit the event names. Serving, scanning, policy, and the comment all read this
+      # one commit, so a base branch that moves during the run cannot mix two snapshots.
+      BASE_SHA: \${{ github.event.pull_request.base.sha }}
       HEAD_SHA: \${{ github.event.pull_request.head.sha }}
       ENGINE_TREE_DIGEST: \${{ needs.usabl-engine.outputs.engine_tree_digest }}
     steps:
@@ -613,11 +615,15 @@ ${verifyDownload('DOWNLOAD_DIR', 'usabl-app-build.tar', 'BUILD_DIGEST', 'build')
 ${ENGINE_CHECK}
           node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" extract-build --archive "\${DOWNLOAD_DIR}/usabl-app-build.tar" --into "\${RUNNER_TEMP}/usabl-app"
 
-      - name: Fetch trusted base ref when absent
+      - name: Fetch the trusted base commit when absent
         working-directory: head
         run: |
-          if ! git rev-parse --verify --quiet "origin/\${BASE_REF}" > /dev/null; then
-            git fetch origin "\${BASE_REF}" --depth=1
+          if ! [[ "\${BASE_SHA}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+            echo "the event base SHA is not a full commit SHA; failing closed"
+            exit 1
+          fi
+          if ! git cat-file -e "\${BASE_SHA}^{commit}" 2> /dev/null; then
+            git fetch --no-tags --depth=1 origin "\${BASE_SHA}"
           fi
 
       - name: Allow the Chromium sandbox
@@ -637,10 +643,10 @@ ${variant.serveStep}
           mkdir "\${RUNNER_TEMP}/usabl-judge"
           code=0
           # Keep || code=$? on the same line, because a next-line $? becomes 0 under set -e.
-          # trusted-ref points to origin/\${BASE_REF} so a PR cannot rewrite policy and pass itself.
+          # trusted-ref is the event's base commit, so a PR cannot rewrite policy and pass itself.
           # The engine reads this head tree as data; it is never imported or executed.
 ${ENGINE_CHECK}
-          node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" check --ci --trusted-ref "origin/\${BASE_REF}" --isolated-browser --json > "\${RUNNER_TEMP}/usabl-judge/usabl-result.json" || code=$?
+          node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" check --ci --trusted-ref "\${BASE_SHA}" --isolated-browser --json > "\${RUNNER_TEMP}/usabl-judge/usabl-result.json" || code=$?
           echo "exit_code=\${code}" >> "$GITHUB_OUTPUT"
 
       - name: Stop the build server
@@ -825,7 +831,7 @@ ${ENGINE_CHECK}
       actions: read
       pull-requests: read
     env:
-      BASE_REF: \${{ github.event.pull_request.base.ref }}
+      BASE_SHA: \${{ github.event.pull_request.base.sha }}
       PR_NUMBER: \${{ github.event.pull_request.number }}
       ENGINE_TREE_DIGEST: \${{ needs.usabl-engine.outputs.engine_tree_digest }}
     steps:
@@ -836,7 +842,7 @@ ${ENGINE_CHECK}
           ref: \${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
 
-      - name: Fetch base ref and head objects without checkout
+      - name: Fetch head objects without checkout
         run: |
           # PR_NUMBER comes from the event as an integer. Guard it anyway before it
           # reaches a ref path, so a malformed value can never inject a fetch refspec.
@@ -846,10 +852,9 @@ ${ENGINE_CHECK}
               exit 1
               ;;
           esac
-          # Bring origin/\${BASE_REF} for the trusted-ref diff, and the PR head as
-          # objects only. enforce policy reads blob contents with git show and
-          # git ls-tree, which never check out or execute the head, so no PR code runs.
-          git fetch --no-tags origin "+refs/heads/\${BASE_REF}:refs/remotes/origin/\${BASE_REF}"
+          # The base commit is this checkout. Bring the PR head as objects only. enforce policy
+          # reads blob contents with git show and git ls-tree, which never check out or execute
+          # the head, so no PR code runs.
           git fetch --no-tags origin "refs/pull/\${PR_NUMBER}/head"
 
       - name: Setup Node.js
@@ -881,7 +886,7 @@ ${fetchArtifactStep({
 ${verifyDownload('DOWNLOAD_DIR', 'usabl-result.json', 'RESULT_DIGEST', 'Result')}
           # Git refs and CODEOWNERS are the source of truth.
 ${ENGINE_CHECK}
-          node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" enforce policy --trusted-ref "origin/\${BASE_REF}" < "\${DOWNLOAD_DIR}/usabl-result.json"
+          node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" enforce policy --trusted-ref "\${BASE_SHA}" < "\${DOWNLOAD_DIR}/usabl-result.json"
 
   ${REQUIRED_GATE_JOB}:
     # THE REQUIRED STATUS CHECK. Require this one in branch protection or your ruleset.

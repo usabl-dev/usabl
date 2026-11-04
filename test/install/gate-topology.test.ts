@@ -202,7 +202,7 @@ describe.each(GATES)('$name', ({ body }) => {
 
     it('serves and scans with the isolated browser against the trusted base ref', () => {
       const judge = step(body, 'usabl-scan', 'Run the judge').run ?? '';
-      expect(judge).toContain('check --ci --trusted-ref "origin/${BASE_REF}" --isolated-browser --json');
+      expect(judge).toContain('check --ci --trusted-ref "${BASE_SHA}" --isolated-browser --json');
       expect(step(body, 'usabl-scan', 'Allow the Chromium sandbox').run).toContain(
         'kernel.apparmor_restrict_unprivileged_userns=0',
       );
@@ -289,6 +289,58 @@ describe.each(GATES)('$name', ({ body }) => {
       expect(checkouts[0]?.with?.['repository']).toBeUndefined();
       expect(jobText(body, 'usabl-policy')).toContain('git fetch --no-tags origin \\"refs/pull/${PR_NUMBER}/head\\"');
     });
+  });
+
+  describe('one base commit for the whole run', () => {
+    const BASE_SHA_EXPR = '${{ github.event.pull_request.base.sha }}';
+
+    it('names the event base SHA in every job that reads the trusted base, and never a branch ref', () => {
+      expect(job(body, 'usabl-scan').env?.['BASE_SHA']).toBe(BASE_SHA_EXPR);
+      expect(job(body, 'usabl-policy').env?.['BASE_SHA']).toBe(BASE_SHA_EXPR);
+      for (const id of ['usabl-scan', 'gate-comment', 'usabl-policy']) {
+        // A branch ref moves while the run runs, so serving, scanning, policy, and the comment
+        // could each read a different base. Only the event's base SHA is used.
+        expect(jobText(body, id), id).not.toContain('origin/${BASE_REF}');
+        expect(jobText(body, id), id).not.toContain('refs/heads/${BASE_REF}');
+        expect(jobText(body, id), id).not.toContain('base.ref');
+        for (const entry of job(body, id).steps) {
+          for (const match of (entry.run ?? '').matchAll(/--trusted-ref "([^"]*)"/g)) {
+            expect(match[1], `${id}: ${entry.name}`).toBe('${BASE_SHA}');
+          }
+        }
+      }
+      expect(step(body, 'usabl-policy', 'Checkout trusted base-ref policy').with?.['ref']).toBe(BASE_SHA_EXPR);
+      expect(step(body, 'gate-comment', 'Checkout trusted base config').with?.['ref']).toBe(BASE_SHA_EXPR);
+    });
+
+    it('fetches the base commit by SHA when the head checkout lacks it, after checking its form', () => {
+      const fetchBase = step(body, 'usabl-scan', 'Fetch the trusted base commit when absent').run ?? '';
+      const origin = scratch();
+      const clone = join(scratch(), 'head');
+      const g = (cwd: string, ...args: string[]): string =>
+        spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'core.hooksPath=/dev/null', ...args], {
+          cwd,
+          encoding: 'utf8',
+        }).stdout.trim();
+      g(origin, 'init', '--quiet', '--initial-branch=main');
+      writeFileSync(join(origin, 'a.txt'), 'a');
+      g(origin, 'add', '.');
+      g(origin, 'commit', '--quiet', '-m', 'base');
+      const base = g(origin, 'rev-parse', 'HEAD');
+      g(origin, 'checkout', '--quiet', '-b', 'feature');
+      writeFileSync(join(origin, 'b.txt'), 'b');
+      g(origin, 'add', '.');
+      g(origin, 'commit', '--quiet', '-m', 'head');
+      g(origin, 'config', 'uploadpack.allowAnySHA1InWant', 'true');
+      spawnSync('git', ['clone', '--quiet', '--depth=1', '--branch', 'feature', `file://${origin}`, clone]);
+      expect(spawnSync('git', ['cat-file', '-e', `${base}^{commit}`], { cwd: clone }).status).not.toBe(0);
+      expect(runStep(fetchBase, { BASE_SHA: base }, clone)).toBe(0);
+      expect(spawnSync('git', ['cat-file', '-e', `${base}^{commit}`], { cwd: clone }).status).toBe(0);
+      // A value that is not a full commit SHA never reaches git.
+      expect(runStep(fetchBase, { BASE_SHA: 'main' }, clone)).not.toBe(0);
+      expect(runStep(fetchBase, { BASE_SHA: '' }, clone)).not.toBe(0);
+      expect(runStep(fetchBase, { BASE_SHA: `${base} --upload-pack=x` }, clone)).not.toBe(0);
+    }, 60_000);
   });
 
   describe('properties across every job', () => {

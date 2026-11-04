@@ -55,7 +55,7 @@ describe('USABL_DOCS_GATE_WORKFLOW security properties', () => {
     expect(USABL_DOCS_GATE_WORKFLOW).not.toContain('USABL_ENGINE_CHECKOUT_TOKEN');
     expect(USABL_DOCS_GATE_WORKFLOW).not.toMatch(/^\s*token:/m);
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('<!-- usabl-report -->');
-    expect(USABL_DOCS_GATE_WORKFLOW).toContain('check --ci --trusted-ref "origin/${BASE_REF}" --isolated-browser');
+    expect(USABL_DOCS_GATE_WORKFLOW).toContain('check --ci --trusted-ref "${BASE_SHA}" --isolated-browser');
     // The review path finds the build by the docs workflow file name, not the app one.
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('--workflow usabl-docs-gate.yml');
     expect(USABL_DOCS_GATE_WORKFLOW).not.toContain('--workflow usabl-gate.yml');
