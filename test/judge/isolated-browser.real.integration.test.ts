@@ -9,6 +9,9 @@
  *   screen: the screen becomes a coverage gap that names the origin;
  * - page script runs inside the Chromium sandbox, which the judge requires, so a system that
  *   cannot give the sandbox refuses the scan instead of running without it.
+ *
+ * And a service worker, registered the plain way or through the prototype method, runs and its
+ * requests pass the same filter, so a worker can neither hide content nor reach another origin.
  */
 import { readdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -116,6 +119,43 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the judge isolated brows
       </script></main></html>`,
     );
     writeFileSync(join(buildDir, 'data.json'), '{"ok":"loaded"}');
+    // A worker that claims the page, and on a message from it reaches the other origin.
+    writeFileSync(
+      join(buildDir, 'sw.js'),
+      `self.addEventListener('install', (event) => event.waitUntil(self.skipWaiting()));
+      self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+      self.addEventListener('message', () => { fetch('${other}/from-sw').catch(() => undefined); });`,
+    );
+    // A control that mounts only once the worker is ready, with the barrier a suppressed
+    // registration would hide.
+    writeFileSync(
+      join(buildDir, 'sw-ready.html'),
+      `<!doctype html><html lang="en"><title>sw</title><main><h1>Worker</h1>
+      <p id="state" data-state="pending">state</p>
+      <script>
+        const register = location.hash === '#proto'
+          ? (url) => ServiceWorkerContainer.prototype.register.call(navigator.serviceWorker, url)
+          : (url) => navigator.serviceWorker.register(url);
+        register('/sw.js')
+          .then(() => navigator.serviceWorker.ready)
+          .then((registration) => {
+            document.querySelector('main').insertAdjacentHTML('beforeend', '<button id="late"></button>');
+            registration.active.postMessage('go');
+            document.getElementById('state').dataset.state = 'ready';
+          }, () => { document.getElementById('state').dataset.state = 'refused'; });
+      </script></main></html>`,
+    );
+    writeFileSync(join(buildDir, 'worker.js'), `new WebSocket('ws://127.0.0.1:${recorder.port}/from-worker');`);
+    writeFileSync(
+      join(buildDir, 'worker.html'),
+      `<!doctype html><html lang="en"><title>worker</title><main><h1>Worker socket</h1>
+      <script>new Worker('/worker.js');</script></main></html>`,
+    );
+    writeFileSync(
+      join(buildDir, 'resolved.html'),
+      `<!doctype html><html lang="en"><title>resolved</title><main><h1>Resolved</h1>
+      <script>fetch('http://allowed.test:${recorder.port}/resolved').catch(() => undefined);</script></main></html>`,
+    );
     writeFileSync(
       join(buildDir, 'widget.html'),
       `<!doctype html><html lang="en"><title>widget</title><main><h1>Widget</h1>
@@ -222,6 +262,43 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the judge isolated brows
       await driver.close();
     }
   }, 60_000);
+
+  // Polls the page's blocked list until it names what the test expects, or the wait runs out.
+  async function blockedEventually(page: Page, includes: string): Promise<string[]> {
+    let blocked: string[] = [];
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      blocked = (await page.blockedRequests?.()) ?? [];
+      if (blocked.some((entry) => entry.includes(includes))) return blocked;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return blocked;
+  }
+
+  for (const [label, hash] of [
+    ['the plain way', ''],
+    ['through the prototype method', '#proto'],
+  ] as const) {
+    it(`runs a service worker registered ${label}, and its requests pass the same filter`, async () => {
+      const { isolation: iso, blocked } = isolation();
+      const driver = makeRealBrowserDriver({ isolation: iso, browserSandbox: 'require' });
+      const before = recorder.hits.length;
+      try {
+        const page = await driver.open(`${app.url}/sw-ready.html${hash}`);
+        await page.gotoReady();
+        // Registration is not suppressed, so the content that waits for the worker mounts and
+        // is checked like any other.
+        expect(await settledState(page, '#state')).toBe('ready');
+        expect(await page.getAttribute('#late', 'id')).toBe('late');
+        // The worker's own request to another origin is aborted and counted.
+        expect(await blockedEventually(page, `http://127.0.0.1:${recorder.port}`)).toContain(`http://127.0.0.1:${recorder.port}`);
+        expect(recorder.hits.slice(before).filter((hit) => hit.startsWith('/from-sw'))).toEqual([]);
+        expect(blocked.some((url) => url.endsWith('/from-sw'))).toBe(true);
+        await page.close();
+      } finally {
+        await driver.close();
+      }
+    }, 60_000);
+  }
 
   it('runs page script inside the Chromium sandbox, unlike a default Playwright launch', async () => {
     const { isolation: iso } = isolation();

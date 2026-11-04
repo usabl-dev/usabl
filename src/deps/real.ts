@@ -2309,10 +2309,12 @@ export function makeSharedBrowser(
     const isolation = options.isolation;
     let context: Awaited<ReturnType<LaunchedBrowser['newContext']>>;
     try {
+      // Service workers stay allowed in the judge. Playwright's block option only replaces
+      // navigator.serviceWorker.register in the page, which page script can go around, and it
+      // turns off routing for the workers it misses; and a suppressed worker can hide content
+      // with no gap. Allowed, a worker runs and its requests pass the same context route below.
       context = await launched.newContext({
         ...(options.storageStatePath === undefined ? {} : { storageState: options.storageStatePath }),
-        // A service worker's own fetches bypass context routing, so the judge allows none.
-        ...(isolation === undefined ? {} : { serviceWorkers: 'block' as const }),
       });
     } catch (error) {
       handle.contextFailures += 1;
