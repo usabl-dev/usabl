@@ -685,15 +685,57 @@
   Chromium's sandbox and blocks every request and WebSocket outside the trusted app origin and
   the new trusted-only `judge.allowOrigins`. A screen with a blocked request is a coverage gap.
   The engine comes from one pinned commit of the public engine repository, with no token, and
-  every artifact a trusted job reads is checked against a digest from a job output; no trusted
-  job uses a cache. The verdict reaches `usabl-required` as the judge's job output. A pull
-  request from a fork now runs the gate; its comment goes to the run summary. The build reads
-  two repository variables, `USABL_APP_BUILD_COMMAND` (default `npm run build`) and
-  `USABL_APP_BUILD_DIR` (default `dist`), and `appBaseUrl` must be a loopback address with a
-  port. The history workflow builds the engine with the same job. The Result gains an optional
-  `judge` block (the blocked request count and the build digest), which the summary and the
-  comment show in one line. Workflow edits still rely on code-owner review until an
-  organization-level required workflow exists.
+  every artifact a trusted job reads is checked against a digest from a job output; no job uses
+  a cache. The verdict reaches `usabl-required` as the judge's job output. A pull request from a
+  fork now runs the gate; its comment goes to the run summary. The build reads two repository
+  variables, `USABL_APP_BUILD_COMMAND` (default `npm run build`) and `USABL_APP_BUILD_DIR`
+  (default `dist`), and `appBaseUrl` must be a loopback address with a port. The history
+  workflow builds the engine with the same job. The Result gains an optional `judge` block (the
+  blocked request count and the build digest), which the summary and the comment show in one
+  line.
+
+- Any pull request, from a branch or a fork, runs the gate workflow as it changed it, so one
+  that edits `.github/workflows/` can make `usabl-required` pass whatever the judge found, and
+  its verdict is not evidence. `usabl install --ci` and `usabl install --branch-rule` now say
+  so and tell you to give `.github/workflows/` and every guarded path an owner in
+  `.github/CODEOWNERS` and to require review from code owners. `usabl install --branch-rule`
+  and `usabl doctor` now verify code-owner review as well as the required check, and
+  `usabl doctor` reports whether `CODEOWNERS` gives `.github/workflows/` an owner.
+
+- No trusted job in the generated workflows extracts an artifact with
+  `actions/download-artifact` any more. Its zip extraction followed a `..` in the middle of an
+  entry name, so an artifact replaced in the run could write over the verified engine before any
+  digest check. Each trusted job now fetches the zip through the REST API with its own token
+  (`actions: read`) and reads it with usabl's own fetcher, which accepts only the expected file
+  and refuses any other entry, path, link, duplicate, or oversize zip before it writes. Every
+  step that runs the engine first checks the unpacked engine tree against the new
+  `engine_tree_digest` output.
+
+- Every `setup-node` in the generated workflows sets `package-manager-cache: false`. setup-node
+  v6 caches npm by itself when `package.json` names npm, so leaving the cache inputs out did not
+  turn it off, and a cache written by pull request code could replace files a trusted job runs.
+
+- The judge reads one base commit, the event's base SHA, for serving, scanning, policy, and the
+  comment, instead of a base branch that could move during the run. On a review it takes the
+  build only from a `pull_request` run of the same pull request, head repository, head, and
+  base, found by the run name the gate now sets, whose latest `build-app` job succeeded, and it
+  pages through every run. A review after the base branch moved fails closed until the pull
+  request runs again.
+
+- The isolated judge runs on `usabl.config.json` at the trusted ref only, the readiness budget
+  included. The head's copy is only compared with it, so an invalid head config no longer stops
+  the judge before it scans.
+
+- The isolated judge allows service workers and filters their requests like the page's. The
+  earlier block only replaced `navigator.serviceWorker.register` in the page, which the
+  prototype method went around, and a suppressed worker could hide content with no coverage
+  gap. The judge also catches a redirect hop to an origin outside the allowed set, a response
+  from a server address the URL should not reach (such as an allowed hostname answered by a
+  loopback service), and a WebSocket a worker opens; each makes the screen a coverage gap.
+
+- `usabl extract-build` bounds the archive size, each long-name or pax record, the member
+  count, and the extracted bytes, and refuses an archive past any bound before it allocates or
+  writes.
 
 - axe runs in an isolated world in every frame, not in the page's own world. Page script
   shares the DOM with that world but not its globals or prototypes. A page that patched

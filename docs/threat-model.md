@@ -778,14 +778,18 @@ that adds a barrier.
 **Controls:** the generated gate splits the work so that head code runs only in `build-app`,
 which holds no secret and decides nothing, and as page script in the judge's sandboxed,
 request-filtered browser. The judge runs the engine from the pinned commit, unpacked outside the
-head tree, and publishes the verdict as a job output, which only its own steps can set. Every
-artifact a trusted job reads is checked against a digest from a job output, and no trusted job
-uses a cache. The details, and the hostile rehearsal that tests them, are under "CI trust
-boundary" below.
+head tree, on the configuration at the event's base commit, and publishes the verdict as a job
+output, which only its own steps can set. No trusted job unpacks an artifact with
+`actions/download-artifact`: each fetches the zip through the REST API and reads it with usabl's
+own fetcher, which accepts only the expected file. Every artifact a trusted job reads is then
+checked against a digest from a job output, the engine tree is checked again before each step
+that runs it, and no job uses a cache. The details, and the hostile rehearsal that tests them,
+are under "CI trust boundary" below.
 
-**What stays open:** workflow edits by someone with write access (code-owner review until an
-organization-level required workflow exists), a build that differs from its source, and a page
-that detects the scanner. See the residual risks under "CI trust boundary".
+**What stays open:** any pull request, from a branch or a fork, can edit the workflow that runs
+on it, so the verdict on a pull request that edits the workflow is not evidence; the protection
+is code-owner review. Also a build that differs from its source, and a page that detects the
+scanner. See the residual risks under "CI trust boundary".
 
 ---
 
@@ -837,39 +841,58 @@ What runs where, and what each job holds:
 | `usabl-engine` | No | `contents: read` | None | The pinned commit of the public engine repository |
 | `build-app` | Yes (`npm ci --ignore-scripts` and the build command), `pull_request` only | `contents: read` | None | The head |
 | `usabl-scan` (the judge) | Only as page script in a sandboxed Chromium | `contents: read`, `actions: read` | None | The head, as data, into `head/` |
-| `gate-comment` | No | `contents: read`, `pull-requests: write` | None | `usabl.config.json` at the base commit |
-| `usabl-policy` | No | `contents: read`, `pull-requests: read` | `GITHUB_TOKEN` for the reviews API | The base commit; the head as git objects only |
+| `gate-comment` | No | `contents: read`, `actions: read`, `pull-requests: write` | None | `usabl.config.json` at the base commit |
+| `usabl-policy` | No | `contents: read`, `actions: read`, `pull-requests: read` | `GITHUB_TOKEN` for the reviews API | The base commit; the head as git objects only |
 | `usabl-required` | No | `contents: read` | None | Nothing |
+
+`actions: read` is for the artifact fetch only: it lists the run's artifacts and downloads one.
 
 - **`usabl-engine`** checks out `usabl-dev/usabl` at the pinned commit. The draft ships the
   sentinel `PIN_TO_A_TRUSTED_USABL_COMMIT`, which the operator replaces with a full commit SHA,
   so the engine that judges a pull request is code the operator chose, never the pull request's.
   The engine repository is public, so the checkout needs no token. The job builds the engine,
   packs `package.json`, `dist`, and the production `node_modules` into one archive, and
-  publishes its sha256 as the job output `engine_digest`. Every other job takes the engine from
-  that archive and checks it against that output.
+  publishes its sha256 as the job output `engine_digest`, and the digest of the tree that
+  archive unpacks to as `engine_tree_digest`. Every other job takes the engine from that
+  archive and checks it against `engine_digest`; each trusted step that runs the engine first
+  checks the unpacked tree against `engine_tree_digest`.
 - **`build-app`** runs the head's build and packs the output directory into a tar, leaving
   `.usabl/` out. Its `build_digest` output is the head's own word.
-- **`usabl-scan`** is the judge. It unpacks the engine under `$RUNNER_TEMP`, outside the head
-  tree, so a `node_modules` directory or `.npmrc` the head commits is never on the engine's
-  resolution path. It checks the build archive against `build_digest`, unpacks it with
+- **`usabl-scan`** is the judge. Every step that reads the trusted base uses one commit: the
+  event's base SHA, checked for form and fetched by SHA when the checkout lacks it, never a
+  branch ref that can move during the run. It unpacks the engine under `$RUNNER_TEMP`, outside
+  the head tree, so a `node_modules` directory or `.npmrc` the head commits is never on the
+  engine's resolution path. It checks the build archive against `build_digest`, unpacks it with
   `usabl extract-build` (regular files and directories only, no absolute path, no `..`, a new
-  empty directory), and serves it with `usabl serve-build`, which reads `appBaseUrl` from the
-  trusted base ref and binds only a loopback host with an explicit port. It then runs
-  `check --ci --trusted-ref origin/<base> --isolated-browser`: Chromium's sandbox required
-  whatever `browserSandbox` says (the job sets the AppArmor sysctl first, see Threat 14),
-  service workers blocked, and every request and WebSocket outside the trusted app origin and
-  the trusted `judge.allowOrigins` aborted. Any blocked request makes that screen a coverage
-  gap, so a blocked script can never turn into a clean screen. The judge publishes the verdict
-  as the job output `verdict` (fail unless a valid Result and a clean `enforce accessibility`),
-  and the Result's sha256 as `result_digest`. The Result records the build digest it scanned,
-  so the verdict is bound to those bytes. On `pull_request_review` the judge runs again on the
-  same head and downloads the build from that head's `pull_request` run. With a trusted ref the
-  saved session from `usabl session` is never loaded (Threat 12).
+  empty directory, and bounds on the archive size, each long-name or pax record, the member
+  count, and the extracted bytes, checked before anything is allocated or written), and serves
+  it with `usabl serve-build`, which reads `appBaseUrl` from the base commit and binds only a
+  loopback host with an explicit port. It then runs
+  `check --ci --trusted-ref <base SHA> --isolated-browser`. The judge takes every setting from
+  `usabl.config.json` at the base commit, the readiness budget included; the head's copy is only
+  compared with it, so a head that rewrites or breaks it is reported as a policy change and
+  cannot steer or stop the scan. Chromium's sandbox is required whatever `browserSandbox` says
+  (the job sets the AppArmor sysctl first, see Threat 14). Every request and WebSocket outside
+  the trusted app origin and the trusted `judge.allowOrigins` is aborted. Service workers are
+  allowed: Playwright's option to block them only replaces `navigator.serviceWorker.register` in
+  the page, which page script can go around, and a suppressed worker can hide content with no
+  gap. Allowed, a worker runs and its requests pass the same filter. A redirect hop, a response
+  from an unexpected server address, and a WebSocket a worker opens are caught as described under
+  the residual risks. Any blocked or caught request makes that screen a coverage gap, so a
+  blocked script can never turn into a clean screen. The judge publishes the verdict as the job
+  output `verdict` (fail unless a valid Result and a clean `enforce accessibility`), and the
+  Result's sha256 as `result_digest`. The Result records the build digest it scanned, so the
+  verdict is bound to those bytes. On `pull_request_review` the judge runs again on the same head
+  and takes the build from a `pull_request` run of this exact pull request: the gate names every
+  run with `run-name` after its event, pull request number, head repository, head SHA, and base
+  SHA, and the lookup pages through every completed run and takes only one with that exact name,
+  repository, and workflow file whose latest `build-app` job succeeded. A review after the base
+  branch moved finds no such run and fails closed until the pull request runs again on the new
+  base. With a trusted ref the saved session from `usabl session` is never loaded (Threat 12).
 - **`gate-comment`** and **`usabl-policy`** check the Result against `result_digest` before they
-  read it. Neither runs head code. On a pull request from a fork the run's token cannot write
-  to the pull request, so `gate-comment` writes the comment to the run summary instead. The
-  comment decides nothing either way.
+  read it. Neither runs head code. Both read the base commit the event names. On a pull request
+  from a fork the run's token cannot write to the pull request, so `gate-comment` writes the
+  comment to the run summary instead. The comment decides nothing either way.
 - **`usabl-required`** is the required status check. It runs with `if: always()` and is red
   unless every job has the exact shape for the event and the judge's `verdict` output is
   `pass`. On `pull_request` all five jobs must succeed. On `pull_request_review` the build and
@@ -877,39 +900,61 @@ What runs where, and what each job holds:
   `merge_group`, blocks. `always()` is load-bearing, because GitHub counts a skipped job as a
   satisfied required check.
 
-Why artifacts are checked against job outputs. A job that runs head code on a hosted runner has
+Why artifacts are fetched and checked this way. A job that runs head code on a hosted runner has
 passwordless sudo, so it may be able to read the runner's own token and upload, delete, or
-replace artifacts in the run, and write to the Actions cache. So no trusted job believes an
-artifact by name: each download goes into its own new directory, must be exactly one regular
-file, and must match a digest from a job output, which only the producing job's own steps can
-set. No trusted job uses a cache. The one exception is the build on a review, which comes from
-another run whose job outputs are out of reach. A replaced build gains the author nothing,
-because the author already controls what the build emits, and the judge records the digest it
-scanned.
+replace artifacts in the run, and write to the Actions cache. A replaced artifact is hostile down
+to its zip container. `actions/download-artifact` at the pinned version strips only a leading
+`../` from an entry name before it joins the name to the download folder, so an entry such as
+`nested/../../usabl-engine/dist/cli.js` would write over the verified engine before any digest
+is checked. So no trusted job extracts an artifact with it. Each trusted job writes usabl's own
+fetcher, Node builtins only, into its runner temp directory, and runs it with the job's own
+token: it finds the newest artifact under the name through the REST API, downloads the zip
+under a size bound without sending the token to the storage host, and reads the zip itself. It
+accepts exactly the expected member names, each a regular file, and refuses the whole artifact
+for any other entry, a path or `..` anywhere in a name, an absolute name, a link or directory, a
+duplicate, encryption, zip64, a local header that disagrees with the central directory, or a
+size over the bound, all before it writes a byte, and it writes into a new directory outside the
+workspace. The file must then match a digest from a job output, which only the producing job's
+own steps can set. Only `build-app`, which runs head code anyway, still uses
+`actions/download-artifact`, for the engine its build imports. No job uses a cache: every
+`setup-node` sets `package-manager-cache: false`, because setup-node v6 turns npm caching on by
+itself when `package.json` names npm, and a cache can be written by pull request code. The one
+digest exception is the build on a review, which comes from another run whose job outputs are out
+of reach. A replaced build gains the author nothing, because the author already controls what the
+build emits, and the judge records the digest it scanned.
 
 Forks. Nothing in the gate needs a repository secret, and GitHub gives a fork's pull request
 none, so a pull request from a fork runs the same six jobs and gets the same verdict. Only the
-comment moves, to the run summary.
+comment moves, to the run summary. That says nothing about a fork that edits the workflow; see
+the first residual risk.
 
 A local rehearsal (`test/judge/rehearsal.real.integration.test.ts`) plays these jobs with the
 workflow's own step scripts against a hostile head: forged Results in the build output, the
 workspace, and the runner temp directory, a background process rewriting them, and packages
-planted under the engine's own dependency names. The judge reports the real barrier, tampered
-archives and a replaced Result fail closed, the planted packages never load, and a clean head
-from a fork passes with its comment in the run summary. It runs on one machine, so it shows the
-judge never reads what the build wrote; job isolation on hosted runners comes from each job
-being its own VM.
+planted under the engine's own dependency names. Trusted jobs take artifacts through the
+generated fetcher from a local stand-in for the artifact API. The judge reports the real barrier,
+tampered archives and a replaced Result fail closed, a build zip carrying an entry that climbs
+out to the engine and a Result zip carrying a link are refused before a byte is written, the
+planted packages never load, and a clean head from a fork passes with its comment in the run
+summary. It runs on one machine, so it shows the judge never reads what the build wrote; job
+isolation on hosted runners comes from each job being its own VM.
 
 Residual risks that remain:
 
-- **Workflow edits.** The split protects the judge and its verdict for a pull request from a
-  fork, and from anyone without write access, as long as the workflow file that runs is the one
-  on the base branch. Someone with write access can push a branch whose own edited workflow runs
-  on `pull_request` before any review. Until an organization-level required workflow pinned to a
-  protected ref exists (human task H9), workflow edits rely on code-owner review: a CODEOWNERS
-  entry for `.github/workflows/`, the branch rule "Require review from Code Owners", "dismiss
-  stale approvals", `CODEOWNERS` itself owned, and no bypass actors. That stops an edited
-  workflow from merging. It does not stop it from running on its own branch.
+- **Workflow edits.** Any pull request, from a branch or a fork, runs the workflow as the pull
+  request changed it, whenever GitHub runs it at all. So a pull request that edits
+  `.github/workflows/` can rewrite `usabl-required` to pass, keeping its check name, whatever the
+  judge found. The verdict on a pull request that edits the workflow is not evidence, and the
+  split does not change that for forks or for writers. Read-only tokens and job outputs cannot
+  protect a job definition the pull request controls. The protection is code-owner review: a
+  branch rule or ruleset that requires review from code owners, `.github/workflows/` and every
+  guarded path owned in `CODEOWNERS`, `CODEOWNERS` itself owned, "dismiss stale approvals", and
+  no bypass actors. That stops an edited workflow from merging without an owner's approval. It
+  does not stop it from running and reporting green on its own pull request. `usabl install --ci`
+  and `usabl install --branch-rule` say this and print the setting; `usabl install --branch-rule`
+  and `usabl doctor` check that code-owner review is required, and `usabl doctor` checks that
+  `CODEOWNERS` gives `.github/workflows/` an owner. Only an organization-required workflow, an
+  Enterprise feature, takes the workflow out of the pull request's hands (human task H9).
 - **The author controls the build script.** The build can differ from the source, so the judge
   can be shown a page the source does not produce. The verdict is bound to the build digest in
   the Result. That digest names the bytes that were judged. It does not prove they match the
@@ -922,10 +967,17 @@ Residual risks that remain:
   It has its job token (`contents: read`, `actions: read`), which an escape could use for the
   rest of the run.
 - **Request filtering is not full network confinement.** The filter covers requests that pass
-  through Chromium's request routing, and WebSockets through their own filter. A redirect from
-  an allowed origin to another origin is not seen by the route handler, and WebRTC and DNS
-  prefetch are not routed at all. The default allows only the app origin, which `serve-build`
-  serves without redirects.
+  through Chromium's request routing, a service worker's included, and WebSockets through their
+  own filter. Playwright continues a redirect hop without the route handler, so a hop to another
+  origin cannot be stopped; the judge checks every hop the browser reports, and a hop outside the
+  allowed origins makes the screen a coverage gap after the request was sent. The judge checks the
+  server address of every response: an allowed origin given as an IP address must be answered by
+  that address and port, `localhost` on loopback at its port, and any other hostname by a public
+  address at its port, so an allowed hostname whose DNS answer points at a loopback or private
+  service, or another loopback port, is a gap. A WebSocket a dedicated worker opens bypasses the
+  socket filter, which patches only the page, and is caught the same way. A shared worker's
+  requests are not routed or reported at all, and WebRTC and DNS prefetch are not routed either.
+  The default allows only the app origin, which `serve-build` serves without redirects.
 
 The engine's own checked-in `.github/workflows/usabl-gate.yml` keeps the earlier three-job
 shape, unchanged. It still runs `npm ci` and the build on the head inside `gate-comment`, where
@@ -935,10 +987,12 @@ policy job builds the base commit and decides policy from it. The tests hold it 
 `ENGINE_SELF_GATE_SCRIPT`.
 
 `usabl install --ci` also writes `.github/workflows/usabl-history.yml`. It builds the engine with
-the same `usabl-engine` job, and both later jobs check the archive against `engine_digest`. Its
-scan job runs main's own application, which was merged through the gate, so it does not get the
-judge split. The record it uploads is believed by name, which is safe for the reason Threat 13
-gives: the history can only make a run stricter, never greener.
+the same `usabl-engine` job, and both later jobs fetch the archive with usabl's own fetcher,
+check it against `engine_digest`, and check the unpacked tree before each engine run. Its scan
+job runs main's own application, which was merged through the gate, so it does not get the judge
+split. The record it uploads goes through the same fetcher, so its zip cannot write outside its
+directory, and its content is believed, which is safe for the reason Threat 13 gives: the history
+can only make a run stricter, never greener.
 
 **Status:** [x] The generated gates run the judge split, with no engine token, and forks run
 them. [ ] A live run on GitHub of the hostile cases and a fork pull request. [ ] An

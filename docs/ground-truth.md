@@ -2226,8 +2226,10 @@ lines.
   record or a history it cannot read and writes nothing then.
 - Judge build: `usabl extract-build --archive <file> --into <dir>` reads every tar header first
   and unpacks only regular files and directories into a new, empty directory, refusing the whole
-  archive on a link, a device, an absolute path, or a `..` segment (exit 1; exit 2 on bad
-  arguments). `usabl serve-build --dir <dir>` serves it with GET and HEAD only, realpath
+  archive on a link, a device, an absolute path, a `..` segment, or an archive over its bounds:
+  2 GiB of archive, 64 KiB for one long-name or pax record, 100,000 members, and 2 GiB of
+  extracted files, each checked on the declared sizes before anything is allocated or written
+  (exit 1; exit 2 on bad arguments). `usabl serve-build --dir <dir>` serves it with GET and HEAD only, realpath
   containment, nosniff, and the root `index.html` for an extensionless path that has no file.
   With `--trusted-ref <ref>` it binds the loopback origin of `appBaseUrl` at that ref and refuses
   any other; with `--port` (and `--host`, default `127.0.0.1`) it binds what it was given. Both
@@ -2432,11 +2434,39 @@ it packs the build output (repository variables `USABL_APP_BUILD_COMMAND`, defau
 `npm run build`, and `USABL_APP_BUILD_DIR`, default `dist`) with a `build_digest` output.
 `usabl-scan`, the trusted judge, runs on both events: it unpacks the build with
 `usabl extract-build`, serves it with `usabl serve-build` on the loopback origin of the trusted
-`appBaseUrl`, runs `check --ci --trusted-ref origin/<base> --isolated-browser`, and publishes
+`appBaseUrl`, runs `check --ci --trusted-ref <base SHA> --isolated-browser`, and publishes
 `verdict` and `result_digest` outputs. `gate-comment` posts the comment from the digest-checked
 Result, or writes it to the run summary on a pull request from a fork. `usabl-policy` runs
-`usabl enforce policy --trusted-ref` with the head read only as git objects. `usabl-required`
-(`if: always()`, needs all five) sets the required status. See `docs/threat-model.md` (Threat 15
+`usabl enforce policy --trusted-ref <base SHA>` with the head read only as git objects.
+`usabl-required` (`if: always()`, needs all five) sets the required status. Serving, scanning,
+policy, and the comment all read the one base commit the event names, never a branch ref.
+
+No trusted job extracts an artifact with `actions/download-artifact`, whose zip extraction
+follows a `..` in the middle of an entry name. Each writes usabl's own fetcher
+(`FETCH_ARTIFACT_SCRIPT` in `src/install/artifact-fetch.ts`, Node builtins only) and runs it with
+the job's token (`actions: read`): it lists the run's artifacts through the REST API, downloads
+the newest under the name with a size bound (engine 512 MiB, build 2 GiB, Result and history
+record 64 MiB), accepts only the exact expected file as a regular file, refuses any other entry,
+path, link, duplicate, encryption, or zip64 before it writes, and writes into a new directory
+outside the workspace. The file is then checked against the producing job's digest output. The
+engine job also publishes `engine_tree_digest`, and every trusted step that runs the engine
+checks the unpacked tree against it first. Every `setup-node` sets
+`package-manager-cache: false`. On `pull_request_review` the judge takes the build from a
+`pull_request` run named, through `run-name`, after this event's pull request number, head
+repository, head SHA, and base SHA, in this repository and workflow file, whose latest
+`build-app` job succeeded; it pages through every completed run, and finds none after the base
+moved, so that review fails closed until the pull request runs again.
+
+What the required check is worth. Any pull request, from a branch or a fork, runs the workflow as
+the pull request changed it, so one that edits `.github/workflows/` can make `usabl-required`
+pass whatever the judge found. The verdict on a pull request that edits the workflow is not
+evidence. The protection is a branch rule or ruleset that requires review from code owners, with
+`.github/workflows/` and the guarded paths owned in `CODEOWNERS`, so such a pull request cannot
+merge without an owner's approval. `usabl install --ci` and `usabl install --branch-rule` say so;
+`usabl install --branch-rule` verifies both the required check and code-owner review; `usabl doctor`
+reports both, and reports `workflow-owners`, whether the last `CODEOWNERS` rule that matches a
+file under `.github/workflows/` names an owner. Only an organization-required workflow takes the
+workflow out of the pull request's hands. See `docs/threat-model.md` (Threat 15
 and "CI trust boundary") for what each job holds. The engine's own repo checks in the earlier
 three-job shape (`gate-comment`, `usabl-policy`, `usabl-required`), because it has no app to
 build. Because `classifyGateWorkflow` compares a workflow line for line against the draft,
@@ -2458,10 +2488,19 @@ three-job rule.
 **The judge's browser.** `check --isolated-browser` reads the origins the browser may reach from
 the trusted ref: the `appBaseUrl` origin, the `docsBaseUrl` origin when `usabl.docs.json` exists,
 and `judge.allowOrigins` in `usabl.config.json` (bare http or https origins, dropped when the
-trusted config cannot be read). It requires Chromium's sandbox whatever `browserSandbox` says,
-blocks service workers, and aborts every request and WebSocket to any other origin. A screen on
-which anything was blocked gets a `not-covered` gap that names the blocked origins, never the
-path or query, and keeps its drafts. The Result gains a `judge` block (`isolatedBrowser: true`,
+trusted config cannot be read). With a trusted ref the judge runs on `usabl.config.json` at that
+ref, the readiness budget and every other setting included; the head's copy is never parsed, only
+compared by the guard, so an invalid or rewritten head config is a policy change and does not
+stop or steer the scan. When the trusted ref has no readable config, the head's copy plans the
+run with `readyTimeoutMs`, `signalTimeoutMs`, `browserSandbox`, and `judge` removed, and no origin
+is allowed. It requires Chromium's sandbox whatever `browserSandbox` says, and aborts every
+request and WebSocket to any other origin. Service workers are allowed, and their requests pass
+the same filter. It also catches what the route cannot stop: a redirect hop to an origin outside
+the allowed set, a response whose server address the URL should not reach (an IP origin answered
+by another address or port, `localhost` off loopback or on another port, another hostname
+answered by a loopback, private, or link-local address), and a WebSocket a worker opens outside
+the allowed origins. A screen on which anything was blocked or caught gets a `not-covered` gap
+that names the origins, never the path or query, and keeps its drafts. The Result gains a `judge` block (`isolatedBrowser: true`,
 `blockedRequests`, and `buildDigest`, the sha256 from `USABL_BUILD_DIGEST` or null). It is
 disclosure only: the gate never reads it, the Result reader refuses a malformed one, and the
 summary and the comment show it in one line.
@@ -2469,7 +2508,8 @@ summary and the comment show it in one line.
 **The history workflow.** `usabl install --ci` also writes `.github/workflows/usabl-history.yml`,
 the default-branch workflow that feeds the debt history (section 9). It runs on a push to main,
 once a day, and by hand, one run at a time. It builds the engine with the same `usabl-engine` job
-as the gate, and each later job checks the archive against `engine_digest` before it runs it. Its
+as the gate, and each later job fetches the archive and the record with usabl's own fetcher,
+checks the archive against `engine_digest`, and checks the unpacked tree before each engine run. Its
 `history-scan` job checks out main, starts the application, runs `usabl history record`, and
 uploads the record. It runs application code, so it reads only. Its `history-append` job needs
 the scan, runs only the checked engine and no npm, appends the record with
@@ -2690,7 +2730,7 @@ integration surface. It always exits 0, because a missing surface is information
 failure; its filesystem port throws on any write so an accidental write fails loudly. It
 reports these surfaces: config, authenticated session, playwright chromium, chromium sandbox,
 route manifest, evidence floor, readiness signals, waivers, overlay, stop-hook, the usabl-check
-and usabl-fix skills, cursor, ci, branch-rule, and policy scope, each with a state such as wired,
+and usabl-fix skills, cursor, ci, branch-rule, workflow owners, and policy scope, each with a state such as wired,
 missing, drifted, or unknown. The chromium sandbox surface starts Chromium with its sandbox the way
 a scan does, opens one blank page, and closes it. It is wired when that works, missing with the fix
 when Chromium reports that it cannot start its sandbox, and unknown when the launch failed for
@@ -2731,8 +2771,9 @@ Onboarding uses two distinct commands. `usabl init` scaffolds policy: it writes
 and refuses to overwrite without `--force`. `usabl install <target>` wires integrations,
 exactly one per run: `--overlay` (the Vite or webpack plugin; see section 11.3), `--claude` (a Stop hook running `npx usabl
 stop-hook` in `.claude/settings.json`), `--ci` (the generated PR-gate workflow), or
-`--branch-rule` (a read-only check that the protected branch and the `usabl-required`
-required status check exist). `init` does not wire CI or overlays, and `install` does not
+`--branch-rule` (a read-only check that the protected branch requires the `usabl-required`
+status check and review from code owners, which prints the setting and the `CODEOWNERS` lines
+for `.github/workflows/` and the guarded paths). `init` does not wire CI or overlays, and `install` does not
 scaffold policy.
 
 `usabl init` looks for the router in `src/App.tsx`, `src/App.jsx`, `src/routes.tsx`,
