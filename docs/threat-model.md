@@ -947,12 +947,20 @@ Residual risks that remain:
   judge found. The verdict on a pull request that edits the workflow is not evidence, and the
   split does not change that for forks or for writers. Read-only tokens and job outputs cannot
   protect a job definition the pull request controls. The protection is code-owner review: a
-  branch rule or ruleset that requires review from code owners, `.github/workflows/` and every
-  guarded path owned in `CODEOWNERS`, `CODEOWNERS` itself owned, "dismiss stale approvals", and
-  no bypass actors. That stops an edited workflow from merging without an owner's approval. It
+  branch rule or ruleset that requires review from code owners, at least one approving review
+  (GitHub requires no review at all when the count is 0, code-owner review or not),
+  `.github/workflows/` and every guarded path owned in `CODEOWNERS`, `CODEOWNERS` itself owned,
+  "dismiss stale approvals", and no bypass actors. Without the dismissal, an owner approves a
+  harmless change, the author then pushes a workflow edit, and the earlier approval still counts.
+  That stops an edited workflow from merging without an owner's approval of its last push. It
   does not stop it from running and reporting green on its own pull request. `usabl install --ci`
   and `usabl install --branch-rule` say this and print the setting; `usabl install --branch-rule`
-  and `usabl doctor` check that code-owner review is required, and `usabl doctor` checks that
+  and `usabl doctor` check that code-owner review, at least one approval, and stale-approval
+  dismissal are required (classic `require_code_owner_reviews`, `required_approving_review_count`,
+  `dismiss_stale_reviews`; ruleset `require_code_owner_review`, `required_approving_review_count`,
+  `dismiss_stale_reviews_on_push`). A count of 0 or a dismissal that is off is not applied; a
+  value usabl cannot read is "cannot verify". A ruleset on `~DEFAULT_BRANCH` counts for `main`
+  only when the repository says `main` is its default branch. `usabl doctor` also checks that
   `CODEOWNERS` gives `.github/workflows/` an owner. Only an organization-required workflow, an
   Enterprise feature, takes the workflow out of the pull request's hands (human task H9).
 - **The author controls the build script.** The build can differ from the source, so the judge

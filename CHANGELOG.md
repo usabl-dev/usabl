@@ -702,6 +702,14 @@
   and `usabl doctor` now verify code-owner review as well as the required check, and
   `usabl doctor` reports whether `CODEOWNERS` gives `.github/workflows/` an owner.
 
+- `usabl install --branch-rule` and `usabl doctor` now also require, and print, at least one
+  approving review and dismissal of stale approvals on push, for classic branch protection and
+  for rulesets. With 0 required approvals GitHub requires no review at all, even with code-owner
+  review on. With stale approvals kept, an owner could approve a harmless workflow change and the
+  author could then push one that makes `usabl-required` pass. A ruleset that targets
+  `~DEFAULT_BRANCH` now verifies when the repository's default branch is `main`, instead of
+  reading as "cannot verify".
+
 - No trusted job in the generated workflows extracts an artifact with
   `actions/download-artifact` any more. Its zip extraction followed a `..` in the middle of an
   entry name, so an artifact replaced in the run could write over the verified engine before any

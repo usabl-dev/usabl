@@ -2463,8 +2463,11 @@ pass whatever the judge found. The verdict on a pull request that edits the work
 evidence. The protection is a branch rule or ruleset that requires review from code owners, with
 `.github/workflows/` and the guarded paths owned in `CODEOWNERS`, so such a pull request cannot
 merge without an owner's approval. `usabl install --ci` and `usabl install --branch-rule` say so;
-`usabl install --branch-rule` verifies both the required check and code-owner review; `usabl doctor`
-reports both, and reports `workflow-owners`, whether the last `CODEOWNERS` rule that matches a
+`usabl install --branch-rule` verifies the required check, code-owner review, at least one
+required approving review (a count of 0 requires no review at all), and dismissal of stale
+approvals on push, each by classic protection or by an active ruleset; a ruleset on
+`~DEFAULT_BRANCH` counts only when the repository's default branch is `main`. Each part that is
+off is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same, and reports `workflow-owners`, whether the last `CODEOWNERS` rule that matches a
 file under `.github/workflows/` names an owner. Only an organization-required workflow takes the
 workflow out of the pull request's hands. See `docs/threat-model.md` (Threat 15
 and "CI trust boundary") for what each job holds. The engine's own repo checks in the earlier

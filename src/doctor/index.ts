@@ -719,7 +719,7 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'branch-rule',
       label: BRANCH_RULE_LABEL,
       state: 'missing',
-      nextStep: `The main branch does not require the ${REQUIRED_CHECK} check and review from code owners, so an accessibility regression, or a pull request that edits the gate, can still merge. Run "usabl install --branch-rule" for the exact setting.`,
+      nextStep: `The main branch does not require all of: the ${REQUIRED_CHECK} check, review from code owners, at least one approving review, and dismissal of stale approvals on push. Without them an accessibility regression, or a pull request that edits the gate, can still merge. Run "usabl install --branch-rule" for the exact setting.`,
     };
   }
   return {

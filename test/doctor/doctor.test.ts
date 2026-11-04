@@ -97,7 +97,7 @@ const GH_VERIFIED = ghReplying(() => ({
   code: 0,
   stdout: JSON.stringify({
     required_status_checks: { strict: true, checks: [{ context: REQUIRED_CHECK, app_id: -1 }] },
-    required_pull_request_reviews: { require_code_owner_reviews: true },
+    required_pull_request_reviews: { require_code_owner_reviews: true, required_approving_review_count: 1, dismiss_stale_reviews: true },
   }),
   stderr: '',
 }));
@@ -120,7 +120,10 @@ const GH_RULESET_PROTECTED = ghReplying((endpoint) => {
         conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
         rules: [
           { type: 'required_status_checks', parameters: { required_status_checks: [{ context: REQUIRED_CHECK }] } },
-          { type: 'pull_request', parameters: { require_code_owner_review: true } },
+          {
+            type: 'pull_request',
+            parameters: { require_code_owner_review: true, required_approving_review_count: 1, dismiss_stale_reviews_on_push: true },
+          },
         ],
       }),
       stderr: '',

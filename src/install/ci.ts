@@ -1013,7 +1013,8 @@ export async function planDocsCi(fs: InstallFs): Promise<CiPlan> {
 const WORKFLOW_BOUNDARY =
   'Any pull request, from a branch or a fork, runs this workflow as the pull request changed it, so one that edits .github/workflows can make ' +
   `"${REQUIRED_GATE_JOB}" pass whatever it judged; its verdict is not evidence. Protect the gate with code owners: add "/.github/workflows/ @your-login" ` +
-  'and every guarded path to .github/CODEOWNERS, and require review from code owners on the protected branch. "usabl install --branch-rule" prints and checks both.';
+  'and every guarded path to .github/CODEOWNERS, and on the protected branch require review from code owners, at least one approval, and dismissal of ' +
+  'stale approvals on push. "usabl install --branch-rule" prints and checks the full setting.';
 
 function writtenReport(): string {
   return [
