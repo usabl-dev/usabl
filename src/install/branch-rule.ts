@@ -1,10 +1,23 @@
 /**
  * Branch protection generator for `usabl install --branch-rule`.
  * This generator is read-only. It NEVER mutates a repository setting. It prints the exact
- * protection the operator must apply and verifies the current state with a single
- * read-only gh call. It only reports "verified" when it can positively confirm that the
- * required check is present; otherwise it refuses and prints the setting, because claiming
- * verified without proof would be a false green.
+ * protection the operator must apply and verifies the current state with read-only gh calls.
+ * It only reports "verified" when it can positively confirm every part of the protection: the
+ * required check, required code-owner review, at least one required approving review, and
+ * dismissal of stale approvals on push. Otherwise
+ * it refuses and prints the setting, because claiming verified without proof would be a false
+ * green.
+ *
+ * Why both. Any pull request, from a branch or a fork, runs the workflow as the pull request
+ * changed it, so a pull request that edits .github/workflows can make usabl-required pass whatever
+ * it judged. The verdict on such a pull request is not evidence. What stops it merging is code
+ * owner review: .github/workflows and the guarded paths listed in CODEOWNERS, and the protected
+ * branch requiring a code owner's approval. GitHub requires none when the required approving
+ * review count is 0, even with code-owner review on, so the count must be at least 1. That
+ * approval has to be of the last push: with stale
+ * approvals kept, an owner approves a harmless change and the author then pushes one that makes
+ * the check pass, and the earlier approval still counts. Only an organization-required workflow,
+ * an Enterprise feature, takes the workflow out of the pull request's hands.
  */
 import { REQUIRED_GATE_JOB } from './ci.js';
 
@@ -19,6 +32,8 @@ export const REQUIRED_CHECK = REQUIRED_GATE_JOB;
 // The read-only gh call. {owner}/{repo} are resolved by gh from the current repo context,
 // so no repository slug is interpolated from any external input.
 const PROTECTION_ENDPOINT = `repos/{owner}/{repo}/branches/${PROTECTED_BRANCH}/protection`;
+// The repository itself, read only for its default branch when a ruleset targets ~DEFAULT_BRANCH.
+const REPOSITORY_ENDPOINT = 'repos/{owner}/{repo}';
 
 export interface GhResult {
   code: number;
@@ -86,12 +101,25 @@ export function branchRuleSetting(): string {
     '    about accessibility. Either one alone can be green while an accessibility regression merges.',
     '  - Require the branch to be up to date before merging (strict).',
     '  - Require a pull request before merging.',
-    '  - Require review from Code Owners, so guarded-file changes need an owner approval that usabl-policy enforces.',
+    '  - Require review from Code Owners. This is the protection that holds when a pull request edits',
+    '    the gate itself: any pull request, from a branch or a fork, runs the workflow as it changed it,',
+    `    so it can make ${REQUIRED_CHECK} pass whatever it judged, and that verdict is not evidence.`,
+    '  - Require at least one approval before merging. With 0 required approvals, GitHub requires no',
+    '    review at all, even with Code Owners review on.',
+    '  - Dismiss stale pull request approvals when new commits are pushed. Otherwise an owner approves a',
+    '    harmless change, the author then pushes a workflow edit, and the earlier approval still counts.',
+    '  - In .github/CODEOWNERS, give .github/workflows/ and every guarded path an owner, for example:',
+    '      /.github/workflows/ @your-login',
+    '      /.github/CODEOWNERS @your-login',
+    '      /usabl.config.json @your-login',
+    '    so a pull request that changes the gate or its policy cannot merge without an owner approving it.',
     '',
     'The resulting protection state, with exact values:',
     `  required_status_checks: { strict: true, contexts: ["${REQUIRED_CHECK}"] }`,
-    '  required_pull_request_reviews: { require_code_owner_reviews: true }',
+    '  required_pull_request_reviews: { require_code_owner_reviews: true, required_approving_review_count: 1, dismiss_stale_reviews: true }',
     '  enforce_admins: true',
+    'A ruleset can set the same: a required_status_checks rule naming the check and a pull_request rule',
+    'with require_code_owner_review, required_approving_review_count of at least 1, and dismiss_stale_reviews_on_push.',
   ].join('\n');
 }
 
@@ -116,16 +144,23 @@ function isRulesetShape(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && typeof value['enforcement'] === 'string' && Array.isArray(value['rules']);
 }
 
-// Whether a single ref target names the protected branch. "covers" only for literals this code can
-// evaluate exactly (~ALL, or refs/heads/main). "unknown" for anything usabl cannot evaluate without
-// replicating GitHub's fnmatch and default-branch resolution: a glob, or ~DEFAULT_BRANCH (main may
-// not be the default). "no" for another literal branch. Unknowns never become a confident answer.
+// Whether a single ref target names the protected branch. "covers" only for targets this code can
+// evaluate exactly: ~ALL, refs/heads/main, and ~DEFAULT_BRANCH when the repository says main is its
+// default branch. "unknown" for anything usabl cannot evaluate without replicating GitHub's
+// fnmatch, and for ~DEFAULT_BRANCH when the default branch could not be read. "no" for another
+// literal branch, and for ~DEFAULT_BRANCH when another branch is the default. Unknowns never become
+// a confident answer.
 type TargetMatch = 'covers' | 'no' | 'unknown';
-function refTargetMatchesProtected(token: string): TargetMatch {
+// Whether main is the repository's default branch: true, false, or null when it was not read.
+type DefaultIsMain = boolean | null;
+function refTargetMatchesProtected(token: string, defaultIsMain: DefaultIsMain): TargetMatch {
   if (token === '~ALL' || token === `refs/heads/${PROTECTED_BRANCH}`) {
     return 'covers';
   }
-  if (token === '~DEFAULT_BRANCH' || /[*?[\]]/.test(token)) {
+  if (token === '~DEFAULT_BRANCH') {
+    return defaultIsMain === null ? 'unknown' : defaultIsMain ? 'covers' : 'no';
+  }
+  if (/[*?[\]]/.test(token)) {
     return 'unknown';
   }
   return 'no';
@@ -147,11 +182,54 @@ function isBranchNotProtected(stderr: string): boolean {
   return /branch not protected/i.test(stderr);
 }
 
-// The classic branch-protection answer for the required check: confirmed present, confidently
+// The classic branch-protection answer for one requirement: confirmed present, confidently
 // absent, or unreadable (gh missing, a non-"branch not protected" error, or unparseable JSON).
 type ClassicState = 'present' | 'absent' | 'unreadable';
 
-async function readClassicProtection(gh: GhReader): Promise<ClassicState> {
+// Whether classic protection requires code-owner review.
+export function isCodeOwnerReviewRequired(parsed: unknown): boolean {
+  if (!isRecord(parsed)) {
+    return false;
+  }
+  const reviews = parsed['required_pull_request_reviews'];
+  return isRecord(reviews) && reviews['require_code_owner_reviews'] === true;
+}
+
+// Whether classic protection requires at least one approving review. GitHub requires no review at
+// all when the count is 0, code-owner review or not. No review settings is a confident no; a count
+// that is not a number cannot be read.
+export function isApprovalRequired(parsed: unknown): boolean | 'unknown' {
+  if (!isRecord(parsed)) {
+    return false;
+  }
+  const reviews = parsed['required_pull_request_reviews'];
+  if (!isRecord(reviews)) {
+    return false;
+  }
+  return approvalCountState(reviews['required_approving_review_count']);
+}
+
+function approvalCountState(count: unknown): boolean | 'unknown' {
+  return typeof count === 'number' && Number.isFinite(count) ? count >= 1 : 'unknown';
+}
+
+// Whether classic protection dismisses stale approvals on push. No review settings at all is a
+// confident no. Review settings that do not carry the field as a boolean cannot be read, so they
+// are 'unknown', never taken as either answer.
+export function isStaleReviewDismissed(parsed: unknown): boolean | 'unknown' {
+  if (!isRecord(parsed)) {
+    return false;
+  }
+  const reviews = parsed['required_pull_request_reviews'];
+  if (!isRecord(reviews)) {
+    return false;
+  }
+  const dismiss = reviews['dismiss_stale_reviews'];
+  return typeof dismiss === 'boolean' ? dismiss : 'unknown';
+}
+
+// The classic protection body, or 'absent' (the branch has no classic rule) or 'unreadable'.
+async function readClassicProtection(gh: GhReader): Promise<{ body: unknown } | 'absent' | 'unreadable'> {
   let outcome: GhResult | null;
   try {
     outcome = await gh.getJson(PROTECTION_ENDPOINT);
@@ -165,10 +243,21 @@ async function readClassicProtection(gh: GhReader): Promise<ClassicState> {
     return isBranchNotProtected(outcome.stderr) ? 'absent' : 'unreadable';
   }
   try {
-    return isRequiredCheckPresent(JSON.parse(outcome.stdout)) ? 'present' : 'absent';
+    return { body: JSON.parse(outcome.stdout) as unknown };
   } catch {
     return 'unreadable';
   }
+}
+
+function classicState(
+  classic: { body: unknown } | 'absent' | 'unreadable',
+  present: (body: unknown) => boolean | 'unknown',
+): ClassicState {
+  if (classic === 'absent' || classic === 'unreadable') {
+    return classic;
+  }
+  const answer = present(classic.body);
+  return answer === 'unknown' ? 'unreadable' : answer ? 'present' : 'absent';
 }
 
 // How a ruleset's branch conditions relate to the protected branch. "covers" and "no" are confident;
@@ -187,7 +276,7 @@ function stringListOrNull(value: unknown): string[] | null {
   }
   return null;
 }
-function conditionCoverage(conditions: unknown): Coverage {
+function conditionCoverage(conditions: unknown, defaultIsMain: DefaultIsMain): Coverage {
   if (!isRecord(conditions)) {
     return 'ambiguous';
   }
@@ -200,8 +289,8 @@ function conditionCoverage(conditions: unknown): Coverage {
   if (includeList === null || excludeList === null) {
     return 'ambiguous';
   }
-  const include = includeList.map(refTargetMatchesProtected);
-  const exclude = excludeList.map(refTargetMatchesProtected);
+  const include = includeList.map((token) => refTargetMatchesProtected(token, defaultIsMain));
+  const exclude = excludeList.map((token) => refTargetMatchesProtected(token, defaultIsMain));
 
   // Exclusions first. A confident exclusion of main means this ruleset does not protect it. An
   // exclusion usabl cannot evaluate might exclude main, so the whole ruleset is ambiguous.
@@ -219,6 +308,68 @@ function conditionCoverage(conditions: unknown): Coverage {
     return 'ambiguous';
   }
   return 'no';
+}
+
+function rulesetRequiresCodeOwnerReview(fullRuleset: Record<string, unknown>): boolean {
+  const rules = fullRuleset['rules'];
+  if (!Array.isArray(rules)) {
+    return false;
+  }
+  return rules.some(
+    (rule) =>
+      isRecord(rule) &&
+      rule['type'] === 'pull_request' &&
+      isRecord(rule['parameters']) &&
+      rule['parameters']['require_code_owner_review'] === true,
+  );
+}
+
+// Whether a ruleset's pull_request rule requires at least one approving review. A pull_request rule
+// whose count is not a number cannot be read, so the answer is 'unknown' unless another of its
+// pull_request rules confirms it.
+function rulesetRequiresApproval(fullRuleset: Record<string, unknown>): boolean | 'unknown' {
+  const rules = fullRuleset['rules'];
+  if (!Array.isArray(rules)) {
+    return false;
+  }
+  let unknown = false;
+  for (const rule of rules) {
+    if (!isRecord(rule) || rule['type'] !== 'pull_request') {
+      continue;
+    }
+    const state = approvalCountState(isRecord(rule['parameters']) ? rule['parameters']['required_approving_review_count'] : undefined);
+    if (state === true) {
+      return true;
+    }
+    if (state === 'unknown') {
+      unknown = true;
+    }
+  }
+  return unknown ? 'unknown' : false;
+}
+
+// Whether a ruleset's pull_request rule dismisses stale approvals on push. A pull_request rule
+// that does not carry the field as a boolean cannot be read, so the answer is 'unknown' unless
+// another of its pull_request rules confirms it.
+function rulesetDismissesStaleReviews(fullRuleset: Record<string, unknown>): boolean | 'unknown' {
+  const rules = fullRuleset['rules'];
+  if (!Array.isArray(rules)) {
+    return false;
+  }
+  let unknown = false;
+  for (const rule of rules) {
+    if (!isRecord(rule) || rule['type'] !== 'pull_request') {
+      continue;
+    }
+    const dismiss = isRecord(rule['parameters']) ? rule['parameters']['dismiss_stale_reviews_on_push'] : undefined;
+    if (dismiss === true) {
+      return true;
+    }
+    if (typeof dismiss !== 'boolean') {
+      unknown = true;
+    }
+  }
+  return unknown ? 'unknown' : false;
 }
 
 function rulesetNamesRequiredCheck(fullRuleset: Record<string, unknown>): boolean {
@@ -250,17 +401,27 @@ function rulesetNamesRequiredCheck(fullRuleset: Record<string, unknown>): boolea
 // Coverage of the protected branch by an active branch ruleset that requires the check: 'covers',
 // 'ambiguous', or 'no'. A ruleset that is not active, not branch-scoped, or does not name the check
 // is 'no'.
-export function rulesetCheckCoverage(fullRuleset: unknown): Coverage {
+export function rulesetCheckCoverage(fullRuleset: unknown, defaultIsMain: DefaultIsMain = null): Coverage {
+  return rulesetCoverage(fullRuleset, rulesetNamesRequiredCheck, defaultIsMain);
+}
+
+// A requirement read off one ruleset: set, not set, or present but unreadable.
+type RulesetRequirement = (ruleset: Record<string, unknown>) => boolean | 'unknown';
+
+function rulesetCoverage(fullRuleset: unknown, requires: RulesetRequirement, defaultIsMain: DefaultIsMain): Coverage {
   if (!isRecord(fullRuleset)) {
     return 'no';
   }
   if (fullRuleset['enforcement'] !== 'active' || fullRuleset['target'] !== 'branch') {
     return 'no';
   }
-  if (!rulesetNamesRequiredCheck(fullRuleset)) {
+  const required = requires(fullRuleset);
+  if (required === false) {
     return 'no';
   }
-  return conditionCoverage(fullRuleset['conditions']);
+  const coverage = conditionCoverage(fullRuleset['conditions'], defaultIsMain);
+  // A setting usabl cannot read, on a ruleset that might protect main, is never a confident answer.
+  return required === 'unknown' && coverage !== 'no' ? 'ambiguous' : coverage;
 }
 
 // The result of reading rulesets: a named ruleset that confidently requires the check, 'ambiguous'
@@ -298,12 +459,64 @@ async function listAllRulesets(gh: GhReader): Promise<unknown[] | 'unreadable'> 
 }
 
 type RulesetOutcome = { name: string } | 'ambiguous' | null | 'unreadable';
-async function findRulesetRequiringCheck(gh: GhReader): Promise<RulesetOutcome> {
+
+// The active branch rulesets, and whether main is the default branch for any that target
+// ~DEFAULT_BRANCH.
+interface ActiveRulesets {
+  rulesets: Array<Record<string, unknown>>;
+  defaultIsMain: DefaultIsMain;
+}
+
+function targetsDefaultBranch(ruleset: Record<string, unknown>): boolean {
+  const conditions = ruleset['conditions'];
+  const refName = isRecord(conditions) ? conditions['ref_name'] : undefined;
+  if (!isRecord(refName)) {
+    return false;
+  }
+  return [refName['include'], refName['exclude']].some(
+    (list) => Array.isArray(list) && list.includes('~DEFAULT_BRANCH'),
+  );
+}
+
+// Whether main is the repository's default branch, or null when the repository could not be read.
+// null keeps a ~DEFAULT_BRANCH target unknown, so a failed read never confirms or rules out main.
+async function readDefaultIsMain(gh: GhReader): Promise<DefaultIsMain> {
+  let res: GhResult | null;
+  try {
+    res = await gh.getJson(REPOSITORY_ENDPOINT);
+  } catch {
+    return null;
+  }
+  if (res === null || res.code !== 0) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(res.stdout);
+    const name = isRecord(parsed) ? parsed['default_branch'] : undefined;
+    return typeof name === 'string' && name.length > 0 ? name === PROTECTED_BRANCH : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readActiveRulesets(gh: GhReader): Promise<ActiveRulesets | 'unreadable'> {
+  const rulesets = await readActiveRulesetBodies(gh);
+  if (rulesets === 'unreadable') {
+    return 'unreadable';
+  }
+  // The repository is read only when a ruleset needs it, so a repository without such a ruleset
+  // costs no extra call.
+  const defaultIsMain = rulesets.some(targetsDefaultBranch) ? await readDefaultIsMain(gh) : null;
+  return { rulesets, defaultIsMain };
+}
+
+// Every active branch ruleset's detail body, or 'unreadable' when any read fails.
+async function readActiveRulesetBodies(gh: GhReader): Promise<Array<Record<string, unknown>> | 'unreadable'> {
   const list = await listAllRulesets(gh);
   if (list === 'unreadable') {
     return 'unreadable';
   }
-  let sawAmbiguous = false;
+  const rulesets: Array<Record<string, unknown>> = [];
   for (const summary of list) {
     if (!isRecord(summary) || summary['enforcement'] !== 'active' || summary['target'] !== 'branch') {
       continue;
@@ -331,7 +544,18 @@ async function findRulesetRequiringCheck(gh: GhReader): Promise<RulesetOutcome> 
     if (!isRulesetShape(full)) {
       return 'unreadable';
     }
-    const coverage = rulesetCheckCoverage(full);
+    rulesets.push(full);
+  }
+  return rulesets;
+}
+
+function findRulesetRequiring(active: ActiveRulesets | 'unreadable', requires: RulesetRequirement): RulesetOutcome {
+  if (active === 'unreadable') {
+    return 'unreadable';
+  }
+  let sawAmbiguous = false;
+  for (const full of active.rulesets) {
+    const coverage = rulesetCoverage(full, requires, active.defaultIsMain);
     if (coverage === 'covers') {
       const name = typeof full['name'] === 'string' ? full['name'] : 'a ruleset';
       return { name };
@@ -343,47 +567,76 @@ async function findRulesetRequiringCheck(gh: GhReader): Promise<RulesetOutcome> 
   return sawAmbiguous ? 'ambiguous' : null;
 }
 
+// One half of the protection, as read: where it was confirmed, or why it was not.
+type RequirementState = { present: string } | 'absent' | 'ambiguous' | 'unreadable';
+
+function requirementState(classic: ClassicState, ruleset: RulesetOutcome): RequirementState {
+  if (classic === 'present') {
+    return { present: 'classic branch protection' };
+  }
+  if (ruleset !== null && typeof ruleset === 'object') {
+    return { present: `ruleset "${ruleset.name}"` };
+  }
+  if (classic === 'unreadable' || ruleset === 'unreadable') {
+    return 'unreadable';
+  }
+  return ruleset === 'ambiguous' ? 'ambiguous' : 'absent';
+}
+
 export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> {
   const setting = branchRuleSetting();
+  const checkLabel = `${REQUIRED_CHECK} as a required status check`;
+  const reviewLabel = 'review from code owners';
+  const approvalLabel = 'at least one approving review';
+  const staleLabel = 'dismissal of stale approvals on push';
 
   // Classic protection first, so a classic-protected repo still verifies in one read-only GET.
   const classic = await readClassicProtection(gh);
-  if (classic === 'present') {
+  const parts: Array<{ label: string; classic: ClassicState; ruleset: RulesetRequirement }> = [
+    { label: checkLabel, classic: classicState(classic, isRequiredCheckPresent), ruleset: rulesetNamesRequiredCheck },
+    { label: reviewLabel, classic: classicState(classic, isCodeOwnerReviewRequired), ruleset: rulesetRequiresCodeOwnerReview },
+    { label: approvalLabel, classic: classicState(classic, isApprovalRequired), ruleset: rulesetRequiresApproval },
+    { label: staleLabel, classic: classicState(classic, isStaleReviewDismissed), ruleset: rulesetDismissesStaleReviews },
+  ];
+
+  // Rulesets are read only when classic protection did not confirm every part, since a ruleset
+  // can set any of them instead.
+  const rulesets: ActiveRulesets | 'unreadable' = parts.every((part) => part.classic === 'present')
+    ? { rulesets: [], defaultIsMain: null }
+    : await readActiveRulesets(gh);
+  const states = parts.map((part) => ({
+    label: part.label,
+    state: requirementState(part.classic, part.classic === 'present' ? null : findRulesetRequiring(rulesets, part.ruleset)),
+  }));
+
+  const confirmed = states.flatMap((entry) => (typeof entry.state === 'object' ? [entry.state.present] : []));
+  if (confirmed.length === states.length) {
+    const where = [...new Set(confirmed)].join(' and ');
     return {
       exitCode: 0,
       action: 'verified',
-      message: `verified: ${REQUIRED_CHECK} is a required status check on ${PROTECTED_BRANCH} (classic branch protection).`,
+      message: `verified: ${PROTECTED_BRANCH} requires ${checkLabel}, ${reviewLabel}, ${approvalLabel}, and ${staleLabel} (${where}).`,
     };
   }
 
-  // Classic did not confirm it, so check rulesets: a ruleset can require the same check.
-  const ruleset = await findRulesetRequiringCheck(gh);
-  if (ruleset !== null && ruleset !== 'unreadable' && ruleset !== 'ambiguous') {
-    return {
-      exitCode: 0,
-      action: 'verified',
-      message: `verified: ${REQUIRED_CHECK} is a required status check on ${PROTECTED_BRANCH} (ruleset "${ruleset.name}").`,
-    };
-  }
-
-  // Neither mechanism confirmed the check. Only call it not-applied when both are confident: a
-  // classic absence and a rulesets list that named no rule requiring it. If either could not be
-  // read, or a ruleset might require it on branch targeting usabl cannot evaluate, refuse rather
-  // than claim the protection is missing.
-  if (classic === 'unreadable' || ruleset === 'unreadable' || ruleset === 'ambiguous') {
-    const reason =
-      ruleset === 'ambiguous'
-        ? `a ruleset requires ${REQUIRED_CHECK} but usabl cannot confirm it targets ${PROTECTED_BRANCH}`
-        : `could not read classic protection and rulesets for ${PROTECTED_BRANCH}`;
+  // A part that is confidently absent is reported as not applied, because the operator has a step
+  // to take whatever the other parts read. Otherwise, a part that could not be read, or a ruleset
+  // whose branch targeting usabl cannot evaluate, is refused rather than called missing.
+  const missing = states.flatMap((entry) => (entry.state === 'absent' ? [entry.label] : []));
+  if (missing.length > 0) {
     return {
       exitCode: 2,
-      action: 'cannot-verify',
-      message: `cannot verify: ${reason}.\n${setting}\n${verifyByHand()}`,
+      action: 'not-applied',
+      message: `not applied: ${PROTECTED_BRANCH} does not require ${missing.join(' or ')}, by classic branch protection or by an active ruleset.\n${setting}`,
     };
   }
+  const reason =
+    states.some((entry) => entry.state === 'ambiguous')
+      ? `a ruleset sets part of the protection but usabl cannot confirm it targets ${PROTECTED_BRANCH}`
+      : `could not read classic protection and rulesets for ${PROTECTED_BRANCH}`;
   return {
     exitCode: 2,
-    action: 'not-applied',
-    message: `not applied: ${REQUIRED_CHECK} is required by neither classic branch protection nor an active ruleset on ${PROTECTED_BRANCH}.\n${setting}`,
+    action: 'cannot-verify',
+    message: `cannot verify: ${reason}.\n${setting}\n${verifyByHand()}`,
   };
 }

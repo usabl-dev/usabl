@@ -17,6 +17,7 @@ import { planClaudeSkill, CLAUDE_SKILLS, type ClaudeSkillDescriptor } from '../i
 import { planCursor, readCursorUiFileGlobs } from '../install/cursor.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { verifyBranchRule, REQUIRED_CHECK, type GhReader } from '../install/branch-rule.js';
+import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
@@ -77,6 +78,14 @@ const BRANCH_RULE_LABEL = `branch protection (main requires ${REQUIRED_CHECK})`;
 const PLAYWRIGHT_CHROMIUM_LABEL = 'playwright chromium (headless browser)';
 const CHROMIUM_SANDBOX_LABEL = 'chromium sandbox (isolates the pages usabl scans)';
 const POLICY_SCOPE_LABEL = 'policy scope (guardedPaths covers CODEOWNERS)';
+const WORKFLOW_OWNERS_LABEL = 'workflow owners (CODEOWNERS gives .github/workflows/ an owner)';
+// The directory GitHub runs workflows from, and the file extensions it runs.
+const WORKFLOWS_DIR = '.github/workflows';
+const WORKFLOW_EXTENSIONS = ['yml', 'yaml'] as const;
+// Stand-ins for a workflow file a pull request adds. No supported CODEOWNERS literal can contain
+// "[", so only a wildcard can match these stems, and a rule that matches every one of them, at
+// every length here, matches any new workflow name.
+const NEW_WORKFLOW_STEMS = ['', '[', '[[', '[[[[[[[[', '['.repeat(40)];
 const READINESS_SIGNALS_LABEL = 'readiness signals (reachedWhen on screens with floored debt)';
 
 // Four states, and unknown is first class. wired is a positive confirmation. missing is a
@@ -643,7 +652,7 @@ async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
       // draft that command hits its already-wired path and prints "No change" without
       // reprinting the pin step, so it would not do what this instruction implies. The edit is
       // self-contained: replace the placeholder in place.
-      nextStep: `The gate workflow is present but the engine ref is still the placeholder. Edit ${USABL_GATE_WORKFLOW_PATH} and replace PIN_TO_A_TRUSTED_USABL_COMMIT (it appears twice) with a full 40-character commit SHA you trust.`,
+      nextStep: `The gate workflow is present but the engine ref is still the placeholder. Edit ${USABL_GATE_WORKFLOW_PATH} and replace PIN_TO_A_TRUSTED_USABL_COMMIT (it appears once, in the usabl-engine job) with a full 40-character commit SHA you trust.`,
     };
   }
   return {
@@ -715,7 +724,7 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'branch-rule',
       label: BRANCH_RULE_LABEL,
       state: 'missing',
-      nextStep: `The main branch does not require the ${REQUIRED_CHECK} check, so an accessibility regression can still merge. Run "usabl install --branch-rule" for the exact setting.`,
+      nextStep: `The main branch does not require all of: the ${REQUIRED_CHECK} check, review from code owners, at least one approving review, and dismissal of stale approvals on push. Without them an accessibility regression, or a pull request that edits the gate, can still merge. Run "usabl install --branch-rule" for the exact setting.`,
     };
   }
   return {
@@ -724,6 +733,152 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
     state: 'unknown',
     nextStep: 'usabl cannot confirm branch protection (gh unavailable, or the read was inconclusive). Verify by hand; see "usabl install --branch-rule".',
   };
+}
+
+// What GitHub accepts as an owner: @user, @org/team, or an email address. Anything else does not
+// count as an owner, so a rule that names it cannot be read as owned.
+const OWNER_USER = /^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const OWNER_TEAM = /^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const OWNER_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+function isValidOwner(token: string): boolean {
+  return OWNER_USER.test(token) || OWNER_TEAM.test(token) || OWNER_EMAIL.test(token);
+}
+
+interface CodeownersRule {
+  pattern: string;
+  owners: string[];
+  match: (path: string) => boolean;
+  // The extensions for which it matches every workflow file a pull request could add.
+  everyNewWorkflow: ReadonlySet<WorkflowExtension>;
+  // The extensions for which it could match some workflow file a pull request could add.
+  someNewWorkflow: ReadonlySet<WorkflowExtension>;
+}
+
+type WorkflowExtension = (typeof WORKFLOW_EXTENSIONS)[number];
+
+function matchesEveryNewWorkflow(match: (path: string) => boolean, ext: WorkflowExtension): boolean {
+  return NEW_WORKFLOW_STEMS.every((stem) => match(`${WORKFLOWS_DIR}/${stem}.${ext}`));
+}
+
+// Whether a file-name glob segment could match a name with this extension. It errs toward yes: a
+// wildcard segment is ruled out only when the literal text after its last wildcard cannot end such
+// a name, so a rule this cannot rule out is treated as able to match.
+function nameCouldBeWorkflow(segment: string, ext: WorkflowExtension): boolean {
+  const lastWildcard = Math.max(segment.lastIndexOf('*'), segment.lastIndexOf('?'));
+  const suffix = `.${ext}`;
+  if (lastWildcard === -1) {
+    return segment.endsWith(suffix);
+  }
+  const tail = segment.slice(lastWildcard + 1);
+  return suffix.endsWith(tail) || tail.endsWith(suffix);
+}
+
+// Whether a rule that does not match every new workflow file could still match one: a directory
+// part that is exactly .github/workflows, or a name pattern that applies at any depth, with a
+// name that could be a workflow file. A trailing slash names a directory, never a workflow file.
+function matchesSomeNewWorkflow(pattern: string, ext: WorkflowExtension): boolean {
+  if (pattern.endsWith('/')) {
+    return false;
+  }
+  const core = pattern.replace(/^\/+/, '');
+  const segments = core.split('/');
+  const name = segments[segments.length - 1] ?? '';
+  if (segments.length === 1) {
+    // A slash-free pattern matches at any depth; one with a leading slash only at the root.
+    return !pattern.startsWith('/') && nameCouldBeWorkflow(name, ext);
+  }
+  if (segments.length !== WORKFLOWS_DIR.split('/').length + 1) {
+    return false;
+  }
+  const directory = compileCodeownersPattern(`/${segments.slice(0, -1).join('/')}/`);
+  return directory.ok && directory.match(`${WORKFLOWS_DIR}/x`) && nameCouldBeWorkflow(name, ext);
+}
+
+// Why a rule does not give what it matches an owner, or null when it does.
+function ownerProblem(rule: CodeownersRule): string | null {
+  if (rule.owners.length === 0) {
+    return `the rule "${rule.pattern}" names no owner, which takes ownership away`;
+  }
+  const invalid = rule.owners.find((owner) => !isValidOwner(owner));
+  if (invalid !== undefined) {
+    return `the rule "${rule.pattern}" names "${invalid}", which is not a valid owner (@user, @org/team, or an email)`;
+  }
+  return null;
+}
+
+// Whether CODEOWNERS gives every workflow an owner. Any pull request, from a branch or a fork, runs
+// the workflow as it changed it, so it can make the required check pass whatever it judged. What
+// keeps such a pull request from merging is a code owner's approval. So the last CODEOWNERS rule
+// that matches each workflow file present must name valid owners, and so must the last rule for any
+// workflow file a pull request could add, because GitHub takes the last matching rule and a rule
+// with no owner takes ownership away.
+async function collectWorkflowOwners(deps: DoctorDeps): Promise<SurfaceReport> {
+  const fix =
+    'Add "/.github/workflows/ @your-login" to .github/CODEOWNERS, after any rule that matches a workflow file, and require review from code owners on main. ' +
+    'Any pull request can change the workflow that runs on it, so its own verdict is not evidence; an owner approval is what stops it merging.';
+  const missing = (detail: string): SurfaceReport => ({
+    id: 'workflow-owners',
+    label: WORKFLOW_OWNERS_LABEL,
+    state: 'missing',
+    nextStep: `${detail}. ${fix}`,
+  });
+  const raw = await deps.fs.readFile(CODEOWNERS_PATH);
+  if (raw === null) {
+    return missing(`No ${CODEOWNERS_PATH}`);
+  }
+  const rules: CodeownersRule[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.replace(/#.*$/, '').trim();
+    if (trimmed.length === 0) {
+      continue;
+    }
+    const [pattern = '', ...owners] = trimmed.split(/\s+/);
+    const compiled = compileCodeownersPattern(pattern);
+    if (!compiled.ok) {
+      return {
+        id: 'workflow-owners',
+        label: WORKFLOW_OWNERS_LABEL,
+        state: 'unknown',
+        nextStep: `${CODEOWNERS_PATH} uses the pattern ${pattern}, which usabl cannot evaluate (${compiled.reason}), so it cannot confirm .github/workflows/ has an owner. Check it by hand.`,
+      };
+    }
+    const every = WORKFLOW_EXTENSIONS.filter((ext) => matchesEveryNewWorkflow(compiled.match, ext));
+    const some = WORKFLOW_EXTENSIONS.filter((ext) => every.includes(ext) || matchesSomeNewWorkflow(pattern, ext));
+    rules.push({ pattern, owners, match: compiled.match, everyNewWorkflow: new Set(every), someNewWorkflow: new Set(some) });
+  }
+
+  // Every workflow file present, by its last matching rule.
+  const present = await deps.fs.glob(WORKFLOW_EXTENSIONS.map((ext) => `${WORKFLOWS_DIR}/*.${ext}`));
+  for (const file of [...present].sort()) {
+    const rule = rules.filter((candidate) => candidate.match(file)).pop();
+    if (rule === undefined) {
+      return missing(`${CODEOWNERS_PATH} gives ${file} no owner`);
+    }
+    const problem = ownerProblem(rule);
+    if (problem !== null) {
+      return missing(`${CODEOWNERS_PATH} gives ${file} no valid owner: ${problem}`);
+    }
+  }
+
+  // A workflow file a pull request adds, for each extension GitHub runs. The last rule that matches
+  // every such name has to name valid owners, and no later rule that could match one may take
+  // them away.
+  for (const ext of WORKFLOW_EXTENSIONS) {
+    const lastFull = rules.map((rule) => rule.everyNewWorkflow.has(ext)).lastIndexOf(true);
+    if (lastFull === -1) {
+      return missing(`${CODEOWNERS_PATH} gives .github/workflows/ no owner, so a new workflow file (.${ext}) a pull request adds has none`);
+    }
+    for (const rule of rules.slice(lastFull)) {
+      if (!rule.someNewWorkflow.has(ext)) {
+        continue;
+      }
+      const problem = ownerProblem(rule);
+      if (problem !== null) {
+        return missing(`${CODEOWNERS_PATH} leaves a new workflow file (.${ext}) in .github/workflows/ without a valid owner: ${problem}`);
+      }
+    }
+  }
+  return { id: 'workflow-owners', label: WORKFLOW_OWNERS_LABEL, state: 'wired', nextStep: '' };
 }
 
 // A guarded prefix, leading and trailing slashes stripped, so a directory entry and a file entry
@@ -866,6 +1021,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     await guardRead('cursor', CURSOR_LABEL, () => collectCursor(deps)),
     await guardRead('ci', CI_LABEL, () => collectCi(deps)),
     await guardRead('branch-rule', BRANCH_RULE_LABEL, () => collectBranchRule(deps)),
+    await guardRead('workflow-owners', WORKFLOW_OWNERS_LABEL, () => collectWorkflowOwners(deps)),
     await guardRead('policy-scope', POLICY_SCOPE_LABEL, () => collectPolicyScope(deps)),
   ];
 }

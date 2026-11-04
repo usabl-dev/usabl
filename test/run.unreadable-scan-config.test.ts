@@ -80,7 +80,7 @@ const docsManifestBytes = JSON.stringify({
 /**
  * What the required aggregate does with this Result, running the exact bytes the workflow runs.
  *
- * The workflow publishes the accessibility verdict as "pass" only when `usabl enforce
+ * The judge publishes the accessibility verdict as "pass" only when `usabl enforce
  * accessibility` exits 0, and blocks on anything else. That translation is reproduced here so the
  * test covers the whole path from Result to merge decision, which is where the defect lived.
  */
@@ -88,7 +88,10 @@ function requiredAggregate(accessibilityExitCode: number): { code: number; outpu
   const outcome = spawnSync(process.execPath, ['-e', REQUIRED_GATE_SCRIPT], {
     env: {
       EVENT_NAME: 'pull_request',
+      ENGINE_RESULT: 'success',
+      BUILD_RESULT: 'success',
       SCAN_RESULT: 'success',
+      COMMENT_RESULT: 'success',
       POLICY_RESULT: 'success',
       ACCESSIBILITY_VERDICT: accessibilityExitCode === 0 ? 'pass' : 'fail',
     },

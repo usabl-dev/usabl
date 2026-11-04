@@ -5,6 +5,7 @@
  */
 import type { CoverageGap, Finding, Result } from '../contracts/index.js';
 import { neutralize } from '../primitives/neutralize.js';
+import { isJudgeDisclosure, judgeLine } from '../judge/disclosure.js';
 import {
   discloseGaps,
   fixOrAbsence,
@@ -373,6 +374,9 @@ export function formatSummary(result: Result): string {
   }
   if (result.receipt) {
     lines.push(`  receipt: sourceTree ${result.receipt.sourceTree} @ ${result.receipt.mintedAt}`);
+  }
+  if (isJudgeDisclosure(result.judge)) {
+    lines.push(`  judge: ${judgeLine(result.judge)}`);
   }
   return lines.join('\n');
 }

@@ -4,6 +4,7 @@
  * It must never mint a verdict and must never mutate the raw Result used for receipts.
  */
 import type { Result } from '../contracts/index.js';
+import { isJudgeDisclosure } from '../judge/disclosure.js';
 import { neutralize } from '../primitives/neutralize.js';
 
 // The untrusted-text frame markers.
@@ -600,6 +601,17 @@ export function scrubResult(result: Result): Result {
             intermittent: result.debt.intermittent,
           },
         }),
+    // A boolean, a whole number, and a hex digest, all checked, so nothing here can carry page
+    // text. Anything else is dropped rather than passed through.
+    ...(isJudgeDisclosure(result.judge)
+      ? {
+          judge: {
+            isolatedBrowser: true as const,
+            blockedRequests: result.judge.blockedRequests,
+            buildDigest: result.judge.buildDigest,
+          },
+        }
+      : {}),
   };
 }
 

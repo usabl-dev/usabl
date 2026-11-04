@@ -60,7 +60,13 @@ export interface CliOptions {
   // When true, `stop-hook` emits Cursor's followup_message protocol instead of Claude's
   // decision: block. Set by --cursor on the stop-hook command.
   cursorStopHook: boolean;
+  // check-only: run the judge's browser. Chromium's sandbox required, service workers blocked, and
+  // every request outside the trusted origins aborted, so a blocked screen is a coverage gap.
+  isolatedBrowser: boolean;
 }
+
+// The value flags of serve-build and extract-build. Those commands parse their own arguments.
+const BUILD_COMMAND_VALUE_FLAGS: ReadonlySet<string> = new Set(['--dir', '--host', '--port', '--archive', '--into']);
 
 function isFlag(value: string): boolean {
   return value.startsWith('-');
@@ -131,6 +137,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let cursor = false;
   let docsCi = false;
   let branchRule = false;
+  let isolatedBrowser = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -216,6 +223,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
       ci = true;
       continue;
     }
+    if (token === '--isolated-browser') {
+      isolatedBrowser = true;
+      continue;
+    }
     if (token === '--self-check') {
       selfCheck = true;
       continue;
@@ -276,6 +287,15 @@ export function parseCliArgs(argv: string[]): CliOptions {
       index += 1;
       continue;
     }
+    if (BUILD_COMMAND_VALUE_FLAGS.has(token)) {
+      // serve-build and extract-build read these with their own strict parsers. Here the value is
+      // only stepped over, so a path such as "--dir build" is never taken for a command name.
+      const value = argv[index + 1];
+      if (value !== undefined && !isFlag(value)) {
+        index += 1;
+      }
+      continue;
+    }
     if (token === '--config') {
       const value = argv[index + 1];
       if (value === undefined || isFlag(value)) {
@@ -314,6 +334,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     outPath,
     installTarget,
     cursorStopHook,
+    isolatedBrowser,
   };
 }
 

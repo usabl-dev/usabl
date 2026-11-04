@@ -675,6 +675,96 @@
 
 ### Security
 
+- The CI gate that `usabl install --ci` and `usabl install --docs-ci` write no longer lets a
+  pull request grade itself. Before, one job ran the pull request's own `npm ci` and dev server
+  and, in the same job, wrote and uploaded the Result the required check read, so a hostile
+  build could overwrite its own Result. The gate is now six jobs. `build-app` is the only job
+  that runs pull request code, and it holds no secret. `usabl-scan`, the judge, never runs that
+  code in Node or a shell: it unpacks the build with `usabl extract-build`, serves it with
+  `usabl serve-build`, and scans it with `usabl check --isolated-browser`, which requires
+  Chromium's sandbox and blocks every request and WebSocket outside the trusted app origin and
+  the new trusted-only `judge.allowOrigins`. A screen with a blocked request is a coverage gap.
+  The engine comes from one pinned commit of the public engine repository, with no token, and
+  every artifact a trusted job reads is checked against a digest from a job output; no job uses
+  a cache. The verdict reaches `usabl-required` as the judge's job output. A pull request from a
+  fork now runs the gate; its comment goes to the run summary. The build reads two repository
+  variables, `USABL_APP_BUILD_COMMAND` (default `npm run build`) and `USABL_APP_BUILD_DIR`
+  (default `dist`), and `appBaseUrl` must be a loopback address with a port. The history
+  workflow builds the engine with the same job. The Result gains an optional `judge` block (the
+  blocked request count and the build digest), which the summary and the comment show in one
+  line.
+
+- Any pull request, from a branch or a fork, runs the gate workflow as it changed it, so one
+  that edits `.github/workflows/` can make `usabl-required` pass whatever the judge found, and
+  its verdict is not evidence. `usabl install --ci` and `usabl install --branch-rule` now say
+  so and tell you to give `.github/workflows/` and every guarded path an owner in
+  `.github/CODEOWNERS` and to require review from code owners. `usabl install --branch-rule`
+  and `usabl doctor` now verify code-owner review as well as the required check, and
+  `usabl doctor` reports whether `CODEOWNERS` gives `.github/workflows/` an owner.
+
+- `usabl install --branch-rule` and `usabl doctor` now also require, and print, at least one
+  approving review and dismissal of stale approvals on push, for classic branch protection and
+  for rulesets. With 0 required approvals GitHub requires no review at all, even with code-owner
+  review on. With stale approvals kept, an owner could approve a harmless workflow change and the
+  author could then push one that makes `usabl-required` pass. A ruleset that targets
+  `~DEFAULT_BRANCH` now verifies when the repository's default branch is `main`, instead of
+  reading as "cannot verify".
+
+- `usabl doctor` now checks workflow ownership for every `.yml` and `.yaml` file in
+  `.github/workflows/` and for a new one a pull request could add, not only for
+  `usabl-gate.yml`, and it checks that each owner is `@user`, `@org/team`, or an email. Before, a
+  later `CODEOWNERS` rule with no owner, such as one line for `usabl-docs-gate.yml`, left that
+  workflow unowned while doctor reported `wired`, and so did a rule that owned only
+  `usabl-gate.yml` or named something that is not an owner.
+
+- No trusted job in the generated workflows extracts an artifact with
+  `actions/download-artifact` any more. Its zip extraction followed a `..` in the middle of an
+  entry name, so an artifact replaced in the run could write over the verified engine before any
+  digest check. Each trusted job now fetches the zip through the REST API with its own token
+  (`actions: read`) and reads it with usabl's own fetcher, which accepts only the expected file
+  and refuses any other entry, path, link, duplicate, or oversize zip before it writes. Every
+  step that runs the engine first checks the unpacked engine tree against the new
+  `engine_tree_digest` output.
+
+- Every `setup-node` in the generated workflows sets `package-manager-cache: false`. setup-node
+  v6 caches npm by itself when `package.json` names npm, so leaving the cache inputs out did not
+  turn it off, and a cache written by pull request code could replace files a trusted job runs.
+
+- The judge reads one base commit, the event's base SHA, for serving, scanning, policy, and the
+  comment, instead of a base branch that could move during the run. On a review it takes the
+  build only from a `pull_request` run of the same pull request, head repository, head, and
+  base, found by the run name the gate now sets, whose latest `build-app` job succeeded, and it
+  pages through every run. A review after the base branch moved fails closed until the pull
+  request runs again.
+
+- The isolated judge runs on `usabl.config.json` at the trusted ref only, the readiness budget
+  included. The head's copy is only compared with it, so an invalid head config no longer stops
+  the judge before it scans.
+
+- The isolated judge allows service workers and filters their requests like the page's. The
+  earlier block only replaced `navigator.serviceWorker.register` in the page, which the
+  prototype method went around, and a suppressed worker could hide content with no coverage
+  gap. The judge also catches a redirect hop to an origin outside the allowed set, a response
+  from a server address the URL should not reach (such as an allowed hostname answered by a
+  loopback service), and a WebSocket a worker opens; each makes the screen a coverage gap.
+
+- Readiness now waits for service workers. A worker's requests are reported on the browser
+  context, not the page, so readiness read the network as quiet while a worker fetch was still
+  out, and a screen whose content waited for the worker was checked as an empty shell with no gap.
+  Readiness now also counts every request a service worker sends and every worker that is
+  installing or activating. A worker that does not finish inside `readyTimeoutMs` makes the
+  screen a `not-covered` gap that names it. This applies to every scan, the judge included.
+
+- The isolated judge now makes a screen a coverage gap when a shared worker starts or a service
+  worker opens a WebSocket. Neither passes the request filter: Playwright drops shared workers, and
+  it watches sockets only where there is a page. Before, a shared worker's fetch to another origin
+  and a service worker's socket reached their servers with no gap. The judge now sees both through
+  the browser's debugging protocol, outside page script.
+
+- `usabl extract-build` bounds the archive size, each long-name or pax record, the member
+  count, and the extracted bytes, and refuses an archive past any bound before it allocates or
+  writes.
+
 - axe runs in an isolated world in every frame, not in the page's own world. Page script
   shares the DOM with that world but not its globals or prototypes. A page that patched
   `Element.prototype.getAttribute` so one button's id read as another's could give two

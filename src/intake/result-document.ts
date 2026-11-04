@@ -39,6 +39,7 @@ import type {
   Finding,
   FloorHeadroom,
   FloorUnconfirmed,
+  JudgeDisclosure,
   Receipt,
   Result,
   RuleApplicability,
@@ -54,6 +55,7 @@ import {
 // The code of a run with nothing to check, the first of the two no-verdict codes.
 const IDLE_EXIT_CODE = NO_VERDICT_EXIT_CODES[0];
 import { InputRefusedError } from './input-refusal.js';
+import { isJudgeDisclosure } from '../judge/disclosure.js';
 
 type Json = Record<string, unknown>;
 
@@ -472,6 +474,15 @@ function debt(value: unknown, field: string): DebtStatus {
   };
 }
 
+// The block the CI judge writes. Checked whole, because a malformed digest would read as a binding
+// to a build that does not hold.
+function judge(value: unknown, field: string): JudgeDisclosure {
+  if (!isJudgeDisclosure(value)) {
+    refuse(field, 'must be the block the CI judge writes: isolatedBrowser true, a whole blockedRequests count, and a sha256 buildDigest or null');
+  }
+  return { isolatedBrowser: true, blockedRequests: value.blockedRequests, buildDigest: value.buildDigest };
+}
+
 /**
  * Checks a parsed JSON value against the Result contract and returns a Result built from the
  * checked fields. Throws InputRefusedError on the first field that does not match.
@@ -562,5 +573,6 @@ function readResult(value: unknown): Result {
     floorHeadroom: list(source['floorHeadroom'], 'floorHeadroom', headroom),
     floorUnconfirmed: list(source['floorUnconfirmed'], 'floorUnconfirmed', unconfirmed),
     ...(has(source, 'debt') ? { debt: debt(source['debt'], 'debt') } : {}),
+    ...(has(source, 'judge') ? { judge: judge(source['judge'], 'judge') } : {}),
   };
 }

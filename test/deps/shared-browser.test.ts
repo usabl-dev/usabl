@@ -50,7 +50,9 @@ function fakeLaunched(): {
       }
       return page;
     },
-    newCDPSession: async () => ({ send: async () => ({}) }),
+    newCDPSession: async () => ({ send: async () => ({}), on: () => undefined }),
+    // The open listens for service-worker requests on the context.
+    on: () => undefined,
     close: async () => {
       contextsClosed += 1;
     },

@@ -81,11 +81,12 @@ protection requires the `usabl-required` check (verified with `usabl install --b
 | 3. Read the verdict | The comment shows verified, regression, not_covered, or approval_required, with the findings behind it | Understanding | Reading a raw finding without context |
 | 4. Approve | Merge when the `usabl-required` check is green | Confidence | A block with no waiver path |
 
-The comment is a projection of the same gated Result; it invents no verdict. Policy
-enforcement runs in the second job (`usabl-policy`) against the base commit, so head
-code never decides its own gate. The third job, `usabl-required`, is the one branch
-protection waits on: it is red unless the accessibility verdict and the policy verdict
-both pass. Changing a guarded policy file yields `approval_required` until it is
+The comment is a projection of the same gated Result; it invents no verdict. The head is
+built in `build-app`, which holds no secret, and judged in `usabl-scan`, which runs the pinned
+engine on the built output and never runs head code, so head code never decides its own gate.
+Policy enforcement runs in `usabl-policy` against the base commit. `usabl-required` is the one
+check branch protection waits on: it is red unless every job has the right shape and the
+judge's accessibility verdict and the policy verdict both pass. Changing a guarded policy file yields `approval_required` until it is
 reviewed.
 
 **Rip-out moment:** The team ignores the bot comment.

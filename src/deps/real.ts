@@ -10,6 +10,14 @@ import { applyAxeTags, type AxeIssue, type AxeRuleSummary, type AxeUncheckedFram
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
 import { runAxeInIsolatedWorld } from './axe-world.js';
 import { BrowserSandboxRequiredError, isBrowserSandboxRefusal, isSandboxLaunchFailure, type BrowserSandboxPolicy } from './sandbox.js';
+import {
+  blockedOriginLabel,
+  decideRedirectResponse,
+  decideRequest,
+  decideServerAddress,
+  decideWebSocket,
+  type BrowserIsolation,
+} from '../judge/request-filter.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
 // Ansible Automation Platform screen measured 12.4 s to network idle plus 13.3 s to a DOM that
@@ -1526,6 +1534,9 @@ async function stablePathsForSelector(cdp: CDPSession, selector: string): Promis
 interface ReadinessPage {
   networkQuietFor(windowMs: number): boolean;
   evaluate(fn: () => number): Promise<number>;
+  // What kept the network from going quiet, when it was something other than the page's own
+  // requests, for the message when the budget runs out. Optional so a scripted page needs none.
+  networkBusyDetail?(): string | null;
 }
 
 /**
@@ -1731,6 +1742,124 @@ export function makeNetworkActivityTracker(
   };
 }
 
+// The subset of a Playwright request the worker tracker reads.
+export interface WorkerRequestHandle {
+  // The service worker that issued the request, or null for a page's own request.
+  serviceWorker(): unknown;
+}
+
+// The subset of a Playwright browser context the worker tracker listens to. Narrow so a test can
+// drive it.
+export interface WorkerRequestEvents {
+  on(event: 'request' | 'requestfinished' | 'requestfailed', handler: (request: WorkerRequestHandle) => void): void;
+  off?(event: 'request' | 'requestfinished' | 'requestfailed', handler: (request: WorkerRequestHandle) => void): void;
+}
+
+// One service worker version as the browser reports it over CDP.
+export interface ServiceWorkerVersionState {
+  versionId: string;
+  status: string;
+  runningStatus: string;
+}
+
+export interface WorkerActivity {
+  // Whether no service worker request is in flight and no worker is being installed or activated,
+  // and that has held for at least windowMs.
+  quietFor(windowMs: number): boolean;
+  // What is still running, or null when nothing is.
+  busyDetail(): string | null;
+  // Feeds a ServiceWorker.workerVersionUpdated event.
+  versionsUpdated(versions: ServiceWorkerVersionState[]): void;
+  stop(): void;
+}
+
+// The live service-worker signal for readiness.
+//
+// A service worker's requests are reported on the browser context, never on the page, so the
+// page's tracker cannot see them. Content that waits for navigator.serviceWorker.ready mounts only
+// after the worker's install and activate steps finish, and those can wait on a fetch, or on
+// nothing the network shows at all. Without this, readiness read a quiet page while the worker
+// was still installing, and the scan graded the shell before the content arrived.
+//
+// So two things keep the network busy here: a request a service worker issued that has not
+// finished or failed, and a worker version the browser reports as installing, installed (waiting),
+// or activating, or as new while its script is starting or running. A version that is new and
+// stopped is one whose script was never fetched, or failed to fetch, and the browser reports
+// nothing more about it, so it does not count; its script fetch is a worker request and counts on
+// its own. A worker that never finishes keeps readiness waiting until the budget runs out, and the
+// caller turns that into a coverage gap that names the worker.
+const BUSY_VERSION_STATUSES = new Set(['installing', 'installed', 'activating']);
+const RUNNING_STATUSES = new Set(['starting', 'running']);
+
+function versionBusy(version: ServiceWorkerVersionState): boolean {
+  return BUSY_VERSION_STATUSES.has(version.status) || (version.status === 'new' && RUNNING_STATUSES.has(version.runningStatus));
+}
+
+// Exported for tests. Product code reaches it through Page.gotoReady().
+export function makeWorkerActivityTracker(context: WorkerRequestEvents, now: () => number = Date.now): WorkerActivity {
+  const inFlight = new Set<WorkerRequestHandle>();
+  const versions = new Map<string, ServiceWorkerVersionState>();
+  let idleSince = now();
+
+  const busyVersions = (): number => [...versions.values()].filter(versionBusy).length;
+  const busy = (): boolean => inFlight.size > 0 || busyVersions() > 0;
+  // Called after every change. Idle starts at the moment the last busy thing stopped.
+  const changed = (wasBusy: boolean): void => {
+    if (wasBusy && !busy()) {
+      idleSince = now();
+    }
+  };
+  const isWorkerRequest = (request: WorkerRequestHandle): boolean => {
+    try {
+      return request.serviceWorker() !== null;
+    } catch {
+      return false;
+    }
+  };
+  const onRequest = (request: WorkerRequestHandle): void => {
+    if (isWorkerRequest(request)) {
+      inFlight.add(request);
+    }
+  };
+  const onDone = (request: WorkerRequestHandle): void => {
+    const wasBusy = busy();
+    inFlight.delete(request);
+    changed(wasBusy);
+  };
+  context.on('request', onRequest);
+  context.on('requestfinished', onDone);
+  context.on('requestfailed', onDone);
+
+  return {
+    quietFor(windowMs: number): boolean {
+      return !busy() && now() - idleSince >= windowMs;
+    },
+    busyDetail(): string | null {
+      const parts: string[] = [];
+      if (inFlight.size > 0) {
+        parts.push(`${inFlight.size} service worker request${inFlight.size === 1 ? '' : 's'} still in flight`);
+      }
+      const installing = busyVersions();
+      if (installing > 0) {
+        parts.push(`${installing} service worker${installing === 1 ? '' : 's'} still installing or activating`);
+      }
+      return parts.length === 0 ? null : parts.join(', ');
+    },
+    versionsUpdated(updated: ServiceWorkerVersionState[]): void {
+      const wasBusy = busy();
+      for (const version of updated) {
+        versions.set(version.versionId, version);
+      }
+      changed(wasBusy);
+    },
+    stop(): void {
+      context.off?.('request', onRequest);
+      context.off?.('requestfinished', onDone);
+      context.off?.('requestfailed', onDone);
+    },
+  };
+}
+
 // "Timeout 15000ms exceeded" does not say whether the network never went quiet or the DOM never
 // stopped moving, and those have different fixes: a stuck request against an app or a lab that
 // renders slower than the budget allows.
@@ -1859,7 +1988,8 @@ export async function waitForRendered(
       // operator at a request budget; otherwise the DOM never stopped and its last count is the
       // useful detail.
       if (domStable && !networkQuiet) {
-        throw new Error(readinessTimeout('network activity did not go quiet', timeoutMs, ''));
+        const busy = pw.networkBusyDetail?.() ?? null;
+        throw new Error(readinessTimeout('network activity did not go quiet', timeoutMs, busy === null ? '' : ` (${busy})`));
       }
       throw new Error(
         readinessTimeout('DOM did not stop changing', timeoutMs, `, last element count ${elements}`),
@@ -1908,11 +2038,14 @@ function wrapPage(
   cdp: CDPSession,
   readyTimeoutMs: number,
   network: NetworkActivity,
+  workers: WorkerActivity | null = null,
 ): Page {
-  // The readiness seam: the DOM read from the page, the network signal from the live tracker.
+  // The readiness seam: the DOM read from the page, the network signal from the live trackers.
+  // The page's own requests and its service workers' both have to be quiet.
   const readiness: ReadinessPage = {
     evaluate: (fn) => pw.evaluate(fn),
-    networkQuietFor: (windowMs) => network.networkQuietFor(windowMs),
+    networkQuietFor: (windowMs) => network.networkQuietFor(windowMs) && (workers === null || workers.quietFor(windowMs)),
+    networkBusyDetail: () => workers?.busyDetail() ?? null,
   };
   const page: Page = {
     async gotoReady(readyWhen?: ReadinessProbe): Promise<ReadinessOutcome> {
@@ -2102,13 +2235,127 @@ export interface RealBrowserOptions {
   readyTimeoutMs?: number;
   // What this run allows when Chromium cannot start its sandbox. Absent means auto.
   browserSandbox?: BrowserSandboxPolicy;
+  // The judge's request filter. When set, every context blocks service workers and routes every
+  // request through the filter before any page exists. The judge also sets browserSandbox to
+  // require, so page script runs inside Chromium's sandbox or the scan is refused.
+  isolation?: BrowserIsolation;
 }
 
 /**
  * The part of a launched Playwright browser this module uses. Narrow so a test can stand in a fake
  * and drive the launch, disconnect, and relaunch logic without a real Chromium.
  */
-export type LaunchedBrowser = Pick<Browser, 'newContext' | 'isConnected' | 'close'>;
+export type LaunchedBrowser = Pick<Browser, 'newContext' | 'isConnected' | 'close'> &
+  // Optional so a fake needs it only when it serves the judge, which watches worker targets with it.
+  Partial<Pick<Browser, 'newBrowserCDPSession'>>;
+
+/**
+ * Watches, for the judge, the worker traffic its request filter cannot reach, from outside page
+ * script.
+ *
+ * Playwright detaches a shared worker, so its requests are never routed or reported, and it
+ * listens for WebSockets only where there is a page, so a service worker's socket passes no filter.
+ * Neither can be filtered yet, so each makes the screen a coverage gap:
+ * - a shared worker is seen through target discovery on a browser session, filtered to this
+ *   context, the moment it is created;
+ * - a service worker is attached from the page's own session, which the browser pauses at start
+ *   until it is released, so its Network domain is on before its script runs and every socket it
+ *   opens is reported. A service worker that discovery saw but this session never watched could
+ *   have opened a socket unseen, so it is a gap too.
+ * Every target the page session attaches to, a frame or a dedicated worker included, is released
+ * at once, so the page runs as it would. The page session uses the non-flat protocol, because
+ * Playwright does not route messages for a child session it did not create itself.
+ */
+async function watchUnfilteredWorkers(
+  browser: LaunchedBrowser,
+  page: CDPSession,
+  caught: (url: string, why: string) => void,
+): Promise<{ checkWatched: () => void; detach: () => Promise<void> }> {
+  if (browser.newBrowserCDPSession === undefined) {
+    throw new Error('the isolated browser cannot watch worker targets, so it cannot confirm their traffic is filtered');
+  }
+  const contextId = (await page.send('Target.getTargetInfo')).targetInfo.browserContextId;
+  const browserSession = await browser.newBrowserCDPSession();
+  const discovered = new Map<string, string>();
+  const watched = new Set<string>();
+  // The page session's child sessions on service workers, and the Network.enable request sent to
+  // each, by message id.
+  const workerSessions = new Map<string, { targetId: string; url: string }>();
+  const enabling = new Map<number, { targetId: string; url: string }>();
+  let messageId = 0;
+  const sendTo = (sessionId: string, method: string): { id: number; sent: Promise<unknown> } => {
+    messageId += 1;
+    const id = messageId;
+    return { id, sent: page.send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id, method, params: {} }) }) };
+  };
+  try {
+    browserSession.on('Target.targetCreated', ({ targetInfo }) => {
+      if (targetInfo.browserContextId !== contextId) {
+        return;
+      }
+      if (targetInfo.type === 'shared_worker') {
+        caught(targetInfo.url, 'a shared worker started, and its requests cannot be filtered');
+      } else if (targetInfo.type === 'service_worker') {
+        discovered.set(targetInfo.targetId, targetInfo.url);
+      }
+    });
+    await browserSession.send('Target.setDiscoverTargets', {
+      discover: true,
+      filter: [{ type: 'service_worker' }, { type: 'shared_worker' }],
+    });
+    page.on('Target.attachedToTarget', ({ sessionId, targetInfo }) => {
+      if (targetInfo.type === 'service_worker') {
+        const worker = { targetId: targetInfo.targetId, url: targetInfo.url };
+        workerSessions.set(sessionId, worker);
+        const enable = sendTo(sessionId, 'Network.enable');
+        enabling.set(enable.id, worker);
+        enable.sent.catch(() => caught(worker.url, 'a service worker that could not be watched for sockets'));
+      }
+      // Sent after Network.enable on the same session, so the target handles that first.
+      sendTo(sessionId, 'Runtime.runIfWaitingForDebugger').sent.catch(() => undefined);
+    });
+    page.on('Target.receivedMessageFromTarget', ({ sessionId, message }) => {
+      const worker = workerSessions.get(sessionId);
+      if (worker === undefined) {
+        return;
+      }
+      let parsed: { id?: unknown; error?: unknown; method?: unknown; params?: { url?: unknown } };
+      try {
+        parsed = JSON.parse(message) as typeof parsed;
+      } catch {
+        caught(worker.url, 'a service worker whose messages could not be read');
+        return;
+      }
+      if (typeof parsed.id === 'number' && enabling.has(parsed.id)) {
+        enabling.delete(parsed.id);
+        if (parsed.error === undefined) {
+          watched.add(worker.targetId);
+        } else {
+          caught(worker.url, 'a service worker that could not be watched for sockets');
+        }
+        return;
+      }
+      if (parsed.method === 'Network.webSocketCreated') {
+        const url = typeof parsed.params?.url === 'string' ? parsed.params.url : worker.url;
+        caught(url, 'opened by a service worker, and its sockets cannot be filtered');
+      }
+    });
+    await page.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: false });
+  } catch (error) {
+    await browserSession.detach().catch(() => undefined);
+    throw error;
+  }
+  return {
+    checkWatched: () => {
+      for (const [targetId, url] of [...discovered].sort(([a], [b]) => a.localeCompare(b))) {
+        if (!watched.has(targetId)) {
+          caught(url, 'a service worker that could not be watched for sockets');
+        }
+      }
+    },
+    detach: () => browserSession.detach().catch(() => undefined),
+  };
+}
 
 /**
  * One browser process shared across runs.
@@ -2301,11 +2548,16 @@ export function makeSharedBrowser(
     const launched = handle.process;
     const readyTimeoutMs = readyTimeoutMsFor(options);
 
+    const isolation = options.isolation;
     let context: Awaited<ReturnType<LaunchedBrowser['newContext']>>;
     try {
-      context = await launched.newContext(
-        options.storageStatePath === undefined ? {} : { storageState: options.storageStatePath },
-      );
+      // Service workers stay allowed in the judge. Playwright's block option only replaces
+      // navigator.serviceWorker.register in the page, which page script can go around, and it
+      // turns off routing for the workers it misses; and a suppressed worker can hide content
+      // with no gap. Allowed, a worker runs and its requests pass the same context route below.
+      context = await launched.newContext({
+        ...(options.storageStatePath === undefined ? {} : { storageState: options.storageStatePath }),
+      });
     } catch (error) {
       handle.contextFailures += 1;
       // A process that has died, or one that stays connected but cannot make a context any more,
@@ -2319,12 +2571,122 @@ export function makeSharedBrowser(
 
     // From here a context exists. Any failure below must close it, or an authenticated page opened
     // from the run's storage state stays alive with nothing holding it.
+    // Set once the page's session exists, in the judge: the worker targets the filter cannot reach.
+    let workerWatch: { checkWatched: () => void; detach: () => Promise<void> } | null = null;
     try {
+      // Context-wide routing is installed before any page exists, so the first navigation, its
+      // frames, its workers, and any popup all pass through the filter.
+      let blockedOrigins: (() => Promise<string[]>) | null = null;
+      let caughtByJudge: ((url: string, why: string) => void) | null = null;
+      if (isolation !== undefined) {
+        const blocked = new Set<string>();
+        // Address checks wait on the browser, so the list is read only after they settle.
+        const pending = new Set<Promise<void>>();
+        blockedOrigins = async () => {
+          while (pending.size > 0) await Promise.all([...pending]);
+          workerWatch?.checkWatched();
+          return [...blocked].sort();
+        };
+        const caught = (url: string, why: string): void => {
+          blocked.add(`${blockedOriginLabel(url)} (${why})`);
+          isolation.onBlocked(url);
+        };
+        caughtByJudge = caught;
+        await context.route('**/*', async (route) => {
+          const requestUrl = route.request().url();
+          if (decideRequest(isolation.allowedOrigins, requestUrl) === 'allow') {
+            await route.continue();
+            return;
+          }
+          blocked.add(blockedOriginLabel(requestUrl));
+          isolation.onBlocked(requestUrl);
+          await route.abort('blockedbyclient');
+        });
+        // WebSockets bypass request routing, so they get their own filter. An allowed socket is
+        // connected through to its server; any other is closed before it reaches one.
+        await context.routeWebSocket(/.*/, (socket) => {
+          const socketUrl = socket.url();
+          if (decideWebSocket(isolation.allowedOrigins, socketUrl) === 'allow') {
+            socket.connectToServer();
+            return;
+          }
+          blocked.add(blockedOriginLabel(socketUrl));
+          isolation.onBlocked(socketUrl);
+          void socket.close({ code: 1008, reason: 'blocked by the usabl judge' }).catch(() => undefined);
+        });
+        // Playwright continues a redirect hop without the route above, so a hop cannot be
+        // stopped there. Every hop is still reported, by the page and by service workers, so a hop
+        // outside the allowed origins is caught here and the screen becomes a coverage gap.
+        context.on('request', (request) => {
+          if (request.redirectedFrom() !== null && decideRequest(isolation.allowedOrigins, request.url()) === 'block') {
+            caught(request.url(), 'reached by a redirect');
+          }
+        });
+        // An allowed origin can still be answered by a server it should not reach: an allowed
+        // hostname whose DNS answer is a loopback or private address, or another loopback port.
+        // A redirect response is also judged on its own Location, so a hop off the allowed set is
+        // caught even if the browser reports the next request late.
+        context.on('response', (response) => {
+          const status = response.status();
+          const redirect = status >= 300 && status < 400;
+          const check = Promise.all([response.serverAddr(), redirect ? response.headerValue('location') : Promise.resolve(null)])
+            .then(([address, location]) => {
+              if (redirect) {
+                const judged = decideRedirectResponse(isolation.allowedOrigins, response.url(), location, address);
+                if (judged.hop === 'block') {
+                  let target = response.url();
+                  try {
+                    target = new URL(location ?? '', response.url()).href;
+                  } catch {
+                    // A Location that is not a URL is named by the redirect that sent it.
+                  }
+                  caught(target, 'reached by a redirect');
+                }
+                if (judged.address === 'unexpected') {
+                  caught(response.url(), 'answered from an unexpected address');
+                }
+                return;
+              }
+              if (address !== null && decideServerAddress(isolation.allowedOrigins, response.url(), address) === 'unexpected') {
+                caught(response.url(), 'answered from an unexpected address');
+              }
+            })
+            .catch(() => caught(response.url(), 'its server address could not be read'))
+            .finally(() => pending.delete(check));
+          pending.add(check);
+        });
+        // A socket a worker opens does not pass the socket route, which patches only the page.
+        // The browser still reports it, so one outside the allowed origins is caught.
+        const watchSockets = (opened: PwPage): void => {
+          opened.on('websocket', (socket) => {
+            if (decideWebSocket(isolation.allowedOrigins, socket.url()) === 'block') {
+              const label = blockedOriginLabel(socket.url());
+              // A page socket the route already closed is counted once.
+              if (!blocked.has(label)) {
+                blocked.add(label);
+                isolation.onBlocked(socket.url());
+              }
+            }
+          });
+        };
+        context.on('page', watchSockets);
+      }
       const page = await context.newPage();
       // Attach the in-flight tracker before navigating, so the navigation's own requests are
       // counted and readiness cannot read idle off a page whose first responses have not landed.
       const network = makeNetworkActivityTracker(page);
+      // Service-worker requests are reported on the context, and install and activation over CDP,
+      // so readiness waits for them too. Both are attached before navigating, like the page's.
+      const workers = makeWorkerActivityTracker(context);
       const cdp = await context.newCDPSession(page);
+      if (caughtByJudge !== null) {
+        // Before navigating, so a worker the page starts at once is already watched.
+        workerWatch = await watchUnfilteredWorkers(launched, cdp, caughtByJudge);
+      }
+      cdp.on('ServiceWorker.workerVersionUpdated', (event) => workers.versionsUpdated(event.versions));
+      // A browser that cannot report its workers cannot show that they finished, so the open fails
+      // and the screen becomes a gap rather than a scan that may have read a shell.
+      await cdp.send('ServiceWorker.enable');
       await cdp.send('Accessibility.enable');
       // Before navigating, so the first live update the screen makes is heard. Late injection would
       // under-report announcements and create a false sense of coverage.
@@ -2332,11 +2694,27 @@ export function makeSharedBrowser(
       // open() owns navigation and gotoReady() only waits for readiness. Navigation takes the same
       // budget, so one config number covers the whole cost of reaching a screen.
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });
-      const wrapped = wrapPage(page, context, cdp, readyTimeoutMs, network);
+      const opened = wrapPage(page, context, cdp, readyTimeoutMs, network, workers);
+      const watch = workerWatch;
+      const wrapped: Page =
+        blockedOrigins === null
+          ? opened
+          : {
+              ...opened,
+              blockedRequests: () => blockedOrigins(),
+              close: async () => {
+                try {
+                  await opened.close();
+                } finally {
+                  await watch?.detach();
+                }
+              },
+            };
       // A page from a process without the sandbox says so, and the check runner carries that onto
       // the screen in the Result.
       return handle.sandboxed ? wrapped : { ...wrapped, browserSandbox: 'off' };
     } catch (error) {
+      await workerWatch?.detach();
       await context.close().catch(() => undefined);
       // A failure with the process gone means the process died under us. Forget it so the next
       // open relaunches instead of failing against a dead reference. A failure with the process

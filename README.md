@@ -133,7 +133,9 @@ Known limits:
   and save one (it needs `.usabl/` in `.gitignore`), or set `USABL_STORAGE_STATE`. usabl
   detects many sign-in pages and reports them as gaps, but not every kind.
 - The CI workflow that `usabl install --ci` writes builds the engine from a commit of
-  this repository that you pin.
+  this repository that you pin. It builds the pull request in a job with no secrets and
+  judges the built app in a separate job. So the app must build to static files, and
+  `appBaseUrl` must be a loopback address with a port, such as `http://127.0.0.1:5173`.
 
 ## Documentation
 

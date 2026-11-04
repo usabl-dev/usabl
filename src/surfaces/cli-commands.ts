@@ -55,6 +55,10 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
         help: 'Read policy from this git ref and check the files changed since it.',
       },
       { name: '--ci', help: 'Run as the CI gate. Needs --trusted-ref.' },
+      {
+        name: '--isolated-browser',
+        help: 'Scan as the CI judge: sandbox required, other origins blocked.',
+      },
       CONFIG_FLAG,
     ],
   },
@@ -120,6 +124,30 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
       { name: '--out', value: '<file>', help: 'For record: the file to write the record to.' },
       TRUSTED_REF_FLAG,
       CONFIG_FLAG,
+    ],
+  },
+  {
+    name: 'serve-build',
+    usage: 'usabl serve-build --dir <dir> --trusted-ref <ref> | --port <port>',
+    summary: 'Serve a built app on loopback for the CI judge.',
+    flags: [
+      { name: '--dir', value: '<dir>', help: 'The built app directory to serve.' },
+      {
+        name: '--trusted-ref',
+        value: '<git-ref>',
+        help: 'Bind the loopback origin of appBaseUrl in usabl.config.json at this ref.',
+      },
+      { name: '--port', value: '<port>', help: 'Bind this port instead of reading a trusted ref.' },
+      { name: '--host', value: '<host>', help: 'With --port: the host to bind. Default: 127.0.0.1.' },
+    ],
+  },
+  {
+    name: 'extract-build',
+    usage: 'usabl extract-build --archive <file> --into <dir>',
+    summary: 'Check and unpack a build archive for the CI judge.',
+    flags: [
+      { name: '--archive', value: '<file>', help: 'The tar archive the build job wrote.' },
+      { name: '--into', value: '<dir>', help: 'A new, empty directory to unpack into.' },
     ],
   },
   {
@@ -209,8 +237,13 @@ function pad(text: string, width: number): string {
   return text.length >= width ? `${text} ` : text.padEnd(width);
 }
 
+// The summary column. It fits the longest command people type by hand, so every summary line
+// stays within 80 columns. A longer name, such as the CI-only build commands, is followed by one
+// space instead.
+const SUMMARY_COLUMN = 11;
+
 export function formatHelp(): string {
-  const width = Math.max(...CLI_COMMANDS.map((command) => command.name.length)) + 2;
+  const width = Math.min(Math.max(...CLI_COMMANDS.map((command) => command.name.length)) + 2, SUMMARY_COLUMN);
   return [
     'usabl checks the screens a change touches for accessibility barriers.',
     '',
