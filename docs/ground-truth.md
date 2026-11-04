@@ -1251,6 +1251,21 @@ and every part it declares has to hold.
   or a check caused never counts. A redirected request is dated by the request that started the
   chain.
 
+**Readiness waits for service workers.** A service worker's requests are reported on the browser
+context, not on the page, and its install and activation steps only through the browser's
+debugging protocol. Content that waits for `navigator.serviceWorker.ready` mounts only after those
+steps finish, and they can wait on a fetch. So the network counts as quiet only when the page's
+own requests and its service workers' requests have all finished or failed, and no worker is
+installing, waiting, or activating, or starting its script. A worker whose script was never
+fetched, or failed to fetch, does not count, because the browser reports nothing more about it.
+Measured through a real browser against a page whose button with no accessible name mounts only
+after a worker's install step waits 20 seconds on a fetch: before, readiness read the page as
+quiet and the shell was walked and checked with no finding and no gap; now readiness waits and
+the button is reported. When the worker does not finish inside `readyTimeoutMs`, readiness runs
+out on a busy network, and the screen is a `not-covered` gap whose reason names the service
+worker request or install still running. A browser that cannot report its workers fails the open,
+which is also a gap.
+
 **Readiness waits for the selector.** A page can mount a small shell, do nothing at all for a
 while (no request in flight and no change to the DOM), and only then fetch and mount its real
 content. During that pause both readiness conditions really hold, so without a signal a pause
@@ -2501,7 +2516,8 @@ stop or steer the scan. When the trusted ref has no readable config, the head's 
 run with `readyTimeoutMs`, `signalTimeoutMs`, `browserSandbox`, and `judge` removed, and no origin
 is allowed. It requires Chromium's sandbox whatever `browserSandbox` says, and aborts every
 request and WebSocket to any other origin. Service workers are allowed, and their requests pass
-the same filter. It also catches what the route cannot stop: a redirect hop to an origin outside
+the same filter. Readiness waits for their requests and their install and activation, as for any
+scan (see "Readiness waits for service workers"). It also catches what the route cannot stop: a redirect hop to an origin outside
 the allowed set, or a redirect response whose Location points there, a response whose server address the URL should not reach (an IP origin answered
 by another address or port, `localhost` off loopback or on another port, another hostname
 answered by a loopback, private, or link-local address), and a WebSocket a worker opens outside

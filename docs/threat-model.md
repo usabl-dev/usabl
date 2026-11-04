@@ -876,7 +876,10 @@ What runs where, and what each job holds:
   the trusted app origin and the trusted `judge.allowOrigins` is aborted. Service workers are
   allowed: Playwright's option to block them only replaces `navigator.serviceWorker.register` in
   the page, which page script can go around, and a suppressed worker can hide content with no
-  gap. Allowed, a worker runs and its requests pass the same filter. A redirect hop, a response
+  gap. Allowed, a worker runs and its requests pass the same filter. Readiness waits for a
+  worker's requests, which the browser reports on the context and not on the page, and for its
+  install and activation, so content that waits for the worker is mounted before the scan. A
+  worker that does not finish inside the readiness budget makes the screen a coverage gap. A redirect hop, a response
   from an unexpected server address, and a WebSocket a worker opens are caught as described under
   the residual risks. Any blocked or caught request makes that screen a coverage gap, so a
   blocked script can never turn into a clean screen. The judge publishes the verdict as the job

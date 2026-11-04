@@ -13,7 +13,9 @@
  * And the paths a page can take around a request filter: a service worker, registered the plain
  * way or through the prototype method, runs and its requests pass the same filter; a redirect from
  * an allowed origin to another, an allowed hostname answered by a loopback server, and a socket
- * opened from a worker are each caught, so the screen is a coverage gap.
+ * opened from a worker are each caught, so the screen is a coverage gap. And readiness waits for a
+ * service worker whose install step gates the content, or makes the screen a gap when it does not
+ * finish inside the budget.
  */
 import { readdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -377,6 +379,98 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the judge isolated brows
       await page.close();
     } finally {
       await driver.close();
+    }
+  }, 60_000);
+
+  // A server whose service worker waits, during install, on a fetch that answers late or never.
+  // The page mounts its real content only once the worker is ready, so a scan that reads the
+  // network as quiet while the worker's fetch is out grades the shell.
+  async function startWorkerGatedApp(): Promise<{ origin: string; close: () => Promise<void> }> {
+    const server = createServer((req, res) => {
+      const path = new URL(req.url ?? '/', 'http://x').pathname;
+      const mode = new URL(req.url ?? '/', 'http://x').searchParams.get('mode') ?? 'slow';
+      if (path === '/sw.js') {
+        res.writeHead(200, { 'content-type': 'text/javascript' });
+        res.end(`self.addEventListener('install', (event) => event.waitUntil(fetch('/${mode}').then((r) => r.text()).then(() => self.skipWaiting())));
+          self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));`);
+        return;
+      }
+      if (path === '/slow') {
+        // Longer than the keyboard walk and the checks take, inside the default readiness budget,
+        // so a scan that did not wait finishes before the content mounts.
+        setTimeout(() => res.writeHead(200, { 'content-type': 'text/plain' }).end('ok'), 20_000);
+        return;
+      }
+      if (path === '/hang') {
+        // Never answers. The connection is ended when the server closes.
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<!doctype html><html lang="en"><title>gated</title><main><h1>Gated</h1>
+        <nav><a href="/other">Other</a></nav><p id="shell">shell</p>
+        <script>
+          navigator.serviceWorker.register('/sw.js?mode=${mode}')
+            .then(() => navigator.serviceWorker.ready)
+            .then(() => document.querySelector('main').insertAdjacentHTML('beforeend', '<button id="late"></button>'));
+        </script></main></html>`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const origin = `http://127.0.0.1:${address !== null && typeof address === 'object' ? address.port : 0}`;
+    return {
+      origin,
+      close: async () => {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      },
+    };
+  }
+
+  function workerGatedRunner(origin: string, readyTimeoutMs?: number): { runner: ReturnType<typeof makeCheckRunner>; driver: ReturnType<typeof makeRealBrowserDriver> } {
+    const driver = makeRealBrowserDriver({
+      isolation: { allowedOrigins: new Set([origin]), onBlocked: () => undefined },
+      browserSandbox: 'require',
+      ...(readyTimeoutMs === undefined ? {} : { readyTimeoutMs }),
+    });
+    const runner = makeCheckRunner({
+      browser: driver,
+      providers: [axeProvider],
+      config: testConfig({
+        appBaseUrl: origin,
+        surfaces: [{ id: 'gated', url: `${origin}/`, files: [], reachedWhen: { selector: '#shell' } }],
+      }),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+    return { runner, driver };
+  }
+
+  it('waits for a service worker fetch that gates the content, so the shell is never graded clean', { timeout: 90_000 }, async () => {
+    const app = await startWorkerGatedApp();
+    const { runner, driver } = workerGatedRunner(app.origin);
+    try {
+      const scan = await runner.scan({ id: 'gated', url: `${app.origin}/?mode=slow` });
+      // The worker's fetch answers inside the readiness budget, so readiness waits for it and the
+      // nameless button the worker gates is checked.
+      expect(scan.drafts.some((draft) => draft.rule === 'button-name')).toBe(true);
+    } finally {
+      await driver.close();
+      await app.close();
+    }
+  });
+
+  it('makes the screen a coverage gap when a service worker fetch does not finish within the budget', async () => {
+    const app = await startWorkerGatedApp();
+    const { runner, driver } = workerGatedRunner(app.origin, 4000);
+    try {
+      const scan = await runner.scan({ id: 'gated', url: `${app.origin}/?mode=hang` });
+      expect(scan.drafts.filter((draft) => draft.rule === 'button-name')).toEqual([]);
+      const gap = scan.gaps.find((entry) => entry.state === 'not-covered');
+      expect(gap).toBeDefined();
+      expect(gap?.reason ?? '').toContain('service worker');
+    } finally {
+      await driver.close();
+      await app.close();
     }
   }, 60_000);
 

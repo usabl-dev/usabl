@@ -1534,6 +1534,9 @@ async function stablePathsForSelector(cdp: CDPSession, selector: string): Promis
 interface ReadinessPage {
   networkQuietFor(windowMs: number): boolean;
   evaluate(fn: () => number): Promise<number>;
+  // What kept the network from going quiet, when it was something other than the page's own
+  // requests, for the message when the budget runs out. Optional so a scripted page needs none.
+  networkBusyDetail?(): string | null;
 }
 
 /**
@@ -1739,6 +1742,124 @@ export function makeNetworkActivityTracker(
   };
 }
 
+// The subset of a Playwright request the worker tracker reads.
+export interface WorkerRequestHandle {
+  // The service worker that issued the request, or null for a page's own request.
+  serviceWorker(): unknown;
+}
+
+// The subset of a Playwright browser context the worker tracker listens to. Narrow so a test can
+// drive it.
+export interface WorkerRequestEvents {
+  on(event: 'request' | 'requestfinished' | 'requestfailed', handler: (request: WorkerRequestHandle) => void): void;
+  off?(event: 'request' | 'requestfinished' | 'requestfailed', handler: (request: WorkerRequestHandle) => void): void;
+}
+
+// One service worker version as the browser reports it over CDP.
+export interface ServiceWorkerVersionState {
+  versionId: string;
+  status: string;
+  runningStatus: string;
+}
+
+export interface WorkerActivity {
+  // Whether no service worker request is in flight and no worker is being installed or activated,
+  // and that has held for at least windowMs.
+  quietFor(windowMs: number): boolean;
+  // What is still running, or null when nothing is.
+  busyDetail(): string | null;
+  // Feeds a ServiceWorker.workerVersionUpdated event.
+  versionsUpdated(versions: ServiceWorkerVersionState[]): void;
+  stop(): void;
+}
+
+// The live service-worker signal for readiness.
+//
+// A service worker's requests are reported on the browser context, never on the page, so the
+// page's tracker cannot see them. Content that waits for navigator.serviceWorker.ready mounts only
+// after the worker's install and activate steps finish, and those can wait on a fetch, or on
+// nothing the network shows at all. Without this, readiness read a quiet page while the worker
+// was still installing, and the scan graded the shell before the content arrived.
+//
+// So two things keep the network busy here: a request a service worker issued that has not
+// finished or failed, and a worker version the browser reports as installing, installed (waiting),
+// or activating, or as new while its script is starting or running. A version that is new and
+// stopped is one whose script was never fetched, or failed to fetch, and the browser reports
+// nothing more about it, so it does not count; its script fetch is a worker request and counts on
+// its own. A worker that never finishes keeps readiness waiting until the budget runs out, and the
+// caller turns that into a coverage gap that names the worker.
+const BUSY_VERSION_STATUSES = new Set(['installing', 'installed', 'activating']);
+const RUNNING_STATUSES = new Set(['starting', 'running']);
+
+function versionBusy(version: ServiceWorkerVersionState): boolean {
+  return BUSY_VERSION_STATUSES.has(version.status) || (version.status === 'new' && RUNNING_STATUSES.has(version.runningStatus));
+}
+
+// Exported for tests. Product code reaches it through Page.gotoReady().
+export function makeWorkerActivityTracker(context: WorkerRequestEvents, now: () => number = Date.now): WorkerActivity {
+  const inFlight = new Set<WorkerRequestHandle>();
+  const versions = new Map<string, ServiceWorkerVersionState>();
+  let idleSince = now();
+
+  const busyVersions = (): number => [...versions.values()].filter(versionBusy).length;
+  const busy = (): boolean => inFlight.size > 0 || busyVersions() > 0;
+  // Called after every change. Idle starts at the moment the last busy thing stopped.
+  const changed = (wasBusy: boolean): void => {
+    if (wasBusy && !busy()) {
+      idleSince = now();
+    }
+  };
+  const isWorkerRequest = (request: WorkerRequestHandle): boolean => {
+    try {
+      return request.serviceWorker() !== null;
+    } catch {
+      return false;
+    }
+  };
+  const onRequest = (request: WorkerRequestHandle): void => {
+    if (isWorkerRequest(request)) {
+      inFlight.add(request);
+    }
+  };
+  const onDone = (request: WorkerRequestHandle): void => {
+    const wasBusy = busy();
+    inFlight.delete(request);
+    changed(wasBusy);
+  };
+  context.on('request', onRequest);
+  context.on('requestfinished', onDone);
+  context.on('requestfailed', onDone);
+
+  return {
+    quietFor(windowMs: number): boolean {
+      return !busy() && now() - idleSince >= windowMs;
+    },
+    busyDetail(): string | null {
+      const parts: string[] = [];
+      if (inFlight.size > 0) {
+        parts.push(`${inFlight.size} service worker request${inFlight.size === 1 ? '' : 's'} still in flight`);
+      }
+      const installing = busyVersions();
+      if (installing > 0) {
+        parts.push(`${installing} service worker${installing === 1 ? '' : 's'} still installing or activating`);
+      }
+      return parts.length === 0 ? null : parts.join(', ');
+    },
+    versionsUpdated(updated: ServiceWorkerVersionState[]): void {
+      const wasBusy = busy();
+      for (const version of updated) {
+        versions.set(version.versionId, version);
+      }
+      changed(wasBusy);
+    },
+    stop(): void {
+      context.off?.('request', onRequest);
+      context.off?.('requestfinished', onDone);
+      context.off?.('requestfailed', onDone);
+    },
+  };
+}
+
 // "Timeout 15000ms exceeded" does not say whether the network never went quiet or the DOM never
 // stopped moving, and those have different fixes: a stuck request against an app or a lab that
 // renders slower than the budget allows.
@@ -1867,7 +1988,8 @@ export async function waitForRendered(
       // operator at a request budget; otherwise the DOM never stopped and its last count is the
       // useful detail.
       if (domStable && !networkQuiet) {
-        throw new Error(readinessTimeout('network activity did not go quiet', timeoutMs, ''));
+        const busy = pw.networkBusyDetail?.() ?? null;
+        throw new Error(readinessTimeout('network activity did not go quiet', timeoutMs, busy === null ? '' : ` (${busy})`));
       }
       throw new Error(
         readinessTimeout('DOM did not stop changing', timeoutMs, `, last element count ${elements}`),
@@ -1916,11 +2038,14 @@ function wrapPage(
   cdp: CDPSession,
   readyTimeoutMs: number,
   network: NetworkActivity,
+  workers: WorkerActivity | null = null,
 ): Page {
-  // The readiness seam: the DOM read from the page, the network signal from the live tracker.
+  // The readiness seam: the DOM read from the page, the network signal from the live trackers.
+  // The page's own requests and its service workers' both have to be quiet.
   const readiness: ReadinessPage = {
     evaluate: (fn) => pw.evaluate(fn),
-    networkQuietFor: (windowMs) => network.networkQuietFor(windowMs),
+    networkQuietFor: (windowMs) => network.networkQuietFor(windowMs) && (workers === null || workers.quietFor(windowMs)),
+    networkBusyDetail: () => workers?.busyDetail() ?? null,
   };
   const page: Page = {
     async gotoReady(readyWhen?: ReadinessProbe): Promise<ReadinessOutcome> {
@@ -2435,7 +2560,14 @@ export function makeSharedBrowser(
       // Attach the in-flight tracker before navigating, so the navigation's own requests are
       // counted and readiness cannot read idle off a page whose first responses have not landed.
       const network = makeNetworkActivityTracker(page);
+      // Service-worker requests are reported on the context, and install and activation over CDP,
+      // so readiness waits for them too. Both are attached before navigating, like the page's.
+      const workers = makeWorkerActivityTracker(context);
       const cdp = await context.newCDPSession(page);
+      cdp.on('ServiceWorker.workerVersionUpdated', (event) => workers.versionsUpdated(event.versions));
+      // A browser that cannot report its workers cannot show that they finished, so the open fails
+      // and the screen becomes a gap rather than a scan that may have read a shell.
+      await cdp.send('ServiceWorker.enable');
       await cdp.send('Accessibility.enable');
       // Before navigating, so the first live update the screen makes is heard. Late injection would
       // under-report announcements and create a false sense of coverage.
@@ -2443,7 +2575,7 @@ export function makeSharedBrowser(
       // open() owns navigation and gotoReady() only waits for readiness. Navigation takes the same
       // budget, so one config number covers the whole cost of reaching a screen.
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });
-      const opened = wrapPage(page, context, cdp, readyTimeoutMs, network);
+      const opened = wrapPage(page, context, cdp, readyTimeoutMs, network, workers);
       const wrapped: Page =
         blockedOrigins === null ? opened : { ...opened, blockedRequests: () => blockedOrigins() };
       // A page from a process without the sandbox says so, and the check runner carries that onto

@@ -39,7 +39,9 @@ function fakeProcess(): LaunchedBrowser {
   const page = { on: () => page, goto: async () => null };
   const context = {
     newPage: async () => page,
-    newCDPSession: async () => ({ send: async () => ({}) }),
+    newCDPSession: async () => ({ send: async () => ({}), on: () => undefined }),
+    // The open listens for service-worker requests on the context.
+    on: () => undefined,
     close: async () => {},
   };
   return {

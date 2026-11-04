@@ -748,6 +748,13 @@
   from a server address the URL should not reach (such as an allowed hostname answered by a
   loopback service), and a WebSocket a worker opens; each makes the screen a coverage gap.
 
+- Readiness now waits for service workers. A worker's requests are reported on the browser
+  context, not the page, so readiness read the network as quiet while a worker fetch was still
+  out, and a screen whose content waited for the worker was checked as an empty shell with no gap.
+  Readiness now also counts every request a service worker sends and every worker that is
+  installing or activating. A worker that does not finish inside `readyTimeoutMs` makes the
+  screen a `not-covered` gap that names it. This applies to every scan, the judge included.
+
 - `usabl extract-build` bounds the archive size, each long-name or pax record, the member
   count, and the extracted bytes, and refuses an archive past any bound before it allocates or
   writes.
