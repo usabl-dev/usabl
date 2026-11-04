@@ -161,6 +161,11 @@ describe('writeCi', () => {
     // The engine is public, so the operator sets up no engine secret, and a fork runs the gate.
     expect(result.message).not.toContain('USABL_ENGINE_CHECKOUT_TOKEN');
     expect(result.message).toContain('fork');
+    // Any pull request can edit the workflow that judges it, so the install says what protects it.
+    expect(result.message).toContain('/.github/workflows/');
+    expect(result.message).toContain('CODEOWNERS');
+    expect(result.message).toContain('review from code owners');
+    expect(result.message).toContain('not evidence');
   });
 
   it('no-ops when the on-disk workflow is byte-identical', async () => {

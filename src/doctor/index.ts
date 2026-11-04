@@ -17,6 +17,7 @@ import { planClaudeSkill, CLAUDE_SKILLS, type ClaudeSkillDescriptor } from '../i
 import { planCursor, readCursorUiFileGlobs } from '../install/cursor.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { verifyBranchRule, REQUIRED_CHECK, type GhReader } from '../install/branch-rule.js';
+import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
@@ -77,6 +78,9 @@ const BRANCH_RULE_LABEL = `branch protection (main requires ${REQUIRED_CHECK})`;
 const PLAYWRIGHT_CHROMIUM_LABEL = 'playwright chromium (headless browser)';
 const CHROMIUM_SANDBOX_LABEL = 'chromium sandbox (isolates the pages usabl scans)';
 const POLICY_SCOPE_LABEL = 'policy scope (guardedPaths covers CODEOWNERS)';
+const WORKFLOW_OWNERS_LABEL = 'workflow owners (CODEOWNERS gives .github/workflows/ an owner)';
+// A file under .github/workflows, the path a workflow edit touches.
+const WORKFLOW_PROBE_PATH = '.github/workflows/usabl-gate.yml';
 const READINESS_SIGNALS_LABEL = 'readiness signals (reachedWhen on screens with floored debt)';
 
 // Four states, and unknown is first class. wired is a positive confirmation. missing is a
@@ -715,7 +719,7 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'branch-rule',
       label: BRANCH_RULE_LABEL,
       state: 'missing',
-      nextStep: `The main branch does not require the ${REQUIRED_CHECK} check, so an accessibility regression can still merge. Run "usabl install --branch-rule" for the exact setting.`,
+      nextStep: `The main branch does not require the ${REQUIRED_CHECK} check and review from code owners, so an accessibility regression, or a pull request that edits the gate, can still merge. Run "usabl install --branch-rule" for the exact setting.`,
     };
   }
   return {
@@ -724,6 +728,50 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
     state: 'unknown',
     nextStep: 'usabl cannot confirm branch protection (gh unavailable, or the read was inconclusive). Verify by hand; see "usabl install --branch-rule".',
   };
+}
+
+// Whether CODEOWNERS gives .github/workflows an owner. Any pull request, from a branch or a fork,
+// runs the workflow as it changed it, so it can make the required check pass whatever it judged.
+// What keeps such a pull request from merging is a code owner's approval, so the last CODEOWNERS
+// rule that matches a workflow file must name an owner.
+async function collectWorkflowOwners(deps: DoctorDeps): Promise<SurfaceReport> {
+  const fix =
+    'Add "/.github/workflows/ @your-login" to .github/CODEOWNERS and require review from code owners on main. ' +
+    'Any pull request can change the workflow that runs on it, so its own verdict is not evidence; an owner approval is what stops it merging.';
+  const raw = await deps.fs.readFile(CODEOWNERS_PATH);
+  if (raw === null) {
+    return { id: 'workflow-owners', label: WORKFLOW_OWNERS_LABEL, state: 'missing', nextStep: `No ${CODEOWNERS_PATH}. ${fix}` };
+  }
+  let owners: string[] | null = null;
+  for (const line of raw.split('\n')) {
+    const trimmed = line.replace(/#.*$/, '').trim();
+    if (trimmed.length === 0) {
+      continue;
+    }
+    const [pattern, ...lineOwners] = trimmed.split(/\s+/);
+    const compiled = compileCodeownersPattern(pattern ?? '');
+    if (!compiled.ok) {
+      return {
+        id: 'workflow-owners',
+        label: WORKFLOW_OWNERS_LABEL,
+        state: 'unknown',
+        nextStep: `${CODEOWNERS_PATH} uses the pattern ${pattern ?? ''}, which usabl cannot evaluate (${compiled.reason}), so it cannot confirm .github/workflows/ has an owner. Check it by hand.`,
+      };
+    }
+    // GitHub takes the last matching rule, and a rule with no owner takes ownership away.
+    if (compiled.match(WORKFLOW_PROBE_PATH)) {
+      owners = lineOwners;
+    }
+  }
+  if (owners === null || owners.length === 0) {
+    return {
+      id: 'workflow-owners',
+      label: WORKFLOW_OWNERS_LABEL,
+      state: 'missing',
+      nextStep: `${CODEOWNERS_PATH} gives .github/workflows/ no owner. ${fix}`,
+    };
+  }
+  return { id: 'workflow-owners', label: WORKFLOW_OWNERS_LABEL, state: 'wired', nextStep: '' };
 }
 
 // A guarded prefix, leading and trailing slashes stripped, so a directory entry and a file entry
@@ -866,6 +914,7 @@ export async function collectDoctorReport(deps: DoctorDeps): Promise<SurfaceRepo
     await guardRead('cursor', CURSOR_LABEL, () => collectCursor(deps)),
     await guardRead('ci', CI_LABEL, () => collectCi(deps)),
     await guardRead('branch-rule', BRANCH_RULE_LABEL, () => collectBranchRule(deps)),
+    await guardRead('workflow-owners', WORKFLOW_OWNERS_LABEL, () => collectWorkflowOwners(deps)),
     await guardRead('policy-scope', POLICY_SCOPE_LABEL, () => collectPolicyScope(deps)),
   ];
 }

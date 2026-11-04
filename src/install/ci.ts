@@ -1007,13 +1007,22 @@ export async function planDocsCi(fs: InstallFs): Promise<CiPlan> {
   return planWorkflow(fs, USABL_DOCS_GATE_WORKFLOW_PATH, USABL_DOCS_GATE_WORKFLOW);
 }
 
+// Any pull request, from a branch or a fork, runs this workflow as it changed it. So the required
+// check is evidence only on a pull request that leaves .github/workflows alone, and what stops one
+// that edits it is a code owner's approval.
+const WORKFLOW_BOUNDARY =
+  'Any pull request, from a branch or a fork, runs this workflow as the pull request changed it, so one that edits .github/workflows can make ' +
+  `"${REQUIRED_GATE_JOB}" pass whatever it judged; its verdict is not evidence. Protect the gate with code owners: add "/.github/workflows/ @your-login" ` +
+  'and every guarded path to .github/CODEOWNERS, and require review from code owners on the protected branch. "usabl install --branch-rule" prints and checks both.';
+
 function writtenReport(): string {
   return [
     `Wrote ${USABL_GATE_WORKFLOW_PATH}. Review this draft before you merge it.`,
     `Set the trusted engine ref: replace ${ENGINE_REF_PLACEHOLDER} (it appears once, in the usabl-engine job) with a full 40-character commit SHA from usabl-dev/usabl that you trust.`,
-    'The engine comes from the public usabl-dev/usabl repository, so the gate needs no secret, and a pull request from a fork runs it like any other. A fork cannot write to its pull request, so its usabl comment appears in the run summary instead.',
+    'The engine comes from the public usabl-dev/usabl repository, so the gate needs no secret, and a pull request from a fork runs it the same way. A fork cannot write to its pull request, so its usabl comment appears in the run summary instead.',
     'The app is built by the untrusted build-app job with "npm run build" into dist. If yours differs, set the repository variables USABL_APP_BUILD_COMMAND and USABL_APP_BUILD_DIR. The judge serves that build on the appBaseUrl of usabl.config.json at the base branch, which must be a loopback http origin with an explicit port, such as http://127.0.0.1:5173.',
     `Make "${REQUIRED_GATE_JOB}" the required status check on your protected branch. It is the only job that checks every gate job and the judge's verdict together, so requiring any other job lets an accessibility regression merge. Run "usabl install --branch-rule" for the exact setting.`,
+    WORKFLOW_BOUNDARY,
   ].join('\n');
 }
 
@@ -1021,10 +1030,11 @@ function docsWrittenReport(): string {
   return [
     `Wrote ${USABL_DOCS_GATE_WORKFLOW_PATH}. Review this draft before you merge it.`,
     `Set the trusted engine ref: replace ${ENGINE_REF_PLACEHOLDER} (it appears once, in the usabl-engine job) with a full 40-character commit SHA from usabl-dev/usabl that you trust.`,
-    'The engine comes from the public usabl-dev/usabl repository, so the gate needs no secret, and a pull request from a fork runs it like any other. A fork cannot write to its pull request, so its usabl comment appears in the run summary instead.',
+    'The engine comes from the public usabl-dev/usabl repository, so the gate needs no secret, and a pull request from a fork runs it the same way. A fork cannot write to its pull request, so its usabl comment appears in the run summary instead.',
     `Make "${REQUIRED_GATE_JOB}" the required status check on your protected branch. It is the only job that checks every gate job and the judge's verdict together, so requiring any other job lets an accessibility regression merge. Run "usabl install --branch-rule" for the exact setting.`,
     'Set three repository variables the docs gate reads: USABL_DOCS_BUILD_COMMAND (for example "ccutil compile"), USABL_DOCS_BUILT_ROOT (the directory the build renders HTML into), and USABL_DOCS_SERVE_PORT (a free port).',
     'Point usabl.docs.json docsBaseUrl at http://127.0.0.1:<USABL_DOCS_SERVE_PORT> so the scan targets the served docs. The judge serves the built HTML itself with usabl serve-build.',
+    WORKFLOW_BOUNDARY,
   ].join('\n');
 }
 

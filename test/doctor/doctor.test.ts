@@ -97,6 +97,7 @@ const GH_VERIFIED = ghReplying(() => ({
   code: 0,
   stdout: JSON.stringify({
     required_status_checks: { strict: true, checks: [{ context: REQUIRED_CHECK, app_id: -1 }] },
+    required_pull_request_reviews: { require_code_owner_reviews: true },
   }),
   stderr: '',
 }));
@@ -119,6 +120,7 @@ const GH_RULESET_PROTECTED = ghReplying((endpoint) => {
         conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
         rules: [
           { type: 'required_status_checks', parameters: { required_status_checks: [{ context: REQUIRED_CHECK }] } },
+          { type: 'pull_request', parameters: { require_code_owner_review: true } },
         ],
       }),
       stderr: '',
@@ -136,7 +138,7 @@ const GH_RULESET_PROTECTED = ghReplying((endpoint) => {
 
 const GH_UNAVAILABLE = ghReplying(() => null);
 
-const VALID_CONFIG = JSON.stringify(testConfig());
+const VALID_CONFIG = JSON.stringify(testConfig({ guardedPaths: ['.github/workflows/'] }));
 const VALID_ROUTES = JSON.stringify({ routes: [{ screenId: 'home', url: '/home', entryFile: null }] });
 const VALID_FLOOR = JSON.stringify({ version: 1, entries: [] });
 const VALID_WAIVERS = JSON.stringify({ version: 1, waivers: [] });
@@ -191,7 +193,7 @@ const FULLY_WIRED_FILES: Record<string, string> = {
   '.github/workflows/usabl-gate.yml': PINNED_WORKFLOW,
   // CODEOWNERS gates only always-guarded ledgers here, so guardedPaths covers it and policy-scope
   // reads wired.
-  '.github/CODEOWNERS': '/usabl.config.json @owner\n/.usabl-evidence.json @owner\n',
+  '.github/CODEOWNERS': '/usabl.config.json @owner\n/.usabl-evidence.json @owner\n/.github/workflows/ @owner\n',
   // The storage state lives outside the repository on purpose: it holds live session tokens
   // and must never be committed. Doctor reads it through the same fs port, by absolute path.
   [SESSION_PATH]: VALID_SESSION_FILE,
@@ -219,6 +221,45 @@ function doctorDeps(
 function stateOf(reports: SurfaceReport[], id: string): SurfaceState {
   return byId(reports, id).state;
 }
+
+describe('workflow owners (.github/workflows has a code owner)', () => {
+  // Any pull request can change the workflow that runs on it, including the required check, so
+  // the protection is an owner's approval for any change under .github/workflows.
+  const withOwners = (codeowners: string | null): Record<string, string> => {
+    const files: Record<string, string> = { ...FULLY_WIRED_FILES };
+    if (codeowners === null) delete files['.github/CODEOWNERS'];
+    else files['.github/CODEOWNERS'] = codeowners;
+    return files;
+  };
+  const report = async (codeowners: string | null): Promise<SurfaceReport> =>
+    byId(
+      await collectDoctorReport(doctorDeps({ fs: readOnlyFs(withOwners(codeowners)), gh: GH_VERIFIED, configPath: 'usabl.config.json' })),
+      'workflow-owners',
+    );
+
+  it.each(['/.github/workflows/ @o\n', '/.github/ @o\n', '* @o\n', '.github/workflows/ @o @p\n'])('is wired for %j', async (codeowners) => {
+    expect((await report(codeowners)).state).toBe('wired');
+  });
+
+  it('is missing when no rule covers the workflows', async () => {
+    const found = await report('/src/ @o\n');
+    expect(found.state).toBe('missing');
+    expect(found.nextStep).toContain('/.github/workflows/');
+    expect(found.nextStep).toContain('not evidence');
+  });
+
+  it('is missing when a later rule takes the owners away again', async () => {
+    expect((await report('/.github/workflows/ @o\n/.github/workflows/ \n')).state).toBe('missing');
+  });
+
+  it('is missing when there is no CODEOWNERS file', async () => {
+    expect((await report(null)).state).toBe('missing');
+  });
+
+  it('is unknown for a pattern usabl cannot evaluate', async () => {
+    expect((await report('/.github/** @o\n')).state).toBe('unknown');
+  });
+});
 
 describe('collectPolicyScope (guardedPaths vs CODEOWNERS)', () => {
   const configWith = (guardedPaths: string[]): string =>

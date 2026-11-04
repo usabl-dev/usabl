@@ -32,9 +32,12 @@ function recordingGh(reply: (endpoint: string) => GhResult | null): {
   };
 }
 
-function protectionJson(contexts: string[]): string {
+// Classic protection. Code-owner review is on unless a test turns it off, so a test about the
+// check reads only the check.
+function protectionJson(contexts: string[], codeOwnerReview = true): string {
   return JSON.stringify({
     required_status_checks: { strict: true, checks: contexts.map((context) => ({ context, app_id: -1 })) },
+    required_pull_request_reviews: { require_code_owner_reviews: codeOwnerReview },
   });
 }
 
@@ -52,7 +55,82 @@ describe('branchRuleSetting', () => {
   });
 });
 
+describe('branchRuleSetting and the workflow boundary', () => {
+  it('tells the operator to require code-owner review and to give .github/workflows an owner', () => {
+    const setting = branchRuleSetting();
+    expect(setting).toContain('Require review from Code Owners');
+    expect(setting).toContain('/.github/workflows/ @');
+    expect(setting).toContain('.github/CODEOWNERS');
+    // Any pull request can change the workflow that runs on it, so its own verdict is not evidence.
+    expect(setting).toContain('from a branch or a fork');
+    expect(setting).toContain('not evidence');
+  });
+});
+
 describe('verifyBranchRule', () => {
+  it('does not verify when classic protection requires the check but not code-owner review', async () => {
+    const gh = recordingGh((endpoint) =>
+      endpoint.includes('/rulesets')
+        ? { code: 0, stdout: '[]', stderr: '' }
+        : { code: 0, stdout: protectionJson([REQUIRED_CHECK], false), stderr: '' },
+    );
+    const result = await verifyBranchRule(gh.reader);
+    expect(result.exitCode).toBe(2);
+    expect(result.action).toBe('not-applied');
+    expect(result.message).toContain('review from code owners');
+    expect(result.message).not.toContain('verified:');
+  });
+
+  it('does not verify when a ruleset requires the check and nothing requires code-owner review', async () => {
+    const gh = recordingGh((endpoint) => {
+      if (endpoint.endsWith('/rulesets/7')) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            name: 'Checks only',
+            target: 'branch',
+            enforcement: 'active',
+            conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
+            rules: [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: REQUIRED_CHECK }] } }],
+          }),
+          stderr: '',
+        };
+      }
+      if (endpoint.includes('/rulesets')) {
+        return { code: 0, stdout: JSON.stringify([{ id: 7, target: 'branch', enforcement: 'active' }]), stderr: '' };
+      }
+      return { code: 1, stdout: '', stderr: 'gh: Branch not protected (HTTP 404)' };
+    });
+    const result = await verifyBranchRule(gh.reader);
+    expect(result.action).toBe('not-applied');
+    expect(result.message).toContain('review from code owners');
+  });
+
+  it('verifies when the check is classic protection and code-owner review is a ruleset', async () => {
+    const gh = recordingGh((endpoint) => {
+      if (endpoint.endsWith('/rulesets/7')) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            name: 'Reviews',
+            target: 'branch',
+            enforcement: 'active',
+            conditions: { ref_name: { include: ['~ALL'], exclude: [] } },
+            rules: [{ type: 'pull_request', parameters: { require_code_owner_review: true } }],
+          }),
+          stderr: '',
+        };
+      }
+      if (endpoint.includes('/rulesets')) {
+        return { code: 0, stdout: JSON.stringify([{ id: 7, target: 'branch', enforcement: 'active' }]), stderr: '' };
+      }
+      return { code: 0, stdout: protectionJson([REQUIRED_CHECK], false), stderr: '' };
+    });
+    const result = await verifyBranchRule(gh.reader);
+    expect(result.action).toBe('verified');
+    expect(result.message).toContain('classic branch protection and ruleset "Reviews"');
+  });
+
   it('reports verified when the aggregate is a required check, using one read-only GET', async () => {
     const gh = recordingGh(() => ({ code: 0, stdout: protectionJson([REQUIRED_CHECK]), stderr: '' }));
     const result = await verifyBranchRule(gh.reader);
@@ -118,6 +196,7 @@ describe('verifyBranchRule', () => {
     type: 'required_status_checks',
     parameters: { required_status_checks: [{ context: REQUIRED_CHECK }] },
   };
+  const codeOwnerRule = { type: 'pull_request', parameters: { require_code_owner_review: true } };
 
   it('reports verified when a ruleset requires the check even with no classic protection', async () => {
     const gh = ghWithRuleset({
@@ -125,7 +204,7 @@ describe('verifyBranchRule', () => {
       target: 'branch',
       enforcement: 'active',
       conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
-      rules: [{ type: 'pull_request', parameters: {} }, requiredCheckRule],
+      rules: [codeOwnerRule, requiredCheckRule],
     });
     const result = await verifyBranchRule(gh.reader);
     expect(result.exitCode).toBe(0);
@@ -141,7 +220,7 @@ describe('verifyBranchRule', () => {
       target: 'branch',
       enforcement: 'active',
       conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
-      rules: [requiredCheckRule],
+      rules: [requiredCheckRule, codeOwnerRule],
     });
     const result = await verifyBranchRule(gh.reader);
     expect(result.action).toBe('cannot-verify');
@@ -155,7 +234,7 @@ describe('verifyBranchRule', () => {
       target: 'branch',
       enforcement: 'active',
       conditions: { ref_name: { include: ['~ALL'], exclude: ['refs/heads/ma*'] } },
-      rules: [requiredCheckRule],
+      rules: [requiredCheckRule, codeOwnerRule],
     });
     const result = await verifyBranchRule(gh.reader);
     expect(result.action).toBe('cannot-verify');
@@ -168,7 +247,7 @@ describe('verifyBranchRule', () => {
       target: 'branch',
       enforcement: 'disabled',
       conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
-      rules: [requiredCheckRule],
+      rules: [requiredCheckRule, codeOwnerRule],
     });
     const result = await verifyBranchRule(gh.reader);
     // Disabled ruleset does not require it, classic is absent, no other ruleset: confident not-applied.
@@ -191,7 +270,7 @@ describe('verifyBranchRule', () => {
             target: 'branch',
             enforcement: 'active',
             conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
-            rules: [requiredCheckRule],
+            rules: [requiredCheckRule, codeOwnerRule],
           }),
           stderr: '',
         };
@@ -240,7 +319,7 @@ describe('verifyBranchRule', () => {
       target: 'branch',
       enforcement: 'active',
       conditions: { ref_name: { include: ['~ALL'], exclude: [null] } },
-      rules: [requiredCheckRule],
+      rules: [requiredCheckRule, codeOwnerRule],
     });
     const result = await verifyBranchRule(gh.reader);
     expect(result.action).toBe('cannot-verify');
@@ -252,7 +331,7 @@ describe('verifyBranchRule', () => {
       name: 'No conditions',
       target: 'branch',
       enforcement: 'active',
-      rules: [requiredCheckRule],
+      rules: [requiredCheckRule, codeOwnerRule],
     });
     const result = await verifyBranchRule(gh.reader);
     expect(result.action).toBe('cannot-verify');

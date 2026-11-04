@@ -141,6 +141,11 @@ describe('writeDocsCi', () => {
     expect(result.message).toContain('USABL_DOCS_BUILT_ROOT');
     expect(result.message).toContain('USABL_DOCS_SERVE_PORT');
     expect(result.message).toContain('docsBaseUrl');
+    // Any pull request can edit the workflow that judges it, so the install says what protects it.
+    expect(result.message).toContain('/.github/workflows/');
+    expect(result.message).toContain('CODEOWNERS');
+    expect(result.message).toContain('review from code owners');
+    expect(result.message).toContain('not evidence');
   });
 
   it('no-ops when the on-disk workflow is byte-identical', async () => {
