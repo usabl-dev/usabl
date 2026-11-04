@@ -13,6 +13,13 @@
  * refuses when a hand-tuned workflow differs rather than overwrite it.
  */
 import type { InstallFs, InstallResult } from './index.js';
+import {
+  ARTIFACT_MAX_BYTES,
+  ENGINE_CHECK,
+  engineTreeDigestCommand,
+  fetchArtifactStep,
+  writeFetcherStep,
+} from './artifact-fetch.js';
 
 export const USABL_GATE_WORKFLOW_PATH = '.github/workflows/usabl-gate.yml';
 
@@ -191,14 +198,41 @@ export function verifyDownload(dirVar: string, file: string, digestVar: string, 
 export const UNPACK_ENGINE_IN_TEMP = `          mkdir "\${RUNNER_TEMP}/usabl-engine"
           tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${RUNNER_TEMP}/usabl-engine"`;
 
-export function trustedEngineSteps(verifyStepName: string, unpack: string): string {
-  return `      - name: Download trusted engine
+// The engine in a trusted job: write usabl's own artifact fetcher, take the engine archive through
+// it, check the archive against the engine job's digest output, and unpack it. Each step that runs
+// the engine afterwards checks the unpacked tree again, with ENGINE_CHECK, right before it runs.
+export function trustedEngineSteps(stepName: string, unpack: string): string {
+  return `${writeFetcherStep()}
+
+${fetchArtifactStep({
+  stepName,
+  artifact: 'usabl-engine',
+  member: 'usabl-engine.tgz',
+  into: 'usabl-download-engine',
+  maxBytes: ARTIFACT_MAX_BYTES.engine,
+  env: `          ENGINE_DIGEST: \${{ needs.usabl-engine.outputs.engine_digest }}
+          DOWNLOAD_DIR: \${{ runner.temp }}/usabl-download-engine`,
+  then: `${verifyDownload('DOWNLOAD_DIR', 'usabl-engine.tgz', 'ENGINE_DIGEST', 'engine')}
+${unpack}`,
+})}`;
+}
+
+export const TRUSTED_ENGINE_STEP = 'Fetch, verify, and unpack the trusted engine';
+
+function installTrustedEngineSteps(): string {
+  return trustedEngineSteps(TRUSTED_ENGINE_STEP, UNPACK_ENGINE_IN_TEMP);
+}
+
+// build-app runs pull request code, so it may already hold the runner token that can replace any
+// artifact; the engine it builds with gains it nothing it does not have. It keeps the plain download.
+function buildEngineSteps(unpack: string): string {
+  return `      - name: Download the engine
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: usabl-engine
           path: \${{ runner.temp }}/usabl-download-engine
 
-      - name: ${verifyStepName}
+      - name: Install the engine where the app expects it
         working-directory: \${{ runner.temp }}
         env:
           ENGINE_DIGEST: \${{ needs.usabl-engine.outputs.engine_digest }}
@@ -206,10 +240,6 @@ export function trustedEngineSteps(verifyStepName: string, unpack: string): stri
         run: |
 ${verifyDownload('DOWNLOAD_DIR', 'usabl-engine.tgz', 'ENGINE_DIGEST', 'engine')}
 ${unpack}`;
-}
-
-function installTrustedEngineSteps(): string {
-  return trustedEngineSteps('Verify and unpack trusted engine', UNPACK_ENGINE_IN_TEMP);
 }
 
 // The job that builds the pinned engine and hands it on as a digest-checked archive. The gates and
@@ -223,6 +253,7 @@ export const ENGINE_JOB = `  usabl-engine:
       contents: read
     outputs:
       engine_digest: \${{ steps.pack.outputs.engine_digest }}
+      engine_tree_digest: \${{ steps.pack.outputs.engine_tree_digest }}
     steps:
       - name: Checkout trusted usabl engine commit
         # A full commit SHA you trust. The pull request never chooses the engine that judges it.
@@ -259,6 +290,11 @@ export const ENGINE_JOB = `  usabl-engine:
           # directory and the sources stay out.
           tar --create --gzip --file "\${RUNNER_TEMP}/usabl-engine.tgz" --exclude=.git --exclude=node_modules/.bin package.json dist node_modules
           echo "engine_digest=$(sha256sum "\${RUNNER_TEMP}/usabl-engine.tgz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          # The digest of the tree a job gets when it unpacks this archive. Each trusted job checks
+          # its unpacked engine against it right before it runs the engine.
+          mkdir "\${RUNNER_TEMP}/usabl-engine-tree"
+          tar --extract --gzip --no-same-owner --file "\${RUNNER_TEMP}/usabl-engine.tgz" --directory "\${RUNNER_TEMP}/usabl-engine-tree"
+          echo "engine_tree_digest=$${engineTreeDigestCommand('${RUNNER_TEMP}/usabl-engine-tree')}" >> "$GITHUB_OUTPUT"
 
       - name: Upload trusted engine
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -282,8 +318,7 @@ interface GateVariant {
   serveStep: string;
 }
 
-const APP_BUILD_STEPS = `${trustedEngineSteps(
-  'Install the trusted engine where the app expects it',
+const APP_BUILD_STEPS = `${buildEngineSteps(
   `          # For now the lockfile pins usabl as file:../usabl, and Actions has no sibling folder.
           # Later: npm ci installs usabl from the registry. Drop this step.
           mkdir "\${GITHUB_WORKSPACE}/../usabl"
@@ -357,6 +392,7 @@ const APP_SERVE_STEP = `      - name: Serve the build on the trusted app origin
           # The engine reads appBaseUrl from the trusted base ref, never from the head, and binds
           # only a loopback host with an explicit port. A pull request cannot move the judge to a
           # server of its own.
+${ENGINE_CHECK}
           node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" serve-build --dir "\${RUNNER_TEMP}/usabl-app" --trusted-ref "origin/\${BASE_REF}" > "\${RUNNER_TEMP}/usabl-serve.log" 2>&1 &
 ${waitForServer()}`;
 
@@ -374,6 +410,7 @@ const DOCS_SERVE_STEP = `      - name: Serve the built documentation on localhos
               exit 1
               ;;
           esac
+${ENGINE_CHECK}
           node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" serve-build --dir "\${RUNNER_TEMP}/usabl-app" --host 127.0.0.1 --port "\${SERVE_PORT}" > "\${RUNNER_TEMP}/usabl-serve.log" 2>&1 &
 ${waitForServer()}`;
 
@@ -422,8 +459,11 @@ permissions:
 # runs head code on a hosted runner has sudo, so it may be able to read the runner's own token
 # and upload, delete, or replace artifacts in this run. So no trusted job believes an artifact
 # by its name: each one checks what it downloads against a digest from a job output, which only
-# the producing job's own steps can set. No trusted job uses a cache, because a cache can be
-# written by pull request code. merge_group is not supported; a missing required check blocks.
+# the producing job's own steps can set. No trusted job unpacks an artifact with
+# actions/download-artifact, whose zip extraction follows .. inside entry names; each fetches the
+# zip through the REST API and reads it with usabl's own fetcher, which accepts only the expected
+# file. No trusted job uses a cache, because a cache can be written by pull request code.
+# merge_group is not supported; a missing required check blocks.
 jobs:
 ${ENGINE_JOB}
   build-app:
@@ -489,6 +529,7 @@ ${variant.buildSteps}
     env:
       BASE_REF: \${{ github.event.pull_request.base.ref }}
       HEAD_SHA: \${{ github.event.pull_request.head.sha }}
+      ENGINE_TREE_DIGEST: \${{ needs.usabl-engine.outputs.engine_tree_digest }}
     steps:
       - name: Checkout pull request head as data
         # Nothing in this tree is executed. It is read for the diff against the trusted base.
@@ -511,14 +552,25 @@ ${installTrustedEngineSteps()}
 
       - name: Install Chromium for the judge
         working-directory: \${{ runner.temp }}/usabl-engine
-        run: node node_modules/playwright/cli.js install --with-deps chromium
+        run: |
+${ENGINE_CHECK}
+          node node_modules/playwright/cli.js install --with-deps chromium
 
-      - name: Find this head's build on a review
-        if: github.event_name == 'pull_request_review'
+      - name: Find this head's build
         working-directory: \${{ runner.temp }}
         env:
+          EVENT_NAME: \${{ github.event_name }}
           GH_TOKEN: \${{ github.token }}
         run: |
+          # On pull_request the build is in this run.
+          if [ "\${EVENT_NAME}" = "pull_request" ]; then
+            if ! [[ "\${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              echo "this run has no numeric run id; failing closed"
+              exit 1
+            fi
+            echo "BUILD_RUN_ID=\${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
+            exit 0
+          fi
           # The build runs only on pull_request. Find its completed run for this exact head SHA.
           # env.HEAD_SHA is read inside jq, never interpolated into the filter string.
           run_id="$(gh run list --repo "\${GITHUB_REPOSITORY}" \\
@@ -531,21 +583,14 @@ ${installTrustedEngineSteps()}
           fi
           echo "BUILD_RUN_ID=\${run_id}" >> "$GITHUB_ENV"
 
-      - name: Download the build from this run
-        if: github.event_name == 'pull_request'
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
-        with:
-          name: usabl-app-build
-          path: \${{ runner.temp }}/usabl-download-build
-
-      - name: Download the build from the pull_request run
-        if: github.event_name == 'pull_request_review'
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
-        with:
-          name: usabl-app-build
-          path: \${{ runner.temp }}/usabl-download-build
-          run-id: \${{ env.BUILD_RUN_ID }}
-          github-token: \${{ github.token }}
+${fetchArtifactStep({
+  stepName: 'Fetch the build',
+  artifact: 'usabl-app-build',
+  member: 'usabl-app-build.tar',
+  into: 'usabl-download-build',
+  maxBytes: ARTIFACT_MAX_BYTES.build,
+  runId: '\${{ env.BUILD_RUN_ID }}',
+})}
 
       - name: Verify and unpack the build
         working-directory: \${{ runner.temp }}
@@ -565,6 +610,7 @@ ${verifyDownload('DOWNLOAD_DIR', 'usabl-app-build.tar', 'BUILD_DIGEST', 'build')
           # because they wrote the build. The judge records the digest it actually scanned.
           echo "USABL_BUILD_DIGEST=$(sha256sum "\${DOWNLOAD_DIR}/usabl-app-build.tar" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           # Regular files and directories only, no absolute path, no .. segment, fresh directory.
+${ENGINE_CHECK}
           node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" extract-build --archive "\${DOWNLOAD_DIR}/usabl-app-build.tar" --into "\${RUNNER_TEMP}/usabl-app"
 
       - name: Fetch trusted base ref when absent
@@ -593,6 +639,7 @@ ${variant.serveStep}
           # Keep || code=$? on the same line, because a next-line $? becomes 0 under set -e.
           # trusted-ref points to origin/\${BASE_REF} so a PR cannot rewrite policy and pass itself.
           # The engine reads this head tree as data; it is never imported or executed.
+${ENGINE_CHECK}
           node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" check --ci --trusted-ref "origin/\${BASE_REF}" --isolated-browser --json > "\${RUNNER_TEMP}/usabl-judge/usabl-result.json" || code=$?
           echo "exit_code=\${code}" >> "$GITHUB_OUTPUT"
 
@@ -616,7 +663,11 @@ ${variant.serveStep}
           # Result that fails validation gets no digest, so no other job will read it.
           verdict=fail
           digest=
-          if [ -s usabl-judge/usabl-result.json ] && [ -n "\${USABL_EXIT}" ] && (
+          # The engine check runs in a subshell, so a mismatch leaves the verdict at fail and still
+          # publishes it.
+          if (
+${ENGINE_CHECK}
+          ) && [ -s usabl-judge/usabl-result.json ] && [ -n "\${USABL_EXIT}" ] && (
 ${VALIDATE_RESULT_SCRIPT}
           ); then
             digest="$(sha256sum usabl-judge/usabl-result.json | cut -d' ' -f1)"
@@ -666,7 +717,11 @@ ${VALIDATE_RESULT_SCRIPT}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Only the artifact fetch uses this: it lists this run's artifacts and downloads the Result.
+      actions: read
       pull-requests: write
+    env:
+      ENGINE_TREE_DIGEST: \${{ needs.usabl-engine.outputs.engine_tree_digest }}
     steps:
       - name: Checkout trusted base config
         # The base commit only, and only the config, for the comment noise budget.
@@ -688,11 +743,13 @@ ${VALIDATE_RESULT_SCRIPT}
 
 ${installTrustedEngineSteps()}
 
-      - name: Download Result JSON
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
-        with:
-          name: usabl-result
-          path: \${{ runner.temp }}/usabl-download-result
+${fetchArtifactStep({
+  stepName: 'Fetch Result JSON',
+  artifact: 'usabl-result',
+  member: 'usabl-result.json',
+  into: 'usabl-download-result',
+  maxBytes: ARTIFACT_MAX_BYTES.result,
+})}
 
       - name: Verify Result JSON and render the comment
         working-directory: \${{ runner.temp }}
@@ -701,6 +758,7 @@ ${installTrustedEngineSteps()}
           DOWNLOAD_DIR: \${{ runner.temp }}/usabl-download-result
         run: |
 ${verifyDownload('DOWNLOAD_DIR', 'usabl-result.json', 'RESULT_DIGEST', 'Result')}
+${ENGINE_CHECK}
           code=0
           node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" comment --config "\${GITHUB_WORKSPACE}/base/usabl.config.json" < "\${DOWNLOAD_DIR}/usabl-result.json" > usabl-comment.md || code=$?
           if [ ! -s usabl-comment.md ] || ! grep -q '<!-- usabl-report -->' usabl-comment.md; then
@@ -763,10 +821,13 @@ ${verifyDownload('DOWNLOAD_DIR', 'usabl-result.json', 'RESULT_DIGEST', 'Result')
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Only the artifact fetch uses this: it lists this run's artifacts and downloads the Result.
+      actions: read
       pull-requests: read
     env:
       BASE_REF: \${{ github.event.pull_request.base.ref }}
       PR_NUMBER: \${{ github.event.pull_request.number }}
+      ENGINE_TREE_DIGEST: \${{ needs.usabl-engine.outputs.engine_tree_digest }}
     steps:
       - name: Checkout trusted base-ref policy
         # Check out the base commit, never the PR head. This working tree is trusted.
@@ -801,11 +862,13 @@ ${verifyDownload('DOWNLOAD_DIR', 'usabl-result.json', 'RESULT_DIGEST', 'Result')
 
 ${installTrustedEngineSteps()}
 
-      - name: Download Result JSON
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
-        with:
-          name: usabl-result
-          path: \${{ runner.temp }}/usabl-download-result
+${fetchArtifactStep({
+  stepName: 'Fetch Result JSON',
+  artifact: 'usabl-result',
+  member: 'usabl-result.json',
+  into: 'usabl-download-result',
+  maxBytes: ARTIFACT_MAX_BYTES.result,
+})}
 
       - name: Enforce policy
         env:
@@ -817,6 +880,7 @@ ${installTrustedEngineSteps()}
           # owners, and only after it matches the judge's result_digest output.
 ${verifyDownload('DOWNLOAD_DIR', 'usabl-result.json', 'RESULT_DIGEST', 'Result')}
           # Git refs and CODEOWNERS are the source of truth.
+${ENGINE_CHECK}
           node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" enforce policy --trusted-ref "origin/\${BASE_REF}" < "\${DOWNLOAD_DIR}/usabl-result.json"
 
   ${REQUIRED_GATE_JOB}:

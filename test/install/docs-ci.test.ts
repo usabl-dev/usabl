@@ -47,7 +47,10 @@ describe('USABL_DOCS_GATE_WORKFLOW security properties', () => {
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38');
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd');
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
-    expect(USABL_DOCS_GATE_WORKFLOW).toContain('actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e');
+    // The docs build needs no engine, so no job takes an artifact with download-artifact: every
+    // job that takes one is trusted and uses usabl's own fetcher.
+    expect(USABL_DOCS_GATE_WORKFLOW).not.toMatch(/uses: actions\/download-artifact/);
+    expect(USABL_DOCS_GATE_WORKFLOW).toContain('node "${RUNNER_TEMP}/usabl-fetch-artifact.cjs"');
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('repository: usabl-dev/usabl');
     expect(USABL_DOCS_GATE_WORKFLOW).not.toContain('USABL_ENGINE_CHECKOUT_TOKEN');
     expect(USABL_DOCS_GATE_WORKFLOW).not.toMatch(/^\s*token:/m);

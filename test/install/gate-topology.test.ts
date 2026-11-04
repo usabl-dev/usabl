@@ -18,7 +18,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { load } from 'js-yaml';
@@ -27,10 +27,12 @@ import {
   ENGINE_REF_PLACEHOLDER,
   REQUIRED_GATE_JOB,
   REQUIRED_GATE_SCRIPT,
+  TRUSTED_ENGINE_STEP,
   USABL_DOCS_GATE_WORKFLOW,
   USABL_GATE_WORKFLOW,
 } from '../../src/install/ci.js';
 import { REQUIRED_CHECK, branchRuleSetting } from '../../src/install/branch-rule.js';
+import { engineTreeDigestCommand } from '../../src/install/artifact-fetch.js';
 
 interface Step {
   name?: string;
@@ -97,6 +99,12 @@ function scratch(): string {
 afterEach(() => {
   while (tempDirs.length > 0) rmSync(tempDirs.pop() as string, { recursive: true, force: true });
 });
+
+// The engine tree digest, computed by the same command the generated engine job runs.
+function treeDigest(dir: string): string {
+  const outcome = spawnSync('bash', ['-e', '-c', `echo ${engineTreeDigestCommand(dir)}`.replace('echo (', 'echo $(')], { encoding: 'utf8' });
+  return outcome.stdout.trim();
+}
 
 // Run a step's shell the way the runner does by default: bash -e.
 function runStep(run: string, env: Record<string, string>, cwd?: string): number {
@@ -173,11 +181,11 @@ describe.each(GATES)('$name', ({ body }) => {
       expect(checkouts[0]?.with?.['persist-credentials']).toBe(false);
     });
 
-    it('runs every node command from the engine under the runner temp directory, outside the head tree', () => {
+    it('runs every node command from the engine or the fetcher under the runner temp directory, outside the head tree', () => {
       // The engine is unpacked to $RUNNER_TEMP/usabl-engine. RUNNER_TEMP is not under the
       // workspace, and the head is in workspace/head, so a node_modules the head commits is never
       // on the engine's module resolution path.
-      const unpack = step(body, 'usabl-scan', 'Verify and unpack trusted engine').run ?? '';
+      const unpack = step(body, 'usabl-scan', TRUSTED_ENGINE_STEP).run ?? '';
       expect(unpack).toContain('--directory "${RUNNER_TEMP}/usabl-engine"');
       for (const entry of job(body, 'usabl-scan').steps) {
         for (const line of (entry.run ?? '').split('\n')) {
@@ -185,6 +193,7 @@ describe.each(GATES)('$name', ({ body }) => {
           if (command === undefined || command === '<<\'NODE\'') continue;
           const inEngine =
             command.startsWith('"${RUNNER_TEMP}/usabl-engine/') ||
+            command === '"${RUNNER_TEMP}/usabl-fetch-artifact.cjs"' ||
             (entry['working-directory'] === '${{ runner.temp }}/usabl-engine' && command.startsWith('node_modules/'));
           expect(inEngine, `${entry.name}: ${line.trim()}`).toBe(true);
         }
@@ -209,7 +218,7 @@ describe.each(GATES)('$name', ({ body }) => {
     });
 
     it('regex-checks the run id it finds on a review before using it', () => {
-      const find = step(body, 'usabl-scan', "Find this head's build on a review");
+      const find = step(body, 'usabl-scan', "Find this head's build");
       expect(find.run).toContain('=~ ^[0-9]+$');
       expect(find.env?.['GH_TOKEN']).toBe('${{ github.token }}');
     });
@@ -257,6 +266,11 @@ describe.each(GATES)('$name', ({ body }) => {
       const summaryFile = join(temp, 'summary.md');
       expect(runStep(summary.run ?? '', { COMMENT_PATH: join(temp, 'comment.md'), GITHUB_STEP_SUMMARY: summaryFile })).toBe(0);
       expect(readFileSync(summaryFile, 'utf8')).toContain('REGRESSION');
+    });
+
+    it('reads the Result through the fetcher, with actions read for that only', () => {
+      expect(job(body, 'gate-comment').permissions).toEqual({ contents: 'read', actions: 'read', 'pull-requests': 'write' });
+      expect(step(body, 'gate-comment', 'Fetch Result JSON').env?.['ARTIFACT_NAME']).toBe('usabl-result');
     });
 
     it('is the only job that can write to the pull request', () => {
@@ -348,35 +362,63 @@ describe.each(GATES)('$name', ({ body }) => {
       }
     });
 
-    it('follows every artifact download in a trusted job with a digest check against a job output', () => {
+    it('never extracts an artifact with actions/download-artifact in a trusted job', () => {
+      // Its zip extraction strips only a leading ../ from an entry name, so an entry with a ..
+      // in the middle writes outside the download folder before any digest is checked.
+      for (const id of TRUSTED_JOBS) {
+        for (const entry of job(body, id).steps) {
+          expect(entry.uses ?? '', `${id}: ${entry.name}`).not.toMatch(/^actions\/download-artifact@/);
+        }
+      }
+    });
+
+    it('follows every artifact fetch in a trusted job with a digest check against a job output', () => {
       for (const id of TRUSTED_JOBS) {
         const steps = job(body, id).steps;
         steps.forEach((entry, index) => {
-          if (!entry.uses?.startsWith('actions/download-artifact@')) return;
-          const name = String(entry.with?.['name']);
-          // The review-path build download comes from another run, whose job outputs are out of
-          // reach. The judge records the digest it scanned instead; the verify step says so.
-          const fromOtherRun = entry.with?.['run-id'] !== undefined;
-          const checker = steps.slice(index + 1).find((later) =>
+          if (entry.env?.['ARTIFACT_NAME'] === undefined) return;
+          const name = entry.env['ARTIFACT_NAME'];
+          // The review-path build comes from another run, whose job outputs are out of reach. The
+          // judge records the digest it scanned instead; the verify step says so.
+          const checker = steps.slice(index).find((later) =>
             Object.values(later.env ?? {}).some((value) => /^\$\{\{ needs\.[\w-]+\.outputs\.\w+_digest \}\}$/.test(value)),
           );
-          expect(checker, `${id}: download of ${name}`).toBeDefined();
+          expect(checker, `${id}: fetch of ${name}`).toBeDefined();
           const digestVar = Object.entries(checker?.env ?? {}).find(([, value]) => /outputs\.\w+_digest/.test(value))?.[0];
           const run = checker?.run ?? '';
           expect(run, `${id}: ${name}`).toContain(`[[ "\${${digestVar}}" =~ ^[0-9a-f]{64}$ ]]`);
           expect(run, `${id}: ${name}`).toContain('sha256sum -c -');
-          if (fromOtherRun) {
+          if (name === 'usabl-app-build') {
             expect(run).toContain('USABL_BUILD_DIGEST=$(sha256sum');
           }
         });
       }
     });
 
-    it('downloads each artifact into its own fresh directory under the runner temp directory', () => {
+    it('checks the unpacked engine tree against the engine job output right before every engine run in a trusted job', () => {
+      expect(job(body, 'usabl-engine').outputs?.['engine_tree_digest']).toBe('${{ steps.pack.outputs.engine_tree_digest }}');
+      for (const id of TRUSTED_JOBS.filter((entry) => entry !== 'usabl-engine' && entry !== REQUIRED_GATE_JOB)) {
+        expect(job(body, id).env?.['ENGINE_TREE_DIGEST'], id).toBe('${{ needs.usabl-engine.outputs.engine_tree_digest }}');
+        for (const entry of job(body, id).steps) {
+          const lines = (entry.run ?? '').split('\n');
+          const firstRun = lines.findIndex(
+            (line) =>
+              line.includes('"${RUNNER_TEMP}/usabl-engine/dist/cli.js"') ||
+              /^\s*node node_modules\//.test(line),
+          );
+          if (firstRun === -1) continue;
+          const check = lines.findIndex((line) => line.includes('[[ "${ENGINE_TREE_DIGEST}" =~ ^[0-9a-f]{64}$ ]]'));
+          expect(check, `${id}: ${entry.name}`).toBeGreaterThan(-1);
+          expect(check, `${id}: ${entry.name}`).toBeLessThan(firstRun);
+        }
+      }
+    });
+
+    it('fetches each artifact into its own fresh directory under the runner temp directory', () => {
       for (const id of TRUSTED_JOBS) {
         for (const entry of job(body, id).steps) {
-          if (!entry.uses?.startsWith('actions/download-artifact@')) continue;
-          expect(String(entry.with?.['path']), `${id}: ${entry.name}`).toMatch(/^\$\{\{ runner\.temp \}\}\/usabl-download-[a-z]+$/);
+          if (entry.env?.['ARTIFACT_NAME'] === undefined) continue;
+          expect(String(entry.env['ARTIFACT_INTO']), `${id}: ${entry.name}`).toMatch(/^\$\{\{ runner\.temp \}\}\/usabl-download-[a-z]+$/);
         }
       }
     });
@@ -385,7 +427,7 @@ describe.each(GATES)('$name', ({ body }) => {
       for (const id of TRUSTED_JOBS) {
         for (const entry of job(body, id).steps) {
           const run = entry.run ?? '';
-          if (!run.includes("node <<'NODE'") && !/\bnode -e\b/.test(run)) continue;
+          if (!run.includes("<<'NODE'") && !/\bnode -e\b/.test(run)) continue;
           expect(entry['working-directory'] ?? '', `${id}: ${entry.name}`).toMatch(/^\$\{\{ runner\.temp \}\}/);
           for (const spec of run.matchAll(/(?:require|import)\(\s*'([^']+)'/g)) {
             expect(spec[1], `${id}: ${entry.name}`).toMatch(/^node:/);
@@ -446,7 +488,7 @@ describe.each(GATES)('$name', ({ body }) => {
   describe('the download check, run as shell', () => {
     const verify = (): string => step(body, 'gate-comment', 'Verify Result JSON and render the comment').run ?? '';
     // Only the check, cut before the render, so it runs without an engine.
-    const checkOnly = (): string => verify().slice(0, verify().indexOf('code=0'));
+    const checkOnly = (): string => verify().slice(0, verify().indexOf('if ! [[ "${ENGINE_TREE_DIGEST}"'));
 
     function download(files: Record<string, string>): string {
       const dir = join(scratch(), 'usabl-download-result');
@@ -493,16 +535,27 @@ describe.each(GATES)('$name', ({ body }) => {
         judge: { isolatedBrowser: true, blockedRequests: 0, buildDigest: DIGEST },
       });
 
-    function resolve(result: string | null, usablExit: string, engineExit: number): { verdict: string; digest: string } {
+    function resolve(
+      result: string | null,
+      usablExit: string,
+      engineExit: number,
+      tamper?: (engineDir: string) => void,
+    ): { verdict: string; digest: string } {
       const temp = scratch();
       const judgeDir = join(temp, 'usabl-judge');
       mkdirSync(judgeDir, { recursive: true });
       mkdirSync(join(temp, 'usabl-engine', 'dist'), { recursive: true });
       writeFileSync(join(temp, 'usabl-engine', 'dist', 'cli.js'), `process.exit(${engineExit});\n`);
+      const tree = treeDigest(join(temp, 'usabl-engine'));
+      tamper?.(join(temp, 'usabl-engine'));
       if (result !== null) writeFileSync(join(judgeDir, 'usabl-result.json'), result);
       const output = join(temp, 'github-output');
       writeFileSync(output, '');
-      runStep(run(), { RUNNER_TEMP: temp, GITHUB_OUTPUT: output, USABL_EXIT: usablExit, USABL_BUILD_DIGEST: DIGEST }, temp);
+      runStep(
+        run(),
+        { RUNNER_TEMP: temp, GITHUB_OUTPUT: output, USABL_EXIT: usablExit, USABL_BUILD_DIGEST: DIGEST, ENGINE_TREE_DIGEST: tree },
+        temp,
+      );
       const written = readFileSync(output, 'utf8');
       return {
         verdict: /verdict=(\S*)/.exec(written)?.[1] ?? '',
@@ -515,6 +568,15 @@ describe.each(GATES)('$name', ({ body }) => {
       expect(outcome.verdict).toBe('pass');
       expect(outcome.digest).toMatch(/^[0-9a-f]{64}$/);
     }, 30_000);
+
+    it('publishes fail and no digest when the engine tree changed after it was checked', () => {
+      const replaced = resolve(validResult(0), '0', 0, (dir) => writeFileSync(join(dir, 'dist', 'cli.js'), 'process.exit(0); // replaced\n'));
+      expect(replaced).toEqual({ verdict: 'fail', digest: '' });
+      const added = resolve(validResult(0), '0', 0, (dir) => writeFileSync(join(dir, 'dist', 'extra.js'), ''));
+      expect(added).toEqual({ verdict: 'fail', digest: '' });
+      const linked = resolve(validResult(0), '0', 0, (dir) => symlinkSync('/tmp', join(dir, 'dist', 'link')));
+      expect(linked).toEqual({ verdict: 'fail', digest: '' });
+    }, 60_000);
 
     it('publishes fail with a digest for a regression, so the comment can explain it', () => {
       const outcome = resolve(validResult(1), '1', 1);
@@ -531,7 +593,7 @@ describe.each(GATES)('$name', ({ body }) => {
       const temp = scratch();
       const output = join(temp, 'github-output');
       writeFileSync(output, '');
-      runStep(run(), { RUNNER_TEMP: temp, GITHUB_OUTPUT: output, USABL_EXIT: '', USABL_BUILD_DIGEST: DIGEST }, temp);
+      runStep(run(), { RUNNER_TEMP: temp, GITHUB_OUTPUT: output, USABL_EXIT: '', USABL_BUILD_DIGEST: DIGEST, ENGINE_TREE_DIGEST: 'e'.repeat(64) }, temp);
       expect(readFileSync(output, 'utf8')).toContain('verdict=fail');
     }, 30_000);
 

@@ -36,8 +36,9 @@ describe('the history workflow', () => {
   it('scans with read access only, and writes in a job that needs the scan', () => {
     expect(Object.keys(parsed.jobs)).toEqual(['usabl-engine', 'history-scan', 'history-append']);
     expect(parsed.jobs['usabl-engine']!.permissions).toEqual({ contents: 'read' });
-    expect(parsed.jobs['history-scan']!.permissions).toEqual({ contents: 'read' });
-    expect(parsed.jobs['history-append']!.permissions).toEqual({ contents: 'write' });
+    // actions: read is for the artifact fetch only: it lists this run's artifacts and downloads them.
+    expect(parsed.jobs['history-scan']!.permissions).toEqual({ contents: 'read', actions: 'read' });
+    expect(parsed.jobs['history-append']!.permissions).toEqual({ contents: 'write', actions: 'read' });
     expect(parsed.jobs['history-append']!.needs).toEqual(['usabl-engine', 'history-scan']);
   });
 
@@ -50,13 +51,30 @@ describe('the history workflow', () => {
   it('checks the engine archive against the engine job digest before either job runs it', () => {
     for (const id of ['history-scan', 'history-append']) {
       const steps = parsed.jobs[id]!.steps;
-      const download = steps.findIndex((step) => step.uses?.startsWith('actions/download-artifact') && step.with?.['name'] === 'usabl-engine');
-      expect(download, id).toBeGreaterThan(-1);
-      const verify = steps[download + 1];
+      const fetch = steps.findIndex((step) => step.env?.['ARTIFACT_NAME'] === 'usabl-engine');
+      expect(fetch, id).toBeGreaterThan(-1);
+      const verify = steps[fetch];
       expect(verify?.env?.['ENGINE_DIGEST'], id).toBe('${{ needs.usabl-engine.outputs.engine_digest }}');
       expect(verify?.run, id).toContain('sha256sum -c -');
       const firstEngineRun = steps.findIndex((step) => /usabl-engine\/dist\/cli\.js/.test(step.run ?? ''));
-      expect(firstEngineRun, id).toBeGreaterThan(download + 1);
+      expect(firstEngineRun, id).toBeGreaterThan(fetch);
+    }
+  });
+
+  it('never extracts an artifact with actions/download-artifact, and checks the engine tree before each engine run', () => {
+    expect(USABL_HISTORY_WORKFLOW).not.toMatch(/uses: actions\/download-artifact/);
+    for (const id of ['history-scan', 'history-append']) {
+      expect(parsed.jobs[id] as Job & { env?: Record<string, string> }).toMatchObject({
+        env: { ENGINE_TREE_DIGEST: '${{ needs.usabl-engine.outputs.engine_tree_digest }}' },
+      });
+      for (const step of parsed.jobs[id]!.steps) {
+        const run = step.run ?? '';
+        const engineRun = run.search(/"\$\{RUNNER_TEMP\}\/usabl-engine\/dist\/cli\.js"|node node_modules\//);
+        if (engineRun === -1) continue;
+        const check = run.indexOf('[[ "${ENGINE_TREE_DIGEST}" =~ ^[0-9a-f]{64}$ ]]');
+        expect(check, `${id}: ${step.name}`).toBeGreaterThan(-1);
+        expect(check, `${id}: ${step.name}`).toBeLessThan(engineRun);
+      }
     }
   });
 

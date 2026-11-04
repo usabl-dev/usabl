@@ -21,10 +21,12 @@
  * workflow that differs.
  */
 import type { InstallFs, InstallResult } from './index.js';
+import { ARTIFACT_MAX_BYTES, ENGINE_CHECK, fetchArtifactStep } from './artifact-fetch.js';
 import {
   ENGINE_JOB,
   ENGINE_REF_PLACEHOLDER,
   planCi,
+  TRUSTED_ENGINE_STEP,
   trustedEngineSteps,
   UNPACK_ENGINE_IN_TEMP,
   writeCi,
@@ -61,7 +63,9 @@ concurrency:
 # The engine is built once, by the same job the pull request gate uses, and each later job checks
 # the archive against that job's digest output before it runs it. The scan job runs application
 # code, which on a hosted runner may be able to replace artifacts in the run, so the job that
-# writes never runs an engine it did not check. No job uses a cache.
+# writes never runs an engine it did not check. No job unpacks an artifact with
+# actions/download-artifact, whose zip extraction follows .. inside entry names; each uses usabl's
+# own fetcher, which accepts only the expected file. No job uses a cache.
 jobs:
 ${ENGINE_JOB}
 
@@ -73,6 +77,10 @@ ${ENGINE_JOB}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Only the artifact fetch uses this: it lists this run's artifacts and downloads the engine.
+      actions: read
+    env:
+      ENGINE_TREE_DIGEST: \${{ needs.usabl-engine.outputs.engine_tree_digest }}
     steps:
       - name: Checkout main
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -88,11 +96,13 @@ ${ENGINE_JOB}
           # written by pull request code, so every job turns it off by name.
           package-manager-cache: false
 
-${trustedEngineSteps('Verify and unpack trusted engine', HISTORY_SCAN_ENGINE_UNPACK)}
+${trustedEngineSteps(TRUSTED_ENGINE_STEP, HISTORY_SCAN_ENGINE_UNPACK)}
 
       - name: Install Chromium for engine checks
         working-directory: \${{ runner.temp }}/usabl-engine
-        run: node node_modules/playwright/cli.js install --with-deps chromium
+        run: |
+${ENGINE_CHECK}
+          node node_modules/playwright/cli.js install --with-deps chromium
 
       - name: Allow the Chromium sandbox
         run: |
@@ -123,7 +133,9 @@ ${trustedEngineSteps('Verify and unpack trusted engine', HISTORY_SCAN_ENGINE_UNP
           exit 1
 
       - name: Scan main and write the history record
-        run: node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" history record --out usabl-history-record.json
+        run: |
+${ENGINE_CHECK}
+          node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" history record --out usabl-history-record.json
 
       - name: Stop application server
         if: always()
@@ -150,6 +162,10 @@ ${trustedEngineSteps('Verify and unpack trusted engine', HISTORY_SCAN_ENGINE_UNP
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Only the artifact fetch uses this: it lists this run's artifacts and downloads them.
+      actions: read
+    env:
+      ENGINE_TREE_DIGEST: \${{ needs.usabl-engine.outputs.engine_tree_digest }}
     steps:
       - name: Checkout main without running it
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -164,13 +180,15 @@ ${trustedEngineSteps('Verify and unpack trusted engine', HISTORY_SCAN_ENGINE_UNP
           # written by pull request code, so every job turns it off by name.
           package-manager-cache: false
 
-${trustedEngineSteps('Verify and unpack trusted engine', UNPACK_ENGINE_IN_TEMP)}
+${trustedEngineSteps(TRUSTED_ENGINE_STEP, UNPACK_ENGINE_IN_TEMP)}
 
-      - name: Download the history record
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
-        with:
-          name: usabl-history-record
-          path: \${{ runner.temp }}/usabl-download-record
+${fetchArtifactStep({
+  stepName: 'Fetch the history record',
+  artifact: 'usabl-history-record',
+  member: 'usabl-history-record.json',
+  into: 'usabl-download-record',
+  maxBytes: ARTIFACT_MAX_BYTES.record,
+})}
 
       - name: Append the record and push the history branch
         env:
@@ -178,6 +196,7 @@ ${trustedEngineSteps('Verify and unpack trusted engine', UNPACK_ENGINE_IN_TEMP)}
         run: |
           # Fetch the branch fresh on every try, append on top of it, and push without force. A
           # push that loses a race is refused, so the loop fetches the newer branch and tries again.
+${ENGINE_CHECK}
           for attempt in 1 2 3; do
             git fetch --no-tags origin "+refs/heads/usabl/history:refs/remotes/origin/usabl/history" || echo "no usabl/history branch yet; the first record starts it"
             node "\${RUNNER_TEMP}/usabl-engine/dist/cli.js" history append "\${RECORD_PATH}"

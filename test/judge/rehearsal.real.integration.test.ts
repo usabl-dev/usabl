@@ -4,10 +4,13 @@
  *
  * The harness plays the jobs on this machine by running the exact `run:` bodies of the generated
  * workflow, parsed from USABL_GATE_WORKFLOW, through bash. The `uses:` steps (checkout, setup,
- * artifact upload and download, the comment post) are stood in by small handlers, and each job
- * gets its own workspace and its own runner temp directory, the way each job gets its own VM.
- * Artifacts move between jobs only through a store directory, which is the one channel a hosted
- * run gives them. Steps that need the network or root are noted where they are skipped.
+ * artifact upload, the untrusted build job's engine download, the comment post) are stood in by
+ * small handlers, and each job gets its own workspace and its own runner temp directory, the way
+ * each job gets its own VM. Artifacts move between jobs only through a store directory, which is
+ * the one channel a hosted run gives them. Trusted jobs take them the way the generated workflow
+ * does: usabl's own fetcher, run from its generated step, against a local stand-in for the GitHub
+ * artifact API that serves each stored file as a zip. Steps that need the network or root are noted
+ * where they are skipped.
  *
  * The pull request is hostile on purpose. Its build writes a forged clean Result into the build
  * output, into its own workspace, and into its own runner temp directory, and leaves a background
@@ -44,10 +47,12 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { load } from 'js-yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { REQUIRED_GATE_JOB, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
+import { REQUIRED_GATE_JOB, TRUSTED_ENGINE_STEP, USABL_GATE_WORKFLOW } from '../../src/install/ci.js';
+import { makeZip, startArtifactApi, type ArtifactApi, type StoredArtifact } from '../support/zip.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BASE_REPOSITORY = 'example/hostile-app';
+const RUN_ID = '7001';
 
 interface Step {
   name?: string;
@@ -84,6 +89,7 @@ interface Needs {
 interface Rehearsal {
   root: string;
   store: string;
+  api: ArtifactApi;
   sourceRepo: string;
   headSha: string;
   baseSha: string;
@@ -310,6 +316,7 @@ async function runJob(ctx: JobContext): Promise<JobRun> {
       'github.event.pull_request.number': '7',
       'github.event.pull_request.head.repo.full_name': ctx.headRepository ?? BASE_REPOSITORY,
       'github.repository': BASE_REPOSITORY,
+      'github.run_id': RUN_ID,
       'github.token': 'job-token',
       'secrets.GITHUB_TOKEN': 'job-token',
     };
@@ -355,6 +362,8 @@ async function runJob(ctx: JobContext): Promise<JobRun> {
         mkdirSync(target, { recursive: true });
         copyFileSync(inputs['path'] as string, join(target, basename(inputs['path'] as string)));
       } else if (action === 'actions/download-artifact') {
+        // Only the untrusted build job still uses this action; trusted jobs run the fetcher.
+        if (ctx.jobId !== 'build-app') throw new Error(`${ctx.jobId} must not use download-artifact`);
         const source = join(ctx.rehearsal.store, inputs['name'] as string);
         if (!existsSync(source)) {
           failed = true;
@@ -386,6 +395,8 @@ async function runJob(ctx: JobContext): Promise<JobRun> {
         GITHUB_OUTPUT: outputFile,
         GITHUB_ENV: envFile,
         GITHUB_REPOSITORY: BASE_REPOSITORY,
+        GITHUB_RUN_ID: RUN_ID,
+        GITHUB_API_URL: ctx.rehearsal.api.url,
         GITHUB_STEP_SUMMARY: summaryFile,
         RUNNER_TEMP: runnerTemp,
         // The fixture has no dependencies; keep npm off the network and out of the user's cache.
@@ -517,6 +528,23 @@ function storedFile(rehearsal: Rehearsal, artifact: string): string {
   return join(dir, file as string);
 }
 
+// The run's artifacts as the API lists them: each stored file zipped the way upload-artifact
+// zips it, unless the test replaced the whole zip, as a runner token can, with <name>.zip.
+function storedArtifacts(store: string): StoredArtifact[] {
+  const ids = new Map<string, number>();
+  return readdirSync(store, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry, index) => {
+      ids.set(entry.name, 2000 + index);
+      const replaced = join(store, `${entry.name}.zip`);
+      const [file] = readdirSync(join(store, entry.name));
+      const zip = existsSync(replaced)
+        ? readFileSync(replaced)
+        : makeZip([{ name: file as string, data: readFileSync(join(store, entry.name, file as string)), dataDescriptor: true }]);
+      return { id: ids.get(entry.name) as number, name: entry.name, zip };
+    });
+}
+
 async function newRehearsal(barrier = true): Promise<Rehearsal> {
   const root = mkdtempSync(join(tmpdir(), 'usabl-rehearsal-'));
   const port = await freePort();
@@ -524,11 +552,13 @@ async function newRehearsal(barrier = true): Promise<Rehearsal> {
   const { repo, baseSha, headSha } = makeHostileRepo(root, port, marker, barrier);
   const store = join(root, 'artifacts');
   mkdirSync(store);
-  return { root, store, sourceRepo: repo, headSha, baseSha, port, marker, pids: [] };
+  const api = await startArtifactApi(BASE_REPOSITORY, (runId) => (runId === RUN_ID ? storedArtifacts(store) : []));
+  return { root, store, api, sourceRepo: repo, headSha, baseSha, port, marker, pids: [] };
 }
 
-function cleanup(rehearsal: Rehearsal | undefined): void {
+async function cleanup(rehearsal: Rehearsal | undefined): Promise<void> {
   if (rehearsal === undefined) return;
+  await rehearsal.api.close();
   for (const pid of rehearsal.pids) {
     try {
       process.kill(Number(pid), 'SIGKILL');
@@ -555,7 +585,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the generated app gate a
     scan = await runScanJob(rehearsal, engine, build);
   }, 600_000);
 
-  afterAll(() => cleanup(rehearsal));
+  afterAll(async () => cleanup(rehearsal));
 
   it('builds and packs the hostile head in build-app, which left its rewriter running', () => {
     expect(engine.result, engine.log.join('\n')).toBe('success');
@@ -648,17 +678,59 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the generated app gate a
       expect(tampered.result).toBe('failure');
       expect(tampered.outputs['verdict']).toBe('fail');
       expect(tampered.outputs['result_digest']).toBe('');
-      expect(tampered.log.find((line) => line.startsWith('fail:'))).toMatch(/^fail: Verify and unpack trusted engine/);
+      expect(tampered.log.find((line) => line.startsWith('fail:'))?.startsWith(`fail: ${TRUSTED_ENGINE_STEP}`)).toBe(true);
     } finally {
       writeFileSync(archive, original);
     }
   }, 300_000);
+
+  it('refuses a build zip that carries an entry climbing out to the engine, before it writes a byte', async () => {
+    // download-artifact strips only a leading ../, so this entry would land on the judge's
+    // verified engine. The tar inside is unchanged, so its digest would still match.
+    const payload = join(rehearsal.root, 'replaced-engine-ran');
+    const zipPath = join(rehearsal.store, 'usabl-app-build.zip');
+    writeFileSync(
+      zipPath,
+      makeZip([
+        { name: 'usabl-app-build.tar', data: readFileSync(storedFile(rehearsal, 'usabl-app-build')) },
+        {
+          name: 'nested/../../usabl-engine/dist/cli.js',
+          data: `require('node:fs').writeFileSync(${JSON.stringify(payload)}, 'x'); console.log('verdict=pass');`,
+        },
+      ]),
+    );
+    try {
+      const tampered = await runScanJob(rehearsal, engine, build);
+      expect(tampered.result).toBe('failure');
+      expect(tampered.outputs['verdict']).toBe('fail');
+      expect(tampered.outputs['result_digest']).toBe('');
+      const failure = tampered.log.find((line) => line.startsWith('fail:')) ?? '';
+      expect(failure).toMatch(/^fail: Fetch the build/);
+      expect(failure).toContain('failing closed');
+      expect(existsSync(payload)).toBe(false);
+    } finally {
+      rmSync(zipPath, { force: true });
+    }
+  }, 300_000);
+
+  it('refuses a Result zip that carries a link instead of the file, in the comment job', async () => {
+    const zipPath = join(rehearsal.store, 'usabl-result.zip');
+    writeFileSync(zipPath, makeZip([{ name: 'usabl-result.json', data: '/etc/passwd', method: 0, mode: 0o120777 }]));
+    try {
+      const comment = await runCommentJob(rehearsal, engine, scan);
+      expect(comment.result).toBe('failure');
+      expect(comment.comment).toBeNull();
+      expect(comment.log.find((line) => line.startsWith('fail:'))).toMatch(/^fail: Fetch Result JSON[\s\S]*not a regular file/);
+    } finally {
+      rmSync(zipPath, { force: true });
+    }
+  }, 120_000);
 });
 
 describe.skipIf(process.env.USABL_INTEGRATION !== '1')('a hostile pull request that adds no barrier', () => {
   let rehearsal: Rehearsal | undefined;
 
-  afterAll(() => cleanup(rehearsal));
+  afterAll(async () => cleanup(rehearsal));
 
   it('passes the whole gate on a clean head, so the blocks above come from the barrier and the tampering', async () => {
     rehearsal = await newRehearsal(false);
