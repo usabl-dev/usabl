@@ -114,8 +114,9 @@ async function readBlockedOrigins(page: Page): Promise<string | null> {
   const named = origins.slice(0, MAX_BLOCKED_ORIGINS_NAMED).join(', ');
   const more = origins.length > MAX_BLOCKED_ORIGINS_NAMED ? ` and ${origins.length - MAX_BLOCKED_ORIGINS_NAMED} more` : '';
   return (
-    `the isolated browser blocked requests to ${named}${more}, so this screen was not checked as users see it. ` +
-    'If the app needs an origin, add it to judge.allowOrigins in the trusted usabl.config.json.'
+    `the isolated browser blocked or caught requests outside the allowed origins: ${named}${more}, so this screen was not checked as users see it. ` +
+    'If the app needs an origin, add it to judge.allowOrigins in the trusted usabl.config.json. ' +
+    'An allowed hostname must be answered by a public address; list a local service by its IP address and port.'
   );
 }
 

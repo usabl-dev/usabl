@@ -11,6 +11,7 @@ import {
   allowedOriginsFrom,
   blockedOriginLabel,
   decideRequest,
+  decideServerAddress,
   decideWebSocket,
 } from '../../src/judge/request-filter.js';
 
@@ -138,5 +139,43 @@ describe('judge.allowOrigins in usabl.config.json', () => {
     const working = parseUsablConfig(JSON.stringify({ ...base, judge: { allowOrigins: ['https://evil.example'] } }));
     const resolved = await resolveIntakeConfig({ show: async () => null }, working, 'origin/main');
     expect(resolved.judge).toBeUndefined();
+  });
+});
+
+describe('decideServerAddress', () => {
+  // A request whose origin is allowed can still reach a server it should not: an allowed hostname
+  // whose DNS answer is a loopback or private address, or a loopback origin answered on another
+  // port. The address the response came from is checked against the URL.
+  const allowed = new Set(['http://127.0.0.1:5173', 'https://fonts.example.com', 'http://localhost:8080', 'http://[::1]:9000']);
+
+  it.each([
+    ['http://127.0.0.1:5173/app.js', '127.0.0.1', 5173],
+    ['http://localhost:8080/api', '127.0.0.1', 8080],
+    ['http://localhost:8080/api', '::1', 8080],
+    ['http://[::1]:9000/x', '::1', 9000],
+    ['https://fonts.example.com/css', '93.184.216.34', 443],
+    ['https://fonts.example.com/css', '2606:2800:220:1:248:1893:25c8:1946', 443],
+  ])('expects %s answered by %s:%d', (url, ipAddress, port) => {
+    expect(decideServerAddress(allowed, url, { ipAddress, port })).toBe('expected');
+  });
+
+  it.each([
+    ['the app origin answered on another loopback port', 'http://127.0.0.1:5173/app.js', '127.0.0.1', 5174],
+    ['the app origin answered by another loopback address', 'http://127.0.0.1:5173/app.js', '127.0.0.2', 5173],
+    ['localhost answered by a public address', 'http://localhost:8080/api', '93.184.216.34', 8080],
+    ['an allowed hostname that resolved to loopback', 'https://fonts.example.com/css', '127.0.0.1', 443],
+    ['an allowed hostname that resolved to IPv6 loopback', 'https://fonts.example.com/css', '::1', 443],
+    ['an allowed hostname that resolved to a private address', 'https://fonts.example.com/css', '10.0.0.5', 443],
+    ['an allowed hostname that resolved to a link-local address', 'https://fonts.example.com/css', '169.254.169.254', 443],
+    ['an allowed hostname that resolved to a mapped loopback address', 'https://fonts.example.com/css', '::ffff:127.0.0.1', 443],
+    ['an allowed hostname that resolved to a unique local address', 'https://fonts.example.com/css', 'fd00::1', 443],
+    ['an allowed hostname answered on another port', 'https://fonts.example.com/css', '93.184.216.34', 8443],
+    ['an origin that is not allowed at all', 'https://evil.example/x', '93.184.216.34', 443],
+  ])('catches %s', (_label, url, ipAddress, port) => {
+    expect(decideServerAddress(allowed, url, { ipAddress, port })).toBe('unexpected');
+  });
+
+  it('has nothing to check for a response that did not come from the network', () => {
+    expect(decideServerAddress(allowed, 'data:text/plain,x', { ipAddress: '', port: 0 })).toBe('expected');
   });
 });

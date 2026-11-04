@@ -10,7 +10,13 @@ import { applyAxeTags, type AxeIssue, type AxeRuleSummary, type AxeUncheckedFram
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
 import { runAxeInIsolatedWorld } from './axe-world.js';
 import { BrowserSandboxRequiredError, isBrowserSandboxRefusal, isSandboxLaunchFailure, type BrowserSandboxPolicy } from './sandbox.js';
-import { blockedOriginLabel, decideRequest, decideWebSocket, type BrowserIsolation } from '../judge/request-filter.js';
+import {
+  blockedOriginLabel,
+  decideRequest,
+  decideServerAddress,
+  decideWebSocket,
+  type BrowserIsolation,
+} from '../judge/request-filter.js';
 
 // Default budget for one screen to navigate, go quiet, and stop rendering. An authenticated
 // Ansible Automation Platform screen measured 12.4 s to network idle plus 13.3 s to a DOM that
@@ -2332,10 +2338,19 @@ export function makeSharedBrowser(
     try {
       // Context-wide routing is installed before any page exists, so the first navigation, its
       // frames, its workers, and any popup all pass through the filter.
-      let blockedOrigins: (() => string[]) | null = null;
+      let blockedOrigins: (() => Promise<string[]>) | null = null;
       if (isolation !== undefined) {
         const blocked = new Set<string>();
-        blockedOrigins = () => [...blocked].sort();
+        // Address checks wait on the browser, so the list is read only after they settle.
+        const pending = new Set<Promise<void>>();
+        blockedOrigins = async () => {
+          while (pending.size > 0) await Promise.all([...pending]);
+          return [...blocked].sort();
+        };
+        const caught = (url: string, why: string): void => {
+          blocked.add(`${blockedOriginLabel(url)} (${why})`);
+          isolation.onBlocked(url);
+        };
         await context.route('**/*', async (route) => {
           const requestUrl = route.request().url();
           if (decideRequest(isolation.allowedOrigins, requestUrl) === 'allow') {
@@ -2358,6 +2373,43 @@ export function makeSharedBrowser(
           isolation.onBlocked(socketUrl);
           void socket.close({ code: 1008, reason: 'blocked by the usabl judge' }).catch(() => undefined);
         });
+        // Playwright continues a redirect hop without the route above, so a hop cannot be
+        // stopped there. Every hop is still reported, by the page and by service workers, so a hop
+        // outside the allowed origins is caught here and the screen becomes a coverage gap.
+        context.on('request', (request) => {
+          if (request.redirectedFrom() !== null && decideRequest(isolation.allowedOrigins, request.url()) === 'block') {
+            caught(request.url(), 'reached by a redirect');
+          }
+        });
+        // An allowed origin can still be answered by a server it should not reach: an allowed
+        // hostname whose DNS answer is a loopback or private address, or another loopback port.
+        context.on('response', (response) => {
+          const check = response
+            .serverAddr()
+            .then((address) => {
+              if (address !== null && decideServerAddress(isolation.allowedOrigins, response.url(), address) === 'unexpected') {
+                caught(response.url(), 'answered from an unexpected address');
+              }
+            })
+            .catch(() => caught(response.url(), 'its server address could not be read'))
+            .finally(() => pending.delete(check));
+          pending.add(check);
+        });
+        // A socket a worker opens does not pass the socket route, which patches only the page.
+        // The browser still reports it, so one outside the allowed origins is caught.
+        const watchSockets = (opened: PwPage): void => {
+          opened.on('websocket', (socket) => {
+            if (decideWebSocket(isolation.allowedOrigins, socket.url()) === 'block') {
+              const label = blockedOriginLabel(socket.url());
+              // A page socket the route already closed is counted once.
+              if (!blocked.has(label)) {
+                blocked.add(label);
+                isolation.onBlocked(socket.url());
+              }
+            }
+          });
+        };
+        context.on('page', watchSockets);
       }
       const page = await context.newPage();
       // Attach the in-flight tracker before navigating, so the navigation's own requests are
@@ -2373,7 +2425,7 @@ export function makeSharedBrowser(
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeoutMs });
       const opened = wrapPage(page, context, cdp, readyTimeoutMs, network);
       const wrapped: Page =
-        blockedOrigins === null ? opened : { ...opened, blockedRequests: async () => blockedOrigins() };
+        blockedOrigins === null ? opened : { ...opened, blockedRequests: () => blockedOrigins() };
       // A page from a process without the sandbox says so, and the check runner carries that onto
       // the screen in the Result.
       return handle.sandboxed ? wrapped : { ...wrapped, browserSandbox: 'off' };

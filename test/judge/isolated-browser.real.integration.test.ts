@@ -10,8 +10,10 @@
  * - page script runs inside the Chromium sandbox, which the judge requires, so a system that
  *   cannot give the sandbox refuses the scan instead of running without it.
  *
- * And a service worker, registered the plain way or through the prototype method, runs and its
- * requests pass the same filter, so a worker can neither hide content nor reach another origin.
+ * And the paths a page can take around a request filter: a service worker, registered the plain
+ * way or through the prototype method, runs and its requests pass the same filter; a redirect from
+ * an allowed origin to another, an allowed hostname answered by a loopback server, and a socket
+ * opened from a worker are each caught, so the screen is a coverage gap.
  */
 import { readdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -19,7 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { makeRealBrowserDriver } from '../../src/deps/real.js';
+import { chromiumLaunchOptions, makeRealBrowserDriver } from '../../src/deps/real.js';
 import { startBuildServer, type BuildServer } from '../../src/judge/serve-build.js';
 import { axeProvider } from '../../src/providers/axe/index.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
@@ -299,6 +301,79 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the judge isolated brows
       }
     }, 60_000);
   }
+
+  it('catches a redirect from an allowed origin to another origin, and the screen becomes a gap', async () => {
+    const redirecting = createServer((req, res) => {
+      if (req.url === '/hop') {
+        res.writeHead(302, { location: `http://127.0.0.1:${recorder.port}/after-redirect` }).end();
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<!doctype html><html lang="en"><title>r</title><main><h1>Redirect</h1>
+        <script>fetch('/hop').catch(() => undefined);</script></main></html>`);
+    });
+    await new Promise<void>((resolve) => redirecting.listen(0, '127.0.0.1', resolve));
+    const address = redirecting.address();
+    const origin = `http://127.0.0.1:${address !== null && typeof address === 'object' ? address.port : 0}`;
+    const driver = makeRealBrowserDriver({
+      isolation: { allowedOrigins: new Set([origin]), onBlocked: () => undefined },
+      browserSandbox: 'require',
+    });
+    try {
+      const runner = makeCheckRunner({
+        browser: driver,
+        providers: [axeProvider],
+        config: testConfig({ appBaseUrl: origin }),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+      });
+      const scan = await runner.scan({ id: 'redirect', url: `${origin}/` });
+      const gap = scan.gaps.find((entry) => entry.reason.includes('isolated browser blocked'));
+      expect(gap?.state).toBe('not-covered');
+      expect(gap?.reason).toContain(`http://127.0.0.1:${recorder.port} (reached by a redirect)`);
+    } finally {
+      await driver.close();
+      await new Promise<void>((resolve) => redirecting.close(() => resolve()));
+    }
+  }, 60_000);
+
+  it('catches an allowed hostname that a loopback server answered', async () => {
+    // The resolver rule stands in for a DNS answer the head cannot be trusted with: an allowed
+    // public hostname that points at another loopback service.
+    const driver = makeRealBrowserDriver(
+      {
+        isolation: { allowedOrigins: new Set([app.url, `http://allowed.test:${recorder.port}`]), onBlocked: () => undefined },
+        browserSandbox: 'require',
+      },
+      {
+        launch: (launch) =>
+          chromium.launch({ ...chromiumLaunchOptions(launch), args: ['--host-resolver-rules=MAP allowed.test 127.0.0.1'] }),
+      },
+    );
+    try {
+      const page = await driver.open(`${app.url}/resolved.html`);
+      await page.gotoReady();
+      expect(await blockedEventually(page, 'allowed.test')).toContain(
+        `http://allowed.test:${recorder.port} (answered from an unexpected address)`,
+      );
+      await page.close();
+    } finally {
+      await driver.close();
+    }
+  }, 60_000);
+
+  it('catches a socket a worker opens to another origin', async () => {
+    const { isolation: iso } = isolation();
+    const driver = makeRealBrowserDriver({ isolation: iso, browserSandbox: 'require' });
+    try {
+      const page = await driver.open(`${app.url}/worker.html`);
+      await page.gotoReady();
+      expect(await blockedEventually(page, 'ws://')).toContain(`ws://127.0.0.1:${recorder.port}`);
+      await page.close();
+    } finally {
+      await driver.close();
+    }
+  }, 60_000);
 
   it('runs page script inside the Chromium sandbox, unlike a default Playwright launch', async () => {
     const { isolation: iso } = isolation();
