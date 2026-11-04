@@ -710,6 +710,13 @@
   `~DEFAULT_BRANCH` now verifies when the repository's default branch is `main`, instead of
   reading as "cannot verify".
 
+- `usabl doctor` now checks workflow ownership for every `.yml` and `.yaml` file in
+  `.github/workflows/` and for a new one a pull request could add, not only for
+  `usabl-gate.yml`, and it checks that each owner is `@user`, `@org/team`, or an email. Before, a
+  later `CODEOWNERS` rule with no owner, such as one line for `usabl-docs-gate.yml`, left that
+  workflow unowned while doctor reported `wired`, and so did a rule that owned only
+  `usabl-gate.yml` or named something that is not an owner.
+
 - No trusted job in the generated workflows extracts an artifact with
   `actions/download-artifact` any more. Its zip extraction followed a `..` in the middle of an
   entry name, so an artifact replaced in the run could write over the verified engine before any

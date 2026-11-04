@@ -2467,8 +2467,11 @@ merge without an owner's approval. `usabl install --ci` and `usabl install --bra
 required approving review (a count of 0 requires no review at all), and dismissal of stale
 approvals on push, each by classic protection or by an active ruleset; a ruleset on
 `~DEFAULT_BRANCH` counts only when the repository's default branch is `main`. Each part that is
-off is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same, and reports `workflow-owners`, whether the last `CODEOWNERS` rule that matches a
-file under `.github/workflows/` names an owner. Only an organization-required workflow takes the
+off is "not applied", and each it cannot read is "cannot verify". `usabl doctor` reports the same, and reports `workflow-owners`: wired only when the last
+`CODEOWNERS` rule that matches each `.yml` or `.yaml` file in `.github/workflows/`, and the last
+rule for any such file a pull request could add, names valid owners (`@user`, `@org/team`, or an
+email). A later rule with no owner takes ownership away, and a pattern usabl cannot evaluate
+reads as unknown. Only an organization-required workflow takes the
 workflow out of the pull request's hands. See `docs/threat-model.md` (Threat 15
 and "CI trust boundary") for what each job holds. The engine's own repo checks in the earlier
 three-job shape (`gate-comment`, `usabl-policy`, `usabl-required`), because it has no app to

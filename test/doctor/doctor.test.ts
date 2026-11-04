@@ -228,21 +228,73 @@ function stateOf(reports: SurfaceReport[], id: string): SurfaceState {
 describe('workflow owners (.github/workflows has a code owner)', () => {
   // Any pull request can change the workflow that runs on it, including the required check, so
   // the protection is an owner's approval for any change under .github/workflows.
-  const withOwners = (codeowners: string | null): Record<string, string> => {
-    const files: Record<string, string> = { ...FULLY_WIRED_FILES };
+  const withOwners = (codeowners: string | null, extra: Record<string, string> = {}): Record<string, string> => {
+    const files: Record<string, string> = { ...FULLY_WIRED_FILES, ...extra };
     if (codeowners === null) delete files['.github/CODEOWNERS'];
     else files['.github/CODEOWNERS'] = codeowners;
     return files;
   };
-  const report = async (codeowners: string | null): Promise<SurfaceReport> =>
+  const report = async (codeowners: string | null, extra: Record<string, string> = {}): Promise<SurfaceReport> =>
     byId(
-      await collectDoctorReport(doctorDeps({ fs: readOnlyFs(withOwners(codeowners)), gh: GH_VERIFIED, configPath: 'usabl.config.json' })),
+      await collectDoctorReport(
+        doctorDeps({ fs: readOnlyFs(withOwners(codeowners, extra)), gh: GH_VERIFIED, configPath: 'usabl.config.json' }),
+      ),
       'workflow-owners',
     );
 
-  it.each(['/.github/workflows/ @o\n', '/.github/ @o\n', '* @o\n', '.github/workflows/ @o @p\n'])('is wired for %j', async (codeowners) => {
+  it.each([
+    '/.github/workflows/ @o\n',
+    '/.github/ @o\n',
+    '* @o\n',
+    '.github/workflows/ @o @p\n',
+    '/.github/workflows/ @org/team-a\n',
+    '/.github/workflows/ owner@example.com\n',
+    '/.github/workflows/*.yml @o\n/.github/workflows/*.yaml @o\n',
+    // A later rule that names another owner for one file keeps that file owned.
+    '/.github/workflows/ @o\n/.github/workflows/deploy.yml @p\n',
+  ])('is wired for %j', async (codeowners) => {
     expect((await report(codeowners)).state).toBe('wired');
   });
+
+  it('is missing when a later rule with no owner takes one workflow file out', async () => {
+    // The docs gate is unowned, so a pull request can edit it with no owner approving.
+    const codeowners = '/.github/workflows/ @owner\n/.github/workflows/usabl-docs-gate.yml\n';
+    const present = await report(codeowners, { '.github/workflows/usabl-docs-gate.yml': 'name: docs\n' });
+    expect(present.state).toBe('missing');
+    expect(present.nextStep).toContain('.github/workflows/usabl-docs-gate.yml');
+    // The file need not exist yet: a pull request that adds it is just as unowned.
+    expect((await report(codeowners)).state).toBe('missing');
+  });
+
+  it('is missing when only one workflow file has an owner', async () => {
+    // A new workflow file gets no owner, so a pull request can add one that reports the check.
+    const found = await report('/.github/workflows/usabl-gate.yml @owner\n');
+    expect(found.state).toBe('missing');
+    expect(found.nextStep).toContain('new workflow file');
+  });
+
+  it('is missing when a workflow file present in the directory has no owner', async () => {
+    const found = await report('/.github/workflows/*.yml @o\n', { '.github/workflows/deploy.yaml': 'name: deploy\n' });
+    expect(found.state).toBe('missing');
+    expect(found.nextStep).toContain('.github/workflows/deploy.yaml');
+  });
+
+  it('is missing when only .yml files have an owner, since a new .yaml workflow would not', async () => {
+    expect((await report('/.github/workflows/*.yml @o\n')).state).toBe('missing');
+  });
+
+  it('is missing when a later partial rule with no owner could match a new workflow file', async () => {
+    expect((await report('/.github/workflows/ @o\n/.github/workflows/release-*.yml\n')).state).toBe('missing');
+  });
+
+  it.each(['/.github/workflows/ not-an-owner\n', '/.github/workflows/ @o not-an-owner\n', '/.github/workflows/ @\n'])(
+    'is not wired when the rule names something that is not an owner: %j',
+    async (codeowners) => {
+      const found = await report(codeowners);
+      expect(found.state).not.toBe('wired');
+      expect(found.nextStep).toContain('not a valid owner');
+    },
+  );
 
   it('is missing when no rule covers the workflows', async () => {
     const found = await report('/src/ @o\n');

@@ -961,7 +961,10 @@ Residual risks that remain:
   `dismiss_stale_reviews_on_push`). A count of 0 or a dismissal that is off is not applied; a
   value usabl cannot read is "cannot verify". A ruleset on `~DEFAULT_BRANCH` counts for `main`
   only when the repository says `main` is its default branch. `usabl doctor` also checks that
-  `CODEOWNERS` gives `.github/workflows/` an owner. Only an organization-required workflow, an
+  `CODEOWNERS` gives every workflow an owner: the last rule that matches each `.yml` or `.yaml`
+  file in `.github/workflows/`, and the last rule for any such file a pull request could add, must
+  name valid owners (`@user`, `@org/team`, or an email). A later rule with no owner takes
+  ownership away, so it fails the check. A pattern usabl cannot evaluate makes it unknown. Only an organization-required workflow, an
   Enterprise feature, takes the workflow out of the pull request's hands (human task H9).
 - **The author controls the build script.** The build can differ from the source, so the judge
   can be shown a page the source does not produce. The verdict is bound to the build digest in
