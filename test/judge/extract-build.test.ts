@@ -158,6 +158,90 @@ describe('extractBuildArchive', () => {
   });
 });
 
+// A hand-written tar header, for archives the system tar will not make: one whose header claims
+// more than any limit allows, so a test can show the refusal comes before the allocation.
+function header(name: string, type: string, size: number): Buffer {
+  const block = Buffer.alloc(512);
+  block.write(name, 0, 100, 'utf8');
+  block.write('0000644\0', 100, 'latin1');
+  block.write('0000000\0', 108, 'latin1');
+  block.write('0000000\0', 116, 'latin1');
+  block.write(`${size.toString(8).padStart(11, '0')}\0`, 124, 'latin1');
+  block.write('00000000000\0', 136, 'latin1');
+  block.write(type, 156, 'latin1');
+  block.write('ustar\0', 257, 'latin1');
+  block.write('00', 263, 'latin1');
+  block.fill(0x20, 148, 156);
+  let sum = 0;
+  for (const byte of block) sum += byte;
+  block.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 'latin1');
+  return block;
+}
+
+describe('extractBuildArchive resource limits', () => {
+  it('refuses an archive larger than the archive limit before reading a header', async () => {
+    const base = scratch();
+    const archive = goodBuild(base);
+    const into = join(base, 'out');
+    const outcome = await extractBuildArchive(archive, into, { maxArchiveBytes: 1024 });
+    expect(outcome).toEqual({ ok: false, message: expect.stringContaining('archive limit') });
+    expect(existsSync(into)).toBe(false);
+  });
+
+  it('refuses a long-name record over the metadata limit without allocating it', async () => {
+    const base = scratch();
+    const archive = join(base, 'build.tar');
+    // The header claims a 1 GiB long name. The file is small, but the size check must come first,
+    // so the refusal names the metadata limit rather than a short read.
+    writeFileSync(archive, Buffer.concat([header('././@LongLink', 'L', 1024 ** 3), Buffer.alloc(1024)]));
+    const alloc = vi.spyOn(Buffer, 'alloc');
+    try {
+      const outcome = await extractBuildArchive(archive, join(base, 'out'), { maxMetadataBytes: 4096 });
+      expect(outcome).toEqual({ ok: false, message: expect.stringContaining('metadata limit') });
+      expect(alloc.mock.calls.every(([size]) => size <= 4096)).toBe(true);
+    } finally {
+      alloc.mockRestore();
+    }
+  });
+
+  it('refuses a pax record over the metadata limit', async () => {
+    const base = scratch();
+    const dist = join(base, 'dist');
+    const deep = join(dist, ...Array.from({ length: 12 }, (_, i) => `segment-number-${i}-of-a-long-path`));
+    mkdirSync(deep, { recursive: true });
+    writeFileSync(join(deep, 'leaf.html'), 'leaf');
+    const archive = join(base, 'build.tar');
+    tar(dist, ['--create', '--format=pax', '--file', archive, '.']);
+    const into = join(base, 'out');
+    const outcome = await extractBuildArchive(archive, into, { maxMetadataBytes: 64 });
+    expect(outcome).toEqual({ ok: false, message: expect.stringContaining('metadata limit') });
+    expect(existsSync(into)).toBe(false);
+  });
+
+  it('refuses more members than the member limit and writes nothing', async () => {
+    const base = scratch();
+    const archive = goodBuild(base);
+    const into = join(base, 'out');
+    const outcome = await extractBuildArchive(archive, into, { maxMembers: 3 });
+    expect(outcome).toEqual({ ok: false, message: expect.stringContaining('member limit') });
+    expect(existsSync(into)).toBe(false);
+  });
+
+  it('refuses files that add up past the extracted-size limit and writes nothing', async () => {
+    const base = scratch();
+    const archive = goodBuild(base);
+    const into = join(base, 'out');
+    const outcome = await extractBuildArchive(archive, into, { maxExtractedBytes: 20 });
+    expect(outcome).toEqual({ ok: false, message: expect.stringContaining('extracted-size limit') });
+    expect(existsSync(into)).toBe(false);
+  });
+
+  it('has default limits a web build fits under', async () => {
+    const base = scratch();
+    expect((await extractBuildArchive(goodBuild(base), join(base, 'out'))).ok).toBe(true);
+  });
+});
+
 describe('runExtractBuild', () => {
   function io(): { err: string[]; stdout: (s: string) => void; stderr: (s: string) => void } {
     const err: string[] = [];

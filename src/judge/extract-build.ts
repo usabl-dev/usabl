@@ -13,6 +13,10 @@
  * - every file is created new (it can never replace or follow something already there), and
  *   nothing but files and directories is ever created, so no write can pass through a link.
  *
+ * - the archive size, every long-name and pax record, the member count, and the bytes the files
+ *   add up to are bounded, and each bound is checked before anything is allocated or written, so
+ *   a hostile archive cannot exhaust memory or disk before it is refused.
+ *
  * It reads POSIX ustar, GNU long names, and pax path records, which is what GNU tar writes. It
  * never decides a verdict; it only refuses or unpacks.
  */
@@ -29,6 +33,24 @@ interface Member {
 }
 
 export type ExtractOutcome = { ok: true; files: number } | { ok: false; message: string };
+
+// The bounds on one archive. A web build is far below each of them; an archive past any one is
+// refused whole.
+export interface ExtractLimits {
+  maxArchiveBytes: number;
+  // One GNU long-name or pax record. A real path record is a few hundred bytes.
+  maxMetadataBytes: number;
+  maxMembers: number;
+  // The file bytes all members add up to once unpacked.
+  maxExtractedBytes: number;
+}
+
+export const DEFAULT_EXTRACT_LIMITS: ExtractLimits = {
+  maxArchiveBytes: 2 * 1024 ** 3,
+  maxMetadataBytes: 64 * 1024,
+  maxMembers: 100_000,
+  maxExtractedBytes: 2 * 1024 ** 3,
+};
 
 function readString(block: Buffer, start: number, length: number): string {
   const slice = block.subarray(start, start + length);
@@ -119,8 +141,9 @@ const TYPE_NAMES: Record<string, string> = {
 };
 
 // Read and check every header. Nothing is written until this returns a full, clean list.
-async function listMembers(handle: FileHandle, archiveSize: number): Promise<Member[]> {
+async function listMembers(handle: FileHandle, archiveSize: number, limits: ExtractLimits): Promise<Member[]> {
   const members: Member[] = [];
+  let extractedBytes = 0;
   let offset = 0;
   let longName: string | null = null;
   let pax: Record<string, string> | null = null;
@@ -142,10 +165,15 @@ async function listMembers(handle: FileHandle, archiveSize: number): Promise<Mem
     const type = String.fromCharCode(header[156] ?? 0);
     const dataOffset = offset + BLOCK;
     const next = dataOffset + Math.ceil(size / BLOCK) * BLOCK;
+    // The metadata bound comes first, so a record is refused on its declared size alone.
+    if ((type === 'L' || type === 'x') && size > limits.maxMetadataBytes) {
+      throw new Error(
+        `a long-name or pax record is ${size} bytes, over the metadata limit of ${limits.maxMetadataBytes} bytes`,
+      );
+    }
     if (dataOffset + size > archiveSize) {
       throw new Error('the archive ends in the middle of a member');
     }
-
     if (type === 'L') {
       longName = readString(await readAt(handle, dataOffset, size), 0, size);
       offset = next;
@@ -173,6 +201,9 @@ async function listMembers(handle: FileHandle, archiveSize: number): Promise<Mem
     if (!normalized.ok) {
       throw new Error(normalized.message);
     }
+    if (members.length >= limits.maxMembers) {
+      throw new Error(`the archive has more than ${limits.maxMembers} members, over the member limit`);
+    }
     if (type === '5') {
       if (normalized.path !== '') {
         members.push({ path: normalized.path, kind: 'directory', dataOffset, size: 0 });
@@ -183,6 +214,12 @@ async function listMembers(handle: FileHandle, archiveSize: number): Promise<Mem
       }
       if (!Number.isInteger(memberSize) || memberSize !== size) {
         throw new Error(`member ${JSON.stringify(name)} has an inconsistent size`);
+      }
+      extractedBytes += memberSize;
+      if (extractedBytes > limits.maxExtractedBytes) {
+        throw new Error(
+          `the files add up to more than ${limits.maxExtractedBytes} bytes, over the extracted-size limit`,
+        );
       }
       members.push({ path: normalized.path, kind: 'file', dataOffset, size: memberSize });
     }
@@ -205,7 +242,12 @@ async function copyData(handle: FileHandle, member: Member, target: string): Pro
   }
 }
 
-export async function extractBuildArchive(archivePath: string, into: string): Promise<ExtractOutcome> {
+export async function extractBuildArchive(
+  archivePath: string,
+  into: string,
+  limitOverrides: Partial<ExtractLimits> = {},
+): Promise<ExtractOutcome> {
+  const limits: ExtractLimits = { ...DEFAULT_EXTRACT_LIMITS, ...limitOverrides };
   let handle: FileHandle;
   try {
     handle = await open(archivePath, 'r');
@@ -214,9 +256,15 @@ export async function extractBuildArchive(archivePath: string, into: string): Pr
   }
   try {
     const archiveSize = (await handle.stat()).size;
+    if (archiveSize > limits.maxArchiveBytes) {
+      return {
+        ok: false,
+        message: `the archive is ${archiveSize} bytes, over the archive limit of ${limits.maxArchiveBytes} bytes`,
+      };
+    }
     let members: Member[];
     try {
-      members = await listMembers(handle, archiveSize);
+      members = await listMembers(handle, archiveSize, limits);
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }
