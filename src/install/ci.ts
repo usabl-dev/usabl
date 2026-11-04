@@ -20,6 +20,7 @@ import {
   fetchArtifactStep,
   writeFetcherStep,
 } from './artifact-fetch.js';
+import { FIND_BUILD_RUN_SCRIPT, gateRunName } from './build-run.js';
 
 export const USABL_GATE_WORKFLOW_PATH = '.github/workflows/usabl-gate.yml';
 
@@ -442,6 +443,9 @@ const VALIDATE_RESULT_SCRIPT = `          node <<'NODE'
 
 function gateWorkflow(variant: GateVariant): string {
   return `name: ${variant.name}
+# Each run is named after the event, pull request, head, and base that started it, so a review can
+# find the build of this exact pull request even when another pull request has the same head.
+run-name: ${gateRunName(variant.name)}
 
 on:
   pull_request:
@@ -563,6 +567,10 @@ ${ENGINE_CHECK}
         env:
           EVENT_NAME: \${{ github.event_name }}
           GH_TOKEN: \${{ github.token }}
+          WORKFLOW_FILE: ${variant.workflowFile}
+          WORKFLOW_NAME: ${variant.name}
+          PR_NUMBER: \${{ github.event.pull_request.number }}
+          HEAD_REPO: \${{ github.event.pull_request.head.repo.full_name }}
         run: |
           # On pull_request the build is in this run.
           if [ "\${EVENT_NAME}" = "pull_request" ]; then
@@ -573,14 +581,15 @@ ${ENGINE_CHECK}
             echo "BUILD_RUN_ID=\${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
             exit 0
           fi
-          # The build runs only on pull_request. Find its completed run for this exact head SHA.
-          # env.HEAD_SHA is read inside jq, never interpolated into the filter string.
-          run_id="$(gh run list --repo "\${GITHUB_REPOSITORY}" \\
-            --workflow ${variant.workflowFile} --event pull_request --limit 50 \\
-            --json databaseId,headSha,status \\
-            --jq '[.[] | select(.headSha == env.HEAD_SHA and .status == "completed")][0].databaseId')"
+          # The build runs only on pull_request. Take the newest completed pull_request run of this
+          # exact pull request, head repository, head, and base, by its run name, whose latest
+          # build-app job succeeded. Every page of runs is searched.
+          run_id="$(node <<'NODE'
+${indentScript(FIND_BUILD_RUN_SCRIPT, '          ')}
+          NODE
+          )"
           if ! [[ "\${run_id}" =~ ^[0-9]+$ ]]; then
-            echo "no completed pull_request run for head \${HEAD_SHA}; failing closed"
+            echo "no completed pull_request run built this pull request at head \${HEAD_SHA} on base \${BASE_SHA}; failing closed"
             exit 1
           fi
           echo "BUILD_RUN_ID=\${run_id}" >> "$GITHUB_ENV"

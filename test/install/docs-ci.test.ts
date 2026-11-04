@@ -57,8 +57,8 @@ describe('USABL_DOCS_GATE_WORKFLOW security properties', () => {
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('<!-- usabl-report -->');
     expect(USABL_DOCS_GATE_WORKFLOW).toContain('check --ci --trusted-ref "${BASE_SHA}" --isolated-browser');
     // The review path finds the build by the docs workflow file name, not the app one.
-    expect(USABL_DOCS_GATE_WORKFLOW).toContain('--workflow usabl-docs-gate.yml');
-    expect(USABL_DOCS_GATE_WORKFLOW).not.toContain('--workflow usabl-gate.yml');
+    expect(USABL_DOCS_GATE_WORKFLOW).toContain('WORKFLOW_FILE: usabl-docs-gate.yml');
+    expect(USABL_DOCS_GATE_WORKFLOW).not.toContain('WORKFLOW_FILE: usabl-gate.yml');
   });
 
   it('builds the docs in the untrusted job and serves them from the judge', () => {
