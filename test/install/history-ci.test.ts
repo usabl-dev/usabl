@@ -63,11 +63,22 @@ describe('the history workflow', () => {
   it('gives the writing job no cache and no npm, so nothing the scan wrote can reach it', () => {
     for (const step of parsed.jobs['history-append']!.steps) {
       expect(step.uses ?? '').not.toMatch(/^actions\/cache/);
-      if (step.uses?.startsWith('actions/setup-node@')) {
-        expect(Object.keys(step.with ?? {})).toEqual(['node-version']);
-      }
       expect(step.run ?? '').not.toMatch(/\bnpm\b/);
     }
+  });
+
+  it('turns the setup-node package cache off in every job, because omitting it leaves it on', () => {
+    let setups = 0;
+    for (const [id, job] of Object.entries(parsed.jobs)) {
+      for (const step of job!.steps) {
+        expect(step.uses ?? '', id).not.toMatch(/^actions\/cache/);
+        if (step.uses?.startsWith('actions/setup-node@')) {
+          setups += 1;
+          expect(step.with, `${id}: ${step.name}`).toEqual({ 'node-version': '22', 'package-manager-cache': false });
+        }
+      }
+    }
+    expect(setups).toBe(3);
   });
 
   it('runs the application only in the job that cannot write', () => {

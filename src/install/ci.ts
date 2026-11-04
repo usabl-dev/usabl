@@ -237,6 +237,9 @@ export const ENGINE_JOB = `  usabl-engine:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
+          # setup-node turns npm caching on by itself when package.json names npm. A cache can be
+          # written by pull request code, so every job turns it off by name.
+          package-manager-cache: false
 
       - name: Install and build trusted engine
         working-directory: usabl-engine
@@ -445,6 +448,9 @@ ${ENGINE_JOB}
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
+          # setup-node turns npm caching on by itself when package.json names npm. A cache can be
+          # written by pull request code, so every job turns it off by name.
+          package-manager-cache: false
 
 ${variant.buildSteps}
 
@@ -497,6 +503,9 @@ ${variant.buildSteps}
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
+          # setup-node turns npm caching on by itself when package.json names npm. A cache can be
+          # written by pull request code, so every job turns it off by name.
+          package-manager-cache: false
 
 ${installTrustedEngineSteps()}
 
@@ -673,6 +682,9 @@ ${VALIDATE_RESULT_SCRIPT}
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
+          # setup-node turns npm caching on by itself when package.json names npm. A cache can be
+          # written by pull request code, so every job turns it off by name.
+          package-manager-cache: false
 
 ${installTrustedEngineSteps()}
 
@@ -783,6 +795,9 @@ ${verifyDownload('DOWNLOAD_DIR', 'usabl-result.json', 'RESULT_DIGEST', 'Result')
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
+          # setup-node turns npm caching on by itself when package.json names npm. A cache can be
+          # written by pull request code, so every job turns it off by name.
+          package-manager-cache: false
 
 ${installTrustedEngineSteps()}
 

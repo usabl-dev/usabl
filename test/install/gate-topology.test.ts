@@ -303,14 +303,19 @@ describe.each(GATES)('$name', ({ body }) => {
     });
 
     it('uses no cache in any job, neither setup-node cache nor actions/cache', () => {
+      // setup-node v5 and later turns npm caching on by itself when package.json names npm, so
+      // leaving the cache inputs out does not turn it off. Every setup-node must say false.
+      let setups = 0;
       for (const id of JOB_ORDER) {
         for (const entry of job(body, id).steps) {
           expect(entry.uses ?? '', `${id}: ${entry.name}`).not.toMatch(/^actions\/cache/);
           if (entry.uses?.startsWith('actions/setup-node@')) {
-            expect(Object.keys(entry.with ?? {}), `${id}: ${entry.name}`).toEqual(['node-version']);
+            setups += 1;
+            expect(entry.with, `${id}: ${entry.name}`).toEqual({ 'node-version': '22', 'package-manager-cache': false });
           }
         }
       }
+      expect(setups).toBeGreaterThanOrEqual(JOB_ORDER.length - 1);
     });
 
     it('sets a fresh npm cache for every npm call in a trusted job', () => {

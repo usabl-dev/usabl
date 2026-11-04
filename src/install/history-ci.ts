@@ -84,6 +84,9 @@ ${ENGINE_JOB}
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
+          # setup-node turns npm caching on by itself when package.json names npm. A cache can be
+          # written by pull request code, so every job turns it off by name.
+          package-manager-cache: false
 
 ${trustedEngineSteps('Verify and unpack trusted engine', HISTORY_SCAN_ENGINE_UNPACK)}
 
@@ -157,6 +160,9 @@ ${trustedEngineSteps('Verify and unpack trusted engine', HISTORY_SCAN_ENGINE_UNP
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
+          # setup-node turns npm caching on by itself when package.json names npm. A cache can be
+          # written by pull request code, so every job turns it off by name.
+          package-manager-cache: false
 
 ${trustedEngineSteps('Verify and unpack trusted engine', UNPACK_ENGINE_IN_TEMP)}
 
