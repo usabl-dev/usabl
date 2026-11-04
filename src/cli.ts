@@ -67,7 +67,7 @@ import { recordMainScan } from './history/record-run.js';
 import { runDebt } from './history/report.js';
 import { runServeBuild } from './judge/serve-build.js';
 import { runExtractBuild } from './judge/extract-build.js';
-import { prepareJudge } from './judge/prepare.js';
+import { prepareJudge, withoutRuntimeSettings } from './judge/prepare.js';
 
 // The configured url warnings this process has already printed. It holds config urls, which may
 // carry a query, so it is never printed and never leaves the process.
@@ -721,7 +721,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     judge = prepared;
   }
 
-  const config = await loadConfig(opts.configPath);
+  // The judge runs on the trusted config. The head's copy is never parsed here, so an invalid one
+  // cannot stop the judge before it scans; the guard still compares its bytes and reports it.
+  // Without a readable trusted config the head's copy plans the run, with its runtime settings
+  // taken out, and no origin is allowed, so every screen it plans is a coverage gap.
+  const config =
+    judge === null || opts.trustedRef === null
+      ? await loadConfig(opts.configPath)
+      : (judge.config ?? withoutRuntimeSettings(await loadConfig(opts.configPath)));
   const deps = await buildDeps(config, {
     // Static-only denies live checks as explicit capability gaps instead of silent omission.
     allowedCapabilities: opts.staticOnly ? [] : ['live'],

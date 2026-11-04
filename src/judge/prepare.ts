@@ -4,8 +4,14 @@
  * digest the workflow handed it, counts the requests the browser blocks, and adds the judge block
  * to the Result. It decides nothing: blocked requests reach the gate as coverage gaps, which the
  * check runner adds per screen.
+ *
+ * With a trusted ref it also hands back the trusted usabl.config.json, parsed, and the judge runs
+ * on it: every runtime setting, such as the readiness budget, comes from the trusted commit. The
+ * head's copy is only compared with it by the guard, so a head that breaks or rewrites the file
+ * is reported as a policy change instead of steering or stopping the judge.
  */
-import type { Result } from '../contracts/index.js';
+import type { Result, UsablConfig } from '../contracts/index.js';
+import { parseUsablConfig } from '../intake/config.js';
 import { judgeDisclosure } from './disclosure.js';
 import { allowedOriginsFrom, blockedOriginLabel, type BrowserIsolation } from './request-filter.js';
 
@@ -19,8 +25,27 @@ export interface PrepareJudgeInput {
 }
 
 export type PreparedJudge =
-  | { ok: true; isolation: BrowserIsolation; finish: (result: Result) => Result }
+  // config is the trusted config, or null when there is no trusted ref or it has no readable
+  // config. In the second case the caller must not take runtime settings from the head.
+  | { ok: true; isolation: BrowserIsolation; config: UsablConfig | null; finish: (result: Result) => Result }
   | { ok: false; message: string };
+
+// The settings that change how the judge runs rather than what it plans. When the trusted ref has
+// no readable config, the head's copy is still used to plan, and these are taken out of it, so the
+// engine defaults apply instead of the head's.
+export function withoutRuntimeSettings(config: UsablConfig): UsablConfig {
+  const { readyTimeoutMs: _ready, signalTimeoutMs: _signal, browserSandbox: _sandbox, judge: _judge, ...rest } = config;
+  return rest;
+}
+
+function parseTrusted(raw: string | null): UsablConfig | null {
+  if (raw === null) return null;
+  try {
+    return parseUsablConfig(raw);
+  } catch {
+    return null;
+  }
+}
 
 export async function prepareJudge(input: PrepareJudgeInput): Promise<PreparedJudge> {
   const digestCheck = judgeDisclosure(0, input.buildDigestEnv);
@@ -54,6 +79,7 @@ export async function prepareJudge(input: PrepareJudgeInput): Promise<PreparedJu
   return {
     ok: true,
     isolation,
+    config: input.trustedRef === null ? null : parseTrusted(configRaw),
     finish: (result) => ({
       ...result,
       judge: { isolatedBrowser: true, blockedRequests: blocked, buildDigest: digestCheck.judge.buildDigest },

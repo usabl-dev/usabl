@@ -215,13 +215,16 @@ export async function buildDeps(
     config,
     options.trustedRef,
   );
+  const runtimeConfig =
+    options.isolation !== undefined && options.trustedRef !== undefined ? intakeConfig : config;
   const browserOptions: RealBrowserOptions = {
     ...(storageStatePath === null ? {} : { storageStatePath }),
     // The operator's app is what decides how long a screen takes to render, so the budget rides
-    // the config the run was started with.
-    ...(config.readyTimeoutMs === undefined
+    // the config the run was started with. The judge runs a pull request's page script, so with a
+    // trusted ref it takes the budget from the trusted config: a head cannot shorten its own.
+    ...(runtimeConfig.readyTimeoutMs === undefined
       ? {}
-      : { readyTimeoutMs: config.readyTimeoutMs }),
+      : { readyTimeoutMs: runtimeConfig.readyTimeoutMs }),
     // The sandbox policy is policy, so a pull request must not be able to turn a required sandbox
     // off for its own scan. With a trusted ref, require in either document wins.
     // The judge runs a pull request's page script, so it always requires the sandbox, whatever

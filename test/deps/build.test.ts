@@ -236,6 +236,34 @@ describe("buildDeps", () => {
     ]);
   });
 
+  it("gives the judge the trusted config's readiness budget, not the head's", async () => {
+    // The judge runs a pull request's page script. A head that shortens its own readiness budget
+    // could turn every screen into a coverage gap on purpose, so with isolation and a trusted ref
+    // the budget is the trusted config's.
+    const repo = await mkdtemp(join(tmpdir(), "usabl-judge-budget-"));
+    const seen: Array<number | undefined> = [];
+    const browserFor = (options: { readyTimeoutMs?: number }): BrowserDriver => {
+      seen.push(options.readyTimeoutMs);
+      return { open: async () => makeFakePage(), close: async () => {} };
+    };
+    const isolation = { allowedOrigins: new Set(["http://127.0.0.1:5173"]), onBlocked: () => undefined };
+    try {
+      await execFileAsync("git", ["init", "-q"], { cwd: repo });
+      await writeFile(join(repo, "usabl.config.json"), JSON.stringify({ ...testConfig(), readyTimeoutMs: 30_000 }), "utf8");
+      await execFileAsync("git", ["add", "usabl.config.json"], { cwd: repo });
+      await execFileAsync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "base"], {
+        cwd: repo,
+      });
+      const head = { ...testConfig(), readyTimeoutMs: 1 };
+      await buildDeps(head, { cwd: repo, browserFor, isolation, trustedRef: "HEAD" });
+      // Without the judge, a local run keeps the config it was started with.
+      await buildDeps(head, { cwd: repo, browserFor });
+      expect(seen).toEqual([30_000, 1]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("tells the check runner that a session was configured, and that it was not", async () => {
     // Two of the three not-reached rules are claims about a session that was asserted and did not
     // work, so they are off unless someone asserted one. This is the only place in the product

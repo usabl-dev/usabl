@@ -82,6 +82,41 @@ describe('prepareJudge', () => {
     expect(logged.join('')).toContain('every request will be blocked');
   });
 
+  it('takes every runtime setting from the trusted config and never reads the working one', async () => {
+    const reads: string[] = [];
+    const trusted = JSON.stringify({ ...JSON.parse(config('http://127.0.0.1:5173')), readyTimeoutMs: 30_000, signalTimeoutMs: 9_000 });
+    const prepared = await prepareJudge({
+      trustedRef: 'b'.repeat(40),
+      configPath: 'usabl.config.json',
+      buildDigestEnv: undefined,
+      readAtRef: async (_ref, path) => (path === 'usabl.config.json' ? trusted : null),
+      readWorking: async (path) => {
+        reads.push(path);
+        return '{ this is not json';
+      },
+      log: () => undefined,
+    });
+    if (!prepared.ok) throw new Error(`expected ok: ${prepared.message}`);
+    expect(prepared.config?.readyTimeoutMs).toBe(30_000);
+    expect(prepared.config?.signalTimeoutMs).toBe(9_000);
+    expect(prepared.config?.appBaseUrl).toBe('http://127.0.0.1:5173');
+    expect(reads).toEqual([]);
+  });
+
+  it('hands back no config when the trusted ref has none, so the caller strips the head runtime settings', async () => {
+    const prepared = await prepareJudge({
+      trustedRef: 'origin/main',
+      configPath: 'usabl.config.json',
+      buildDigestEnv: undefined,
+      readAtRef: async () => '{ broken',
+      readWorking: async () => config('http://127.0.0.1:5173'),
+      log: () => undefined,
+    });
+    if (!prepared.ok) throw new Error('expected ok');
+    expect(prepared.config).toBeNull();
+    expect(prepared.isolation.allowedOrigins.size).toBe(0);
+  });
+
   it('uses the working config only when no trusted ref is given, for a local run', async () => {
     const prepared = await prepareJudge({
       trustedRef: null,
