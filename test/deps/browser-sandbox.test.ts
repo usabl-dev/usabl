@@ -23,6 +23,7 @@ vi.mock('playwright', async (importOriginal) => {
 
 import { makeRealBrowserDriver, makeSharedBrowser, type LaunchedBrowser } from '../../src/deps/real.js';
 import { BrowserSandboxRequiredError, isBrowserSandboxRefusal } from '../../src/deps/sandbox.js';
+import { playwrightPageOf } from '../../src/providers/engines/shared.js';
 
 // The line Chromium writes when it cannot start its sandbox, as Playwright reports it.
 const NO_SANDBOX =
@@ -102,6 +103,17 @@ describe('when the system cannot provide a sandbox', () => {
     const page = await shared.driver().open('http://app.test/');
     expect(ports.calls).toEqual([{ chromiumSandbox: true }, { chromiumSandbox: false }]);
     expect(page.browserSandbox).toBe('off');
+    await shared.close();
+  });
+
+  it('keeps the Playwright page behind a page from the unsandboxed process, so an engine can still run', async () => {
+    // The sandbox note is added to a copy of the page. The Playwright page is looked up by the
+    // page object, so the copy has to carry it, or every engine reads the page as not live.
+    const ports = launcher({ sandboxError: NO_SANDBOX });
+    const shared = makeSharedBrowser({ launch: ports.launch });
+    const page = await shared.driver().open('http://app.test/');
+    expect(page.browserSandbox).toBe('off');
+    expect(playwrightPageOf(page)).not.toBeNull();
     await shared.close();
   });
 

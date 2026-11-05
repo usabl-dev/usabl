@@ -24,6 +24,20 @@ export function registerPlaywrightPage(page: Page, playwrightPage: unknown): voi
   playwrightPages.set(page, playwrightPage);
 }
 
+/**
+ * Registers a copy of a usabl page with the Playwright page behind the original, if it has one.
+ * The real browser driver copies a page to add fields (a request filter, a sandbox note, an
+ * adopted page's close). Without this the copy would read as having no live page, and every
+ * engine would refuse it.
+ */
+export function carryPlaywrightPage<T extends Page>(from: Page, copy: T): T {
+  const playwrightPage = playwrightPages.get(from);
+  if (playwrightPage !== undefined) {
+    playwrightPages.set(copy, playwrightPage);
+  }
+  return copy;
+}
+
 /** The Playwright page registered for this usabl page, or null when there is none. */
 export function playwrightPageOf(page: Page): unknown {
   return playwrightPages.get(page) ?? null;

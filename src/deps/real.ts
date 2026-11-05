@@ -8,7 +8,7 @@ import { chromium, type Browser, type BrowserContext, type CDPSession, type Page
 import type { AncestorAttributesRead, AnnouncementDrain, AnnouncementUndecidable, ApiResponse, AxNode, BrowserDriver, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
-import { registerPlaywrightPage } from '../providers/engines/shared.js';
+import { carryPlaywrightPage, registerPlaywrightPage } from '../providers/engines/shared.js';
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
 import { runAxeInIsolatedWorld } from './axe-world.js';
 import { BrowserSandboxRequiredError, isBrowserSandboxRefusal, isSandboxLaunchFailure, type BrowserSandboxPolicy } from './sandbox.js';
@@ -2161,7 +2161,8 @@ function wrapPage(
 
   attachAxeBridge(page, pw, cdp);
   // The optional commercial engines drive the Playwright page themselves. It is registered, not
-  // attached, so it stays off the page object; see registerPlaywrightPage.
+  // attached, so it stays off the page object; see registerPlaywrightPage. Every copy of the page
+  // made below goes through carryPlaywrightPage, so the copy keeps it.
   registerPlaywrightPage(page, pw);
   return page;
 }
@@ -2199,7 +2200,7 @@ export async function adoptPage(pw: PwPage, options: { readyTimeoutMs?: number }
   // network listeners come off, and the CDP session is detached, which also drops the live-region
   // capture script and the accessibility domain that session set up. A session the page already
   // lost, because the caller closed it, has nothing left to detach.
-  return {
+  return carryPlaywrightPage(page, {
     ...page,
     close: async (): Promise<void> => {
       network.stop();
@@ -2209,7 +2210,7 @@ export async function adoptPage(pw: PwPage, options: { readyTimeoutMs?: number }
         // Already detached, or the page is gone. Either way nothing is held.
       }
     },
-  };
+  });
 }
 
 /**
@@ -2686,7 +2687,7 @@ export function makeSharedBrowser(
       const wrapped: Page =
         blockedOrigins === null
           ? opened
-          : {
+          : carryPlaywrightPage(opened, {
               ...opened,
               blockedRequests: () => blockedOrigins(),
               close: async () => {
@@ -2696,10 +2697,10 @@ export function makeSharedBrowser(
                   await watch?.detach();
                 }
               },
-            };
+            });
       // A page from a process without the sandbox says so, and the check runner carries that onto
       // the screen in the Result.
-      return handle.sandboxed ? wrapped : { ...wrapped, browserSandbox: 'off' };
+      return handle.sandboxed ? wrapped : carryPlaywrightPage(wrapped, { ...wrapped, browserSandbox: 'off' });
     } catch (error) {
       await workerWatch?.detach();
       await context.close().catch(() => undefined);

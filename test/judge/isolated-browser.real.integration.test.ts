@@ -32,6 +32,7 @@ import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import type { Page } from '../../src/contracts/index.js';
 import type { BrowserIsolation } from '../../src/judge/request-filter.js';
 import { testConfig } from '../helpers.js';
+import { playwrightPageOf } from '../../src/providers/engines/shared.js';
 
 interface Recorder {
   server: Server;
@@ -212,6 +213,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the judge isolated brows
     const driver = makeRealBrowserDriver({ isolation: iso, browserSandbox: 'require' });
     try {
       const page = await driver.open(`${app.url}/`);
+      // The filtered page is a copy of the opened one; it keeps the Playwright page an engine needs.
+      expect(playwrightPageOf(page)).not.toBeNull();
       await page.gotoReady();
       expect(await settledState(page, '#own')).toBe('loaded');
       expect(await settledState(page, '#other')).toBe('blocked');

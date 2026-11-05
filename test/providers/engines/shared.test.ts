@@ -10,6 +10,7 @@ import {
   loadEngineModule,
   makeRedactor,
   packageLookupDirs,
+  carryPlaywrightPage,
   playwrightPageOf,
   registerPlaywrightPage,
   probeInstalledPackage,
@@ -264,6 +265,16 @@ describe('the Playwright page bridge', () => {
     registerPlaywrightPage(page, pw);
     expect(playwrightPageOf(page)).toBe(pw);
     expect(playwrightPageOf(makeFakePage())).toBeNull();
+  });
+
+  it('carries the Playwright page to a copy made through carryPlaywrightPage, and nothing to a copy of an unregistered page', () => {
+    const page = makeFakePage();
+    const pw = { fake: 'playwright page' };
+    registerPlaywrightPage(page, pw);
+    const copy = carryPlaywrightPage(page, { ...page, browserSandbox: 'off' as const });
+    expect(copy.browserSandbox).toBe('off');
+    expect(playwrightPageOf(copy)).toBe(pw);
+    expect(playwrightPageOf(carryPlaywrightPage(makeFakePage(), { ...makeFakePage() }))).toBeNull();
   });
 
   it('is not a property of the page, so a copy or a page that names one does not carry it', () => {
