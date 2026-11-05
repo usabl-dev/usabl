@@ -68,6 +68,8 @@ const BROKEN = page(
   <main id="main-content">
     <h1>Broken</h1>
     <rh-cta id="cta-bare">Learn more</rh-cta>
+    <rh-cta id="cta-empty-href" href="">Read more</rh-cta>
+    <rh-skip-link id="skip-empty-href" href="">Skip to content</rh-skip-link>
     <rh-tabs id="tabs-unpaired">
       <rh-tab slot="tab">One</rh-tab>
       <rh-tab slot="tab">Two</rh-tab>
@@ -96,6 +98,16 @@ const CORRECT = page(
     <rh-button id="labelled" accessible-label="Close panel"></rh-button>
     <rh-cta href="#details">Read the details</rh-cta>
     <rh-cta><a href="#details">Read more</a></rh-cta>
+    <rh-cta><a slot="" href="#details">Go to details</a></rh-cta>
+    <rh-skip-link><a slot="" href="#main-content">Skip to the content</a></rh-skip-link>
+    <rh-button id="slot-empty-name"><span slot="">Save draft</span></rh-button>
+    <rh-tabs>
+      <rh-tab slot="tab">A</rh-tab>
+      <rh-tab-panel slot="">Panel A</rh-tab-panel>
+    </rh-tabs>
+    <rh-dialog><h1>Preferences</h1><p>Preferences text</p></rh-dialog>
+    <button id="open-help" type="button">Open help</button>
+    <rh-dialog trigger="open-help"><p>Help text</p></rh-dialog>
     <rh-tabs>
       <rh-tab slot="tab">One</rh-tab>
       <rh-tab slot="tab">Two</rh-tab>
@@ -122,6 +134,28 @@ const PF_PAGE = page(
   </main>`,
   false,
 );
+
+// PatternFly markup only inside a frame, with an unnamed plain button in the top document. The
+// top document is not PatternFly, so the PatternFly rules must not run on it.
+const PF_IN_FRAME = page(
+  'PatternFly in frame',
+  `<main><h1>Frame host</h1><button id="plain" type="button"><svg aria-hidden="true" width="12" height="12"></svg></button>
+  <iframe title="PatternFly widget" src="/pf"></iframe></main>`,
+  false,
+);
+
+// An open dialog whose only name source is an h1, which the component takes as its name.
+const DIALOG_H1_OPEN = page(
+  'Dialog h1',
+  `<main><h1>Dialog host</h1><rh-dialog id="h1-dialog"><h1>Settings</h1><p>Body</p></rh-dialog></main>
+  <script type="module">
+    await customElements.whenDefined('rh-dialog');
+    document.getElementById('h1-dialog').show();
+  </script>`,
+);
+
+// A closed dialog with no name source in its markup: the tree cannot be asked.
+const DIALOG_CLOSED_UNNAMED = page('Dialog closed', '<main><h1>Closed</h1><rh-dialog id="closed-unnamed"><p>Body</p></rh-dialog></main>');
 
 // Neither design system, with a class that only contains a PatternFly prefix and a custom element
 // that only resembles an RHDS one.
@@ -165,6 +199,9 @@ const PAGES: Record<string, string> = {
   '/correct': CORRECT,
   '/pf': PF_PAGE,
   '/neither': NEITHER,
+  '/pf-in-frame': PF_IN_FRAME,
+  '/dialog-h1-open': DIALOG_H1_OPEN,
+  '/dialog-closed-unnamed': DIALOG_CLOSED_UNNAMED,
   '/in-shadow': IN_SHADOW,
   '/in-frame': IN_FRAME,
   '/inner-frame': INNER_FRAME,
@@ -256,8 +293,10 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('RHDS rulepack and design
         ['rhds-accordion-header-parent', '#stray-header'],
         ['rhds-button-accessible-label', '#icon-only'],
         ['rhds-cta-link', '#cta-bare'],
+        ['rhds-cta-link', '#cta-empty-href'],
         ['rhds-dialog-name', '#dialog-unnamed'],
         ['rhds-skip-link-target', '#skip-dangling'],
+        ['rhds-skip-link-target', '#skip-empty-href'],
         ['rhds-skip-link-target', '#skip-missing'],
         ['rhds-switch-label', '#switch-unlabeled'],
         ['rhds-tabs-paired', '#tabs-unpaired'],
@@ -304,13 +343,44 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('RHDS rulepack and design
     expect(result.applicability).toEqual([...inapplicable('neither', 'rhds', RHDS_RULES), ...inapplicable('neither', 'pf', PF_RULES)]);
   });
 
-  it('sees an RHDS element inside an open shadow root or a same-origin frame as RHDS on the page', async () => {
+  it('discloses an RHDS element inside an open shadow root or a same-origin frame as a gap, not a clean check', async () => {
     for (const path of ['/in-shadow', '/in-frame']) {
       const result = await scan(path, false);
-      expect(packEntries(result, 'rhds')).toEqual([]);
-      // The rules read the top document, so the element inside is not checked. See ground truth.
+      // The rules read the top document, so the pack does not apply there and says what it skipped.
       expect(rulesOf(result.drafts, 'rhds')).toEqual([]);
+      expect(packEntries(result, 'rhds')).toEqual(inapplicable(path.slice(1), 'rhds', RHDS_RULES));
+      expect(result.gaps).toEqual([
+        {
+          ref: 'provider:rhds-rulepack/out-of-document',
+          state: 'not-covered',
+          reason: '1 RHDS element(s) sit inside frames or shadow roots, which the RHDS rulepack does not read, so they were not checked.',
+        },
+      ]);
     }
+  });
+
+  it('does not run the PatternFly rules on a top document whose only PatternFly markup is inside a frame', async () => {
+    const result = await scan('/pf-in-frame', false);
+
+    expect(rulesOf(result.drafts, 'pf')).toEqual([]);
+    expect(packEntries(result, 'pf')).toEqual(inapplicable('pf-in-frame', 'pf', PF_RULES));
+    expect(result.gaps).toEqual([
+      {
+        ref: 'provider:pf-rulepack/out-of-document',
+        state: 'not-covered',
+        reason: expect.stringMatching(/^[1-9][0-9]* PatternFly element\(s\) sit inside frames or shadow roots, which the PatternFly rulepack does not read/),
+      },
+    ]);
+  });
+
+  it('passes an open dialog named by an h1, and reports a closed dialog with no name source as unverified', async () => {
+    const named = await scan('/dialog-h1-open', false);
+    expect(named.drafts.filter((draft) => draft.layer === 'rhds')).toEqual([]);
+
+    const closed = await scan('/dialog-closed-unnamed', false);
+    expect(closed.drafts.filter((draft) => draft.layer === 'rhds')).toEqual([
+      expect.objectContaining({ rule: 'rhds-dialog-name', elementPath: '#closed-unnamed', confidence: 'unverified' }),
+    ]);
   });
 
   it('reports an rh-button whose definition never loaded as unverified, never fail', async () => {
