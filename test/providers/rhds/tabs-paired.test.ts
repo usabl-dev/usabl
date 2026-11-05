@@ -40,6 +40,7 @@ describe('rhds-tabs-paired', () => {
 
   it('counts direct children only: tabs in the tab slot, panels in the default slot', () => {
     expect(tabsIn('#tabs')).toBe('#tabs > rh-tab[slot="tab"]');
-    expect(panelsIn('#tabs')).toBe('#tabs > rh-tab-panel:not([slot])');
+    // slot="" is the default slot, so a panel with it counts.
+    expect(panelsIn('#tabs')).toBe('#tabs > rh-tab-panel:is(:not([slot]), [slot=""])');
   });
 });

@@ -18,6 +18,8 @@ describe('rhds-dialog-name', () => {
     ]);
     expect(drafts[0]?.why.startsWith(`"${RHDS_SOURCES[RULE][0].quote}"`)).toBe(true);
     expect(drafts[0]?.fix).toContain('accessible-label');
+    expect(drafts[0]?.why).toContain('no h1 to h6 heading');
+    expect(drafts[0]?.fix).toContain('h1 to h6');
   });
 
   it('reports a closed dialog with no name source as unverified, because it is not in the tree', async () => {
@@ -87,13 +89,15 @@ describe('rhds-dialog-name', () => {
     expect(drafts).toEqual([]);
   });
 
-  it('looks for h2 to h6 headings in the header slot or the default slot, and escapes trigger ids', () => {
+  it('looks for h1 to h6 headings in the header slot or the default slot, and escapes trigger ids', () => {
+    // The component takes any unslotted heading as its name, h1 included, and slot="" is the
+    // default slot.
     expect(headingsIn('#d')).toBe(
       [
-        '#d > :is(h2, h3, h4, h5, h6)[slot="header"]',
-        '#d > [slot="header"] :is(h2, h3, h4, h5, h6)',
-        '#d > :is(h2, h3, h4, h5, h6):not([slot])',
-        '#d > :not([slot]) :is(h2, h3, h4, h5, h6)',
+        '#d > :is(h1, h2, h3, h4, h5, h6)[slot="header"]',
+        '#d > [slot="header"] :is(h1, h2, h3, h4, h5, h6)',
+        '#d > :is(h1, h2, h3, h4, h5, h6):is(:not([slot]), [slot=""])',
+        '#d > :is(:not([slot]), [slot=""]) :is(h1, h2, h3, h4, h5, h6)',
       ].join(', '),
     );
     expect(triggerOf('a"b\\c')).toBe('[id="a\\"b\\\\c"]');

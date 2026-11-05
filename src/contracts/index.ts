@@ -127,7 +127,8 @@ export interface RuleApplicability {
   rule: string;
   outcome: RuleOutcome;
   // Elements the rule matched on this screen. axe reports zero for an inapplicable rule, and the
-  // count is read from what the run returned rather than assumed from the outcome.
+  // count is read from what the run returned rather than assumed from the outcome. A design-system
+  // pack that does not apply reports 0 for each rule because none of its rules ran.
   elementCount: number;
 }
 
@@ -755,7 +756,7 @@ export interface HostMarkup {
   // Every attribute the element carries, by name.
   attributes: Record<string, string>;
   // The text of the child nodes that go to the default slot (text nodes, and elements with no slot
-  // attribute, with their descendants), whitespace collapsed. Text in a named slot is not counted.
+  // attribute or an empty one, with their descendants), whitespace collapsed. Text in a named slot is not counted.
   defaultSlotText: string;
 }
 export interface BrowserDriver {

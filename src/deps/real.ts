@@ -568,7 +568,8 @@ const HOST_MARKUP_FUNCTION = `function (query) {
   }
   let text = '';
   for (const node of Array.from(element.childNodes)) {
-    const toDefaultSlot = node.nodeType === 3 || (node.nodeType === 1 && !node.hasAttribute('slot'));
+    // slot="" is the default slot, the same as no slot attribute.
+    const toDefaultSlot = node.nodeType === 3 || (node.nodeType === 1 && (node.getAttribute('slot') || '') === '');
     if (toDefaultSlot) {
       text += ' ' + (node.textContent || '');
     }
@@ -876,33 +877,37 @@ async function readFocus(cdp: CDPSession): Promise<FocusRead> {
   }
 }
 
+const SHADOW_NODE_GROUP = 'usabl-shadow-node';
+
 /**
  * The backend node of the first element innerSelector matches inside the open shadow root of the
  * host hostSelector names, found in the read world so page script cannot answer for it. Null when
- * there is no such element.
+ * there is no such element. Exported for its tests.
  */
-async function backendNodeIdInShadowRoot(cdp: CDPSession, hostSelector: string, innerSelector: string): Promise<number | null> {
+export async function backendNodeIdInShadowRoot(cdp: CDPSession, hostSelector: string, innerSelector: string): Promise<number | null> {
   const contextId = await isolatedWorldContextId(cdp, READ_WORLD, 'read an element in a shadow root');
-  const evaluated: unknown = await cdp.send('Runtime.evaluate', {
-    expression: `(${SHADOW_ELEMENT_FUNCTION})(${JSON.stringify(hostSelector)}, ${JSON.stringify(innerSelector)})`,
-    contextId,
-    objectGroup: 'usabl-shadow-node',
-    includeCommandLineAPI: false,
-  });
-  const exception = getProp(evaluated, 'exceptionDetails');
-  if (exception !== undefined) {
-    const description = readString(getProp(getProp(exception, 'exception'), 'description'))?.split('\n')[0];
-    throw new Error(`the browser could not read an element in a shadow root: ${description ?? readString(getProp(exception, 'text')) ?? 'unknown error'}`);
-  }
-  const objectId = readString(getProp(getProp(evaluated, 'result'), 'objectId'));
-  if (objectId === null) {
-    return null;
-  }
+  // Every object this read makes, the found element or a thrown value, lands in this group, and the
+  // group is released however the read ends.
   try {
+    const evaluated: unknown = await cdp.send('Runtime.evaluate', {
+      expression: `(${SHADOW_ELEMENT_FUNCTION})(${JSON.stringify(hostSelector)}, ${JSON.stringify(innerSelector)})`,
+      contextId,
+      objectGroup: SHADOW_NODE_GROUP,
+      includeCommandLineAPI: false,
+    });
+    const exception = getProp(evaluated, 'exceptionDetails');
+    if (exception !== undefined) {
+      const description = readString(getProp(getProp(exception, 'exception'), 'description'))?.split('\n')[0];
+      throw new Error(`the browser could not read an element in a shadow root: ${description ?? readString(getProp(exception, 'text')) ?? 'unknown error'}`);
+    }
+    const objectId = readString(getProp(getProp(evaluated, 'result'), 'objectId'));
+    if (objectId === null) {
+      return null;
+    }
     const described: unknown = await cdp.send('DOM.describeNode', { objectId });
     return readNumber(getProp(getProp(described, 'node'), 'backendNodeId'));
   } finally {
-    await cdp.send('Runtime.releaseObject', { objectId }).catch(() => undefined);
+    await cdp.send('Runtime.releaseObjectGroup', { objectGroup: SHADOW_NODE_GROUP }).catch(() => undefined);
   }
 }
 

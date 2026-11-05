@@ -9,7 +9,9 @@ import { cssString, rhdsDraft } from './draft.js';
 const RULE = 'rhds-skip-link-target';
 
 export const SKIP_LINK_SEL = {
-  missingLink: 'rh-skip-link:not([href]):not(:has(> a:not([slot])))',
+  // An empty href renders no link, so it counts as no href. A child with slot="" is in the default
+  // slot, so it counts as the slotted link.
+  missingLink: 'rh-skip-link:is(:not([href]), [href=""]):not(:has(> a:is(:not([slot]), [slot=""])))',
   fragmentHref: 'rh-skip-link[href^="#"]',
 } as const;
 
@@ -47,7 +49,7 @@ export async function checkRhdsSkipLinkTarget(ctx: ProviderContext): Promise<Dra
       severity: 'moderate',
       confidence: 'fail',
       whatUserExperiences: 'This skip link goes nowhere, so keyboard users still have to tab through the navigation.',
-      observed: 'This rh-skip-link has no href and no slotted <a>.',
+      observed: 'This rh-skip-link has no href, or an empty one, and no slotted <a>.',
       fix: 'Set href on the rh-skip-link to the id of the main content, for example href="#main-content", or slot an <a> that points there.',
     }),
   );

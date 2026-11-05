@@ -8,8 +8,9 @@ import { rhdsDraft } from './draft.js';
 const RULE = 'rhds-cta-link';
 
 export const CTA_SEL = {
-  // A child with a slot attribute is not in the default slot, so it does not count as the link.
-  missingTarget: 'rh-cta:not([href]):not(:has(> :is(a, button):not([slot]):first-child))',
+  // A child with a slot name is not in the default slot, so it does not count as the link. A child
+  // with slot="" is in the default slot. An empty href renders no link, so it counts as no href.
+  missingTarget: 'rh-cta:is(:not([href]), [href=""]):not(:has(> :is(a, button):is(:not([slot]), [slot=""]):first-child))',
 } as const;
 
 export async function checkRhdsCtaLink(ctx: ProviderContext): Promise<Draft[]> {
@@ -19,7 +20,7 @@ export async function checkRhdsCtaLink(ctx: ProviderContext): Promise<Draft[]> {
       severity: 'serious',
       confidence: 'fail',
       whatUserExperiences: 'This call to action is not a link or a button, so keyboard and screen reader users cannot use it.',
-      observed: 'This rh-cta has no href, and its first child is not an <a> or a <button>.',
+      observed: 'This rh-cta has no href or an empty one, and its first child in the default slot is not an <a> or a <button>.',
       fix: 'Set href on the rh-cta, or make an <a> or a <button> its first child.',
     }),
   );

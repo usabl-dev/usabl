@@ -29,8 +29,11 @@ describe('rhds-cta-link', () => {
     expect(byRule((await run({})).drafts, RULE)).toEqual([]);
   });
 
-  it('selects only a cta with no href and no a or button first child in the default slot', () => {
-    // A slotted child with a slot attribute is not in the default slot, so it does not count.
-    expect(CTA_SEL.missingTarget).toBe('rh-cta:not([href]):not(:has(> :is(a, button):not([slot]):first-child))');
+  it('selects only a cta with no href, or an empty one, and no a or button first child in the default slot', () => {
+    // A child with a slot name is not in the default slot, so it does not count. slot="" is the
+    // default slot, so a link with it counts. An empty href renders no link, so it counts as none.
+    expect(CTA_SEL.missingTarget).toBe(
+      'rh-cta:is(:not([href]), [href=""]):not(:has(> :is(a, button):is(:not([slot]), [slot=""]):first-child))',
+    );
   });
 });

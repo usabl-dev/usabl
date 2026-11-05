@@ -1,5 +1,5 @@
 /**
- * rh-dialog naming check. Markup decides whether a name source exists: an accessible-label, an h2 to
+ * rh-dialog naming check. Markup decides whether a name source exists: an accessible-label, an h1 to
  * h6 heading in the header or default slot, or a trigger element with text, which the component
  * uses as its fallback name. Only when there is none is the accessibility tree asked. A closed
  * dialog is absent from the tree, which is unknown rather than an empty name.
@@ -8,7 +8,10 @@ import type { Draft, ProviderContext } from '../../contracts/index.js';
 import { cssString, hasText, nameUnavailableDraft, notUpgradedDraft, rhdsDraft } from './draft.js';
 
 const RULE = 'rhds-dialog-name';
-const HEADING = ':is(h2, h3, h4, h5, h6)';
+// The component takes any unslotted heading as its name, h1 included.
+const HEADING = ':is(h1, h2, h3, h4, h5, h6)';
+// slot="" is the default slot, the same as no slot attribute.
+const DEFAULT_SLOT = ':is(:not([slot]), [slot=""])';
 
 export const DIALOG_SEL = {
   host: 'rh-dialog',
@@ -26,8 +29,8 @@ export function headingsIn(host: string): string {
   return [
     `${host} > ${HEADING}[slot="header"]`,
     `${host} > [slot="header"] ${HEADING}`,
-    `${host} > ${HEADING}:not([slot])`,
-    `${host} > :not([slot]) ${HEADING}`,
+    `${host} > ${HEADING}${DEFAULT_SLOT}`,
+    `${host} > ${DEFAULT_SLOT} ${HEADING}`,
   ].join(', ');
 }
 
@@ -75,8 +78,8 @@ export async function checkRhdsDialogName(ctx: ProviderContext): Promise<Draft[]
         confidence: 'fail',
         whatUserExperiences: 'Screen reader users hear "dialog" with no name, so they do not know what it is for.',
         observed:
-          'This rh-dialog has no accessible-label, no h2 to h6 heading in its header or default slot, and no trigger with text, and the accessibility tree reports an empty name for it.',
-        fix: 'Add an h2 to h6 heading with slot="header", or set accessible-label on the rh-dialog.',
+          'This rh-dialog has no accessible-label, no h1 to h6 heading in its header or default slot, and no trigger with text, and the accessibility tree reports an empty name for it.',
+        fix: 'Add an h1 to h6 heading with slot="header", or set accessible-label on the rh-dialog.',
       }),
     );
   }

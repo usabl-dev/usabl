@@ -17,7 +17,8 @@ export function tabsIn(host: string): string {
 }
 
 export function panelsIn(host: string): string {
-  return `${host} > rh-tab-panel:not([slot])`;
+  // slot="" is the default slot, the same as no slot attribute.
+  return `${host} > rh-tab-panel:is(:not([slot]), [slot=""])`;
 }
 
 export async function checkRhdsTabsPaired(ctx: ProviderContext): Promise<Draft[]> {

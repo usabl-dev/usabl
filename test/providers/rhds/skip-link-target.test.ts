@@ -52,7 +52,8 @@ describe('rhds-skip-link-target', () => {
 
   it('does not check an href that is not a fragment', () => {
     expect(SKIP_LINK_SEL.fragmentHref).toBe('rh-skip-link[href^="#"]');
-    expect(SKIP_LINK_SEL.missingLink).toBe('rh-skip-link:not([href]):not(:has(> a:not([slot])))');
+    // An empty href renders no link, and slot="" is the default slot.
+    expect(SKIP_LINK_SEL.missingLink).toBe('rh-skip-link:is(:not([href]), [href=""]):not(:has(> a:is(:not([slot]), [slot=""])))');
     expect(targetOf('m"x')).toBe('[id="m\\"x"], a[name="m\\"x"]');
   });
 });
