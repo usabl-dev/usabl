@@ -212,11 +212,14 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the announcement capture
       const page: Page = await adoptPage(pw);
       const cdp = await context.newCDPSession(pw);
       await cdp.send('Accessibility.enable');
+      // The dialog is open, though not modal, when the region inside it is written, so the
+      // region is in the accessibility tree at the write. A later task makes it modal.
+      await pw.evaluate(`document.getElementById('first').show()`);
       await page.drainAnnouncements();
       await pw.evaluate(`new Promise((resolve) => {
         window.say('outside', 'said in outside');
         window.say('in-first', 'said in in-first');
-        setTimeout(() => { document.getElementById('first').showModal(); resolve(); }, 0);
+        setTimeout(() => { const first = document.getElementById('first'); first.close(); first.showModal(); resolve(); }, 0);
       })`);
       const record = await page.drainAnnouncementRecord();
       expect(record.undecidable).toBeNull();
