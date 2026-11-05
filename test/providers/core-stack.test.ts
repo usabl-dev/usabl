@@ -9,6 +9,7 @@ describe('makeCoreProviders', () => {
     expect(makeCoreProviders().map((provider) => provider.id)).toEqual([
       'axe-core',
       'pf-rulepack',
+      'rhds-rulepack',
       'docs-rulepack',
       'keyboard-walk',
     ]);
@@ -18,6 +19,7 @@ describe('makeCoreProviders', () => {
     expect(makeCoreProviders({ keyboardWalk: false }).map((provider) => provider.id)).toEqual([
       'axe-core',
       'pf-rulepack',
+      'rhds-rulepack',
       'docs-rulepack',
     ]);
   });
@@ -55,6 +57,7 @@ describe('makeScanProviders', () => {
     expect(makeScanProviders(bundle).map((provider) => provider.id)).toEqual([
       'axe-core',
       'pf-rulepack',
+      'rhds-rulepack',
       'docs-rulepack',
       'keyboard-walk',
       'intake:clusters-heading',
@@ -65,6 +68,7 @@ describe('makeScanProviders', () => {
     expect(makeScanProviders(null, { keyboardWalk: false }).map((provider) => provider.id)).toEqual([
       'axe-core',
       'pf-rulepack',
+      'rhds-rulepack',
       'docs-rulepack',
     ]);
   });

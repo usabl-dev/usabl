@@ -9,6 +9,7 @@ import { mapRequirementsToProviders } from '../intake/map-to-providers.js';
 import { axeProvider } from './axe/index.js';
 import { makeDocsRulepackProvider } from './docs-rulepack/index.js';
 import { makeKeyboardWalkProvider } from './keyboard-walk/index.js';
+import { makeRhdsRulepackProvider } from './rhds/index.js';
 import { makeRulepackProvider } from './rulepack/index.js';
 
 // Per-screen budget for the keyboard walk, anchored when each walk starts. It guards against a
@@ -27,11 +28,18 @@ export interface CoreProviderOptions {
 }
 
 /**
- * Core provider stack for a live scan. Order matches buildDeps: axe, PatternFly rulepack,
- * docs rulepack (self-gates to the docs profile), keyboard walk.
+ * Core provider stack for a live scan. Order matches buildDeps: axe, PatternFly rulepack (runs only
+ * on a page with a PatternFly marker, never on docs), RHDS rulepack (runs only on a page with an
+ * RHDS element, on app and docs), docs rulepack (self-gates to the docs profile), keyboard walk.
+ * The provider runner moves page-mutating providers, such as the PatternFly probes, to the end.
  */
 export function makeCoreProviders(options: CoreProviderOptions = {}): Provider[] {
-  const providers: Provider[] = [axeProvider, makeRulepackProvider(), makeDocsRulepackProvider()];
+  const providers: Provider[] = [
+    axeProvider,
+    makeRulepackProvider(),
+    makeRhdsRulepackProvider(),
+    makeDocsRulepackProvider(),
+  ];
   if (options.keyboardWalk === false) {
     return providers;
   }
