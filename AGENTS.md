@@ -20,7 +20,7 @@ returns one gate-owned verdict, or an honest gap when it could not check.
 | `src/trust/`                                               | The guard that detects policy divergence from the trusted ref.                                                    |
 | `src/run.ts`                                               | The sequencer: guard, coverage, scan, gate.                                                                       |
 | `src/coverage/`                                            | Maps changed files to screens through imports, routes, and docs manifests.                                        |
-| `src/providers/`                                           | Evidence collectors: `axe/`, `rulepack/` (PatternFly), `keyboard-walk/`, `docs-rulepack/`. They emit drafts only. |
+| `src/providers/`                                           | Evidence collectors: `axe/`, `rulepack/` (PatternFly), `rhds/` (Red Hat Design System), `keyboard-walk/`, `docs-rulepack/`. They emit drafts only. |
 | `src/deps/`                                                | Adapters for git, the file system, and the browser, plus fakes for tests.                                         |
 | `src/evidence/`                                            | The evidence floor and the verified receipt.                                                                      |
 | `src/history/`                                             | The debt history: records of main scans, the effective floor, and `usabl debt`.                                   |

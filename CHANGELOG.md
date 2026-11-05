@@ -58,7 +58,27 @@
   a skipped gap on a wide-blast change, and `usabl drift routes` refuses on it until the
   sidecar acknowledges its id.
 
+- A Red Hat Design System (RHDS) rulepack, `rhds-rulepack` (layer `rhds`). Seven rules check
+  `rh-button`, `rh-cta`, `rh-tabs`, `rh-dialog`, `rh-switch`, `rh-accordion-header`, and
+  `rh-skip-link` against the sentences the `@rhds/elements` 5.0.0 element documentation
+  states, quoted word for word in each draft's `why`. Structure rules fail from markup. Naming
+  rules fail only when the markup has no name source and the accessibility tree reports an
+  empty name; an element whose definition did not load, or a control the tree does not show,
+  such as a closed dialog, is reported as unverified. The pack only reads the page, and it runs
+  on app and docs screens.
+
+- Each design-system rulepack now runs only on a page that carries its design system's
+  marker, and reports each of its rules as inapplicable on a page without it, the way axe
+  reports a rule that matched nothing. The RHDS pack looks for any element that RHDS 5.0.0
+  defines, including inside open shadow roots and frames.
+
 ### Fixed
+
+- The PatternFly rulepack no longer reports PatternFly rules on a page with no PatternFly
+  markup. Some of its selectors have generic ARIA arms, so on a page built with another design
+  system they matched markup PatternFly never made. It now runs only where an element has a
+  class token that starts with `pf-v6-`, `pf-v5-`, `pf-c-`, or `pf-m-`, or a
+  `data-ouia-component-type` that starts with `PF`.
 
 - In a monorepo, `usabl check` no longer reads a change in a workspace package the app depends
   on as nothing to check. With a config for `packages/admin`, a change in `packages/shared`,
