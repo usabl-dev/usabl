@@ -11,7 +11,8 @@ describe('menu toggle state attributes', () => {
     const page = makeFakePage({
       // A PatternFly page, so the pack runs.
       countEverywhere: async (query) => (query === SEL.pfMarker ? 1 : 0),
-      queryAll: async (query) => (query === SEL.menuToggle ? [{ selector }] : []),
+      queryAll: async (query) =>
+        query === SEL.pfMarker ? [{ selector: '.pf-v6-c-page' }] : query === SEL.menuToggle ? [{ selector }] : [],
       axAt: async () => ({ name: 'Actions for policy-worker', role: 'button', states: {} }),
     }) as Page & { getAttribute(selector: string, name: string): Promise<string | null> }
     page.getAttribute = async (_selector, name) => {

@@ -29,10 +29,16 @@ function withRulepackPage(
   axPlan: Record<string, AxNode | null>,
   ancestorPlan: AncestorPlan = {},
   pfMarkers = 1,
+  pfMarkersElsewhere = 0,
 ): Page {
   return Object.assign(page, {
-    countEverywhere: async (selector: string) => (selector === SEL.pfMarker ? pfMarkers : 0),
-    queryAll: async (selector: string) => queryPlan[selector] ?? [],
+    // pfMarkers sit in the top document, where the rules read. pfMarkersElsewhere sit in frames or
+    // shadow roots, which only countEverywhere sees.
+    countEverywhere: async (selector: string) => (selector === SEL.pfMarker ? pfMarkers + pfMarkersElsewhere : 0),
+    queryAll: async (selector: string) =>
+      selector === SEL.pfMarker
+        ? Array.from({ length: pfMarkers }, (_, index) => element(`.pf-marker-${index + 1}`))
+        : (queryPlan[selector] ?? []),
     // An alert the plan does not name is one the page can no longer find.
     ancestorAttributes: async (selector: string) => {
       const chain = ancestorPlan[selector];
@@ -53,11 +59,12 @@ async function makeContext(
   profile?: ProfileName,
   ancestorPlan: AncestorPlan = {},
   pfMarkers = 1,
+  pfMarkersElsewhere = 0,
 ): Promise<ProviderContext> {
   const deps = makeFakeDeps();
   const page = await deps.browser.open(SCREEN.url);
   return {
-    page: withRulepackPage(page, queryPlan, axPlan, ancestorPlan, pfMarkers),
+    page: withRulepackPage(page, queryPlan, axPlan, ancestorPlan, pfMarkers, pfMarkersElsewhere),
     screen: SCREEN,
     config: testConfig(),
     ...(profile !== undefined ? { profile } : {}),
@@ -364,6 +371,36 @@ describe('makeRulepackProvider', () => {
     );
   });
 
+  it('does not run when PatternFly markup sits only in frames or shadow roots, and discloses those elements as a gap', async () => {
+    // The rules read the top document. A PatternFly widget inside a frame must not switch the pack
+    // on for a top document with no PatternFly, where its generic ARIA arms would fire.
+    const extra = vi.fn(async (): Promise<Draft[]> => [draftFrom('extra-ran')]);
+    const ctx = await makeContext({ [SEL.unnamedButton]: [element('#plain')] }, {}, 'app', {}, 0, 3);
+
+    const output = await makeRulepackProvider([extra]).run(ctx);
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(extra).not.toHaveBeenCalled();
+    expect(applicabilityOf(output)).toHaveLength(PF_RULES.length);
+    expect(applicabilityOf(output).every((entry) => entry.outcome === 'inapplicable' && entry.elementCount === 0)).toBe(true);
+    expect(gapsOf(output)).toEqual([
+      {
+        ref: 'provider:pf-rulepack/out-of-document',
+        state: 'not-covered',
+        reason:
+          '3 PatternFly element(s) sit inside frames or shadow roots, which the PatternFly rulepack does not read, so they were not checked.',
+      },
+    ]);
+  });
+
+  it('runs with no gap when the top document has PatternFly markup and more sits elsewhere', async () => {
+    const extra = vi.fn(async (): Promise<Draft[]> => [draftFrom('extra-ran')]);
+    const output = await makeRulepackProvider([extra]).run(await makeContext({}, {}, 'app', {}, 1, 4));
+
+    expect(draftsOf(output)).toEqual([draftFrom('extra-ran')]);
+    expect(gapsOf(output)).toEqual([]);
+  });
+
   it('runs on a page that carries a PatternFly marker and reports no applicability of its own', async () => {
     const extra = vi.fn(async (): Promise<Draft[]> => [draftFrom('extra-ran')]);
     const output = await makeRulepackProvider([extra]).run(await makeContext({}, {}, 'app', {}, 3));
@@ -381,7 +418,7 @@ describe('makeRulepackProvider', () => {
         .filter((file) => file.endsWith('.ts'))
         .flatMap((file) => [...readFileSync(join(dir, file), 'utf8').matchAll(/'(pf-[a-z0-9-]+)'/g)].map((match) => match[1] ?? '')),
     );
-    for (const notRule of ['pf-v6-', 'pf-v5-', 'pf-c-', 'pf-m-', 'pf-rulepack']) literals.delete(notRule);
+    for (const notRule of ['pf-v6-', 'pf-v5-', 'pf-c-', 'pf-m-', 'pf-l-', 'pf-u-', 'pf-rulepack']) literals.delete(notRule);
     expect([...literals].sort()).toEqual([...PF_RULES]);
   });
 
@@ -396,6 +433,10 @@ describe('makeRulepackProvider', () => {
         '[class*=" pf-c-"]',
         '[class^="pf-m-"]',
         '[class*=" pf-m-"]',
+        '[class^="pf-l-"]',
+        '[class*=" pf-l-"]',
+        '[class^="pf-u-"]',
+        '[class*=" pf-u-"]',
         '[data-ouia-component-type^="PF"]',
       ].join(', '),
     );

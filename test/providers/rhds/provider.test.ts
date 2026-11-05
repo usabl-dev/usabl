@@ -42,6 +42,31 @@ describe('makeRhdsRulepackProvider', () => {
     }
   });
 
+  it('does not run when RHDS elements sit only in frames or shadow roots, and discloses them as a gap', async () => {
+    // A shell that keeps every RHDS element in a shadow root would otherwise read as checked and
+    // clean: the rules read the top document and would find nothing.
+    for (const profile of [undefined, 'docs'] as const) {
+      const result = await run({ markers: 0, markersElsewhere: 5, query: { [BUTTON_SEL.host]: ['#x'] } }, profile);
+      expect(result.drafts).toEqual([]);
+      expect(result.applicability).toEqual(
+        RHDS_RULES.map((rule) => ({ screenId: SCREEN.id, layer: 'rhds', rule, outcome: 'inapplicable', elementCount: 0 })),
+      );
+      expect(result.gaps).toEqual([
+        {
+          ref: 'provider:rhds-rulepack/out-of-document',
+          state: 'not-covered',
+          reason: '5 RHDS element(s) sit inside frames or shadow roots, which the RHDS rulepack does not read, so they were not checked.',
+        },
+      ]);
+    }
+  });
+
+  it('runs with no gap when the top document has an RHDS element and more sit elsewhere', async () => {
+    const result = await run({ markers: 2, markersElsewhere: 7, query: { [BUTTON_SEL.host]: ['#x'] }, shadow: { '#x': { [BUTTON_SEL.inner]: ax('', 'button') } } });
+    expect(result.drafts.map((draft) => draft.rule)).toEqual(['rhds-button-accessible-label']);
+    expect(result.gaps).toEqual([]);
+  });
+
   it('runs no check on a page with no RHDS element', async () => {
     const extra = vi.fn(async (): Promise<Draft[]> => []);
     const page = makeFakePage();
@@ -62,6 +87,7 @@ describe('makeRhdsRulepackProvider', () => {
     const page = makeFakePage({
       countEverywhere: async (selector) => (selector === RHDS_MARKER ? 1 : 0),
       queryAll: async (selector) => {
+        if (selector === RHDS_MARKER) return [{ selector: '#marker' }];
         if (selector === BUTTON_SEL.host) throw new Error('boom');
         return [];
       },
@@ -82,7 +108,7 @@ describe('makeRhdsRulepackProvider', () => {
 
   it('lets a marker read that throws reach the provider runner, which discloses it as a gap', async () => {
     const page = makeFakePage({
-      countEverywhere: async () => {
+      queryAll: async () => {
         throw new Error('page closed');
       },
     });

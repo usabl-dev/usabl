@@ -23,14 +23,14 @@
  */
 // Class prefixes that mark PatternFly markup. They decide only whether the rulepack runs on a page;
 // the rules themselves are still written and checked against PatternFly 6 markup.
-const PF_CLASS_PREFIXES = ['pf-v6-', 'pf-v5-', 'pf-c-', 'pf-m-'];
+const PF_CLASS_PREFIXES = ['pf-v6-', 'pf-v5-', 'pf-c-', 'pf-m-', 'pf-l-', 'pf-u-'];
 
 export const SEL = {
   /**
    * Any element that marks the page as PatternFly: a class token that starts with a PatternFly
    * prefix, or an OUIA type that PatternFly writes, such as "PF6/Button". A class token starts the
-   * attribute or follows a space, so a class such as "xpf-c-card" is not a match. Read through
-   * Page.countEverywhere, so it sees every frame and open shadow roots.
+   * attribute or follows a space, so a class such as "xpf-c-card" is not a match. The pack applies
+   * only when the top document holds a match, read with queryAll as the rules read.
    */
   pfMarker: [
     ...PF_CLASS_PREFIXES.flatMap((prefix) => [`[class^="${prefix}"]`, `[class*=" ${prefix}"]`]),

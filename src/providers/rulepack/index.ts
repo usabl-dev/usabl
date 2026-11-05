@@ -15,7 +15,7 @@ import { checkPfRowActionNameUnique } from './pf-row-action-name-unique.js';
 import { checkPfTableHeaderAssoc } from './pf-table-header-assoc.js';
 import { checkPfToastLiveRegion } from './pf-toast-live-region.js';
 import { checkPfToolbarLabeledWhenRepeated } from './pf-toolbar-labeled-when-repeated.js';
-import { designSystemPresent, inapplicableOutput } from '../design-system-pack.js';
+import { packNotApplicable } from '../design-system-pack.js';
 import { probeDialogs, probeMenus } from './probes.js';
 import { SEL } from './selectors.js';
 
@@ -89,10 +89,18 @@ export function makeRulepackProvider(extraChecks: RulepackCheck[] = []): Provide
 
       // Several selectors have generic ARIA arms, and the dialog probe clicks disclosure controls,
       // so on a page built with another design system they would report PatternFly rules against
-      // markup PatternFly never made. A page with no PatternFly marker gets no PF drafts, and the
-      // record shows each rule matched nothing. Read before any probe, so nothing has been clicked.
-      if (!(await designSystemPresent(ctx, SEL.pfMarker))) {
-        return inapplicableOutput(ctx, 'pf', PF_RULES);
+      // markup PatternFly never made. A top document with no PatternFly marker gets no PF drafts,
+      // and the record shows each rule matched nothing. Read before any probe, so nothing has been
+      // clicked.
+      const notApplicable = await packNotApplicable(ctx, {
+        id: 'pf-rulepack',
+        layer: 'pf',
+        name: 'PatternFly',
+        marker: SEL.pfMarker,
+        rules: PF_RULES,
+      });
+      if (notApplicable !== null) {
+        return notApplicable;
       }
 
       // Static checks first, then probes, because probes mutate page state. Extra checks name

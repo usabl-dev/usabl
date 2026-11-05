@@ -15,8 +15,10 @@ export interface PagePlan {
   // hostMarkup overrides by exact selector. Any element the query plan returns is otherwise an
   // upgraded element with no attributes and no default-slot text. Anything else matches nothing.
   markup?: Record<string, Partial<HostMarkup> | null>;
-  // How many RHDS marker elements the page holds. Absent means one, so the pack applies.
+  // How many RHDS marker elements the top document holds. Absent means one, so the pack applies.
   markers?: number;
+  // How many more sit inside frames or shadow roots, where only countEverywhere sees them.
+  markersElsewhere?: number;
 }
 
 const BARE: HostMarkup = { defined: true, attributes: {}, defaultSlotText: '' };
@@ -24,8 +26,11 @@ const BARE: HostMarkup = { defined: true, attributes: {}, defaultSlotText: '' };
 export function contextFor(plan: PagePlan, profile?: ProfileName): ProviderContext {
   const known = new Set(Object.values(plan.query ?? {}).flat());
   const page = makeFakePage({
-    countEverywhere: async (selector) => (selector === RHDS_MARKER ? (plan.markers ?? 1) : 0),
-    queryAll: async (selector) => (plan.query?.[selector] ?? []).map((s) => ({ selector: s })),
+    countEverywhere: async (selector) => (selector === RHDS_MARKER ? (plan.markers ?? 1) + (plan.markersElsewhere ?? 0) : 0),
+    queryAll: async (selector) =>
+      selector === RHDS_MARKER
+        ? Array.from({ length: plan.markers ?? 1 }, (_, index) => ({ selector: `#rhds-marker-${index + 1}` }))
+        : (plan.query?.[selector] ?? []).map((s) => ({ selector: s })),
     axAt: async (selector) => plan.ax?.[selector] ?? null,
     axInShadowRoot: async (host, inner) => plan.shadow?.[host]?.[inner] ?? null,
     hostMarkup: async (selector) => {

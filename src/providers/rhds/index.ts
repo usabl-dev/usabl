@@ -10,7 +10,7 @@ import type {
   ProviderContext,
   ProviderOutput,
 } from '../../contracts/index.js';
-import { designSystemPresent, inapplicableOutput } from '../design-system-pack.js';
+import { packNotApplicable } from '../design-system-pack.js';
 import { RHDS_LAYER } from './draft.js';
 import { checkRhdsAccordionHeaderParent } from './rhds-accordion-header-parent.js';
 import { checkRhdsButtonAccessibleLabel } from './rhds-button-accessible-label.js';
@@ -29,8 +29,8 @@ interface NamedCheck {
 }
 
 /**
- * The marker that says RHDS is on the page: any element the pinned release defines, in any frame
- * and inside open shadow roots.
+ * The marker that says RHDS is on the page: any element the pinned release defines, in the top
+ * document, where the rules read.
  */
 export const RHDS_MARKER = RHDS_TAGS.join(', ');
 
@@ -63,8 +63,15 @@ export function makeRhdsRulepackProvider(extraChecks: RhdsCheck[] = []): Provide
     capabilities: ['live'],
     // RHDS is used on content sites as well as applications, so the pack runs on both profiles.
     async run(ctx: ProviderContext): Promise<ProviderOutput> {
-      if (!(await designSystemPresent(ctx, RHDS_MARKER))) {
-        return inapplicableOutput(ctx, RHDS_LAYER, RHDS_RULES);
+      const notApplicable = await packNotApplicable(ctx, {
+        id: 'rhds-rulepack',
+        layer: RHDS_LAYER,
+        name: 'RHDS',
+        marker: RHDS_MARKER,
+        rules: RHDS_RULES,
+      });
+      if (notApplicable !== null) {
+        return notApplicable;
       }
 
       const named: NamedCheck[] = [
