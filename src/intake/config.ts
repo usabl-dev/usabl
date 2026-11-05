@@ -3,7 +3,16 @@
  * This unit validates shape only.
  * It must never mint a verdict or choose scan targets on its own.
  */
-import type { BrowserSandboxPolicy, JudgeConfig, ReachedWhenSignal, SurfaceConfig, UsablConfig } from '../contracts/index.js';
+import type {
+  BrowserSandboxPolicy,
+  DequeEngineConfig,
+  EnginesConfig,
+  EvincedEngineConfig,
+  JudgeConfig,
+  ReachedWhenSignal,
+  SurfaceConfig,
+  UsablConfig,
+} from '../contracts/index.js';
 import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
 import { expandBraces } from '../primitives/match-glob.js';
@@ -301,6 +310,74 @@ function parseJudge(raw: unknown): JudgeConfig {
   return { allowOrigins };
 }
 
+// The engines block turns on vendor code that can hold credentials and reach the network, so a key
+// usabl does not know is refused rather than ignored. A misspelled "enabeld" would otherwise read as
+// an engine that is off, and a misspelled "trackUsage" would leave the operator's choice unapplied.
+function rejectUnknownEngineKeys(value: object, allowed: readonly string[], label: string): void {
+  for (const key of Object.keys(value)) {
+    // A promote list is the one key an operator may expect from the engine design. Vendor findings
+    // stay preview until a live run on a licensed SDK shows which types repeat, so it gets its own
+    // message rather than reading as a typo.
+    if (key === 'promote') {
+      throw configError`${label}.promote is not accepted yet. Vendor findings stay preview (shown, never blocking) until a live run on a licensed SDK proves which rule types are stable. Remove the key.`;
+    }
+    if (!allowed.includes(key)) {
+      throw configError`${label} has an unknown key "${key}". The keys it accepts are ${allowed.join(', ')}.`;
+    }
+  }
+}
+
+function expectBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw configError`${label} must be true or false`;
+  }
+  return value;
+}
+
+function parseDequeEngine(raw: unknown): DequeEngineConfig {
+  const engine = expectObject(raw, 'engines.deque');
+  rejectUnknownEngineKeys(engine, ['enabled', 'rulesetId', 'trackUsage'], 'engines.deque');
+  const rulesetRaw = Reflect.get(engine, 'rulesetId');
+  const trackUsageRaw = Reflect.get(engine, 'trackUsage');
+  if (rulesetRaw !== undefined && (typeof rulesetRaw !== 'string' || rulesetRaw.trim().length === 0)) {
+    throw configError`engines.deque.rulesetId must be a non-empty string`;
+  }
+  return {
+    enabled: expectBoolean(Reflect.get(engine, 'enabled'), 'engines.deque.enabled'),
+    ...(rulesetRaw === undefined ? {} : { rulesetId: rulesetRaw }),
+    ...(trackUsageRaw === undefined
+      ? {}
+      : { trackUsage: expectBoolean(trackUsageRaw, 'engines.deque.trackUsage') }),
+  };
+}
+
+function parseEvincedEngine(raw: unknown): EvincedEngineConfig {
+  const engine = expectObject(raw, 'engines.evinced');
+  rejectUnknownEngineKeys(engine, ['enabled', 'mode'], 'engines.evinced');
+  const modeRaw = Reflect.get(engine, 'mode');
+  if (modeRaw !== undefined && modeRaw !== 'offline' && modeRaw !== 'online') {
+    throw configError`engines.evinced.mode must be "offline" or "online"`;
+  }
+  return {
+    enabled: expectBoolean(Reflect.get(engine, 'enabled'), 'engines.evinced.enabled'),
+    ...(modeRaw === undefined ? {} : { mode: modeRaw }),
+  };
+}
+
+function parseEngines(raw: unknown): EnginesConfig | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const engines = expectObject(raw, 'engines');
+  rejectUnknownEngineKeys(engines, ['deque', 'evinced'], 'engines');
+  const dequeRaw = Reflect.get(engines, 'deque');
+  const evincedRaw = Reflect.get(engines, 'evinced');
+  return {
+    ...(dequeRaw === undefined ? {} : { deque: parseDequeEngine(dequeRaw) }),
+    ...(evincedRaw === undefined ? {} : { evinced: parseEvincedEngine(evincedRaw) }),
+  };
+}
+
 export function parseUsablConfig(raw: string): UsablConfig {
   // A JSON.parse failure message quotes the offending input back, so it is operator text on the
   // same egress as every other message here and cannot be allowed to pass through unscrubbed.
@@ -352,6 +429,7 @@ export function parseUsablConfig(raw: string): UsablConfig {
 
   const judgeRaw = Reflect.get(root, 'judge');
   const judge = judgeRaw === undefined ? undefined : parseJudge(judgeRaw);
+  const engines = parseEngines(Reflect.get(root, 'engines'));
 
   return {
     appBaseUrl: parseConfiguredUrl(Reflect.get(root, 'appBaseUrl'), 'appBaseUrl'),
@@ -372,5 +450,6 @@ export function parseUsablConfig(raw: string): UsablConfig {
     ...(noiseBudget === undefined ? {} : { noiseBudget }),
     ...(browserSandbox === undefined ? {} : { browserSandbox }),
     ...(judge === undefined ? {} : { judge }),
+    ...(engines === undefined ? {} : { engines }),
   };
 }

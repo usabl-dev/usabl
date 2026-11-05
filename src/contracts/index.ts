@@ -903,6 +903,32 @@ export interface UsablConfig {
   browserSandbox?: BrowserSandboxPolicy;
   // Settings for the CI judge. Read from the trusted ref only.
   judge?: JudgeConfig;
+  // Optional commercial engines. Read from the trusted ref only. Absent or turned off means the
+  // engine's provider is not registered at all, so a run without this block is the run usabl
+  // made before engines existed.
+  engines?: EnginesConfig;
+}
+
+// ---- optional commercial engines (the operator holds the license; the package is never a dependency) ----
+// Their findings are preview in this release: shown, never gating. No key here can promote them.
+export interface DequeEngineConfig {
+  enabled: boolean;
+  // Passed to Deque's builder as is. Absent means Deque's own default ruleset.
+  rulesetId?: string;
+  // Deque sends usage data unless told not to. Absent means false: usabl turns it off.
+  trackUsage?: boolean;
+}
+export type EvincedMode = 'offline' | 'online';
+export interface EvincedEngineConfig {
+  enabled: boolean;
+  // offline reads EVINCED_SERVICE_ID and EVINCED_AUTH_TOKEN and needs no license server.
+  // online reads EVINCED_SERVICE_ID and EVINCED_API_KEY and contacts Evinced's license server.
+  // Absent means offline.
+  mode?: EvincedMode;
+}
+export interface EnginesConfig {
+  deque?: DequeEngineConfig;
+  evinced?: EvincedEngineConfig;
 }
 
 // Origins other than the app origin that the judge's isolated browser may reach, for example a

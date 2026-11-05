@@ -876,3 +876,65 @@ describe('parseUsablConfig userinfo without a scheme and two slashes', () => {
     });
   }
 });
+
+describe('parseUsablConfig engines', () => {
+  it('leaves engines unset when the operator does not name the block', () => {
+    expect(parseUsablConfig(configJson()).engines).toBeUndefined();
+  });
+
+  it('reads both engines with every documented key', () => {
+    const engines = {
+      deque: { enabled: true, rulesetId: 'wcag2.2', trackUsage: false },
+      evinced: { enabled: true, mode: 'online' },
+    };
+    expect(parseUsablConfig(configJson({ engines })).engines).toEqual(engines);
+  });
+
+  it('reads an engine that names only enabled', () => {
+    expect(parseUsablConfig(configJson({ engines: { evinced: { enabled: false } } })).engines).toEqual({
+      evinced: { enabled: false },
+    });
+  });
+
+  it('refuses an unknown engine and an unknown key inside an engine', () => {
+    expect(() => parseUsablConfig(configJson({ engines: { lighthouse: { enabled: true } } }))).toThrow(
+      /engines has an unknown key "lighthouse"/,
+    );
+    expect(() => parseUsablConfig(configJson({ engines: { deque: { enabeld: true } } }))).toThrow(
+      /engines\.deque has an unknown key "enabeld"/,
+    );
+    expect(() =>
+      parseUsablConfig(configJson({ engines: { evinced: { enabled: true, secret: 'x' } } })),
+    ).toThrow(/engines\.evinced has an unknown key "secret"/);
+  });
+
+  it('refuses a promote list, because vendor findings stay preview until a live run', () => {
+    for (const engine of ['deque', 'evinced']) {
+      expect(() =>
+        parseUsablConfig(configJson({ engines: { [engine]: { enabled: true, promote: ['WRONG_SEMANTIC_ROLE'] } } })),
+      ).toThrow(/engines\.(deque|evinced)\.promote is not accepted yet.*preview.*licensed SDK/);
+    }
+  });
+
+  it('refuses an engine without a boolean enabled', () => {
+    expect(() => parseUsablConfig(configJson({ engines: { deque: {} } }))).toThrow(
+      /engines\.deque\.enabled must be true or false/,
+    );
+    expect(() => parseUsablConfig(configJson({ engines: { evinced: { enabled: 'yes' } } }))).toThrow(
+      /engines\.evinced\.enabled must be true or false/,
+    );
+  });
+
+  it('refuses malformed values for each engine key', () => {
+    const bad: Array<[unknown, RegExp]> = [
+      [[], /engines must be an object/],
+      [{ deque: true }, /engines\.deque must be an object/],
+      [{ deque: { enabled: true, rulesetId: '  ' } }, /engines\.deque\.rulesetId must be a non-empty string/],
+      [{ deque: { enabled: true, trackUsage: 'false' } }, /engines\.deque\.trackUsage must be true or false/],
+      [{ evinced: { enabled: true, mode: 'cloud' } }, /engines\.evinced\.mode must be "offline" or "online"/],
+    ];
+    for (const [engines, message] of bad) {
+      expect(() => parseUsablConfig(configJson({ engines }))).toThrow(message);
+    }
+  });
+});

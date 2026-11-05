@@ -1,15 +1,16 @@
 /**
  * Resolve intake config from trusted-ref config bytes when available.
- * This unit protects requirement provider wiring only.
+ * This unit protects requirement provider and engine provider wiring only.
  * It must never accept PR-only intake roots when trusted policy cannot be parsed.
  */
 import type { GitReader, UsablConfig } from '../contracts/index.js';
 import { parseUsablConfig } from './config.js';
 
 // Without trusted policy, nothing that trusted policy alone may turn on is kept: the requirements
-// root, and the origins the judge's browser may reach.
+// root, the origins the judge's browser may reach, and the commercial engines, which run vendor
+// code that can hold credentials and reach the network.
 function withoutTrustedOnlyFields(config: UsablConfig): UsablConfig {
-  const { requirements: _requirements, judge: _judge, ...rest } = config;
+  const { requirements: _requirements, judge: _judge, engines: _engines, ...rest } = config;
   return rest;
 }
 

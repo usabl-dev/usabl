@@ -151,4 +151,33 @@ requirements:
       },
     });
   });
+  describe('engines', () => {
+    const branchEngines = { evinced: { enabled: true, mode: 'online' as const } };
+
+    it('takes engines from the trusted config, not the branch', async () => {
+      const working = testConfig({ engines: branchEngines });
+      const trusted = testConfig({ engines: { deque: { enabled: true } } });
+      const git = scriptedGit({ 'origin/main': { 'usabl.config.json': JSON.stringify(trusted) } });
+      const resolved = await resolveIntakeConfig(git, working, 'origin/main');
+      expect(resolved.engines).toEqual({ deque: { enabled: true } });
+    });
+
+    it('turns engines off when trusted config is missing or unparseable', async () => {
+      const working = testConfig({ engines: branchEngines });
+      const missing = await resolveIntakeConfig(scriptedGit({ 'origin/main': {} }), working, 'origin/main');
+      expect(missing.engines).toBeUndefined();
+      const broken = await resolveIntakeConfig(
+        scriptedGit({ 'origin/main': { 'usabl.config.json': '{not json' } }),
+        working,
+        'origin/main',
+      );
+      expect(broken.engines).toBeUndefined();
+      expect(broken.surfaces).toEqual(working.surfaces);
+    });
+
+    it('keeps the working engines on a local run with no trusted ref', async () => {
+      const working = testConfig({ engines: branchEngines });
+      expect((await resolveIntakeConfig(scriptedGit({}), working, undefined)).engines).toEqual(branchEngines);
+    });
+  });
 });
