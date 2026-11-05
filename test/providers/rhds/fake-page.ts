@@ -1,7 +1,7 @@
-import type { AxNode, Draft, HostMarkup, ProfileName, ProviderContext, RuleApplicability } from '../../../src/contracts/index.js';
+import type { AxNode, Draft, HostMarkup, ProfileName, ProviderContext, ProviderNote, RuleApplicability } from '../../../src/contracts/index.js';
 import { makeFakePage } from '../../../src/deps/fakes.js';
 import { makeRhdsRulepackProvider, RHDS_MARKER } from '../../../src/providers/rhds/index.js';
-import { applicabilityOf, draftsOf, gapsOf, testConfig } from '../../helpers.js';
+import { applicabilityOf, draftsOf, gapsOf, notesOf, testConfig } from '../../helpers.js';
 
 export const SCREEN = { id: 'home', url: 'http://127.0.0.1:5173/' };
 
@@ -53,9 +53,9 @@ export function ax(name: string | null, role: string): AxNode {
 export async function run(
   plan: PagePlan,
   profile?: ProfileName,
-): Promise<{ drafts: Draft[]; gaps: unknown[]; applicability: RuleApplicability[] }> {
+): Promise<{ drafts: Draft[]; gaps: unknown[]; applicability: RuleApplicability[]; notes: ProviderNote[] }> {
   const output = await makeRhdsRulepackProvider().run(contextFor(plan, profile));
-  return { drafts: draftsOf(output), gaps: gapsOf(output), applicability: applicabilityOf(output) };
+  return { drafts: draftsOf(output), gaps: gapsOf(output), applicability: applicabilityOf(output), notes: notesOf(output) };
 }
 
 export function byRule(drafts: Draft[], rule: string): Draft[] {

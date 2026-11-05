@@ -21,6 +21,7 @@ import {
   isGradientContrastReview,
 } from '../primitives/gradient-contrast.js';
 import { UNCONFIRMED_HEADING, unconfirmedNotice } from './floor-notice.js';
+import { NOTES_HEADING, screenNotes } from './notes.js';
 import { formatAppSourceLocation, formatDocsSourceLocation } from './source-location.js';
 import { describeVerdict, formatVerdictLine } from './verdict-line.js';
 
@@ -78,6 +79,27 @@ function renderNotEvaluated(result: Result): string[] {
  * each one with its own reason, which carries the fix. Refs are repository paths and reasons are
  * usabl's own words about the source tree; both are neutralized like any printed field.
  */
+/**
+ * The notes providers disclosed, one line per note, printed after the gaps. A note says what a
+ * provider did not read on a screen. It is not a gap and never changes the verdict, so it is
+ * labelled as a disclosure that does not block and appears under any run. Every field is
+ * neutralized and bounded like a gap's.
+ */
+function renderNotes(result: Result): string[] {
+  const notes = screenNotes(result);
+  if (notes.length === 0) {
+    return [];
+  }
+  return [
+    `  ${NOTES_HEADING}: ${notes.length} note(s)`,
+    ...notes.map(
+      (note) =>
+        `    ${boundField(neutralizePrintedText(note.screenId), 'gapRef')}: ` +
+        `${boundField(neutralizePrintedText(note.ref), 'gapRef')}: ${boundField(neutralizePrintedText(note.reason), 'gapReason')}`,
+    ),
+  ];
+}
+
 function renderOtherUnplacedFiles(gaps: readonly CoverageGap[]): string[] {
   const unplaced = gaps.filter((gap) => gap.state === 'unresolved');
   if (unplaced.length < 2) {
@@ -354,6 +376,7 @@ export function formatSummary(result: Result): string {
   lines.push(...renderFloorHeadroom(result));
   lines.push(...renderFloorUnconfirmed(result));
   lines.push(...renderNotEvaluated(result));
+  lines.push(...renderNotes(result));
   lines.push(...renderBrowserSandbox(result));
   if (result.dirtyGuardedPaths.length > 0) {
     lines.push(`  guarded paths changed: ${result.dirtyGuardedPaths.join(', ')}`);

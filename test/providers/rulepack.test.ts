@@ -12,7 +12,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeRulepackProvider, PF_RULES } from '../../src/providers/rulepack/index.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
-import { applicabilityOf, draftsOf, gapsOf, testConfig } from '../helpers.js';
+import { applicabilityOf, draftsOf, gapsOf, notesOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 
@@ -371,7 +371,7 @@ describe('makeRulepackProvider', () => {
     );
   });
 
-  it('does not run when PatternFly markup sits only in frames or shadow roots, and discloses those elements as a gap', async () => {
+  it('does not run when PatternFly markup sits only in frames or shadow roots, and discloses it in a note, never a gap', async () => {
     // The rules read the top document. A PatternFly widget inside a frame must not switch the pack
     // on for a top document with no PatternFly, where its generic ARIA arms would fire.
     const extra = vi.fn(async (): Promise<Draft[]> => [draftFrom('extra-ran')]);
@@ -383,12 +383,13 @@ describe('makeRulepackProvider', () => {
     expect(extra).not.toHaveBeenCalled();
     expect(applicabilityOf(output)).toHaveLength(PF_RULES.length);
     expect(applicabilityOf(output).every((entry) => entry.outcome === 'inapplicable' && entry.elementCount === 0)).toBe(true);
-    expect(gapsOf(output)).toEqual([
+    // A note, not a gap: the screen is not blocked because an optional pack could not read there.
+    expect(gapsOf(output)).toEqual([]);
+    expect(notesOf(output)).toEqual([
       {
         ref: 'provider:pf-rulepack/out-of-document',
-        state: 'not-covered',
         reason:
-          '3 PatternFly element(s) sit inside frames or shadow roots, which the PatternFly rulepack does not read, so they were not checked.',
+          '3 PatternFly element(s) sit inside frames or shadow roots, which the PatternFly rulepack does not read, so the PatternFly rules did not check them.',
       },
     ]);
   });
@@ -399,6 +400,7 @@ describe('makeRulepackProvider', () => {
 
     expect(draftsOf(output)).toEqual([draftFrom('extra-ran')]);
     expect(gapsOf(output)).toEqual([]);
+    expect(notesOf(output)).toEqual([]);
   });
 
   it('runs on a page that carries a PatternFly marker and reports no applicability of its own', async () => {

@@ -19,6 +19,7 @@ import { NOT_A_LIST, ownEntry, wholeNumberText } from '../output/carried.js';
 import { computeConformance } from '../output/conformance.js';
 import { fixOrAbsence, isBlockingBarrier } from '../output/disclosure.js';
 import { unconfirmedNotice } from '../output/floor-notice.js';
+import { screenNotes } from '../output/notes.js';
 import { debtSentence, trackingOffSentence } from '../output/debt.js';
 import {
   applyNoiseBudget,
@@ -500,6 +501,32 @@ function renderCoverageGaps(result: Result): string[] {
   ];
 }
 
+// The notes providers disclosed about screens, after the coverage gaps and under their own heading,
+// so no reader takes one for a gap. A note never changes the verdict. The section is left out when
+// no screen has a note. The ref and reason are framed like a gap's: engine words, but a caller can
+// compose a Result outside the engine.
+function renderNotes(result: Result): string[] {
+  const notes = screenNotes(result);
+  if (notes.length === 0) {
+    return [];
+  }
+  return [
+    '',
+    '### Disclosed, does not block',
+    '_What a check did not read on a screen. These are not coverage gaps and do not change the verdict._',
+    ...notes.flatMap((note) =>
+      listItem(
+        '-',
+        `(${inlineCode(neutralize(note.screenId))})`,
+        framedMarkdownLines([
+          { label: 'ref', value: note.ref },
+          { label: 'reason', value: note.reason },
+        ]),
+      ),
+    ),
+  ];
+}
+
 // The announcement text for one stop, page-derived: tokens come from the accessibility tree and
 // live regions, and the element-path fallback is a DOM selector. Returned raw; the caller frames
 // it, and the frame scrubs it, so it is not pre-neutralized here.
@@ -630,6 +657,7 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
     '',
     ...renderFloorUnconfirmed(safe),
     ...renderCoverageGaps(safe),
+    ...renderNotes(safe),
     '',
     ...renderAnnouncements(safe),
   ].join('\n');

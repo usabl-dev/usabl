@@ -158,6 +158,36 @@ describe('runProviders', () => {
     expect(result.gaps).toEqual([]);
   });
 
+  it('carries provider notes through beside drafts, and never turns one into a gap', async () => {
+    const note = { ref: 'provider:fake-live/out-of-document', reason: '2 widgets sit inside frames the fake does not read.' };
+    const provider: Provider = {
+      id: 'fake-live',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> => ({ drafts: [draft], notes: [note] }),
+    };
+    const ctx = await makeContext();
+
+    const result = await runProviders([provider], ctx, ['live']);
+
+    expect(result.notes).toEqual([note]);
+    expect(result.gaps).toEqual([]);
+    expect(result.drafts).toEqual([draft]);
+  });
+
+  it('reads notes that are not a list, and a bare Draft[], as no notes', async () => {
+    const notAList: Provider = {
+      id: 'odd',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async () => ({ drafts: [], notes: 'not a list' }) as unknown as ProviderOutput,
+    };
+    const bare: Provider = { id: 'bare', layer: 'fake', capabilities: ['live'], run: async () => [draft] };
+    const result = await runProviders([notAList, bare], await makeContext(), ['live']);
+
+    expect(result.notes).toEqual([]);
+  });
+
   it('treats a provider output with no applicability key as reporting none', async () => {
     const provider: Provider = {
       id: 'fake-live',

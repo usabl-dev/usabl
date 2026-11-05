@@ -13,6 +13,7 @@ import {
   barrierLines,
   guardedFileLines,
   notEvaluatedPieces,
+  notePieces,
   unconfirmedPieces,
   unrecognizedRunLine,
 } from './model-pieces.js';
@@ -106,7 +107,13 @@ export function projectSelfCheck(
   const gapPieces = notEvaluatedPieces(safe);
   // The same floor notices the Stop hook gives, closing the frame as tail pieces, so a shortened
   // message drops barriers before it drops one.
-  const tailPieces = [...(gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : []), ...unconfirmedPieces(safe)];
+  // Provider notes come last: they are disclosure only and the first tail pieces a shortened
+  // message drops.
+  const tailPieces = [
+    ...(gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : []),
+    ...unconfirmedPieces(safe),
+    ...notePieces(safe),
+  ];
 
   // This surface prints a source or candidates piece per group on top of what the stop hook
   // prints, so it has its own budget. Nothing is dropped at the default noise budget.

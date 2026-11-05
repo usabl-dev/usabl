@@ -42,20 +42,20 @@ describe('makeRhdsRulepackProvider', () => {
     }
   });
 
-  it('does not run when RHDS elements sit only in frames or shadow roots, and discloses them as a gap', async () => {
-    // A shell that keeps every RHDS element in a shadow root would otherwise read as checked and
-    // clean: the rules read the top document and would find nothing.
+  it('does not run when RHDS elements sit only in frames or shadow roots, and discloses them in a note, never a gap', async () => {
+    // The rules read the top document and would find nothing in a shell that keeps every RHDS
+    // element in a shadow root. The pack says so in a note, which never blocks the screen.
     for (const profile of [undefined, 'docs'] as const) {
       const result = await run({ markers: 0, markersElsewhere: 5, query: { [BUTTON_SEL.host]: ['#x'] } }, profile);
       expect(result.drafts).toEqual([]);
       expect(result.applicability).toEqual(
         RHDS_RULES.map((rule) => ({ screenId: SCREEN.id, layer: 'rhds', rule, outcome: 'inapplicable', elementCount: 0 })),
       );
-      expect(result.gaps).toEqual([
+      expect(result.gaps).toEqual([]);
+      expect(result.notes).toEqual([
         {
           ref: 'provider:rhds-rulepack/out-of-document',
-          state: 'not-covered',
-          reason: '5 RHDS element(s) sit inside frames or shadow roots, which the RHDS rulepack does not read, so they were not checked.',
+          reason: '5 RHDS element(s) sit inside frames or shadow roots, which the RHDS rulepack does not read, so the RHDS rules did not check them.',
         },
       ]);
     }
@@ -65,6 +65,7 @@ describe('makeRhdsRulepackProvider', () => {
     const result = await run({ markers: 2, markersElsewhere: 7, query: { [BUTTON_SEL.host]: ['#x'] }, shadow: { '#x': { [BUTTON_SEL.inner]: ax('', 'button') } } });
     expect(result.drafts.map((draft) => draft.rule)).toEqual(['rhds-button-accessible-label']);
     expect(result.gaps).toEqual([]);
+    expect(result.notes).toEqual([]);
   });
 
   it('runs no check on a page with no RHDS element', async () => {

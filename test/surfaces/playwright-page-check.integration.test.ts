@@ -25,6 +25,15 @@ const CLEAN_HTML = `<!doctype html>
   </body>
 </html>`;
 
+// The clean page, with its only RHDS element inside an open shadow root, where the RHDS rules do
+// not read. The pack says so in a note, and the note does not block the page.
+const RHDS_IN_SHADOW_HTML = CLEAN_HTML.replace(
+  '</main>',
+  `<x-shell></x-shell></main>
+    <script>customElements.define('x-shell', class extends HTMLElement { constructor() { super();
+      this.attachShadow({ mode: 'open' }).innerHTML = '<rh-cta>Read the guide</rh-cta>'; } });</script>`,
+);
+
 // A page with a guaranteed deterministic failure: an image with no alt text. image-alt is a
 // hard axe violation (never incomplete), so this must gate to a regression.
 const IMAGE_ALT_HTML = `<!doctype html>
@@ -69,6 +78,24 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage on a live Play
 
       expect(result.failures).toEqual([]);
       expect(result.verdict).toBe('verified');
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('discloses RHDS markup it did not read in a note, with no gap and no change to the verdict', async () => {
+    const { context, page } = await openPage(RHDS_IN_SHADOW_HTML);
+    try {
+      const result = await checkPage(page, { tabCap: 10 });
+
+      expect(result.verdict).toBe('verified');
+      expect(result.gaps).toEqual([]);
+      expect(result.notes).toEqual([
+        {
+          ref: 'provider:rhds-rulepack/out-of-document',
+          reason: '1 RHDS element(s) sit inside frames or shadow roots, which the RHDS rulepack does not read, so the RHDS rules did not check them.',
+        },
+      ]);
     } finally {
       await context.close();
     }

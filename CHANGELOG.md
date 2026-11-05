@@ -71,8 +71,16 @@
   design system's marker, and reports each of its rules as inapplicable on a page without
   it, the way axe reports a rule that matched nothing. The RHDS pack looks for any element
   that RHDS 5.0.0 defines. When the marker appears only inside frames or shadow roots,
-  which the rules do not read, the pack also reports a not-covered gap with the count, so
-  such a page never reads as checked and clean.
+  which the rules do not read, the pack adds a note with the count that says its rules did
+  not check them. A note is disclosure only. It is not a coverage gap, it never changes the
+  verdict, and it never blocks the screen. axe and the keyboard walk still read those frames
+  and open shadow roots.
+
+- Provider notes. A provider can return notes beside its drafts, applicability, and gaps.
+  Each screen in the Result carries its notes, and `checkPage` returns them. The terminal
+  summary, the pull request comment, the self-check, and the Stop hook print them after the
+  coverage gaps, under "disclosed, does not block". The gate and the receipt do not read
+  them.
 
 ### Fixed
 

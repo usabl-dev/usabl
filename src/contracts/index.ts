@@ -132,6 +132,16 @@ export interface RuleApplicability {
   elementCount: number;
 }
 
+// A provider's disclosure about a screen: something it did not read there, said so a reader knows,
+// with no claim about the screen. Disclosure only. It is never a verdict input and never a coverage
+// gap, and the gate never reads it, so it cannot block a screen or mark one checked. The ref names
+// the provider and the subject, for example provider:rhds-rulepack/out-of-document. The reason is
+// engine words and counts, never page text.
+export interface ProviderNote {
+  ref: string;
+  reason: string;
+}
+
 export interface ScreenScan {
   screenId: string;
   url: string;
@@ -142,6 +152,11 @@ export interface ScreenScan {
   // confusion this record exists to remove. Empty means nothing was reported, which is honest for
   // a scan that failed or for providers that say nothing about applicability.
   applicability: RuleApplicability[];
+  // What the providers disclosed about this screen that is neither a finding nor a gap. Every scan
+  // the engine builds sets it, empty when there is nothing to disclose. It is optional only so the
+  // many hand-built scans in older tests and a Result written by an older engine keep their shape;
+  // absent reads as no notes. Disclosure only: nothing that decides a verdict reads it.
+  notes?: ProviderNote[];
   // Positive reachability evidence, measured during the scan while the live DOM was available.
   // The tri-state is deliberate:
   //   null  = the surface declared no reachedWhen selector, so we make no claim either way.
@@ -938,12 +953,15 @@ export interface ProviderOutput {
   // runProviders merges these with the gaps it raises itself. Absent means the provider reported
   // no per-check failures, which is the honest reading of a provider that never sets it.
   gaps?: CoverageGap[];
+  // Disclosures that never reach the gate. See ProviderNote. Absent means nothing to disclose.
+  notes?: ProviderNote[];
 }
 
 export interface ProviderRunResult {
   drafts: Draft[];
   gaps: CoverageGap[];
   applicability: RuleApplicability[];
+  notes: ProviderNote[];
 }
 
 // ---- gate I/O ----
