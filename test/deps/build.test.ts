@@ -601,6 +601,38 @@ describe("buildDeps engines", () => {
     }
   });
 
+  it("registers no engine when only the branch config turns one on under a trusted ref", async () => {
+    // Engines are trusted-only. The committed config has no engines block, so a branch that adds one
+    // gets no vendor code, no extra capability, and no engine version in its receipt.
+    const repo = await mkdtemp(join(tmpdir(), "usabl-engines-trusted-"));
+    try {
+      await execFileAsync("git", ["init", "-q"], { cwd: repo });
+      await writeFile(join(repo, "usabl.config.json"), JSON.stringify(testConfig()), "utf8");
+      await execFileAsync("git", ["add", "usabl.config.json"], { cwd: repo });
+      await execFileAsync(
+        "git",
+        ["-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "base"],
+        { cwd: repo },
+      );
+      const branch = testConfig({ engines: ENGINES_ON });
+      const deps = await buildDeps(branch, {
+        cwd: repo,
+        browserFor,
+        allowedCapabilities: [],
+        env: {},
+        trustedRef: "HEAD",
+      });
+      const scan = await deps.checkRunner.scan(SCREEN);
+      const refs = [...scan.gaps.map((gap) => gap.ref), ...(scan.notes ?? []).map((note) => note.ref)];
+      expect(refs).not.toContain("provider:deque");
+      expect(refs).not.toContain("provider:evinced");
+      expect(refs).toContain("provider:axe-core");
+      expect("engines" in deps.scannerVersions).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("records engine versions only when an engine is on", async () => {
     const without = await buildDeps(testConfig(), { browserFor });
     expect("engines" in without.scannerVersions).toBe(false);
