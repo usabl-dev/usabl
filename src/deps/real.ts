@@ -5,7 +5,7 @@
  * Missing or ignored AX nodes stay null so downstream layers disclose not-covered and unverified honestly.
  */
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { AncestorAttributesRead, AnnouncementDrain, AnnouncementUndecidable, ApiResponse, AxNode, BrowserDriver, ElementTarget, FocusUnreadable, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import type { AncestorAttributesRead, AnnouncementDrain, AnnouncementUndecidable, ApiResponse, AxNode, BrowserDriver, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeIssue, type AxeRuleSummary, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
 import { runAxeInIsolatedWorld } from './axe-world.js';
@@ -546,6 +546,37 @@ const FOCUS_BODY_FUNCTION = `function () {
   document.body.focus();
 }`;
 
+// The first element an inner selector matches in the open shadow root of the first element a host
+// selector matches, or null. Returned as an object, not a value, so its node can be described.
+const SHADOW_ELEMENT_FUNCTION = `function (hostQuery, innerQuery) {
+  const host = document.querySelector(hostQuery);
+  const root = host instanceof Element ? host.shadowRoot : null;
+  return root === null ? null : root.querySelector(innerQuery);
+}`;
+
+// The markup facts of the first element a selector matches, or null. Node types are compared by
+// number, and every read goes through this world's own prototypes, so page script cannot change
+// what an attribute, a slot assignment, or a text read returns.
+const HOST_MARKUP_FUNCTION = `function (query) {
+  const element = document.querySelector(query);
+  if (!(element instanceof Element)) {
+    return null;
+  }
+  const attributes = {};
+  for (const attribute of Array.from(element.attributes)) {
+    attributes[attribute.name] = attribute.value;
+  }
+  let text = '';
+  for (const node of Array.from(element.childNodes)) {
+    // slot="" is the default slot, the same as no slot attribute.
+    const toDefaultSlot = node.nodeType === 3 || (node.nodeType === 1 && (node.getAttribute('slot') || '') === '');
+    if (toDefaultSlot) {
+      text += ' ' + (node.textContent || '');
+    }
+  }
+  return { defined: element.matches(':defined'), attributes, defaultSlotText: text.replace(/\\s+/g, ' ').trim() };
+}`;
+
 // Whether the first element a selector matches is the focused element.
 const ACTIVE_ELEMENT_IS_FUNCTION = `function (query) {
   return document.querySelector(query) === document.activeElement;
@@ -844,6 +875,61 @@ async function readFocus(cdp: CDPSession): Promise<FocusRead> {
   } finally {
     await cdp.send('Runtime.releaseObject', { objectId }).catch(() => undefined);
   }
+}
+
+const SHADOW_NODE_GROUP = 'usabl-shadow-node';
+
+/**
+ * The backend node of the first element innerSelector matches inside the open shadow root of the
+ * host hostSelector names, found in the read world so page script cannot answer for it. Null when
+ * there is no such element. Exported for its tests.
+ */
+export async function backendNodeIdInShadowRoot(cdp: CDPSession, hostSelector: string, innerSelector: string): Promise<number | null> {
+  const contextId = await isolatedWorldContextId(cdp, READ_WORLD, 'read an element in a shadow root');
+  // Every object this read makes, the found element or a thrown value, lands in this group, and the
+  // group is released however the read ends.
+  try {
+    const evaluated: unknown = await cdp.send('Runtime.evaluate', {
+      expression: `(${SHADOW_ELEMENT_FUNCTION})(${JSON.stringify(hostSelector)}, ${JSON.stringify(innerSelector)})`,
+      contextId,
+      objectGroup: SHADOW_NODE_GROUP,
+      includeCommandLineAPI: false,
+    });
+    const exception = getProp(evaluated, 'exceptionDetails');
+    if (exception !== undefined) {
+      const description = readString(getProp(getProp(exception, 'exception'), 'description'))?.split('\n')[0];
+      throw new Error(`the browser could not read an element in a shadow root: ${description ?? readString(getProp(exception, 'text')) ?? 'unknown error'}`);
+    }
+    const objectId = readString(getProp(getProp(evaluated, 'result'), 'objectId'));
+    if (objectId === null) {
+      return null;
+    }
+    const described: unknown = await cdp.send('DOM.describeNode', { objectId });
+    return readNumber(getProp(getProp(described, 'node'), 'backendNodeId'));
+  } finally {
+    await cdp.send('Runtime.releaseObjectGroup', { objectGroup: SHADOW_NODE_GROUP }).catch(() => undefined);
+  }
+}
+
+// Reads a HostMarkup the read world returned, keeping only well-formed fields.
+function readHostMarkup(value: unknown): HostMarkup | null {
+  if (value === null || typeof value !== 'object') {
+    return null;
+  }
+  const attributes: Record<string, string> = {};
+  const raw = getProp(value, 'attributes');
+  if (raw !== null && typeof raw === 'object') {
+    for (const [name, attribute] of Object.entries(raw)) {
+      if (typeof attribute === 'string') {
+        attributes[name] = attribute;
+      }
+    }
+  }
+  return {
+    defined: getProp(value, 'defined') === true,
+    attributes,
+    defaultSlotText: readString(getProp(value, 'defaultSlotText')) ?? '',
+  };
 }
 
 async function axFromBackendId(cdp: CDPSession, backendNodeId: number): Promise<AxNode | null> {
@@ -2134,6 +2220,16 @@ function wrapPage(
         return null;
       }
       return axFromBackendId(cdp, backendNodeId);
+    },
+    async axInShadowRoot(hostSelector: string, innerSelector: string): Promise<AxNode | null> {
+      const backendNodeId = await backendNodeIdInShadowRoot(cdp, hostSelector, innerSelector);
+      if (backendNodeId === null) {
+        return null;
+      }
+      return axFromBackendId(cdp, backendNodeId);
+    },
+    async hostMarkup(selector: string): Promise<HostMarkup | null> {
+      return readHostMarkup(await callInWorld(cdp, READ_WORLD, 'read element markup', HOST_MARKUP_FUNCTION, [selector]));
     },
     async getAttribute(selector: string, name: string): Promise<string | null> {
       return pw.locator(selector).getAttribute(name);

@@ -8,9 +8,11 @@ import type {
   ProviderContext,
 } from '../../src/contracts/index.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
-import { makeRulepackProvider } from '../../src/providers/rulepack/index.js';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { makeRulepackProvider, PF_RULES } from '../../src/providers/rulepack/index.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
-import { draftsOf, gapsOf, testConfig } from '../helpers.js';
+import { applicabilityOf, draftsOf, gapsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
 
@@ -26,9 +28,17 @@ function withRulepackPage(
   queryPlan: Record<string, ElementRef[]>,
   axPlan: Record<string, AxNode | null>,
   ancestorPlan: AncestorPlan = {},
+  pfMarkers = 1,
+  pfMarkersElsewhere = 0,
 ): Page {
   return Object.assign(page, {
-    queryAll: async (selector: string) => queryPlan[selector] ?? [],
+    // pfMarkers sit in the top document, where the rules read. pfMarkersElsewhere sit in frames or
+    // shadow roots, which only countEverywhere sees.
+    countEverywhere: async (selector: string) => (selector === SEL.pfMarker ? pfMarkers + pfMarkersElsewhere : 0),
+    queryAll: async (selector: string) =>
+      selector === SEL.pfMarker
+        ? Array.from({ length: pfMarkers }, (_, index) => element(`.pf-marker-${index + 1}`))
+        : (queryPlan[selector] ?? []),
     // An alert the plan does not name is one the page can no longer find.
     ancestorAttributes: async (selector: string) => {
       const chain = ancestorPlan[selector];
@@ -48,11 +58,13 @@ async function makeContext(
   axPlan: Record<string, AxNode | null> = {},
   profile?: ProfileName,
   ancestorPlan: AncestorPlan = {},
+  pfMarkers = 1,
+  pfMarkersElsewhere = 0,
 ): Promise<ProviderContext> {
   const deps = makeFakeDeps();
   const page = await deps.browser.open(SCREEN.url);
   return {
-    page: withRulepackPage(page, queryPlan, axPlan, ancestorPlan),
+    page: withRulepackPage(page, queryPlan, axPlan, ancestorPlan, pfMarkers, pfMarkersElsewhere),
     screen: SCREEN,
     config: testConfig(),
     ...(profile !== undefined ? { profile } : {}),
@@ -330,6 +342,104 @@ describe('makeRulepackProvider', () => {
     expect(draftsOf(singleOutput)).toEqual([]);
     expect(gapsOf(singleOutput)).toEqual([]);
     expect(provider.capabilities).toContain('live');
+  });
+
+  it('reports every rule inapplicable on a page with no PatternFly marker, and runs no check', async () => {
+    // Some selectors have generic ARIA arms, and the dialog probe clicks disclosure controls, so on a
+    // page built with another design system they would report PatternFly rules against markup
+    // PatternFly never made. An alert outside a live region would flag here if the pack ran.
+    const extra = vi.fn(async (): Promise<Draft[]> => [draftFrom('extra-ran')]);
+    const provider = makeRulepackProvider([extra]);
+    const ctx = await makeContext({ [SEL.alert]: [element('.outside-alert')] }, {}, 'app', {}, 0);
+
+    const output = await provider.run(ctx);
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(gapsOf(output)).toEqual([]);
+    expect(extra).not.toHaveBeenCalled();
+    expect(applicabilityOf(output)).toEqual(
+      [
+        'pf-focus-into-dialog',
+        'pf-icon-button-name',
+        'pf-kebab-expanded-state',
+        'pf-modal-focus-return',
+        'pf-row-action-name-unique',
+        'pf-table-header-assoc',
+        'pf-toast-live-region',
+        'pf-toolbar-labeled-when-repeated',
+      ].map((rule) => ({ screenId: SCREEN.id, layer: 'pf', rule, outcome: 'inapplicable', elementCount: 0 })),
+    );
+  });
+
+  it('does not run when PatternFly markup sits only in frames or shadow roots, and discloses those elements as a gap', async () => {
+    // The rules read the top document. A PatternFly widget inside a frame must not switch the pack
+    // on for a top document with no PatternFly, where its generic ARIA arms would fire.
+    const extra = vi.fn(async (): Promise<Draft[]> => [draftFrom('extra-ran')]);
+    const ctx = await makeContext({ [SEL.unnamedButton]: [element('#plain')] }, {}, 'app', {}, 0, 3);
+
+    const output = await makeRulepackProvider([extra]).run(ctx);
+
+    expect(draftsOf(output)).toEqual([]);
+    expect(extra).not.toHaveBeenCalled();
+    expect(applicabilityOf(output)).toHaveLength(PF_RULES.length);
+    expect(applicabilityOf(output).every((entry) => entry.outcome === 'inapplicable' && entry.elementCount === 0)).toBe(true);
+    expect(gapsOf(output)).toEqual([
+      {
+        ref: 'provider:pf-rulepack/out-of-document',
+        state: 'not-covered',
+        reason:
+          '3 PatternFly element(s) sit inside frames or shadow roots, which the PatternFly rulepack does not read, so they were not checked.',
+      },
+    ]);
+  });
+
+  it('runs with no gap when the top document has PatternFly markup and more sits elsewhere', async () => {
+    const extra = vi.fn(async (): Promise<Draft[]> => [draftFrom('extra-ran')]);
+    const output = await makeRulepackProvider([extra]).run(await makeContext({}, {}, 'app', {}, 1, 4));
+
+    expect(draftsOf(output)).toEqual([draftFrom('extra-ran')]);
+    expect(gapsOf(output)).toEqual([]);
+  });
+
+  it('runs on a page that carries a PatternFly marker and reports no applicability of its own', async () => {
+    const extra = vi.fn(async (): Promise<Draft[]> => [draftFrom('extra-ran')]);
+    const output = await makeRulepackProvider([extra]).run(await makeContext({}, {}, 'app', {}, 3));
+
+    expect(draftsOf(output)).toEqual([draftFrom('extra-ran')]);
+    expect(applicabilityOf(output)).toEqual([]);
+  });
+
+  it('lists every rule id the checks and probes write, so the inapplicable record misses none', () => {
+    // Every pf- literal in the rulepack source is a rule id, except the class prefixes of the marker
+    // and the provider id. A new rule that is left out of PF_RULES fails here.
+    const dir = join(process.cwd(), 'src/providers/rulepack');
+    const literals = new Set(
+      readdirSync(dir)
+        .filter((file) => file.endsWith('.ts'))
+        .flatMap((file) => [...readFileSync(join(dir, file), 'utf8').matchAll(/'(pf-[a-z0-9-]+)'/g)].map((match) => match[1] ?? '')),
+    );
+    for (const notRule of ['pf-v6-', 'pf-v5-', 'pf-c-', 'pf-m-', 'pf-l-', 'pf-u-', 'pf-rulepack']) literals.delete(notRule);
+    expect([...literals].sort()).toEqual([...PF_RULES]);
+  });
+
+  it('recognizes PatternFly by class token prefix or by an OUIA type, never by substring', () => {
+    expect(SEL.pfMarker).toBe(
+      [
+        '[class^="pf-v6-"]',
+        '[class*=" pf-v6-"]',
+        '[class^="pf-v5-"]',
+        '[class*=" pf-v5-"]',
+        '[class^="pf-c-"]',
+        '[class*=" pf-c-"]',
+        '[class^="pf-m-"]',
+        '[class*=" pf-m-"]',
+        '[class^="pf-l-"]',
+        '[class*=" pf-l-"]',
+        '[class^="pf-u-"]',
+        '[class*=" pf-u-"]',
+        '[data-ouia-component-type^="PF"]',
+      ].join(', '),
+    );
   });
 
   it('is a no-op on the docs profile: returns empty and runs no checks', async () => {

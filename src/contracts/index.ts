@@ -127,7 +127,8 @@ export interface RuleApplicability {
   rule: string;
   outcome: RuleOutcome;
   // Elements the rule matched on this screen. axe reports zero for an inapplicable rule, and the
-  // count is read from what the run returned rather than assumed from the outcome.
+  // count is read from what the run returned rather than assumed from the outcome. A design-system
+  // pack that does not apply reports 0 for each rule because none of its rules ran.
   elementCount: number;
 }
 
@@ -707,6 +708,17 @@ export interface Page {
   // Why the element that has focus cannot be read, or null when it can. See FocusUnreadable.
   activeFocusUnreadable(): Promise<FocusUnreadable | null>;
   axAt(selector: string): Promise<AxNode | null>;
+  // The accessibility node of the first element innerSelector matches inside the open shadow root
+  // of the first element hostSelector matches in the document. A web component's inner control,
+  // such as the native button inside rh-button, is reachable only this way, because axAt reads the
+  // document and stops at the host. Null when the host is missing, has no open shadow root, nothing
+  // inside it matches, or the node is missing or ignored. Read in an isolated world, so page script
+  // cannot point the read at another element.
+  axInShadowRoot(hostSelector: string, innerSelector: string): Promise<AxNode | null>;
+  // What the first element a selector matches in the document holds in its own markup. Markup
+  // facts only, used by component rules to tell whether a name source exists. A name itself always
+  // comes from the accessibility tree. Null when nothing matches. See HostMarkup.
+  hostMarkup(selector: string): Promise<HostMarkup | null>;
   getAttribute(selector: string, name: string): Promise<string | null>;
   // The named attributes of the element a selector matches and of each element above it, nearest
   // first: the element itself, then its parent, up to the root. The walk follows the flat tree that
@@ -734,6 +746,18 @@ export interface Page {
   // requests it blocked since the page opened. A blocked script can remove the very control a
   // barrier sits on, so any entry here makes the screen a coverage gap.
   blockedRequests?(): Promise<string[]>;
+}
+// What Page.hostMarkup read about one element. Page text, so untrusted: a rule reads it to decide,
+// and never copies it into a draft.
+export interface HostMarkup {
+  // Whether the custom element definition has loaded, the :defined pseudo-class. An element that
+  // never upgraded has no shadow root and no inner control to read.
+  defined: boolean;
+  // Every attribute the element carries, by name.
+  attributes: Record<string, string>;
+  // The text of the child nodes that go to the default slot (text nodes, and elements with no slot
+  // attribute or an empty one, with their descendants), whitespace collapsed. Text in a named slot is not counted.
+  defaultSlotText: string;
 }
 export interface BrowserDriver {
   open(url: string): Promise<Page>;

@@ -270,6 +270,8 @@ src/
   providers/
     axe/            index.ts notes.ts
     rulepack/       index.ts probes.ts selectors.ts pf-<one-file-per-static-rule>.ts
+    rhds/           index.ts sources.ts draft.ts rhds-<one-file-per-rule>.ts
+    design-system-pack.ts   (design-system markers and the inapplicable record; section 7.2)
     docs-rulepack/  index.ts heading-order.ts
     keyboard-walk/  index.ts steps.ts
     check-runner.ts index.ts
@@ -766,6 +768,97 @@ one, because that would submit forms and delete records.
 
 Cut line (dropped first if time runs short): 8, then 7 and 6. Protect 1-5.
 
+**Marker.** The pack runs only on a page whose top document has PatternFly markup in it: an
+element with a class token that starts with `pf-v6-`, `pf-v5-`, `pf-c-`, `pf-m-`, `pf-l-`,
+or `pf-u-`, or a `data-ouia-component-type` that starts with `PF` (`SEL.pfMarker`). The
+`pf-l-` and `pf-u-` prefixes let a PatternFly 4 page that carries only layout or utility
+classes count. A class token counts only at the start of the attribute or after a space, so
+`xpf-c-card` is not a match. Several selectors have generic ARIA arms, and the dialog probe
+clicks disclosure controls, so without the marker the pack would report PatternFly rules
+against markup another design system made. The marker is read with `queryAll`, the same read
+the rules use, and it is read before any probe clicks; a read that throws reaches the
+provider runner, which discloses it as a gap. When the top document has no marker the pack
+returns no drafts, and reports each of its eight rules in `ProviderOutput.applicability`
+with outcome `inapplicable` and `elementCount` 0, the way axe reports a rule that matched
+nothing. If `Page.countEverywhere` then finds marker elements inside frames or open shadow
+roots, which the rules do not read, the pack also returns one `not-covered` gap,
+`provider:pf-rulepack/out-of-document`, that gives their count. `countEverywhere` adds 0 for
+a frame it cannot read, so it only ever adds this gap and never decides that the pack
+applies. When the top document has the marker and more PatternFly markup sits elsewhere,
+there is no gap, and the markup elsewhere is not checked, as before. `PF_RULES` in
+`rulepack/index.ts` lists the rule ids, and a unit test keeps it equal to the ids the checks
+and probes write. On a page where the pack applies it reports no applicability, as before.
+The pack stays off on the docs profile and reports nothing there.
+
+### 7.2.1 RHDS rulepack
+
+The provider id is `rhds-rulepack` (layer `rhds`, capability `live`). It checks that Red
+Hat Design System (RHDS) elements are put together the way the RHDS element documentation
+says. It only reads the page: no clicks and no key presses, so it does not set
+`mutatesPageState`. It runs on the app and docs profiles, because RHDS is used on content
+sites. It is registered in the core stack after the PatternFly pack.
+
+Each rule quotes its source sentence word for word in `rhds/sources.ts`, from
+`custom-elements.json` in `@rhds/elements` 5.0.0, which is pinned exactly as a
+devDependency. A rule checks nothing its quote does not say. `test/providers/rhds/sources.test.ts`
+checks every quote against that file and checks that the installed version is the pinned one.
+Each draft's `why` opens with the quoted sentence, and its `fix` names the attribute or the
+missing child. No page text goes into a draft: labels, ids, and `href` values decide a rule
+and stay out of it.
+
+| Rule | Element | Fails when | Evidence |
+| --- | --- | --- | --- |
+| `rhds-button-accessible-label` | `rh-button` | no `accessible-label`, no default-slot text, and the tree name of the inner button is empty | tree |
+| `rhds-cta-link` | `rh-cta` | no `href` or an empty one, and its first child in the default slot is not an `a` or a `button` | markup |
+| `rhds-tabs-paired` | `rh-tabs` | the count of `rh-tab` children in the tab slot differs from the count of `rh-tab-panel` children in the default slot | markup |
+| `rhds-dialog-name` | `rh-dialog` | no `accessible-label`, no `h1` to `h6` heading in the header or default slot, no trigger with text, and the tree name of the inner dialog is empty | tree |
+| `rhds-switch-label` | `rh-switch` | no `accessible-label`, no `label[for]` that names its id, and the tree name of the host is empty | tree |
+| `rhds-accordion-header-parent` | `rh-accordion-header` | its parent is not `rh-accordion` | markup |
+| `rhds-skip-link-target` | `rh-skip-link` | no `href` (or an empty one) and no slotted `a`, or an `href` fragment that names no element by id (or an anchor by name) in the document, as written or percent-decoded | markup |
+
+Default slot means a child with no `slot` attribute or with `slot=""`, as the DOM assigns
+it. The component takes any unslotted heading as its name, so an `h1` counts.
+
+All drafts are `deterministic`. The markup rules fail outright. The naming rules trust the
+accessibility tree: markup decides whether a name source exists, and a draft fails only when
+there is none and the tree reports an empty name for the inner control. When the element is
+not upgraded (its definition did not load, so it is not `:defined`), the draft is
+`unverified`, never `fail`. When the control has no node in the tree, for example a closed
+dialog, the draft is `unverified` too. The inner control is read with
+`Page.axInShadowRoot`, which finds the element inside the host's open shadow root in an
+isolated world and reads its node from the accessibility tree. Markup facts come from
+`Page.hostMarkup`, also read in an isolated world, so page script cannot change them.
+
+Each check runs inside its own try/catch, as in the PatternFly pack. A check that throws
+becomes a `not-covered` gap named `provider:rhds-rulepack/<rule>`, and the other checks
+still run.
+
+**Marker.** The pack runs only on a page whose top document holds an element the pinned
+release defines, read with `queryAll`, the same read the rules use. CSS has no selector for a
+tag name prefix, so the marker lists every tag in the pinned `custom-elements.json` (all of
+them start with `rh-`), and the sources test keeps the list equal to the manifest. A tag that
+a later release adds is not in the list, and no rule checks it either. When the top document
+has no marker the pack returns no drafts, and reports each of its seven rules as
+`inapplicable` with `elementCount` 0, on both profiles. If `Page.countEverywhere` then finds
+RHDS elements inside frames or open shadow roots, the pack also returns one `not-covered`
+gap, `provider:rhds-rulepack/out-of-document`, that gives their count. So an application
+shell that keeps every RHDS element in a shadow root reads as not checked, never as checked
+and clean. As in the PatternFly pack, `countEverywhere` only ever adds this gap. On a page
+where the pack applies it reports no applicability.
+
+Stated limits. The rules read the top document only, like the PatternFly rules. When the top
+document has an RHDS element, more RHDS elements inside open shadow roots or frames are not
+checked and raise no gap. RHDS components hold other RHDS elements in their own shadow roots,
+so a gap there would fire on every RHDS page. The structure rules read authored markup, so an element that moves its children
+after load is read as it is at scan time. `rhds-dialog-name` cannot confirm a name on a
+closed dialog with no name source in its markup, so that case stays `unverified`.
+
+The applicability entries a pack reports when it does not apply flow downstream like axe's
+inapplicable entries. The receipt counts each such rule as abstained for the screen
+(`summarizeApplicability`), the Result document carries them per screen, and an unseen
+screen drops them with its drafts. The gate, the floor, and the baseline do not read
+applicability.
+
 ### 7.3 Keyboard walk
 
 Tab through the page and record/assert focus: the focused element's accessible name
@@ -847,6 +940,8 @@ Per-provider behavior on a docs page:
   tag set; this rulepack fills that gap with doc-worded copy. It returns `Draft[]` and
   never mints a verdict.
 - **PatternFly rulepack** is a no-op (`return []`): product docs are not a PatternFly UI.
+- **RHDS rulepack** runs unchanged, because RHDS is used on content sites. It applies only
+  where an RHDS element is on the page (section 7.2.1).
 - **keyboard walk** runs unchanged.
 
 ---

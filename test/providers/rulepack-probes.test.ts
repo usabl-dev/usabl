@@ -30,7 +30,12 @@ async function makeDialogContext(options: {
   let isOpen = false;
 
   const scriptedPage: Page = Object.assign(page, {
+    // A PatternFly page, so the pack runs.
+    countEverywhere: async (selector: string) => (selector === SEL.pfMarker ? 1 : 0),
     queryAll: async (selector: string) => {
+      if (selector === SEL.pfMarker) {
+        return [{ selector: '.pf-v6-c-page' }];
+      }
       if (selector === SEL.dialogTrigger) {
         return [trigger];
       }
@@ -95,7 +100,12 @@ async function makeMenuContext(options: {
   let isOpen = false;
 
   const scriptedPage: Page = Object.assign(page, {
+    // A PatternFly page, so the pack runs.
+    countEverywhere: async (selector: string) => (selector === SEL.pfMarker ? 1 : 0),
     queryAll: async (selector: string) => {
+      if (selector === SEL.pfMarker) {
+        return [{ selector: '.pf-v6-c-page' }];
+      }
       if (selector === SEL.menuToggle) {
         return [toggle];
       }

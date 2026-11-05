@@ -27,11 +27,13 @@ import { checkPage } from '../../src/surfaces/playwright-helper.js';
 const BROKEN = '<button type="button"><svg aria-hidden="true" width="12" height="12"></svg></button>';
 const NAMED = '<button type="button" aria-label="Open actions">Actions</button>';
 
+// The main element carries a PatternFly class, so the PatternFly rulepack runs on these pages and
+// its drafts take part in the row identity checks.
 function page(body: string, headScript = ''): string {
   return `<!doctype html>
 <html lang="en">
   <head><meta charset="utf-8"><title>Rows</title>${headScript === '' ? '' : `<script>${headScript}</script>`}</head>
-  <body><main><h1>Rows</h1>${body}</main></body>
+  <body><main class="pf-v6-c-page__main"><h1>Rows</h1>${body}</main></body>
 </html>`;
 }
 

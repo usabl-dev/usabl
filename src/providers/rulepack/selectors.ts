@@ -21,7 +21,21 @@
  * match lands on every wrapper as well as the block. ~= matches one space-separated class token,
  * so it hits the block element and skips its children.
  */
+// Class prefixes that mark PatternFly markup. They decide only whether the rulepack runs on a page;
+// the rules themselves are still written and checked against PatternFly 6 markup.
+const PF_CLASS_PREFIXES = ['pf-v6-', 'pf-v5-', 'pf-c-', 'pf-m-', 'pf-l-', 'pf-u-'];
+
 export const SEL = {
+  /**
+   * Any element that marks the page as PatternFly: a class token that starts with a PatternFly
+   * prefix, or an OUIA type that PatternFly writes, such as "PF6/Button". A class token starts the
+   * attribute or follows a space, so a class such as "xpf-c-card" is not a match. The pack applies
+   * only when the top document holds a match, read with queryAll as the rules read.
+   */
+  pfMarker: [
+    ...PF_CLASS_PREFIXES.flatMap((prefix) => [`[class^="${prefix}"]`, `[class*=" ${prefix}"]`]),
+    '[data-ouia-component-type^="PF"]',
+  ].join(', '),
   alert: '[class~="pf-v6-c-alert"]',
   unnamedButton: 'button[aria-label=""], button:not([aria-label]):not([aria-labelledby])',
 

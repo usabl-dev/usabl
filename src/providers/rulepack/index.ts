@@ -15,7 +15,9 @@ import { checkPfRowActionNameUnique } from './pf-row-action-name-unique.js';
 import { checkPfTableHeaderAssoc } from './pf-table-header-assoc.js';
 import { checkPfToastLiveRegion } from './pf-toast-live-region.js';
 import { checkPfToolbarLabeledWhenRepeated } from './pf-toolbar-labeled-when-repeated.js';
+import { packNotApplicable } from '../design-system-pack.js';
 import { probeDialogs, probeMenus } from './probes.js';
+import { SEL } from './selectors.js';
 
 type RulepackCheck = (ctx: ProviderContext) => Promise<Draft[]>;
 
@@ -45,6 +47,21 @@ const PROBES: NamedCheck[] = [
   { name: 'probe-menus', run: probeMenus },
 ];
 
+/**
+ * Every rule the pack can emit, for the applicability record of a page without PatternFly. Keep it
+ * equal to the rule ids the static checks and the probes write.
+ */
+export const PF_RULES: readonly string[] = [
+  'pf-focus-into-dialog',
+  'pf-icon-button-name',
+  'pf-kebab-expanded-state',
+  'pf-modal-focus-return',
+  'pf-row-action-name-unique',
+  'pf-table-header-assoc',
+  'pf-toast-live-region',
+  'pf-toolbar-labeled-when-repeated',
+];
+
 // One check that throws must not drop the whole rulepack's drafts. It becomes a scoped gap that
 // names the check and the error, and the remaining checks still run and return their drafts.
 function checkGap(name: string, message: string): CoverageGap {
@@ -68,6 +85,22 @@ export function makeRulepackProvider(extraChecks: RulepackCheck[] = []): Provide
       // So the whole rulepack is a no-op on docs. App and default behavior stays unchanged.
       if ((ctx.profile ?? 'app') === 'docs') {
         return { drafts: [] };
+      }
+
+      // Several selectors have generic ARIA arms, and the dialog probe clicks disclosure controls,
+      // so on a page built with another design system they would report PatternFly rules against
+      // markup PatternFly never made. A top document with no PatternFly marker gets no PF drafts,
+      // and the record shows each rule matched nothing. Read before any probe, so nothing has been
+      // clicked.
+      const notApplicable = await packNotApplicable(ctx, {
+        id: 'pf-rulepack',
+        layer: 'pf',
+        name: 'PatternFly',
+        marker: SEL.pfMarker,
+        rules: PF_RULES,
+      });
+      if (notApplicable !== null) {
+        return notApplicable;
       }
 
       // Static checks first, then probes, because probes mutate page state. Extra checks name

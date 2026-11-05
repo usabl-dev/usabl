@@ -8,6 +8,7 @@ import { makeRealBrowserDriver } from './deps/real.js';
 import { axeProvider } from './providers/axe/index.js';
 import { makeCheckRunner } from './providers/check-runner.js';
 import { makeKeyboardWalkProvider } from './providers/keyboard-walk/index.js';
+import { makeRhdsRulepackProvider } from './providers/rhds/index.js';
 import { makeStepRunner } from './providers/keyboard-walk/steps.js';
 import { makeRulepackProvider } from './providers/rulepack/index.js';
 import { formatIntegrationSmokeEgress } from './output/integration-smoke.js';
@@ -33,6 +34,7 @@ async function main(): Promise<number> {
     providers: [
       axeProvider,
       makeRulepackProvider(),
+      makeRhdsRulepackProvider(),
       makeKeyboardWalkProvider({ now: Date.now, wallClockMs: 15_000 }),
     ],
     config,
