@@ -960,6 +960,110 @@ Per-provider behavior on a docs page:
   where an RHDS element is on the page (section 7.2.1).
 - **keyboard walk** runs unchanged.
 
+### 7.7 Optional commercial engines (Deque axe DevTools, Evinced)
+
+Two optional providers run a vendor's Playwright SDK beside usabl's own checks. They are off unless
+the trusted `usabl.config.json` turns them on, and the vendor packages are never dependencies of
+usabl: the operator holds the license and installs the package from the vendor's registry.
+
+**Status.** Tested against the vendor's documented result format. Not yet run on a licensed SDK.
+Every finding from either engine is `preview` evidence: it is shown on every surface and never moves
+the verdict. No config key can promote one. A live run on a licensed SDK has to show which rule
+types repeat before any of them may gate. `usabl doctor` prints
+the same status line in its engines section whether or not an engine is on.
+
+| Engine | Package | Provider id | Layer | Rule ids | Evidence class | Capabilities |
+|---|---|---|---|---|---|---|
+| Deque axe DevTools for Web | `@axe-devtools/playwright` | `deque` | `deque` | `deque:<rule id>` | `preview` | `live`, plus `network` when `trackUsage` is true |
+| Evinced Automation for Web | `@evinced/js-playwright-sdk` | `evinced` | `evinced` | `evinced:<issue type id>` | `preview` | `live`, `secrets`, plus `network` in online mode |
+
+```json
+{
+  "engines": {
+    "deque": { "enabled": true, "rulesetId": "wcag2.2", "trackUsage": false },
+    "evinced": { "enabled": true, "mode": "offline" }
+  }
+}
+```
+
+**Config.** `engines.deque` accepts `enabled`, `rulesetId` (passed to Deque's builder as is; absent
+means Deque's default), and `trackUsage` (absent means false). `engines.evinced` accepts `enabled`
+and `mode` (`offline`, the default, reads `EVINCED_SERVICE_ID` and `EVINCED_AUTH_TOKEN`; `online`
+reads `EVINCED_SERVICE_ID` and `EVINCED_API_KEY` and contacts Evinced's license server). An unknown
+key is refused. A `promote` key is refused with its own message, because findings stay preview.
+Engines are trusted-only, like `requirements` and `judge`: under a trusted ref they come from the
+committed config, and a missing or unparseable trusted config turns them off. The Playwright helper
+(`checkPage`) does not run them, because it reads the working tree's config and its page verdict
+counts every failing draft.
+
+**What each engine adds.** Deque returns standard axe-core results. The open-source axe rules in them
+are dropped, because the axe provider already reports them, and Deque's own rules map through the
+axe provider's mapping (`mapAxeRunResult`) under the `deque` layer and the `deque:` prefix. Finding
+identity leaves the layer out, so the prefix is what keeps a Deque finding from sharing an identity,
+a floor entry, or a waiver with an axe finding. Deque records applicability for its own rules.
+Evinced runs with every open-source axe rule switched off inside it and with platform upload off,
+and maps one draft per element that has a selector. It reports no passes, so it records no
+applicability and never claims a rule ran clean.
+
+**What becomes a gap, and what becomes a note.** A run that could not use the engine is a
+`not-covered` gap on `provider:deque` or `provider:evinced`, with the reason and the fix: the package
+is not installed; the package is installed but a package it needs is not (named); the package throws
+while loading; a credential variable is not set (named, never its value); the page has no Playwright
+page behind it; the SDK returned something that is not its documented shape; Deque ran no rules at
+all; any vendor call did not finish within `ENGINE_CALL_TIMEOUT_MS` (60 seconds), which is how a hung
+license server ends; or a switch outside the trusted config could change what the engine does (below).
+An entry or element the engine returned that usabl could not read is a provider note, because a lost
+preview finding could never have moved the verdict. The mapping turns the same losses into gaps for a
+class that gates, so the protection is in place before promotion exists.
+
+**Switches outside the trusted config.** A switched-off SDK returns an empty result, and an empty
+result reads as a clean screen, so each provider refuses to run while such a switch could be set:
+
+- Evinced: `EV_SWITCH_ON` set to anything but `true`, or an `evConfig.json`, `evConfig.yaml`, or
+  `evConfig.yml` in the working folder that is not in `guardedPaths`. The analyze options also pass
+  `switchOn: true`.
+- Deque: `AXE_RULESET_PATH` set, or an `axe-ruleset.json` in the working folder that is not in
+  `guardedPaths`. Deque documents both for its CLI, where a ruleset file replaces the whole axe-core
+  ruleset. Its Playwright reference does not say whether the SDK reads them, so usabl assumes it may.
+  Its Playwright reference also names a "script-builder custom rule configuration file" that the
+  builder reads when no ruleset is given, without naming the file; usabl cannot check that one.
+- Deque usage tracking: Deque's usage service is on by default. With `trackUsage` absent or false,
+  usabl calls `enableTracking(false)` on the builder and refuses to run while `AXE_TRACK_USAGE` is set
+  to anything but `false`. It never writes the environment. A builder with no `enableTracking` runs
+  only when `AXE_TRACK_USAGE` is already `false`. Doctor suggests setting `AXE_TRACK_USAGE=false` so
+  nothing is sent while the package loads, which the builder call cannot cover.
+
+**Docs screens.** On a `docs` screen Deque runs with `withTags` set to the same WCAG 2.2 AA tag set
+axe uses (section 7.6). A builder without `withTags` is a gap on docs screens. Whether Deque narrows
+a chosen `rulesetId` further by tags is not stated in its reference. Evinced has no tag filter and
+runs its full set on docs screens.
+
+**Finding the package.** The run imports the package with a dynamic import. Doctor and the run's
+failure messages find it the way that import does: `node_modules` in the folder of usabl's own module
+and every folder above it, from its real path, never `NODE_PATH` or a global folder. Doctor also
+checks that every dependency and non-optional peer the vendor package declares resolves from the
+vendor's folder, and names any that do not. It runs no vendor code, so a package that resolves and
+then throws while loading is caught only at run time, as "failed to load".
+
+**Receipt.** Each turned-on engine's installed version joins `scannerVersions.engines`, keyed by
+engine id, or `not-installed`. A receipt minted with one set of engine versions fails
+re-verification under another, and a receipt minted with no engine keeps its earlier shape
+(section 10, receipt binding).
+
+**Limits.**
+- The vendor SDK runs inside the scan process with the operator's credentials and the whole
+  environment. usabl does not sandbox it. See the threat model, "A vendor engine SDK in the scan
+  process".
+- Both SDKs run their scripts in the page's own world, unlike usabl's axe, which runs in an isolated
+  world (section 7.1). Page script can change what they read and report. This is one more reason
+  their findings are preview.
+- A vendor call that times out cannot be cancelled. It may keep running in the page while the
+  providers that change page state run after it; its late result is dropped.
+- The engines run after the read-only providers and before the ones that change page state. A vendor
+  script that changes the DOM would be seen by those later providers.
+- Evinced's issue shape is only partly documented. Every field is read defensively. The first live run on a
+  licensed SDK has to record the real shape.
+
 ---
 
 ## 8. Coverage and discovery
@@ -2230,6 +2334,10 @@ Five bindings are compared on re-verification:
 - `scannerVersions`: the axe-core, Playwright, and Chromium versions that decided the
   verdict. `verifyReceipt` compares these too, so a swapped or upgraded scanner
   invalidates the receipt.
+  When an optional commercial engine is on, `scannerVersions.engines` maps its id to the
+  installed package version, and `verifyReceipt` compares that map too: a version change,
+  or an engine turned on or off, invalidates the receipt. An absent map and an empty one
+  both mean no engine (section 7.7).
 
 - `historyHead`: the commit of the debt history branch the run read, or null. The history can
   lower the debt a run accepts, so a receipt minted before the history moved stops matching,
@@ -2901,6 +3009,15 @@ one file. Doctor reports whether a session is set and never prints the variable'
 file contents. The saved file's fixed path is printed, because usabl chose it. The CI state is classified by `classifyGateWorkflow`: `missing`, `wired` (two
 engine-ref lines, both the same real 40-hex SHA), `unpinned` (both lines are the pin
 sentinel), or `drifted` (any other shape). Doctor never mints a verdict or a receipt.
+
+After the surfaces, doctor prints an `optional engines` section (section 7.7). It opens with the line
+"Tested against the vendor's documented result format. Not yet run on a licensed SDK. Engine findings
+are preview: shown, never blocking." Each engine is `off`, `unknown` when the config cannot be read,
+or `on` with its package version (or `package not installed`, with any missing dependency named) and
+its credentials state (`credentials: none needed` for Deque, `credentials present: yes` or `no` for
+Evinced). The note under each names the next step, or every outside switch that would make a scan
+refuse. The section never prints a credential or switch value, and it never changes the surface
+counts in the header.
 
 ---
 

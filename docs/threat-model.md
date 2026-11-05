@@ -161,6 +161,10 @@ awareness.
   swap moves the fingerprint and fails `verifyReceipt`.
 - Dependabot bumps require explicit maintainer review for policy impact.
 
+- When an optional commercial engine is on, its installed package version is recorded in
+  `scannerVersions.engines`, so a vendor upgrade, or an engine turned on or off, fails
+  `verifyReceipt` the same way. usabl cannot pin a vendor package; the operator installs it.
+
 **Status:** [x] Lockfile pins and receipt `scannerVersions` ship. [ ] The maintainer review rule
 for scanner bumps is process, not code.
 
@@ -790,6 +794,62 @@ are under "CI trust boundary" below.
 on it, so the verdict on a pull request that edits the workflow is not evidence; the protection
 is code-owner review. Also a build that differs from its source, and a page that detects the
 scanner. See the residual risks under "CI trust boundary".
+
+---
+
+## Threat 16: A vendor engine SDK in the scan process
+
+**Attack:** the optional Deque axe DevTools and Evinced engines run a vendor's SDK inside the scan
+process. It is not usabl's code, and usabl cannot pin it: the operator installs it from the vendor's
+registry. The Evinced SDK also holds the operator's license credentials. Four things can go wrong. A
+pull request turns an engine on for its own run, so vendor code with credentials and network access
+runs on its branch. A vendor error or a vendor result quotes a credential back into a gap reason, a
+finding, or the CLI output. A switch outside the trusted config (`EV_SWITCH_ON`, an `evConfig` file,
+`AXE_RULESET_PATH`, an `axe-ruleset.json` file) makes an engine report nothing, which reads as a
+clean screen. A hung license server stalls every run.
+
+**Controls:**
+
+- Engines are trusted-only. Under a trusted ref they come from the committed `usabl.config.json`,
+  and a missing or unparseable trusted config turns them off (`resolveIntakeConfig`). The
+  Playwright helper, which reads the working tree's config, does not run them.
+- Engine findings are `preview` in this release. No config key promotes them, and the gate never
+  counts preview evidence toward a verdict, so a vendor result cannot block or pass a change. Their
+  rule ids carry a `deque:` or `evinced:` prefix, so they never share an identity, a floor entry, or
+  a waiver with an axe finding.
+- Credentials are read by variable name from the environment `buildDeps` was given. The Evinced
+  provider seeds a redactor with every Evinced credential value before anything can fail, and runs
+  every message and every string the SDK returns through it. The egress scrubber in
+  `src/surfaces/scrub.ts` still applies on every surface. Doctor reports credentials as set or not
+  set, never a value.
+- The providers never write the environment. Deque usage tracking is turned off through the
+  builder's `enableTracking(false)`, and Evinced platform upload is turned off before analysis.
+- Each provider refuses to run while an outside switch could make it report nothing: the variable
+  set to an unsafe value, or the file present in the working folder and not in `guardedPaths`. The
+  refusal is a named coverage gap.
+- Every vendor call (load, upload switch, credentials, analyze) has a 60 second timeout
+  (`ENGINE_CALL_TIMEOUT_MS`). A call that does not finish is a named `not-covered` gap, and a late
+  rejection from it is dropped rather than ending the process.
+- Online mode declares the `network` capability, and Deque declares it when the operator opts in to
+  usage tracking, so the grant is visible in the provider's declaration.
+- Each turned-on engine's installed version is bound into the receipt (Threat 5).
+
+**Tests:** `test/intake/trusted-config.test.ts` (engines off without trusted config),
+`test/intake/config.test.ts` (unknown and `promote` keys refused),
+`test/providers/engines/evinced.test.ts` and `test/run.engines-secrets.test.ts` (credentials absent
+from every gap, draft, finding, receipt, and CLI output, with an SDK that quotes them back),
+`test/providers/engines/deque.test.ts` and `evinced.test.ts` (outside switches refused, hung calls
+become gaps within the timeout, the environment is never written), `test/gate/engine-evidence.test.ts`
+(preview never moves the verdict, Deque and axe identities stay apart), and
+`test/deps/build.test.ts` (switches read from the given environment, not `process.env`).
+
+**What stays open:** usabl does not sandbox the SDK. It runs with the whole process environment,
+which in CI can include other secrets, the file system, and the network, and it is handed the
+Playwright page, so it can read the session's cookies and navigate. An operator who turns an engine
+on trusts that vendor's package as much as usabl's own dependencies. Both SDKs run their scripts in
+the page's own world, so page script can change what they read and report; this is one reason their
+findings stay preview. A vendor call that times out keeps running until the scan closes the page.
+Not yet run on a licensed SDK.
 
 ---
 
