@@ -123,6 +123,17 @@
   state is read again when the capture is drained, so a dialog that closes one task or one
   promise after the write hides the text too.
 
+- The keyboard walk no longer reports a focus trap as a complete walk. When Tab went around a
+  group of controls and back to the first, the walk read the repeated stop as the end of the
+  page and reported nothing, so the controls after the trap were never reached while the screen
+  read as covered. Now only focus on the body completes the walk. A cycle that never passes
+  through the body ends the walk with `keyboard-walk-truncated`, and outside an open modal
+  dialog it is also a `keyboard-walk-trap` barrier (WCAG 2.1.2, No Keyboard Trap), severity
+  critical, with the path of each stop of the cycle as evidence. A cycle inside one open modal
+  dialog (a `dialog` opened with `showModal()`, or `role="dialog"` or `role="alertdialog"` with
+  `aria-modal="true"`) is what the dialog should do, so it gets the gap alone, which says the
+  walk stayed inside the dialog.
+
 - The PatternFly rulepack no longer reports PatternFly rules on a page with no PatternFly
   markup. Some of its selectors have generic ARIA arms, so on a page built with another design
   system they matched markup PatternFly never made. It now runs only where an element in the

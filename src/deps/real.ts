@@ -549,6 +549,77 @@ const DEEP_FOCUS_EXPRESSION = `(function () {
   return focus.unreadable !== null ? focus.unreadable : focus.element;
 })()`;
 
+// The paths of the open modal dialogs that hold the focused element, nearest first, each in the
+// form activePath gives. The keyboard walk reads a focus cycle inside such a dialog as the dialog
+// doing its job, not as a keyboard trap, so the read must not see a dialog that is not one. A
+// dialog element counts only in the browser's own :modal state, which only showModal() gives it.
+// An element whose first recognized role is dialog or alertdialog with aria-modal true counts
+// while it is connected, rendered, not hidden by visibility, and not under aria-hidden, inert, or
+// hidden. The climb follows the flat tree, so a dialog in a shadow root holds the light content
+// slotted into it, and it climbs out of a same-origin frame to the frame element. Node types are
+// compared by number, because an element in a frame has that frame's own constructors.
+const ACTIVE_MODAL_DIALOGS_FUNCTION = `function () {
+  ${DEEP_FOCUS_IMPL}
+  const liveResolver = (${createLiveResolver.toString()})();
+  const frameOf = (node) => {
+    try {
+      const view = node.ownerDocument ? node.ownerDocument.defaultView : null;
+      return view ? view.frameElement : null;
+    } catch (_error) {
+      return null;
+    }
+  };
+  const up = (node) => {
+    if (node.assignedSlot) {
+      return node.assignedSlot;
+    }
+    const parent = node.parentNode;
+    if (parent && parent.nodeType === ELEMENT_NODE) {
+      return parent;
+    }
+    if (parent && parent.nodeType === FRAGMENT_NODE && parent.host) {
+      return parent.host;
+    }
+    return frameOf(node);
+  };
+  const deepPath = (element) => {
+    const root = element.getRootNode();
+    if (root.nodeType === FRAGMENT_NODE && root.host) {
+      return deepPath(root.host) + SHADOW_STEP + pathIn(element, root);
+    }
+    const frame = frameOf(element);
+    return frame ? deepPath(frame) + FRAME_STEP + pathIn(element, root) : pathIn(element, root);
+  };
+  const isOpenModal = (element) => {
+    if (element.localName === 'dialog' && element.matches(':modal')) {
+      return true;
+    }
+    if (!liveResolver.ariaModalDialog({ role: element.getAttribute('role'), ariaModal: element.getAttribute('aria-modal') })) {
+      return false;
+    }
+    if (!element.isConnected || !element.checkVisibility({ visibilityProperty: true })) {
+      return false;
+    }
+    const chain = [];
+    for (let current = element; current; current = up(current)) {
+      chain.push({
+        ariaHidden: current.getAttribute('aria-hidden'),
+        inert: current.hasAttribute('inert'),
+        hidden: current.hasAttribute('hidden'),
+      });
+    }
+    return !liveResolver.hiddenInChain(chain);
+  };
+  const focus = deepFocus();
+  const paths = [];
+  for (let current = focus.element; current; current = up(current)) {
+    if (isOpenModal(current)) {
+      paths.push(deepPath(current));
+    }
+  }
+  return paths;
+}`;
+
 // The world the focus and style reads run in, for the same reason as the path world. A page that
 // redefines querySelector, the activeElement or body getters, contains, focus, or getComputedStyle
 // in its own world could otherwise make a focus check report what the page wants, and pass a
@@ -2119,6 +2190,13 @@ function wrapPage(
     async activeFocusUnreadable(): Promise<FocusUnreadable | null> {
       const focus = await readFocus(cdp);
       return focus.kind === 'unreadable' ? focus.reason : null;
+    },
+    async activeModalDialogs(): Promise<string[]> {
+      const paths = await callInWorld(cdp, READ_WORLD, 'read the modal dialogs that hold focus', ACTIVE_MODAL_DIALOGS_FUNCTION);
+      if (!Array.isArray(paths) || !paths.every((path): path is string => typeof path === 'string')) {
+        throw new Error('the browser could not read the modal dialogs that hold focus: the read returned something other than a list of paths');
+      }
+      return paths;
     },
     async axAt(selector: string): Promise<AxNode | null> {
       const backendNodeId = await backendNodeIdForSelector(cdp, selector);

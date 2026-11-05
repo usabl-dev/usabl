@@ -16,6 +16,8 @@ interface ScriptedPageSpec {
   // The stop at which focus is on the document body. A real browser moves focus there after the
   // last control on the page, and that ends the walk.
   bodyAt?: number;
+  // The paths of the open modal dialogs that hold the focused element, at each stop.
+  modals?: string[][];
   onTab?: () => void;
 }
 
@@ -34,6 +36,16 @@ function unnamedLinkPage(paths: string[]): ScriptedPageSpec {
     activePaths: paths,
     activeNodes: paths.map(() => ({ name: null, role: 'link', states: {} })),
     announcements: paths.map(() => []),
+  };
+}
+
+// Named buttons at the given paths. A name here is page text, which no walk draft may carry.
+function namedButtonPage(paths: string[], modals?: string[][]): ScriptedPageSpec {
+  return {
+    activePaths: paths,
+    activeNodes: paths.map(() => ({ name: 'Page text that must not leak', role: 'button', states: {} })),
+    announcements: paths.map(() => []),
+    ...(modals === undefined ? {} : { modals }),
   };
 }
 
@@ -77,6 +89,7 @@ async function makeScriptedPage(spec: ScriptedPageSpec): Promise<Page> {
     activeNode: async () => readAt(spec.activeNodes, currentIndex(cursor), null),
     drainAnnouncements: async () => readAt(spec.announcements, currentIndex(cursor), []),
     activeFocusUnreadable: async () => readAt(spec.unreadable ?? [], currentIndex(cursor), null),
+    activeModalDialogs: async () => readAt(spec.modals ?? [], currentIndex(cursor), []),
     activeElementIs: async (selector: string) => selector === 'body' && spec.bodyAt !== undefined && cursor === spec.bodyAt,
   });
 }
@@ -369,4 +382,108 @@ describe('makeKeyboardWalkProvider', () => {
       expect(drafts[1]?.fix).toContain('by hand');
     });
   }
+
+  // A focus trap: Tab from the second control goes back to the first, so focus never reaches the
+  // body and the controls after the trap are never walked. Read as a completed cycle, the walk
+  // reported nothing and the screen read as covered.
+  it('reports a keyboard trap and a truncation gap when focus cycles without reaching the body', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage(namedButtonPage(['#before', '#one', '#two', '#one', '#outside']));
+
+    const drafts = draftsOf(await provider.run(makeContext(page)));
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-trap', 'keyboard-walk-truncated']);
+    expect(drafts[0]).toEqual({
+      rule: 'keyboard-walk-trap',
+      layer: 'walk',
+      severity: 'critical',
+      evidenceClass: 'deterministic',
+      screenId: SCREEN.id,
+      elementPath: '#one',
+      elementName: null,
+      role: null,
+      whatUserExperiences:
+        'Keyboard focus is trapped in a group of controls. A keyboard user who presses Tab cannot leave the group and cannot reach the rest of the page.',
+      why: 'Tab moved focus around a cycle of 2 control(s) and never reached the end of the page. This fails WCAG 2.1.2 No Keyboard Trap.',
+      fix: 'Let Tab and Shift+Tab move focus out of this group to the controls before and after it. Keep focus inside a group only while it is an open modal dialog: a dialog element opened with showModal(), or an element with role dialog or alertdialog and aria-modal true.',
+      evidence: { extra: { cycle: ['#one', '#two'], rowRead: { kind: 'none' } } },
+      confidence: 'fail',
+    });
+    expect(drafts[1]).toMatchObject({ evidenceClass: 'deterministic', confidence: 'unverified', elementPath: '' });
+    expect(drafts[1]?.why).toBe(
+      'After 3 tab stop(s), focus went back to a control the keyboard walk had already reached, without reaching the end of the page, so the controls after the trap were never walked.',
+    );
+    expect(JSON.stringify(drafts)).not.toContain('Page text');
+  });
+
+  it('reports a control that keeps focus on every Tab as a trap of one stop', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage(namedButtonPage(['#stuck', '#stuck', '#stuck']));
+
+    const drafts = draftsOf(await provider.run(makeContext(page)));
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-trap', 'keyboard-walk-truncated']);
+    expect(drafts[0]?.elementPath).toBe('#stuck');
+    expect(drafts[0]?.evidence.extra?.['cycle']).toEqual(['#stuck']);
+    expect(drafts[0]?.why).toContain('1 control(s)');
+  });
+
+  // An open modal dialog keeps focus inside itself on purpose. That is the expected behavior, not
+  // a barrier, but the rest of the page behind the dialog was still never walked.
+  it('ends with a gap and no trap when the cycle stays inside an open modal dialog', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage(namedButtonPage(['#one', '#two', '#one'], [['#dialog'], ['#dialog'], ['#dialog']]));
+
+    const drafts = draftsOf(await provider.run(makeContext(page)));
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
+    expect(drafts[0]).toMatchObject({ evidenceClass: 'deterministic', confidence: 'unverified', elementPath: '' });
+    expect(drafts[0]?.why).toBe(
+      'After 2 tab stop(s), focus went back to a control it had already reached, inside an open modal dialog that holds every control on the way. The dialog keeps focus inside itself as it should, so the keyboard walk stayed inside it and did not cover the rest of the page.',
+    );
+    expect(drafts[0]?.fix).toContain('dialog');
+  });
+
+  it('reads a cycle inside a modal dialog nested in another as staying inside the outer one', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage(
+      namedButtonPage(['#one', '#two', '#one'], [['#outer', '#outer >> #inner'], ['#outer'], ['#outer', '#outer >> #inner']]),
+    );
+
+    const drafts = draftsOf(await provider.run(makeContext(page)));
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
+    expect(drafts[0]?.why).toContain('modal dialog');
+  });
+
+  it('reports a trap when the modal dialog does not hold every stop of the cycle', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    // The first stop is before the cycle and outside the dialog. The cycle itself leaves it.
+    const page = await makeScriptedPage(namedButtonPage(['#before', '#one', '#two', '#one'], [[], ['#dialog'], [], ['#dialog']]));
+
+    const drafts = draftsOf(await provider.run(makeContext(page)));
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-trap', 'keyboard-walk-truncated']);
+    expect(drafts[0]?.evidence.extra?.['cycle']).toEqual(['#one', '#two']);
+  });
+
+  it('reads a cycle in two different modal dialogs as a trap', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage(namedButtonPage(['#one', '#two', '#one'], [['#first-dialog'], ['#second-dialog'], ['#first-dialog']]));
+
+    const drafts = draftsOf(await provider.run(makeContext(page)));
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-trap', 'keyboard-walk-truncated']);
+  });
+
+  it('reports the same trap draft on every run of the same page', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const spec = namedButtonPage(['#a', '#b', '#c', '#b']);
+
+    const first = draftsOf(await provider.run(makeContext(await makeScriptedPage(spec))));
+    const second = draftsOf(await provider.run(makeContext(await makeScriptedPage(spec))));
+
+    expect(second).toEqual(first);
+    expect(first[0]?.evidence.extra?.['cycle']).toEqual(['#b', '#c']);
+  });
 });

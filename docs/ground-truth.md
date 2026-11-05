@@ -889,6 +889,34 @@ and `assert-announced(region, contains)`.
 Marks any focus it cannot confirm as `unverified` rather than passing. Does not hang
 on a focus trap.
 
+**How the walk ends.** The walk starts on the body. Only focus on the body completes it: a
+browser moves focus there after the last control on the page. Tab that brings focus back to
+a stop already reached, without passing through the body, is a cycle, and a cycle means Tab
+never reached the rest of the page. So a cycle never ends the walk as complete. It ends with
+`keyboard-walk-truncated` as `unverified`, and the cycle is the stops from the first visit of
+the repeated stop to the last stop before the repeat. A cycle that one open modal dialog holds
+in full is that dialog doing its job: a modal dialog keeps focus inside itself on purpose. The
+gap then says the walk stayed inside the modal dialog and did not cover the rest of the page,
+and nothing else is reported. Every other cycle is a keyboard trap (WCAG 2.1.2, No Keyboard
+Trap), and the walk also emits one deterministic `keyboard-walk-trap` draft: severity
+`critical`, confidence `fail`, layer `walk`, the path of the first stop of the cycle as its
+element path, and `evidence.extra.cycle`, the path of each stop of the cycle in Tab order. The
+draft carries no page text: no name, no role, no label. A control that keeps focus on every
+Tab is a trap of one stop.
+
+An open modal dialog is read at each stop, by `Page.activeModalDialogs`, from the element
+that has focus up the flat tree: a slotted element climbs through its slot, a shadow root
+climbs to its host, and a same-origin frame climbs to its frame element. A `dialog` element
+counts only in the browser's own `:modal` state, which only `showModal()` gives it, so a
+dialog opened with `show()` or the `open` attribute is not modal. An element whose first
+recognized role is `dialog` or `alertdialog` with `aria-modal` true counts while it is
+connected, rendered, not hidden by visibility, and not under `aria-hidden`, `inert`, or
+`hidden`. A cycle counts as inside one only when the same dialog holds every stop of it, so
+a cycle that passes through two dialogs, or leaves the dialog, is a trap. A dialog opened with
+`showModal()` and no script that keeps focus in it lets Tab leave the document after its last
+control, so focus reaches the body and the walk ends complete. The content behind such a
+dialog is inert: out of reach of the keyboard and left out of the accessibility tree.
+
 **Shadow roots and frames.** `document.activeElement` stops at the host of a shadow root
 and at a frame, so every control inside one would get the host's or the frame's path. The
 walk would read the second control as a return to the first, end as if the focus order were
@@ -901,7 +929,7 @@ are identity strings, not selectors or locators: no code looks an element up by 
 locator built from one can match more than one element, because Playwright's CSS engine also
 searches open shadow roots. An element outside every shadow root and frame
 keeps the path it had before, so its identity key does not change. The walk ends as
-complete only when a path repeats or focus reaches the body. The read enters `iframe` and
+complete only when focus reaches the body. The read enters `iframe` and
 `frame` elements only. Any other element that holds a frame, such as an `object` or `embed`
 element that shows a document, or a `fencedframe`, is found through the browser's own DOM read
 over CDP (the browser gives a frame owner a frame id or a content document), and focus on it
@@ -4084,7 +4112,7 @@ Categories:
 | SC | Name | Level | usabl | How |
 |---|---|---|---|---|
 | 2.1.1 | Keyboard | A | Built (keyboard walk + PF rulepack) | The keyboard walk tabs through interactive elements. Any interactive element not on the Tab path is reported. PF rules cover dialog focus, kebabs, and row actions. |
-| 2.1.2 | No Keyboard Trap | A | Built (keyboard walk) | Cycle detection in the walk. If Tab never escapes a region, the walk reports it. |
+| 2.1.2 | No Keyboard Trap | A | Built (keyboard walk) | Cycle detection in the walk. A Tab cycle that never reaches the body is `keyboard-walk-trap`, plus a truncation gap. A cycle inside one open modal dialog is a truncation gap only. See 7.3. |
 | 2.1.4 | Character Key Shortcuts | A | Never | Requires knowing whether single-character shortcuts exist in application logic. |
 | 2.2.1 | Timing Adjustable | A | Never | Time limits are application logic. usabl does not run over time. |
 | 2.2.2 | Pause, Stop, Hide | A | Planned | Detect auto-updating/moving content and assert a pause mechanism exists. Partially possible with animation detection. |

@@ -79,6 +79,8 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     activePath: async () => 'body',
     // A fake page has no shadow roots or frames, so focus is always where its path says.
     activeFocusUnreadable: async () => null,
+    // Nor any modal dialog, so no dialog holds focus.
+    activeModalDialogs: async () => [],
     axAt: async () => null,
     // A fake page has no shadow roots and no markup, so neither read finds an element.
     axInShadowRoot: async () => null,

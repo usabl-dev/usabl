@@ -35,6 +35,11 @@ function frameDoc(body: string): string {
 
 const FRAME_STEP = ' >> internal:control=enter-frame >> ';
 
+// Tab from the button with id b sends focus back to the button with id a.
+const TRAP_SCRIPT =
+  `document.getElementById('b').addEventListener('keydown', (event) => {` +
+  ` if (event.key === 'Tab' && !event.shiftKey) { event.preventDefault(); document.getElementById('a').focus(); } });`;
+
 function pages(crossOrigin: string): Record<string, string> {
   return {
     // The case the walk got wrong: both shadow buttons read as the host, the second read as a
@@ -71,6 +76,46 @@ function pages(crossOrigin: string): Record<string, string> {
       '<button type="button" id="one">One</button><button type="button" id="two">Two</button><button type="button" id="outside">Outside</button>' +
         `<script>document.getElementById('two').addEventListener('keydown', (event) => {` +
         ` if (event.key === 'Tab' && !event.shiftKey) { event.preventDefault(); document.getElementById('one').focus(); } });</script>`,
+    ),
+    // A dialog element opened with showModal() on load, with nothing but the browser's own focus
+    // handling.
+    '/native-modal': page(
+      '<dialog id="dialog"><button type="button" id="a">A</button><button type="button" id="b">B</button></dialog>' +
+        '<button type="button" id="outside">Outside</button>' +
+        `<script>document.getElementById('dialog').showModal();</script>`,
+    ),
+    // The same dialog with a script focus trap of its own, as a dialog library adds.
+    '/native-modal-trap': page(
+      '<dialog id="dialog"><button type="button" id="a">A</button><button type="button" id="b">B</button></dialog>' +
+        '<button type="button" id="outside">Outside</button>' +
+        `<script>document.getElementById('dialog').showModal(); ${TRAP_SCRIPT}</script>`,
+    ),
+    // A dialog element opened with show(), which is not modal: the rest of the page stays live, so
+    // a script trap inside it is a keyboard trap.
+    '/non-modal-dialog-trap': page(
+      '<dialog id="dialog"><button type="button" id="a">A</button><button type="button" id="b">B</button></dialog>' +
+        '<button type="button" id="outside">Outside</button>' +
+        `<script>document.getElementById('dialog').show(); ${TRAP_SCRIPT}</script>`,
+    ),
+    // An ARIA modal dialog shown on load with a script focus trap.
+    '/aria-modal-trap': page(
+      '<div role="dialog" aria-modal="true" aria-label="Settings" id="dialog"><button type="button" id="a">A</button>' +
+        '<button type="button" id="b">B</button></div><button type="button" id="outside">Outside</button>' +
+        `<script>${TRAP_SCRIPT}</script>`,
+    ),
+    // The same, with aria-modal false: a trap in a dialog that does not claim to be modal.
+    '/aria-non-modal-trap': page(
+      '<div role="dialog" aria-modal="false" aria-label="Settings" id="dialog"><button type="button" id="a">A</button>' +
+        '<button type="button" id="b">B</button></div><button type="button" id="outside">Outside</button>' +
+        `<script>${TRAP_SCRIPT}</script>`,
+    ),
+    // An ARIA modal dialog inside the shadow root of a web component, with the trapped buttons in
+    // the light tree, slotted into it. Only a climb of the flat tree finds the dialog above them.
+    '/slotted-modal-trap': page(
+      '<x-modal><button type="button" id="a">A</button><button type="button" id="b">B</button></x-modal>' +
+        '<button type="button" id="outside">Outside</button>' +
+        openElement('x-modal', '<div role="dialog" aria-modal="true" aria-label="Settings"><slot></slot></div>') +
+        `<script>${TRAP_SCRIPT}</script>`,
     ),
     '/closed-shadow-buttons': page(
       '<button type="button">First</button><x-closed></x-closed><button type="button" id="trailing"></button>' +
@@ -267,29 +312,100 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
     }
   });
 
-  it('still ends on a real focus cycle inside a shadow root, with no truncation', async () => {
+  // A focus trap the walk read as a completed cycle: it reported nothing, so the screen read as
+  // covered while the Outside button after the trap was never reached.
+  it('reports a keyboard trap inside a shadow root and ends with a truncation gap', async () => {
     const opened = await open('/shadow-trap');
     try {
       const stops = await paths(opened, 4);
       expect(stops[0]).toBe(stops[2]);
       expect(stops[0]).not.toBe(stops[1]);
       const drafts = await walk(opened);
-      expect(drafts).toEqual([]);
+      expect(summary(drafts)).toEqual([
+        ['keyboard-walk-trap', stops[0]],
+        ['keyboard-walk-truncated', ''],
+      ]);
+      expect(drafts[0]).toMatchObject({ severity: 'critical', confidence: 'fail', evidenceClass: 'deterministic', elementName: null });
+      expect(drafts[0]?.evidence.extra?.['cycle']).toEqual([stops[0], stops[1]]);
+      expect(drafts[1]?.confidence).toBe('unverified');
+      expect(drafts[1]?.why).toContain('controls after the trap were never walked');
     } finally {
       await opened.close();
     }
   });
 
-  it('still ends on a real focus cycle in the light tree, with no truncation', async () => {
+  it('reports a keyboard trap in the light tree and ends with a truncation gap', async () => {
     const opened = await open('/light-trap');
     try {
       const stops = await paths(opened, 3);
       expect(stops).toEqual(['#one', '#two', '#one']);
+      const drafts = await walk(opened);
+      expect(summary(drafts)).toEqual([
+        ['keyboard-walk-trap', '#one'],
+        ['keyboard-walk-truncated', ''],
+      ]);
+      expect(drafts[0]?.evidence.extra?.['cycle']).toEqual(['#one', '#two']);
+      // The trapped buttons are named One and Two. No page text reaches the drafts.
+      expect(JSON.stringify(drafts)).not.toMatch(/One|Two/);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  // A dialog opened with showModal() and no script trap lets Tab leave the document after its last
+  // control, so focus reaches the body and the walk ends complete. The content behind the dialog is
+  // inert then: out of reach of the keyboard and left out of the accessibility tree.
+  it('walks a dialog opened with showModal() to the body when no script keeps focus in it', async () => {
+    const opened = await open('/native-modal');
+    try {
+      const stops = await paths(opened, 2);
+      expect(stops).toEqual(['#b', 'html > body:nth-child(2)']);
       expect(await walk(opened)).toEqual([]);
     } finally {
       await opened.close();
     }
   });
+
+  for (const [path, dialog] of [
+    ['/native-modal-trap', '#dialog'],
+    ['/aria-modal-trap', '#dialog'],
+    ['/slotted-modal-trap', 'html > body:nth-child(2) > main:nth-child(1) > x-modal:nth-child(1) >> div:nth-child(1)'],
+  ] as const) {
+    it(`ends with a gap and no trap when focus cycles inside an open modal dialog (${path})`, async () => {
+      const opened = await open(path);
+      try {
+        await opened.focusBody();
+        await opened.tab();
+        expect(await opened.activeModalDialogs()).toEqual([dialog]);
+        const drafts = await walk(opened);
+        expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
+        expect(drafts[0]?.confidence).toBe('unverified');
+        expect(drafts[0]?.why).toContain('inside an open modal dialog');
+        expect(drafts[0]?.why).toContain('did not cover the rest of the page');
+      } finally {
+        await opened.close();
+      }
+    });
+  }
+
+  for (const path of ['/non-modal-dialog-trap', '/aria-non-modal-trap']) {
+    it(`reports a keyboard trap inside a dialog that is not modal (${path})`, async () => {
+      const opened = await open(path);
+      try {
+        await opened.focusBody();
+        await opened.tab();
+        expect(await opened.activeModalDialogs()).toEqual([]);
+        const drafts = await walk(opened);
+        expect(summary(drafts)).toEqual([
+          ['keyboard-walk-trap', '#a'],
+          ['keyboard-walk-truncated', ''],
+        ]);
+        expect(drafts[0]?.evidence.extra?.['cycle']).toEqual(['#a', '#b']);
+      } finally {
+        await opened.close();
+      }
+    });
+  }
 
   it('discloses a truncated walk when focus moves into a closed shadow root', async () => {
     const opened = await open('/closed-shadow-buttons');
