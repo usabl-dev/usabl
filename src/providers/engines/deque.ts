@@ -229,14 +229,21 @@ export function makeDequeProvider(config: DequeEngineConfig, options: DequeProvi
         throw notLivePageError(DEQUE_LABEL);
       }
 
+      // Deque's usage service is on by default. The package loads and the builder is made before
+      // enableTracking(false) can be called, and nothing proves those two steps send no usage data.
+      // The variable is the one switch that covers them, so unless the operator opted in it must be
+      // exactly false before anything from Deque runs. Unset is not enough.
+      if (trackingOff && env[DEQUE_TRACK_USAGE_ENV] !== 'false') {
+        throw new Error(
+          `${DEQUE_TRACK_USAGE_ENV} is not set to false, so Deque did not run. Deque's usage service is on by default, and only this variable turns it off while the package loads and the builder is made. To fix it, set ${DEQUE_TRACK_USAGE_ENV}=false, or set engines.deque.enabled to false.`,
+        );
+      }
+
       // Checked before the package loads, so nothing from Deque runs while a switch outside the
-      // trusted config could turn its usage service on or replace its rules with an empty set.
+      // trusted config could replace its rules with an empty set.
       await assertNoOutsideSwitch(DEQUE_LABEL, {
         env,
         variables: [
-          ...(trackingOff
-            ? [{ name: DEQUE_TRACK_USAGE_ENV, safe: 'false', why: 'can turn on Deque usage reporting, which usabl keeps off' }]
-            : []),
           {
             name: DEQUE_RULESET_PATH_ENV,
             safe: null,
@@ -273,11 +280,6 @@ export function makeDequeProvider(config: DequeEngineConfig, options: DequeProvi
       } catch (error) {
         throw new Error(`${DEQUE_LABEL.vendor} analysis failed: ${errorMessage(error)}`);
       }
-      if (trackingOff && typeof builder.enableTracking !== 'function' && env[DEQUE_TRACK_USAGE_ENV] !== 'false') {
-        throw new Error(
-          `This version of ${DEQUE_PACKAGE} has no enableTracking, so usabl cannot turn its usage reporting off. To fix it, set ${DEQUE_TRACK_USAGE_ENV} to false, or set engines.deque.enabled to false.`,
-        );
-      }
       const docs = (ctx.profile ?? 'app') === 'docs';
       if (docs && typeof builder.withTags !== 'function') {
         // Docs screens are held to the WCAG 2.2 AA tag set, as axe is. Running Deque's whole ruleset
@@ -289,6 +291,8 @@ export function makeDequeProvider(config: DequeEngineConfig, options: DequeProvi
 
       let raw: unknown;
       try {
+        // The variable already turned tracking off. The builder call is the documented second
+        // switch, for an SDK that reads its settings at analyze time.
         if (trackingOff && typeof builder.enableTracking === 'function') {
           builder.enableTracking(false);
         }

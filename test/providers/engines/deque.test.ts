@@ -106,10 +106,13 @@ function fakeDequeModule(
   return async () => ({ AxeDevToolsBuilder: Builder });
 }
 
+// The environment a run must have for Deque, with usage tracking left off.
+const TRACKING_OFF = { AXE_TRACK_USAGE: 'false' };
+
 // Every test names its own loader and environment, and nothing on disk is ever consulted.
 function provider(config: Parameters<typeof makeDequeProvider>[0], options: DequeProviderOptions) {
   return makeDequeProvider(config, {
-    env: {},
+    env: TRACKING_OFF,
     fileExists: async () => false,
     probe: async () => ({ state: 'installed', version: '4.11.2', missingDependencies: [] }),
     ...options,
@@ -248,14 +251,13 @@ describe('makeDequeProvider', () => {
 
   it('turns usage tracking off through the builder before analyzing, and never writes the environment', async () => {
     const recorded = newRecorded();
-    const env: Record<string, string | undefined> = {};
-    const frozen = Object.freeze(env);
+    const frozen = Object.freeze({ ...TRACKING_OFF });
     await provider({ enabled: true }, { load: fakeDequeModule(await dequeResults(), recorded), env: frozen }).run(
       ctxFor(livePage()),
     );
 
     expect(recorded.calls).toEqual(['enableTracking(false)', 'analyze']);
-    expect(frozen[DEQUE_TRACK_USAGE_ENV]).toBeUndefined();
+    expect(frozen[DEQUE_TRACK_USAGE_ENV]).toBe('false');
   });
 
   it('runs when the environment already turns tracking off', async () => {
@@ -329,7 +331,7 @@ describe('Deque failures become coverage gaps with a fix', () => {
   it('reports the real dynamic import of the absent package as not installed', async () => {
     // No loader and no probe injected: this is the shipped import and the shipped lookup of the
     // vendor package name, which is not installed in this repository and never will be.
-    const p = makeDequeProvider({ enabled: true }, { env: {}, fileExists: async () => false });
+    const p = makeDequeProvider({ enabled: true }, { env: TRACKING_OFF, fileExists: async () => false });
     const [gap] = await gapsFor(p);
     expect(gap?.reason).toContain('@axe-devtools/playwright is not installed');
   });
@@ -409,27 +411,30 @@ describe('Deque failures become coverage gaps with a fix', () => {
     ]);
   });
 
-  it('refuses to run while AXE_TRACK_USAGE could turn tracking on', async () => {
-    for (const value of ['true', '1', '']) {
+  it('refuses to run unless AXE_TRACK_USAGE is exactly false, before anything from Deque loads', async () => {
+    // The package loads and the builder is made before enableTracking(false) can be called, and
+    // nothing proves those two steps send no usage data. The variable is the one switch that covers
+    // them, so unset is not enough.
+    for (const env of [{}, { AXE_TRACK_USAGE: 'true' }, { AXE_TRACK_USAGE: '1' }, { AXE_TRACK_USAGE: '' }, { AXE_TRACK_USAGE: 'FALSE' }]) {
       const recorded = newRecorded();
-      const p = provider(
-        { enabled: true },
-        { load: fakeDequeModule(await dequeResults(), recorded), env: { AXE_TRACK_USAGE: value } },
-      );
+      let loaded = false;
+      const load = fakeDequeModule(await dequeResults(), recorded);
+      const p = provider({ enabled: true }, { load: async () => ((loaded = true), load()), env });
       const [gap] = await gapsFor(p);
-      expect(gap?.reason).toContain('AXE_TRACK_USAGE is set to a value other than false');
-      expect(gap?.reason).toContain('unset AXE_TRACK_USAGE or set it to false');
-      expect(recorded.calls).toEqual([]);
+      expect(gap?.reason).toContain('AXE_TRACK_USAGE is not set to false');
+      expect(gap?.reason).toContain("Deque's usage service is on by default");
+      expect(gap?.reason).toContain('set AXE_TRACK_USAGE=false, or set engines.deque.enabled to false');
+      expect(loaded).toBe(false);
+      expect(recorded.constructed).toEqual([]);
     }
   });
 
-  it('refuses a builder with no tracking switch unless the environment turns tracking off', async () => {
+  it('runs a builder with no tracking switch, because the variable already turns tracking off', async () => {
     const recorded = newRecorded();
     const p = provider({ enabled: true }, { load: fakeDequeModule(await dequeResults(), recorded, { tracking: false }) });
-    const [gap] = await gapsFor(p);
-    expect(gap?.reason).toContain('has no enableTracking');
-    expect(gap?.reason).toContain('set AXE_TRACK_USAGE to false');
-    expect(recorded.calls).toEqual([]);
+    const run = await runProviders([p], ctxFor(livePage()), ['live']);
+    expect(run.gaps).toEqual([]);
+    expect(recorded.calls).toEqual(['analyze']);
   });
 
   it('refuses a docs screen when the builder cannot limit itself to the docs tags', async () => {
@@ -446,7 +451,7 @@ describe('Deque refuses to run while a ruleset switch outside the config could r
     const recorded = newRecorded();
     const p = provider(
       { enabled: true },
-      { load: fakeDequeModule(await dequeResults(), recorded), env: { AXE_RULESET_PATH: '/tmp/empty.json' } },
+      { load: fakeDequeModule(await dequeResults(), recorded), env: { ...TRACKING_OFF, AXE_RULESET_PATH: '/tmp/empty.json' } },
     );
     const [gap] = (await runProviders([p], ctxFor(livePage()), ['live'])).gaps;
     expect(gap?.reason).toContain('AXE_RULESET_PATH is set');

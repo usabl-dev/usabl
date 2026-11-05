@@ -52,7 +52,7 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('Deque provider on a real
       const provider = makeDequeProvider(
         { enabled: true },
         {
-          env: {},
+          env: { AXE_TRACK_USAGE: 'false' },
           fileExists: async () => false,
           load: async () => ({
             AxeDevToolsBuilder: class {

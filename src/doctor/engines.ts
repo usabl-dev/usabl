@@ -142,8 +142,9 @@ async function dequeReport(
   const trackingOff = deque.trackUsage !== true;
   const problems: string[] = [];
   const tracking = deps.env[DEQUE_TRACK_USAGE_ENV];
-  if (trackingOff && tracking !== undefined && tracking !== 'false') {
-    problems.push(`${DEQUE_TRACK_USAGE_ENV} is set to a value other than false`);
+  const trackingUnsafe = trackingOff && tracking !== 'false';
+  if (trackingUnsafe) {
+    problems.push(`${DEQUE_TRACK_USAGE_ENV} is not set to false`);
   }
   if (deps.env[DEQUE_RULESET_PATH_ENV] !== undefined) {
     problems.push(`${DEQUE_RULESET_PATH_ENV} is set`);
@@ -161,15 +162,18 @@ async function dequeReport(
   if (problems.length > 0 || steps.length > 0) {
     note = [
       ...(problems.length > 0 ? [refusalSentence('Deque', problems)] : []),
+      ...(trackingUnsafe
+        ? [
+            `Set ${DEQUE_TRACK_USAGE_ENV}=false, which turns Deque usage reporting off while the package loads, or opt in with engines.deque.trackUsage.`,
+          ]
+        : []),
       ...steps,
       ...(steps.length > 0 ? [`Or set engines.deque.enabled to false. ${UNTIL_THEN}`] : []),
     ].join(' ');
   } else if (!trackingOff) {
     note = 'Usage tracking on (opted in), so Deque sends usage data to its usage service. No credentials are needed at run time.';
-  } else if (tracking === 'false') {
-    note = 'Usage tracking off. No credentials are needed at run time.';
   } else {
-    note = `Usage tracking off: usabl calls enableTracking(false) on the builder. Also set ${DEQUE_TRACK_USAGE_ENV}=false, so nothing is sent while the package loads. No credentials are needed at run time.`;
+    note = 'Usage tracking off. No credentials are needed at run time.';
   }
   return {
     id: 'deque',

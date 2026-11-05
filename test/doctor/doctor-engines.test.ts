@@ -132,7 +132,7 @@ describe('usabl doctor engines section', () => {
     }
   });
 
-  it('suggests AXE_TRACK_USAGE=false so nothing is sent while the package loads', async () => {
+  it('warns that every scan will refuse Deque until AXE_TRACK_USAGE is false', async () => {
     const reports = await collectEngineReports({
       readFile: async (path) => (path === 'usabl.config.json' ? configWith({ deque: { enabled: true } }) : null),
       configPath: 'usabl.config.json',
@@ -140,7 +140,19 @@ describe('usabl doctor engines section', () => {
       probePackage: INSTALLED,
     });
     expect(reports[0]?.note).toBe(
-      'Usage tracking off: usabl calls enableTracking(false) on the builder. Also set AXE_TRACK_USAGE=false, so nothing is sent while the package loads. No credentials are needed at run time.',
+      'Every scan will refuse to run Deque until this is fixed: AXE_TRACK_USAGE is not set to false. Set AXE_TRACK_USAGE=false, which turns Deque usage reporting off while the package loads, or opt in with engines.deque.trackUsage.',
+    );
+  });
+
+  it('needs no AXE_TRACK_USAGE when the operator opts in to usage tracking', async () => {
+    const reports = await collectEngineReports({
+      readFile: async (path) => (path === 'usabl.config.json' ? configWith({ deque: { enabled: true, trackUsage: true } }) : null),
+      configPath: 'usabl.config.json',
+      env: {},
+      probePackage: INSTALLED,
+    });
+    expect(reports[0]?.note).toBe(
+      'Usage tracking on (opted in), so Deque sends usage data to its usage service. No credentials are needed at run time.',
     );
   });
 
@@ -163,7 +175,7 @@ describe('usabl doctor engines section', () => {
       probePackage: INSTALLED,
     });
     expect(reports[0]?.note).toBe(
-      'Every scan will refuse to run Deque until this is fixed: AXE_TRACK_USAGE is set to a value other than false; AXE_RULESET_PATH is set; axe-ruleset.json is in the project and not in guardedPaths.',
+      'Every scan will refuse to run Deque until this is fixed: AXE_TRACK_USAGE is not set to false; AXE_RULESET_PATH is set; axe-ruleset.json is in the project and not in guardedPaths. Set AXE_TRACK_USAGE=false, which turns Deque usage reporting off while the package loads, or opt in with engines.deque.trackUsage.',
     );
     expect(reports[1]?.note).toBe(
       'Every scan will refuse to run Evinced until this is fixed: EV_SWITCH_ON is set to a value other than true; evConfig.yml is in the project and not in guardedPaths.',
