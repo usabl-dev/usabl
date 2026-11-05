@@ -408,6 +408,16 @@ export interface ScreenScan {
   stops: TranscriptStop[];
   drafts: Draft[];
   gaps: CoverageGap[];
+  notes?: ProviderNote[];          // every engine scan sets it; absent reads as no notes
+}
+
+// A provider's disclosure about a screen, for example design-system markup its rules did not
+// read. Disclosure only: never a verdict input and never a coverage gap. The gate never reads
+// it, so it cannot block a screen or mark one checked. Engine words and counts, no page text.
+// Providers return notes in ProviderOutput.notes beside drafts, applicability, and gaps.
+export interface ProviderNote {
+  ref: string;                     // provider:<pack id>/<subject>
+  reason: string;
 }
 
 export interface AffectedScreen {
@@ -781,11 +791,14 @@ provider runner, which discloses it as a gap. When the top document has no marke
 returns no drafts, and reports each of its eight rules in `ProviderOutput.applicability`
 with outcome `inapplicable` and `elementCount` 0, the way axe reports a rule that matched
 nothing. If `Page.countEverywhere` then finds marker elements inside frames or open shadow
-roots, which the rules do not read, the pack also returns one `not-covered` gap,
-`provider:pf-rulepack/out-of-document`, that gives their count. `countEverywhere` adds 0 for
-a frame it cannot read, so it only ever adds this gap and never decides that the pack
+roots, which the rules do not read, the pack also returns one note in `ProviderOutput.notes`,
+`provider:pf-rulepack/out-of-document`, that gives their count and says the PatternFly rules
+did not check them. A note is disclosure only. It is not a coverage gap, the gate never reads
+it, and it never moves the verdict or blocks the screen, so the pack returns no gap here. axe
+and the keyboard walk still read those frames and open shadow roots. `countEverywhere` adds 0
+for a frame it cannot read, so it only ever adds this note and never decides that the pack
 applies. When the top document has the marker and more PatternFly markup sits elsewhere,
-there is no gap, and the markup elsewhere is not checked, as before. `PF_RULES` in
+there is no note and no gap, and the markup elsewhere is not checked, as before. `PF_RULES` in
 `rulepack/index.ts` lists the rule ids, and a unit test keeps it equal to the ids the checks
 and probes write. On a page where the pack applies it reports no applicability, as before.
 The pack stays off on the docs profile and reports nothing there.
@@ -840,15 +853,18 @@ them start with `rh-`), and the sources test keeps the list equal to the manifes
 a later release adds is not in the list, and no rule checks it either. When the top document
 has no marker the pack returns no drafts, and reports each of its seven rules as
 `inapplicable` with `elementCount` 0, on both profiles. If `Page.countEverywhere` then finds
-RHDS elements inside frames or open shadow roots, the pack also returns one `not-covered`
-gap, `provider:rhds-rulepack/out-of-document`, that gives their count. So an application
-shell that keeps every RHDS element in a shadow root reads as not checked, never as checked
-and clean. As in the PatternFly pack, `countEverywhere` only ever adds this gap. On a page
+RHDS elements inside frames or open shadow roots, the pack also returns one note,
+`provider:rhds-rulepack/out-of-document`, that gives their count and says the RHDS rules did
+not check them. So an application shell that keeps every RHDS element in a shadow root says
+which rules did not read it. The note is disclosure only. It is not a coverage gap, the gate
+never reads it, and it never moves the verdict or blocks the screen. axe and the keyboard walk
+still read those frames and open shadow roots, so the screen is checked by them as on any
+other page. As in the PatternFly pack, `countEverywhere` only ever adds this note. On a page
 where the pack applies it reports no applicability.
 
 Stated limits. The rules read the top document only, like the PatternFly rules. When the top
 document has an RHDS element, more RHDS elements inside open shadow roots or frames are not
-checked and raise no gap. RHDS components hold other RHDS elements in their own shadow roots,
+checked and raise no gap and no note. RHDS components hold other RHDS elements in their own shadow roots,
 so a gap there would fire on every RHDS page. The structure rules read authored markup, so an element that moves its children
 after load is read as it is at scan time. `rhds-dialog-name` cannot confirm a name on a
 closed dialog with no name source in its markup, so that case stays `unverified`.
@@ -2527,8 +2543,11 @@ then `### Accessibility debt` when the floor holds debt or the change fixed some
 intermittent.", followed, when automatic tracking is off, by why and how to turn it on,
 then the finding sections `### New barriers`, `### Known (recorded debt)`, and
 `### Advisory (non-gating)`, or `### Findings (collapsed by rule)` for the deterministic lane
-when the noise budget collapses it, then `### Coverage gaps` and
-`### Announcements (current run)`. The known section lists carried and waived deterministic
+when the noise budget collapses it, then `### Coverage gaps`, then
+`### Disclosed, does not block` when any screen carries a provider note, and
+`### Announcements (current run)`. The notes section is disclosure only and never changes
+the verdict. The terminal summary, the self-check, and the Stop hook print the same notes
+after the gaps under `disclosed, does not block`. The known section lists carried and waived deterministic
 findings, each with its status, the same recorded debt the terminal and the overlay list. A
 collapsed group holds findings of one status, and names its screen id and rule once, in its
 headline. Its hint calls the findings gating only when every one of them gates. All page-derived text passes through `neutralize()`. Sticky comment
@@ -2691,6 +2710,10 @@ whose ref is that file, the same ref `usabl check` gives it.
 the only verdict authority. It also acts on the caller's page: the keyboard walk presses Tab,
 the PatternFly probes open and close dialogs and menus, and each flow requirement on the page's
 surface runs its authored steps, clicks and key presses, on that page.
+
+The result's `notes` holds the provider notes for the page, such as design-system markup a
+rulepack did not read. They are disclosure only and do not change the verdict. A page that
+did not render as the screen it claimed returns no notes, as it returns no drafts.
 
 `checkPage` scrubs its result before it returns it, because the result leaves usabl there. Every
 string passes through the scrubber, and every URL in it, the page address in a gap ref included,
