@@ -2918,8 +2918,9 @@ closed when it has no `open` attribute: the browser renders none of its content 
 of the accessibility tree. The observer runs after the task that made the change, so a Save button
 that writes `Saved` into a polite region inside its dialog and closes the dialog in the same task
 is not heard: by the time the change is read, the dialog is closed, and no screen reader speaks the
-text. A change made while the dialog is open, in an earlier task than the one that closes it, is
-heard as before. It covers a region inside `aria-hidden="true"`, an
+text. The hidden state is read again at drain, the way the modal state is, so a region whose
+dialog closes one task later, or after a promise that follows the write, is not heard either.
+Anything that hides the region by the drain decides, which can only make the capture hear less. It covers a region inside `aria-hidden="true"`, an
 `aria-hidden` wrapper between the region and the change, and a region that is itself hidden. Orca
 says nothing for a polite status inside `aria-hidden="true"`. `aria-hidden="false"` does not bring
 back content an ancestor hides. A `hidden` attribute that page CSS overrides still counts as

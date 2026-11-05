@@ -319,8 +319,9 @@ const LIVE_CAPTURE_IMPL = `
       buffer.push({ text, start });
     }
   };
-  // Modal state is read when a change is observed, and again here. A page can write a region and
-  // open a modal in a later task, before the browser updates the accessibility tree, so a screen
+  // Modal state and hidden state are read when a change is observed, and again here. A page can
+  // write a region and open a modal in a later task, or close the dialog that holds the region one
+  // task or one promise later, before the browser updates the accessibility tree, so a screen
   // reader likely hears nothing. The state at drain decides, so the answer does not depend on which
   // ran first. A change on an element that has left the document cannot be checked against a modal
   // open now, so the drain says so instead of guessing.
@@ -333,6 +334,9 @@ const LIVE_CAPTURE_IMPL = `
     }
     const modals = findOpenModals();
     for (const entry of entries) {
+      if (liveResolver.hiddenInChain(flatChain(entry.start).map(hiddenFacts))) {
+        continue;
+      }
       if (modals.size === 0) {
         texts.push(entry.text);
       } else if (!entry.start.isConnected) {

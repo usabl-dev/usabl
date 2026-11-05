@@ -119,7 +119,9 @@
   closed the dialog in the same task was recorded as heard, although the closed dialog's content
   is out of the accessibility tree and no screen reader speaks it, so a flow requirement that
   expects the announcement passed. A `dialog` element without the `open` attribute now hides its
-  content from the capture, the same way `hidden`, `inert`, and `aria-hidden` do.
+  content from the capture, the same way `hidden`, `inert`, and `aria-hidden` do. The hidden
+  state is read again when the capture is drained, so a dialog that closes one task or one
+  promise after the write hides the text too.
 
 - The PatternFly rulepack no longer reports PatternFly rules on a page with no PatternFly
   markup. Some of its selectors have generic ARIA arms, so on a page built with another design
