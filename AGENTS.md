@@ -13,28 +13,28 @@ returns one gate-owned verdict, or an honest gap when it could not check.
 
 ## Repository map
 
-| Path                                                       | What it holds                                                                                                     |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `src/contracts/`                                           | The shared types: `Draft`, `Finding`, `Result`, config, and the deps interface.                                   |
-| `src/gate/`                                                | The gate. The only code that turns drafts into findings and decides a verdict.                                    |
-| `src/trust/`                                               | The guard that detects policy divergence from the trusted ref.                                                    |
-| `src/run.ts`                                               | The sequencer: guard, coverage, scan, gate.                                                                       |
-| `src/coverage/`                                            | Maps changed files to screens through imports, routes, and docs manifests.                                        |
+| Path                                                       | What it holds                                                                                                                                      |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/contracts/`                                           | The shared types: `Draft`, `Finding`, `Result`, config, and the deps interface.                                                                    |
+| `src/gate/`                                                | The gate. The only code that turns drafts into findings and decides a verdict.                                                                     |
+| `src/trust/`                                               | The guard that detects policy divergence from the trusted ref.                                                                                     |
+| `src/run.ts`                                               | The sequencer: guard, coverage, scan, gate.                                                                                                        |
+| `src/coverage/`                                            | Maps changed files to screens through imports, routes, and docs manifests.                                                                         |
 | `src/providers/`                                           | Evidence collectors: `axe/`, `rulepack/` (PatternFly), `rhds/` (Red Hat Design System), `keyboard-walk/`, `docs-rulepack/`. They emit drafts only. |
-| `src/deps/`                                                | Adapters for git, the file system, and the browser, plus fakes for tests.                                         |
-| `src/evidence/`                                            | The evidence floor and the verified receipt.                                                                      |
-| `src/history/`                                             | The debt history: records of main scans, the effective floor, and `usabl debt`.                                   |
-| `src/intake/`                                              | Config, route, and requirement loading and validation.                                                            |
-| `src/surfaces/`                                            | CLI, overlay, stop hook, pull request comment, Playwright helper, docs output, and `scrub.ts`.                    |
-| `src/output/`                                              | Text projections of a Result: summary, verdict line, disclosure.                                                  |
-| `src/primitives/`                                          | Small pure helpers: hashing, identity, globs, `neutralize`.                                                       |
-| `src/init/`, `src/install/`                                | Generators for policy drafts and for each integration.                                                            |
-| `src/baseline/`, `src/floor/`, `src/drift/`, `src/doctor/` | The `baseline`, `floor prune`, `drift routes`, and `doctor` commands.                                             |
-| `src/docs/`, `src/app/`                                    | Reports artifacts and finding-to-source mapping. Presentation only.                                               |
-| `src/voicing/`, `src/measure/`                             | Built but dormant. Not in the run or gate path.                                                                   |
-| `test/`                                                    | Vitest tests. The layout mirrors `src/`.                                                                          |
-| `fixtures/`                                                | Fixture pages and golden outputs used by tests.                                                                   |
-| `docs/`                                                    | Product docs, the ground truth, the threat model, and the published HTML pages.                                   |
+| `src/deps/`                                                | Adapters for git, the file system, and the browser, plus fakes for tests.                                                                          |
+| `src/evidence/`                                            | The evidence floor and the verified receipt.                                                                                                       |
+| `src/history/`                                             | The debt history: records of main scans, the effective floor, and `usabl debt`.                                                                    |
+| `src/intake/`                                              | Config, route, and requirement loading and validation.                                                                                             |
+| `src/surfaces/`                                            | CLI, overlay, stop hook, pull request comment, Playwright helper, docs output, and `scrub.ts`.                                                     |
+| `src/output/`                                              | Text projections of a Result: summary, verdict line, disclosure.                                                                                   |
+| `src/primitives/`                                          | Small pure helpers: hashing, identity, globs, `neutralize`.                                                                                        |
+| `src/init/`, `src/install/`                                | Generators for policy drafts and for each integration.                                                                                             |
+| `src/baseline/`, `src/floor/`, `src/drift/`, `src/doctor/` | The `baseline`, `floor prune`, `drift routes`, and `doctor` commands.                                                                              |
+| `src/docs/`, `src/app/`                                    | Reports artifacts and finding-to-source mapping. Presentation only.                                                                                |
+| `src/voicing/`, `src/measure/`                             | Built but dormant. Not in the run or gate path.                                                                                                    |
+| `test/`                                                    | Vitest tests. The layout mirrors `src/`.                                                                                                           |
+| `fixtures/`                                                | Fixture pages and golden outputs used by tests.                                                                                                    |
+| `docs/`                                                    | Product docs, the ground truth, the threat model, and the published HTML pages.                                                                    |
 
 ## Setup and gates
 
