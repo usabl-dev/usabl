@@ -991,6 +991,8 @@ means Deque's default), and `trackUsage` (absent means false). `engines.evinced`
 and `mode` (`offline`, the default, reads `EVINCED_SERVICE_ID` and `EVINCED_AUTH_TOKEN`; `online`
 reads `EVINCED_SERVICE_ID` and `EVINCED_API_KEY` and contacts Evinced's license server). An unknown
 key is refused. A `promote` key is refused with its own message, because findings stay preview.
+The providers take an evidence class and a promote list as code options so the gating paths can be
+tested; config cannot set either.
 Engines are trusted-only, like `requirements` and `judge`: under a trusted ref they come from the
 committed config, and a missing or unparseable trusted config turns them off. The Playwright helper
 (`checkPage`) does not run them, because it reads the working tree's config and its page verdict
@@ -1005,16 +1007,31 @@ Evinced runs with every open-source axe rule switched off inside it and with pla
 and maps one draft per element that has a selector. It reports no passes, so it records no
 applicability and never claims a rule ran clean.
 
-**What becomes a gap, and what becomes a note.** A run that could not use the engine is a
-`not-covered` gap on `provider:deque` or `provider:evinced`, with the reason and the fix: the package
-is not installed; the package is installed but a package it needs is not (named); the package throws
-while loading; a credential variable is not set (named, never its value); the page has no Playwright
-page behind it; the SDK returned something that is not its documented shape; Deque ran no rules at
-all; any vendor call did not finish within `ENGINE_CALL_TIMEOUT_MS` (60 seconds), which is how a hung
-license server ends; or a switch outside the trusted config could change what the engine does (below).
-An entry or element the engine returned that usabl could not read is a provider note, because a lost
-preview finding could never have moved the verdict. The mapping turns the same losses into gaps for a
-class that gates, so the protection is in place before promotion exists.
+**What becomes a gap, and what becomes a note.** While engine findings are preview, a run that could
+not use the engine is a provider note on `provider:deque` or `provider:evinced`, never a gap. The
+note says the engine did not run, why, and that its findings are preview so the verdict does not
+change. A missing preview engine cannot hide a barrier the gate would have blocked on, so it must
+not stop a screen from being cleanly scanned or a run from being verified. The note covers every
+failure: the package is not installed; the package is installed but a package it needs is not
+(named); the package throws while loading; a credential variable is not set (named, never its
+value); the page has no Playwright page behind it; the SDK returned something that is not its
+documented shape; Deque ran no rules at all; any vendor call did not finish within
+`ENGINE_CALL_TIMEOUT_MS` (60 seconds), which is how a hung license server ends; `AXE_TRACK_USAGE` is
+not `false` (below); or a switch outside the trusted config could change what the engine does
+(below). Each provider catches its own failure and returns the note, so the provider seam never
+turns it into a `provider failed` gap. An entry or element the engine returned that usabl could not
+read is also a note. When Deque returns entries but every one is an open-source axe rule, one note
+says Deque reported only rules axe already runs, so an empty Deque section is not mistaken for a
+clean one.
+
+The code keeps the switch for a class that gates. When the evidence class gates (Deque) or a type is
+promoted (Evinced), every one of those failures and lost entries is a `not-covered` gap instead, so
+the protection is in place before promotion exists.
+
+Preview engine drafts skip the row read (section 9, Identity, row keys). The row read exists to keep a
+blocking finding's identity stable across rows, and an unreadable row adds a gap. A preview draft
+never blocks, so it gets no row key and no gap. A deterministic draft on the same page still gets
+both.
 
 **Switches outside the trusted config.** A switched-off SDK returns an empty result, and an empty
 result reads as a clean screen, so each provider refuses to run while such a switch could be set:
@@ -1027,14 +1044,16 @@ result reads as a clean screen, so each provider refuses to run while such a swi
   ruleset. Its Playwright reference does not say whether the SDK reads them, so usabl assumes it may.
   Its Playwright reference also names a "script-builder custom rule configuration file" that the
   builder reads when no ruleset is given, without naming the file; usabl cannot check that one.
-- Deque usage tracking: Deque's usage service is on by default. With `trackUsage` absent or false,
-  usabl calls `enableTracking(false)` on the builder and refuses to run while `AXE_TRACK_USAGE` is set
-  to anything but `false`. It never writes the environment. A builder with no `enableTracking` runs
-  only when `AXE_TRACK_USAGE` is already `false`. Doctor suggests setting `AXE_TRACK_USAGE=false` so
-  nothing is sent while the package loads, which the builder call cannot cover.
+- Deque usage tracking: Deque's usage service is on by default, and `AXE_TRACK_USAGE=false` is the
+  documented way to turn it off. With `trackUsage` absent or false, usabl refuses to run Deque unless
+  `AXE_TRACK_USAGE` is exactly `false`, and checks this before it loads the package, because the
+  variable is the only switch that covers the package load and the builder's construction. When it
+  runs, it also calls `enableTracking(false)` on the builder if the builder has one. usabl never
+  writes the environment. The refusal and doctor both say to set `AXE_TRACK_USAGE=false` or to set
+  `engines.deque.enabled` to false. With `trackUsage: true` the variable is not checked.
 
 **Docs screens.** On a `docs` screen Deque runs with `withTags` set to the same WCAG 2.2 AA tag set
-axe uses (section 7.6). A builder without `withTags` is a gap on docs screens. Whether Deque narrows
+axe uses (section 7.6). A builder without `withTags` does not run on docs screens, with a note. Whether Deque narrows
 a chosen `rulesetId` further by tags is not stated in its reference. Evinced has no tag filter and
 runs its full set on docs screens.
 
@@ -1042,13 +1061,16 @@ runs its full set on docs screens.
 failure messages find it the way that import does: `node_modules` in the folder of usabl's own module
 and every folder above it, from its real path, never `NODE_PATH` or a global folder. Doctor also
 checks that every dependency and non-optional peer the vendor package declares resolves from the
-vendor's folder, and names any that do not. It runs no vendor code, so a package that resolves and
-then throws while loading is caught only at run time, as "failed to load".
+vendor's folder, and names any that do not. That check starts from the vendor folder's real path,
+as Node does, so a package that pnpm links in from its store finds its dependencies beside it in the
+store. Doctor runs no vendor code, so a package that resolves and then throws while loading is caught
+only at run time, as "failed to load".
 
 **Receipt.** Each turned-on engine's installed version joins `scannerVersions.engines`, keyed by
 engine id, or `not-installed`. A receipt minted with one set of engine versions fails
 re-verification under another, and a receipt minted with no engine keeps its earlier shape
-(section 10, receipt binding).
+(section 10, receipt binding). The receipt's per-screen applicability counts include the Deque
+rules that ran, because Deque records applicability for its own rules. Those counts never gate.
 
 **Limits.**
 - The vendor SDK runs inside the scan process with the operator's credentials and the whole
@@ -1063,6 +1085,9 @@ re-verification under another, and a receipt minted with no engine keeps its ear
   script that changes the DOM would be seen by those later providers.
 - Evinced's issue shape is only partly documented. Every field is read defensively. The first live run on a
   licensed SDK has to record the real shape.
+- Yarn Plug'n'Play installs have no `node_modules`. The import can still work there, but doctor and
+  the run's failure messages look only in `node_modules`, so doctor says the package is not
+  installed.
 
 ---
 
@@ -1784,7 +1809,8 @@ A selector the page cannot parse, one that matches no element (the element left 
 scanner saw it), and one that matches more than one element are unreadable, and are handled like a
 row that cannot be told apart, below. Only an element that was found, outside every body row of a
 keyed table, keeps its old key with no gap. A finding with no selector at all is about the page or
-the walk, not an element, and has no row. A table is a `table` or an element with role
+the walk, not an element, and has no row. A preview draft (from an optional engine) is not read either: it never
+blocks, so it gets no row key and no gap (section 7.7). A table is a `table` or an element with role
 `table`, `grid`, or `treegrid`. Its rows are the `tr` and `role="row"` elements whose nearest table
 is that table, so a row of a nested table is never one of the outer table's rows. Header and footer
 rows (inside `thead` or `tfoot`, or holding a column header) are not body rows.

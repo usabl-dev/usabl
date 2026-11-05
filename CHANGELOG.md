@@ -88,12 +88,14 @@
   documented result format. Not yet run on a licensed SDK. Their findings are preview: shown
   beside the axe and rulepack findings, never blocking, under rule ids prefixed `deque:` and
   `evinced:`. Engines are read from the trusted config only. A run that cannot use an engine
-  is a named coverage gap with the fix: the package or a package it needs is not installed,
-  a credential is not set, a vendor call did not finish within 60 seconds, or a switch
-  outside the trusted config (`EV_SWITCH_ON`, `evConfig.json`, `AXE_RULESET_PATH`,
-  `axe-ruleset.json`, or `AXE_TRACK_USAGE`) could change what the engine reports. Deque usage
-  tracking and Evinced platform upload are off unless you opt in, and usabl never writes the
-  environment. On docs screens Deque uses the same WCAG tags as axe. Credential values are
+  gets a note that names the engine, the reason, and the fix, and the verdict does not change,
+  because the engine's findings are preview. Reasons include: the package or a package it
+  needs is not installed, a credential is not set, a vendor call did not finish within 60
+  seconds, or a switch outside the trusted config (`EV_SWITCH_ON`, `evConfig.json`,
+  `AXE_RULESET_PATH`, or `axe-ruleset.json`) could change what the engine reports. Deque runs
+  only when `AXE_TRACK_USAGE` is `false`, unless you opt in to its usage tracking, and Evinced
+  platform upload is off unless you opt in. usabl never writes the environment. On docs
+  screens Deque uses the same WCAG tags as axe. Credential values are
   redacted from every message. `usabl doctor` shows each engine, its package and credentials
   state, and the testing status. Each turned-on engine's version is bound into the receipt.
   `checkPage` does not run the engines.
