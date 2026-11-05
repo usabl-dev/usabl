@@ -2912,8 +2912,14 @@ an explicit `aria-live` beats the role, only the exact tokens `polite` and `asse
 and roles match without regard to case. A change inside `aria-live="off"`, inside an off wrapper
 within a polite region, or inside a region whose token is `POLITE` or `banana` is not heard. Nor is
 a change inside content hidden from assistive technology: anything on the walk with `inert`, with
-`hidden`, or with an `aria-hidden` value Chromium reads as true. That is every non-empty value
-except `false` and `undefined` in any case. It covers a region inside `aria-hidden="true"`, an
+`hidden`, with an `aria-hidden` value Chromium reads as true, or a closed `dialog` element. That is
+every non-empty `aria-hidden` value except `false` and `undefined` in any case. A `dialog` is
+closed when it has no `open` attribute: the browser renders none of its content and leaves it out
+of the accessibility tree. The observer runs after the task that made the change, so a Save button
+that writes `Saved` into a polite region inside its dialog and closes the dialog in the same task
+is not heard: by the time the change is read, the dialog is closed, and no screen reader speaks the
+text. A change made while the dialog is open, in an earlier task than the one that closes it, is
+heard as before. It covers a region inside `aria-hidden="true"`, an
 `aria-hidden` wrapper between the region and the change, and a region that is itself hidden. Orca
 says nothing for a polite status inside `aria-hidden="true"`. `aria-hidden="false"` does not bring
 back content an ancestor hides. A `hidden` attribute that page CSS overrides still counts as

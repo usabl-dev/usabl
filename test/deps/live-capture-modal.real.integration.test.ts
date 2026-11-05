@@ -406,4 +406,111 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the announcement capture
     }
   });
   }
+
+  // A dialog that closes in the same task that writes a live region inside it. The observer runs
+  // after the task, when the dialog is already closed and its content is out of the accessibility
+  // tree, so no screen reader speaks the text. The capture recorded it anyway.
+  it('does not hear a region inside a dialog that closed in the task that wrote it', async () => {
+    const context = await browser.newContext();
+    try {
+      const pw = await context.newPage();
+      await pw.setContent(PAGE, { waitUntil: 'domcontentloaded' });
+      const page: Page = await adoptPage(pw);
+      const cdp = await context.newCDPSession(pw);
+      await cdp.send('Accessibility.enable');
+      await pw.evaluate(`document.getElementById('first').showModal()`);
+      await page.drainAnnouncements();
+      await pw.evaluate(`window.say('in-first', 'said in in-first'); document.getElementById('first').close()`);
+      const drained = await page.drainAnnouncements();
+      const state = await regionState(cdp, ['in-first'], drained);
+      expect(state['in-first']).toMatchObject({ heard: false, exposed: false });
+      expectMatchesTree(state);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('still hears a region inside a dialog that stays open after the write', async () => {
+    const context = await browser.newContext();
+    try {
+      const pw = await context.newPage();
+      await pw.setContent(PAGE, { waitUntil: 'domcontentloaded' });
+      const page: Page = await adoptPage(pw);
+      const cdp = await context.newCDPSession(pw);
+      await cdp.send('Accessibility.enable');
+      await pw.evaluate(`document.getElementById('first').showModal()`);
+      await page.drainAnnouncements();
+      await pw.evaluate(`window.say('in-first', 'said in in-first')`);
+      const state = await regionState(cdp, ['in-first'], await page.drainAnnouncements());
+      expect(state['in-first']).toEqual({ heard: true, exposed: true, reasons: [] });
+    } finally {
+      await context.close();
+    }
+  });
+
+  // The change is read in the task after the write, while the dialog is still open, so a screen
+  // reader can speak it before a later task closes the dialog.
+  it('still hears a region written in an earlier task than the one that closes its dialog', async () => {
+    const context = await browser.newContext();
+    try {
+      const pw = await context.newPage();
+      await pw.setContent(PAGE, { waitUntil: 'domcontentloaded' });
+      const page: Page = await adoptPage(pw);
+      await pw.evaluate(`document.getElementById('first').showModal()`);
+      await page.drainAnnouncements();
+      await pw.evaluate(`new Promise((resolve) => {
+        window.say('in-first', 'said in in-first');
+        setTimeout(() => { document.getElementById('first').close(); resolve(); }, 0);
+      })`);
+      expect(await page.drainAnnouncements()).toEqual(['said in in-first']);
+    } finally {
+      await context.close();
+    }
+  });
+
+  // The false green end to end: a Save button in a modal dialog writes "Saved" into a polite region
+  // inside the dialog and closes it. No screen reader speaks the text, and a flow requirement that
+  // expects it passed.
+  it('does not pass a flow requirement on a region inside a dialog the step closed', async () => {
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title></head><body>
+      <main><dialog id="edit"><p>Edit</p><div aria-live="polite" id="message"></div>
+      <button type="button" id="save">Save</button></dialog></main>
+      <script>
+        const dialog = document.getElementById('edit');
+        dialog.showModal();
+        document.getElementById('save').addEventListener('click', () => {
+          document.getElementById('message').textContent = 'Saved';
+          dialog.close();
+        });
+      </script>
+    </body></html>`;
+    const driver = makeRealBrowserDriver();
+    try {
+      const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+      try {
+        const [provider] = mapRequirementsToProviders({
+          version: 1,
+          requirements: [
+            {
+              id: 'save-announces',
+              kind: 'flow',
+              surface: 'clusters',
+              description: 'Saving announces that the change was saved.',
+              assertion: { type: 'flow', steps: [{ do: 'click', selector: '#save' }], expectedAnnouncement: 'Saved' },
+              approved: true,
+            },
+          ],
+        });
+        if (provider === undefined) throw new Error('no flow provider');
+        const drafts = draftsOf(
+          await provider.run({ page, screen: { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' }, config: testConfig() }),
+        );
+        expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['intake:save-announces', 'fail']]);
+      } finally {
+        await page.close();
+      }
+    } finally {
+      await driver.close();
+    }
+  });
 });

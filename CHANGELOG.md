@@ -114,6 +114,13 @@
   file. A `package.json` change to scripts or metadata only still reads as nothing to check:
   the dependency fields are compared with the trusted ref.
 
+- The announcement capture no longer hears text written into a `dialog` as it closes. A Save
+  button inside a modal dialog that wrote `Saved` into a polite region inside the dialog and
+  closed the dialog in the same task was recorded as heard, although the closed dialog's content
+  is out of the accessibility tree and no screen reader speaks it, so a flow requirement that
+  expects the announcement passed. A `dialog` element without the `open` attribute now hides its
+  content from the capture, the same way `hidden`, `inert`, and `aria-hidden` do.
+
 - The PatternFly rulepack no longer reports PatternFly rules on a page with no PatternFly
   markup. Some of its selectors have generic ARIA arms, so on a page built with another design
   system they matched markup PatternFly never made. It now runs only where an element in the
