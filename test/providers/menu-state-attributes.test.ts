@@ -9,6 +9,8 @@ describe('menu toggle state attributes', () => {
   it('accepts valid false expanded state when Chromium omits it from AX properties', async () => {
     const selector = '.menu-toggle'
     const page = makeFakePage({
+      // A PatternFly page, so the pack runs.
+      countEverywhere: async (query) => (query === SEL.pfMarker ? 1 : 0),
       queryAll: async (query) => (query === SEL.menuToggle ? [{ selector }] : []),
       axAt: async () => ({ name: 'Actions for policy-worker', role: 'button', states: {} }),
     }) as Page & { getAttribute(selector: string, name: string): Promise<string | null> }

@@ -74,6 +74,8 @@ function recorder(
 function makeClickMutatedPage(): Page {
   let mutated = false;
   return makeFakePage({
+    // A PatternFly page, so the rulepack runs its probes and clicks.
+    countEverywhere: async (selector) => (selector === SEL.pfMarker ? 1 : 0),
     queryAll: async (selector) => {
       if (selector === SEL.dialogTrigger) {
         return [{ selector: '#open-dialog' }];
