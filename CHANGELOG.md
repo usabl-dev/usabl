@@ -67,18 +67,20 @@
   such as a closed dialog, is reported as unverified. The pack only reads the page, and it runs
   on app and docs screens.
 
-- Each design-system rulepack now runs only on a page that carries its design system's
-  marker, and reports each of its rules as inapplicable on a page without it, the way axe
-  reports a rule that matched nothing. The RHDS pack looks for any element that RHDS 5.0.0
-  defines, including inside open shadow roots and frames.
+- Each design-system rulepack now runs only on a page whose top document carries its
+  design system's marker, and reports each of its rules as inapplicable on a page without
+  it, the way axe reports a rule that matched nothing. The RHDS pack looks for any element
+  that RHDS 5.0.0 defines. When the marker appears only inside frames or shadow roots,
+  which the rules do not read, the pack also reports a not-covered gap with the count, so
+  such a page never reads as checked and clean.
 
 ### Fixed
 
 - The PatternFly rulepack no longer reports PatternFly rules on a page with no PatternFly
   markup. Some of its selectors have generic ARIA arms, so on a page built with another design
-  system they matched markup PatternFly never made. It now runs only where an element has a
-  class token that starts with `pf-v6-`, `pf-v5-`, `pf-c-`, or `pf-m-`, or a
-  `data-ouia-component-type` that starts with `PF`.
+  system they matched markup PatternFly never made. It now runs only where an element in the
+  top document has a class token that starts with `pf-v6-`, `pf-v5-`, `pf-c-`, `pf-m-`,
+  `pf-l-`, or `pf-u-`, or a `data-ouia-component-type` that starts with `PF`.
 
 - In a monorepo, `usabl check` no longer reads a change in a workspace package the app depends
   on as nothing to check. With a config for `packages/admin`, a change in `packages/shared`,
