@@ -113,6 +113,35 @@ describe('makeCheckRunner', () => {
     ]);
   });
 
+  it('carries a provider note onto the scan, and a screen with only a note has no gaps', async () => {
+    // A design-system pack that finds its markup only inside frames or shadow roots says so in a
+    // note. The screen still counts as cleanly scanned, because the note never becomes a gap.
+    const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
+    const note = {
+      ref: 'provider:rhds-rulepack/out-of-document',
+      reason: '3 RHDS element(s) sit inside frames or shadow roots, which the RHDS rulepack does not read, so the RHDS rules did not check them.',
+    };
+    const pack: Provider = {
+      id: 'rhds-rulepack',
+      layer: 'rhds',
+      capabilities: ['live'],
+      run: async (): Promise<ProviderOutput> => ({ drafts: [], gaps: [], notes: [note] }),
+    };
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [pack],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.notes).toEqual([note]);
+    expect(scan.gaps).toEqual([]);
+    expect(scan.drafts).toEqual([]);
+  });
+
   it('carries provider applicability onto the scan', async () => {
     const page = await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] });
     const entry: RuleApplicability = {
@@ -358,6 +387,7 @@ describe('makeCheckRunner', () => {
       drafts: [],
       // Nothing was opened, so nothing is known about which rules applied here.
       applicability: [],
+      notes: [],
       // Nothing rendered, so no reachability claim is made either way.
       reachedSelectorPresent: null,
       reachedWhenSelector: null,

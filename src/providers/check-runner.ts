@@ -131,6 +131,7 @@ function failedScan(screen: { id: string; url: string }, reason: string): Screen
     drafts: [],
     gaps: [notCoveredGap(screen.url, reason)],
     applicability: [],
+    notes: [],
     reachedSelectorPresent: null,
     reachedWhenSelector: null,
   };
@@ -156,6 +157,7 @@ function notReachedScan(
     drafts: [],
     gaps: [gap],
     applicability: [],
+    notes: [],
     reachedSelectorPresent: null,
     reachedWhenSelector: signal?.selector ?? null,
     ...responseFields(signal, null),
@@ -237,6 +239,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
         drafts: [],
         gaps: [],
         applicability: [],
+        notes: [],
         reachedSelectorPresent: null,
         reachedWhenSelector: signal?.selector ?? null,
         ...responseFields(signal, null),
@@ -283,6 +286,7 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
             drafts: [],
             gaps: [],
             applicability: [],
+            notes: [],
             reachedSelectorPresent: false,
             reachedWhenSelector: signal?.selector ?? null,
             signalWaitMs,
@@ -359,6 +363,8 @@ export function makeCheckRunner(deps: CheckRunnerDeps): CheckRunner {
               // cleanly scanned: no floored row is claimed fixed and prune keeps its entries.
               gaps: [...providerResult.gaps, ...rows.gaps],
               applicability: providerResult.applicability,
+              // Disclosures only. They are not gaps, so a screen with only notes is cleanly scanned.
+              notes: providerResult.notes,
               reachedSelectorPresent: readiness.selectorPresent,
               reachedWhenSelector: signal?.selector ?? null,
               ...responseFields(signal, readiness.responseSeen),

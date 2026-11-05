@@ -131,9 +131,10 @@ export function markUnseenScreens(screens: ScreenScan[]): UnseenPass {
     // Applicability goes with the drafts, for the same reason. Sixty rules reported inapplicable
     // against a document that never rendered is a fact about a blank page, not about the
     // application, and keeping it would put the dropped claim back in a quieter form. Images read
-    // for the docs generator go too: they describe a page that is not the screen.
+    // for the docs generator go too: they describe a page that is not the screen. Notes go for the
+    // same reason: what a provider did not read on a blank page says nothing about the screen.
     const { images: _images, imagesNotListed: _imagesNotListed, ...kept } = scan;
-    return { ...kept, drafts: [], applicability: [], gaps: [...scan.gaps, unseenGap(scan, sentences)] };
+    return { ...kept, drafts: [], applicability: [], notes: [], gaps: [...scan.gaps, unseenGap(scan, sentences)] };
   });
 
   return { screens: marked, unseenScreenIds };

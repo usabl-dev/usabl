@@ -154,6 +154,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
           drafts: [],
           gaps: [],
           applicability: [],
+          notes: [],
           reachedSelectorPresent: null,
           reachedWhenSelector: null,
         },

@@ -40,6 +40,7 @@ import type {
   FloorHeadroom,
   FloorUnconfirmed,
   JudgeDisclosure,
+  ProviderNote,
   Receipt,
   Result,
   RuleApplicability,
@@ -296,6 +297,14 @@ function gap(value: unknown, field: string): CoverageGap {
   };
 }
 
+function note(value: unknown, field: string): ProviderNote {
+  const source = record(value, field);
+  return {
+    ref: text(source['ref'], at(field, 'ref')),
+    reason: text(source['reason'], at(field, 'reason')),
+  };
+}
+
 function token(value: unknown, field: string): AnnouncementToken {
   const source = record(value, field);
   return {
@@ -343,6 +352,8 @@ function screen(value: unknown, field: string): ScreenScan {
     drafts: list(source['drafts'], at(field, 'drafts'), draft),
     gaps: list(source['gaps'], at(field, 'gaps'), gap),
     applicability: list(source['applicability'], at(field, 'applicability'), ruleApplicability),
+    // A Result written by an engine with no notes has no such field, and that means no notes.
+    notes: has(source, 'notes') ? list(source['notes'], at(field, 'notes'), note) : [],
     reachedSelectorPresent: flagOrNull(source['reachedSelectorPresent'], at(field, 'reachedSelectorPresent')),
   };
   if (has(source, 'reachedWhenSelector')) {

@@ -13,6 +13,7 @@ import type {
   Page,
   ProfileName,
   Provider,
+  ProviderNote,
   ReadinessOutcome,
   RequirementBundle,
   Result,
@@ -55,6 +56,10 @@ export interface PageCheckResult {
   gaps: CoverageGap[]; // providers that could not run on this page
   drafts: Draft[]; // every observation the providers emitted, in provider order
   summary: string;
+  // Set by checkPage: what the providers disclosed about the page that is neither a finding nor a
+  // gap, such as design-system markup a rulepack did not read. Disclosure only: it never changes
+  // the verdict.
+  notes?: ProviderNote[];
   // Set by checkPage: where it looked for usabl.config.json and whether it found one. A missing
   // config at the default root adds no gap, because a project that does not use usabl config has
   // none, so this field is how a caller can tell "no requirements" from "read the wrong folder".
@@ -325,21 +330,22 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
     // The projection leaves usabl here, so it is scrubbed here: page text, gap refs, and reasons.
     // The page address is a gap ref, and a query string or a fragment in it can hold a session
     // token.
-    const finish = (drafts: Draft[], gaps: CoverageGap[]): PageCheckResult =>
+    const finish = (drafts: Draft[], gaps: CoverageGap[], notes: ProviderNote[] = []): PageCheckResult =>
       scrubOutboundData({
         ...summarizePageCheck(drafts, [...intake.gaps, ...requirementGaps, ...gaps]),
+        notes,
         project: intake.project,
       });
     // The providers, then the same row keys the CLI attaches, so a finding here carries the
     // identity it has in usabl check.
-    const runChecks = async (): Promise<{ drafts: Draft[]; gaps: CoverageGap[] }> => {
+    const runChecks = async (): Promise<{ drafts: Draft[]; gaps: CoverageGap[]; notes: ProviderNote[] }> => {
       const provided = await runProviders(
         providers,
         { page, screen, config: PAGE_CHECK_CONFIG, profile },
         pageCheckCapabilities(providers),
       );
       const rows = await attachRowScopeToDrafts(page, screen, provided.drafts);
-      return { drafts: rows.drafts, gaps: [...provided.gaps, ...rows.gaps] };
+      return { drafts: rows.drafts, gaps: [...provided.gaps, ...rows.gaps], notes: provided.notes };
     };
 
     // A labeled screen that declares a readiness signal in usabl.config.json is held to it, the
@@ -350,8 +356,8 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
         : config.surfaces.find((surface) => surface.id === labeledScreenId)?.reachedWhen;
     const signal = readinessSignalOf(reachedWhen);
     if (signal === null || config === null) {
-      const { drafts, gaps } = await runChecks();
-      return finish(drafts, gaps);
+      const { drafts, gaps, notes } = await runChecks();
+      return finish(drafts, gaps, notes);
     }
 
     const before = await readinessBeforeChecks(page, screenId, signal, config);
@@ -360,11 +366,12 @@ export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}):
       return finish([], [before.gap]);
     }
     await page.markWalkStart();
-    const { drafts, gaps } = await runChecks();
+    const { drafts, gaps, notes } = await runChecks();
     // Measured again after the checks, as the CLI does. A part holds only if it held both times.
+    // An unseen page loses its notes with its drafts: they describe a page that is not the screen.
     const held = heldThroughout(before.measured, await measureReadiness(page, signal, config.appBaseUrl));
     const unseen = unseenGap(screenId, signal, held);
-    return unseen === null ? finish(drafts, gaps) : finish([], [...gaps, unseen]);
+    return unseen === null ? finish(drafts, gaps, notes) : finish([], [...gaps, unseen]);
   } finally {
     // Releases the CDP session and the listeners adoption added. The caller's page stays open.
     await page.close();
@@ -440,6 +447,7 @@ function unseenGap(
     drafts: [],
     gaps: [],
     applicability: [],
+    notes: [],
     reachedSelectorPresent: measured.selectorPresent,
     reachedWhenSelector: signal.selector,
     ...(signalWaitMs === undefined ? {} : { signalWaitMs }),

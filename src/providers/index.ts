@@ -10,6 +10,7 @@ import type {
   Draft,
   Provider,
   ProviderContext,
+  ProviderNote,
   ProviderOutput,
   ProviderRunResult,
   RuleApplicability,
@@ -60,19 +61,20 @@ function orderByPageEffect(providers: Provider[]): Provider[] {
  * applied, and nothing is the honest reading of that, so it contributes no applicability.
  *
  * Provider is an exported contract of a published package, so a provider written outside this
- * repository is a real caller the compiler never checked. Drafts, applicability, and gaps are read
+ * repository is a real caller the compiler never checked. Drafts, applicability, gaps, and notes are read
  * as the untyped values they really are: anything that is not an array reports nothing, rather than
  * spreading a string into the record one character at a time. This is the only seam that reads a
  * provider return, so it is the only place that needs the check.
  */
 function normalizeOutput(output: Draft[] | ProviderOutput): Required<ProviderOutput> {
   if (Array.isArray(output)) {
-    return { drafts: output, applicability: [], gaps: [] };
+    return { drafts: output, applicability: [], gaps: [], notes: [] };
   }
   return {
     drafts: Array.isArray(output.drafts) ? output.drafts : [],
     applicability: Array.isArray(output.applicability) ? output.applicability : [],
     gaps: Array.isArray(output.gaps) ? output.gaps : [],
+    notes: Array.isArray(output.notes) ? output.notes : [],
   };
 }
 
@@ -85,6 +87,8 @@ export async function runProviders(
   const drafts: Draft[] = [];
   const gaps: CoverageGap[] = [];
   const applicability: RuleApplicability[] = [];
+  // Disclosures carried beside the drafts. They never become gaps, so they never block a screen.
+  const notes: ProviderNote[] = [];
 
   let mutatedBy: string | null = null;
 
@@ -111,6 +115,7 @@ export async function runProviders(
       const output = normalizeOutput(await provider.run(ctx));
       drafts.push(...output.drafts);
       applicability.push(...output.applicability);
+      notes.push(...output.notes);
       // A provider that isolates its own checks discloses each failed check as a scoped gap.
       // Merge those beside the gaps this seam raises for a whole provider that threw or was denied.
       gaps.push(...output.gaps);
@@ -121,5 +126,5 @@ export async function runProviders(
     }
   }
 
-  return { drafts, gaps, applicability };
+  return { drafts, gaps, applicability, notes };
 }

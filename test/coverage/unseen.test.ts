@@ -217,6 +217,20 @@ describe('markUnseenScreens', () => {
     expect(pass.screens[0]?.applicability).toEqual([]);
   });
 
+  it('strips notes as well as drafts from a screen it cannot claim it saw, and keeps them on one it did', () => {
+    const note = { ref: 'provider:rhds-rulepack/out-of-document', reason: '1 RHDS element(s) sit inside frames.' };
+    const unseen = markUnseenScreens([
+      scan({ screenId: 'overview', url: 'http://app/overview', stops: [stop('html > body:nth-child(2)')], drafts: [draft('overview')], notes: [note] }),
+    ]);
+    expect(unseen.unseenScreenIds).toEqual(['overview']);
+    expect(unseen.screens[0]?.notes).toEqual([]);
+
+    const seen = markUnseenScreens([
+      scan({ screenId: 'overview', url: 'http://app/overview', stops: [stop('#save')], drafts: [draft('overview')], notes: [note] }),
+    ]);
+    expect(seen.screens[0]?.notes).toEqual([note]);
+  });
+
   it('keeps applicability on a screen it did see', () => {
     const entry = applicability('overview', 'video-caption', 'inapplicable');
     const pass = markUnseenScreens([

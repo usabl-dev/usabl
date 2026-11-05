@@ -1,6 +1,7 @@
 import type {
   CoverageGap,
   Draft,
+  ProviderNote,
   ProviderOutput,
   RuleApplicability,
   UsablConfig,
@@ -19,6 +20,11 @@ export function applicabilityOf(output: Draft[] | ProviderOutput): RuleApplicabi
 /** Reads the gaps a provider reported. A bare Draft[] reported none. */
 export function gapsOf(output: Draft[] | ProviderOutput): CoverageGap[] {
   return Array.isArray(output) ? [] : (output.gaps ?? []);
+}
+
+/** Reads the notes a provider reported. A bare Draft[] reported none. */
+export function notesOf(output: Draft[] | ProviderOutput): ProviderNote[] {
+  return Array.isArray(output) ? [] : (output.notes ?? []);
 }
 
 const BASE_CONFIG: UsablConfig = {
