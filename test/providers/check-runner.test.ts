@@ -113,6 +113,63 @@ describe('makeCheckRunner', () => {
     ]);
   });
 
+  it('skips row scope for a preview draft, so an element it cannot find again adds no gap', async () => {
+    // A preview finding never moves the verdict. If its element could not be found again, a row
+    // scope gap would still take the screen out of the cleanly scanned set, and a preview finding
+    // alone would turn a verified run into not covered.
+    const page = Object.assign(
+      await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] }),
+      { rowContext: async () => ({ kind: 'unreadable', reason: 'element-missing' }) as const },
+    );
+    const preview: Draft = { ...makeDraft('deque:own-rule'), layer: 'deque', evidenceClass: 'preview', elementPath: '#gone' };
+    const engine: Provider = {
+      id: 'deque',
+      layer: 'deque',
+      capabilities: ['live'],
+      run: async (): Promise<Draft[]> => [preview],
+    };
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [engine],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.gaps).toEqual([]);
+    expect(scan.drafts).toEqual([preview]);
+  });
+
+  it('still adds the row scope gap for a deterministic draft on the same page', async () => {
+    const page = Object.assign(
+      await makeScriptedPage({ activePaths: ['#first', '#first'], activeNodes: [null, null] }),
+      { rowContext: async () => ({ kind: 'unreadable', reason: 'element-missing' }) as const },
+    );
+    const gating: Draft = { ...makeDraft('button-name'), layer: 'axe', elementPath: '#gone' };
+    const preview: Draft = { ...makeDraft('deque:own-rule'), layer: 'deque', evidenceClass: 'preview', elementPath: '#gone' };
+    const both: Provider = {
+      id: 'both',
+      layer: 'fake',
+      capabilities: ['live'],
+      run: async (): Promise<Draft[]> => [gating, preview],
+    };
+    const runner = makeCheckRunner({
+      browser: { open: async () => page, close: async () => {} },
+      providers: [both],
+      config: testConfig(),
+      allowedCapabilities: ['live'],
+      stepRunner: makeStepRunner(),
+    });
+
+    const scan = await runner.scan(SCREEN);
+
+    expect(scan.gaps).toHaveLength(1);
+    expect(scan.gaps[0]?.reason).toContain('rule button-name');
+    expect(scan.drafts).toEqual([{ ...gating, confidence: 'unverified' }, preview]);
+  });
+
   it('carries a provider note onto the scan, and a screen with only a note has no gaps', async () => {
     // A design-system pack that finds its markup only inside frames or shadow roots says so in a
     // note. The screen still counts as cleanly scanned, because the note never becomes a gap.
