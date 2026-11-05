@@ -225,6 +225,22 @@ describe('mapDequeResults on recorded axe results', () => {
     expect(gapsOf(output)[0]?.reason).toContain('Deque ran no rules on this screen, so it checked nothing');
   });
 
+  it('notes a result that holds only rules axe already runs, so nothing from Deque is shown', async () => {
+    // A rulesetId that names only open-source axe rules leaves nothing for Deque to add. That is not
+    // a failure, but without a note it would read as Deque having checked and found nothing.
+    const output = mapDequeResults(await recordedAxeResults(), SCREEN.id, await openSourceAxeRuleIds());
+    expect(draftsOf(output)).toEqual([]);
+    expect(applicabilityOf(output)).toEqual([]);
+    expect(gapsOf(output)).toEqual([]);
+    expect(output.notes).toEqual([
+      {
+        ref: 'provider:deque',
+        reason:
+          'Deque reported only rules that axe already runs, so nothing from Deque is shown on this screen. Check engines.deque.rulesetId if you expected rules of its own.',
+      },
+    ]);
+  });
+
   it('proves the recorded fixture really holds open-source axe findings', async () => {
     const axe = await recordedAxeResults();
     const ids = (axe['violations'] as Array<{ id: string }>).map((issue) => issue.id);

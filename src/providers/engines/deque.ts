@@ -198,9 +198,23 @@ export function mapDequeResults(
     evidenceClass,
   });
   const ref = `provider:${DEQUE_PROVIDER_ID}`;
+  // Every rule Deque reported is one axe already runs, such as a rulesetId that names only
+  // open-source rules. Nothing is lost and nothing could gate, but without a note the screen would
+  // read as Deque having checked it and found nothing.
+  const ownCount = BUCKETS.reduce((total, bucket) => total + ownRules[bucket].length, 0);
+  const onlyAxeRules: ProviderNote[] =
+    ownCount === 0 && lost.length === 0
+      ? [
+          {
+            ref,
+            reason:
+              'Deque reported only rules that axe already runs, so nothing from Deque is shown on this screen. Check engines.deque.rulesetId if you expected rules of its own.',
+          },
+        ]
+      : [];
   return classGates(evidenceClass)
-    ? { ...mapped, gaps: lost.map((reason) => dequeGap(reason)), notes: [] }
-    : { ...mapped, gaps: [], notes: lost.map((reason) => ({ ref, reason })) };
+    ? { ...mapped, gaps: lost.map((reason) => dequeGap(reason)), notes: onlyAxeRules }
+    : { ...mapped, gaps: [], notes: [...lost.map((reason) => ({ ref, reason })), ...onlyAxeRules] };
 }
 
 interface DequeBuilder {
