@@ -4,11 +4,14 @@
  * a timeout, and redacting credential values.
  */
 import { describe, expect, it } from 'vitest';
+import { makeFakePage } from '../../../src/deps/fakes.js';
 import {
   ENGINE_CALL_TIMEOUT_MS,
   loadEngineModule,
   makeRedactor,
   packageLookupDirs,
+  playwrightPageOf,
+  registerPlaywrightPage,
   probeInstalledPackage,
   withEngineTimeout,
   type EngineLabel,
@@ -222,5 +225,25 @@ describe('makeRedactor', () => {
   it('replaces every occurrence of every non-empty secret', () => {
     const redact = makeRedactor(['abc', '', 'xyz']);
     expect(redact('abc and xyz and abc')).toBe('[redacted] and [redacted] and [redacted]');
+  });
+});
+
+describe('the Playwright page bridge', () => {
+  it('hands back the Playwright page registered for a usabl page, and nothing for any other', () => {
+    const page = makeFakePage();
+    const pw = { fake: 'playwright page' };
+    expect(playwrightPageOf(page)).toBeNull();
+    registerPlaywrightPage(page, pw);
+    expect(playwrightPageOf(page)).toBe(pw);
+    expect(playwrightPageOf(makeFakePage())).toBeNull();
+  });
+
+  it('is not a property of the page, so a copy or a page that names one does not carry it', () => {
+    const page = makeFakePage();
+    registerPlaywrightPage(page, { fake: 'playwright page' });
+    expect(Object.keys(page)).not.toContain('playwrightPage');
+    expect(playwrightPageOf({ ...page })).toBeNull();
+    const forged = Object.assign(makeFakePage(), { playwrightPage: () => ({ forged: true }) });
+    expect(playwrightPageOf(forged)).toBeNull();
   });
 });

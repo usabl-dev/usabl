@@ -13,6 +13,7 @@ import {
   normalizeSeparators,
 } from "../../src/deps/build.js";
 import { makeFakePage } from "../../src/deps/fakes.js";
+import { registerPlaywrightPage } from "../../src/providers/engines/shared.js";
 import type { BrowserDriver } from "../../src/contracts/index.js";
 import { testConfig } from "../helpers.js";
 
@@ -576,8 +577,11 @@ describe("buildDeps engines", () => {
 
   it("reads engine switches from the environment it was given, never from process.env", async () => {
     const live = (): BrowserDriver => ({
-      open: async (url: string) =>
-        Object.assign(makeFakePage({ currentUrl: async () => url }), { playwrightPage: () => ({}) }),
+      open: async (url: string) => {
+        const page = makeFakePage({ currentUrl: async () => url });
+        registerPlaywrightPage(page, {});
+        return page;
+      },
       close: async () => {},
     });
     const previous = process.env.EV_SWITCH_ON;

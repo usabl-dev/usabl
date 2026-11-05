@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Page, ProviderContext } from '../../../src/contracts/index.js';
 import { makeFakePage } from '../../../src/deps/fakes.js';
+import { registerPlaywrightPage } from '../../../src/providers/engines/shared.js';
 import { runProviders } from '../../../src/providers/index.js';
 import {
   evincedAnalyzeOptions,
@@ -44,7 +45,9 @@ const NOT_FOCUSABLE = {
 };
 
 function livePage(): Page {
-  return Object.assign(makeFakePage(), { playwrightPage: () => ({ fake: 'playwright page' }) });
+  const page = makeFakePage();
+  registerPlaywrightPage(page, { fake: 'playwright page' });
+  return page;
 }
 
 function ctxFor(page: Page = livePage(), config = testConfig()): ProviderContext {

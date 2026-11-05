@@ -24,7 +24,7 @@ import {
   withoutOpenSourceAxeRules,
   type DequeProviderOptions,
 } from '../../../src/providers/engines/deque.js';
-import { openSourceAxeRuleIds } from '../../../src/providers/engines/shared.js';
+import { openSourceAxeRuleIds, registerPlaywrightPage } from '../../../src/providers/engines/shared.js';
 import { applicabilityOf, draftsOf, gapsOf, testConfig } from '../../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
@@ -53,7 +53,9 @@ async function dequeResults(): Promise<Record<string, unknown>> {
 }
 
 function livePage(): Page {
-  return Object.assign(makeFakePage(), { playwrightPage: () => ({ fake: 'playwright page' }) });
+  const page = makeFakePage();
+  registerPlaywrightPage(page, { fake: 'playwright page' });
+  return page;
 }
 
 function ctxFor(page: Page, overrides: Partial<ProviderContext> = {}): ProviderContext {

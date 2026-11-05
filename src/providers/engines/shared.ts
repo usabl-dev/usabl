@@ -12,18 +12,21 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '../../contracts/index.js';
 
-/**
- * A page that can hand a vendor SDK the Playwright page behind it. The real browser driver attaches
- * this; fake pages do not, and an engine provider refuses to run without it rather than reporting a
- * clean page it never saw.
- */
-export interface PlaywrightBridgePage {
-  playwrightPage(): unknown;
+// The Playwright page behind each usabl page the real browser driver made. A vendor SDK drives the
+// Playwright page itself, so an engine provider needs it. It is kept here rather than on the page,
+// so it never appears in a copy of a page, in a serialized one, or in the Provider contract, and a
+// page cannot claim one by naming a property. Fake pages are never registered, and an engine
+// provider handed one refuses to run rather than reporting a clean page it never saw.
+const playwrightPages = new WeakMap<Page, unknown>();
+
+/** Records the Playwright page behind a usabl page. Only the real browser driver calls this. */
+export function registerPlaywrightPage(page: Page, playwrightPage: unknown): void {
+  playwrightPages.set(page, playwrightPage);
 }
 
+/** The Playwright page registered for this usabl page, or null when there is none. */
 export function playwrightPageOf(page: Page): unknown {
-  const bridge: unknown = Reflect.get(page, 'playwrightPage');
-  return typeof bridge === 'function' ? (bridge as PlaywrightBridgePage['playwrightPage']).call(page) : null;
+  return playwrightPages.get(page) ?? null;
 }
 
 export type ModuleLoader = () => Promise<unknown>;

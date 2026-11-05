@@ -8,6 +8,7 @@ import type { Deps, UsablConfig } from '../src/contracts/index.js';
 import { makeFakeDeps, makeFakePage } from '../src/deps/fakes.js';
 import { makeCheckRunner } from '../src/providers/check-runner.js';
 import { makeEvincedProvider } from '../src/providers/engines/evinced.js';
+import { registerPlaywrightPage } from '../src/providers/engines/shared.js';
 import { makeStepRunner } from '../src/providers/keyboard-walk/steps.js';
 import { run } from '../src/run.js';
 import { projectCli } from '../src/surfaces/cli.js';
@@ -59,14 +60,12 @@ function depsWith(evAnalyze: () => Promise<unknown>): Deps {
     changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
     scannerVersions: { axeCore: '4.13.0', playwright: '1.62.1', chromium: 'revision-1', engines: { evinced: '3.9.0' } },
   });
-  const page = Object.assign(
-    makeFakePage({
-      currentUrl: async () => config.surfaces[0]!.url,
-      // A keyboard stop off the body, so the screen reads as rendered rather than unseen.
-      activePath: async () => 'html > body > main > button#save',
-    }),
-    { playwrightPage: () => ({ fake: 'playwright page' }) },
-  );
+  const page = makeFakePage({
+    currentUrl: async () => config.surfaces[0]!.url,
+    // A keyboard stop off the body, so the screen reads as rendered rather than unseen.
+    activePath: async () => 'html > body > main > button#save',
+  });
+  registerPlaywrightPage(page, { fake: 'playwright page' });
   return {
     ...base,
     checkRunner: makeCheckRunner({

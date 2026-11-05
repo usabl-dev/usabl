@@ -8,6 +8,7 @@ import { chromium, type Browser, type BrowserContext, type CDPSession, type Page
 import type { AncestorAttributesRead, AnnouncementDrain, AnnouncementUndecidable, ApiResponse, AxNode, BrowserDriver, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
+import { registerPlaywrightPage } from '../providers/engines/shared.js';
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
 import { runAxeInIsolatedWorld } from './axe-world.js';
 import { BrowserSandboxRequiredError, isBrowserSandboxRefusal, isSandboxLaunchFailure, type BrowserSandboxPolicy } from './sandbox.js';
@@ -2005,14 +2006,6 @@ function attachAxeBridge(page: Page, pw: PwPage, cdp: CDPSession): void {
   });
 }
 
-// The optional commercial engines take the Playwright page itself, because their SDKs drive it
-// directly. Attached the same way as the axe bridge, so a fake page never has it and an engine
-// provider handed one refuses to run instead of reporting a page it never saw. Only the engine
-// providers read it.
-function attachEngineBridge(page: Page, pw: PwPage): void {
-  Object.assign(page, { playwrightPage: (): PwPage => pw });
-}
-
 function wrapPage(
   pw: PwPage,
   context: BrowserContext,
@@ -2167,7 +2160,9 @@ function wrapPage(
   };
 
   attachAxeBridge(page, pw, cdp);
-  attachEngineBridge(page, pw);
+  // The optional commercial engines drive the Playwright page themselves. It is registered, not
+  // attached, so it stays off the page object; see registerPlaywrightPage.
+  registerPlaywrightPage(page, pw);
   return page;
 }
 
