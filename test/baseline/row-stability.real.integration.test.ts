@@ -63,12 +63,14 @@ function rowHtml(row: Row): string {
   return `<tr><th scope="row">${name}</th><td>Running</td><td>${button}</td></tr>`;
 }
 
+// The main element carries a PatternFly class, so the PatternFly rulepack runs on this page and
+// its drafts take part in the identity checks.
 function pageHtml(rows: Row[]): string {
   return `<!doctype html>
 <html lang="en">
   <head><meta charset="utf-8"><title>Jobs</title></head>
   <body>
-    <main>
+    <main class="pf-v6-c-page__main">
       <h1>Jobs</h1>
       <table>
         <caption>Scheduled jobs</caption>
