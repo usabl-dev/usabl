@@ -379,6 +379,7 @@ function affectedScreen(value: unknown, field: string): AffectedScreen {
     provenance: oneOf(source['provenance'], at(field, 'provenance'), ['route-graph', 'wide-blast', 'manual', 'docs-manifest'] as const),
   };
   if (has(source, 'importChain')) out.importChain = texts(source['importChain'], at(field, 'importChain'));
+  if (has(source, 'reason')) out.reason = text(source['reason'], at(field, 'reason'));
   if (has(source, 'profile')) out.profile = oneOf(source['profile'], at(field, 'profile'), ['app', 'docs'] as const);
   return out;
 }

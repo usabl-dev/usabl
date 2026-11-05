@@ -425,6 +425,7 @@ export interface AffectedScreen {
   url: string;
   provenance: 'route-graph' | 'wide-blast' | 'manual';
   importChain?: string[];
+  reason?: string; // wide blast from a dependency change only: names each file and why it counts
 }
 
 export interface CoverageGap {
@@ -972,9 +973,36 @@ Given a set of changed files, discover which surfaces they affect:
 2. Build a static import graph from each route's entry file (BFS over imports).
 3. Match each changed file against the import-graph closures.
 4. Wide-blast fallback: files matching `wideBlastGlobs` (global CSS, app shell, build
-   config) affect every extracted route.
+   config) affect every extracted route. So does a dependency change of the app (see
+   below), which also affects every configured surface.
 5. Manual surface globs in config are an additive fallback, never a replacement.
 6. Anything resolving to nothing stays in `unresolvedFiles` and forces `not_covered`.
+
+**Dependency changes.** A pull request that bumps the UI component library touches the app's
+`package.json` and the lockfile, and neither matches `uiFileGlobs`. A new version of the
+library can change every screen, so such a change is wide blast, not nothing to check. A
+changed file is a dependency change when it is:
+
+- a lockfile (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, or `pnpm-lock.yaml`)
+  in the repository root or in the app's folder. Any change to it counts, because a lockfile
+  change can change the version of any installed package.
+- the app's `package.json`, when its `dependencies` or `devDependencies` differ from the same
+  fields at the trusted ref. The two versions are parsed and the two fields compared as data,
+  so key order and whitespace do not count. A change that leaves both fields as they were, such
+  as one that edits only `scripts`, `version`, `description`, or other metadata, is not a
+  dependency change and reads as before. A file missing on one side declares no dependencies.
+  When either version does not parse, or no trusted read is given, usabl cannot compare, and
+  the change counts.
+
+The app's folder is, for each place the config points into (the router file, the folder of
+each `uiFileGlobs` pattern, and each surface file), the nearest folder at or above it that holds
+a `package.json` in the tree or at the trusted ref. That is the repository root for a root app
+and the app's own package, such as `packages/admin`, in a monorepo. A `package.json` or lockfile
+of another package, and `peerDependencies`, `optionalDependencies`, `overrides`, or
+`resolutions` alone, do not count. A dependency change queues every discovered route and every
+configured surface with provenance `wide-blast`, and each such screen carries a `reason` that
+names each dependency file and why it counts. With no route and no surface, each dependency file
+is an `unresolved` gap that says there was no screen to check, never nothing to check.
 
 **Files usabl cannot place.** Each file in `unresolvedFiles` gets an `unresolved` gap whose ref
 is its repository path. The reason says why usabl could not place it, then the fix: add it to the
@@ -1004,8 +1032,8 @@ with that extension is not seen and the file usabl did find is attributed.
 Coverage answers two different questions.
 
 **Nothing to check** (`coverage.nothingToCheck === true`): no changed files match
-`uiFileGlobs`, and no changed file maps to a documentation page under a
-`usabl.docs.json` manifest. There was nothing to prove. `Result.verdict` is `null`,
+`uiFileGlobs`, no changed file is a dependency change of the app, and no changed file maps to a
+documentation page under a `usabl.docs.json` manifest. There was nothing to prove. `Result.verdict` is `null`,
 exit 0, and an explicit "nothing to check" message. A backend-only PR, a prose change
 with no manifested doc page, and a clean tree with no diff are this path. This is not
 `not_covered`. A change to an `.adoc` source that maps to a documentation page is a

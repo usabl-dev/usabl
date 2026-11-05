@@ -8,6 +8,7 @@ import type { AffectedScreen, Coverage, CoverageGap, FsGlob, UsablConfig } from 
 import { loadAliasConfig } from './alias-config.js';
 import { buildUnresolvedReason } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
+import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
 import { type TrustedRead, workspaceDependencyGaps } from './workspace-packages.js';
 import { parseRouteManifest, type RouteEntry, type RouteManifest } from './route-manifest.js';
 import { parseDocsManifest, type DocsManifest } from './docs-manifest.js';
@@ -170,24 +171,26 @@ export async function computeCoverage(
   // In a monorepo, a change in a workspace package the app depends on matches none of the app's
   // uiFileGlobs, while the app may render it. It is written down as a gap, so it never reads as
   // idle. See workspace-packages.ts for why it is not mapped to screens.
-  const workspaceGaps = await workspaceDependencyGaps(
-    fs,
-    config,
-    changedFiles.filter((file) => !isTestFile(file) && !uiFiles.includes(file)),
-    trustedRead,
-  );
+  const otherFiles = changedFiles.filter((file) => !isTestFile(file) && !uiFiles.includes(file));
+  const workspaceGaps = await workspaceDependencyGaps(fs, config, otherFiles, trustedRead);
+  // A bump of the UI component library touches the app's package.json and the lockfile, and
+  // neither matches uiFileGlobs, while the new version can change every screen. Such a change is
+  // wide blast, with a reason that names each file. See dependency-changes.ts.
+  const dependencies = await dependencyChanges(fs, config, otherFiles, trustedRead);
+  const dependencyReason = dependencies.length === 0 ? null : [...dependencies.map((change) => change.why), EVERY_SCREEN].join(' ');
   // No UI-touching files means idle. That is not the same claim as "covered".
-  if (uiFiles.length === 0 && workspaceGaps.length === 0) {
+  if (uiFiles.length === 0 && workspaceGaps.length === 0 && dependencyReason === null) {
     return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
   }
   const unresolvedFiles: string[] = workspaceGaps.map((gap) => gap.ref);
   const gaps: CoverageGap[] = [...workspaceGaps];
-  if (uiFiles.length === 0) {
+  if (uiFiles.length === 0 && dependencyReason === null) {
     return { changedFiles, affected: [], unresolvedFiles, gaps, nothingToCheck: false };
   }
   const affectedByScreen = new Map<string, AffectedScreen>();
+  const wideBlastReason = dependencyReason === null ? {} : { reason: dependencyReason };
 
-  const hasWideBlast = uiFiles.some((file) => isWideBlastFile(file, config.discovery.wideBlastGlobs));
+  const hasWideBlast = dependencyReason !== null || uiFiles.some((file) => isWideBlastFile(file, config.discovery.wideBlastGlobs));
   let wideBlastAttributedAnyScreen = false;
   if (hasWideBlast) {
     // A shell or global file can influence any route, so queue every discovered
@@ -198,6 +201,7 @@ export async function computeCoverage(
         screenId: route.screenId,
         url: routeUrl(config.appBaseUrl, route.url),
         provenance: 'wide-blast',
+        ...wideBlastReason,
       });
     }
     wideBlastAttributedAnyScreen = affectedByScreen.size > affectedCountBeforeWideBlast;
@@ -222,6 +226,31 @@ export async function computeCoverage(
         state: 'skipped',
         reason: `${route.reason} Write the routes into usabl.routes.json, which usabl reads instead of the router file.`,
       });
+    }
+  }
+
+  if (dependencyReason !== null) {
+    // A dependency change reaches every screen, so every configured surface is queued too, not
+    // only the ones that list a changed file.
+    for (const surface of config.surfaces) {
+      if (hasAffectedUrl(affectedByScreen, surface.url)) {
+        continue;
+      }
+      addAffected(affectedByScreen, { screenId: surface.id, url: surface.url, provenance: 'wide-blast', reason: dependencyReason });
+    }
+    // With no route and no surface there is no screen to check, which is not the same as nothing
+    // to check. Each file is written down as a gap.
+    if (affectedByScreen.size === 0) {
+      for (const change of dependencies) {
+        unresolvedFiles.push(change.file);
+        gaps.push({
+          ref: change.file,
+          state: 'unresolved',
+          reason:
+            `${change.why} A dependency change can change every screen, but usabl found no screen to check: no route was discovered and no surface is configured. ` +
+            'Add the routes of the app to usabl.routes.json, or list its screens as surfaces in usabl.config.json.',
+        });
+      }
     }
   }
 

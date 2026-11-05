@@ -84,6 +84,16 @@
 
 ### Fixed
 
+- `usabl check` no longer reads a dependency bump as nothing to check. A pull request that
+  bumped the UI component library in the app's `package.json` and the lockfile matched no
+  `uiFileGlobs`, so the run exited 0, although a new version of the library can change every
+  screen. A change to the `dependencies` or `devDependencies` of the app's `package.json`, or to
+  `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, or `pnpm-lock.yaml` in the repository
+  root or the app's folder, is now wide blast: every discovered route and every configured
+  surface is checked, with provenance `wide-blast` and a `reason` that names the file. A
+  `package.json` change to scripts or metadata only still reads as nothing to check: the two
+  dependency fields are compared with the trusted ref.
+
 - The PatternFly rulepack no longer reports PatternFly rules on a page with no PatternFly
   markup. Some of its selectors have generic ARIA arms, so on a page built with another design
   system they matched markup PatternFly never made. It now runs only where an element in the
