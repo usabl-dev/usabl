@@ -302,6 +302,16 @@ export interface Coverage {
 
 // ---- receipt (re-checkable proof of a verified run) ----
 // Receipts exist only for verified deterministic outcomes. Preview and model-judgment never mint one.
+// The scanner stack a run used. A receipt binds it, so a swapped scanner fails re-verification.
+// `engines` names each optional commercial engine the config turned on, by engine id, with the
+// installed package version. Absent when no engine is on, so receipts minted before engines existed
+// keep the same shape and still verify.
+export interface ScannerVersions {
+  axeCore: string;
+  playwright: string;
+  chromium: string;
+  engines?: Record<string, string>;
+}
 export interface Receipt {
   // Version 2 added historyHead. A version 1 receipt is not read, so it triggers one full run.
   schemaVersion: 2;
@@ -313,7 +323,7 @@ export interface Receipt {
   historyHead: string | null;
   policyHash: string;
   runnerVersion: string;
-  scannerVersions: { axeCore: string; playwright: string; chromium: string };
+  scannerVersions: ScannerVersions;
   surfaces: string[];
   coverage: { checked: string[]; notCovered: string[] };
   // What the run actually examined, per scanned screen: rules that examined at least one element
@@ -823,7 +833,7 @@ export interface Deps {
   fs: FsGlob;
   checkRunner: CheckRunner;
   runnerVersion: string;
-  scannerVersions: { axeCore: string; playwright: string; chromium: string };
+  scannerVersions: ScannerVersions;
   // The design-intake bundle loaded once at build time (trusted-ref overlaid). The docs surface
   // reads this exact bundle so it never re-derives intake or drifts from what the run enforced.
   requirements: RequirementBundle;

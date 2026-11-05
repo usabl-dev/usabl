@@ -5,11 +5,12 @@
  * exported, so it checks the ids it is handed (see checkReceiptInput).
  *
  * Five bindings: sourceTree (current Git working tree), policyHash (guarded-path
- * blobs at HEAD), runnerVersion, scannerVersions (axe-core, Playwright, Chromium), and
+ * blobs at HEAD), runnerVersion, scannerVersions (axe-core, Playwright, Chromium, and the
+ * version of each optional commercial engine the config turned on), and
  * historyHead (the debt history commit, which can lower the debt a run accepts).
  * Lists are sorted so the same inputs hash the same way.
  */
-import type { Deps, Receipt, ScreenScan, UsablConfig } from "../contracts/index.js";
+import type { Deps, Receipt, ScannerVersions, ScreenScan, UsablConfig } from "../contracts/index.js";
 import { sortBy } from "../primitives/sortKey.js";
 import { canonicalHash } from "../primitives/canonical.js";
 import { buildGuardedSet, expandGuardedSet } from "../trust/guard.js";
@@ -217,6 +218,22 @@ export async function currentHistoryHead(deps: Deps): Promise<string | null> {
   }
 }
 
+/**
+ * Whether two runs used the same commercial engines at the same versions. Absent and empty both
+ * mean no engine was on, so a receipt minted before engines existed still matches a run that turns
+ * none on. A receipt and a run that differ in which engines are on, or in any engine's version,
+ * used different scanners.
+ */
+function sameEngines(minted: ScannerVersions["engines"], current: ScannerVersions["engines"]): boolean {
+  const a = minted ?? {};
+  const b = current ?? {};
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) {
+    return false;
+  }
+  return keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key]);
+}
+
 export interface ReceiptVerification {
   valid: boolean;
   failedFields: string[];
@@ -261,7 +278,8 @@ export async function verifyReceipt(
   if (
     mintedScanners.axeCore !== currentScanners.axeCore ||
     mintedScanners.playwright !== currentScanners.playwright ||
-    mintedScanners.chromium !== currentScanners.chromium
+    mintedScanners.chromium !== currentScanners.chromium ||
+    !sameEngines(mintedScanners.engines, currentScanners.engines)
   ) {
     failedFields.push("scannerVersions");
   }

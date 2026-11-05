@@ -2005,6 +2005,14 @@ function attachAxeBridge(page: Page, pw: PwPage, cdp: CDPSession): void {
   });
 }
 
+// The optional commercial engines take the Playwright page itself, because their SDKs drive it
+// directly. Attached the same way as the axe bridge, so a fake page never has it and an engine
+// provider handed one refuses to run instead of reporting a page it never saw. Only the engine
+// providers read it.
+function attachEngineBridge(page: Page, pw: PwPage): void {
+  Object.assign(page, { playwrightPage: (): PwPage => pw });
+}
+
 function wrapPage(
   pw: PwPage,
   context: BrowserContext,
@@ -2159,6 +2167,7 @@ function wrapPage(
   };
 
   attachAxeBridge(page, pw, cdp);
+  attachEngineBridge(page, pw);
   return page;
 }
 

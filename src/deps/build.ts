@@ -13,6 +13,7 @@ import { canonicalHash, sha256 } from "../primitives/canonical.js";
 import { sortBy } from "../primitives/sortKey.js";
 import { makeCheckRunner } from "../providers/check-runner.js";
 import { makeScanProviders } from "../providers/core-stack.js";
+import { engineCapabilities, makeEngineProviders, readEngineVersions } from "../providers/engines/index.js";
 import { makeStepRunner } from "../providers/keyboard-walk/steps.js";
 import { loadRequirements } from "../intake/load.js";
 import { overlayRequirementsFs } from "../intake/overlay-fs.js";
@@ -168,6 +169,18 @@ function readChromiumVersion(): string {
   }
 }
 
+/**
+ * The capabilities a run grants. An engine the trusted config turns on adds what it declares, but
+ * only on a run that grants live scanning at all: a static-only run grants nothing, so every live
+ * provider, engine or not, is disclosed as a capability-denied gap.
+ */
+export function grantCapabilities(base: Capability[], engineNeeds: Capability[]): Capability[] {
+  if (!base.includes("live")) {
+    return base;
+  }
+  return [...new Set([...base, ...engineNeeds])];
+}
+
 export async function buildDeps(
   config: UsablConfig,
   options: {
@@ -195,7 +208,6 @@ export async function buildDeps(
   } = {},
 ): Promise<Deps> {
   const cwd = options.cwd ?? process.cwd();
-  const allowedCapabilities = options.allowedCapabilities ?? ["live"];
   // Every operator surface funnels through here, so this is the one place a session has to
   // be picked up for the CLI, the dev overlay, and the Stop hook to all reach a login-gated
   // screen. The environment defaults like cwd does, and stays injectable for tests. With no
@@ -248,11 +260,25 @@ export async function buildDeps(
     options.trustedRef,
   );
   const loadedRequirements = await loadRequirements(intakeFs, intakeConfig);
-  const providers = makeScanProviders(
-    loadedRequirements.ok ? loadedRequirements.bundle : null,
+  // Engines come from the config intake trusts: under a trusted ref that is the committed policy,
+  // so a branch cannot turn on vendor code that holds credentials or reaches the network for its
+  // own run. The Playwright helper does not run them: it reads the working tree's config, and its
+  // page verdict counts every failing draft, so preview vendor findings would block there.
+  const engines = intakeConfig.engines;
+  const allowedCapabilities = grantCapabilities(
+    options.allowedCapabilities ?? ["live"],
+    engineCapabilities(engines),
   );
+  const providers = [
+    ...makeScanProviders(loadedRequirements.ok ? loadedRequirements.bundle : null),
+    // The engines read their switches and credentials from the same environment the session is
+    // read from, and never write to it.
+    ...makeEngineProviders(engines, { env: options.env ?? process.env, cwd }),
+  ];
   // Intake parse failure is policy input failure, not an engine crash.
   // We keep building Deps so run() can fail closed through the gate path.
+
+  const engineVersions = await readEngineVersions(engines);
 
   return {
     clock: () => new Date().toISOString(),
@@ -261,6 +287,7 @@ export async function buildDeps(
       axeCore: readDependencyVersion("axe-core"),
       playwright: readDependencyVersion("playwright"),
       chromium: readChromiumVersion(),
+      ...(engineVersions === undefined ? {} : { engines: engineVersions }),
     },
     browser,
     git,
