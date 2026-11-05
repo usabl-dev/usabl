@@ -12,6 +12,7 @@ import {
   barrierLines,
   guardedFileLines,
   notEvaluatedPieces,
+  notePieces,
   unconfirmedPieces,
   unrecognizedRunLine,
 } from './model-pieces.js';
@@ -204,7 +205,13 @@ function buildBlockMessage(result: Result, config?: UsablConfig): string {
   const gapPieces = notEvaluatedPieces(result);
   // The floor notices close the frame. Like gap lines they limit what the run can claim, so they
   // are tail pieces and outlast every barrier when the message is shortened.
-  const tailPieces = [...(gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : []), ...unconfirmedPieces(result)];
+  // Provider notes come last: they are disclosure only and the first tail pieces a shortened
+  // message drops.
+  const tailPieces = [
+    ...(gapPieces.length > 0 ? ['Not evaluated:', ...gapPieces] : []),
+    ...unconfirmedPieces(result),
+    ...notePieces(result),
+  ];
 
   // The whole message is bounded as well as each field. Whole barriers go first, headline and
   // pieces together, then floor notices and gap lines from the end, never the opening lines, the
@@ -270,7 +277,8 @@ export function evaluateStopDecision(
     const line = `${formatVerdictWord(verdict, passNote)}: the gate verified this change. You may stop.`;
     // A verified run is where the floor notice matters most: floored debt on a screen whose
     // content may not have mounted. It does not change the decision. It travels with it, framed.
-    const notices = unconfirmedPieces(safe);
+    // Provider notes travel with it the same way, after the floor notices. They never block.
+    const notices = [...unconfirmedPieces(safe), ...notePieces(safe)];
     if (sourceTree === undefined && notices.length === 0) {
       return { block: false, message: line };
     }
@@ -380,7 +388,7 @@ export function evaluateStopDecision(
         pieces,
         keepPieces: pieces.length,
         // The floor notices travel with the stop here too, inside the frame, after the summary.
-        tailPieces: unconfirmedPieces(safe),
+        tailPieces: [...unconfirmedPieces(safe), ...notePieces(safe)],
         frame: frameUntrustedBlock,
       }),
     };

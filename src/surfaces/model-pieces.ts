@@ -13,6 +13,7 @@ import type { Finding, Result } from '../contracts/index.js';
 import { boundField, type BoundedGroup } from '../output/bounded-text.js';
 import { NOT_A_LIST, wholeNumberText } from '../output/carried.js';
 import { unconfirmedNotice } from '../output/floor-notice.js';
+import { NOTES_HEADING, screenNotes } from '../output/notes.js';
 import { describeVerdict, formatVerdictWord } from '../output/verdict-line.js';
 import {
   APPROVAL_REQUIRED_HOW_IT_CLEARS,
@@ -71,6 +72,23 @@ export function unconfirmedPieces(result: Result): string[] {
     return [NOT_A_LIST];
   }
   return entries.map((entry) => `not claimed fixed: ${boundField(unconfirmedNotice(entry), 'notice')}`);
+}
+
+/**
+ * The notes providers disclosed, one framed piece per note, each naming its screen, ref, and
+ * reason after a label that says it does not block.
+ *
+ * A note says what a check did not read on a screen. It is not a gap and never changes the
+ * verdict, so callers pass these as the last tail pieces: a shortened message drops a note before
+ * it drops a gap line or a floor notice. A screen list or a note list that is not a list gives no
+ * pieces.
+ */
+export function notePieces(result: Result): string[] {
+  return screenNotes(result).map(
+    (note) =>
+      `${NOTES_HEADING}: ${boundField(note.screenId, 'gapRef')}: ${boundField(note.ref, 'gapRef')}: ` +
+      boundField(note.reason, 'gapReason'),
+  );
 }
 
 /** The label of the framed piece that names the guarded files. */
