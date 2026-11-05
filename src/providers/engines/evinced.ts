@@ -379,11 +379,14 @@ export function makeEvincedProvider(config: EvincedEngineConfig, options: Evince
     capabilities: evincedCapabilities(config),
     async run(ctx: ProviderContext): Promise<ProviderOutput> {
       // Seeded with every Evinced credential in the environment, whichever mode is on, before
-      // anything can fail, so no path out of this provider carries a credential value.
+      // anything can fail, so no path out of this provider carries a credential value. Each value
+      // is seeded as set and trimmed: a value set with padding is handed to the SDK as set, and an
+      // SDK that trims it would quote the trimmed form back.
       const redact = makeRedactor(
         [EVINCED_SERVICE_ID_ENV, EVINCED_AUTH_TOKEN_ENV, EVINCED_API_KEY_ENV]
           .map((name) => readEnv(env, name))
-          .filter((value): value is string => value !== null),
+          .filter((value): value is string => value !== null)
+          .flatMap((value) => [value, value.trim()]),
       );
       try {
         return await analyze(ctx, redact);

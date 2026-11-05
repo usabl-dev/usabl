@@ -575,6 +575,22 @@ describe('Evinced credentials never leave the provider', () => {
     expectNoSecret(JSON.stringify(loadResult));
   });
 
+  it('redacts a credential set with padding, in its trimmed form and as set', async () => {
+    const padded = { EVINCED_SERVICE_ID: `  ${SERVICE_ID}\n`, EVINCED_AUTH_TOKEN: ` ${AUTH_TOKEN} ` };
+    const p = provider(
+      { enabled: true },
+      fakeEvincedModule([], newCalls(), {
+        analyze: async () => {
+          throw new Error(`rejected ${SERVICE_ID} and [${padded.EVINCED_AUTH_TOKEN}]`);
+        },
+      }),
+      padded,
+    );
+    const result = await runProviders([p], ctxFor(), ['live', 'secrets']);
+    expect(failureOf(result)).toContain('rejected [redacted] and [[redacted]]');
+    expectNoSecret(JSON.stringify(result));
+  });
+
   it('keeps every credential out of a credential-missing message', async () => {
     const result = await runProviders(
       [provider({ enabled: true, mode: 'online' }, fakeEvincedModule([], newCalls()), { EVINCED_AUTH_TOKEN: AUTH_TOKEN })],
