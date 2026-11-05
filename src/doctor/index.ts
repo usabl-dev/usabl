@@ -38,6 +38,8 @@ import { neutralize } from '../primitives/neutralize.js';
 import { scrubString } from '../surfaces/scrub.js';
 import { buildGuardedSet } from '../trust/guard.js';
 import type { PlaywrightBootstrapProbe } from './playwright-bootstrap.js';
+import { collectEngineReports, formatEngineReports } from './engines.js';
+import type { InstalledPackage } from '../providers/engines/shared.js';
 import type { ChromiumSandboxProbe } from './sandbox-probe.js';
 import { SANDBOX_FIX } from '../deps/sandbox.js';
 
@@ -130,6 +132,9 @@ export interface DoctorDeps {
     ignoreState(path: string): Promise<GitIgnoreState>;
     mode(path: string): Promise<number | null>;
   };
+  // Finds an installed engine package the way the run's dynamic import would, without loading it.
+  // Injected so tests never depend on what node_modules holds. Defaults to a read of node_modules.
+  probeEnginePackage?: (packageName: string) => Promise<InstalledPackage>;
 }
 
 function isFsReadError(error: unknown): boolean {
@@ -1053,5 +1058,14 @@ export async function runDoctor(deps: DoctorDeps): Promise<{ exitCode: 0; stdout
   // so the count of missing, drifted, or unknown surfaces never changes the exit code. A
   // genuine internal error throws and falls through to the cli-bin catch-all (exit 4).
   const reports = await collectDoctorReport(deps);
-  return { exitCode: 0, stdout: formatDoctorReport(reports) };
+  // Engines are off or on, not wired or missing, so they print in a section of their own and never
+  // move the surface counts in the header.
+  const engines = await collectEngineReports({
+    readFile: (path) => deps.fs.readFile(path),
+    configPath: deps.configPath,
+    env: deps.env,
+    ...(deps.probeEnginePackage === undefined ? {} : { probePackage: deps.probeEnginePackage }),
+  });
+  const stdout = formatDoctorReport(reports) + formatEngineReports(engines, neutralize).join('\n');
+  return { exitCode: 0, stdout };
 }
