@@ -8,6 +8,7 @@
 import type {
   CoverageGap,
   Draft,
+  EvidenceClass,
   Provider,
   ProviderContext,
   ProviderOutput,
@@ -113,11 +114,39 @@ function mapSeverity(impact: AxeIssue['impact']): Severity {
   }
 }
 
+/**
+ * Which layer an axe-shaped result belongs to. The open-source axe provider and a commercial
+ * engine that returns axe-shaped results share one mapping, so a draft means the same thing
+ * whichever of them produced it.
+ *
+ * rulePrefix exists because finding identity leaves the layer out on purpose, so axe and
+ * PatternFly reports of one defect collapse to one identity. Another engine's rule ids must
+ * therefore differ from axe's in the id itself, or its findings would merge into axe's floor
+ * entries and waivers. The prefix goes on the draft and applicability rule only; notes are still
+ * looked up by the engine's own id.
+ *
+ * evidenceClass is what the producing engine may claim. The axe provider claims deterministic. An
+ * engine whose repeatability is not proven claims preview, which the gate shows and never gates on.
+ */
+export interface AxeMappingOptions {
+  layer: string;
+  rulePrefix?: string;
+  evidenceClass?: EvidenceClass;
+}
+
+const AXE_LAYER = 'axe';
+const AXE_MAPPING: AxeMappingOptions = { layer: AXE_LAYER };
+
+function ruleIdFor(issueId: string, options: AxeMappingOptions): string {
+  return `${options.rulePrefix ?? ''}${issueId}`;
+}
+
 function mapNodeToDraft(
   issue: AxeIssue,
   node: AxeNode,
   confidence: Draft['confidence'],
-  ctx: ProviderContext,
+  screenId: string,
+  options: AxeMappingOptions,
 ): Draft {
   const note = noteFor(issue.id);
   const fallback = node.failureSummary ?? '';
@@ -141,11 +170,11 @@ function mapNodeToDraft(
     confidence === 'unverified' ? `Needs review: ${issue.description}` : issue.description;
 
   const draft: Draft = {
-    rule: issue.id,
-    layer: 'axe',
+    rule: ruleIdFor(issue.id, options),
+    layer: options.layer,
     severity: mapSeverity(issue.impact),
-    evidenceClass: 'deterministic',
-    screenId: ctx.screen.id,
+    evidenceClass: options.evidenceClass ?? 'deterministic',
+    screenId,
     elementPath: node.target.join(' '),
     elementName: null,
     role: null,
@@ -166,12 +195,11 @@ function mapNodeToDraft(
 function mapIssueToDrafts(
   issue: AxeIssue,
   confidence: Draft['confidence'],
-  ctx: ProviderContext,
+  screenId: string,
+  options: AxeMappingOptions,
 ): Draft[] {
-  return issue.nodes.map((node) => mapNodeToDraft(issue, node, confidence, ctx));
+  return issue.nodes.map((node) => mapNodeToDraft(issue, node, confidence, screenId, options));
 }
-
-const AXE_LAYER = 'axe';
 
 // A frame axe could not check is a gap on the screen, never a silent drop: the screen's result
 // would otherwise read as if the frame had nothing wrong with it.
@@ -186,12 +214,13 @@ function uncheckedFrameGap(frame: AxeUncheckedFrame): CoverageGap {
 function issueApplicability(
   issue: AxeIssue,
   outcome: RuleOutcome,
-  ctx: ProviderContext,
+  screenId: string,
+  options: AxeMappingOptions,
 ): RuleApplicability {
   return {
-    screenId: ctx.screen.id,
-    layer: AXE_LAYER,
-    rule: issue.id,
+    screenId,
+    layer: options.layer,
+    rule: ruleIdFor(issue.id, options),
     outcome,
     elementCount: issue.nodes.length,
   };
@@ -200,15 +229,52 @@ function issueApplicability(
 function summaryApplicability(
   summary: AxeRuleSummary,
   outcome: RuleOutcome,
-  ctx: ProviderContext,
+  screenId: string,
+  options: AxeMappingOptions,
 ): RuleApplicability {
   return {
-    screenId: ctx.screen.id,
-    layer: AXE_LAYER,
-    rule: summary.id,
+    screenId,
+    layer: options.layer,
+    rule: ruleIdFor(summary.id, options),
     outcome,
     elementCount: summary.nodeCount,
   };
+}
+
+/**
+ * Projects one axe-shaped run into drafts and applicability. Pure: the same result and options
+ * always give the same output, and nothing here decides whether an outcome is expected.
+ */
+export function mapAxeRunResult(
+  axeResult: Pick<AxeRunResult, 'violations' | 'incomplete' | 'passes' | 'inapplicable'>,
+  screenId: string,
+  options: AxeMappingOptions = AXE_MAPPING,
+): { drafts: Draft[]; applicability: RuleApplicability[] } {
+  const drafts: Draft[] = [];
+  // One entry per rule axe reached a conclusion about, in axe's own four buckets. This records
+  // what ran; it never decides whether an outcome is expected, and it never becomes a finding.
+  const applicability: RuleApplicability[] = [];
+
+  for (const issue of axeResult.violations) {
+    drafts.push(...mapIssueToDrafts(issue, 'fail', screenId, options));
+    applicability.push(issueApplicability(issue, 'failed', screenId, options));
+  }
+
+  // Incomplete stays visible as unverified. Dropping it would silently claim clean coverage.
+  for (const issue of axeResult.incomplete) {
+    drafts.push(...mapIssueToDrafts(issue, 'unverified', screenId, options));
+    applicability.push(issueApplicability(issue, 'incomplete', screenId, options));
+  }
+
+  for (const summary of axeResult.passes) {
+    applicability.push(summaryApplicability(summary, 'passed', screenId, options));
+  }
+
+  for (const summary of axeResult.inapplicable) {
+    applicability.push(summaryApplicability(summary, 'inapplicable', screenId, options));
+  }
+
+  return { drafts, applicability };
 }
 
 export const axeProvider: Provider = {
@@ -225,30 +291,7 @@ export const axeProvider: Provider = {
       (ctx.profile ?? 'app') === 'docs'
         ? await ctx.page.runAxe({ tags: DOCS_AXE_TAGS })
         : await ctx.page.runAxe();
-    const drafts: Draft[] = [];
-    // One entry per rule axe reached a conclusion about, in axe's own four buckets. This records
-    // what ran; it never decides whether an outcome is expected, and it never becomes a finding.
-    const applicability: RuleApplicability[] = [];
-
-    for (const issue of axeResult.violations) {
-      drafts.push(...mapIssueToDrafts(issue, 'fail', ctx));
-      applicability.push(issueApplicability(issue, 'failed', ctx));
-    }
-
-    // Incomplete stays visible as unverified. Dropping it would silently claim clean coverage.
-    for (const issue of axeResult.incomplete) {
-      drafts.push(...mapIssueToDrafts(issue, 'unverified', ctx));
-      applicability.push(issueApplicability(issue, 'incomplete', ctx));
-    }
-
-    for (const summary of axeResult.passes) {
-      applicability.push(summaryApplicability(summary, 'passed', ctx));
-    }
-
-    for (const summary of axeResult.inapplicable) {
-      applicability.push(summaryApplicability(summary, 'inapplicable', ctx));
-    }
-
+    const { drafts, applicability } = mapAxeRunResult(axeResult, ctx.screen.id);
     const gaps = (axeResult.uncheckedFrames ?? []).map((frame) => uncheckedFrameGap(frame));
     return { drafts, applicability, gaps };
   },
