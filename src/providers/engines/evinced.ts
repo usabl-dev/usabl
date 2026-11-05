@@ -158,8 +158,8 @@ function evincedGap(reason: string): CoverageGap {
  * The issue shape is only partly documented, so every field is read as the untyped value it is. An
  * issue without a type id has no identity, and an element without a selector cannot be located, so
  * neither is shown. For a preview type that changes no verdict, and one note counts what was not
- * shown. For a promoted type it could, so every element of it that could not be read, and every
- * issue of it whose severity could not be read, is a coverage gap. promote is empty unless a caller
+ * shown. Only for a promoted type could it, so only there is every element that could not be read,
+ * and every issue whose severity could not be read, a coverage gap. promote is empty unless a caller
  * passes one; the provider passes none in this release.
  */
 export function mapEvincedIssues(

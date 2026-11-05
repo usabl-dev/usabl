@@ -147,7 +147,8 @@ function dequeGap(reason: string): CoverageGap {
  * no other provider reports, so every own entry the normalizer lost is disclosed, and so is a
  * violation whose element list is not a list. While Deque findings are preview a lost one could
  * never have moved the verdict, so the disclosure is a note. If they ever gate, the same loss is a
- * coverage gap. A result with no rule in any bucket checked nothing, which is always a gap.
+ * coverage gap. A result with no rule in any bucket checked nothing. It is disclosed the same way:
+ * a note while findings are preview, a gap for a class that gates.
  */
 export function mapDequeResults(
   raw: unknown,

@@ -2,10 +2,11 @@
  * Shared seams for the optional commercial engines (Deque axe DevTools, Evinced).
  * The vendor packages are never dependencies of usabl. Each one is loaded by a dynamic import only
  * when the trusted config turns its engine on, through a loader a test can replace with a fake.
- * Every failure here is thrown with a reason and a fix, so the provider seam records a coverage
- * gap. Every vendor call is bounded by a timeout, so a hung license server becomes a named gap and
- * never a stalled run. Nothing here mints a verdict, and nothing here lets a credential reach a
- * message.
+ * Every failure here is thrown with a reason and a fix. The engine provider catches it and, while
+ * its findings are preview, returns it as a note that names the engine; only for a class that
+ * gates does it become a coverage gap. Every vendor call is bounded by a timeout, so a hung license
+ * server ends in that named note and never in a stalled run. Nothing here mints a verdict, and
+ * nothing here lets a credential reach a message.
  */
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -110,8 +111,9 @@ function describeBudget(ms: number): string {
 /**
  * Waits for one vendor call, at most timeoutMs. A call that does not settle in time rejects with a
  * message that names the engine and the step. The call itself cannot be cancelled, so a rejection it
- * makes later is caught here and dropped: the run has already disclosed the gap, and an unhandled
- * rejection would end the process.
+ * makes later is caught here and dropped: the run has already disclosed the timeout (a note while
+ * findings are preview, a gap for a class that gates), and an unhandled rejection would end the
+ * process.
  */
 export async function withEngineTimeout<T>(
   label: EngineLabel,

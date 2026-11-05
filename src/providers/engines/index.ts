@@ -45,8 +45,11 @@ export function engineCapabilities(engines: EnginesConfig | undefined): Capabili
  * The installed package version of each turned-on engine, keyed by engine id, for the receipt. Read
  * from disk without loading vendor code, so the same answer comes back whether or not a scan ran,
  * which is what lets a receipt re-verify without a browser. An engine whose package is not found
- * records "not-installed"; a run like that ends in a coverage gap and mints no receipt. Undefined
- * when no engine is on, so receipts keep their earlier shape.
+ * records "not-installed". While engine findings are preview, a run like that carries a note that
+ * the engine did not run, still mints its receipt, and binds "not-installed" into it. The binding
+ * matters because a receipt minted without the package then fails re-verification where the
+ * package is installed, so it cannot stand for a scan the engine would have joined. Undefined when
+ * no engine is on, so receipts keep their earlier shape.
  */
 export async function readEngineVersions(
   engines: EnginesConfig | undefined,
