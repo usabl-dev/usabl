@@ -68,7 +68,7 @@ describe('dependency changes of the app', () => {
     expectEveryScreenFor(coverage, 'package-lock.json');
     expect(coverage.affected[0]?.reason).toBe(
       'package-lock.json is a lockfile, and a change to it can change the version of any installed package. ' +
-        'package.json changed the app\'s dependencies or devDependencies. ' +
+        'package.json changed the dependency fields of the app\'s package.json. ' +
         'A dependency upgrade, such as a new version of the UI component library, can change every screen, so usabl checks every screen.',
     );
   });
@@ -77,7 +77,7 @@ describe('dependency changes of the app', () => {
     const bumped = pkg({ scripts: { build: 'vite build' }, dependencies: { '@patternfly/react-core': '6.2.0', react: '18.3.1' }, devDependencies: { vite: '6.0.0' } });
     const coverage = await computeCoverage(fsOf(appTree({ 'package.json': bumped })), appConfig, ['package.json'], undefined, trustedOf(appTree()));
     expectEveryScreenFor(coverage, 'package.json');
-    expect(coverage.affected[0]?.reason).toContain('package.json changed the app\'s dependencies or devDependencies.');
+    expect(coverage.affected[0]?.reason).toContain('package.json changed the dependency fields of the app\'s package.json.');
   });
 
   it('checks every screen when only the devDependencies change', async () => {
@@ -99,7 +99,7 @@ describe('dependency changes of the app', () => {
     expectEveryScreenFor(coverage, 'package.json');
   });
 
-  for (const lockfile of ['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml']) {
+  for (const lockfile of ['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb']) {
     it(`checks every screen when the root lockfile ${lockfile} changes alone`, async () => {
       const coverage = await computeCoverage(fsOf(appTree({ [lockfile]: 'changed' })), appConfig, [lockfile], undefined, trustedOf(appTree()));
       expectEveryScreenFor(coverage, lockfile);
@@ -118,13 +118,33 @@ describe('dependency changes of the app', () => {
     expect(coverage).toEqual({ changedFiles: ['package.json'], affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true });
   });
 
-  it('reads a change to peerDependencies or overrides alone as nothing to check', async () => {
+  // Each of these fields can change which version of a package is installed. Counting one that
+  // does not can only add checks.
+  for (const [field, value] of [
+    ['peerDependencies', { peerDependencies: { react: '>=18' } }],
+    ['optionalDependencies', { optionalDependencies: { fsevents: '2.3.3' } }],
+    ['overrides', { overrides: { '@patternfly/react-core': '6.2.0' } }],
+    ['resolutions', { resolutions: { '@patternfly/react-core': '6.2.0' } }],
+    ['pnpm.overrides', { pnpm: { overrides: { '@patternfly/react-core': '6.2.0' } } }],
+  ] as const) {
+    it(`checks every screen when only ${field} changes`, async () => {
+      const edited = pkg({
+        scripts: { build: 'vite build' },
+        dependencies: { '@patternfly/react-core': '6.1.0', react: '18.3.1' },
+        devDependencies: { vite: '6.0.0' },
+        ...value,
+      });
+      const coverage = await computeCoverage(fsOf(appTree({ 'package.json': edited })), appConfig, ['package.json'], undefined, trustedOf(appTree()));
+      expectEveryScreenFor(coverage, 'package.json');
+    });
+  }
+
+  it('reads a change to other pnpm settings as nothing to check', async () => {
     const edited = pkg({
       scripts: { build: 'vite build' },
       dependencies: { '@patternfly/react-core': '6.1.0', react: '18.3.1' },
       devDependencies: { vite: '6.0.0' },
-      peerDependencies: { react: '>=18' },
-      overrides: { semver: '7.6.0' },
+      pnpm: { onlyBuiltDependencies: ['esbuild'] },
     });
     const coverage = await computeCoverage(fsOf(appTree({ 'package.json': edited })), appConfig, ['package.json'], undefined, trustedOf(appTree()));
     expect(coverage.nothingToCheck).toBe(true);
@@ -251,5 +271,94 @@ describe('dependency changes of an app in a monorepo', () => {
       trustedOf(tree()),
     );
     expect(coverage.nothingToCheck).toBe(true);
+  });
+});
+
+// Where the app's package.json files are found: every folder on the climb from each place the
+// config points into, up to the repository root.
+describe('the folders of the app', () => {
+  const tree = (overrides: Record<string, string> = {}): Record<string, string> => ({
+    'package.json': JSON.stringify({ private: true, workspaces: ['packages/*'] }),
+    'usabl.routes.json': JSON.stringify({ routes: [{ screenId: 'home', url: '/', entryFile: 'packages/admin/src/Home.tsx' }] }),
+    'packages/admin/package.json': JSON.stringify({ name: '@mono/admin', dependencies: { '@patternfly/react-core': '6.1.0' } }),
+    'packages/admin/src/App.tsx': '',
+    'packages/admin/src/Home.tsx': 'export default function Home() {}',
+    ...overrides,
+  });
+  const config: UsablConfig = {
+    appBaseUrl: 'http://localhost:5173',
+    uiFileGlobs: ['packages/admin/src/**/*.tsx'],
+    discovery: { routerFile: 'packages/admin/src/App.tsx', wideBlastGlobs: [] },
+    surfaces: [],
+    guardedPaths: ['usabl.config.json'],
+  };
+  const BUMPED = JSON.stringify({ name: '@mono/admin', dependencies: { '@patternfly/react-core': '6.2.0' } });
+
+  // A pull request that adds a package.json below the real manifest. The nearest manifest to the
+  // anchors is then the added one, and a bump of the real manifest read as nothing to check.
+  it('still counts a bump of the real manifest when the pull request adds a package.json below it', async () => {
+    const added = JSON.stringify({ name: 'decoy', private: true });
+    const coverage = await computeCoverage(
+      fsOf(tree({ 'packages/admin/package.json': BUMPED, 'packages/admin/src/package.json': added })),
+      config,
+      ['packages/admin/package.json', 'packages/admin/src/package.json'],
+      undefined,
+      trustedOf(tree()),
+    );
+    expect(coverage.affected).toEqual([
+      expect.objectContaining({ screenId: 'home', provenance: 'wide-blast', reason: expect.stringContaining('packages/admin/package.json changed') }),
+    ]);
+    // The added file declares no dependency fields, the same as the missing file it replaces.
+    expect(coverage.affected[0]?.reason).not.toContain('packages/admin/src/package.json');
+  });
+
+  it('reads an added package.json with no dependency fields as nothing to check', async () => {
+    const coverage = await computeCoverage(
+      fsOf(tree({ 'packages/admin/src/package.json': JSON.stringify({ name: 'decoy' }) })),
+      config,
+      ['packages/admin/src/package.json'],
+      undefined,
+      trustedOf(tree()),
+    );
+    expect(coverage.nothingToCheck).toBe(true);
+  });
+
+  it('counts a deleted package.json that declared dependencies', async () => {
+    const files = tree();
+    delete files['packages/admin/package.json'];
+    const coverage = await computeCoverage(fsOf(files), config, ['packages/admin/package.json'], undefined, trustedOf(tree()));
+    expect(coverage.affected).toEqual([expect.objectContaining({ screenId: 'home', provenance: 'wide-blast' })]);
+  });
+
+  it('counts the root package.json of a monorepo, which is on the climb from the app', async () => {
+    const root = JSON.stringify({ private: true, workspaces: ['packages/*'], devDependencies: { '@patternfly/react-core': '6.2.0' } });
+    const coverage = await computeCoverage(fsOf(tree({ 'package.json': root })), config, ['package.json'], undefined, trustedOf(tree()));
+    expect(coverage.affected).toEqual([expect.objectContaining({ screenId: 'home', provenance: 'wide-blast', reason: expect.stringContaining('package.json changed') })]);
+  });
+
+  it('reads an anchor with a leading slash from the repository root', async () => {
+    const slashed: UsablConfig = { ...config, uiFileGlobs: ['/packages/admin/src/**/*.tsx'], discovery: { routerFile: '/packages/admin/src/App.tsx', wideBlastGlobs: [] } };
+    const coverage = await computeCoverage(fsOf(tree({ 'packages/admin/package.json': BUMPED })), slashed, ['packages/admin/package.json'], undefined, trustedOf(tree()));
+    expect(coverage.affected).toEqual([expect.objectContaining({ screenId: 'home', provenance: 'wide-blast' })]);
+  });
+
+  it('follows an anchor with ../ inside the repository, and never reads one that leaves it', async () => {
+    const reads: string[] = [];
+    const base = fsOf(tree({ 'packages/admin/package.json': BUMPED }));
+    const recording: FsGlob = {
+      readFile: async (file) => {
+        reads.push(file);
+        return base.readFile(file);
+      },
+      glob: (patterns) => base.glob(patterns),
+    };
+    const dotted: UsablConfig = {
+      ...config,
+      uiFileGlobs: ['packages/web/../admin/src/**/*.tsx', '../elsewhere/src/**/*.tsx'],
+      discovery: { routerFile: '../elsewhere/src/App.tsx', wideBlastGlobs: [] },
+    };
+    const coverage = await computeCoverage(recording, dotted, ['packages/admin/package.json'], undefined, trustedOf(tree()));
+    expect(coverage.affected).toEqual([expect.objectContaining({ screenId: 'home', provenance: 'wide-blast' })]);
+    expect(reads.filter((file) => file.includes('elsewhere') && file.endsWith('package.json'))).toEqual([]);
   });
 });

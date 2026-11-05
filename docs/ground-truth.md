@@ -983,23 +983,30 @@ Given a set of changed files, discover which surfaces they affect:
 library can change every screen, so such a change is wide blast, not nothing to check. A
 changed file is a dependency change when it is:
 
-- a lockfile (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, or `pnpm-lock.yaml`)
-  in the repository root or in the app's folder. Any change to it counts, because a lockfile
-  change can change the version of any installed package.
-- the app's `package.json`, when its `dependencies` or `devDependencies` differ from the same
-  fields at the trusted ref. The two versions are parsed and the two fields compared as data,
-  so key order and whitespace do not count. A change that leaves both fields as they were, such
-  as one that edits only `scripts`, `version`, `description`, or other metadata, is not a
-  dependency change and reads as before. A file missing on one side declares no dependencies.
-  When either version does not parse, or no trusted read is given, usabl cannot compare, and
-  the change counts.
+- a lockfile (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`,
+  `bun.lock`, or `bun.lockb`) in the repository root or in one of the app's folders. Any change
+  to it counts, because a lockfile change can change the version of any installed package.
+- one of the app's `package.json` files, when its dependency fields differ from the same fields
+  at the trusted ref. The dependency fields are `dependencies`, `devDependencies`,
+  `peerDependencies`, `optionalDependencies`, `overrides`, `resolutions`, and `pnpm.overrides`.
+  Each of them can change which version of a package is installed, and counting one that does
+  not can only add checks. The two versions are parsed and the fields compared as data, so key
+  order and whitespace do not count. A change that leaves every field as it was, such as one
+  that edits only `scripts`, `version`, `description`, other `pnpm` settings, or other metadata,
+  is not a dependency change and reads as before. A file missing on one side declares no
+  dependency fields, the same as a file that holds an empty object, so an added `package.json`
+  with none of them does not count, and a deleted one that had some does. When either version
+  does not parse, or no trusted read is given, usabl cannot compare, and the change counts.
 
-The app's folder is, for each place the config points into (the router file, the folder of
-each `uiFileGlobs` pattern, and each surface file), the nearest folder at or above it that holds
-a `package.json` in the tree or at the trusted ref. That is the repository root for a root app
-and the app's own package, such as `packages/admin`, in a monorepo. A `package.json` or lockfile
-of another package, and `peerDependencies`, `optionalDependencies`, `overrides`, or
-`resolutions` alone, do not count. A dependency change queues every discovered route and every
+The app's folders are, for each place the config points into (the router file, the folder of
+each `uiFileGlobs` pattern, and each surface file), every folder from it up to the repository
+root that holds a `package.json` in the tree or at the trusted ref. A leading `/` is read from
+the repository root, and a path that leaves the repository with `..` is never read. Every folder
+on the climb counts, not only the nearest: a pull request that adds `packages/admin/src/package.json`
+would otherwise move the app folder off `packages/admin`, and a bump of the real manifest would
+read as nothing to check. In a monorepo this includes the root `package.json` as well as the
+app's own package, such as `packages/admin`. A `package.json` or lockfile of a package that is
+not on the climb, such as another workspace package, does not count. A dependency change queues every discovered route and every
 configured surface with provenance `wide-blast`, and each such screen carries a `reason` that
 names each dependency file and why it counts. With no route and no surface, each dependency file
 is an `unresolved` gap that says there was no screen to check, never nothing to check.

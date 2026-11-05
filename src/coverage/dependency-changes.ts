@@ -6,19 +6,22 @@
  * to check while a new version of the library can change every screen. This module finds such
  * changes, and the planner treats each one as a wide-blast change: every screen is checked.
  *
- * A change counts when it is any change to a lockfile in the repository root or in the app's
- * folder, or a change to the dependencies or devDependencies of the app's package.json. A
- * package.json change that leaves both fields as they were, such as one that edits only scripts
- * or metadata, does not count: the fields are compared, parsed, between the tree and the trusted
- * ref. It must never decide a verdict. When usabl cannot compare, because a version does not parse
+ * A change counts when it is any change to a lockfile in the repository root or in one of the
+ * app's folders, or a change to the dependency fields of one of the app's package.json files:
+ * dependencies, devDependencies, peerDependencies, optionalDependencies, overrides, resolutions,
+ * and pnpm.overrides. A package.json change that leaves every one of them as it was, such as one
+ * that edits only scripts or metadata, does not count: the fields are compared, parsed, between
+ * the tree and the trusted ref. It must never decide a verdict. When usabl cannot compare, because a version does not parse
  * or no trusted ref was given, the change counts, because counting it can only add checks.
  */
 import { posix as path } from 'node:path';
 import type { FsGlob, UsablConfig } from '../contracts/index.js';
 import type { TrustedRead } from './workspace-packages.js';
 
-const LOCKFILES: readonly string[] = ['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml'];
-const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies'] as const;
+const LOCKFILES: readonly string[] = ['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb'];
+// The package.json fields that decide which version of a package is installed. Counting a field
+// that does not can only add checks, so the list leans wide.
+const TOP_LEVEL_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies', 'overrides', 'resolutions'] as const;
 
 /** A changed file that can change every screen, and one sentence that says why it counts. */
 export interface DependencyChange {
@@ -45,10 +48,12 @@ function staticPrefix(glob: string): string {
   return segments.join('/');
 }
 
-// The folders that hold the app's package.json: for each place the config points into (the router
-// file, the uiFileGlobs folders, and the surface files), the nearest folder at or above it that has
-// a package.json in the tree or at the trusted ref. A repository with one package at its root has
-// the root as its app folder.
+// The folders that hold one of the app's package.json files: for each place the config points into
+// (the router file, the uiFileGlobs folders, and the surface files), every folder from it up to the
+// repository root that has a package.json in the tree or at the trusted ref. Not only the nearest
+// one: a pull request can add a package.json below the real manifest, and the nearest one would
+// then move the app folder off it, so a bump of the real manifest would not count. A repository
+// with one package at its root has the root as its app folder.
 async function appDirs(fs: FsGlob, config: UsablConfig, trusted: TrustedRead | undefined): Promise<Set<string>> {
   const anchors = [
     path.dirname(config.discovery.routerFile.replace(/^\/+/u, '')),
@@ -71,10 +76,7 @@ async function appDirs(fs: FsGlob, config: UsablConfig, trusted: TrustedRead | u
     if (path.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) continue;
     let dir = normalized === '.' ? '' : normalized.replace(/\/+$/u, '');
     for (;;) {
-      if (await hasManifest(dir)) {
-        found.add(dir);
-        break;
-      }
+      if (await hasManifest(dir)) found.add(dir);
       if (dir === '') break;
       const parent = path.dirname(dir);
       dir = parent === '.' ? '' : parent;
@@ -94,19 +96,31 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? 'undefined';
 }
 
-// The dependency fields of a package.json, compared as one string. A missing file declares none.
-// Null when the file exists and is not a JSON object.
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// The dependency fields of a parsed package.json, compared as one string. An absent field reads as
+// null, so a manifest with none of them gives the same string as an empty object.
+function fieldsOf(record: Record<string, unknown>): string {
+  const pnpm = record['pnpm'];
+  return canonical({
+    ...Object.fromEntries(TOP_LEVEL_FIELDS.map((field) => [field, record[field] ?? null])),
+    'pnpm.overrides': isRecord(pnpm) ? (pnpm['overrides'] ?? null) : null,
+  });
+}
+
+// The dependency fields of a package.json file. A missing file declares none, the same as an empty
+// object. Null when the file exists and is not a JSON object.
 function dependencyFields(raw: string | null): string | null {
-  if (raw === null) return canonical({});
+  if (raw === null) return fieldsOf({});
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
     return null;
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-  const record = parsed as Record<string, unknown>;
-  return canonical(Object.fromEntries(DEPENDENCY_FIELDS.map((field) => [field, record[field] ?? null])));
+  return isRecord(parsed) ? fieldsOf(parsed) : null;
 }
 
 /**
@@ -153,7 +167,7 @@ export async function dependencyChanges(
       continue;
     }
     if (tree !== base) {
-      changes.push({ file, why: `${file} changed the app's dependencies or devDependencies.` });
+      changes.push({ file, why: `${file} changed the dependency fields of the app's package.json.` });
     }
   }
   return changes;
