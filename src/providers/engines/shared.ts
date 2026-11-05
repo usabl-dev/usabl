@@ -129,6 +129,8 @@ export async function withEngineTimeout<T>(
 export interface PackageProbeFs {
   isDirectory(path: string): Promise<boolean>;
   readFile(path: string): Promise<string | null>;
+  // The path with every symbolic link resolved, or the path itself when it cannot be resolved.
+  realpath(path: string): Promise<string>;
 }
 
 export type InstalledPackage =
@@ -148,6 +150,13 @@ const realFs: PackageProbeFs = {
       return await readFile(path, 'utf8');
     } catch {
       return null;
+    }
+  },
+  async realpath(path) {
+    try {
+      return await realpath(path);
+    } catch {
+      return path;
     }
   },
 };
@@ -220,10 +229,14 @@ export async function probeInstalledPackage(
 ): Promise<InstalledPackage> {
   const fs = options.fs ?? realFs;
   const fromDir = options.fromDir ?? (await ownDir());
-  const dir = await findPackageDir(packageName, fromDir, fs);
-  if (dir === null) {
+  const found = await findPackageDir(packageName, fromDir, fs);
+  if (found === null) {
     return { state: 'not-installed' };
   }
+  // Node loads a package from its real path, and resolves the package's own imports from there. A
+  // package manager that links packages into node_modules, as pnpm does, keeps each package's
+  // dependencies beside its real folder, not beside the link.
+  const dir = await fs.realpath(found);
   const raw = await fs.readFile(join(dir, 'package.json'));
   let manifest: unknown = null;
   if (raw !== null) {

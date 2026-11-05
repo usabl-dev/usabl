@@ -25,7 +25,8 @@ const LABEL: EngineLabel = {
   registry: "Acme's registry",
 };
 
-function memoryFs(files: Record<string, string>): PackageProbeFs {
+// Files by path, and symbolic links by the folder path they stand at, pointing to a real folder.
+function memoryFs(files: Record<string, string>, links: Record<string, string> = {}): PackageProbeFs {
   const dirs = new Set<string>();
   for (const path of Object.keys(files)) {
     const parts = path.split('/');
@@ -33,9 +34,18 @@ function memoryFs(files: Record<string, string>): PackageProbeFs {
       dirs.add(parts.slice(0, i).join('/') || '/');
     }
   }
+  const real = (path: string): string => {
+    for (const [link, target] of Object.entries(links)) {
+      if (path === link || path.startsWith(`${link}/`)) {
+        return target + path.slice(link.length);
+      }
+    }
+    return path;
+  };
   return {
-    isDirectory: async (path) => dirs.has(path),
-    readFile: async (path) => files[path] ?? null,
+    isDirectory: async (path) => dirs.has(real(path)),
+    readFile: async (path) => files[real(path)] ?? null,
+    realpath: async (path) => real(path),
   };
 }
 
@@ -96,6 +106,24 @@ describe('probeInstalledPackage', () => {
       state: 'installed',
       version: '2.0.0',
       missingDependencies: ['acme-core', 'playwright'],
+    });
+  });
+
+  it('looks up dependencies from the real folder of a symlinked package, as Node does', async () => {
+    // pnpm links each package into node_modules from its own store folder, where its dependencies
+    // sit beside it. Node loads them from the real path, so the lookup must start there too.
+    const store = '/srv/app/node_modules/.pnpm/@acme+scanner@2.0.0/node_modules';
+    const fs = memoryFs(
+      {
+        [`${store}/@acme/scanner/package.json`]: JSON.stringify({ version: '2.0.0', dependencies: { 'acme-core': '^2' } }),
+        [`${store}/acme-core/package.json`]: '{}',
+      },
+      { '/srv/app/node_modules/@acme/scanner': `${store}/@acme/scanner` },
+    );
+    expect(await probeInstalledPackage('@acme/scanner', { fromDir: '/srv/app/dist', fs })).toEqual({
+      state: 'installed',
+      version: '2.0.0',
+      missingDependencies: [],
     });
   });
 
