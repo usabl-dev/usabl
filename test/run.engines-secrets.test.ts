@@ -1,7 +1,7 @@
 /**
  * A whole run with the Evinced engine on and fake credential values in the environment. The
- * values must appear nowhere: not in a draft, a finding, a gap, the receipt, or the text and JSON
- * the CLI prints. The SDK is a fake that quotes the credentials back, which is the worst case.
+ * values must appear nowhere: not in a draft, a finding, a gap, a note, the receipt, or the text and
+ * JSON the CLI prints. The SDK is a fake that quotes the credentials back, which is the worst case.
  */
 import { describe, expect, it } from 'vitest';
 import type { Deps, UsablConfig } from '../src/contracts/index.js';
@@ -102,7 +102,7 @@ describe('Evinced credentials across a whole run', () => {
     expectNoSecret(cli.json);
   });
 
-  it('keeps them out of the gap and CLI output when the SDK throws', async () => {
+  it('keeps them out of the note and CLI output when the SDK throws, and the run still verifies', async () => {
     const result = await run(
       depsWith(async () => {
         throw new Error(`license rejected: service ${SERVICE_ID} token ${AUTH_TOKEN}`);
@@ -110,13 +110,21 @@ describe('Evinced credentials across a whole run', () => {
       config,
     );
 
-    expect(result.verdict).toBe('not_covered');
-    expect(result.receipt).toBeNull();
-    expect(result.coverage.gaps.map((gap) => gap.reason)).toContain(
-      'provider evinced failed: Evinced analysis failed: license rejected: service [redacted] token [redacted]',
-    );
+    // Evinced findings are preview, so an Evinced that could not run is a note, not a gap. The
+    // verdict and the receipt are what they would be without the engine.
+    expect(result.verdict).toBe('verified');
+    expect(result.receipt).not.toBeNull();
+    expect(result.coverage.gaps).toEqual([]);
+    expect(result.screens.flatMap((screen) => screen.notes ?? [])).toEqual([
+      {
+        ref: 'provider:evinced',
+        reason:
+          'provider evinced did not run: Evinced analysis failed: license rejected: service [redacted] token [redacted]. Its findings are preview, so this does not change the verdict.',
+      },
+    ]);
 
     const cli = projectCli(result);
+    expect(cli.text).toContain('provider evinced did not run');
     expectNoSecret(JSON.stringify(result));
     expectNoSecret(cli.text);
     expectNoSecret(cli.json);

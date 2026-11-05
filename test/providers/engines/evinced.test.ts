@@ -7,7 +7,7 @@
  * a licensed SDK names the stable types. The provider itself never promotes.
  */
 import { describe, expect, it } from 'vitest';
-import type { Page, ProviderContext } from '../../../src/contracts/index.js';
+import type { Page, ProviderContext, ProviderRunResult } from '../../../src/contracts/index.js';
 import { makeFakePage } from '../../../src/deps/fakes.js';
 import { registerPlaywrightPage } from '../../../src/providers/engines/shared.js';
 import { runProviders } from '../../../src/providers/index.js';
@@ -338,7 +338,18 @@ describe('makeEvincedProvider', () => {
   });
 });
 
-describe('Evinced failures become coverage gaps with a fix', () => {
+const PREVIEW_SUFFIX = 'Its findings are preview, so this does not change the verdict.';
+
+// While Evinced findings are preview, an Evinced that could not run is one note and adds no gap: a
+// disclosure that cannot change the verdict must not block a pull request.
+function failureOf(result: ProviderRunResult): string {
+  expect(result.gaps).toEqual([]);
+  expect(result.drafts).toEqual([]);
+  expect(result.notes.map((note) => note.ref)).toEqual(['provider:evinced']);
+  return result.notes[0]?.reason ?? '';
+}
+
+describe('Evinced failures become notes with a fix while its findings are preview', () => {
   async function runOne(
     p: ReturnType<typeof makeEvincedProvider>,
     allowed: Parameters<typeof runProviders>[2] = ['live', 'secrets', 'network'],
@@ -354,53 +365,74 @@ describe('Evinced failures become coverage gaps with a fix', () => {
     const p = provider({ enabled: true }, async () => Promise.reject(notFound), OFFLINE_ENV, {
       probe: async () => ({ state: 'not-installed' }),
     });
-    expect((await runOne(p)).gaps).toEqual([
-      {
-        ref: 'provider:evinced',
-        state: 'not-covered',
-        reason:
-          "provider evinced failed: Evinced is turned on in usabl.config.json but @evinced/js-playwright-sdk is not installed. Install it from Evinced's registry (Automation for Web license), or set engines.evinced.enabled to false.",
-      },
-    ]);
+    expect(failureOf(await runOne(p))).toBe(
+      `provider evinced did not run: Evinced is turned on in usabl.config.json but @evinced/js-playwright-sdk is not installed. Install it from Evinced's registry (Automation for Web license), or set engines.evinced.enabled to false. ${PREVIEW_SUFFIX}`,
+    );
   });
 
   it('reports the real dynamic import of the absent package as not installed', async () => {
     const p = makeEvincedProvider({ enabled: true }, { env: OFFLINE_ENV, fileExists: async () => false });
-    const [gap] = (await runOne(p)).gaps;
-    expect(gap?.reason).toContain('@evinced/js-playwright-sdk is not installed');
+    const reason = failureOf(await runOne(p));
+    expect(reason).toContain('@evinced/js-playwright-sdk is not installed');
   });
 
   it('names the missing credential variables, never their values', async () => {
     const calls = newCalls();
     const offline = await runOne(provider({ enabled: true }, fakeEvincedModule([], calls), { EVINCED_SERVICE_ID: SERVICE_ID }));
-    expect(offline.gaps[0]?.reason).toBe(
-      'provider evinced failed: Evinced is turned on in usabl.config.json in offline mode, but EVINCED_AUTH_TOKEN is not set. Set EVINCED_SERVICE_ID and EVINCED_AUTH_TOKEN, or set engines.evinced.enabled to false.',
+    expect(failureOf(offline)).toBe(
+      `provider evinced did not run: Evinced is turned on in usabl.config.json in offline mode, but EVINCED_AUTH_TOKEN is not set. Set EVINCED_SERVICE_ID and EVINCED_AUTH_TOKEN, or set engines.evinced.enabled to false. ${PREVIEW_SUFFIX}`,
     );
     const online = await runOne(provider({ enabled: true, mode: 'online' }, fakeEvincedModule([], calls), { EVINCED_API_KEY: '  ' }));
-    expect(online.gaps[0]?.reason).toBe(
-      'provider evinced failed: Evinced is turned on in usabl.config.json in online mode, but EVINCED_SERVICE_ID and EVINCED_API_KEY are not set. Set EVINCED_SERVICE_ID and EVINCED_API_KEY, or set engines.evinced.enabled to false.',
+    expect(failureOf(online)).toBe(
+      `provider evinced did not run: Evinced is turned on in usabl.config.json in online mode, but EVINCED_SERVICE_ID and EVINCED_API_KEY are not set. Set EVINCED_SERVICE_ID and EVINCED_API_KEY, or set engines.evinced.enabled to false. ${PREVIEW_SUFFIX}`,
     );
     expect(calls.constructed).toEqual([]);
   });
 
   it('refuses a module without the SDK or the credential function', async () => {
     const noSdk = await runOne(provider({ enabled: true }, async () => ({ setOfflineCredentials: () => {} })));
-    expect(noSdk.gaps[0]?.reason).toContain('does not export EvincedSDK');
+    expect(failureOf(noSdk)).toContain('does not export EvincedSDK');
     const noCredentials = await runOne(provider({ enabled: true, mode: 'online' }, async () => ({ EvincedSDK: class {} }), ONLINE_ENV));
-    expect(noCredentials.gaps[0]?.reason).toContain('does not export setCredentials');
+    expect(failureOf(noCredentials)).toContain('does not export setCredentials');
   });
 
   it('refuses a page with no Playwright page behind it', async () => {
     const result = await runOne(provider({ enabled: true }, fakeEvincedModule([], newCalls())), undefined, makeFakePage());
-    expect(result.gaps[0]?.reason).toContain('Evinced needs a live browser page');
+    expect(failureOf(result)).toContain('Evinced needs a live browser page');
   });
 
   it('never reads a non-list return as a clean page', async () => {
     for (const issues of [null, { issues: [] }, 'none']) {
       const result = await runOne(provider({ enabled: true }, fakeEvincedModule(issues, newCalls())));
       expect(result.drafts).toEqual([]);
-      expect(result.gaps[0]?.reason).toContain('not a list of issues');
+      expect(failureOf(result)).toContain('not a list of issues');
     }
+  });
+
+  it('makes the same failure a coverage gap once a type is promoted, since it could then hide a gating finding', async () => {
+    const p = provider(
+      { enabled: true },
+      fakeEvincedModule([], newCalls(), { analyze: () => new Promise(() => {}) }),
+      OFFLINE_ENV,
+      { timeoutMs: 50, promote: new Set(['WRONG_SEMANTIC_ROLE']) },
+    );
+    const result = await runOne(p);
+    expect(result.notes).toEqual([]);
+    expect(result.gaps).toEqual([
+      {
+        ref: 'provider:evinced',
+        state: 'not-covered',
+        reason:
+          'provider evinced failed: Evinced did not finish analysis within 50 ms, so it checked nothing on this screen. Check its license server and the page, or set engines.evinced.enabled to false.',
+      },
+    ]);
+  });
+
+  it('promotes a type only when a caller passes one, which the config cannot', async () => {
+    const p = provider({ enabled: true }, fakeEvincedModule([WRONG_ROLE], newCalls()), OFFLINE_ENV, {
+      promote: new Set(['WRONG_SEMANTIC_ROLE']),
+    });
+    expect(draftsOf(await p.run(ctxFor())).map((draft) => draft.evidenceClass)).toEqual(['deterministic', 'deterministic']);
   });
 
   it('is a capability-denied gap when secrets or network were not granted', async () => {
@@ -417,7 +449,7 @@ describe('Evinced failures become coverage gaps with a fix', () => {
     ]);
   });
 
-  it('turns a hung license server into a named gap within the timeout', async () => {
+  it('turns a hung license server into a named note within the timeout', async () => {
     const calls = newCalls();
     const p = provider(
       { enabled: true, mode: 'online' },
@@ -426,28 +458,23 @@ describe('Evinced failures become coverage gaps with a fix', () => {
       { timeoutMs: 50 },
     );
     const started = Date.now();
-    const { gaps } = await runOne(p);
+    const reason = failureOf(await runOne(p));
     expect(Date.now() - started).toBeLessThan(2_000);
-    expect(gaps).toEqual([
-      {
-        ref: 'provider:evinced',
-        state: 'not-covered',
-        reason:
-          'provider evinced failed: Evinced did not finish setting its credentials within 50 ms, so it checked nothing on this screen. Check its license server and the page, or set engines.evinced.enabled to false.',
-      },
-    ]);
+    expect(reason).toBe(
+      `provider evinced did not run: Evinced did not finish setting its credentials within 50 ms, so it checked nothing on this screen. Check its license server and the page, or set engines.evinced.enabled to false. ${PREVIEW_SUFFIX}`,
+    );
     expect(calls.analyze).toEqual([]);
   });
 
-  it('turns a hung analysis into a named gap within the timeout', async () => {
+  it('turns a hung analysis into a named note within the timeout', async () => {
     const p = provider(
       { enabled: true },
       fakeEvincedModule([], newCalls(), { analyze: () => new Promise(() => {}) }),
       OFFLINE_ENV,
       { timeoutMs: 50 },
     );
-    const [gap] = (await runOne(p)).gaps;
-    expect(gap?.reason).toContain('Evinced did not finish analysis within 50 ms');
+    const reason = failureOf(await runOne(p));
+    expect(reason).toContain('Evinced did not finish analysis within 50 ms');
   });
 });
 
@@ -465,8 +492,8 @@ describe('Evinced refuses to run while its global switch could be off', () => {
       const { p, calls } = withFiles([], { env: { ...OFFLINE_ENV, EV_SWITCH_ON: value } });
       const result = await runProviders([p], ctxFor(), ['live', 'secrets']);
       expect(result.drafts).toEqual([]);
-      expect(result.gaps[0]?.reason).toContain('EV_SWITCH_ON');
-      expect(result.gaps[0]?.reason).toContain('unset EV_SWITCH_ON or set it to true');
+      expect(failureOf(result)).toContain('EV_SWITCH_ON');
+      expect(failureOf(result)).toContain('unset EV_SWITCH_ON or set it to true');
       expect(calls.analyze).toEqual([]);
     }
   });
@@ -483,8 +510,8 @@ describe('Evinced refuses to run while its global switch could be off', () => {
       const { p, calls } = withFiles([name]);
       const result = await runProviders([p], ctxFor(), ['live', 'secrets']);
       expect(result.drafts).toEqual([]);
-      expect(result.gaps[0]?.reason).toContain(name);
-      expect(result.gaps[0]?.reason).toContain('remove it, or add it to guardedPaths so changing it needs owner approval');
+      expect(failureOf(result)).toContain(name);
+      expect(failureOf(result)).toContain('remove it, or add it to guardedPaths so changing it needs owner approval');
       expect(calls.analyze).toEqual([]);
     }
   });
@@ -519,8 +546,8 @@ describe('Evinced credentials never leave the provider', () => {
       ALL_ENV,
     );
     const result = await runProviders([p], ctxFor(), ['live', 'secrets']);
-    expect(result.gaps[0]?.reason).toBe(
-      'provider evinced failed: Evinced analysis failed: license check failed for service [redacted] with token [redacted] (key [redacted])',
+    expect(failureOf(result)).toBe(
+      `provider evinced did not run: Evinced analysis failed: license check failed for service [redacted] with token [redacted] (key [redacted]). ${PREVIEW_SUFFIX}`,
     );
     expectNoSecret(JSON.stringify(result));
   });
@@ -544,7 +571,7 @@ describe('Evinced credentials never leave the provider', () => {
 
     const brokenImport = provider({ enabled: true }, async () => Promise.reject(new Error(`init read ${AUTH_TOKEN}`)), ALL_ENV);
     const loadResult = await runProviders([brokenImport], ctxFor(), ['live', 'secrets']);
-    expect(loadResult.gaps[0]?.reason).toContain('failed to load: init read [redacted]');
+    expect(failureOf(loadResult)).toContain('failed to load: init read [redacted]');
     expectNoSecret(JSON.stringify(loadResult));
   });
 
@@ -554,7 +581,7 @@ describe('Evinced credentials never leave the provider', () => {
       ctxFor(),
       ['live', 'secrets', 'network'],
     );
-    expect(result.gaps[0]?.reason).toContain('EVINCED_SERVICE_ID and EVINCED_API_KEY are not set');
+    expect(failureOf(result)).toContain('EVINCED_SERVICE_ID and EVINCED_API_KEY are not set');
     expectNoSecret(JSON.stringify(result));
   });
 });

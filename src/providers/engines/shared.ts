@@ -10,7 +10,7 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Page } from '../../contracts/index.js';
+import type { EvidenceClass, Page, ProviderNote, ProviderOutput } from '../../contracts/index.js';
 
 // The Playwright page behind each usabl page the real browser driver made. A vendor SDK drives the
 // Playwright page itself, so an engine provider needs it. It is kept here rather than on the page,
@@ -30,6 +30,35 @@ export function playwrightPageOf(page: Page): unknown {
 }
 
 export type ModuleLoader = () => Promise<unknown>;
+
+/** Whether findings of this class can move the verdict. The gate's rule: only deterministic gates. */
+export function classGates(evidenceClass: EvidenceClass): boolean {
+  return evidenceClass === 'deterministic';
+}
+
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+/**
+ * The output of an engine that could not run while its findings cannot gate. A disclosure that can
+ * never change the verdict must not block a pull request, and a vendor's license server that is
+ * down must not block every pull request, so the failure is one note on the provider, and the
+ * screen stays cleanly scanned. When the class gates, the caller throws instead, and the provider
+ * seam records the same failure as a not-covered gap.
+ */
+export function couldNotRunOutput(providerId: string, message: string): ProviderOutput & { notes: ProviderNote[] } {
+  return {
+    drafts: [],
+    notes: [
+      {
+        ref: `provider:${providerId}`,
+        reason: `provider ${providerId} did not run: ${sentence(message)} Its findings are preview, so this does not change the verdict.`,
+      },
+    ],
+  };
+}
 
 /**
  * Plain words for one engine, used in every message an operator reads about it. configKey is the

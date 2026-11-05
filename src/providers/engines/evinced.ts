@@ -7,7 +7,8 @@
  * its SDK runs its scripts in the page's own world, and no live run on a licensed SDK has yet shown
  * which issue types repeat. Tested against the vendor's documented result format. Not yet run on a
  * licensed SDK. The mapping can promote a type, so the disclosures that guard a promoted type are in
- * place for when a live run names the stable types, but this provider never promotes. Evinced
+ * place for when a live run names the stable types, but the config cannot ask for one. While no type
+ * gates, an Evinced that could not run is a provider note, never a gap. Evinced
  * reports no passes, so it adds findings and never claims coverage: it records no applicability.
  *
  * The SDK holds credentials. Every message and every string it returns passes through a redactor
@@ -29,6 +30,7 @@ import type {
 } from '../../contracts/index.js';
 import {
   assertNoOutsideSwitch,
+  couldNotRunOutput,
   defaultFileExists,
   EngineTimeoutError,
   errorMessage,
@@ -83,6 +85,11 @@ export interface EvincedProviderOptions {
   fileExists?: (path: string) => Promise<boolean>;
   // Budget for each vendor call. Default: ENGINE_CALL_TIMEOUT_MS.
   timeoutMs?: number;
+  // Evinced issue type ids whose findings gate. Default: none, so every finding is preview. The
+  // config cannot set it; it is the switch a later promotion flips. While no type gates, an Evinced
+  // that could not run is a note; once one does, the same failure is a coverage gap, because it
+  // could hide a gating finding.
+  promote?: ReadonlySet<string>;
 }
 
 export function evincedMode(config: EvincedEngineConfig): EvincedMode {
@@ -281,6 +288,7 @@ export function makeEvincedProvider(config: EvincedEngineConfig, options: Evince
   const fileExists = options.fileExists ?? defaultFileExists;
   const readAxeRuleIds = options.axeRuleIds ?? openSourceAxeRuleIds;
   const mode = evincedMode(config);
+  const promote = options.promote ?? new Set<string>();
   let axeRuleIds: Promise<ReadonlySet<string>> | null = null;
   const timed = <T>(step: string, call: Promise<T>): Promise<T> =>
     withEngineTimeout(EVINCED_LABEL, step, call, options.timeoutMs);
@@ -361,8 +369,8 @@ export function makeEvincedProvider(config: EvincedEngineConfig, options: Evince
     }
 
     // No applicability: Evinced reports no passes, so it can add findings but never claims a rule
-    // ran clean on this screen. No promote list: every finding is preview in this release.
-    return mapEvincedIssues(issues, ctx.screen.id, new Set(), redact);
+    // ran clean on this screen. The promote list is empty in this release, so every finding is preview.
+    return mapEvincedIssues(issues, ctx.screen.id, promote, redact);
   }
 
   return {
@@ -380,7 +388,11 @@ export function makeEvincedProvider(config: EvincedEngineConfig, options: Evince
       try {
         return await analyze(ctx, redact);
       } catch (error) {
-        throw new Error(redact(errorMessage(error)));
+        const message = redact(errorMessage(error));
+        if (promote.size > 0) {
+          throw new Error(message);
+        }
+        return couldNotRunOutput(EVINCED_PROVIDER_ID, message);
       }
     },
   };

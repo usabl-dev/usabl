@@ -93,7 +93,7 @@ describe('usabl doctor engines section', () => {
       ['evinced', 'on, package 3.9.0, credentials present: no'],
     ]);
     expect(reports[1]?.note).toBe(
-      'Set EVINCED_AUTH_TOKEN (offline mode reads EVINCED_SERVICE_ID and EVINCED_AUTH_TOKEN). Or set engines.evinced.enabled to false. Until then every scan reports a coverage gap for this engine.',
+      'Set EVINCED_AUTH_TOKEN (offline mode reads EVINCED_SERVICE_ID and EVINCED_AUTH_TOKEN). Or set engines.evinced.enabled to false. Until then every scan notes that this engine did not run.',
     );
   });
 

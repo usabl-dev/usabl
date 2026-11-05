@@ -207,14 +207,20 @@ describe('mapDequeResults on recorded axe results', () => {
     expect(reasons[1]).toContain('unknown rule');
   });
 
-  it('reads a result with every bucket empty as a run that checked nothing, which is a gap', () => {
-    const output = mapDequeResults(
-      { violations: [], incomplete: [], passes: [], inapplicable: [] },
-      SCREEN.id,
-      new Set(['image-alt']),
-    );
+  it('reads a result with every bucket empty as a run that checked nothing, a note while preview', () => {
+    const empty = { violations: [], incomplete: [], passes: [], inapplicable: [] };
+    const output = mapDequeResults(empty, SCREEN.id, new Set(['image-alt']));
     expect(draftsOf(output)).toEqual([]);
     expect(applicabilityOf(output)).toEqual([]);
+    expect(gapsOf(output)).toEqual([]);
+    expect(output.notes).toHaveLength(1);
+    expect(output.notes[0]?.reason).toContain('Deque ran no rules on this screen, so it checked nothing');
+  });
+
+  it('makes a run that checked nothing a gap when the findings would gate', () => {
+    const empty = { violations: [], incomplete: [], passes: [], inapplicable: [] };
+    const output = mapDequeResults(empty, SCREEN.id, new Set(['image-alt']), 'deterministic');
+    expect(output.notes).toEqual([]);
     expect(gapsOf(output)).toHaveLength(1);
     expect(gapsOf(output)[0]?.reason).toContain('Deque ran no rules on this screen, so it checked nothing');
   });
@@ -304,7 +310,19 @@ describe('makeDequeProvider', () => {
   });
 });
 
-describe('Deque failures become coverage gaps with a fix', () => {
+// While Deque findings are preview, a Deque that could not run is one note and adds no gap: a
+// disclosure that cannot change the verdict must not block a pull request.
+async function failureFor(p: ReturnType<typeof makeDequeProvider>, ctx: ProviderContext = ctxFor(livePage())): Promise<string> {
+  const run = await runProviders([p], ctx, ['live']);
+  expect(run.gaps).toEqual([]);
+  expect(run.drafts).toEqual([]);
+  expect(run.notes.map((note) => note.ref)).toEqual(['provider:deque']);
+  return run.notes[0]?.reason ?? '';
+}
+
+const PREVIEW_SUFFIX = 'Its findings are preview, so this does not change the verdict.';
+
+describe('Deque failures become notes with a fix while its findings are preview', () => {
   async function gapsFor(p: ReturnType<typeof makeDequeProvider>, ctx: ProviderContext = ctxFor(livePage())) {
     return (await runProviders([p], ctx, ['live'])).gaps;
   }
@@ -318,22 +336,17 @@ describe('Deque failures become coverage gaps with a fix', () => {
       { load: async () => Promise.reject(notFound), probe: async () => ({ state: 'not-installed' }) },
     );
 
-    expect(await gapsFor(p)).toEqual([
-      {
-        ref: 'provider:deque',
-        state: 'not-covered',
-        reason:
-          "provider deque failed: Deque axe DevTools is turned on in usabl.config.json but @axe-devtools/playwright is not installed. Install it from Deque's registry (axe DevTools for Web Enterprise), or set engines.deque.enabled to false.",
-      },
-    ]);
+    expect(await failureFor(p)).toBe(
+      `provider deque did not run: Deque axe DevTools is turned on in usabl.config.json but @axe-devtools/playwright is not installed. Install it from Deque's registry (axe DevTools for Web Enterprise), or set engines.deque.enabled to false. ${PREVIEW_SUFFIX}`,
+    );
   });
 
   it('reports the real dynamic import of the absent package as not installed', async () => {
     // No loader and no probe injected: this is the shipped import and the shipped lookup of the
     // vendor package name, which is not installed in this repository and never will be.
     const p = makeDequeProvider({ enabled: true }, { env: TRACKING_OFF, fileExists: async () => false });
-    const [gap] = await gapsFor(p);
-    expect(gap?.reason).toContain('@axe-devtools/playwright is not installed');
+    const reason = await failureFor(p);
+    expect(reason).toContain('@axe-devtools/playwright is not installed');
   });
 
   it('names a missing dependency of the package apart from not installed', async () => {
@@ -341,27 +354,27 @@ describe('Deque failures become coverage gaps with a fix', () => {
       code: 'ERR_MODULE_NOT_FOUND',
     });
     const p = provider({ enabled: true }, { load: async () => Promise.reject(missingDep) });
-    const [gap] = await gapsFor(p);
-    expect(gap?.reason).toContain(
+    const reason = await failureFor(p);
+    expect(reason).toContain(
       '@axe-devtools/playwright 4.11.2 is installed but could not load, because axe-core-devtools, a package it needs, is not installed',
     );
   });
 
   it('says a package that is present but throws on import failed to load', async () => {
     const p = provider({ enabled: true }, { load: async () => Promise.reject(new Error('bad build')) });
-    const [gap] = await gapsFor(p);
-    expect(gap?.reason).toContain('@axe-devtools/playwright 4.11.2 is installed but failed to load: bad build');
-    expect(gap?.reason).toContain('set engines.deque.enabled to false');
+    const reason = await failureFor(p);
+    expect(reason).toContain('@axe-devtools/playwright 4.11.2 is installed but failed to load: bad build');
+    expect(reason).toContain('set engines.deque.enabled to false');
   });
 
   it('refuses a module without the builder export', async () => {
-    const [gap] = await gapsFor(provider({ enabled: true }, { load: async () => ({}) }));
-    expect(gap?.reason).toContain('does not export AxeDevToolsBuilder');
+    const reason = await failureFor(provider({ enabled: true }, { load: async () => ({}) }));
+    expect(reason).toContain('does not export AxeDevToolsBuilder');
   });
 
   it('refuses a page with no Playwright page behind it', async () => {
-    const [gap] = await gapsFor(provider({ enabled: true }, { load: async () => ({}) }), ctxFor(makeFakePage()));
-    expect(gap?.reason).toContain('needs a live browser page');
+    const reason = await failureFor(provider({ enabled: true }, { load: async () => ({}) }), ctxFor(makeFakePage()));
+    expect(reason).toContain('needs a live browser page');
   });
 
   it('discloses an analyze that throws', async () => {
@@ -375,33 +388,57 @@ describe('Deque failures become coverage gaps with a fix', () => {
         }),
       },
     );
-    const [gap] = await gapsFor(p);
-    expect(gap?.reason).toBe('provider deque failed: Deque axe DevTools analysis failed: ruleset wcag99 not found');
+    expect(await failureFor(p)).toBe(
+      `provider deque did not run: Deque axe DevTools analysis failed: ruleset wcag99 not found. ${PREVIEW_SUFFIX}`,
+    );
   });
 
-  it('turns a hung analyze into a named gap within the timeout', async () => {
+  it('turns a hung analyze into a named note within the timeout', async () => {
     const p = provider(
       { enabled: true },
       { load: fakeDequeModule(null, newRecorded(), { analyze: () => new Promise(() => {}) }), timeoutMs: 50 },
     );
     const started = Date.now();
-    const [gap] = await gapsFor(p);
+    const reason = await failureFor(p);
     expect(Date.now() - started).toBeLessThan(2_000);
-    expect(gap).toEqual({
-      ref: 'provider:deque',
-      state: 'not-covered',
-      reason:
-        'provider deque failed: Deque axe DevTools did not finish analysis within 50 ms, so it checked nothing on this screen. Check its license server and the page, or set engines.deque.enabled to false.',
-    });
+    expect(reason).toBe(
+      `provider deque did not run: Deque axe DevTools did not finish analysis within 50 ms, so it checked nothing on this screen. Check its license server and the page, or set engines.deque.enabled to false. ${PREVIEW_SUFFIX}`,
+    );
   });
 
   it('never reads a result that is not axe-shaped as a clean page', async () => {
     for (const results of [null, 'ok', { violations: [] }, { violations: [], incomplete: [], passes: [], inapplicable: 'x' }]) {
       const p = provider({ enabled: true }, { load: fakeDequeModule(results, newRecorded()) });
-      const run = await runProviders([p], ctxFor(livePage()), ['live']);
-      expect(run.drafts).toEqual([]);
-      expect(run.gaps[0]?.reason).toContain('not an axe results object');
+      expect(await failureFor(p)).toContain('not an axe results object');
     }
+  });
+
+  it('makes the same failure a coverage gap when the findings would gate', async () => {
+    // Promotion is not in the config yet. The provider still holds the switch, so turning it on
+    // later flips a failure back to a gap without a rewrite.
+    const p = provider(
+      { enabled: true },
+      {
+        evidenceClass: 'deterministic',
+        load: fakeDequeModule(null, newRecorded(), { analyze: () => new Promise(() => {}) }),
+        timeoutMs: 50,
+      },
+    );
+    const run = await runProviders([p], ctxFor(livePage()), ['live']);
+    expect(run.notes).toEqual([]);
+    expect(run.gaps).toEqual([
+      {
+        ref: 'provider:deque',
+        state: 'not-covered',
+        reason:
+          'provider deque failed: Deque axe DevTools did not finish analysis within 50 ms, so it checked nothing on this screen. Check its license server and the page, or set engines.deque.enabled to false.',
+      },
+    ]);
+  });
+
+  it('maps its drafts with the class it was given', async () => {
+    const p = provider({ enabled: true }, { evidenceClass: 'deterministic', load: fakeDequeModule(await dequeResults(), newRecorded()) });
+    expect(draftsOf(await p.run(ctxFor(livePage()))).map((draft) => draft.evidenceClass)).toEqual(['deterministic']);
   });
 
   it('is a capability-denied gap when usage tracking needs network that was not granted', async () => {
@@ -420,10 +457,10 @@ describe('Deque failures become coverage gaps with a fix', () => {
       let loaded = false;
       const load = fakeDequeModule(await dequeResults(), recorded);
       const p = provider({ enabled: true }, { load: async () => ((loaded = true), load()), env });
-      const [gap] = await gapsFor(p);
-      expect(gap?.reason).toContain('AXE_TRACK_USAGE is not set to false');
-      expect(gap?.reason).toContain("Deque's usage service is on by default");
-      expect(gap?.reason).toContain('set AXE_TRACK_USAGE=false, or set engines.deque.enabled to false');
+      const reason = await failureFor(p);
+      expect(reason).toContain('AXE_TRACK_USAGE is not set to false');
+      expect(reason).toContain("Deque's usage service is on by default");
+      expect(reason).toContain('set AXE_TRACK_USAGE=false, or set engines.deque.enabled to false');
       expect(loaded).toBe(false);
       expect(recorded.constructed).toEqual([]);
     }
@@ -440,8 +477,8 @@ describe('Deque failures become coverage gaps with a fix', () => {
   it('refuses a docs screen when the builder cannot limit itself to the docs tags', async () => {
     const recorded = newRecorded();
     const p = provider({ enabled: true }, { load: fakeDequeModule(await dequeResults(), recorded, { tags: false }) });
-    const [gap] = await gapsFor(p, ctxFor(livePage(), { profile: 'docs' }));
-    expect(gap?.reason).toContain('has no withTags');
+    const reason = await failureFor(p, ctxFor(livePage(), { profile: 'docs' }));
+    expect(reason).toContain('has no withTags');
     expect(recorded.calls).not.toContain('analyze');
   });
 });
@@ -453,10 +490,10 @@ describe('Deque refuses to run while a ruleset switch outside the config could r
       { enabled: true },
       { load: fakeDequeModule(await dequeResults(), recorded), env: { ...TRACKING_OFF, AXE_RULESET_PATH: '/tmp/empty.json' } },
     );
-    const [gap] = (await runProviders([p], ctxFor(livePage()), ['live'])).gaps;
-    expect(gap?.reason).toContain('AXE_RULESET_PATH is set');
-    expect(gap?.reason).toContain('unset AXE_RULESET_PATH');
-    expect(gap?.reason).not.toContain('/tmp/empty.json');
+    const reason = await failureFor(p);
+    expect(reason).toContain('AXE_RULESET_PATH is set');
+    expect(reason).toContain('unset AXE_RULESET_PATH');
+    expect(reason).not.toContain('/tmp/empty.json');
     expect(recorded.calls).toEqual([]);
   });
 
@@ -466,9 +503,9 @@ describe('Deque refuses to run while a ruleset switch outside the config could r
       { enabled: true },
       { load: fakeDequeModule(await dequeResults(), recorded), fileExists: async (path) => path.endsWith('axe-ruleset.json') },
     );
-    const [gap] = (await runProviders([p], ctxFor(livePage()), ['live'])).gaps;
-    expect(gap?.reason).toContain('axe-ruleset.json is in the project');
-    expect(gap?.reason).toContain('remove it, or add it to guardedPaths so changing it needs owner approval');
+    const reason = await failureFor(p);
+    expect(reason).toContain('axe-ruleset.json is in the project');
+    expect(reason).toContain('remove it, or add it to guardedPaths so changing it needs owner approval');
     expect(recorded.calls).toEqual([]);
   });
 

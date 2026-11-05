@@ -12,7 +12,8 @@
  * Deque findings are preview in this release: shown, never gating. Its SDK runs its scripts in the
  * page's own world, where page script can reach them, and no live run on a licensed SDK has yet
  * shown which of its rules repeat. Tested against the vendor's documented result format. Not yet
- * run on a licensed SDK. This unit never mints a verdict.
+ * run on a licensed SDK. While its findings are preview, a Deque that could not run is a provider
+ * note, never a gap. This unit never mints a verdict.
  */
 import type {
   Capability,
@@ -28,6 +29,8 @@ import { DOCS_AXE_TAGS, mapAxeRunResult, type AxeRunResult } from '../axe/index.
 import { normalizeAxeResults } from '../axe/raw.js';
 import {
   assertNoOutsideSwitch,
+  classGates,
+  couldNotRunOutput,
   defaultFileExists,
   EngineTimeoutError,
   errorMessage,
@@ -87,6 +90,10 @@ export interface DequeProviderOptions {
   fileExists?: (path: string) => Promise<boolean>;
   // Budget for each vendor call. Default: ENGINE_CALL_TIMEOUT_MS.
   timeoutMs?: number;
+  // The class Deque findings carry. Default: DEQUE_EVIDENCE_CLASS, which is preview. The config
+  // cannot set it; it is the switch a later promotion flips. While the class does not gate, a Deque
+  // that could not run is a note; when it gates, the same failure is a coverage gap.
+  evidenceClass?: EvidenceClass;
 }
 
 export function dequeCapabilities(config: DequeEngineConfig): Capability[] {
@@ -149,16 +156,11 @@ export function mapDequeResults(
   evidenceClass: EvidenceClass = DEQUE_EVIDENCE_CLASS,
 ): ProviderOutput & { gaps: CoverageGap[]; notes: ProviderNote[] } {
   if (BUCKETS.every((bucket) => rawBucket(raw, bucket).length === 0)) {
-    return {
-      drafts: [],
-      applicability: [],
-      gaps: [
-        dequeGap(
-          'Deque ran no rules on this screen, so it checked nothing. Check engines.deque.rulesetId, or set engines.deque.enabled to false.',
-        ),
-      ],
-      notes: [],
-    };
+    const reason =
+      'Deque ran no rules on this screen, so it checked nothing. Check engines.deque.rulesetId, or set engines.deque.enabled to false.';
+    return classGates(evidenceClass)
+      ? { drafts: [], applicability: [], gaps: [dequeGap(reason)], notes: [] }
+      : { drafts: [], applicability: [], gaps: [], notes: [{ ref: `provider:${DEQUE_PROVIDER_ID}`, reason }] };
   }
 
   const ownRules = withoutOpenSourceAxeRules(normalizeAxeResults(raw), axeRuleIds);
@@ -196,7 +198,7 @@ export function mapDequeResults(
     evidenceClass,
   });
   const ref = `provider:${DEQUE_PROVIDER_ID}`;
-  return evidenceClass === 'deterministic'
+  return classGates(evidenceClass)
     ? { ...mapped, gaps: lost.map((reason) => dequeGap(reason)), notes: [] }
     : { ...mapped, gaps: [], notes: lost.map((reason) => ({ ref, reason })) };
 }
@@ -217,106 +219,118 @@ export function makeDequeProvider(config: DequeEngineConfig, options: DequeProvi
   const fileExists = options.fileExists ?? defaultFileExists;
   const readAxeRuleIds = options.axeRuleIds ?? openSourceAxeRuleIds;
   const trackingOff = config.trackUsage !== true;
+  const evidenceClass = options.evidenceClass ?? DEQUE_EVIDENCE_CLASS;
   let axeRuleIds: Promise<ReadonlySet<string>> | null = null;
+
+  async function analyze(ctx: ProviderContext): Promise<ProviderOutput> {
+    const pw = playwrightPageOf(ctx.page);
+    if (pw === null) {
+      throw notLivePageError(DEQUE_LABEL);
+    }
+
+    // Deque's usage service is on by default. The package loads and the builder is made before
+    // enableTracking(false) can be called, and nothing proves those two steps send no usage data.
+    // The variable is the one switch that covers them, so unless the operator opted in it must be
+    // exactly false before anything from Deque runs. Unset is not enough.
+    if (trackingOff && env[DEQUE_TRACK_USAGE_ENV] !== 'false') {
+      throw new Error(
+        `${DEQUE_TRACK_USAGE_ENV} is not set to false, so Deque did not run. Deque's usage service is on by default, and only this variable turns it off while the package loads and the builder is made. To fix it, set ${DEQUE_TRACK_USAGE_ENV}=false, or set engines.deque.enabled to false.`,
+      );
+    }
+
+    // Checked before the package loads, so nothing from Deque runs while a switch outside the
+    // trusted config could replace its rules with an empty set.
+    await assertNoOutsideSwitch(DEQUE_LABEL, {
+      env,
+      variables: [
+        {
+          name: DEQUE_RULESET_PATH_ENV,
+          safe: null,
+          why: 'can replace every Deque rule with a ruleset outside the trusted config, so it could report nothing',
+        },
+      ],
+      files: DEQUE_RULESET_FILES,
+      why: 'can replace every Deque rule with a ruleset outside the trusted config, so it could report nothing',
+      guardedPaths: ctx.config.guardedPaths,
+      cwd: options.cwd ?? process.cwd(),
+      fileExists,
+    });
+
+    const module = await loadEngineModule(DEQUE_LABEL, {
+      load,
+      probe,
+      redact: (text) => text,
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    });
+    const Builder = pickExport(module, 'AxeDevToolsBuilder');
+    if (typeof Builder !== 'function') {
+      throw missingExportError(DEQUE_LABEL, 'AxeDevToolsBuilder');
+    }
+
+    axeRuleIds ??= readAxeRuleIds();
+    const knownAxeRules = await axeRuleIds;
+
+    let builder: DequeBuilder;
+    try {
+      builder = new (Builder as DequeBuilderClass)({
+        page: pw,
+        ...(config.rulesetId === undefined ? {} : { rulesetId: config.rulesetId }),
+      });
+    } catch (error) {
+      throw new Error(`${DEQUE_LABEL.vendor} analysis failed: ${errorMessage(error)}`);
+    }
+    const docs = (ctx.profile ?? 'app') === 'docs';
+    if (docs && typeof builder.withTags !== 'function') {
+      // Docs screens are held to the WCAG 2.2 AA tag set, as axe is. Running Deque's whole ruleset
+      // there would show findings against criteria the docs surface does not claim.
+      throw new Error(
+        `This version of ${DEQUE_PACKAGE} has no withTags, so usabl cannot limit it to the docs WCAG tags on a docs screen. Set engines.deque.enabled to false to scan docs without it.`,
+      );
+    }
+
+    let raw: unknown;
+    try {
+      // The variable already turned tracking off. The builder call is the documented second
+      // switch, for an SDK that reads its settings at analyze time.
+      if (trackingOff && typeof builder.enableTracking === 'function') {
+        builder.enableTracking(false);
+      }
+      if (docs && typeof builder.withTags === 'function') {
+        // The same tag set the axe provider passes on a docs screen. The builder is chainable in
+        // Deque's reference; a return without analyze() means the call changed the builder in place.
+        const tagged: unknown = builder.withTags([...DOCS_AXE_TAGS]);
+        if (tagged !== null && typeof tagged === 'object' && typeof Reflect.get(tagged, 'analyze') === 'function') {
+          builder = tagged as DequeBuilder;
+        }
+      }
+      raw = await withEngineTimeout(DEQUE_LABEL, 'analysis', builder.analyze(), options.timeoutMs);
+    } catch (error) {
+      if (error instanceof EngineTimeoutError) {
+        throw error;
+      }
+      throw new Error(`${DEQUE_LABEL.vendor} analysis failed: ${errorMessage(error)}`);
+    }
+    if (!isAxeResultsShape(raw)) {
+      throw new Error(
+        `${DEQUE_LABEL.vendor} returned something that is not an axe results object, so usabl cannot say what it checked.`,
+      );
+    }
+    return mapDequeResults(raw, ctx.screen.id, knownAxeRules, evidenceClass);
+  }
 
   return {
     id: DEQUE_PROVIDER_ID,
     layer: DEQUE_LAYER,
     capabilities: dequeCapabilities(config),
     async run(ctx: ProviderContext): Promise<ProviderOutput> {
-      const pw = playwrightPageOf(ctx.page);
-      if (pw === null) {
-        throw notLivePageError(DEQUE_LABEL);
-      }
-
-      // Deque's usage service is on by default. The package loads and the builder is made before
-      // enableTracking(false) can be called, and nothing proves those two steps send no usage data.
-      // The variable is the one switch that covers them, so unless the operator opted in it must be
-      // exactly false before anything from Deque runs. Unset is not enough.
-      if (trackingOff && env[DEQUE_TRACK_USAGE_ENV] !== 'false') {
-        throw new Error(
-          `${DEQUE_TRACK_USAGE_ENV} is not set to false, so Deque did not run. Deque's usage service is on by default, and only this variable turns it off while the package loads and the builder is made. To fix it, set ${DEQUE_TRACK_USAGE_ENV}=false, or set engines.deque.enabled to false.`,
-        );
-      }
-
-      // Checked before the package loads, so nothing from Deque runs while a switch outside the
-      // trusted config could replace its rules with an empty set.
-      await assertNoOutsideSwitch(DEQUE_LABEL, {
-        env,
-        variables: [
-          {
-            name: DEQUE_RULESET_PATH_ENV,
-            safe: null,
-            why: 'can replace every Deque rule with a ruleset outside the trusted config, so it could report nothing',
-          },
-        ],
-        files: DEQUE_RULESET_FILES,
-        why: 'can replace every Deque rule with a ruleset outside the trusted config, so it could report nothing',
-        guardedPaths: ctx.config.guardedPaths,
-        cwd: options.cwd ?? process.cwd(),
-        fileExists,
-      });
-
-      const module = await loadEngineModule(DEQUE_LABEL, {
-        load,
-        probe,
-        redact: (text) => text,
-        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-      });
-      const Builder = pickExport(module, 'AxeDevToolsBuilder');
-      if (typeof Builder !== 'function') {
-        throw missingExportError(DEQUE_LABEL, 'AxeDevToolsBuilder');
-      }
-
-      axeRuleIds ??= readAxeRuleIds();
-      const knownAxeRules = await axeRuleIds;
-
-      let builder: DequeBuilder;
       try {
-        builder = new (Builder as DequeBuilderClass)({
-          page: pw,
-          ...(config.rulesetId === undefined ? {} : { rulesetId: config.rulesetId }),
-        });
+        return await analyze(ctx);
       } catch (error) {
-        throw new Error(`${DEQUE_LABEL.vendor} analysis failed: ${errorMessage(error)}`);
-      }
-      const docs = (ctx.profile ?? 'app') === 'docs';
-      if (docs && typeof builder.withTags !== 'function') {
-        // Docs screens are held to the WCAG 2.2 AA tag set, as axe is. Running Deque's whole ruleset
-        // there would show findings against criteria the docs surface does not claim.
-        throw new Error(
-          `This version of ${DEQUE_PACKAGE} has no withTags, so usabl cannot limit it to the docs WCAG tags on a docs screen. Set engines.deque.enabled to false to scan docs without it.`,
-        );
-      }
-
-      let raw: unknown;
-      try {
-        // The variable already turned tracking off. The builder call is the documented second
-        // switch, for an SDK that reads its settings at analyze time.
-        if (trackingOff && typeof builder.enableTracking === 'function') {
-          builder.enableTracking(false);
-        }
-        if (docs && typeof builder.withTags === 'function') {
-          // The same tag set the axe provider passes on a docs screen. The builder is chainable in
-          // Deque's reference; a return without analyze() means the call changed the builder in place.
-          const tagged: unknown = builder.withTags([...DOCS_AXE_TAGS]);
-          if (tagged !== null && typeof tagged === 'object' && typeof Reflect.get(tagged, 'analyze') === 'function') {
-            builder = tagged as DequeBuilder;
-          }
-        }
-        raw = await withEngineTimeout(DEQUE_LABEL, 'analysis', builder.analyze(), options.timeoutMs);
-      } catch (error) {
-        if (error instanceof EngineTimeoutError) {
+        if (classGates(evidenceClass)) {
           throw error;
         }
-        throw new Error(`${DEQUE_LABEL.vendor} analysis failed: ${errorMessage(error)}`);
+        return couldNotRunOutput(DEQUE_PROVIDER_ID, errorMessage(error));
       }
-      if (!isAxeResultsShape(raw)) {
-        throw new Error(
-          `${DEQUE_LABEL.vendor} returned something that is not an axe results object, so usabl cannot say what it checked.`,
-        );
-      }
-      return mapDequeResults(raw, ctx.screen.id, knownAxeRules);
     },
   };
 }

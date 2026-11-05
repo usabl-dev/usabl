@@ -51,7 +51,8 @@ export interface EngineDoctorDeps {
 
 const DEQUE_LABEL = 'deque (axe DevTools for Web, @axe-devtools/playwright)';
 const EVINCED_LABEL = 'evinced (Evinced Automation for Web, @evinced/js-playwright-sdk)';
-const UNTIL_THEN = 'Until then every scan reports a coverage gap for this engine.';
+// While engine findings are preview, an engine that cannot run is a note on each scan, not a gap.
+const UNTIL_THEN = 'Until then every scan notes that this engine did not run.';
 
 function isFsReadError(error: unknown): boolean {
   return error instanceof Error && typeof (error as { code?: unknown }).code === 'string';

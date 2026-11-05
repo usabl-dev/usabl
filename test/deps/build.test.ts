@@ -565,14 +565,10 @@ describe("buildDeps engines", () => {
     const deps = await buildDeps(testConfig({ engines: ENGINES_ON }), { browserFor, env: {} });
     const scan = await deps.checkRunner.scan(SCREEN);
     // Nothing is denied. Each engine then fails on the fake page, which has no Playwright page
-    // behind it, and that failure is a disclosed gap rather than a silent pass.
+    // behind it. Its findings are preview, so the failure is a disclosed note, not a gap.
     expect(scan.gaps.filter((gap) => gap.state === "capability-denied")).toEqual([]);
-    expect(scan.gaps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ ref: "provider:deque", state: "not-covered" }),
-        expect.objectContaining({ ref: "provider:evinced", state: "not-covered" }),
-      ]),
-    );
+    expect(scan.gaps.filter((gap) => gap.ref === "provider:deque" || gap.ref === "provider:evinced")).toEqual([]);
+    expect((scan.notes ?? []).map((note) => note.ref)).toEqual(["provider:deque", "provider:evinced"]);
   });
 
   it("reads engine switches from the environment it was given, never from process.env", async () => {
@@ -592,7 +588,7 @@ describe("buildDeps engines", () => {
         env: {},
       });
       const scan = await deps.checkRunner.scan(SCREEN);
-      const reason = scan.gaps.find((gap) => gap.ref === "provider:evinced")?.reason ?? "";
+      const reason = (scan.notes ?? []).find((note) => note.ref === "provider:evinced")?.reason ?? "";
       // The given environment has no switch, so the run gets as far as the absent package.
       expect(reason).toContain("is not installed");
       expect(reason).not.toContain("EV_SWITCH_ON");
