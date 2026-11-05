@@ -439,7 +439,7 @@ describe('makeKeyboardWalkProvider', () => {
     expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
     expect(drafts[0]).toMatchObject({ evidenceClass: 'deterministic', confidence: 'unverified', elementPath: '' });
     expect(drafts[0]?.why).toBe(
-      'After 2 tab stop(s), focus went back to a control it had already reached, inside an open modal dialog that holds every control on the way. The dialog keeps focus inside itself as it should, so the keyboard walk stayed inside it and did not cover the rest of the page.',
+      'After 2 tab stop(s), focus went back to a control it had already reached, and every control in that cycle is inside one open modal dialog. Focus stayed inside the dialog, and the rest of the page was not walked.',
     );
     expect(drafts[0]?.fix).toContain('dialog');
   });
@@ -454,6 +454,20 @@ describe('makeKeyboardWalkProvider', () => {
 
     expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
     expect(drafts[0]?.why).toContain('modal dialog');
+  });
+
+  // Stops walked before the cycle began sit outside the dialog. Only the cycle is judged, so this
+  // is still a cycle inside one modal dialog. A rule that judged every walked stop would call it a
+  // keyboard trap.
+  it('judges only the stops of the cycle, not the stops walked before it', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage(namedButtonPage(['#before', '#one', '#two', '#one'], [[], ['#d'], ['#d'], ['#d']]));
+
+    const drafts = draftsOf(await provider.run(makeContext(page)));
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
+    expect(drafts[0]?.why).toContain('After 3 tab stop(s)');
+    expect(drafts[0]?.why).toContain('inside one open modal dialog');
   });
 
   it('reports a trap when the modal dialog does not hold every stop of the cycle', async () => {

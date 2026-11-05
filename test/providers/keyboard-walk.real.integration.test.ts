@@ -380,8 +380,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
         const drafts = await walk(opened);
         expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
         expect(drafts[0]?.confidence).toBe('unverified');
-        expect(drafts[0]?.why).toContain('inside an open modal dialog');
-        expect(drafts[0]?.why).toContain('did not cover the rest of the page');
+        expect(drafts[0]?.why).toContain('inside one open modal dialog');
+        expect(drafts[0]?.why).toContain('the rest of the page was not walked');
       } finally {
         await opened.close();
       }

@@ -130,8 +130,9 @@ interface WalkedStop {
   modals: readonly string[];
 }
 
-// Whether one open modal dialog holds every stop of a cycle. Such a dialog keeps focus inside
-// itself on purpose, so the cycle is the dialog doing its job, not a keyboard trap.
+// Whether one open modal dialog holds every stop of a cycle. A modal dialog may keep focus inside
+// itself, so such a cycle is read as expected, not as a keyboard trap. Only the stops of the cycle
+// are judged, never the stops walked before it.
 function cycleInsideOneModal(cycle: readonly WalkedStop[]): boolean {
   const [first, ...rest] = cycle;
   if (first === undefined) {
@@ -161,7 +162,7 @@ const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number) =>
   'focus-trap': (stops) =>
     `After ${stops} tab stop(s), focus went back to a control the keyboard walk had already reached, without reaching the end of the page, so the controls after the trap were never walked.`,
   'modal-dialog': (stops) =>
-    `After ${stops} tab stop(s), focus went back to a control it had already reached, inside an open modal dialog that holds every control on the way. The dialog keeps focus inside itself as it should, so the keyboard walk stayed inside it and did not cover the rest of the page.`,
+    `After ${stops} tab stop(s), focus went back to a control it had already reached, and every control in that cycle is inside one open modal dialog. Focus stayed inside the dialog, and the rest of the page was not walked.`,
 };
 
 const BUDGET_FIX = 'Raise the keyboard walk budget for this screen, or split the screen so its focus order fits one walk.';
@@ -247,11 +248,12 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
           break;
         }
         const path = tabStopPath(stops[0]?.elementPath ?? '', i);
-        // A stop seen before, with no pass through the body in between, is a cycle. The body check
-        // below ends the walk first on a page whose focus order runs out, so a cycle here means Tab
-        // can no longer reach the rest of the page. Inside one open modal dialog that is the dialog
-        // working. Anywhere else it is a keyboard trap. Either way the rest of the page was never
-        // walked, so the walk ends with a gap, never as complete.
+        // A stop seen before is a cycle. The body check runs after this one in the same iteration,
+        // and an iteration that finds focus on the body ends the walk, so the body is never in
+        // seenPaths and a cycle here never passed through it: Tab can no longer reach the rest of
+        // the page. Inside one open modal dialog that is read as expected. Anywhere else it is a
+        // keyboard trap. Either way the rest of the page was never walked, so the walk ends with a
+        // gap, never as complete.
         if (seenPaths.has(path)) {
           const cycle = walked.slice(walked.findIndex((stop) => stop.path === path));
           if (cycleInsideOneModal(cycle)) {

@@ -894,10 +894,12 @@ browser moves focus there after the last control on the page. Tab that brings fo
 a stop already reached, without passing through the body, is a cycle, and a cycle means Tab
 never reached the rest of the page. So a cycle never ends the walk as complete. It ends with
 `keyboard-walk-truncated` as `unverified`, and the cycle is the stops from the first visit of
-the repeated stop to the last stop before the repeat. A cycle that one open modal dialog holds
-in full is that dialog doing its job: a modal dialog keeps focus inside itself on purpose. The
-gap then says the walk stayed inside the modal dialog and did not cover the rest of the page,
-and nothing else is reported. Every other cycle is a keyboard trap (WCAG 2.1.2, No Keyboard
+the repeated stop to the last stop before the repeat. Only those stops are judged, never the
+stops walked before the cycle began. A cycle that one open modal dialog holds in full is read as
+expected, because a modal dialog may keep focus inside itself. The gap then says focus stayed
+inside an open modal dialog and the rest of the page was not walked, and nothing else is
+reported. The gap makes no claim that the dialog is right to keep focus: its role and
+`aria-modal` come from the page. Every other cycle is a keyboard trap (WCAG 2.1.2, No Keyboard
 Trap), and the walk also emits one deterministic `keyboard-walk-trap` draft: severity
 `critical`, confidence `fail`, layer `walk`, the path of the first stop of the cycle as its
 element path, and `evidence.extra.cycle`, the path of each stop of the cycle in Tab order. The
@@ -910,8 +912,9 @@ climbs to its host, and a same-origin frame climbs to its frame element. A `dial
 counts only in the browser's own `:modal` state, which only `showModal()` gives it, so a
 dialog opened with `show()` or the `open` attribute is not modal. An element whose first
 recognized role is `dialog` or `alertdialog` with `aria-modal` true counts while it is
-connected, rendered, not hidden by visibility, and not under `aria-hidden`, `inert`, or
-`hidden`. A cycle counts as inside one only when the same dialog holds every stop of it, so
+connected, rendered, not hidden by visibility, and not under `aria-hidden`, `inert`, `hidden`,
+or a closed `dialog`. That test is the same one the announcement capture uses, so the walk and
+the capture read a modal the same way. A cycle counts as inside one only when the same dialog holds every stop of it, so
 a cycle that passes through two dialogs, or leaves the dialog, is a trap. A dialog opened with
 `showModal()` and no script that keeps focus in it lets Tab leave the document after its last
 control, so focus reaches the body and the walk ends complete. The content behind such a

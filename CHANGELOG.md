@@ -131,8 +131,8 @@
   dialog it is also a `keyboard-walk-trap` barrier (WCAG 2.1.2, No Keyboard Trap), severity
   critical, with the path of each stop of the cycle as evidence. A cycle inside one open modal
   dialog (a `dialog` opened with `showModal()`, or `role="dialog"` or `role="alertdialog"` with
-  `aria-modal="true"`) is what the dialog should do, so it gets the gap alone, which says the
-  walk stayed inside the dialog.
+  `aria-modal="true"`) gets the gap alone, which says focus stayed inside the dialog and the
+  rest of the page was not walked.
 
 - The PatternFly rulepack no longer reports PatternFly rules on a page with no PatternFly
   markup. Some of its selectors have generic ARIA arms, so on a page built with another design
