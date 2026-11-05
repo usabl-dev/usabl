@@ -339,21 +339,23 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('RHDS rulepack and design
 
     expect(result.drafts).toEqual([]);
     expect(result.gaps).toEqual([]);
+    expect(result.notes).toEqual([]);
     // The runner moves the PatternFly pack, which clicks, after the read-only RHDS pack.
     expect(result.applicability).toEqual([...inapplicable('neither', 'rhds', RHDS_RULES), ...inapplicable('neither', 'pf', PF_RULES)]);
   });
 
-  it('discloses an RHDS element inside an open shadow root or a same-origin frame as a gap, not a clean check', async () => {
+  it('discloses an RHDS element inside an open shadow root or a same-origin frame in a note, never a gap', async () => {
     for (const path of ['/in-shadow', '/in-frame']) {
       const result = await scan(path, false);
       // The rules read the top document, so the pack does not apply there and says what it skipped.
       expect(rulesOf(result.drafts, 'rhds')).toEqual([]);
       expect(packEntries(result, 'rhds')).toEqual(inapplicable(path.slice(1), 'rhds', RHDS_RULES));
-      expect(result.gaps).toEqual([
+      // The note is disclosure only. No gap means the markup elsewhere cannot block the screen.
+      expect(result.gaps).toEqual([]);
+      expect(result.notes).toEqual([
         {
           ref: 'provider:rhds-rulepack/out-of-document',
-          state: 'not-covered',
-          reason: '1 RHDS element(s) sit inside frames or shadow roots, which the RHDS rulepack does not read, so they were not checked.',
+          reason: '1 RHDS element(s) sit inside frames or shadow roots, which the RHDS rulepack does not read, so the RHDS rules did not check them.',
         },
       ]);
     }
@@ -364,11 +366,13 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('RHDS rulepack and design
 
     expect(rulesOf(result.drafts, 'pf')).toEqual([]);
     expect(packEntries(result, 'pf')).toEqual(inapplicable('pf-in-frame', 'pf', PF_RULES));
-    expect(result.gaps).toEqual([
+    expect(result.gaps).toEqual([]);
+    expect(result.notes).toEqual([
       {
         ref: 'provider:pf-rulepack/out-of-document',
-        state: 'not-covered',
-        reason: expect.stringMatching(/^[1-9][0-9]* PatternFly element\(s\) sit inside frames or shadow roots, which the PatternFly rulepack does not read/),
+        reason: expect.stringMatching(
+          /^[1-9][0-9]* PatternFly element\(s\) sit inside frames or shadow roots, which the PatternFly rulepack does not read, so the PatternFly rules did not check them\.$/,
+        ),
       },
     ]);
   });
