@@ -6,12 +6,16 @@ import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' };
+const BODY_PATH = 'html > body:nth-child(2)';
 
 interface ScriptedPageSpec {
   activePaths: string[];
   activeNodes: Array<AxNode | null>;
   announcements: string[][];
   unreadable?: Array<FocusUnreadable | null>;
+  // The stop at which focus is on the document body. A real browser moves focus there after the
+  // last control on the page, and that ends the walk.
+  bodyAt?: number;
   onTab?: () => void;
 }
 
@@ -31,6 +35,11 @@ function unnamedLinkPage(paths: string[]): ScriptedPageSpec {
     activeNodes: paths.map(() => ({ name: null, role: 'link', states: {} })),
     announcements: paths.map(() => []),
   };
+}
+
+// The same, with focus on the document body after the last path, as at the end of a real page.
+function unnamedLinksThenBody(paths: string[]): ScriptedPageSpec {
+  return { ...unnamedLinkPage([...paths, BODY_PATH]), bodyAt: paths.length };
 }
 
 function rules(drafts: Array<{ rule: string }>): string[] {
@@ -68,6 +77,7 @@ async function makeScriptedPage(spec: ScriptedPageSpec): Promise<Page> {
     activeNode: async () => readAt(spec.activeNodes, currentIndex(cursor), null),
     drainAnnouncements: async () => readAt(spec.announcements, currentIndex(cursor), []),
     activeFocusUnreadable: async () => readAt(spec.unreadable ?? [], currentIndex(cursor), null),
+    activeElementIs: async (selector: string) => selector === 'body' && spec.bodyAt !== undefined && cursor === spec.bodyAt,
   });
 }
 
@@ -151,13 +161,14 @@ describe('keyboard walk StepRunner', () => {
 
 describe('makeKeyboardWalkProvider', () => {
   it('emits unverified draft when activeNode is null at a tab stop', async () => {
-    // The repeated path ends the walk on a completed focus cycle, so this case reads only the
-    // detection behavior and never the separate disclosure a cut-short walk owes the operator.
+    // Focus reaches the body after the one stop, so the walk ends complete and this case reads
+    // only the detection behavior, never the separate disclosure a cut-short walk owes the operator.
     const provider = makeKeyboardWalkProvider({ tabCap: 5 });
     const page = await makeScriptedPage({
-      activePaths: ['#mystery-focus', '#mystery-focus'],
+      activePaths: ['#mystery-focus', BODY_PATH],
       activeNodes: [null, null],
       announcements: [[], []],
+      bodyAt: 1,
     });
 
     const drafts = draftsOf(await provider.run(makeContext(page)));
@@ -199,12 +210,10 @@ describe('makeKeyboardWalkProvider', () => {
   it('emits fail draft for unnamed interactive role reached by Tab', async () => {
     const provider = makeKeyboardWalkProvider({ tabCap: 5 });
     const page = await makeScriptedPage({
-      activePaths: ['#empty-link', '#empty-link'],
-      activeNodes: [
-        { name: null, role: 'link', states: {} },
-        { name: null, role: 'link', states: {} },
-      ],
+      activePaths: ['#empty-link', BODY_PATH],
+      activeNodes: [{ name: null, role: 'link', states: {} }, null],
       announcements: [[], []],
+      bodyAt: 1,
     });
 
     const drafts = draftsOf(await provider.run(makeContext(page)));
@@ -258,10 +267,10 @@ describe('makeKeyboardWalkProvider', () => {
     // A real run opens the page, collects a transcript, and runs other providers before this walk,
     // and it does that again for every screen. All of that time is spent on one provider instance.
     clock.advance(30_000);
-    const first = draftsOf(await provider.run(makeContext(await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#b'])))));
+    const first = draftsOf(await provider.run(makeContext(await makeScriptedPage(unnamedLinksThenBody(['#a', '#b'])))));
 
     clock.advance(30_000);
-    const second = draftsOf(await provider.run(makeContext(await makeScriptedPage(unnamedLinkPage(['#a', '#b', '#b'])))));
+    const second = draftsOf(await provider.run(makeContext(await makeScriptedPage(unnamedLinksThenBody(['#a', '#b'])))));
 
     expect(rules(first)).toEqual([
       'keyboard-walk-unnamed-interactive',
@@ -312,11 +321,11 @@ describe('makeKeyboardWalkProvider', () => {
     expect(truncated[0]?.why).toMatch(/\d+ tab stop/);
   });
 
-  it('emits no truncation draft when the focus cycle completes inside the budget', async () => {
+  it('emits no truncation draft when the walk reaches the end of the page inside the budget', async () => {
     const clock = makeClock();
     const provider = makeKeyboardWalkProvider({ tabCap: 10, wallClockMs: 1_000, now: clock.now });
     const page = await makeScriptedPage({
-      ...unnamedLinkPage(['#only-link', '#only-link']),
+      ...unnamedLinksThenBody(['#only-link']),
       onTab: () => clock.advance(10),
     });
 
