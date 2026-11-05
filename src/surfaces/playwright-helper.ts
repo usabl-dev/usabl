@@ -280,11 +280,13 @@ export function requirementGapsForPage(
  *
  * This is the seam a Playwright suite uses: navigate and interact with the page in your test, then
  * hand the page to checkPage. It adopts the page (attaching a CDP session, the path helper, and the
- * live-region capture, without ever closing the page or its context), runs the same provider list
- * as `buildDeps` (axe, PatternFly rulepack, docs rulepack, keyboard walk, then one provider per
+ * live-region capture, without ever closing the page or its context), runs the core provider list
+ * (axe, PatternFly rulepack, RHDS rulepack, docs rulepack, keyboard walk, then one provider per
  * design requirement in the project), and summarizes the drafts with the same precedence as a full
- * usabl run. A design requirement this page cannot be matched to is a gap, so the helper cannot
- * return verified for a requirement it never checked.
+ * usabl run. buildDeps runs the same core list and then adds the optional commercial engines that
+ * the trusted config turns on. checkPage does not run those engines. A design requirement this page
+ * cannot be matched to is a gap, so the helper cannot return verified for a requirement it never
+ * checked.
  *
  * Three things a caller should know:
  * - It reads usabl.config.json and the design requirements from the working tree at `projectRoot`,
