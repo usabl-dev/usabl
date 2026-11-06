@@ -481,10 +481,11 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the announcement capture
 
   // The false green end to end: a Save button in a modal dialog writes "Saved" into a polite region
   // inside the dialog and closes it. No screen reader speaks the text, and a flow requirement that
-  // expects it passed.
+  // expects it passed. A close in a later task is not tested here: the flow step does not wait for a
+  // later task, so the order of the close and the drain is not fixed, and the capture-level test
+  // above covers that case by awaiting the close before it drains.
   for (const [when, close] of [
     ['in the same task', 'dialog.close();'],
-    ['one task later', 'setTimeout(() => dialog.close(), 0);'],
     ['after an awaited promise', 'await Promise.resolve(); dialog.close();'],
   ] as const) {
   it(`does not pass a flow requirement on a region inside a dialog the step closed ${when}`, async () => {
