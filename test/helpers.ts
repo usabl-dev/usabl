@@ -60,5 +60,6 @@ export function testConfig(overrides: Partial<UsablConfig> = {}): UsablConfig {
     ...(overrides.promotedObligations !== undefined
       ? { promotedObligations: overrides.promotedObligations }
       : {}),
+    ...(overrides.engines !== undefined ? { engines: overrides.engines } : {}),
   };
 }

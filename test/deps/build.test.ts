@@ -13,6 +13,7 @@ import {
   normalizeSeparators,
 } from "../../src/deps/build.js";
 import { makeFakePage } from "../../src/deps/fakes.js";
+import { registerPlaywrightPage } from "../../src/providers/engines/shared.js";
 import type { BrowserDriver } from "../../src/contracts/index.js";
 import { testConfig } from "../helpers.js";
 
@@ -507,5 +508,138 @@ describe("collectEngineFiles", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("buildDeps engines", () => {
+  const ENGINES_ON = {
+    deque: { enabled: true },
+    evinced: { enabled: true, mode: "online" as const },
+  };
+  const ENGINES_OFF = {
+    deque: { enabled: false, trackUsage: true },
+    evinced: { enabled: false, mode: "online" as const },
+  };
+  const browserFor = (): BrowserDriver => ({
+    open: async (url: string) => makeFakePage({ currentUrl: async () => url }),
+    close: async () => {},
+  });
+  const SCREEN = { id: "clusters", url: "http://127.0.0.1:5173/clusters" };
+
+  // Which providers ran, read from the gaps a static-only scan raises: every live provider is
+  // denied, and each denial names its provider.
+  async function deniedProviders(engines?: typeof ENGINES_ON | typeof ENGINES_OFF): Promise<string[]> {
+    const deps = await buildDeps(testConfig(engines === undefined ? {} : { engines }), {
+      browserFor,
+      allowedCapabilities: [],
+      env: {},
+    });
+    const scan = await deps.checkRunner.scan(SCREEN);
+    return scan.gaps.filter((gap) => gap.state === "capability-denied").map((gap) => gap.ref);
+  }
+
+  it("registers no engine provider when engines are absent or turned off", async () => {
+    const today = await deniedProviders();
+    expect(today).not.toContain("provider:deque");
+    expect(today).not.toContain("provider:evinced");
+    expect(await deniedProviders(ENGINES_OFF)).toEqual(today);
+  });
+
+  it("registers turned-on engines, and a static-only run grants them nothing", async () => {
+    const deps = await buildDeps(testConfig({ engines: ENGINES_ON }), {
+      browserFor,
+      allowedCapabilities: [],
+      env: {},
+    });
+    const scan = await deps.checkRunner.scan(SCREEN);
+    const denied = scan.gaps.filter((gap) => gap.state === "capability-denied");
+    expect(denied.map((gap) => gap.reason)).toEqual(
+      expect.arrayContaining([
+        "provider deque denied capability: live",
+        "provider evinced denied capability: live, secrets, network",
+      ]),
+    );
+  });
+
+  it("grants a live run what the turned-on engines declare", async () => {
+    const deps = await buildDeps(testConfig({ engines: ENGINES_ON }), { browserFor, env: {} });
+    const scan = await deps.checkRunner.scan(SCREEN);
+    // Nothing is denied. Each engine then fails on the fake page, which has no Playwright page
+    // behind it. Its findings are preview, so the failure is a disclosed note, not a gap.
+    expect(scan.gaps.filter((gap) => gap.state === "capability-denied")).toEqual([]);
+    expect(scan.gaps.filter((gap) => gap.ref === "provider:deque" || gap.ref === "provider:evinced")).toEqual([]);
+    expect((scan.notes ?? []).map((note) => note.ref)).toEqual(["provider:deque", "provider:evinced"]);
+  });
+
+  it("reads engine switches from the environment it was given, never from process.env", async () => {
+    const live = (): BrowserDriver => ({
+      open: async (url: string) => {
+        const page = makeFakePage({ currentUrl: async () => url });
+        registerPlaywrightPage(page, {});
+        return page;
+      },
+      close: async () => {},
+    });
+    const previous = process.env.EV_SWITCH_ON;
+    process.env.EV_SWITCH_ON = "false";
+    try {
+      const deps = await buildDeps(testConfig({ engines: { evinced: { enabled: true } } }), {
+        browserFor: live,
+        env: {},
+      });
+      const scan = await deps.checkRunner.scan(SCREEN);
+      const reason = (scan.notes ?? []).find((note) => note.ref === "provider:evinced")?.reason ?? "";
+      // The given environment has no switch, so the run gets as far as the absent package.
+      expect(reason).toContain("is not installed");
+      expect(reason).not.toContain("EV_SWITCH_ON");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.EV_SWITCH_ON;
+      } else {
+        process.env.EV_SWITCH_ON = previous;
+      }
+    }
+  });
+
+  it("registers no engine when only the branch config turns one on under a trusted ref", async () => {
+    // Engines are trusted-only. The committed config has no engines block, so a branch that adds one
+    // gets no vendor code, no extra capability, and no engine version in its receipt.
+    const repo = await mkdtemp(join(tmpdir(), "usabl-engines-trusted-"));
+    try {
+      await execFileAsync("git", ["init", "-q"], { cwd: repo });
+      await writeFile(join(repo, "usabl.config.json"), JSON.stringify(testConfig()), "utf8");
+      await execFileAsync("git", ["add", "usabl.config.json"], { cwd: repo });
+      await execFileAsync(
+        "git",
+        ["-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "base"],
+        { cwd: repo },
+      );
+      const branch = testConfig({ engines: ENGINES_ON });
+      const deps = await buildDeps(branch, {
+        cwd: repo,
+        browserFor,
+        allowedCapabilities: [],
+        env: {},
+        trustedRef: "HEAD",
+      });
+      const scan = await deps.checkRunner.scan(SCREEN);
+      const refs = [...scan.gaps.map((gap) => gap.ref), ...(scan.notes ?? []).map((note) => note.ref)];
+      expect(refs).not.toContain("provider:deque");
+      expect(refs).not.toContain("provider:evinced");
+      expect(refs).toContain("provider:axe-core");
+      expect("engines" in deps.scannerVersions).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("records engine versions only when an engine is on", async () => {
+    const without = await buildDeps(testConfig(), { browserFor });
+    expect("engines" in without.scannerVersions).toBe(false);
+    const off = await buildDeps(testConfig({ engines: ENGINES_OFF }), { browserFor });
+    expect("engines" in off.scannerVersions).toBe(false);
+    const on = await buildDeps(testConfig({ engines: ENGINES_ON }), { browserFor });
+    // Neither vendor package is installed in this repository.
+    expect(on.scannerVersions.engines).toEqual({ deque: "not-installed", evinced: "not-installed" });
   });
 });

@@ -17,6 +17,9 @@
  * could not be read, and an element the scanner named that cannot be found again as exactly one
  * element. Under the old key a new barrier in one row can fill a count accepted for another and read
  * as carried, so the run cannot prove it is not hiding there.
+ *
+ * Only drafts whose evidence class gates are read. A preview draft, such as one from an optional
+ * commercial engine, keeps its key and adds no gap: it can never be carried or block.
  */
 import type { CoverageGap, Draft, ElementTarget, Page, RowAmbiguity, RowContextRead, RowUnreadable } from '../contracts/index.js';
 import { sha256 } from '../primitives/canonical.js';
@@ -240,6 +243,14 @@ export async function attachRowScopeToDrafts(
   const unkeyed = new Map<string, UnkeyedGroup>();
   for (const original of drafts) {
     const { draft, carried, target } = takeRowFields(original);
+    // Only a draft whose class gates needs a row key: the key exists so a new barrier in one row
+    // cannot read as an accepted one in another. A preview draft never moves the verdict, so it is
+    // not read here at all. A gap for its element would take the screen out of the cleanly scanned
+    // set, and a preview finding alone would then turn a verified run into not covered.
+    if (draft.evidenceClass !== 'deterministic') {
+      enriched.push(draft);
+      continue;
+    }
     // A row the provider read at the element wins. Else the element is found by its target when it
     // sits past a frame or a shadow root, and by its element path otherwise. A target that is not
     // one is a failed read, never a quiet fall back to a path that may name another element.

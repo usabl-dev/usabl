@@ -395,6 +395,18 @@ function coverage(value: unknown, field: string): Coverage {
   };
 }
 
+// The engine id to installed version map a receipt carries when an optional engine was on. Each
+// entry is checked; a key is read only as a record key and never repeated in a refusal.
+function engineVersions(value: unknown, field: string): Record<string, string> {
+  const source = record(value, field);
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(source)) {
+    if (typeof source[key] !== 'string') refuse(field, 'must map each engine id to a version string');
+    Object.defineProperty(out, key, { value: source[key], enumerable: true, writable: true, configurable: true });
+  }
+  return out;
+}
+
 function receipt(value: unknown, field: string): Receipt {
   const source = record(value, field);
   const scanners = record(source['scannerVersions'], at(field, 'scannerVersions'));
@@ -414,6 +426,7 @@ function receipt(value: unknown, field: string): Receipt {
       axeCore: text(scanners['axeCore'], at(scannersField, 'axeCore')),
       playwright: text(scanners['playwright'], at(scannersField, 'playwright')),
       chromium: text(scanners['chromium'], at(scannersField, 'chromium')),
+      ...(has(scanners, 'engines') ? { engines: engineVersions(scanners['engines'], at(scannersField, 'engines')) } : {}),
     },
     surfaces: texts(source['surfaces'], at(field, 'surfaces')),
     coverage: {

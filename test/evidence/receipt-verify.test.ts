@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { UsablConfig } from "../../src/contracts/index.js";
+import type { ScannerVersions, UsablConfig } from "../../src/contracts/index.js";
 import { collectEngineFiles, hashEngineFiles } from "../../src/deps/build.js";
 import { makeFakeDeps } from "../../src/deps/fakes.js";
 import {
@@ -301,5 +301,67 @@ describe("receipt engine binding (end-to-end)", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("receipt commercial engine versions", () => {
+  const BASE_SCANNERS = { axeCore: "4.13.0", playwright: "1.62.1", chromium: "revision-1200" };
+
+  function depsWith(scannerVersions: ScannerVersions) {
+    return makeFakeDeps({
+      files: guardFiles,
+      headContents: guardFiles,
+      headBlobs: guardBlobs,
+      writeTree: "tree-a",
+      runnerVersion: "0.1.0",
+      scannerVersions,
+    });
+  }
+
+  async function verifyAcross(minted: ReturnType<typeof depsWith>, current: ReturnType<typeof depsWith>) {
+    const expanded = await expandGuardedSet(minted, buildGuardedSet(config));
+    const receipt = await mintReceipt(minted, { ...config, guardedPaths: expanded }, mintArgs);
+    return { receipt, verification: await verifyReceipt(current, config, receipt, "tree-a") };
+  }
+
+  it("keeps a receipt with no engines valid when no engine is on", async () => {
+    const { receipt, verification } = await verifyAcross(depsWith(BASE_SCANNERS), depsWith(BASE_SCANNERS));
+    expect("engines" in receipt.scannerVersions).toBe(false);
+    expect(verification).toEqual({ valid: true, failedFields: [] });
+  });
+
+  it("reads an empty engine map the same as no engines", async () => {
+    const { verification } = await verifyAcross(depsWith(BASE_SCANNERS), depsWith({ ...BASE_SCANNERS, engines: {} }));
+    expect(verification).toEqual({ valid: true, failedFields: [] });
+  });
+
+  it("names the engine versions it was minted with and re-verifies on the same ones", async () => {
+    const engines = { deque: "4.11.2", evinced: "3.9.0" };
+    const { receipt, verification } = await verifyAcross(
+      depsWith({ ...BASE_SCANNERS, engines }),
+      depsWith({ ...BASE_SCANNERS, engines: { evinced: "3.9.0", deque: "4.11.2" } }),
+    );
+    expect(receipt.scannerVersions.engines).toEqual(engines);
+    expect(verification).toEqual({ valid: true, failedFields: [] });
+  });
+
+  it("fails scannerVersions when an engine version changes", async () => {
+    const { verification } = await verifyAcross(
+      depsWith({ ...BASE_SCANNERS, engines: { deque: "4.11.2" } }),
+      depsWith({ ...BASE_SCANNERS, engines: { deque: "4.12.0" } }),
+    );
+    expect(verification).toEqual({ valid: false, failedFields: ["scannerVersions"] });
+  });
+
+  it("fails scannerVersions when an engine is turned on, off, or swapped after the receipt", async () => {
+    const turnedOn = await verifyAcross(depsWith(BASE_SCANNERS), depsWith({ ...BASE_SCANNERS, engines: { evinced: "3.9.0" } }));
+    expect(turnedOn.verification).toEqual({ valid: false, failedFields: ["scannerVersions"] });
+    const turnedOff = await verifyAcross(depsWith({ ...BASE_SCANNERS, engines: { evinced: "3.9.0" } }), depsWith(BASE_SCANNERS));
+    expect(turnedOff.verification).toEqual({ valid: false, failedFields: ["scannerVersions"] });
+    const swapped = await verifyAcross(
+      depsWith({ ...BASE_SCANNERS, engines: { evinced: "3.9.0" } }),
+      depsWith({ ...BASE_SCANNERS, engines: { deque: "3.9.0" } }),
+    );
+    expect(swapped.verification).toEqual({ valid: false, failedFields: ["scannerVersions"] });
   });
 });

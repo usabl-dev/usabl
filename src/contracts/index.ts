@@ -305,6 +305,16 @@ export interface Coverage {
 
 // ---- receipt (re-checkable proof of a verified run) ----
 // Receipts exist only for verified deterministic outcomes. Preview and model-judgment never mint one.
+// The scanner stack a run used. A receipt binds it, so a swapped scanner fails re-verification.
+// `engines` names each optional commercial engine the config turned on, by engine id, with the
+// installed package version. Absent when no engine is on, so receipts minted before engines existed
+// keep the same shape and still verify.
+export interface ScannerVersions {
+  axeCore: string;
+  playwright: string;
+  chromium: string;
+  engines?: Record<string, string>;
+}
 export interface Receipt {
   // Version 2 added historyHead. A version 1 receipt is not read, so it triggers one full run.
   schemaVersion: 2;
@@ -316,7 +326,7 @@ export interface Receipt {
   historyHead: string | null;
   policyHash: string;
   runnerVersion: string;
-  scannerVersions: { axeCore: string; playwright: string; chromium: string };
+  scannerVersions: ScannerVersions;
   surfaces: string[];
   coverage: { checked: string[]; notCovered: string[] };
   // What the run actually examined, per scanned screen: rules that examined at least one element
@@ -826,7 +836,7 @@ export interface Deps {
   fs: FsGlob;
   checkRunner: CheckRunner;
   runnerVersion: string;
-  scannerVersions: { axeCore: string; playwright: string; chromium: string };
+  scannerVersions: ScannerVersions;
   // The design-intake bundle loaded once at build time (trusted-ref overlaid). The docs surface
   // reads this exact bundle so it never re-derives intake or drifts from what the run enforced.
   requirements: RequirementBundle;
@@ -906,6 +916,32 @@ export interface UsablConfig {
   browserSandbox?: BrowserSandboxPolicy;
   // Settings for the CI judge. Read from the trusted ref only.
   judge?: JudgeConfig;
+  // Optional commercial engines. Read from the trusted ref only. Absent or turned off means the
+  // engine's provider is not registered at all, so a run without this block is the run usabl
+  // made before engines existed.
+  engines?: EnginesConfig;
+}
+
+// ---- optional commercial engines (the operator holds the license; the package is never a dependency) ----
+// Their findings are preview in this release: shown, never gating. No key here can promote them.
+export interface DequeEngineConfig {
+  enabled: boolean;
+  // Passed to Deque's builder as is. Absent means Deque's own default ruleset.
+  rulesetId?: string;
+  // Deque sends usage data unless told not to. Absent means false: usabl turns it off.
+  trackUsage?: boolean;
+}
+export type EvincedMode = 'offline' | 'online';
+export interface EvincedEngineConfig {
+  enabled: boolean;
+  // offline reads EVINCED_SERVICE_ID and EVINCED_AUTH_TOKEN and needs no license server.
+  // online reads EVINCED_SERVICE_ID and EVINCED_API_KEY and contacts Evinced's license server.
+  // Absent means offline.
+  mode?: EvincedMode;
+}
+export interface EnginesConfig {
+  deque?: DequeEngineConfig;
+  evinced?: EvincedEngineConfig;
 }
 
 // Origins other than the app origin that the judge's isolated browser may reach, for example a

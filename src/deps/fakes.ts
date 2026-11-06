@@ -4,13 +4,13 @@
  * hands it back as the page's own address, so a fake page is always where it was sent.
  * Unused Page methods throw: a test that hits them is lying about coverage, not passing.
  */
-import type { Deps, RequirementBundle, ScreenScan, Page } from '../contracts/index.js';
+import type { Deps, RequirementBundle, ScreenScan, Page, ScannerVersions } from '../contracts/index.js';
 import { matchGlob } from '../primitives/match-glob.js';
 
 export interface FakeDepsSpec {
   now: string;
   runnerVersion: string;
-  scannerVersions: { axeCore: string; playwright: string; chromium: string };
+  scannerVersions: ScannerVersions;
   changed: Array<{ code: string; path: string }>;
   diffNames?: string[];
   files: Record<string, string>; // working-tree contents by path

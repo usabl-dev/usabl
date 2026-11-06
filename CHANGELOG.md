@@ -82,6 +82,24 @@
   coverage gaps, under "disclosed, does not block". The gate and the receipt do not read
   them.
 
+- Optional Deque axe DevTools and Evinced engines. With a vendor license, install
+  `@axe-devtools/playwright` or `@evinced/js-playwright-sdk` from the vendor's registry and
+  turn the engine on under `engines` in `usabl.config.json`. Tested against the vendor's
+  documented result format. Not yet run on a licensed SDK. Their findings are preview: shown
+  beside the axe and rulepack findings, never blocking, under rule ids prefixed `deque:` and
+  `evinced:`. Engines are read from the trusted config only. A run that cannot use an engine
+  gets a note that names the engine, the reason, and the fix, and the verdict does not change,
+  because the engine's findings are preview. Reasons include: the package or a package it
+  needs is not installed, a credential is not set, a vendor call did not finish within 60
+  seconds, or a switch outside the trusted config (`EV_SWITCH_ON`, `evConfig.json`,
+  `AXE_RULESET_PATH`, or `axe-ruleset.json`) could change what the engine reports. Deque runs
+  only when `AXE_TRACK_USAGE` is `false`, unless you opt in to its usage tracking, and Evinced
+  platform upload is off unless you opt in. usabl never writes the environment. On docs
+  screens Deque uses the same WCAG tags as axe. Credential values are
+  redacted from every message. `usabl doctor` shows each engine, its package and credentials
+  state, and the testing status. Each turned-on engine's version is bound into the receipt.
+  `checkPage` does not run the engines.
+
 ### Fixed
 
 - `usabl check` no longer reads a dependency bump as nothing to check. A pull request that

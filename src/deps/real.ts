@@ -6,7 +6,9 @@
  */
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
 import type { AncestorAttributesRead, AnnouncementDrain, AnnouncementUndecidable, ApiResponse, AxNode, BrowserDriver, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
-import { applyAxeTags, type AxeIssue, type AxeRuleSummary, type AxeUncheckedFrame } from '../providers/axe/index.js';
+import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
+import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
+import { carryPlaywrightPage, registerPlaywrightPage } from '../providers/engines/shared.js';
 import { createLiveResolver } from '../providers/rulepack/live-value.js';
 import { runAxeInIsolatedWorld } from './axe-world.js';
 import { BrowserSandboxRequiredError, isBrowserSandboxRefusal, isSandboxLaunchFailure, type BrowserSandboxPolicy } from './sandbox.js';
@@ -607,125 +609,11 @@ const COMPUTED_STYLE_FUNCTION = `function (query, cssProperty) {
 }`;
 
 
-export interface AxeResult {
-  violations: AxeIssue[];
-  incomplete: AxeIssue[];
-  // axe classifies every rule it loaded, not only the ones that produced findings. Keeping the
-  // other two buckets is what lets a later reader tell a rule that ran and passed from a rule
-  // that never matched anything on this screen.
-  passes: AxeRuleSummary[];
-  inapplicable: AxeRuleSummary[];
-}
-
-function mapAxeCheck(rawCheck: unknown): { data?: unknown } {
-  const data = getProp(rawCheck, 'data');
-  return data === undefined ? {} : { data };
-}
-
-function mapAxeNode(rawNode: unknown): AxeIssue['nodes'][number] {
-  const rawTarget = getProp(rawNode, 'target');
-  const target = Array.isArray(rawTarget) ? rawTarget.map((entry) => String(entry)) : [];
-  // axe names an element in a frame or a shadow root with one part per boundary: one entry per
-  // frame, and an entry that is a list for the path into shadow roots. The joined target above
-  // stays the element path a finding is named by. The parts are kept beside it, only for an element
-  // past a boundary, so its row can be read where it really is.
-  const parts = Array.isArray(rawTarget)
-    ? rawTarget.map((entry) => (Array.isArray(entry) ? entry.map((part) => String(part)) : [String(entry)]))
-    : [];
-  const crossesBoundary = parts.length > 1 || parts.some((level) => level.length > 1);
-  const html = readString(getProp(rawNode, 'html'));
-  const failureSummary = readString(getProp(rawNode, 'failureSummary'));
-  const rawAny = getProp(rawNode, 'any');
-  const checks = Array.isArray(rawAny) ? rawAny.map((check) => mapAxeCheck(check)) : [];
-
-  return {
-    target,
-    ...(crossesBoundary ? { targetParts: parts } : {}),
-    ...(html === null ? {} : { html }),
-    ...(failureSummary === null ? {} : { failureSummary }),
-    ...(checks.length === 0 ? {} : { any: checks }),
-  };
-}
-
-function mapAxeIssues(rawIssues: unknown): AxeIssue[] {
-  if (!Array.isArray(rawIssues)) {
-    return [];
-  }
-
-  const issues: AxeIssue[] = [];
-  for (const rawIssue of rawIssues) {
-    const id = readString(getProp(rawIssue, 'id'));
-    const description = readString(getProp(rawIssue, 'description'));
-    if (id === null || description === null) {
-      continue;
-    }
-
-    const rawImpact = readString(getProp(rawIssue, 'impact'));
-    const impact =
-      rawImpact === 'critical' || rawImpact === 'serious' || rawImpact === 'moderate' || rawImpact === 'minor'
-        ? rawImpact
-        : undefined;
-
-    const rawNodes = getProp(rawIssue, 'nodes');
-    const nodes = Array.isArray(rawNodes) ? rawNodes.map((node) => mapAxeNode(node)) : [];
-
-    issues.push({
-      id,
-      description,
-      nodes,
-      ...(impact === undefined ? {} : { impact }),
-    });
-  }
-
-  return issues;
-}
-
-/**
- * Maps an axe rule bucket to the light record applicability needs: which rule, and how many
- * elements it matched. Nodes are counted, never mapped, because a passing rule can carry
- * hundreds of them per screen and none of them are evidence of anything.
- *
- * Exported so the mapping can be proven without a browser. Same defensive contract as
- * mapAxeIssues: raw axe output is untyped and input that is not an array yields nothing. Only
- * the rule id is required, because it is the whole identity of the record. Nothing else about
- * the entry is read, so nothing else can decide whether the entry is kept.
- */
-export function mapAxeRuleSummaries(rawRules: unknown): AxeRuleSummary[] {
-  if (!Array.isArray(rawRules)) {
-    return [];
-  }
-
-  const summaries: AxeRuleSummary[] = [];
-  for (const rawRule of rawRules) {
-    const id = readString(getProp(rawRule, 'id'));
-    if (id === null) {
-      continue;
-    }
-
-    // inapplicable entries always arrive with an empty node list, but the length is read rather
-    // than assumed so this stays true of whatever bucket it is handed.
-    const rawNodes = getProp(rawRule, 'nodes');
-    const nodeCount = Array.isArray(rawNodes) ? rawNodes.length : 0;
-
-    summaries.push({ id, nodeCount });
-  }
-
-  return summaries;
-}
-
-/**
- * Maps the results object axe returns to the record the axe provider reads. The same defensive
- * contract as the bucket mappings above: anything that is not the expected shape reads as empty.
- * Exported so a test can map the results of an axe run it made itself the same way.
- */
-export function mapAxeResults(raw: unknown): AxeResult {
-  return {
-    violations: mapAxeIssues(getProp(raw, 'violations')),
-    incomplete: mapAxeIssues(getProp(raw, 'incomplete')),
-    passes: mapAxeRuleSummaries(getProp(raw, 'passes')),
-    inapplicable: mapAxeRuleSummaries(getProp(raw, 'inapplicable')),
-  };
-}
+// The axe results the driver hands the axe provider. The mapping lives with the provider, so an
+// engine that returns axe-shaped results is read by the same code. Kept here under the names
+// callers of the driver already import.
+export type AxeResult = AxeRunResultBuckets;
+export { mapAxeRuleSummaries, normalizeAxeResults as mapAxeResults } from '../providers/axe/raw.js';
 
 function getProp(value: unknown, key: string): unknown {
   if (value === null || typeof value !== 'object') {
@@ -2113,7 +2001,7 @@ function attachAxeBridge(page: Page, pw: PwPage, cdp: CDPSession): void {
       // axe runs in an isolated world in every frame, so page script cannot change what it reads
       // or reports. A frame it could not check comes back named, and the provider discloses it.
       const run = await runAxeInIsolatedWorld(pw, cdp, runOptions);
-      return { ...mapAxeResults(run.results), uncheckedFrames: run.uncheckedFrames };
+      return { ...normalizeAxeResults(run.results), uncheckedFrames: run.uncheckedFrames };
     },
   });
 }
@@ -2272,6 +2160,10 @@ function wrapPage(
   };
 
   attachAxeBridge(page, pw, cdp);
+  // The optional commercial engines drive the Playwright page themselves. It is registered, not
+  // attached, so it stays off the page object; see registerPlaywrightPage. Every copy of the page
+  // made below goes through carryPlaywrightPage, so the copy keeps it.
+  registerPlaywrightPage(page, pw);
   return page;
 }
 
@@ -2308,7 +2200,7 @@ export async function adoptPage(pw: PwPage, options: { readyTimeoutMs?: number }
   // network listeners come off, and the CDP session is detached, which also drops the live-region
   // capture script and the accessibility domain that session set up. A session the page already
   // lost, because the caller closed it, has nothing left to detach.
-  return {
+  return carryPlaywrightPage(page, {
     ...page,
     close: async (): Promise<void> => {
       network.stop();
@@ -2318,7 +2210,7 @@ export async function adoptPage(pw: PwPage, options: { readyTimeoutMs?: number }
         // Already detached, or the page is gone. Either way nothing is held.
       }
     },
-  };
+  });
 }
 
 /**
@@ -2795,7 +2687,7 @@ export function makeSharedBrowser(
       const wrapped: Page =
         blockedOrigins === null
           ? opened
-          : {
+          : carryPlaywrightPage(opened, {
               ...opened,
               blockedRequests: () => blockedOrigins(),
               close: async () => {
@@ -2805,10 +2697,10 @@ export function makeSharedBrowser(
                   await watch?.detach();
                 }
               },
-            };
+            });
       // A page from a process without the sandbox says so, and the check runner carries that onto
       // the screen in the Result.
-      return handle.sandboxed ? wrapped : { ...wrapped, browserSandbox: 'off' };
+      return handle.sandboxed ? wrapped : carryPlaywrightPage(wrapped, { ...wrapped, browserSandbox: 'off' });
     } catch (error) {
       await workerWatch?.detach();
       await context.close().catch(() => undefined);

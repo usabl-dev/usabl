@@ -121,6 +121,29 @@ describe('receipt-store', () => {
     await expect(loadReceipt(fs)).resolves.toEqual(receipt);
   });
 
+  it('round-trips a receipt that names engine versions', async () => {
+    const fs = new MemoryReceiptFs();
+    const withEngines: Receipt = {
+      ...receiptFixture,
+      scannerVersions: { ...receiptFixture.scannerVersions, engines: { deque: '4.11.2', evinced: '3.9.0' } },
+    };
+
+    await saveReceipt(fs, withEngines);
+
+    expect(await loadReceipt(fs)).toEqual(withEngines);
+  });
+
+  it('rejects a stored receipt whose engine versions are malformed', async () => {
+    for (const engines of [['4.11.2'], { deque: 4 }, 'deque', null]) {
+      const fs = new MemoryReceiptFs();
+      fs.writeRaw(
+        RECEIPT_PATH,
+        JSON.stringify({ ...receiptFixture, scannerVersions: { ...receiptFixture.scannerVersions, engines } }),
+      );
+      expect(await loadReceipt(fs)).toBeNull();
+    }
+  });
+
   it('keeps .usabl state ignored by git', async () => {
     const gitignorePath = new URL('../../.gitignore', import.meta.url);
     const gitignore = await readFile(gitignorePath, 'utf8');

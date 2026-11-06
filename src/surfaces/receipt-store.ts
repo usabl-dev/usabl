@@ -42,6 +42,12 @@ function isApplicabilitySummary(value: unknown): value is Receipt['applicability
   );
 }
 
+// Optional, so a receipt minted before engines existed still loads. When present it must be a map
+// of engine id to version string, or the receipt is corrupt and is treated as absent.
+function isEngineVersions(value: unknown): boolean {
+  return value === undefined || (isRecord(value) && Object.values(value).every((version) => typeof version === 'string'));
+}
+
 function isReceipt(value: unknown): value is Receipt {
   if (!isRecord(value)) {
     return false;
@@ -62,6 +68,7 @@ function isReceipt(value: unknown): value is Receipt {
     typeof scannerVersions['axeCore'] === 'string' &&
     typeof scannerVersions['playwright'] === 'string' &&
     typeof scannerVersions['chromium'] === 'string' &&
+    isEngineVersions(scannerVersions['engines']) &&
     isStringArray(value['surfaces']) &&
     isRecord(coverage) &&
     isStringArray(coverage['checked']) &&

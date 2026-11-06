@@ -270,6 +270,20 @@ describe('parseResultJson validates the whole Result against the contract', () =
     expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
   });
 
+  it('keeps the engine versions a receipt names', () => {
+    const parsed = parseResultJson(withValue(['receipt', 'scannerVersions', 'engines'], { deque: '4.11.2' }));
+    expect(parsed.receipt?.scannerVersions.engines).toEqual({ deque: '4.11.2' });
+    expect('engines' in (parseResultJson(validResult()).receipt?.scannerVersions ?? {})).toBe(false);
+  });
+
+  it('refuses malformed receipt engine versions, naming the field and never the value', () => {
+    for (const engines of [[LEAK], { deque: LEAK.length }, LEAK]) {
+      const err = refusal(withValue(['receipt', 'scannerVersions', 'engines'], engines));
+      expect(err.message).toContain('receipt.scannerVersions.engines');
+      expect(err.message).not.toContain('leak-me');
+    }
+  });
+
   it('drops fields the contract does not name, so no projector reads them', () => {
     const doc = validResult();
     doc['injected'] = LEAK;
