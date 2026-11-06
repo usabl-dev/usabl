@@ -214,6 +214,9 @@ export interface AffectedScreen {
   url: string;
   provenance: 'route-graph' | 'wide-blast' | 'manual' | 'docs-manifest';
   importChain?: string[];
+  // Why a wide-blast screen is checked, naming the changed file, when a dependency change of the
+  // app queued it: a change to the app's dependencies or to a lockfile. Absent otherwise.
+  reason?: string;
   profile?: ProfileName;
 }
 /**
