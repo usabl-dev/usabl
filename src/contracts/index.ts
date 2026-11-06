@@ -735,6 +735,13 @@ export interface Page {
   activePath(): Promise<string>;
   // Why the element that has focus cannot be read, or null when it can. See FocusUnreadable.
   activeFocusUnreadable(): Promise<FocusUnreadable | null>;
+  // The paths of the open modal dialogs that hold the element that has focus, nearest first, in the
+  // form activePath gives. A dialog element opened with showModal() is one. So is an element whose
+  // first recognized role is dialog or alertdialog with aria-modal true, while it is shown and not
+  // hidden from assistive technology. The read climbs the flat tree, so a dialog in a shadow root
+  // holds the content slotted into it, and it climbs out of same-origin frames. Empty when no such
+  // dialog holds focus, and when nothing has focus.
+  activeModalDialogs(): Promise<string[]>;
   axAt(selector: string): Promise<AxNode | null>;
   // The accessibility node of the first element innerSelector matches inside the open shadow root
   // of the first element hostSelector matches in the document. A web component's inner control,

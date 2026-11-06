@@ -567,6 +567,11 @@ outside every table as the control in an accepted row. Either way a new barrier 
   owner other than an `iframe` or `frame`, such as an `object`, `embed`, or `fencedframe`
   element. Focus inside a closed shadow root, a frame from another origin, or such a frame
   owner ends the walk with an `unverified` truncation draft, never a pass.
+- A Tab cycle that never reaches the body ends the walk with an `unverified` truncation draft,
+  never a pass. The read of the open modal dialogs that hold focus runs in the read world too.
+  A page can still mark a container as an ARIA modal dialog, and the walk then reads a trap
+  inside it as the dialog keeping focus, with no `keyboard-walk-trap` draft. The truncation
+  draft stays, so the screen is not covered rather than passed.
 
 - The zoom write (`setZoom`) runs in the isolated world the focus and style reads use, so a page
   that redefines style writes, or says its root is not an element, cannot stop the zoom from

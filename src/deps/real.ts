@@ -204,8 +204,9 @@ export const HIDDEN_FACTS_IMPL = `
 // from it is not recorded; see the observer below. Nor is a change inside content hidden from
 // assistive technology, by aria-hidden, inert, hidden, or a closed dialog anywhere on that walk.
 // The same resolver holds that rule.
-// The resolver, the flat-tree parent, and the open-modal test, shared by the capture and the
-// closed shadow root check at drain, so both read a modal the same way.
+// The resolver, the flat-tree parent, and the open-modal test, shared by the capture, the closed
+// shadow root check at drain, and the keyboard walk's modal read, so all three read a modal the
+// same way.
 const MODAL_RULE_IMPL = `
   const liveResolver = (${createLiveResolver.toString()})();
   ${HIDDEN_FACTS_IMPL}
@@ -227,8 +228,10 @@ const MODAL_RULE_IMPL = `
   // alertdialog with aria-modal true, while it is connected and shown: rendered, not hidden by
   // visibility, and not under aria-hidden, inert, or hidden on the flat tree. Safari with VoiceOver
   // hides everything outside such a dialog while it is shown, and Chromium does on Mac and Android
-  // while focus is inside it, so content outside it may not be spoken at all.
-  const isOpenModal = (element) => {
+  // while focus is inside it, so content outside it may not be spoken at all. parentOf climbs the
+  // hidden chain: the flat-tree parent here, and one that also climbs out of same-origin frames for
+  // the keyboard walk.
+  const isOpenModalOn = (element, parentOf) => {
     if (element.localName === 'dialog' && element.matches(':modal')) {
       return true;
     }
@@ -239,11 +242,12 @@ const MODAL_RULE_IMPL = `
       return false;
     }
     const chain = [];
-    for (let current = element; current instanceof Element; current = flatParent(current)) {
+    for (let current = element; current; current = parentOf(current)) {
       chain.push(hiddenFacts(current));
     }
     return !liveResolver.hiddenInChain(chain);
   };
+  const isOpenModal = (element) => isOpenModalOn(element, flatParent);
 `;
 
 const LIVE_CAPTURE_IMPL = `
@@ -548,6 +552,59 @@ const DEEP_FOCUS_EXPRESSION = `(function () {
   const focus = deepFocus();
   return focus.unreadable !== null ? focus.unreadable : focus.element;
 })()`;
+
+// The paths of the open modal dialogs that hold the focused element, nearest first, each in the
+// form activePath gives. The keyboard walk reads a focus cycle inside such a dialog as expected,
+// not as a keyboard trap, so the read must not see a dialog that is not one. A
+// dialog element counts only in the browser's own :modal state, which only showModal() gives it.
+// An element whose first recognized role is dialog or alertdialog with aria-modal true counts
+// while it is connected, rendered, not hidden by visibility, and not under aria-hidden, inert,
+// hidden, or a closed dialog. The test is the capture's own isOpenModalOn, so the walk and the
+// capture read a modal the same way. The climb follows the flat tree, so a dialog in a shadow root
+// holds the light content slotted into it, and it climbs out of a same-origin frame to the frame
+// element. Node types are compared by number, because an element in a frame has that frame's own
+// constructors.
+const ACTIVE_MODAL_DIALOGS_FUNCTION = `function () {
+  ${DEEP_FOCUS_IMPL}
+  ${MODAL_RULE_IMPL}
+  const frameOf = (node) => {
+    try {
+      const view = node.ownerDocument ? node.ownerDocument.defaultView : null;
+      return view ? view.frameElement : null;
+    } catch (_error) {
+      return null;
+    }
+  };
+  const up = (node) => {
+    if (node.assignedSlot) {
+      return node.assignedSlot;
+    }
+    const parent = node.parentNode;
+    if (parent && parent.nodeType === ELEMENT_NODE) {
+      return parent;
+    }
+    if (parent && parent.nodeType === FRAGMENT_NODE && parent.host) {
+      return parent.host;
+    }
+    return frameOf(node);
+  };
+  const deepPath = (element) => {
+    const root = element.getRootNode();
+    if (root.nodeType === FRAGMENT_NODE && root.host) {
+      return deepPath(root.host) + SHADOW_STEP + pathIn(element, root);
+    }
+    const frame = frameOf(element);
+    return frame ? deepPath(frame) + FRAME_STEP + pathIn(element, root) : pathIn(element, root);
+  };
+  const focus = deepFocus();
+  const paths = [];
+  for (let current = focus.element; current; current = up(current)) {
+    if (isOpenModalOn(current, up)) {
+      paths.push(deepPath(current));
+    }
+  }
+  return paths;
+}`;
 
 // The world the focus and style reads run in, for the same reason as the path world. A page that
 // redefines querySelector, the activeElement or body getters, contains, focus, or getComputedStyle
@@ -2119,6 +2176,13 @@ function wrapPage(
     async activeFocusUnreadable(): Promise<FocusUnreadable | null> {
       const focus = await readFocus(cdp);
       return focus.kind === 'unreadable' ? focus.reason : null;
+    },
+    async activeModalDialogs(): Promise<string[]> {
+      const paths = await callInWorld(cdp, READ_WORLD, 'read the modal dialogs that hold focus', ACTIVE_MODAL_DIALOGS_FUNCTION);
+      if (!Array.isArray(paths) || !paths.every((path): path is string => typeof path === 'string')) {
+        throw new Error('the browser could not read the modal dialogs that hold focus: the read returned something other than a list of paths');
+      }
+      return paths;
     },
     async axAt(selector: string): Promise<AxNode | null> {
       const backendNodeId = await backendNodeIdForSelector(cdp, selector);
