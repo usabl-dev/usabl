@@ -170,6 +170,24 @@ const DEEP_FOCUS_IMPL = `
   };
 `;
 
+/**
+ * Browser-side helper: what one element says about hiding its subtree from assistive technology,
+ * in the shape liveResolver.hiddenInChain reads. A dialog element without the open attribute is
+ * closed: the browser renders none of its content and leaves it out of the accessibility tree. A
+ * page that writes a live region inside a dialog and closes the dialog in the same task has closed
+ * it by the time the observer reads the change, so no screen reader speaks the text. Exported so
+ * the rule can be tested on its own.
+ */
+export const HIDDEN_FACTS_IMPL = `
+  const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
+  const hiddenFacts = (element) => ({
+    ariaHidden: element.getAttribute('aria-hidden'),
+    inert: element.hasAttribute('inert'),
+    hidden: element.hasAttribute('hidden'),
+    closedDialog: element.namespaceURI === HTML_NAMESPACE && element.localName === 'dialog' && !element.hasAttribute('open'),
+  });
+`;
+
 // Browser-side live-region capture used by both document-start injection and adoptPage install.
 // Keep this the only implementation: the CLI and checkPage
 // must hear the same announcements, so a fix to what counts as a live region has to land in both
@@ -184,12 +202,13 @@ const DEEP_FOCUS_IMPL = `
 // expected that text passed. The walk follows the flat tree the way the rule's walk does, so a
 // slotted element climbs through its slot. A change whose live region sits in a different tree
 // from it is not recorded; see the observer below. Nor is a change inside content hidden from
-// assistive technology, by aria-hidden, inert, or hidden anywhere on that walk. The same resolver
-// holds that rule.
+// assistive technology, by aria-hidden, inert, hidden, or a closed dialog anywhere on that walk.
+// The same resolver holds that rule.
 // The resolver, the flat-tree parent, and the open-modal test, shared by the capture and the
 // closed shadow root check at drain, so both read a modal the same way.
 const MODAL_RULE_IMPL = `
   const liveResolver = (${createLiveResolver.toString()})();
+  ${HIDDEN_FACTS_IMPL}
   const flatParent = (element) => {
     if (element.assignedSlot) {
       return element.assignedSlot;
@@ -221,11 +240,7 @@ const MODAL_RULE_IMPL = `
     }
     const chain = [];
     for (let current = element; current instanceof Element; current = flatParent(current)) {
-      chain.push({
-        ariaHidden: current.getAttribute('aria-hidden'),
-        inert: current.hasAttribute('inert'),
-        hidden: current.hasAttribute('hidden'),
-      });
+      chain.push(hiddenFacts(current));
     }
     return !liveResolver.hiddenInChain(chain);
   };
@@ -236,8 +251,9 @@ const LIVE_CAPTURE_IMPL = `
   // The element whose region the change belongs to: the nearest one that sets a live value, when
   // that value is polite or assertive. Null when the change is not live, and null when anything on
   // the walk hides its subtree from assistive technology: the changed element, a wrapper between it
-  // and the region, the region itself, or anything above the region. A screen reader says nothing
-  // for that change, so recording it would let a flow requirement pass on words no one heard.
+  // and the region, the region itself, or anything above the region, such as a closed dialog. A
+  // screen reader says nothing for that change, so recording it would let a flow requirement pass
+  // on words no one heard.
   //
   // A change outside an open modal dialog is not recorded either. While a dialog opened with
   // showModal() is open, Chromium leaves everything outside the top one out of the accessibility
@@ -250,9 +266,7 @@ const LIVE_CAPTURE_IMPL = `
       chain.push({
         ariaLive: current.getAttribute('aria-live'),
         role: current.getAttribute('role'),
-        ariaHidden: current.getAttribute('aria-hidden'),
-        inert: current.hasAttribute('inert'),
-        hidden: current.hasAttribute('hidden'),
+        ...hiddenFacts(current),
       });
     }
     if (liveResolver.hiddenInChain(chain) || liveResolver.effectiveLiveValue(chain) === 'off') {
@@ -305,8 +319,9 @@ const LIVE_CAPTURE_IMPL = `
       buffer.push({ text, start });
     }
   };
-  // Modal state is read when a change is observed, and again here. A page can write a region and
-  // open a modal in a later task, before the browser updates the accessibility tree, so a screen
+  // Modal state and hidden state are read when a change is observed, and again here. A page can
+  // write a region and open a modal in a later task, or close the dialog that holds the region one
+  // task or one promise later, before the browser updates the accessibility tree, so a screen
   // reader likely hears nothing. The state at drain decides, so the answer does not depend on which
   // ran first. A change on an element that has left the document cannot be checked against a modal
   // open now, so the drain says so instead of guessing.
@@ -319,6 +334,9 @@ const LIVE_CAPTURE_IMPL = `
     }
     const modals = findOpenModals();
     for (const entry of entries) {
+      if (liveResolver.hiddenInChain(flatChain(entry.start).map(hiddenFacts))) {
+        continue;
+      }
       if (modals.size === 0) {
         texts.push(entry.text);
       } else if (!entry.start.isConnected) {

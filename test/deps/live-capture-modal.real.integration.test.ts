@@ -212,11 +212,14 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the announcement capture
       const page: Page = await adoptPage(pw);
       const cdp = await context.newCDPSession(pw);
       await cdp.send('Accessibility.enable');
+      // The dialog is open, though not modal, when the region inside it is written, so the
+      // region is in the accessibility tree at the write. A later task makes it modal.
+      await pw.evaluate(`document.getElementById('first').show()`);
       await page.drainAnnouncements();
       await pw.evaluate(`new Promise((resolve) => {
         window.say('outside', 'said in outside');
         window.say('in-first', 'said in in-first');
-        setTimeout(() => { document.getElementById('first').showModal(); resolve(); }, 0);
+        setTimeout(() => { const first = document.getElementById('first'); first.close(); first.showModal(); resolve(); }, 0);
       })`);
       const record = await page.drainAnnouncementRecord();
       expect(record.undecidable).toBeNull();
@@ -370,6 +373,131 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the announcement capture
         document.getElementById('save').addEventListener('click', () => {
           ${opens}
           document.getElementById('message').textContent = 'Saved';
+        });
+      </script>
+    </body></html>`;
+    const driver = makeRealBrowserDriver();
+    try {
+      const page = await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+      try {
+        const [provider] = mapRequirementsToProviders({
+          version: 1,
+          requirements: [
+            {
+              id: 'save-announces',
+              kind: 'flow',
+              surface: 'clusters',
+              description: 'Saving announces that the change was saved.',
+              assertion: { type: 'flow', steps: [{ do: 'click', selector: '#save' }], expectedAnnouncement: 'Saved' },
+              approved: true,
+            },
+          ],
+        });
+        if (provider === undefined) throw new Error('no flow provider');
+        const drafts = draftsOf(
+          await provider.run({ page, screen: { id: 'clusters', url: 'http://127.0.0.1:5173/clusters' }, config: testConfig() }),
+        );
+        expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['intake:save-announces', 'fail']]);
+      } finally {
+        await page.close();
+      }
+    } finally {
+      await driver.close();
+    }
+  });
+  }
+
+  // A dialog that closes in the same task that writes a live region inside it. The observer runs
+  // after the task, when the dialog is already closed and its content is out of the accessibility
+  // tree, so no screen reader speaks the text. The capture recorded it anyway.
+  it('does not hear a region inside a dialog that closed in the task that wrote it', async () => {
+    const context = await browser.newContext();
+    try {
+      const pw = await context.newPage();
+      await pw.setContent(PAGE, { waitUntil: 'domcontentloaded' });
+      const page: Page = await adoptPage(pw);
+      const cdp = await context.newCDPSession(pw);
+      await cdp.send('Accessibility.enable');
+      await pw.evaluate(`document.getElementById('first').showModal()`);
+      await page.drainAnnouncements();
+      await pw.evaluate(`window.say('in-first', 'said in in-first'); document.getElementById('first').close()`);
+      const drained = await page.drainAnnouncements();
+      const state = await regionState(cdp, ['in-first'], drained);
+      expect(state['in-first']).toMatchObject({ heard: false, exposed: false });
+      expectMatchesTree(state);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('still hears a region inside a dialog that stays open after the write', async () => {
+    const context = await browser.newContext();
+    try {
+      const pw = await context.newPage();
+      await pw.setContent(PAGE, { waitUntil: 'domcontentloaded' });
+      const page: Page = await adoptPage(pw);
+      const cdp = await context.newCDPSession(pw);
+      await cdp.send('Accessibility.enable');
+      await pw.evaluate(`document.getElementById('first').showModal()`);
+      await page.drainAnnouncements();
+      await pw.evaluate(`window.say('in-first', 'said in in-first')`);
+      const state = await regionState(cdp, ['in-first'], await page.drainAnnouncements());
+      expect(state['in-first']).toEqual({ heard: true, exposed: true, reasons: [] });
+    } finally {
+      await context.close();
+    }
+  });
+
+  // The dialog closes after the write, one task later or after an awaited promise. The observer
+  // reads the change while the dialog is still open, but by the drain the dialog is closed and its
+  // content is out of the accessibility tree. The hidden state at drain decides, as the modal state
+  // does.
+  for (const [when, closeLater] of [
+    ['one task after the write', `setTimeout(() => { document.getElementById('first').close(); resolve(); }, 0);`],
+    ['after a promise that follows the write', `Promise.resolve().then(() => { document.getElementById('first').close(); resolve(); });`],
+  ] as const) {
+    it(`does not hear a region inside a dialog that closed ${when}`, async () => {
+      const context = await browser.newContext();
+      try {
+        const pw = await context.newPage();
+        await pw.setContent(PAGE, { waitUntil: 'domcontentloaded' });
+        const page: Page = await adoptPage(pw);
+        const cdp = await context.newCDPSession(pw);
+        await cdp.send('Accessibility.enable');
+        await pw.evaluate(`document.getElementById('first').showModal()`);
+        await page.drainAnnouncements();
+        await pw.evaluate(`new Promise((resolve) => {
+          window.say('in-first', 'said in in-first');
+          ${closeLater}
+        })`);
+        const state = await regionState(cdp, ['in-first'], await page.drainAnnouncements());
+        expect(state['in-first']).toMatchObject({ heard: false, exposed: false });
+        expectMatchesTree(state);
+      } finally {
+        await context.close();
+      }
+    });
+  }
+
+  // The false green end to end: a Save button in a modal dialog writes "Saved" into a polite region
+  // inside the dialog and closes it. No screen reader speaks the text, and a flow requirement that
+  // expects it passed. A close in a later task is not tested here: the flow step does not wait for a
+  // later task, so the order of the close and the drain is not fixed, and the capture-level test
+  // above covers that case by awaiting the close before it drains.
+  for (const [when, close] of [
+    ['in the same task', 'dialog.close();'],
+    ['after an awaited promise', 'await Promise.resolve(); dialog.close();'],
+  ] as const) {
+  it(`does not pass a flow requirement on a region inside a dialog the step closed ${when}`, async () => {
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Save</title></head><body>
+      <main><dialog id="edit"><p>Edit</p><div aria-live="polite" id="message"></div>
+      <button type="button" id="save">Save</button></dialog></main>
+      <script>
+        const dialog = document.getElementById('edit');
+        dialog.showModal();
+        document.getElementById('save').addEventListener('click', async () => {
+          document.getElementById('message').textContent = 'Saved';
+          ${close}
         });
       </script>
     </body></html>`;

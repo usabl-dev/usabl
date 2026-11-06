@@ -71,7 +71,7 @@ describe('createLiveResolver', () => {
 });
 
 describe('hiddenInChain', () => {
-  const shown = (ariaHidden: string | null = null): HiddenAttributes => ({ ariaHidden, inert: false, hidden: false });
+  const shown = (ariaHidden: string | null = null): HiddenAttributes => ({ ariaHidden, inert: false, hidden: false, closedDialog: false });
 
   // Chromium 151 leaves an element out of the accessibility tree for every non-empty aria-hidden
   // value except "false" and "undefined" in any ASCII case. A value with spaces around "false"
@@ -98,13 +98,24 @@ describe('hiddenInChain', () => {
     expect(resolver.hiddenInChain([shown(), shown('true')])).toBe(true);
     // aria-hidden="false" does not bring back content an ancestor hides.
     expect(resolver.hiddenInChain([shown('false'), shown('true')])).toBe(true);
-    expect(resolver.hiddenInChain([shown(), { ariaHidden: null, inert: true, hidden: false }])).toBe(true);
-    expect(resolver.hiddenInChain([{ ariaHidden: null, inert: false, hidden: true }, shown()])).toBe(true);
+    expect(resolver.hiddenInChain([shown(), { ariaHidden: null, inert: true, hidden: false, closedDialog: false }])).toBe(true);
+    expect(resolver.hiddenInChain([{ ariaHidden: null, inert: false, hidden: true, closedDialog: false }, shown()])).toBe(true);
+  });
+
+  // A closed dialog renders none of its content, and the browser leaves it out of the
+  // accessibility tree. A live region written inside it as it closes is silent.
+  it('hides content inside a closed dialog, at any depth of the chain', () => {
+    const resolver = createLiveResolver();
+    const closed: HiddenAttributes = { ariaHidden: null, inert: false, hidden: false, closedDialog: true };
+    expect(resolver.hiddenInChain([closed])).toBe(true);
+    expect(resolver.hiddenInChain([shown(), closed, shown()])).toBe(true);
+    expect(resolver.hiddenInChain([shown('false'), closed])).toBe(true);
+    expect(resolverFromSource().hiddenInChain([shown(), closed])).toBe(true);
   });
 
   it('answers the same from its own source alone', () => {
     const fromSource = resolverFromSource();
-    for (const chain of [[], [shown('true')], [shown('false')], [shown(), { ariaHidden: null, inert: true, hidden: false }]]) {
+    for (const chain of [[], [shown('true')], [shown('false')], [shown(), { ariaHidden: null, inert: true, hidden: false, closedDialog: false }]]) {
       expect(fromSource.hiddenInChain(chain)).toBe(createLiveResolver().hiddenInChain(chain));
     }
   });

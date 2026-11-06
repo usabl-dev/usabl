@@ -35,14 +35,17 @@ export interface LiveAttributes {
 }
 
 /**
- * The three attributes that decide whether one element hides itself and everything under it from
- * assistive technology, as read from the DOM. inert and hidden are true when the attribute is
- * present, whatever its value.
+ * The facts that decide whether one element hides itself and everything under it from assistive
+ * technology, as read from the DOM. inert and hidden are true when the attribute is present,
+ * whatever its value. closedDialog is true for an HTML dialog element without the open attribute:
+ * the browser does not render a closed dialog's content and leaves it out of the accessibility
+ * tree.
  */
 export interface HiddenAttributes {
   ariaHidden: string | null;
   inert: boolean;
   hidden: boolean;
+  closedDialog: boolean;
 }
 
 /** Whether one element is a modal dialog that is open now, as the browser's :modal reads it. */
@@ -170,16 +173,18 @@ export function createLiveResolver(): LiveResolver {
 
   /**
    * True when any element in a chain hides its subtree from assistive technology: an aria-hidden
-   * value the browser reads as true, an inert attribute, or a hidden attribute. Content inside such
-   * an element is silent even inside a live region. aria-hidden="false" does not bring back content
-   * an ancestor hides, so one hiding element anywhere in the chain is enough. A hidden attribute
-   * that page CSS overrides is still read as hidden. That can only make the capture hear less.
+   * value the browser reads as true, an inert attribute, a hidden attribute, or a dialog element
+   * that is closed. Content inside such an element is silent even inside a live region.
+   * aria-hidden="false" does not bring back content an ancestor hides, so one hiding element
+   * anywhere in the chain is enough. A hidden attribute or a closed dialog that page CSS shows is
+   * still read as hidden. That can only make the capture hear less.
    */
   function hiddenInChain(chain: readonly HiddenAttributes[]): boolean {
     return chain.some(
       (node) =>
         node.inert ||
         node.hidden ||
+        node.closedDialog ||
         (node.ariaHidden !== null && node.ariaHidden !== '' && !ARIA_HIDDEN_SHOWN.has(asciiLower(node.ariaHidden))),
     );
   }
