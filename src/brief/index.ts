@@ -266,7 +266,7 @@ export async function makeBrief(input: BriefInput): Promise<Brief> {
   const plan = await planFor(coverageFs, config, changed, docsManifest, trustedRead);
 
   // Which changed files reach each screen. Each file is planned on its own by the same planners,
-  // so a screen lists every file that reaches it, not only the first one the joined plan kept. One
+  // so a screen lists every file that reaches it. The joined plan keeps only the first one. One
   // changed file needs no second plan: it is the only file that can reach anything. Past the limit
   // the joined plan's own reach is used.
   const reachers = new Map<string, BriefReach[]>();

@@ -2480,10 +2480,10 @@ establish an evidence floor, then turn on the stop hook and CI. It is scanner-sh
 invocation, not scanner semantics: output is a full `Result` with verdict, differential,
 coverage honesty, and optional receipt minting.
 
-**Command surface.** `main` recognizes exactly twelve commands: `check`, `comment`,
-`bypass`, `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`,
-`doctor`, `docs`, plus `help`. `brief` is a command too (see section 11.5). `check` is the default when no command is given, so `usabl`
-alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
+**Command surface.** `main` recognizes these commands: `check`, `brief`, `comment`, `bypass`,
+`init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`, `doctor`, `docs`,
+`session`, `debt`, `history`, `serve-build`, `extract-build`, and `help`. `check` is the default
+when no command is given, so `usabl` alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
 `usabl help <command>` print help and exit 0 before anything else runs: no config is read, no
 browser opens, stdin is not read, and no file is written. The top-level help lists every
 command with one line each. A command's help lists every flag it takes. Both come from one

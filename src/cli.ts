@@ -416,7 +416,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   if (opts.command === 'brief') {
-    // A brief is a plan for a task, not a check. It reads the working tree and git, opens no
+    // A brief is a plan for a task. It runs no check. It reads the working tree and git, opens no
     // browser, writes nothing, never calls the gate, and exits 0 whenever it produced a brief. A
     // config or policy read failure throws, the same way it does for check.
     let changedFiles: string[] | undefined;
