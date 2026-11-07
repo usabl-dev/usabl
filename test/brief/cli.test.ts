@@ -44,8 +44,34 @@ describe('brief arguments', () => {
     });
   });
 
+  const place = { root: '/repo', cwd: '/repo' };
+
   it('writes paths the way git does and drops repeats', () => {
-    expect(normalizeTaskFiles(['./src/a.tsx', 'src//b.tsx', 'src/a.tsx'])).toEqual(['src/a.tsx', 'src/b.tsx']);
+    expect(normalizeTaskFiles(['./src/a.tsx', 'src//b.tsx', 'src/a.tsx'], place)).toEqual({
+      ok: true,
+      files: ['src/a.tsx', 'src/b.tsx'],
+    });
+  });
+
+  it('makes an absolute path inside the repository relative to its root', () => {
+    expect(normalizeTaskFiles(['/repo/src/a.tsx', 'src/b.tsx'], place)).toEqual({
+      ok: true,
+      files: ['src/a.tsx', 'src/b.tsx'],
+    });
+    // A relative path is read from where the command runs, the way a shell reads it.
+    expect(normalizeTaskFiles(['src/a.tsx'], { root: '/repo', cwd: '/repo/web' })).toEqual({
+      ok: true,
+      files: ['web/src/a.tsx'],
+    });
+  });
+
+  it('refuses a path outside the repository and names it', () => {
+    for (const path of ['../other/a.tsx', '/elsewhere/a.tsx', 'src/../../a.tsx', '..']) {
+      const result = normalizeTaskFiles(['src/ok.tsx', path], place);
+      expect(result.ok, path).toBe(false);
+      expect(result.ok ? '' : result.message).toContain(path);
+      expect(result.ok ? '' : result.message).toMatch(/outside the repository/u);
+    }
   });
 });
 
@@ -131,6 +157,18 @@ describe('usabl brief', () => {
     const brief = JSON.parse(stdout.join(''));
     expect(brief.files).toEqual(['src/Page.tsx']);
     expect(brief.screens.map((screen: { id: string }) => screen.id)).toEqual(['page']);
+  });
+
+  it('makes an absolute path inside the repository relative, and refuses one outside with exit 2', async () => {
+    await repo();
+    expect(await main(['brief', '--json', '--files', join(workspace, 'src/Page.tsx')])).toBe(0);
+    expect(JSON.parse(stdout.join('')).files).toEqual(['src/Page.tsx']);
+
+    stdout = [];
+    expect(await main(['brief', '--files', '../outside.tsx'])).toBe(2);
+    expect(stderr.join('')).toContain('../outside.tsx');
+    expect(stderr.join('')).toContain('outside the repository');
+    expect(stdout.join('')).toBe('');
   });
 
   it('fails the same way check does when there is no config', async () => {

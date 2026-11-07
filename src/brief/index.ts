@@ -42,7 +42,8 @@ import { DEQUE_PROVIDER_ID } from '../providers/engines/deque.js';
 import { EVINCED_PROVIDER_ID } from '../providers/engines/evinced.js';
 import { scrubOutboundData } from '../surfaces/scrub.js';
 import { checkGuard } from '../trust/guard.js';
-import { posix } from 'node:path';
+import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
+import { operatorPath } from '../intake/config-error.js';
 
 export interface BriefCheck {
   id: string;
@@ -127,13 +128,32 @@ function localCoverageFs(fs: FsGlob, divergedPaths: readonly string[]): { fs: Fs
   };
 }
 
+export type TaskFiles = { ok: true; files: string[] } | { ok: false; message: string };
+
 /**
- * The task's files written the way git writes changed paths, relative to the repository root with
+ * The task's files written the way git writes changed paths: relative to the repository root, with
  * no "./" and no doubled slash, in the order given, each once. The planners match these strings
- * against globs and surface files, so "./src/App.tsx" would otherwise map to nothing.
+ * against globs and surface files, so "./src/App.tsx" or an absolute path would otherwise map to
+ * nothing and read as a file no screen reaches. A relative path is read from `cwd`, the way a shell
+ * reads it. A path outside the repository is refused, because no screen of this repository can be
+ * reached by it, and the refusal names it.
  */
-export function normalizeTaskFiles(files: readonly string[]): string[] {
-  return [...new Set(files.map((file) => posix.normalize(file.replace(/\\/gu, '/'))))];
+export function normalizeTaskFiles(files: readonly string[], place: { root: string; cwd: string }): TaskFiles {
+  const out: string[] = [];
+  for (const file of files) {
+    const absolute = resolve(place.cwd, file);
+    const inRepo = relative(place.root, absolute).split(sep).join('/');
+    if (inRepo === '' || inRepo === '..' || inRepo.startsWith('../') || isAbsolute(inRepo)) {
+      return {
+        ok: false,
+        message:
+          `refused: --files names ${operatorPath(file)}, which is outside the repository. ` +
+          'Name each file by its path inside the repository, such as src/App.tsx.',
+      };
+    }
+    out.push(posix.normalize(inRepo));
+  }
+  return { ok: true, files: [...new Set(out)] };
 }
 
 /** The app and docs plans for a list of changed files, joined the way run() joins them. */
