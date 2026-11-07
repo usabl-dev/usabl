@@ -281,6 +281,7 @@ describe('makeBrief done', () => {
     expect(brief.nothingToCheck).toBe(false);
     expect(brief.done).toEqual([
       DONE_CONDITIONS.noBlockingFailure,
+      DONE_CONDITIONS.noUnconfirmedFinding,
       DONE_CONDITIONS.coverageComplete,
       DONE_CONDITIONS.approvals,
       DONE_CONDITIONS.liveScan,
@@ -295,6 +296,35 @@ describe('makeBrief done', () => {
     expect(brief.nothingToCheck).toBe(true);
     expect(brief.screens).toEqual([]);
     expect(brief.done).toEqual([DONE_CONDITIONS.nothingToCheck, DONE_CONDITIONS.approvals]);
+  });
+
+  it('names a finding usabl could not confirm, which makes the result not_covered', () => {
+    expect(DONE_CONDITIONS.noUnconfirmedFinding).toMatch(/unverified/u);
+    expect(DONE_CONDITIONS.noUnconfirmedFinding).toMatch(/not_covered/u);
+  });
+
+  it('says nothing to check truthfully when a policy file is dirty and the result needs approval', async () => {
+    const deps = depsFor({
+      files: { 'usabl.config.json': JSON.stringify({ ...config, guardedPaths: ['src/gate/'] }) },
+      headContents: appFiles,
+    });
+    const result = await run(deps, config, { changedFiles: ['README.md', 'usabl.config.json'] });
+    const brief = await briefFor(deps, config, ['README.md', 'usabl.config.json']);
+    expect(result.verdict).toBe('approval_required');
+    expect(result.coverage.nothingToCheck).toBe(true);
+    expect(brief.nothingToCheck).toBe(true);
+    expect(brief.done).toEqual([DONE_CONDITIONS.nothingToCheck, DONE_CONDITIONS.approvals]);
+    // The overall result is approval_required with exit 2, so the line must not claim exit 0.
+    expect(DONE_CONDITIONS.nothingToCheck).not.toMatch(/exits 0/u);
+    expect(DONE_CONDITIONS.nothingToCheck).toMatch(/^No verdict from the scan/u);
+    expect(DONE_CONDITIONS.nothingToCheck).toMatch(/approvals/u);
+  });
+
+  it('keeps the done lines plain: no "X, never Y" turn', () => {
+    expect(DONE_CONDITIONS.coverageComplete.endsWith('A gap makes the result not_covered.')).toBe(true);
+    for (const line of Object.values(DONE_CONDITIONS)) {
+      expect(line).not.toMatch(/, never /u);
+    }
   });
 
   it('carries the version, the policy source, and the files', async () => {

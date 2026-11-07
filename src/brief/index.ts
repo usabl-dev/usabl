@@ -221,6 +221,7 @@ function doneFor(nothingToCheck: boolean, screens: BriefScreen[]): string[] {
   }
   const done: string[] = [
     DONE_CONDITIONS.noBlockingFailure,
+    DONE_CONDITIONS.noUnconfirmedFinding,
     DONE_CONDITIONS.coverageComplete,
     DONE_CONDITIONS.approvals,
   ];

@@ -2902,8 +2902,11 @@ run gives them and joined in the same order, so for the same changed files the b
 exactly the screens a local `usabl check` scans. Like a local run, it checks the guarded files
 against HEAD and reads a `usabl.routes.json` or `usabl.docs.json` that differs from HEAD as
 missing, and it adds a disclosure line for each such manifest. The checks come from the provider list the check runner is built with. The done list
-restates the gate rules (section 9): no new deterministic failure, no coverage gap, approval for
-any changed policy file, and a live scan when a screen needs one.
+restates the gate rules (section 9): no new deterministic failure, no new deterministic finding
+usabl could not confirm, no coverage gap, approval for any changed policy file, and a live scan
+when a screen needs one. When nothing is left to check, it says the scan gives no verdict and
+points at the approvals line, because a changed policy file still makes the result
+`approval_required`.
 
 The brief is measurement. It opens no browser, so no page text is involved, mints no verdict and
 no receipt, never calls the gate, and never reads a verdict. It reads policy from the working
