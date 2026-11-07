@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { UsablConfig } from '../../src/contracts/index.js';
 import { makeFakeDeps, type FakeDepsSpec } from '../../src/deps/fakes.js';
-import { makeBrief, type Brief } from '../../src/brief/index.js';
+import { makeBrief, PER_FILE_REACH_LIMIT, type Brief } from '../../src/brief/index.js';
 import { DONE_CONDITIONS } from '../../src/coverage/completeness.js';
 import { formatBrief } from '../../src/output/brief.js';
 import { run } from '../../src/run.js';
@@ -193,6 +193,44 @@ describe('makeBrief reads the manifests the way a local run does', () => {
     });
     const text = formatBrief(await briefFor(deps, config, ['src/ReportsPage.tsx']));
     expect(text).toContain('note: usabl.routes.json differs from HEAD; a local check reads it as missing');
+  });
+});
+
+describe('makeBrief bounds the cost of reachedBy', () => {
+  it('plans a single changed file once, since its reach is the joined plan', async () => {
+    const deps = depsFor();
+    const read = vi.spyOn(deps.fs, 'readFile');
+    const brief = await briefFor(deps, config, ['src/shared/Table.tsx']);
+    // Once each for the guard, the joined plan, and the requirement screen check. A second plan of
+    // the same file would read the routes manifest a fourth time.
+    expect(read.mock.calls.filter(([path]) => path === 'usabl.routes.json')).toHaveLength(3);
+    expect(brief.screens[0]?.reachedBy).toEqual([
+      { file: 'src/shared/Table.tsx', via: 'imported by the route entry src/ClustersPage.tsx' },
+    ]);
+    expect(brief.disclosures).toEqual([]);
+  });
+
+  const generated = (count: number) => Array.from({ length: count }, (_, index) => `src/gen/File${index}.tsx`);
+
+  it(`lists every reaching file up to ${PER_FILE_REACH_LIMIT} changed files`, async () => {
+    const changed = ['src/ClustersPage.tsx', 'src/shared/Table.tsx', ...generated(PER_FILE_REACH_LIMIT - 2)];
+    const brief = await briefFor(depsFor(), config, changed);
+    expect(brief.screens.find((screen) => screen.id === 'clusters')?.reachedBy).toHaveLength(2);
+    expect(brief.disclosures).toEqual([]);
+  });
+
+  it(`lists one file per screen above ${PER_FILE_REACH_LIMIT} changed files and says so`, async () => {
+    const deps = depsFor();
+    const changed = ['src/ClustersPage.tsx', 'src/shared/Table.tsx', ...generated(PER_FILE_REACH_LIMIT - 1)];
+    const scanned = await scannedByRun(deps, config, changed);
+    const brief = await briefFor(deps, config, changed);
+    expect(brief.screens.map((screen) => screen.id)).toEqual(scanned);
+    expect(brief.screens.find((screen) => screen.id === 'clusters')?.reachedBy).toEqual([
+      { file: 'src/ClustersPage.tsx', via: 'imported by the route entry src/ClustersPage.tsx' },
+    ]);
+    expect(brief.disclosures).toEqual([
+      `reachedBy lists at most one file per screen because the change has ${PER_FILE_REACH_LIMIT + 1} files.`,
+    ]);
   });
 });
 

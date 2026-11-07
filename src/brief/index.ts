@@ -92,6 +92,13 @@ export interface BriefInput {
   changedFiles?: string[];
 }
 
+/**
+ * Above this many changed files the brief does not plan each file on its own. Each of those plans
+ * builds the import graph again, so the cost grows with the size of the change. Past the limit a
+ * screen lists only the file the joined plan kept, and a disclosure says so.
+ */
+export const PER_FILE_REACH_LIMIT = 50;
+
 // The engines usabl knows. One that the config does not turn on has no provider, and the brief
 // still names it so an agent does not assume it runs.
 const KNOWN_ENGINE_IDS: readonly string[] = [DEQUE_PROVIDER_ID, EVINCED_PROVIDER_ID];
@@ -259,9 +266,25 @@ export async function makeBrief(input: BriefInput): Promise<Brief> {
   const plan = await planFor(coverageFs, config, changed, docsManifest, trustedRead);
 
   // Which changed files reach each screen. Each file is planned on its own by the same planners,
-  // so a screen lists every file that reaches it, not only the first one the joined plan kept.
+  // so a screen lists every file that reaches it, not only the first one the joined plan kept. One
+  // changed file needs no second plan: it is the only file that can reach anything. Past the limit
+  // the joined plan's own reach is used.
   const reachers = new Map<string, BriefReach[]>();
-  for (const file of changed) {
+  const disclosures = coverage.hidden.map(manifestDisclosure);
+  const perFile = changed.length > 1 && changed.length <= PER_FILE_REACH_LIMIT;
+  if (changed.length === 1) {
+    for (const screen of plan.affected) {
+      reachers.set(screen.screenId, [{ file: changed[0] ?? null, via: viaOf(screen) }]);
+    }
+  } else if (!perFile) {
+    for (const screen of plan.affected) {
+      reachers.set(screen.screenId, [{ file: screen.importChain?.[1] ?? null, via: viaOf(screen) }]);
+    }
+    if (plan.affected.length > 0) {
+      disclosures.push(`reachedBy lists at most one file per screen because the change has ${changed.length} files.`);
+    }
+  }
+  for (const file of perFile ? changed : []) {
     const single = await planFor(coverageFs, config, [file], docsManifest, trustedRead);
     for (const screen of single.affected) {
       const list = reachers.get(screen.screenId) ?? [];
@@ -316,7 +339,7 @@ export async function makeBrief(input: BriefInput): Promise<Brief> {
     files: changed,
     nothingToCheck: plan.nothingToCheck,
     screens,
-    disclosures: coverage.hidden.map(manifestDisclosure),
+    disclosures,
     unresolved,
     gaps,
     done: doneFor(plan.nothingToCheck, screens),
