@@ -213,6 +213,8 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
     id: 'keyboard-walk',
     layer: 'walk',
     capabilities: ['live'],
+    // The walk runs on every screen it is given.
+    appliesBeforeScan: () => ({ applies: true }),
     // This walk traverses the real focus order, which only describes what a keyboard user meets
     // when it starts from the page as loaded. An opened or dismissed widget rewrites that order.
     requiresPristinePage: true,

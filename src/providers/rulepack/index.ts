@@ -5,10 +5,13 @@
 import type {
   CoverageGap,
   Draft,
+  PlannedApplicability,
+  PlannedScreen,
   Provider,
   ProviderContext,
   ProviderOutput,
 } from '../../contracts/index.js';
+import { DECIDED_ON_PAGE } from '../applicability.js';
 import { checkPfIconButtonName } from './pf-icon-button-name.js';
 import { checkPfKebabExpandedState } from './pf-kebab-expanded-state.js';
 import { checkPfRowActionNameUnique } from './pf-row-action-name-unique.js';
@@ -72,6 +75,14 @@ function checkGap(name: string, message: string): CoverageGap {
   };
 }
 
+// The one rule for where this pack runs before the page opens. The run below reads it too. On an
+// app screen the answer waits for the page, because the pack runs only where a PatternFly marker is.
+export function pfRulepackPlan(screen: PlannedScreen): PlannedApplicability {
+  return screen.profile === 'docs'
+    ? { applies: false, why: 'not on docs pages: the PatternFly rulepack runs on app screens only' }
+    : { applies: true, why: DECIDED_ON_PAGE };
+}
+
 export function makeRulepackProvider(extraChecks: RulepackCheck[] = []): Provider {
   return {
     id: 'pf-rulepack',
@@ -80,10 +91,11 @@ export function makeRulepackProvider(extraChecks: RulepackCheck[] = []): Provide
     // The probes below click dialog and menu triggers and press Escape, so any provider that runs
     // after this one reads a page with open, closed, or refocused widgets in it.
     mutatesPageState: true,
+    appliesBeforeScan: pfRulepackPlan,
     async run(ctx: ProviderContext): Promise<ProviderOutput> {
       // The PF selectors match nothing on docs, and the PF-worded copy reads wrong for a docs guide.
       // So the whole rulepack is a no-op on docs. App and default behavior stays unchanged.
-      if ((ctx.profile ?? 'app') === 'docs') {
+      if (!pfRulepackPlan({ id: ctx.screen.id, profile: ctx.profile ?? 'app' }).applies) {
         return { drafts: [] };
       }
 

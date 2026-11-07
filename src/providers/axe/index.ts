@@ -281,6 +281,9 @@ export const axeProvider: Provider = {
   id: 'axe-core',
   layer: AXE_LAYER,
   capabilities: ['live'],
+  // axe runs on every screen it is given, app and docs alike. Which of its rules apply is reported
+  // per rule after the scan.
+  appliesBeforeScan: () => ({ applies: true }),
   async run(ctx: ProviderContext): Promise<ProviderOutput> {
     if (!isAxePage(ctx.page)) {
       throw new Error('axe provider requires page.runAxe()');

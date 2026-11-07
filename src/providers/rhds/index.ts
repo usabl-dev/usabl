@@ -10,6 +10,7 @@ import type {
   ProviderContext,
   ProviderOutput,
 } from '../../contracts/index.js';
+import { DECIDED_ON_PAGE } from '../applicability.js';
 import { packNotApplicable } from '../design-system-pack.js';
 import { RHDS_LAYER } from './draft.js';
 import { checkRhdsAccordionHeaderParent } from './rhds-accordion-header-parent.js';
@@ -62,6 +63,8 @@ export function makeRhdsRulepackProvider(extraChecks: RhdsCheck[] = []): Provide
     layer: RHDS_LAYER,
     capabilities: ['live'],
     // RHDS is used on content sites as well as applications, so the pack runs on both profiles.
+    // It runs only where the page has an RHDS element, which only the page can say.
+    appliesBeforeScan: () => ({ applies: true, why: DECIDED_ON_PAGE }),
     async run(ctx: ProviderContext): Promise<ProviderOutput> {
       const notApplicable = await packNotApplicable(ctx, {
         id: 'rhds-rulepack',

@@ -47,6 +47,7 @@ import {
   type InstalledPackage,
   type ModuleLoader,
 } from './shared.js';
+import { ENGINE_PREVIEW } from '../applicability.js';
 
 export const DEQUE_PACKAGE = '@axe-devtools/playwright';
 export const DEQUE_PROVIDER_ID = 'deque';
@@ -337,6 +338,7 @@ export function makeDequeProvider(config: DequeEngineConfig, options: DequeProvi
     id: DEQUE_PROVIDER_ID,
     layer: DEQUE_LAYER,
     capabilities: dequeCapabilities(config),
+    appliesBeforeScan: () => ({ applies: true, why: ENGINE_PREVIEW }),
     async run(ctx: ProviderContext): Promise<ProviderOutput> {
       try {
         return await analyze(ctx);
