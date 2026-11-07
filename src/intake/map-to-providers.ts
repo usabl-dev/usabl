@@ -22,6 +22,7 @@ import type {
   Step,
   VoiceAssertion,
 } from '../contracts/index.js';
+import { ANNOUNCEMENT_UNDECIDABLE_FIX, announcementUndecidableCause } from '../primitives/announcement-undecidable.js';
 import { FOCUS_UNREADABLE_FIX, focusUnreadableCause } from '../primitives/focus-unreadable.js';
 import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
 import { makeVirtualSrProvider } from '../voicing/virtual-sr-provider.js';
@@ -127,13 +128,6 @@ function flowUnreadableDraft(
   };
 }
 
-const UNDECIDABLE_CAUSE: Record<AnnouncementUndecidable, string> = {
-  'closed-shadow-modal':
-    'a modal dialog is open inside a closed shadow root, so usabl cannot tell which live regions it hides from assistive technology',
-  'changed-element-removed':
-    'a modal dialog is open, and a live region that changed was removed before usabl could check whether the modal hid it',
-};
-
 // The drain cannot say which announcements a screen reader heard, so the flow is neither a pass
 // nor a fail. It is a gap that names the cause.
 function flowUndecidableDraft(
@@ -154,8 +148,8 @@ function flowUndecidableDraft(
     elementName: node?.name ?? null,
     role: node?.role ?? null,
     whatUserExperiences: `Whether users hear "${expectedAnnouncement}" is unknown.`,
-    why: `usabl cannot tell which live-region announcements a screen reader spoke: ${UNDECIDABLE_CAUSE[reason]}.`,
-    fix: 'Check this announcement by hand. To let usabl check it, keep modal dialogs out of closed shadow roots, and keep the live region in the document until the step ends.',
+    why: `usabl cannot tell which live-region announcements a screen reader spoke: ${announcementUndecidableCause(reason)}.`,
+    fix: ANNOUNCEMENT_UNDECIDABLE_FIX,
     evidence: evidenceFromNode(node, { expectedAnnouncement, announcements, undecidable: reason }),
     confidence: 'unverified',
   };
@@ -373,7 +367,8 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
   for (const requirement of bundle.requirements) {
     if (requirement.assertion.type === 'voice') {
       const contract = toVoiceContract({ ...requirement, assertion: requirement.assertion });
-      providers.push(makeVirtualSrProvider([contract], makeStepRunner(), { id: `intake:${requirement.id}` }));
+      const stepRunner = makeStepRunner({ settleAfterEachStep: true });
+      providers.push(makeVirtualSrProvider([contract], stepRunner, { id: `intake:${requirement.id}` }));
     }
   }
 

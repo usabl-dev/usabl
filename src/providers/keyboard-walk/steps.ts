@@ -1,5 +1,5 @@
 /**
- * Step runner for keyboard interaction transcripts.
+ * Step runner for keyboard interaction transcripts and interaction contracts.
  * It must never silent-no-op unknown step kinds, and it must never skip live-token drains.
  * This keeps interaction evidence honest while the gate remains the only verdict authority.
  */
@@ -58,18 +58,37 @@ function stateTokens(states: Record<string, unknown>): AnnouncementToken[] {
   return tokens;
 }
 
-export function makeConcreteStepRunner(): StepRunner {
+export interface StepRunnerOptions {
+  // Wait for the page to settle after each step before reading focus and draining, and drain with
+  // the record that says when it cannot be trusted. Interaction contracts set this: an action such
+  // as a delete often announces a moment after it runs, and draining at once would miss it, so the
+  // transcript would depend on timing. The keyboard walk leaves it off. A Tab does not wait on the
+  // application, and a settle wait of at least 1.5 seconds on each of up to 200 stops would spend
+  // the walk's whole budget.
+  settleAfterEachStep?: boolean;
+}
+
+export function makeConcreteStepRunner(options: StepRunnerOptions = {}): StepRunner {
+  const settle = options.settleAfterEachStep === true;
   return {
     async run(page: Page, steps: Step[]): Promise<TranscriptStop[]> {
       await page.armAnnouncementCapture();
+      if (settle) {
+        // The capture runs for the life of the page, so it still holds what earlier checks caused,
+        // such as a flow requirement that clicked and never drained. Left in, it would land in the
+        // first window and could satisfy an obligation this contract's steps never caused.
+        await page.drainAnnouncementRecord();
+      }
       const stops: TranscriptStop[] = [];
 
       for (const [index, step] of steps.entries()) {
         await executeStep(page, step);
+        const settled = settle ? await page.settleAfterAction() : null;
         const elementPath = await page.activePath();
         const node = await page.activeNode();
         const focusUnreadable = await page.activeFocusUnreadable();
-        const liveText = await page.drainAnnouncements();
+        const drain = settle ? await page.drainAnnouncementRecord() : { texts: await page.drainAnnouncements(), undecidable: null };
+        const liveText = drain.texts;
         const announcement: AnnouncementToken[] = [];
 
         if (node !== null) {
@@ -90,6 +109,12 @@ export function makeConcreteStepRunner(): StepRunner {
         if (focusUnreadable !== null) {
           stop.focusUnreadable = focusUnreadable;
         }
+        if (settled !== null && !settled.settled) {
+          stop.unsettled = { waitedMs: settled.waitedMs };
+        }
+        if (drain.undecidable !== null) {
+          stop.drainUndecidable = drain.undecidable;
+        }
         stops.push(stop);
       }
 
@@ -98,6 +123,6 @@ export function makeConcreteStepRunner(): StepRunner {
   };
 }
 
-export function makeStepRunner(): StepRunner {
-  return makeConcreteStepRunner();
+export function makeStepRunner(options: StepRunnerOptions = {}): StepRunner {
+  return makeConcreteStepRunner(options);
 }

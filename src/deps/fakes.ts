@@ -69,6 +69,9 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     activeElementIs: async () => false,
     activeElementWithin: async () => false,
     armAnnouncementCapture: async () => {},
+    // A fake page never changes on its own, so it has settled the moment an action ends. A test
+    // that needs a page still changing overrides this.
+    settleAfterAction: async () => ({ settled: true, waitedMs: 0 }),
     drainAnnouncements: async () => [],
     // A fake page has no modal dialogs, so what it drains is always decidable. It drains through
     // the page's own drainAnnouncements, so a test that scripts that one scripts both.

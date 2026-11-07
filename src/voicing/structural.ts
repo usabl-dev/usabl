@@ -6,6 +6,7 @@
  * It must never mint a verdict and must never perform word-level obligation matching.
  */
 import type { AnnouncementToken, Draft, InteractionContract, SpeechObligation, TranscriptStop } from '../contracts/index.js';
+import { ANNOUNCEMENT_UNDECIDABLE_FIX, announcementUndecidableCause } from '../primitives/announcement-undecidable.js';
 import { FOCUS_UNREADABLE_FIX, focusUnreadableCause } from '../primitives/focus-unreadable.js';
 
 function nonEmptyText(text: string | null): text is string {
@@ -61,6 +62,61 @@ function makeDraft(
         : {}),
     },
     confidence: counted ? 'fail' : 'unverified',
+  };
+}
+
+/**
+ * Whether a window decides nothing: the page was still changing when the runner stopped waiting,
+ * or the drain cannot say what a screen reader heard. Both tiers skip such a window, and this tier
+ * reports each obligation in it as a gap.
+ */
+export function isUndecidedWindow(stop: TranscriptStop): boolean {
+  return stop.unsettled !== undefined || stop.drainUndecidable !== undefined;
+}
+
+// The same shape the flow requirement uses for its undecidable drain: unverified, naming the cause,
+// so it is a gap and never a miss or a pass. It carries no wall-clock value, so two runs that waited
+// for different times produce the same draft.
+function undecidedWindowDraft(
+  contract: InteractionContract,
+  obligation: SpeechObligation,
+  stop: TranscriptStop,
+  screenId: string,
+  counted: boolean,
+): Draft {
+  const step = obligation.afterStep;
+  const causes: string[] = [];
+  if (stop.unsettled !== undefined) {
+    causes.push('the page was still changing when usabl stopped waiting for it to settle, so focus and announcements were read before the page finished reacting');
+  }
+  if (stop.drainUndecidable !== undefined) {
+    causes.push(`usabl cannot tell which live-region announcements a screen reader spoke: ${announcementUndecidableCause(stop.drainUndecidable)}`);
+  }
+  const fix =
+    stop.drainUndecidable !== undefined
+      ? ANNOUNCEMENT_UNDECIDABLE_FIX
+      : 'Check this step by hand. To let usabl check it, make sure the page stops changing soon after the action, for example by ending animations and polling that the action starts.';
+  return {
+    ...makeDraft(
+      'voicing/window-undecided',
+      counted,
+      screenId,
+      stop.elementPath,
+      `Whether users hear what obligation "${obligation.class}" needs after step ${step} is unknown.`,
+      `In contract "${contract.contractId}", after step ${step}, ${causes.join('; and ')}.`,
+      fix,
+    ),
+    severity: 'moderate',
+    evidence: {
+      extra: {
+        contractId: contract.contractId,
+        step,
+        obligation: obligation.class,
+        ...(stop.unsettled !== undefined ? { unsettled: true } : {}),
+        ...(stop.drainUndecidable !== undefined ? { undecidable: stop.drainUndecidable } : {}),
+      },
+    },
+    confidence: 'unverified',
   };
 }
 
@@ -148,6 +204,11 @@ export function runStructuralTier(
           'Ensure the interaction steps can reach the obligation window by keyboard.',
         ),
       );
+      continue;
+    }
+
+    if (isUndecidedWindow(windowStop)) {
+      drafts.push(undecidedWindowDraft(contract, obligation, windowStop, screenId, counted));
       continue;
     }
 

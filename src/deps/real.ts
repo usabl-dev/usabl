@@ -5,7 +5,7 @@
  * Missing or ignored AX nodes stay null so downstream layers disclose not-covered and unverified honestly.
  */
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
-import type { AncestorAttributesRead, AnnouncementDrain, AnnouncementUndecidable, ApiResponse, AxNode, BrowserDriver, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementUndecidable, ApiResponse, AxNode, BrowserDriver, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
 import { carryPlaywrightPage, registerPlaywrightPage } from '../providers/engines/shared.js';
@@ -43,6 +43,14 @@ const SETTLE_SAMPLES_REQUIRED = 4;
 // idle still reads as idle here, and the live signal only differs by catching requests that start
 // after that first idle.
 const NETWORK_QUIET_WINDOW_MS = 500;
+// The most a voice contract waits for the page to react to one step before it reads focus and
+// drains the live record. The readiness budget above is sized for a whole page load on a slow
+// application, which would let one step stall a scan for a minute. One action needs far less.
+// The settle window itself is 1.5 seconds, four equal reads 500 ms apart, so a page that does not
+// change at all settles inside this cap, and a page that changes once in the first half second
+// after the action still does. A page still changing at the cap is not waited for: its step
+// window becomes a gap that says so, never a miss and never a pass.
+export const ACTION_SETTLE_CAP_MS = 2_000;
 
 // Browser-side path helper. Keep this the only implementation: a uniqueness (or any path) fix
 // that lands in one copy and misses another recreates the duplicate-id false green.
@@ -2050,6 +2058,36 @@ export async function waitForRendered(
   }
 }
 
+/**
+ * Waits for a page to react to one action, by the readiness signals waitForRendered reads: the
+ * element count equal for the same number of reads, and the network quiet for the same window.
+ * It has its own cap, and running out is an answer, not an error: it returns settled false and how
+ * long it waited, and the caller treats that step's window as undecided. A page-side failure from
+ * evaluate, such as a context destroyed by a navigation, goes through unchanged, the way it does in
+ * waitForRendered, so the caller reports it rather than reading a page that is gone.
+ *
+ * Exported for tests. Product code reaches this through Page.settleAfterAction().
+ */
+export async function waitForActionSettled(pw: ReadinessPage, capMs: number): Promise<ActionSettle> {
+  const start = Date.now();
+  const deadline = start + capMs;
+  let previous: number | null = null;
+  let repeats = 0;
+  for (;;) {
+    const elements = await pw.evaluate(() => document.getElementsByTagName('*').length);
+    repeats = elements === previous ? repeats + 1 : 1;
+    previous = elements;
+    if (repeats >= SETTLE_SAMPLES_REQUIRED && pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS)) {
+      return { settled: true, waitedMs: Date.now() - start };
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return { settled: false, waitedMs: Date.now() - start };
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(SETTLE_SAMPLE_INTERVAL_MS, remaining)));
+  }
+}
+
 // A readiness probe that throws has not shown the signal, so it reads as false and the wait goes on.
 async function signalHolds(holds: () => Promise<boolean>): Promise<boolean> {
   try {
@@ -2147,6 +2185,9 @@ function wrapPage(
     },
     async activeElementWithin(selector: string): Promise<boolean> {
       return (await callInWorld(cdp, READ_WORLD, 'read focus', ACTIVE_ELEMENT_WITHIN_FUNCTION, [selector])) === true;
+    },
+    async settleAfterAction(): Promise<ActionSettle> {
+      return waitForActionSettled(readiness, ACTION_SETTLE_CAP_MS);
     },
     async armAnnouncementCapture(): Promise<void> {
       // The observer is already running: it starts at document start on a page usabl opens, and
