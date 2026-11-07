@@ -3,6 +3,8 @@
  * Intake drafts are direct observations against authored strings and actions, but they still
  * never mint a verdict because the gate remains the only verdict authority.
  * Documentation requirements emit no Provider because they define output artifacts, not checks.
+ * Voice requirements become virtual screen reader providers, whose drafts are preview unless the
+ * obligation class is promoted in config.
  */
 import type {
   AnnouncementUndecidable,
@@ -21,6 +23,8 @@ import type {
   VoiceAssertion,
 } from '../contracts/index.js';
 import { FOCUS_UNREADABLE_FIX, focusUnreadableCause } from '../primitives/focus-unreadable.js';
+import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
+import { makeVirtualSrProvider } from '../voicing/virtual-sr-provider.js';
 
 function hasNonEmptyName(name: string | null): boolean {
   return name !== null && name.trim().length > 0;
@@ -359,6 +363,17 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
 
     if (requirement.assertion.type === 'flow') {
       providers.push(toFlowProvider(requirement, requirement.assertion));
+    }
+  }
+
+  // Voice contracts drive the page the way flow requirements do, so they run in the same group,
+  // after the read-only providers and the keyboard walk, with the same flags. Each contract is
+  // its own provider named by its requirement id, so a static-only run, or a contract whose step
+  // fails, is a gap that names the requirement, and one failing contract does not hide another.
+  for (const requirement of bundle.requirements) {
+    if (requirement.assertion.type === 'voice') {
+      const contract = toVoiceContract({ ...requirement, assertion: requirement.assertion });
+      providers.push(makeVirtualSrProvider([contract], makeStepRunner(), { id: `intake:${requirement.id}` }));
     }
   }
 

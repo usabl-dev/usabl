@@ -88,7 +88,7 @@ describe('makeVirtualSrProvider', () => {
     expect(drafts.filter((draft) => draft.evidenceClass === 'preview')).toHaveLength(0);
   });
 
-  it('emits a deterministic structural draft for a missing dialog name', async () => {
+  it('emits a preview structural draft for a missing dialog name when the class is not promoted', async () => {
     const provider = makeVirtualSrProvider(
       [contract(SCREEN.id, [dialogObligation])],
       runnerReturning([stopAt(0, '/dialog', [role('dialog')])]),
@@ -96,6 +96,21 @@ describe('makeVirtualSrProvider', () => {
     const page = await openClustersPage();
 
     const drafts = draftsOf(await provider.run({ page, screen: SCREEN, config: testConfig() }));
+
+    expect(drafts.some((draft) => draft.rule === 'voicing/missing-name' && draft.evidenceClass === 'preview')).toBe(true);
+    expect(drafts.some((draft) => draft.evidenceClass === 'deterministic')).toBe(false);
+  });
+
+  it('emits a deterministic structural draft for a missing dialog name when the class is promoted', async () => {
+    const provider = makeVirtualSrProvider(
+      [contract(SCREEN.id, [dialogObligation])],
+      runnerReturning([stopAt(0, '/dialog', [role('dialog')])]),
+    );
+    const page = await openClustersPage();
+
+    const drafts = draftsOf(
+      await provider.run({ page, screen: SCREEN, config: testConfig({ promotedObligations: ['dialog-name'] }) }),
+    );
 
     expect(drafts.some((draft) => draft.rule === 'voicing/missing-name' && draft.evidenceClass === 'deterministic')).toBe(true);
   });
