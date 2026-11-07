@@ -65,6 +65,7 @@ describe('usabl help', () => {
     expect(names).toEqual(
       [
         'baseline',
+        'brief',
         'bypass',
         'check',
         'comment',

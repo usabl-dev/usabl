@@ -1,0 +1,258 @@
+/**
+ * `usabl brief`: what an agent reads before it starts a task. It says which screens the task's
+ * files reach, which checks apply to each screen and which do not and why, and what counts as
+ * done.
+ *
+ * It is measurement. It mints no verdict and no receipt, never calls the gate, never reads a
+ * verdict, and never opens a browser, so no page text is involved. Screens come from the same
+ * planners run() calls, with the same inputs a local run gives them, joined in the same order,
+ * and the checks come from the same provider list the check runner is built with. Nothing here
+ * maps a file to a screen by itself.
+ *
+ * Policy is read from the working tree. CI judges a pull request on the trusted ref, so a brief
+ * for a task that edits policy can differ from what the gate decides. This module has no path that
+ * reads policy from a trusted ref, and none that reads it from the pull request tree in CI.
+ */
+import type {
+  AffectedScreen,
+  Coverage,
+  CoverageGap,
+  FsGlob,
+  GitReader,
+  PlannedScreen,
+  Provider,
+  RequirementBundle,
+  UsablConfig,
+} from '../contracts/index.js';
+import { computeCoverage } from '../coverage/planner.js';
+import { parseDocsManifest, type DocsManifest } from '../coverage/docs-manifest.js';
+import { computeDocsCoverage, type DocsCoverage } from '../coverage/docs-planner.js';
+import { DONE_CONDITIONS } from '../coverage/completeness.js';
+import { loadRequirements } from '../intake/load.js';
+import { overlayRequirementsFs } from '../intake/overlay-fs.js';
+import { unknownSurfaceGapsForRun } from '../intake/requirement-surfaces.js';
+import { plannedApplicability } from '../providers/applicability.js';
+import { makeScanProviders, providerProves, PROVIDER_PROVES } from '../providers/core-stack.js';
+import { makeEngineProviders } from '../providers/engines/index.js';
+import { DEQUE_PROVIDER_ID } from '../providers/engines/deque.js';
+import { EVINCED_PROVIDER_ID } from '../providers/engines/evinced.js';
+import { scrubOutboundData } from '../surfaces/scrub.js';
+import { posix } from 'node:path';
+
+export interface BriefCheck {
+  id: string;
+  applies: boolean;
+  proves: string;
+  why?: string;
+}
+
+export interface BriefReach {
+  // The changed file that reaches the screen. Null only when no single changed file reaches it on
+  // its own and the change as a whole does.
+  file: string | null;
+  via: string;
+}
+
+export interface BriefScreen {
+  id: string;
+  url: string;
+  reachedBy: BriefReach[];
+  checks: BriefCheck[];
+  needsLiveScan: boolean;
+}
+
+export interface Brief {
+  version: 1;
+  policySource: 'working tree';
+  files: string[];
+  nothingToCheck: boolean;
+  screens: BriefScreen[];
+  unresolved: Array<{ file: string; why: string }>;
+  // Planning gaps that name no changed file, such as a route the router fallback could not read
+  // or a requirement whose screen does not exist. The gate sees each of them as a coverage gap.
+  gaps: Array<{ ref: string; why: string }>;
+  done: string[];
+}
+
+export interface BriefInput {
+  fs: FsGlob;
+  git: Pick<GitReader, 'show' | 'statusZ' | 'lsFiles'>;
+  config: UsablConfig;
+  // The task's files. Absent means the changed files git reports, the same list a local
+  // `usabl check` plans from.
+  changedFiles?: string[];
+}
+
+// The engines usabl knows. One that the config does not turn on has no provider, and the brief
+// still names it so an agent does not assume it runs.
+const KNOWN_ENGINE_IDS: readonly string[] = [DEQUE_PROVIDER_ID, EVINCED_PROVIDER_ID];
+const ENGINE_OFF = 'not enabled in config';
+
+// The ref a local run reads the workspace manifests at. run() uses the same one when no trusted
+// ref is given.
+const LOCAL_REF = 'HEAD';
+
+/**
+ * The task's files written the way git writes changed paths, relative to the repository root with
+ * no "./" and no doubled slash, in the order given, each once. The planners match these strings
+ * against globs and surface files, so "./src/App.tsx" would otherwise map to nothing.
+ */
+export function normalizeTaskFiles(files: readonly string[]): string[] {
+  return [...new Set(files.map((file) => posix.normalize(file.replace(/\\/gu, '/'))))];
+}
+
+/** The app and docs plans for a list of changed files, joined the way run() joins them. */
+interface JoinedPlan {
+  affected: AffectedScreen[];
+  nothingToCheck: boolean;
+  unresolvedFiles: string[];
+  gaps: CoverageGap[];
+}
+
+async function planFor(
+  fs: FsGlob,
+  config: UsablConfig,
+  changed: string[],
+  docsManifest: DocsManifest | null,
+  trustedRead: (file: string) => Promise<string | null>,
+): Promise<JoinedPlan> {
+  const discovered: Coverage = await computeCoverage(fs, config, changed, docsManifest, trustedRead);
+  const docs: DocsCoverage = computeDocsCoverage(docsManifest, changed);
+  return {
+    affected: [...discovered.affected, ...docs.affected],
+    nothingToCheck: discovered.nothingToCheck && docs.nothingToCheck,
+    unresolvedFiles: [...discovered.unresolvedFiles, ...docs.unresolvedFiles],
+    gaps: [...discovered.gaps, ...docs.gaps],
+  };
+}
+
+function viaOf(screen: AffectedScreen): string {
+  switch (screen.provenance) {
+    case 'route-graph':
+      return `imported by the route entry ${screen.importChain?.[0] ?? 'file'}`;
+    case 'manual':
+      return 'surface files';
+    case 'docs-manifest':
+      return 'docs page sources';
+    case 'wide-blast':
+      if (screen.reason !== undefined) return 'dependency change';
+      return screen.profile === 'docs' ? 'docs shared glob' : 'wide blast glob';
+  }
+}
+
+function checksFor(providers: Provider[], screen: PlannedScreen): BriefCheck[] {
+  const checks: BriefCheck[] = providers.map((provider) => {
+    const proves = providerProves(provider);
+    if (proves === null) {
+      // A check the brief cannot describe is a check an agent would not know to aim at. Refuse
+      // rather than print a guess.
+      throw new Error(`usabl brief has no description for the check ${provider.id}`);
+    }
+    const plan = plannedApplicability(provider, screen);
+    return { id: provider.id, applies: plan.applies, proves, ...(plan.why === undefined ? {} : { why: plan.why }) };
+  });
+  const present = new Set(providers.map((provider) => provider.id));
+  for (const id of KNOWN_ENGINE_IDS) {
+    if (!present.has(id)) {
+      checks.push({ id, applies: false, proves: PROVIDER_PROVES[id] ?? id, why: ENGINE_OFF });
+    }
+  }
+  return checks;
+}
+
+function doneFor(nothingToCheck: boolean, screens: BriefScreen[]): string[] {
+  if (nothingToCheck) {
+    return [DONE_CONDITIONS.nothingToCheck, DONE_CONDITIONS.approvals];
+  }
+  const done: string[] = [
+    DONE_CONDITIONS.noBlockingFailure,
+    DONE_CONDITIONS.coverageComplete,
+    DONE_CONDITIONS.approvals,
+  ];
+  if (screens.some((screen) => screen.needsLiveScan)) {
+    done.push(DONE_CONDITIONS.liveScan);
+  }
+  return done;
+}
+
+/**
+ * The brief for a list of changed files. Throws when the configuration, a manifest, or the
+ * requirements cannot be read, because a brief built on policy usabl could not read would
+ * describe checks the gate will not run.
+ */
+export async function makeBrief(input: BriefInput): Promise<Brief> {
+  const { fs, git, config } = input;
+  const changed = input.changedFiles ?? (await git.statusZ()).map((entry) => entry.path);
+  const trustedRead = (file: string): Promise<string | null> => git.show(LOCAL_REF, file);
+
+  const requirementsFs = overlayRequirementsFs(fs, git, config, undefined);
+  const loaded = await loadRequirements(requirementsFs, config);
+  if (!loaded.ok) {
+    throw new Error(`usabl could not load the design requirements: ${loaded.reason}`);
+  }
+  const requirements: RequirementBundle = loaded.bundle;
+
+  const docsManifest = await parseDocsManifest(fs);
+  const plan = await planFor(fs, config, changed, docsManifest, trustedRead);
+
+  // Which changed files reach each screen. Each file is planned on its own by the same planners,
+  // so a screen lists every file that reaches it, not only the first one the joined plan kept.
+  const reachers = new Map<string, BriefReach[]>();
+  for (const file of changed) {
+    const single = await planFor(fs, config, [file], docsManifest, trustedRead);
+    for (const screen of single.affected) {
+      const list = reachers.get(screen.screenId) ?? [];
+      list.push({ file, via: viaOf(screen) });
+      reachers.set(screen.screenId, list);
+    }
+  }
+
+  const providers: Provider[] = [
+    ...makeScanProviders(requirements),
+    ...makeEngineProviders(config.engines),
+  ];
+
+  // A check that needs a live page cannot be met by a static-only run.
+  const live = new Set(providers.filter((provider) => provider.capabilities.includes('live')).map((p) => p.id));
+  const screens: BriefScreen[] = plan.affected.map((screen) => {
+    const planned: PlannedScreen = { id: screen.screenId, profile: screen.profile ?? 'app' };
+    const checks = checksFor(providers, planned);
+    return {
+      id: screen.screenId,
+      url: screen.url,
+      reachedBy: reachers.get(screen.screenId) ?? [{ file: null, via: viaOf(screen) }],
+      checks,
+      needsLiveScan: checks.some((check) => check.applies && live.has(check.id)),
+    };
+  });
+
+  // A requirement whose screen no source declares is never scanned, and run() records it as a gap.
+  // It does that only when it scans, which is when something is left to check.
+  const requirementGaps = plan.nothingToCheck
+    ? []
+    : await unknownSurfaceGapsForRun(requirements, fs, config, (docsManifest?.pages ?? []).map((page) => page.pageId));
+
+  const unresolvedSet = new Set(plan.unresolvedFiles);
+  const unresolved = plan.unresolvedFiles.map((file) => ({
+    file,
+    why: plan.gaps.find((gap) => gap.ref === file)?.reason ?? 'maps to no screen',
+  }));
+  const gaps = [...plan.gaps.filter((gap) => !unresolvedSet.has(gap.ref)), ...requirementGaps].map((gap) => ({
+    ref: gap.ref,
+    why: gap.reason,
+  }));
+
+  const brief: Brief = {
+    version: 1,
+    policySource: 'working tree',
+    files: changed,
+    nothingToCheck: plan.nothingToCheck,
+    screens,
+    unresolved,
+    gaps,
+    done: doneFor(plan.nothingToCheck, screens),
+  };
+  // Paths, urls, and reasons are operator data, but a configured url can carry a preview token
+  // in its query, so every string loses credentials, query strings, and fragments on the way out.
+  return scrubOutboundData(brief);
+}

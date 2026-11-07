@@ -89,3 +89,24 @@ export function decideAccessibilityVerdict(input: { hasBlockingFailure: boolean;
       : 'verified';
   return { verdict, exitCode: ACCESSIBILITY_EXIT_CODES[verdict] };
 }
+
+/**
+ * What done means for a change, in the words an agent reads before it starts a task. `usabl
+ * brief` prints these, and its text projection prints the same strings. Each one restates a rule
+ * this file or the gate already applies (ground truth section 9): a new deterministic failure is a
+ * regression, anything left unexamined is not_covered, a changed policy file needs approval, and a
+ * run that grants no live check leaves every live check as a gap. They describe what the gate needs
+ * in order to return verified. They are not a verdict, and nothing reads them to decide one.
+ */
+export const DONE_CONDITIONS = {
+  noBlockingFailure:
+    'Every reached screen is scanned and shows no new deterministic failure. A barrier the evidence floor already records, or one a waiver covers, does not block.',
+  coverageComplete:
+    'There is no coverage gap: every changed UI file maps to a screen, and every reached screen and check runs in full. A gap makes the result not_covered, never verified.',
+  approvals:
+    'Every changed policy file is committed, or a code owner approves it on the pull request. A policy file that differs from the trusted copy makes the result approval_required.',
+  liveScan:
+    'The scan ran live in a browser. A static-only run reports every live check as a gap, so it cannot be verified.',
+  nothingToCheck:
+    'Nothing to check: no changed file is a UI file, a dependency change, or a docs page source, so the gate returns no verdict and exits 0.',
+} as const;

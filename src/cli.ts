@@ -68,6 +68,8 @@ import { runDebt } from './history/report.js';
 import { runServeBuild } from './judge/serve-build.js';
 import { runExtractBuild } from './judge/extract-build.js';
 import { prepareJudge, withoutRuntimeSettings } from './judge/prepare.js';
+import { makeBrief, normalizeTaskFiles } from './brief/index.js';
+import { formatBrief } from './output/brief.js';
 
 // The configured url warnings this process has already printed. It holds config urls, which may
 // carry a query, so it is never printed and never leaves the process.
@@ -347,6 +349,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   if (
     opts.command !== 'check' &&
+    opts.command !== 'brief' &&
     opts.command !== 'comment' &&
     opts.command !== 'bypass' &&
     opts.command !== 'init' &&
@@ -395,6 +398,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
     // On success the server keeps the process alive until the workflow stops it.
     return (await runServeBuild(rest, io)).exitCode;
+  }
+
+  if (opts.command === 'brief') {
+    // A brief is a plan for a task, not a check. It reads the working tree and git, opens no
+    // browser, writes nothing, never calls the gate, and exits 0 whenever it produced a brief. A
+    // config or policy read failure throws, the same way it does for check.
+    const config = await loadConfig(opts.configPath);
+    const brief = await makeBrief({
+      fs: makeFsGlob(),
+      git: makeGitReader(),
+      config,
+      ...(opts.files === null ? {} : { changedFiles: normalizeTaskFiles(opts.files) }),
+    });
+    process.stdout.write(`${opts.json ? JSON.stringify(brief, null, 2) : formatBrief(brief)}\n`);
+    return 0;
   }
 
   if (opts.command === 'init') {

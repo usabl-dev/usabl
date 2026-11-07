@@ -72,6 +72,7 @@ describe('parseCliArgs', () => {
       installTarget: null,
       cursorStopHook: false,
       isolatedBrowser: false,
+      files: null,
     });
   });
 
@@ -111,6 +112,7 @@ describe('parseCliArgs', () => {
       installTarget: null,
       cursorStopHook: false,
       isolatedBrowser: false,
+      files: null,
     });
   });
 
@@ -193,6 +195,7 @@ describe('parseCliArgs', () => {
       installTarget: null,
       cursorStopHook: false,
       isolatedBrowser: false,
+      files: null,
     });
   });
 

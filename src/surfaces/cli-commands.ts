@@ -11,6 +11,8 @@ export interface CliFlag {
   name: string;
   // The placeholder for the value the flag takes, when it takes one.
   value?: string;
+  // Set when the flag takes every value up to the next flag, such as --files a.tsx b.tsx.
+  manyValues?: boolean;
   help: string;
 }
 
@@ -59,6 +61,21 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
         name: '--isolated-browser',
         help: 'Scan as the CI judge: sandbox required, other origins blocked.',
       },
+      CONFIG_FLAG,
+    ],
+  },
+  {
+    name: 'brief',
+    usage: 'usabl brief [--files <path> ...] [options]',
+    summary: 'List the screens a task reaches, their checks, and what done means.',
+    flags: [
+      {
+        name: '--files',
+        value: '<path> [<path> ...]',
+        manyValues: true,
+        help: "The task's files. Default: the changed files git reports.",
+      },
+      { name: '--json', help: 'Print the brief as JSON instead of text.' },
       CONFIG_FLAG,
     ],
   },
@@ -286,6 +303,10 @@ const VALUE_FLAGS = new Set(
   CLI_COMMANDS.flatMap((command) => command.flags.filter((flag) => flag.value !== undefined).map((flag) => flag.name)),
 );
 
+const MANY_VALUE_FLAGS = new Set(
+  CLI_COMMANDS.flatMap((command) => command.flags.filter((flag) => flag.manyValues === true).map((flag) => flag.name)),
+);
+
 function unknownCommand(name: string): string {
   return `unknown command: ${neutralize(name)}. Run "usabl help" to list the commands.`;
 }
@@ -307,10 +328,12 @@ export function preflightCli(argv: readonly string[]): CliPreflight {
       continue;
     }
     flags.push(token);
-    const next = argv[index + 1];
-    if (VALUE_FLAGS.has(token) && next !== undefined && !next.startsWith('-')) {
+    // The values of a flag are never commands or help words, even a file named help.
+    do {
+      const next = argv[index + 1];
+      if (!VALUE_FLAGS.has(token) || next === undefined || next.startsWith('-')) break;
       index += 1;
-    }
+    } while (MANY_VALUE_FLAGS.has(token));
   }
 
   const helpFlag = flags.some((flag) => HELP_FLAGS.includes(flag));
