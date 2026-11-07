@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Provider, ProviderContext, RequirementBundle, UsablConfig } from '../../src/contracts/index.js';
 import { DECIDED_ON_PAGE, plannedApplicability } from '../../src/providers/applicability.js';
-import { makeScanProviders, providerProves } from '../../src/providers/core-stack.js';
+import { makeScanProviders, PROVIDER_PROVES, providerProves } from '../../src/providers/core-stack.js';
 import { makeEngineProviders } from '../../src/providers/engines/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
 import { draftsOf } from '../helpers.js';
@@ -75,6 +75,12 @@ describe('providerProves', () => {
       .map((provider) => providerProves(provider));
     expect(proves[0]).toMatch(/^content requirement: /u);
     expect(proves[1]).toMatch(/^flow requirement: /u);
+  });
+
+  it('claims only what each rulepack checks', () => {
+    expect(PROVIDER_PROVES['pf-rulepack']).toContain('table headers with no scope or id to tie cells to them');
+    expect(PROVIDER_PROVES['pf-rulepack']).not.toContain('header link');
+    expect(PROVIDER_PROVES['docs-rulepack']).toBe('Checks heading order on the rendered documentation page.');
   });
 
   it('has no sentence for a provider it does not know', () => {

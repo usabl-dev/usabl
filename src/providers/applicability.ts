@@ -11,7 +11,9 @@ import type { PlannedApplicability, PlannedScreen, Provider } from '../contracts
 export const DECIDED_ON_PAGE = 'decided on the page';
 
 // The answer for a commercial engine the config turned on. Its findings are preview in this
-// release, so an agent must not count on it to move the verdict either way.
+// release, so an agent must not count on it to move the verdict either way. This holds because
+// buildDeps passes the engines no promote list and no evidenceClass option, so every engine
+// finding stays preview. If buildDeps ever passes either one, this sentence must change with it.
 export const ENGINE_PREVIEW = 'turned on in config; its findings are preview and never move the verdict';
 
 export function plannedApplicability(provider: Provider, screen: PlannedScreen): PlannedApplicability {
