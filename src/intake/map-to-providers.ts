@@ -11,12 +11,14 @@ import type {
   Draft,
   FlowAssertion,
   FocusUnreadable,
+  InteractionContract,
   Page,
   PlannedApplicability,
   Provider,
   Requirement,
   RequirementBundle,
   Step,
+  VoiceAssertion,
 } from '../contracts/index.js';
 import { FOCUS_UNREADABLE_FIX, focusUnreadableCause } from '../primitives/focus-unreadable.js';
 
@@ -319,6 +321,31 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
       ];
     },
   };
+}
+
+/** A requirement whose assertion is a voice assertion. */
+export type VoiceRequirement = Requirement & { assertion: VoiceAssertion };
+
+/**
+ * The interaction contract a voice requirement describes. The requirement id names the contract,
+ * so a draft or a gap can point back at the file a team wrote. The arrays are copied so a later
+ * change to the bundle cannot change a contract that is already running.
+ */
+export function toVoiceContract(requirement: VoiceRequirement): InteractionContract {
+  const contract: InteractionContract = {
+    contractId: requirement.id,
+    surfaceId: requirement.surface,
+    task: requirement.description,
+    steps: requirement.assertion.steps.map((step) => ({ ...step })),
+    obligations: requirement.assertion.obligations.map((obligation) => ({
+      ...obligation,
+      requiredTokens: [...obligation.requiredTokens],
+    })),
+  };
+  if (requirement.assertion.maxTabPath !== undefined) {
+    contract.maxTabPath = requirement.assertion.maxTabPath;
+  }
+  return contract;
 }
 
 export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[] {

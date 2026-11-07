@@ -189,3 +189,143 @@ describe('parseBundle', () => {
     });
   });
 });
+
+describe('parseBundle voice requirements', () => {
+  function voiceRequirement(assertion: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+    return {
+      version: 1,
+      requirements: [
+        {
+          id: 'delete-row-announces',
+          kind: 'voice',
+          surface: 'clusters',
+          description: 'Deleting a row announces the deletion',
+          approved: true,
+          assertion: { type: 'voice', ...assertion },
+          ...overrides,
+        },
+      ],
+    };
+  }
+
+  const steps = [{ do: 'click', selector: '[data-row="a"] button[aria-label="Delete"]' }];
+  const obligation = { class: 'live-polite', afterStep: 0, requiredTokens: ['deleted'], mustAnnounce: true };
+
+  function reasonFor(raw: unknown): string {
+    const result = parseBundle(raw);
+    expect(result.ok).toBe(false);
+    return result.ok ? '' : result.reason;
+  }
+
+  it('accepts a voice requirement and keeps its steps, obligations, and tab path limit', () => {
+    const result = parseBundle(
+      voiceRequirement({
+        steps,
+        obligations: [{ ...obligation, focusedRole: 'button' }],
+        maxTabPath: 20,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.bundle.requirements[0]).toEqual({
+      id: 'delete-row-announces',
+      kind: 'voice',
+      surface: 'clusters',
+      description: 'Deleting a row announces the deletion',
+      approved: true,
+      assertion: {
+        type: 'voice',
+        steps,
+        obligations: [{ ...obligation, focusedRole: 'button' }],
+        maxTabPath: 20,
+      },
+    });
+  });
+
+  it('leaves maxTabPath and focusedRole off when they are not written', () => {
+    const result = parseBundle(voiceRequirement({ steps, obligations: [obligation] }));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.bundle.requirements[0]?.assertion.type !== 'voice') {
+      return;
+    }
+    const assertion = result.bundle.requirements[0].assertion;
+    expect('maxTabPath' in assertion).toBe(false);
+    expect('focusedRole' in (assertion.obligations[0] ?? {})).toBe(false);
+  });
+
+  it('refuses a voice requirement with no steps', () => {
+    expect(reasonFor(voiceRequirement({ steps: [], obligations: [obligation] }))).toMatch(
+      /requirements\[0\]\.assertion\.steps: .*at least one step/,
+    );
+  });
+
+  it('refuses a voice requirement with no obligations', () => {
+    expect(reasonFor(voiceRequirement({ steps, obligations: [] }))).toMatch(
+      /requirements\[0\]\.assertion\.obligations: .*at least one obligation/,
+    );
+  });
+
+  it.each([
+    ['past the last step', 1],
+    ['negative', -1],
+    ['not a whole number', 0.5],
+  ])('refuses an afterStep that is %s', (_label, afterStep) => {
+    expect(reasonFor(voiceRequirement({ steps, obligations: [{ ...obligation, afterStep }] }))).toMatch(
+      /requirements\[0\]\.assertion\.obligations\[0\]\.afterStep: afterStep must be a whole number from 0 to 0/,
+    );
+  });
+
+  it('refuses an obligation with no required tokens', () => {
+    expect(reasonFor(voiceRequirement({ steps, obligations: [{ ...obligation, requiredTokens: [] }] }))).toMatch(
+      /requirements\[0\]\.assertion\.obligations\[0\]\.requiredTokens: .*at least one word/,
+    );
+  });
+
+  it.each([
+    ['empty', ''],
+    ['only spaces', '   '],
+    ['only punctuation', '!?.'],
+  ])('refuses a required token that is %s, because it would match any announcement', (_label, token) => {
+    expect(
+      reasonFor(voiceRequirement({ steps, obligations: [{ ...obligation, requiredTokens: ['deleted', token] }] })),
+    ).toMatch(/requirements\[0\]\.assertion\.obligations\[0\]\.requiredTokens\[1\]: .*letter or digit/);
+  });
+
+  it('refuses an obligation with an empty class', () => {
+    expect(reasonFor(voiceRequirement({ steps, obligations: [{ ...obligation, class: '' }] }))).toMatch(
+      /requirements\[0\]\.assertion\.obligations\[0\]\.class: class is required/,
+    );
+  });
+
+  it('refuses a focusedRole that is not a string', () => {
+    expect(reasonFor(voiceRequirement({ steps, obligations: [{ ...obligation, focusedRole: 3 }] }))).toContain(
+      'requirements[0].assertion.obligations[0].focusedRole',
+    );
+  });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -2],
+    ['not a whole number', 1.5],
+  ])('refuses a maxTabPath that is %s', (_label, maxTabPath) => {
+    expect(reasonFor(voiceRequirement({ steps, obligations: [obligation], maxTabPath }))).toMatch(
+      /requirements\[0\]\.assertion\.maxTabPath: maxTabPath must be a positive whole number/,
+    );
+  });
+
+  it('refuses an obligation with an unknown key', () => {
+    expect(reasonFor(voiceRequirement({ steps, obligations: [{ ...obligation, mustAnnouce: true }] }))).toContain(
+      'mustAnnouce',
+    );
+  });
+
+  it('refuses a voice requirement whose kind does not match its assertion', () => {
+    expect(reasonFor(voiceRequirement({ steps, obligations: [obligation] }, { kind: 'flow' }))).toContain(
+      'kind must match assertion.type',
+    );
+  });
+});

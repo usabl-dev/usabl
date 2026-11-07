@@ -229,6 +229,27 @@ describe('requirementGapsForPage', () => {
     ]);
   });
 
+  it('reports a voice requirement whose surface matches no configured or discovered surface', () => {
+    const voice: Requirement = {
+      id: 'delete-row-announces',
+      kind: 'voice',
+      surface: 'clustrs',
+      description: 'Deleting a row announces the deletion',
+      assertion: {
+        type: 'voice',
+        steps: [{ do: 'click', selector: '#delete' }],
+        obligations: [{ class: 'live-polite', afterStep: 0, requiredTokens: ['deleted'], mustAnnounce: true }],
+      },
+      approved: true,
+    };
+    expect(requirementGapsForPage(bundle(voice), 'clusters', known).map((gap) => gap.ref)).toEqual([
+      'requirement:delete-row-announces',
+    ]);
+    expect(requirementGapsForPage(bundle(voice), 'page', known).map((gap) => gap.ref)).toEqual([
+      'requirement:delete-row-announces',
+    ]);
+  });
+
   it('treats a page labeled with a requirement surface as known even when config does not list it', () => {
     // The page is the requirement's surface, so the requirement runs here and nothing is a guess.
     expect(requirementGapsForPage(bundle(content('heading', 'settings')), 'settings', known)).toEqual([]);

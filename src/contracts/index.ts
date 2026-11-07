@@ -486,7 +486,7 @@ export interface InteractionContract {
 }
 
 // ---- design intake + docs output (producers wired; reachable via `usabl docs` and the usabl/docs export) ----
-export type RequirementKind = 'content' | 'flow' | 'doc';
+export type RequirementKind = 'content' | 'flow' | 'doc' | 'voice';
 export interface ContentAssertion {
   type: 'content';
   selector: string;
@@ -502,12 +502,20 @@ export interface DocAssertion {
   type: 'doc';
   artifact: 'alt-text-manifest' | 'announcement-snippets' | 'keyboard-paths';
 }
+// An interaction contract written in the requirements folder. The requirement id becomes the
+// contract id, its surface the contract surface, and its description the contract task.
+export interface VoiceAssertion {
+  type: 'voice';
+  steps: Step[];
+  obligations: SpeechObligation[];
+  maxTabPath?: number;
+}
 export interface Requirement {
   id: string;
   kind: RequirementKind;
   surface: string;
   description: string;
-  assertion: ContentAssertion | FlowAssertion | DocAssertion;
+  assertion: ContentAssertion | FlowAssertion | DocAssertion | VoiceAssertion;
   owner?: string;
   approved: boolean;
 }

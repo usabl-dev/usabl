@@ -231,7 +231,7 @@ export async function loadProjectIntake(projectRoot: string, rootWasPassed: bool
  * Which design requirements a single page check cannot account for. Pure so the rule is testable
  * without a browser or a project on disk. A null screenId is an unlabeled page.
  *
- * Each runtime requirement (content or flow) lands in one of three places:
+ * Each runtime requirement (content, flow, or voice) lands in one of three places:
  * - Its surface is this page's surface, so its provider checks it on this page.
  * - Its surface is a different surface the project names, and this page is a surface the project
  *   or a requirement names. It belongs to that other screen, so it is out of scope here.
@@ -248,7 +248,7 @@ export function requirementGapsForPage(
   knownSurfaceIds: ReadonlySet<string>,
 ): CoverageGap[] {
   const runtime = requirements.requirements.filter(
-    (requirement) => requirement.assertion.type === 'content' || requirement.assertion.type === 'flow',
+    (requirement) => requirement.assertion.type !== 'doc',
   );
   // Null is an unlabeled page. It is no surface, so it is never known and nothing is in scope.
   const pageIsKnown =
