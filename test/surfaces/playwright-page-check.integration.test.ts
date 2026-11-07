@@ -387,6 +387,67 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage runs the desig
     }
   });
 
+  it('runs a voice requirement in the CLI scan and in checkPage, and finds nothing when the save is announced', async () => {
+    html = SAVE_PAGE;
+    const { dir, config } = await makeProject({ 'save-voice.yaml': SAVE_VOICE_REQUIREMENT });
+    try {
+      const deps = await buildDeps(config, { cwd: dir, env: {} });
+      try {
+        const scan = await deps.checkRunner.scan({ id: 'clusters', url: `${baseUrl}/clusters` });
+        expect(scan.gaps.filter((g) => g.ref === 'provider:intake:save-voices')).toEqual([]);
+        expect(scan.drafts.filter((d) => d.layer === 'voicing')).toEqual([]);
+      } finally {
+        await deps.browser.close();
+      }
+
+      const { context, page } = await openUrl(`${baseUrl}/clusters`);
+      try {
+        const result = await checkPage(page, { screenId: 'clusters', projectRoot: dir, tabCap: 10 });
+        expect(result.drafts.filter((d) => d.layer === 'voicing')).toEqual([]);
+        expect(result.gaps).toEqual([]);
+        expect(result.verdict).toBe('verified');
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a silent save under a voice requirement as preview drafts that never block', async () => {
+    html = silentSavePage('');
+    const { dir, config } = await makeProject({ 'save-voice.yaml': SAVE_VOICE_REQUIREMENT });
+    try {
+      const deps = await buildDeps(config, { cwd: dir, env: {} });
+      try {
+        const scan = await deps.checkRunner.scan({ id: 'clusters', url: `${baseUrl}/clusters` });
+        const voicing = scan.drafts.filter((d) => d.layer === 'voicing');
+        expect(voicing.map((d) => [d.rule, d.evidenceClass, d.confidence]).sort()).toEqual([
+          ['voicing/missing-announcement', 'preview', 'unverified'],
+          ['voicing/missing-live-announcement', 'preview', 'unverified'],
+        ]);
+      } finally {
+        await deps.browser.close();
+      }
+
+      const { context, page } = await openUrl(`${baseUrl}/clusters`);
+      try {
+        const result = await checkPage(page, { screenId: 'clusters', projectRoot: dir, tabCap: 10 });
+        expect(result.failures.filter((d) => d.layer === 'voicing')).toEqual([]);
+        expect(result.needsReview.filter((d) => d.layer === 'voicing').map((d) => d.rule).sort()).toEqual([
+          'voicing/missing-announcement',
+          'voicing/missing-live-announcement',
+        ]);
+        expect(result.verdict).not.toBe('regression');
+        expect(result.verdict).not.toBe('verified');
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // Announcements used to be read through window.__usablDrain, a function in the page's own world.
   // A page could define one before adoption, or replace usabl's after load, and hand usabl an
   // announcement no screen reader spoke. Neither may pass a flow requirement.
@@ -510,6 +571,28 @@ requirements:
         - do: click
           selector: '#save'
       expectedAnnouncement: Saved
+    approved: true
+`;
+
+// The same save action written as a voice requirement: an interaction contract the virtual screen
+// reader runs. Its drafts are preview, because no obligation class is promoted.
+const SAVE_VOICE_REQUIREMENT = `version: 1
+requirements:
+  - id: save-voices
+    kind: voice
+    surface: clusters
+    description: Saving keeps focus on Save and announces that the change was saved.
+    assertion:
+      type: voice
+      steps:
+        - do: click
+          selector: '#save'
+      obligations:
+        - class: live-polite
+          afterStep: 0
+          requiredTokens: [saved]
+          focusedRole: button
+          mustAnnounce: true
     approved: true
 `;
 

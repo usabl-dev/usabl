@@ -25,6 +25,15 @@
   over a skill or rule file from an earlier version refuses, names the file, and says the
   manual step: delete the file and run the install again.
 
+- Voice requirements. A requirement of kind `voice` in the requirements folder holds an
+  interaction contract: steps, and what a screen reader user must hear after each one. A live
+  scan and `checkPage` run it with the virtual screen reader, and wait for the page to settle
+  after each step before they read it. Its findings are preview and never block, unless the
+  obligation class is listed in `promotedObligations` in the trusted config. A window where the
+  page never settled is a gap, never a miss. A static-only run reports each voice requirement as
+  a gap, and parsing refuses a contract with no steps, no obligations, a step window that does
+  not exist, or a required word with no letter or digit.
+
 - Automatic debt tracking. `usabl install --ci` now also writes
   `.github/workflows/usabl-history.yml`, which scans main after each merge and once a day
   and appends what it saw to month files on a `usabl/history` branch in your repository. A

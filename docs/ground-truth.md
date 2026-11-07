@@ -291,7 +291,7 @@ src/
   session/          index.ts   (usabl session: sign in once, save the storage state)
   install/          overlay.ts claude.ts ci.ts history-ci.ts branch-rule.ts index.ts
   history/          record.ts read.ts track.ts tracking.ts append.ts git.ts record-run.ts report.ts
-  voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts   (built, not wired; section 7.5)
+  voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts   (runs voice requirements; section 7.5)
   measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
   surfaces/
     cli.ts pr-comment.ts policy-enforce.ts scrub.ts receipt-store.ts
@@ -483,14 +483,14 @@ export interface Result {
 // required check so an approved policy change can merge without turning the Result green.
 
 // Design intake
-export type RequirementKind = 'content' | 'flow' | 'doc';
+export type RequirementKind = 'content' | 'flow' | 'doc' | 'voice';
 
 export interface Requirement {
   id: string;
   kind: RequirementKind;
   surface: string;
   description: string;
-  assertion: ContentAssertion | FlowAssertion | DocAssertion;
+  assertion: ContentAssertion | FlowAssertion | DocAssertion | VoiceAssertion;
   owner?: string;
   approved: boolean;
 }
@@ -511,6 +511,13 @@ export interface FlowAssertion {
 export interface DocAssertion {
   type: 'doc';
   artifact: 'alt-text-manifest' | 'announcement-snippets' | 'keyboard-paths';
+}
+
+export interface VoiceAssertion {
+  type: 'voice';
+  steps: Step[];                   // the interaction contract steps
+  obligations: SpeechObligation[]; // what a screen reader user must hear, per step window
+  maxTabPath?: number;
 }
 
 export interface RequirementBundle {
@@ -960,15 +967,44 @@ Multi-step interactions expressed as data (JSON steps a generic runner executes)
 step that cannot establish its fact emits `unverified`. Adding a new interaction check
 needs no engine change, just data.
 
-### 7.5 Voicing lane (built, not wired in v0.2.0)
+### 7.5 Voicing lane (voice requirements)
 
 The voicing lane lives under `src/voicing/` and is exported from the library
 (`runStructuralTier`, `runVoicingTier`, `makeVirtualSrProvider`, `normalizeToken`,
-`obligationSatisfied`). It is built and tested, but v0.2.0 does not import it into the
-run, gate, or provider path, so it does not affect the v0.2.0 gate. The structural
-tier checks whether a required announcement happened; the voicing tier compares the
-words of the announcement and is `preview` evidence by default. The lane and its
-calibration land in v0.3.0.
+`obligationSatisfied`). It runs an interaction contract, a list of steps and what a screen
+reader user must hear after each one, on a live page. A team writes a contract as a `voice`
+requirement in the requirements folder (section 13). Each voice requirement becomes one
+provider named `intake:<id>`, built where the flow providers are built, so the CLI scan and
+`checkPage` both run it, in the same group as the flow providers.
+
+What it proves. The structural tier checks each obligation window: focus reached the step,
+the focused control has a name and the `focusedRole` when one is given, a live region was
+updated when `mustAnnounce` is true, and the task took no more focus stops than `maxTabPath`.
+The voicing tier checks that the window's announcement holds every `requiredTokens` word,
+compared without case or punctuation. It does not prove what a real screen reader says; the
+transcript comes from the accessibility tree and the live-region capture (section 26).
+
+Preview by default. Both tiers emit `preview` drafts, with confidence `unverified`, unless the
+obligation's `class` is listed in `promotedObligations` in the trusted config. A draft about
+the whole contract, such as no stops at all or an over-long tab path, is deterministic only
+when every obligation class in the contract is promoted. No class has met the promotion bar,
+so nothing from this lane blocks a run until a person promotes a class. Under a trusted ref,
+`promotedObligations` is read from the trusted config like every other field, so a pull
+request cannot promote a class for its own run.
+
+Settling. After each contract step the runner waits for the page to settle, by the same
+element-count and network-quiet signals readiness uses, under its own cap of 2 seconds, and
+only then reads focus and drains the live record. Before the first step it drops what earlier
+checks left in the record. A window where the page was still changing at the cap, or whose
+drain cannot say what a screen reader heard (section 11.6), decides nothing: each obligation in
+it becomes one `voicing/window-undecided` draft, `unverified`, that names the contract, the
+step, and the cause, never a miss and never a pass. The draft carries no wait time, so the
+result does not depend on how long the wait took. The keyboard walk does not wait this way.
+
+Static-only runs. A static-only run grants no live capability, so each voice provider becomes a
+`capability-denied` gap with ref `provider:intake:<id>` and reason
+`provider intake:<id> denied capability: live`. The screen is then not cleanly scanned: no
+voicing finding, and no clean pass for that screen.
 
 ### 7.6 Documentation profile (docs-content)
 
@@ -2926,7 +2962,7 @@ from the tests they already run. A starting point, not the main surface.
 
 `checkPage(page, options)` runs the same provider list the CLI runs on a screen. Both build
 it through `makeScanProviders` in `src/providers/core-stack.ts`: the core stack, then one
-provider per content or flow design requirement. `checkPage` reads `usabl.config.json` from
+provider per content, flow, or voice design requirement. `checkPage` reads `usabl.config.json` from
 `options.projectRoot` (default: the working directory) and loads the requirements directory it
 names through the same loader as the CLI. It reads the working tree; it does not apply a
 trusted ref. It never searches parent directories. When the caller passes `projectRoot` and
@@ -3339,6 +3375,7 @@ rules (those are built in). It does not set enforcement level.
 | `content` | Alt text for topology.svg must be "Cluster network topology showing three nodes" | Content matcher assertion on that element |
 | `flow` | After failed save, error is announced before focus moves | Declarative interaction script added to the walk |
 | `doc` | Publish alt-text manifest for the Clusters surface | Output module generates the artifact |
+| `voice` | Deleting a row announces the deletion | Interaction contract run by the virtual screen reader provider (section 7.5) |
 
 ### Many shapes in, one RequirementBundle
 
@@ -3365,8 +3402,45 @@ add content and flow assertions that the engine enforces alongside the default s
 - `flow` requirements become declarative interaction probes (same step runner as the
   keyboard walk probes).
 - `doc` requirements are not runtime checks; they feed the output module.
+- `voice` requirements become interaction contracts, one virtual screen reader provider each
+  (section 7.5).
 
-A `content` or `flow` requirement runs only on a screen whose id is its surface. When a run
+A `voice` requirement looks like this:
+
+```yaml
+version: 1
+requirements:
+  - id: delete-row-announces
+    kind: voice
+    surface: clusters
+    description: Deleting a row announces the deletion
+    approved: true
+    assertion:
+      type: voice
+      steps:
+        - do: click
+          selector: '[data-row="a"] button[aria-label="Delete"]'
+      obligations:
+        - class: live-polite
+          afterStep: 0
+          requiredTokens: [deleted]
+          mustAnnounce: true
+      maxTabPath: 20   # optional
+```
+
+The requirement id becomes the contract id, the surface the contract surface, and the
+description the contract task. A step is `tab`, `activate` (Enter), `press-escape`, or `click`
+with a `selector`; any other step makes the provider fail, which is a `not-covered` gap. Each
+obligation names a `class`, the step window it is checked in (`afterStep`), the
+`requiredTokens` the announcement must hold, an optional `focusedRole`, and `mustAnnounce`.
+Parsing refuses the file, as `approval_required` with a message that names the field, when:
+`steps` is empty; `obligations` is empty; an `afterStep` is not a whole number from 0 to one
+less than the number of steps; `requiredTokens` is empty, or a token has no letter or digit,
+because such a token compares as empty and would match any announcement; `class` is empty;
+`focusedRole` is not a string; `maxTabPath` is not a positive whole number; `kind` does not
+match `assertion.type`; or any field is unknown.
+
+A `content`, `flow`, or `voice` requirement runs only on a screen whose id is its surface. When a run
 scans anything, each such requirement whose surface matches no configured surface, no screen
 in the route manifest, and no page in the docs manifest becomes a `not-covered` gap with ref
 `requirement:<id>` that names the surface. No run would ever plan that screen, so nothing
@@ -3375,10 +3449,11 @@ read as verified. A requirement on a known screen that the change did not touch 
 scope for that run, not a gap. The surfaces are read through the same trusted view the run
 plans coverage with. `checkPage` applies the same rule through the same code.
 
-All intake-derived Drafts carry `evidenceClass: 'deterministic'` (the assertion is
-hard and repeatable). `mapRequirementsToProviders` emits deterministic drafts with rule
-id `intake:<id>` for content and flow requirements; there is no code path in v0.2.0 that
-marks an intake draft as model-judgment.
+Content and flow Drafts carry `evidenceClass: 'deterministic'` (the assertion is hard and
+repeatable). `mapRequirementsToProviders` emits deterministic drafts with rule id
+`intake:<id>` for content and flow requirements; there is no code path that marks an intake
+draft as model-judgment. Voice requirement drafts carry the `voicing/` rule ids of the two
+tiers and are `preview` unless their obligation class is promoted (section 7.5).
 
 ### Requirement ids are waiver identities
 
@@ -4036,8 +4111,9 @@ to the Virtual Screen Reader transcript.
 The in-run announcement preview is derived from the accessibility tree captured during
 the transcript, not from a real screen reader; its honesty class is "preview, not real
 AT." usabl also ships its own headless virtual screen reader provider
-(`makeVirtualSrProvider`, the voicing lane), which is built but dormant in v0.2.0 and is
-not wired into the run or the gate (section 7.5); it is usabl's own code, not the npm
+(`makeVirtualSrProvider`, the voicing lane), which runs the voice requirements a team
+writes and emits preview evidence unless an obligation class is promoted (section 7.5); it is
+usabl's own code, not the npm
 `@guidepup/virtual-screen-reader` package, which is not a dependency in v0.2.0. The
 engine is screen-reader-agnostic; the validation harness measures the virtual-SR
 transcript's fidelity to a real reader, not to one product.
