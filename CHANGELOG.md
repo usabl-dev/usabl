@@ -8,9 +8,11 @@
   files reach and how each is reached, the checks that apply to each screen, the ones that do
   not and why, and what counts as done. `--files <path> ...` names the task's files; with no
   `--files` it uses the changed files git reports, the same way `usabl check` does. `--json`
-  prints JSON only. The screens come from the planners the gate uses and the checks from the
-  provider list the scan uses, so for the same files the brief names the screens the gate
-  scans, in the same order. It is measurement: it opens no browser, mints no verdict and no
+  prints JSON only. The screens come from the planners the gate uses, read the way a local
+  `usabl check` reads them, and the checks from the provider list the scan uses, so for the
+  same files the brief names the screens a local check scans, in the same order. A routes or
+  docs manifest that differs from HEAD is read as missing, as a local check reads it, and the
+  brief says so in a disclosure line. It is measurement: it opens no browser, mints no verdict and no
   receipt, and exits 0 whenever it printed a brief. A config or requirements file it cannot
   read exits 4 with the reason, as `usabl check` does. It reads policy from the working tree,
   and CI judges on the trusted ref, so a brief for a task that edits policy can differ from the

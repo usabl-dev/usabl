@@ -2897,9 +2897,11 @@ would run on each screen, and what counts as done. A check entry says whether it
 when that is not plain, why: an intake requirement applies only to the screen it names, the
 docs rulepack only to docs pages, an engine only when the config turns it on, and a check that
 can only tell on a live page, such as the PatternFly rulepack looking for its marker, says
-"decided on the page". The screens come from the planners `run()` calls, with the same inputs and
-joined in the same order, so for the same changed files the brief names exactly the screens the
-gate scans. The checks come from the provider list the check runner is built with. The done list
+"decided on the page". The screens come from the planners `run()` calls, with the inputs a local
+run gives them and joined in the same order, so for the same changed files the brief names
+exactly the screens a local `usabl check` scans. Like a local run, it checks the guarded files
+against HEAD and reads a `usabl.routes.json` or `usabl.docs.json` that differs from HEAD as
+missing, and it adds a disclosure line for each such manifest. The checks come from the provider list the check runner is built with. The done list
 restates the gate rules (section 9): no new deterministic failure, no coverage gap, approval for
 any changed policy file, and a live scan when a screen needs one.
 

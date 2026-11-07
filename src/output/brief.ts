@@ -45,6 +45,9 @@ export function formatBrief(brief: Brief): string {
     lead,
     `Policy read from the ${brief.policySource}. CI judges on the trusted ref, so a task that edits policy can get a different result there.`,
   ];
+  for (const disclosure of brief.disclosures) {
+    lines.push(`note: ${disclosure}`);
+  }
   for (const screen of brief.screens) {
     lines.push('', ...screenLines(screen));
   }

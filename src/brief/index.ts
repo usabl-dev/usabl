@@ -9,14 +9,18 @@
  * and the checks come from the same provider list the check runner is built with. Nothing here
  * maps a file to a screen by itself.
  *
- * Policy is read from the working tree. CI judges a pull request on the trusted ref, so a brief
- * for a task that edits policy can differ from what the gate decides. This module has no path that
- * reads policy from a trusted ref, and none that reads it from the pull request tree in CI.
+ * Policy is read from the working tree, the way a local run reads it. A local run also checks the
+ * guarded files against HEAD and reads a routes or docs manifest that differs from HEAD as missing,
+ * and the brief does the same and says so in a disclosure. CI judges a pull request on the trusted
+ * ref, so a brief for a task that edits policy can differ from what the gate decides there. This
+ * module has no path that reads policy from a trusted ref, and none that reads it from the pull
+ * request tree in CI.
  */
 import type {
   AffectedScreen,
   Coverage,
   CoverageGap,
+  Deps,
   FsGlob,
   GitReader,
   PlannedScreen,
@@ -37,6 +41,7 @@ import { makeEngineProviders } from '../providers/engines/index.js';
 import { DEQUE_PROVIDER_ID } from '../providers/engines/deque.js';
 import { EVINCED_PROVIDER_ID } from '../providers/engines/evinced.js';
 import { scrubOutboundData } from '../surfaces/scrub.js';
+import { checkGuard } from '../trust/guard.js';
 import { posix } from 'node:path';
 
 export interface BriefCheck {
@@ -68,6 +73,9 @@ export interface Brief {
   nothingToCheck: boolean;
   screens: BriefScreen[];
   unresolved: Array<{ file: string; why: string }>;
+  // What the reader must know to read the brief right, such as a manifest a local run reads as
+  // missing because it differs from HEAD.
+  disclosures: string[];
   // Planning gaps that name no changed file, such as a route the router fallback could not read
   // or a requirement whose screen does not exist. The gate sees each of them as a coverage gap.
   gaps: Array<{ ref: string; why: string }>;
@@ -88,9 +96,36 @@ export interface BriefInput {
 const KNOWN_ENGINE_IDS: readonly string[] = [DEQUE_PROVIDER_ID, EVINCED_PROVIDER_ID];
 const ENGINE_OFF = 'not enabled in config';
 
-// The ref a local run reads the workspace manifests at. run() uses the same one when no trusted
-// ref is given.
+// The ref a local run reads the workspace manifests at and checks the guarded files against.
+// run() uses the same one when no trusted ref is given.
 const LOCAL_REF = 'HEAD';
+
+// The manifests that choose scan targets. A local run reads one that differs from HEAD as missing.
+const SCAN_TARGET_MANIFESTS: readonly string[] = ['usabl.routes.json', 'usabl.docs.json'];
+
+function manifestDisclosure(path: string): string {
+  return `${path} differs from HEAD; a local check reads it as missing until it is committed, and CI needs approval for it.`;
+}
+
+/**
+ * The file system a local run plans coverage with. The overlay in run.ts is private to it, so this
+ * is the same rule built again from the guard's answer: with no trusted ref, a routes or docs
+ * manifest that differs from HEAD reads as missing, so a task cannot point the scan at screens by
+ * editing the manifest, and every other file reads from the working tree.
+ */
+function localCoverageFs(fs: FsGlob, divergedPaths: readonly string[]): { fs: FsGlob; hidden: string[] } {
+  const hidden = SCAN_TARGET_MANIFESTS.filter((path) => divergedPaths.includes(path));
+  if (hidden.length === 0) {
+    return { fs, hidden };
+  }
+  return {
+    fs: {
+      glob: (patterns) => fs.glob(patterns),
+      readFile: async (path) => (hidden.includes(path) ? null : fs.readFile(path)),
+    },
+    hidden,
+  };
+}
 
 /**
  * The task's files written the way git writes changed paths, relative to the repository root with
@@ -192,14 +227,21 @@ export async function makeBrief(input: BriefInput): Promise<Brief> {
   }
   const requirements: RequirementBundle = loaded.bundle;
 
-  const docsManifest = await parseDocsManifest(fs);
-  const plan = await planFor(fs, config, changed, docsManifest, trustedRead);
+  // The guard reads only the file system and git, compares, and decides nothing. Its answer here
+  // only says which manifests the local run would read as missing.
+  const guardDeps = { fs, git } as unknown as Deps;
+  const diverged = await checkGuard(guardDeps, config, LOCAL_REF);
+  const coverage = localCoverageFs(fs, diverged);
+  const coverageFs = coverage.fs;
+
+  const docsManifest = await parseDocsManifest(coverageFs);
+  const plan = await planFor(coverageFs, config, changed, docsManifest, trustedRead);
 
   // Which changed files reach each screen. Each file is planned on its own by the same planners,
   // so a screen lists every file that reaches it, not only the first one the joined plan kept.
   const reachers = new Map<string, BriefReach[]>();
   for (const file of changed) {
-    const single = await planFor(fs, config, [file], docsManifest, trustedRead);
+    const single = await planFor(coverageFs, config, [file], docsManifest, trustedRead);
     for (const screen of single.affected) {
       const list = reachers.get(screen.screenId) ?? [];
       list.push({ file, via: viaOf(screen) });
@@ -230,7 +272,12 @@ export async function makeBrief(input: BriefInput): Promise<Brief> {
   // It does that only when it scans, which is when something is left to check.
   const requirementGaps = plan.nothingToCheck
     ? []
-    : await unknownSurfaceGapsForRun(requirements, fs, config, (docsManifest?.pages ?? []).map((page) => page.pageId));
+    : await unknownSurfaceGapsForRun(
+        requirements,
+        coverageFs,
+        config,
+        (docsManifest?.pages ?? []).map((page) => page.pageId),
+      );
 
   const unresolvedSet = new Set(plan.unresolvedFiles);
   const unresolved = plan.unresolvedFiles.map((file) => ({
@@ -248,6 +295,7 @@ export async function makeBrief(input: BriefInput): Promise<Brief> {
     files: changed,
     nothingToCheck: plan.nothingToCheck,
     screens,
+    disclosures: coverage.hidden.map(manifestDisclosure),
     unresolved,
     gaps,
     done: doneFor(plan.nothingToCheck, screens),

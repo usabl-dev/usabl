@@ -45,6 +45,8 @@ const docsManifest = JSON.stringify({
 });
 
 const appFiles: Record<string, string> = {
+  // The guard reads its scope from the committed config, so the fixture repository has one.
+  'usabl.config.json': JSON.stringify(config),
   'usabl.routes.json': routes,
   'src/App.tsx': 'export default function App() {}',
   'src/ClustersPage.tsx': "import { Table } from './shared/Table';\nexport default function ClustersPage() {}",
@@ -138,6 +140,59 @@ describe('makeBrief screens match the gate', () => {
     expect(brief.screens.map((screen) => screen.id)).toEqual(scanned);
     expect(brief.screens[0]?.reachedBy).toEqual([{ file: 'src/util.ts', via: 'surface files' }]);
     expect(brief.unresolved).toEqual([]);
+  });
+});
+
+describe('makeBrief reads the manifests the way a local run does', () => {
+  // The working tree adds a route the committed manifest does not have.
+  const dirtyRoutes = JSON.stringify({
+    routes: [
+      ...JSON.parse(routes).routes,
+      { screenId: 'reports', url: '/reports', entryFile: 'src/ReportsPage.tsx' },
+    ],
+  });
+  const reports = { 'src/ReportsPage.tsx': 'export default function ReportsPage() {}' };
+
+  it('plans with a routes manifest that differs from HEAD read as missing, as run() does', async () => {
+    const deps = depsFor({
+      files: { ...reports, 'usabl.routes.json': dirtyRoutes },
+      headContents: { ...appFiles, ...reports },
+    });
+    const changed = ['src/ReportsPage.tsx', 'src/shared/Table.tsx'];
+    const scanned = await scannedByRun(deps, config, changed);
+    const brief = await briefFor(deps, config, changed);
+
+    expect(scanned).not.toContain('reports');
+    expect(brief.screens.map((screen) => screen.id)).toEqual(scanned);
+    expect(brief.disclosures).toEqual([
+      'usabl.routes.json differs from HEAD; a local check reads it as missing until it is committed, and CI needs approval for it.',
+    ]);
+  });
+
+  it('discloses a docs manifest that differs from HEAD and plans no docs page from it', async () => {
+    const deps = depsFor({ files: { 'usabl.docs.json': docsManifest }, headContents: appFiles });
+    const changed = ['modules/getting-started.adoc'];
+    const scanned = await scannedByRun(deps, config, changed);
+    const brief = await briefFor(deps, config, changed);
+    expect(scanned).toEqual([]);
+    expect(brief.screens.map((screen) => screen.id)).toEqual(scanned);
+    expect(brief.disclosures).toEqual([
+      'usabl.docs.json differs from HEAD; a local check reads it as missing until it is committed, and CI needs approval for it.',
+    ]);
+  });
+
+  it('has no disclosure when the manifests match HEAD', async () => {
+    const brief = await briefFor(depsFor(), config, ['src/shared/Table.tsx']);
+    expect(brief.disclosures).toEqual([]);
+  });
+
+  it('prints each disclosure in the text', async () => {
+    const deps = depsFor({
+      files: { ...reports, 'usabl.routes.json': dirtyRoutes },
+      headContents: { ...appFiles, ...reports },
+    });
+    const text = formatBrief(await briefFor(deps, config, ['src/ReportsPage.tsx']));
+    expect(text).toContain('note: usabl.routes.json differs from HEAD; a local check reads it as missing');
   });
 });
 
