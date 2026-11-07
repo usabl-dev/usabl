@@ -122,6 +122,8 @@ alwaysApply: false
 
 # usabl accessibility workflow
 
+Before you start a task, run \`npx usabl brief --json\` from the repository root. Keep the screens it says the task reaches and its \`done\` list in view while you work. The brief is a plan, not a verdict.
+
 When changing user interface code:
 
 - After a meaningful UI change, run \`/usabl-check\` or \`npx usabl check --self-check\` from the repository root.
