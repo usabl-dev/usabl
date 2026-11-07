@@ -23,6 +23,34 @@ describe('brief arguments', () => {
     expect(opts.json).toBe(true);
   });
 
+  it('joins the paths of --files given twice', () => {
+    expect(parseCliArgs(['brief', '--files', 'src/a.tsx', '--json', '--files', 'src/b.tsx']).files).toEqual([
+      'src/a.tsx',
+      'src/b.tsx',
+    ]);
+  });
+
+  it('reads a value flag before --files and keeps both', () => {
+    const opts = parseCliArgs(['brief', '--config', 'c.json', '--files', 'src/a.tsx']);
+    expect(opts.configPath).toBe('c.json');
+    expect(opts.files).toEqual(['src/a.tsx']);
+    expect(preflightCli(['brief', '--config', 'c.json', '--files', 'src/a.tsx'])).toBeNull();
+  });
+
+  it('still steps over one value of a single-value flag, even the word help', () => {
+    // A config file named help is a value, not a request for help.
+    expect(preflightCli(['check', '--config', 'help'])).toBeNull();
+    // Only one value is stepped over, so a help word after it still asks for help.
+    expect(preflightCli(['check', '--config', 'x.json', 'help'])).toMatchObject({ kind: 'help' });
+  });
+
+  it('refuses --static-only, because brief runs no check', () => {
+    expect(preflightCli(['brief', '--static-only'])).toEqual({
+      kind: 'refuse',
+      message: 'brief does not take --static-only. Run "usabl brief --help" to list its options.',
+    });
+  });
+
   it('has no files when --files is not given', () => {
     expect(parseCliArgs(['brief']).files).toBeNull();
   });
