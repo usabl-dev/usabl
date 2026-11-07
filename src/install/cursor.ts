@@ -122,7 +122,7 @@ alwaysApply: false
 
 # usabl accessibility workflow
 
-Before you start a task, run \`npx usabl brief --json\` from the repository root. Keep the screens it says the task reaches and its \`done\` list in view while you work. The brief is a plan, not a verdict.
+Before you start a task, run \`npx usabl brief --json --files <paths>\` from the repository root, with the paths of the files the task will edit. Keep the screens it says the task reaches and its \`done\` list in view while you work. The brief is a plan. Only the gate decides a verdict.
 
 When changing user interface code:
 

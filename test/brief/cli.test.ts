@@ -144,7 +144,7 @@ describe('usabl brief', () => {
     await repo();
     expect(await main(['brief', '--files', 'src/Page.tsx'])).toBe(0);
     const out = stdout.join('');
-    expect(out).toContain('usabl brief: 1 changed file reaches 1 screen. This is a plan, not a verdict.');
+    expect(out).toContain('usabl brief: 1 changed file reaches 1 screen. The brief is a plan. Only the gate decides a verdict.');
     expect(out).toContain('screen page: http://127.0.0.1:5173/page');
     expect(out).toContain('Done when:');
     expect(out).not.toContain('session=abc');

@@ -18,9 +18,10 @@
   and CI judges on the trusted ref, so a brief for a task that edits policy can differ from the
   gate.
 
-- The `/usabl-check` skill and the Cursor rule now start by running `npx usabl brief --json`
-  and keeping the reached screens and the done list in view, and the skill's `allowed-tools`
-  lists that command. Running `usabl install --claude-skill` or `usabl install --cursor` again
+- The `/usabl-check` skill and the Cursor rule now start by running
+  `npx usabl brief --json --files <paths>` with the files the task will edit, and keeping the
+  reached screens and the done list in view. The skill's `allowed-tools` lists
+  `Bash(npx usabl brief --json --files:*)`. Running `usabl install --claude-skill` or `usabl install --cursor` again
   over a skill or rule file from an earlier version refuses, names the file, and says the
   manual step: delete the file and run the install again.
 

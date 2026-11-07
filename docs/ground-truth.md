@@ -2890,8 +2890,11 @@ not because the loop requires it.
 
 The gate stays at Stop. Neither path lets the agent grade its own work.
 
-**Task brief (`usabl brief`).** Before it starts a task, the agent runs `npx usabl brief
---json`. The installed `/usabl-check` skill and the Cursor rule open with that step. The brief
+**Task brief (`usabl brief`).** Before it starts a task, the agent runs
+`npx usabl brief --json --files <paths>` with the files the task will edit. At that point the
+tree is usually clean, so a brief of the changed files would have nothing to check. The
+installed `/usabl-check` skill and the Cursor rule open with that step, and the skill's
+`allowed-tools` lists `Bash(npx usabl brief --json --files:*)`. The brief
 names the screens the task's files reach and how each is reached, one entry per check the scan
 would run on each screen, and what counts as done. A check entry says whether it applies and,
 when that is not plain, why: an intake requirement applies only to the screen it names, the

@@ -87,8 +87,13 @@ describe('CURSOR assistant contents', () => {
 
   it('starts the rule with the task brief', () => {
     const body = CURSOR_RULE_CONTENTS.split('# usabl accessibility workflow\n')[1] ?? '';
-    expect(body.trimStart().startsWith('Before you start a task, run `npx usabl brief --json`')).toBe(true);
+    expect(body.trimStart().startsWith('Before you start a task, run `npx usabl brief --json --files <paths>`')).toBe(
+      true,
+    );
+    expect(body).toContain('the files the task will edit');
     expect(body).toContain('`done` list');
+    expect(body).toContain('The brief is a plan. Only the gate decides a verdict.');
+    expect(body).not.toContain('not a verdict');
   });
 
   it('refuses to overwrite the rule an earlier version wrote, and names the manual step', async () => {

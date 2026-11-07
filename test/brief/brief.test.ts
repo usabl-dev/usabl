@@ -351,7 +351,7 @@ describe('formatBrief', () => {
   it('prints each screen, its checks, and the done list in the brief words', async () => {
     const brief = await briefFor(depsFor(), config, ['src/shared/Table.tsx', 'src/util.ts']);
     const text = formatBrief(brief);
-    expect(text).toContain('This is a plan, not a verdict.');
+    expect(text).toContain('The brief is a plan. Only the gate decides a verdict.');
     expect(text).toContain('screen clusters: http://127.0.0.1:5173/clusters');
     expect(text).toContain('reached by: src/shared/Table.tsx (imported by the route entry src/ClustersPage.tsx)');
     expect(text).toContain('pf-rulepack (decided on the page)');

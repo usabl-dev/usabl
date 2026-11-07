@@ -3,7 +3,8 @@
  * prints it for a person or an agent at a terminal. The done list is printed as the brief holds
  * it, so the text and the JSON say the same thing in the same words.
  *
- * A brief is a plan, not a verdict, and the first line says so. This unit never decides a verdict.
+ * The first line says a brief is a plan and that only the gate decides a verdict. This unit never
+ * decides a verdict.
  */
 import type { Brief, BriefCheck, BriefScreen } from '../brief/index.js';
 
@@ -37,10 +38,10 @@ function screenLines(screen: BriefScreen): string[] {
 
 export function formatBrief(brief: Brief): string {
   const lead = brief.nothingToCheck
-    ? `usabl brief: ${plural(brief.files.length, 'changed file')}, nothing to check. This is a plan, not a verdict.`
+    ? `usabl brief: ${plural(brief.files.length, 'changed file')}, nothing to check. The brief is a plan. Only the gate decides a verdict.`
     : `usabl brief: ${plural(brief.files.length, 'changed file')} ${brief.files.length === 1 ? 'reaches' : 'reach'} ` +
       `${plural(brief.screens.length, 'screen')}. ` +
-      'This is a plan, not a verdict.';
+      'The brief is a plan. Only the gate decides a verdict.';
   const lines = [
     lead,
     `Policy read from the ${brief.policySource}. CI judges on the trusted ref, so a task that edits policy can get a different result there.`,

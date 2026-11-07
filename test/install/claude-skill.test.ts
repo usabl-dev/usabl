@@ -78,12 +78,13 @@ describe('CLAUDE_SKILL_CONTENTS', () => {
     const expected = `---
 name: usabl-check
 description: Run the advisory usabl accessibility check during implementation and explain the current result.
-allowed-tools: Bash(npx usabl check --self-check), Bash(npx usabl brief --json)
+allowed-tools: Bash(npx usabl check --self-check), Bash(npx usabl brief --json --files:*)
 ---
 
-Before you start a task, run \`npx usabl brief --json\` from the repository root. Keep the
-screens it says the task reaches and its \`done\` list in view while you work. The brief is
-a plan, not a verdict.
+Before you start a task, run \`npx usabl brief --json --files <paths>\` from the repository
+root, with the paths of the files the task will edit. Keep the screens it says the task
+reaches and its \`done\` list in view while you work. The brief is a plan. Only the gate
+decides a verdict.
 
 Run \`npx usabl check --self-check\` from the repository root.
 
@@ -103,11 +104,17 @@ decides whether Claude can finish.
 
   it('starts with the task brief and lets the skill run it', () => {
     expect(CLAUDE_SKILL_CONTENTS).toContain(
-      'allowed-tools: Bash(npx usabl check --self-check), Bash(npx usabl brief --json)\n',
+      'allowed-tools: Bash(npx usabl check --self-check), Bash(npx usabl brief --json --files:*)\n',
     );
     const body = CLAUDE_SKILL_CONTENTS.split('---\n')[2] ?? '';
-    expect(body.trimStart().startsWith('Before you start a task, run `npx usabl brief --json`')).toBe(true);
+    // On a clean tree the brief with no files has nothing to check, so the step names the files.
+    expect(body.trimStart().startsWith('Before you start a task, run `npx usabl brief --json --files <paths>`')).toBe(
+      true,
+    );
+    expect(body).toContain('the files the task will edit');
     expect(body).toContain('`done` list');
+    expect(body).toContain('The brief is a plan. Only the gate\ndecides a verdict.');
+    expect(body).not.toContain('not a verdict');
   });
 
   it('refuses to overwrite the skill an earlier version wrote, and names the manual step', async () => {
