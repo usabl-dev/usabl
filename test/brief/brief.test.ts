@@ -275,6 +275,6 @@ describe('formatBrief', () => {
     for (const line of brief.done) {
       expect(text).toContain(`  - ${line}`);
     }
-    expect(text).not.toMatch(/—/u);
+    expect(text).not.toMatch(/\u2014/u);
   });
 });

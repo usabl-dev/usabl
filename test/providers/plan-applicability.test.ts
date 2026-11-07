@@ -65,7 +65,7 @@ describe('providerProves', () => {
       const proves = providerProves(provider);
       expect(proves, `${provider.id} has no proves sentence`).not.toBeNull();
       expect(proves?.trim().length ?? 0).toBeGreaterThan(10);
-      expect(proves).not.toMatch(/—|--/u);
+      expect(proves).not.toMatch(/\u2014|-{2}/u);
     }
   });
 
