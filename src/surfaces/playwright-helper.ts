@@ -51,11 +51,15 @@ import { scrubOutboundData, scrubResult, scrubString } from './scrub.js';
 // This is not a gated Result. It reports what the providers observed on one page, nothing more.
 export interface PageCheckResult {
   verdict: AccessibilityVerdict; // 'verified' | 'regression' | 'not_covered'
-  failures: Draft[]; // confidence 'fail'; the deterministic misses that set a regression
-  needsReview: Draft[]; // confidence 'unverified'; disclosed, never claimed clean, never blocking on their own
+  failures: Draft[]; // deterministic, confidence 'fail'; the misses that set a regression
+  needsReview: Draft[]; // deterministic, confidence 'unverified'; disclosed, never claimed clean, never blocking on their own
   gaps: CoverageGap[]; // providers that could not run on this page
   drafts: Draft[]; // every observation the providers emitted, in provider order
   summary: string;
+  // Drafts that are not deterministic evidence, such as a voice requirement's preview misses. They
+  // are shown for review and never counted in the verdict, the same as in the gate. Present only
+  // when there is at least one, so a page with none has exactly the shape it always had.
+  advisory?: Draft[];
   // Set by checkPage: what the providers disclosed about the page that is neither a finding nor a
   // gap, such as design-system markup a rulepack did not read. Disclosure only: it never changes
   // the verdict.
@@ -77,21 +81,30 @@ export interface PageCheckProject {
  * the gate calls the same function.
  *
  * What this unit does decide is what counts as blocking on a page, and it is broader than the
- * gate's rule. Any draft with `confidence === 'fail'` blocks, because there is no evidence floor
- * and no waiver list to check it against. usabl never upgrades unverified or a gap into verified.
+ * gate's rule. Any deterministic draft with `confidence === 'fail'` blocks, because there is no
+ * evidence floor and no waiver list to check it against. A draft that is not deterministic, such as
+ * preview, is listed as advisory and decides nothing, as in the gate. usabl never upgrades
+ * unverified or a gap into verified.
  */
 export function summarizePageCheck(drafts: Draft[], gaps: CoverageGap[]): PageCheckResult {
-  const failures = drafts.filter((d) => d.confidence === 'fail');
-  const needsReview = drafts.filter((d) => d.confidence === 'unverified');
+  // Only deterministic evidence decides, as in the gate. A preview draft that counted here would
+  // turn a page not covered, or a regression, on evidence the gate ignores.
+  const deterministic = drafts.filter((d) => d.evidenceClass === 'deterministic');
+  const advisory = drafts.filter((d) => d.evidenceClass !== 'deterministic');
+  const failures = deterministic.filter((d) => d.confidence === 'fail');
+  const needsReview = deterministic.filter((d) => d.confidence === 'unverified');
 
   const { verdict } = decideAccessibilityVerdict({
     hasBlockingFailure: failures.length > 0,
     hasUnverified: needsReview.length > 0 || gaps.length > 0,
   });
 
-  const summary = `${verdict}: ${failures.length} blocking, ${needsReview.length} needs review, ${gaps.length} gap(s)`;
-
-  return { verdict, failures, needsReview, gaps, drafts, summary };
+  const counts = `${verdict}: ${failures.length} blocking, ${needsReview.length} needs review, ${gaps.length} gap(s)`;
+  if (advisory.length === 0) {
+    return { verdict, failures, needsReview, gaps, drafts, summary: counts };
+  }
+  const summary = `${counts}\nadvisory: ${advisory.length} preview finding(s), shown for review and never counted in the verdict`;
+  return { verdict, failures, needsReview, gaps, drafts, summary, advisory };
 }
 
 export interface CheckPageOptions {

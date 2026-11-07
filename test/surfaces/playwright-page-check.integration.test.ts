@@ -433,13 +433,15 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage runs the desig
       const { context, page } = await openUrl(`${baseUrl}/clusters`);
       try {
         const result = await checkPage(page, { screenId: 'clusters', projectRoot: dir, tabCap: 10 });
+        // Preview evidence decides nothing on a page check, as in the gate: it is advisory.
         expect(result.failures.filter((d) => d.layer === 'voicing')).toEqual([]);
-        expect(result.needsReview.filter((d) => d.layer === 'voicing').map((d) => d.rule).sort()).toEqual([
+        expect(result.needsReview.filter((d) => d.layer === 'voicing')).toEqual([]);
+        expect((result.advisory ?? []).map((d) => d.rule).sort()).toEqual([
           'voicing/missing-announcement',
           'voicing/missing-live-announcement',
         ]);
-        expect(result.verdict).not.toBe('regression');
-        expect(result.verdict).not.toBe('verified');
+        expect(result.gaps).toEqual([]);
+        expect(result.verdict).toBe('verified');
       } finally {
         await context.close();
       }

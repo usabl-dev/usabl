@@ -28,8 +28,10 @@
 - Voice requirements. A requirement of kind `voice` in the requirements folder holds an
   interaction contract: steps, and what a screen reader user must hear after each one. A live
   scan and `checkPage` run it with the virtual screen reader, and wait for the page to settle
-  after each step before they read it. Its findings are preview and never block, unless the
-  obligation class is listed in `promotedObligations` in the trusted config. A window where the
+  after each step before they read it. Its findings are preview, unless the obligation class
+  is listed in `promotedObligations` in the trusted config. Preview findings never move a
+  verdict: the gate ignores them, and `checkPage` lists them in a new `advisory` field with
+  its own summary line, which appears only when there is at least one. A window where the
   page never settled is a gap, never a miss. A static-only run reports each voice requirement as
   a gap, and parsing refuses a contract with no steps, no obligations, a step window that does
   not exist, or a required word with no letter or digit.

@@ -123,6 +123,52 @@ describe('assertUsablVerdict', () => {
   });
 });
 
+describe('summarizePageCheck with preview drafts', () => {
+  const failure = draft({ rule: 'image-alt', confidence: 'fail' });
+  const incomplete = draft({ rule: 'color-contrast', confidence: 'unverified' });
+
+  it('keeps the output byte for byte when every draft is deterministic', () => {
+    const result = summarizePageCheck([failure, incomplete], [gap()]);
+
+    expect(JSON.stringify(result)).toBe(
+      JSON.stringify({
+        verdict: 'regression',
+        failures: [failure],
+        needsReview: [incomplete],
+        gaps: [gap()],
+        drafts: [failure, incomplete],
+        summary: 'regression: 1 blocking, 1 needs review, 1 gap(s)',
+      }),
+    );
+  });
+
+  it('lists preview drafts as advisory, with their own summary line, and leaves the verdict to deterministic evidence', () => {
+    const previewMiss = draft({ rule: 'intake:save-voices/missing-announcement', layer: 'voicing', evidenceClass: 'preview', confidence: 'unverified' });
+    const previewFail = draft({ rule: 'deque/some-rule', layer: 'deque', evidenceClass: 'preview', confidence: 'fail' });
+
+    const result = summarizePageCheck([previewMiss, previewFail], []);
+
+    expect(result.verdict).toBe('verified');
+    expect(result.failures).toEqual([]);
+    expect(result.needsReview).toEqual([]);
+    expect(result.advisory).toEqual([previewMiss, previewFail]);
+    expect(result.drafts).toEqual([previewMiss, previewFail]);
+    expect(result.summary).toBe(
+      'verified: 0 blocking, 0 needs review, 0 gap(s)\nadvisory: 2 preview finding(s), shown for review and never counted in the verdict',
+    );
+  });
+
+  it('does not let a preview draft hide a deterministic failure', () => {
+    const previewMiss = draft({ layer: 'voicing', evidenceClass: 'preview', confidence: 'unverified' });
+
+    const result = summarizePageCheck([previewMiss, failure], []);
+
+    expect(result.verdict).toBe('regression');
+    expect(result.failures).toEqual([failure]);
+    expect(result.advisory).toEqual([previewMiss]);
+  });
+});
+
 describe('summarizePageCheck', () => {
   it('reports verified when there are no drafts and no gaps', () => {
     const result = summarizePageCheck([], []);
