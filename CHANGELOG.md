@@ -4,6 +4,24 @@
 
 ### Added
 
+- `usabl brief` prints what an agent reads before it starts a task: the screens the task's
+  files reach and how each is reached, the checks that apply to each screen, the ones that do
+  not and why, and what counts as done. `--files <path> ...` names the task's files; with no
+  `--files` it uses the changed files git reports, the same way `usabl check` does. `--json`
+  prints JSON only. The screens come from the planners the gate uses and the checks from the
+  provider list the scan uses, so for the same files the brief names the screens the gate
+  scans, in the same order. It is measurement: it opens no browser, mints no verdict and no
+  receipt, and exits 0 whenever it printed a brief. A config or requirements file it cannot
+  read exits 4 with the reason, as `usabl check` does. It reads policy from the working tree,
+  and CI judges on the trusted ref, so a brief for a task that edits policy can differ from the
+  gate.
+
+- The `/usabl-check` skill and the Cursor rule now start by running `npx usabl brief --json`
+  and keeping the reached screens and the done list in view, and the skill's `allowed-tools`
+  lists that command. Running `usabl install --claude-skill` or `usabl install --cursor` again
+  over a skill or rule file from an earlier version refuses, names the file, and says the
+  manual step: delete the file and run the install again.
+
 - Automatic debt tracking. `usabl install --ci` now also writes
   `.github/workflows/usabl-history.yml`, which scans main after each merge and once a day
   and appends what it saw to month files on a `usabl/history` branch in your repository. A
