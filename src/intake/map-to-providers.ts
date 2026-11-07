@@ -265,6 +265,10 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
     layer: 'intake-flow',
     capabilities: ['live'],
     appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id),
+    // A flow clicks and presses keys, so it changes the page. Flagged, it runs after every provider
+    // that reads the page as loaded, such as the PatternFly rulepack, which would otherwise check a
+    // page where the flow had already removed or opened something.
+    mutatesPageState: true,
     async run(ctx) {
       // Wrong surface is out of scope for this scan. Coverage wiring decides this later.
       if (!requirementPlan(requirement, ctx.screen.id).applies) {
@@ -361,14 +365,18 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
   }
 
   // Voice contracts drive the page the way flow requirements do, so they run in the same group,
-  // after the read-only providers and the keyboard walk, with the same flags. Each contract is
+  // after every provider that reads the page as loaded, with the same flags. Each contract is
   // its own provider named by its requirement id, so a static-only run, or a contract whose step
   // fails, is a gap that names the requirement, and one failing contract does not hide another.
   for (const requirement of bundle.requirements) {
     if (requirement.assertion.type === 'voice') {
       const contract = toVoiceContract({ ...requirement, assertion: requirement.assertion });
       const stepRunner = makeStepRunner({ settleAfterEachStep: true });
-      providers.push(makeVirtualSrProvider([contract], stepRunner, { id: `intake:${requirement.id}` }));
+      providers.push({
+        ...makeVirtualSrProvider([contract], stepRunner, { id: `intake:${requirement.id}` }),
+        // The contract clicks and presses keys, so it changes the page, the same as a flow.
+        mutatesPageState: true,
+      });
     }
   }
 

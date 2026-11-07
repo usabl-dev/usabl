@@ -10,13 +10,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
-import type { BrowserDriver, Capability, Draft, Page, Requirement, RequirementBundle } from '../../src/contracts/index.js';
+import type { BrowserDriver, Capability, Draft, Page, Provider, Requirement, RequirementBundle } from '../../src/contracts/index.js';
 import { buildDeps } from '../../src/deps/build.js';
 import { makeFakeDeps, makeFakePage } from '../../src/deps/fakes.js';
 import { validateId } from '../../src/intake/id-grammar.js';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { makeScanProviders } from '../../src/providers/core-stack.js';
+import { runProviders } from '../../src/providers/index.js';
 import { makeStepRunner } from '../../src/providers/keyboard-walk/steps.js';
 import { run } from '../../src/run.js';
 import { scrubPublishedResult, UNTRUSTED_FRAME_END } from '../../src/surfaces/scrub.js';
@@ -129,6 +130,34 @@ describe('voice requirements become providers', () => {
     expect(voice?.capabilities).toEqual(flow?.capabilities);
     expect(voice?.mutatesPageState).toBe(flow?.mutatesPageState);
     expect(voice?.requiresPristinePage).toBe(flow?.requiresPristinePage);
+  });
+
+  it('runs flow and voice providers after the PatternFly rulepack in the real run order, so its checks see the page as loaded', async () => {
+    // runProviders moves page-changing providers to the end. A contract that clicks Delete before
+    // the rulepack reads the page would hide every barrier inside the deleted row.
+    const order: string[] = [];
+    const providers = makeScanProviders(bundle(voiceRequirement('delete-row-announces'), contentRequirement, flowRequirement)).map(
+      (provider): Provider => ({
+        ...provider,
+        run: async () => {
+          order.push(provider.id);
+          return [];
+        },
+      }),
+    );
+
+    await runProviders(providers, { page: makeFakePage(), screen: SCREEN, config: testConfig() }, ['live']);
+
+    expect(order).toEqual([
+      'axe-core',
+      'rhds-rulepack',
+      'docs-rulepack',
+      'keyboard-walk',
+      'intake:clusters-heading',
+      'pf-rulepack',
+      'intake:save-announces',
+      'intake:delete-row-announces',
+    ]);
   });
 
   it('runs the contract steps on its own screen and reports preview drafts by default', async () => {
