@@ -292,30 +292,59 @@ describe('waitForActionSettled', () => {
       evaluate: async () => elements(),
     };
   }
+  const liveQuiet = async () => true;
+  // A short cap for the tests that only need the cap to run out.
+  const SHORT_CAP_MS = 2_500;
 
-  it('returns settled once the element count holds and the network is quiet', async () => {
-    const result = await waitForActionSettled(scriptedPage(() => 12, () => true), ACTION_SETTLE_CAP_MS);
+  it('returns settled once the element count holds, the network is quiet, and the live record is quiet', async () => {
+    const result = await waitForActionSettled(scriptedPage(() => 12, () => true), ACTION_SETTLE_CAP_MS, liveQuiet);
 
     expect(result.settled).toBe(true);
     expect(result.waitedMs).toBeLessThan(ACTION_SETTLE_CAP_MS);
-  }, 10_000);
+  }, 15_000);
+
+  it('watches a page that does not change for at least two seconds, so a text-only update at 1.6 seconds lands inside the wait', async () => {
+    const result = await waitForActionSettled(scriptedPage(() => 12, () => true), ACTION_SETTLE_CAP_MS, liveQuiet);
+
+    expect(result.waitedMs).toBeGreaterThanOrEqual(2_000);
+  }, 15_000);
+
+  it('keeps waiting while the live record has just received an announcement', async () => {
+    const start = Date.now();
+    // The live record changed until 2.2 seconds in, with no element added and no request.
+    const result = await waitForActionSettled(
+      scriptedPage(() => 12, () => true),
+      ACTION_SETTLE_CAP_MS,
+      async () => Date.now() - start >= 2_200,
+    );
+
+    expect(result.settled).toBe(true);
+    expect(result.waitedMs).toBeGreaterThanOrEqual(2_200);
+  }, 15_000);
+
+  it('returns unsettled at its cap when the live record never goes quiet', async () => {
+    const result = await waitForActionSettled(scriptedPage(() => 12, () => true), SHORT_CAP_MS, async () => false);
+
+    expect(result.settled).toBe(false);
+    expect(result.waitedMs).toBeGreaterThanOrEqual(SHORT_CAP_MS);
+  }, 15_000);
 
   it('returns unsettled at its own cap, without throwing, when the page keeps changing', async () => {
     const start = Date.now();
-    const result = await waitForActionSettled(scriptedPage(() => Date.now() - start, () => true), ACTION_SETTLE_CAP_MS);
+    const result = await waitForActionSettled(scriptedPage(() => Date.now() - start, () => true), SHORT_CAP_MS, liveQuiet);
 
     expect(result.settled).toBe(false);
-    expect(result.waitedMs).toBeGreaterThanOrEqual(ACTION_SETTLE_CAP_MS);
-  }, 10_000);
+    expect(result.waitedMs).toBeGreaterThanOrEqual(SHORT_CAP_MS);
+  }, 15_000);
 
   it('returns unsettled at its cap when the network never goes quiet', async () => {
-    const result = await waitForActionSettled(scriptedPage(() => 12, () => false), ACTION_SETTLE_CAP_MS);
+    const result = await waitForActionSettled(scriptedPage(() => 12, () => false), SHORT_CAP_MS, liveQuiet);
 
     expect(result.settled).toBe(false);
-  }, 10_000);
+  }, 15_000);
 
-  it('uses a cap for one action, far below the page load budget', () => {
-    expect(ACTION_SETTLE_CAP_MS).toBe(2000);
+  it('uses a cap for one action that a row removed after a slow request fits inside, far below the page load budget', () => {
+    expect(ACTION_SETTLE_CAP_MS).toBe(6_000);
   });
 });
 

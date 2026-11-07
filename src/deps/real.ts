@@ -43,14 +43,21 @@ const SETTLE_SAMPLES_REQUIRED = 4;
 // idle still reads as idle here, and the live signal only differs by catching requests that start
 // after that first idle.
 const NETWORK_QUIET_WINDOW_MS = 500;
+// How many equal element counts in a row, 500 ms apart, a voice contract step needs before the page
+// counts as having reacted. Five reads span 2 seconds, one read more than readiness uses. A page
+// that changes only the text of a live region, with no element added and no request sent, is
+// invisible to the count and the network, and only the live record below sees it. Two seconds is
+// the window that record has to catch an update that lands well after the action: an announcement
+// 1.6 seconds after a click falls inside it, and the live-record check then holds the wait open.
+const ACTION_SETTLE_SAMPLES_REQUIRED = 5;
 // The most a voice contract waits for the page to react to one step before it reads focus and
 // drains the live record. The readiness budget above is sized for a whole page load on a slow
-// application, which would let one step stall a scan for a minute. One action needs far less.
-// The settle window itself is 1.5 seconds, four equal reads 500 ms apart, so a page that does not
-// change at all settles inside this cap, and a page that changes once in the first half second
-// after the action still does. A page still changing at the cap is not waited for: its step
-// window becomes a gap that says so, never a miss and never a pass.
-export const ACTION_SETTLE_CAP_MS = 2_000;
+// application, which would let one step stall a scan for a minute. One action needs far less, but
+// a delete that removes its row when a slow request answers changes the page well after the click,
+// and every change restarts the 2 second window, so a short cap would leave that window undecided
+// on every run. Only a page that never settles pays the whole cap, and its window then becomes a
+// gap that says so, never a miss and never a pass. A page that settles returns as soon as it does.
+export const ACTION_SETTLE_CAP_MS = 6_000;
 
 // Browser-side path helper. Keep this the only implementation: a uniqueness (or any path) fix
 // that lands in one copy and misses another recreates the duplicate-id false green.
@@ -325,12 +332,18 @@ const LIVE_CAPTURE_IMPL = `
     return normalized.length > 0 ? normalized : null;
   };
   // Each entry keeps the element whose change it records, so the drain can check it again.
+  // When the record last received an entry, by this world's clock. The settle wait after a voice
+  // contract step reads it without draining, so a live region whose text changes late, with no
+  // element added and no request sent, still holds the wait open.
+  let lastRecordedAt = null;
   const push = (value, start) => {
     const text = toText(value);
     if (text !== null) {
       buffer.push({ text, start });
+      lastRecordedAt = performance.now();
     }
   };
+  window.__usablLiveQuietFor = (windowMs) => lastRecordedAt === null || performance.now() - lastRecordedAt >= windowMs;
   // Modal state and hidden state are read when a change is observed, and again here. A page can
   // write a region and open a modal in a later task, or close the dialog that holds the region one
   // task or one promise later, before the browser updates the accessibility tree, so a screen
@@ -430,6 +443,20 @@ const DRAIN_FUNCTION = `function () {
     undecidable: drained !== null && typeof drained === 'object' ? drained.undecidable : null,
   };
 }`;
+
+// Whether the capture has recorded nothing for the given window, read without draining it. A
+// document without the capture throws, the same as the drain, rather than reading as quiet.
+const LIVE_QUIET_FUNCTION = `function (windowMs) {
+  const quietFor = window.__usablLiveQuietFor;
+  if (typeof quietFor !== 'function') {
+    throw new Error('the announcement capture is not running in this document');
+  }
+  return quietFor(windowMs) === true;
+}`;
+
+async function liveRecordQuiet(cdp: CDPSession): Promise<boolean> {
+  return (await callInWorld(cdp, LIVE_WORLD, 'read announcements', LIVE_QUIET_FUNCTION, [NETWORK_QUIET_WINDOW_MS])) === true;
+}
 
 const UNDECIDABLE_REASONS: ReadonlySet<string> = new Set<AnnouncementUndecidable>(['closed-shadow-modal', 'changed-element-removed']);
 
@@ -2059,16 +2086,20 @@ export async function waitForRendered(
 }
 
 /**
- * Waits for a page to react to one action, by the readiness signals waitForRendered reads: the
- * element count equal for the same number of reads, and the network quiet for the same window.
- * It has its own cap, and running out is an answer, not an error: it returns settled false and how
+ * Waits for a page to react to one action, by the readiness signals waitForRendered reads, the
+ * element count holding and the network quiet for the same window, plus a third: the live-region
+ * record has received nothing for that window either. It has its own cap, and running out is an answer, not an error: it returns settled false and how
  * long it waited, and the caller treats that step's window as undecided. A page-side failure from
  * evaluate, such as a context destroyed by a navigation, goes through unchanged, the way it does in
  * waitForRendered, so the caller reports it rather than reading a page that is gone.
  *
  * Exported for tests. Product code reaches this through Page.settleAfterAction().
  */
-export async function waitForActionSettled(pw: ReadinessPage, capMs: number): Promise<ActionSettle> {
+export async function waitForActionSettled(
+  pw: ReadinessPage,
+  capMs: number,
+  liveQuiet: () => Promise<boolean>,
+): Promise<ActionSettle> {
   const start = Date.now();
   const deadline = start + capMs;
   let previous: number | null = null;
@@ -2077,7 +2108,13 @@ export async function waitForActionSettled(pw: ReadinessPage, capMs: number): Pr
     const elements = await pw.evaluate(() => document.getElementsByTagName('*').length);
     repeats = elements === previous ? repeats + 1 : 1;
     previous = elements;
-    if (repeats >= SETTLE_SAMPLES_REQUIRED && pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS)) {
+    // The live record is read last and only when the other two hold, so a quiet answer describes the
+    // moment the wait ends.
+    if (
+      repeats >= ACTION_SETTLE_SAMPLES_REQUIRED &&
+      pw.networkQuietFor(NETWORK_QUIET_WINDOW_MS) &&
+      (await liveQuiet())
+    ) {
       return { settled: true, waitedMs: Date.now() - start };
     }
     const remaining = deadline - Date.now();
@@ -2187,7 +2224,7 @@ function wrapPage(
       return (await callInWorld(cdp, READ_WORLD, 'read focus', ACTIVE_ELEMENT_WITHIN_FUNCTION, [selector])) === true;
     },
     async settleAfterAction(): Promise<ActionSettle> {
-      return waitForActionSettled(readiness, ACTION_SETTLE_CAP_MS);
+      return waitForActionSettled(readiness, ACTION_SETTLE_CAP_MS, () => liveRecordQuiet(cdp));
     },
     async armAnnouncementCapture(): Promise<void> {
       // The observer is already running: it starts at document start on a page usabl opens, and

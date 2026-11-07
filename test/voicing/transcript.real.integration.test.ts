@@ -56,13 +56,21 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('a voice contract transcr
   });
 
   async function transcript(delayMs: number): Promise<TranscriptStop[]> {
-    const page = await driver.open(`${baseUrl}?delay=${delayMs}`);
+    return transcriptAt(`delay=${delayMs}`, CONTRACT);
+  }
+
+  async function transcriptAt(query: string, contract: InteractionContract): Promise<TranscriptStop[]> {
+    const page = await driver.open(`${baseUrl}?${query}`);
     try {
       await page.gotoReady();
-      return await makeStepRunner({ settleAfterEachStep: true }).run(page, CONTRACT.steps);
+      return await makeStepRunner({ settleAfterEachStep: true }).run(page, contract.steps);
     } finally {
       await page.close();
     }
+  }
+
+  function drafts(contract: InteractionContract, stops: TranscriptStop[]) {
+    return [...runStructuralTier(contract, stops, 'rows'), ...runVoicingTier(contract, stops, 'rows')];
   }
 
   function liveTexts(stops: TranscriptStop[]): Array<string | null> {
@@ -72,6 +80,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('a voice contract transcr
   it.each([
     ['400 ms after the click', 400],
     ['at the click', 0],
+    // Text only: no element is added and no request is sent, so only the live record sees it.
+    ['1600 ms after the click, as text only', 1600],
   ])('hears an announcement made %s, the same way on two fresh pages', async (_label, delayMs) => {
     const first = await transcript(delayMs);
     const second = await transcript(delayMs);
@@ -91,5 +101,43 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('a voice contract transcr
       // Both obligations hold, so neither tier reports anything.
       expect([...runStructuralTier(CONTRACT, stops, 'rows'), ...runVoicingTier(CONTRACT, stops, 'rows')]).toEqual([]);
     }
+  });
+
+  it('judges a window where the row is removed when a slow request answers, 1200 ms after the click', async () => {
+    const stops = await transcriptAt('remove=1200', CONTRACT);
+
+    expect(stops[0]?.unsettled).toBeUndefined();
+    expect(liveTexts(stops)).toEqual(['Row deleted']);
+    expect(drafts(CONTRACT, stops)).toEqual([]);
+  });
+
+  it('credits a late announcement to the step that caused it, not to the next step', async () => {
+    const twoSteps: InteractionContract = {
+      ...CONTRACT,
+      steps: [...CONTRACT.steps, { do: 'tab' }],
+      obligations: [
+        { class: 'live-polite', afterStep: 0, requiredTokens: ['deleted'], mustAnnounce: true },
+        { class: 'focus-name', afterStep: 1, requiredTokens: ['close'], focusedRole: 'button', mustAnnounce: false },
+      ],
+    };
+
+    const stops = await transcriptAt('delay=1600', twoSteps);
+
+    expect(stops.map((stop) => stop.announcement.filter((token) => token.kind === 'live').map((token) => token.text))).toEqual([
+      ['Row deleted'],
+      [],
+    ]);
+    expect(drafts(twoSteps, stops)).toEqual([]);
+  });
+
+  it('turns a window on a page that never settles into an undecided gap, never a miss', async () => {
+    const stops = await transcriptAt('churn=1', CONTRACT);
+    const found = drafts(CONTRACT, stops);
+
+    expect(stops[0]?.unsettled).toBeDefined();
+    expect(found.map((draft) => [draft.rule, draft.confidence])).toEqual([
+      ['voicing/window-undecided', 'unverified'],
+      ['voicing/window-undecided', 'unverified'],
+    ]);
   });
 });
