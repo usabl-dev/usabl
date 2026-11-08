@@ -151,6 +151,43 @@ requirements:
       },
     });
   });
+  describe('promotedObligations', () => {
+    // Promotion turns a voice requirement's preview findings into gating ones, so it is policy. A
+    // branch list must not survive when the trusted config cannot be read.
+    const working = testConfig({ promotedObligations: ['live-polite'] });
+
+    it('drops the working tree list when the trusted config is missing', async () => {
+      const resolved = await resolveIntakeConfig(scriptedGit({ 'origin/main': {} }), working, 'origin/main');
+
+      expect(resolved.promotedObligations).toBeUndefined();
+    });
+
+    it('drops the working tree list when the trusted config is unparseable', async () => {
+      const resolved = await resolveIntakeConfig(
+        scriptedGit({ 'origin/main': { 'usabl.config.json': '{"appBaseUrl"' } }),
+        working,
+        'origin/main',
+      );
+
+      expect(resolved.promotedObligations).toBeUndefined();
+    });
+
+    it('takes the trusted list, not the branch one, when the trusted config is readable', async () => {
+      const trusted = testConfig({ promotedObligations: ['focus-name'] });
+      const resolved = await resolveIntakeConfig(
+        scriptedGit({ 'origin/main': { 'usabl.config.json': JSON.stringify(trusted) } }),
+        working,
+        'origin/main',
+      );
+
+      expect(resolved.promotedObligations).toEqual(['focus-name']);
+    });
+
+    it('keeps the working list on a local run with no trusted ref', async () => {
+      expect((await resolveIntakeConfig(scriptedGit({}), working, undefined)).promotedObligations).toEqual(['live-polite']);
+    });
+  });
+
   describe('engines', () => {
     const branchEngines = { evinced: { enabled: true, mode: 'online' as const } };
 
