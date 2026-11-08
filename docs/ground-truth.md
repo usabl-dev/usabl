@@ -2956,7 +2956,8 @@ installed `/usabl-check` skill and the Cursor rule open with that step, and the 
 `allowed-tools` lists `Bash(npx usabl brief --json --files:*)`. The brief
 names the screens the task's files reach and how each is reached, one entry per check the scan
 would run on each screen, and what counts as done. A check entry says whether it applies and,
-when that is not plain, why: an intake requirement applies only to the screen it names, the
+when that is not plain, why: an intake requirement (content, flow, or voice) applies only to
+the screen it names, the
 docs rulepack only to docs pages, an engine only when the config turns it on, and a check that
 can only tell on a live page, such as the PatternFly rulepack looking for its marker, says
 "decided on the page". The screens come from the planners `run()` calls, with the inputs a local

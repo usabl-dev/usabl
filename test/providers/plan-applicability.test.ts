@@ -31,6 +31,18 @@ const bundle: RequirementBundle = {
       assertion: { type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Cluster deleted' },
       approved: true,
     },
+    {
+      id: 'delete-voices',
+      kind: 'voice',
+      surface: 'clusters',
+      description: 'delete is heard',
+      assertion: {
+        type: 'voice',
+        steps: [{ do: 'click', selector: '#delete' }],
+        obligations: [{ class: 'live-polite', afterStep: 0, requiredTokens: ['deleted'], mustAnnounce: true }],
+      },
+      approved: true,
+    },
   ],
 };
 
@@ -75,6 +87,7 @@ describe('providerProves', () => {
       .map((provider) => providerProves(provider));
     expect(proves[0]).toMatch(/^content requirement: /u);
     expect(proves[1]).toMatch(/^flow requirement: /u);
+    expect(proves[2]).toMatch(/^voice requirement: /u);
   });
 
   it('claims only what each rulepack checks', () => {
@@ -112,7 +125,7 @@ describe('plannedApplicability', () => {
   });
 
   it('says an intake requirement applies only to the screen it names', () => {
-    for (const id of ['intake:clusters-heading', 'intake:delete-row']) {
+    for (const id of ['intake:clusters-heading', 'intake:delete-row', 'intake:delete-voices']) {
       expect(planOf(id, appScreen)).toEqual({ applies: true });
       expect(planOf(id, otherAppScreen)).toEqual({
         applies: false,
@@ -159,8 +172,8 @@ describe('plannedApplicability', () => {
         expect(draftsOf(await provider.run(ctx)), `${provider.id} on ${screen.id}`).toEqual([]);
       }
     }
-    // pf-rulepack on docs, docs-rulepack on the two app screens, and the two intake providers on
+    // pf-rulepack on docs, docs-rulepack on the two app screens, and the three intake providers on
     // alerts and on the docs page.
-    expect(checked).toBe(7);
+    expect(checked).toBe(9);
   });
 });

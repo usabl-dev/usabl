@@ -39,6 +39,8 @@
   Parsing refuses a contract with no steps, a step other than `tab`, `activate`, `press` with
   a key, or `click` with a selector, no obligations, a step window that does not exist, or a
   required word with no letter or digit.
+  `usabl brief` lists each voice requirement as a check on the screen it names and says what
+  it proves.
 
 - `Page` gained a required method, `settleAfterAction()`, which waits for the page to react to
   one action and returns whether it settled and how long it waited. Code that implements the

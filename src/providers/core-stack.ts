@@ -103,6 +103,8 @@ const INTAKE_PROVES: Readonly<Record<string, string>> = {
     'content requirement: the element the requirement names has the accessible text or name the requirement states.',
   'intake-flow':
     'flow requirement: after the steps the requirement lists, the expected announcement is heard on focus or in a live region.',
+  voicing:
+    'voice requirement: after each step the requirement lists, the focused control has a name and role, and the words each obligation requires are heard. Its findings are preview unless the trusted config promotes the obligation class.',
 };
 
 /** The sentence for one provider, or null when this table does not know it. */
