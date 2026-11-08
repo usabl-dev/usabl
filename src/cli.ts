@@ -9,7 +9,7 @@
  * Sample `usabl.config.json` URLs (`http://127.0.0.1:5173`) are the fixture app's
  * Vite origin, not a hardcoded engine target. The engine always reads operator config.
  */
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -42,6 +42,7 @@ import {
 } from './surfaces/cli.js';
 import { preflightCli } from './surfaces/cli-commands.js';
 import { runStopHookFromStdin } from './surfaces/stop-hook-runner.js';
+import { scrubString } from './surfaces/scrub.js';
 import { formatInstallReport, type InstallFs, type InstallResult } from './install/index.js';
 import { planOverlay, writeOverlay } from './install/overlay.js';
 import { planClaude, writeClaude } from './install/claude.js';
@@ -68,6 +69,8 @@ import { runDebt } from './history/report.js';
 import { runServeBuild } from './judge/serve-build.js';
 import { runExtractBuild } from './judge/extract-build.js';
 import { prepareJudge, withoutRuntimeSettings } from './judge/prepare.js';
+import { makeBrief, normalizeTaskFiles } from './brief/index.js';
+import { formatBrief } from './output/brief.js';
 
 // The configured url warnings this process has already printed. It holds config urls, which may
 // carry a query, so it is never printed and never leaves the process.
@@ -189,6 +192,20 @@ async function listPullReviews(pullNumber: number): Promise<Array<{ userLogin: s
 }
 
 const execFileAsync = promisify(execFile);
+
+// The repository root, as real paths, so a path given to brief can be made relative to it. Outside
+// a git repository, or when git is missing, the working folder stands in for it, which is where
+// every other command reads its files from.
+async function repositoryRoot(): Promise<string> {
+  const cwd = await realpath(process.cwd());
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+    const top = stdout.trim();
+    return top.length === 0 ? cwd : await realpath(top);
+  } catch {
+    return cwd;
+  }
+}
 
 // A read-only gh reader for the branch-rule check. The only method issues a GET against an
 // api endpoint, building the argument list internally as ['api', endpoint] and never adding
@@ -347,6 +364,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   if (
     opts.command !== 'check' &&
+    opts.command !== 'brief' &&
     opts.command !== 'comment' &&
     opts.command !== 'bypass' &&
     opts.command !== 'init' &&
@@ -395,6 +413,33 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
     // On success the server keeps the process alive until the workflow stops it.
     return (await runServeBuild(rest, io)).exitCode;
+  }
+
+  if (opts.command === 'brief') {
+    // A brief is a plan for a task. It runs no check. It reads the working tree and git, opens no
+    // browser, writes nothing, never calls the gate, and exits 0 whenever it produced a brief. A
+    // config or policy read failure throws, the same way it does for check.
+    let changedFiles: string[] | undefined;
+    if (opts.files !== null) {
+      const files = normalizeTaskFiles(opts.files, {
+        root: await repositoryRoot(),
+        cwd: await realpath(process.cwd()),
+      });
+      if (!files.ok) {
+        process.stderr.write(`usabl: ${scrubString(files.message)}\n`);
+        return 2;
+      }
+      changedFiles = files.files;
+    }
+    const config = await loadConfig(opts.configPath);
+    const brief = await makeBrief({
+      fs: makeFsGlob(),
+      git: makeGitReader(),
+      config,
+      ...(changedFiles === undefined ? {} : { changedFiles }),
+    });
+    process.stdout.write(`${opts.json ? JSON.stringify(brief, null, 2) : formatBrief(brief)}\n`);
+    return 0;
   }
 
   if (opts.command === 'init') {

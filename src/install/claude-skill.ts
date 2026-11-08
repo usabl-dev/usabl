@@ -29,15 +29,26 @@ export interface ClaudeSkillDescriptor {
 // parents are created for the Stop hook and the CI gate.
 export const CLAUDE_SKILL_PATH = '.claude/skills/usabl-check/SKILL.md';
 
-// The canonical skill body. allowed-tools restricts the command to the advisory self-check
-// flag, so the installed skill can never run anything but "npx usabl check --self-check". The
-// closing paragraph keeps the honesty invariant on the skill's face: this command is advisory
-// and never verifies work; the Stop hook is the only thing that decides Claude can finish.
+// The canonical skill body. allowed-tools restricts the command to the advisory self-check and
+// the task brief, so the installed skill can never run anything but "npx usabl check
+// --self-check" and "npx usabl brief --json --files" followed by paths, and neither decides a
+// verdict. The ":*" lets the assistant name the paths. The first step is the brief, so the
+// assistant knows which screens its task reaches and what done means before it edits anything.
+// It names the files the task will edit, because at the start of a task the tree is usually
+// clean and a brief of the changed files would have nothing to check. The closing paragraph keeps the honesty invariant on the skill's face: this
+// command is advisory and never verifies work; the Stop hook is the only thing that decides
+// Claude can finish. A skill file an earlier version wrote differs from these bytes, so a
+// re-install refuses it and says to delete it and install again.
 export const CLAUDE_SKILL_CONTENTS = `---
 name: usabl-check
 description: Run the advisory usabl accessibility check during implementation and explain the current result.
-allowed-tools: Bash(npx usabl check --self-check)
+allowed-tools: Bash(npx usabl check --self-check), Bash(npx usabl brief --json --files:*)
 ---
+
+Before you start a task, run \`npx usabl brief --json --files <paths>\` from the repository
+root, with the paths of the files the task will edit. Keep the screens it says the task
+reaches and its \`done\` list in view while you work. The brief is a plan. Only the gate
+decides a verdict.
 
 Run \`npx usabl check --self-check\` from the repository root.
 

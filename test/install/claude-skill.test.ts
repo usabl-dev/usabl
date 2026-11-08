@@ -21,6 +21,27 @@ import {
   writeClaudeSkill,
 } from '../../src/install/claude-skill.js';
 
+// The usabl-check skill as the version before the task brief wrote it.
+const PREVIOUS_CHECK_SKILL = `---
+name: usabl-check
+description: Run the advisory usabl accessibility check during implementation and explain the current result.
+allowed-tools: Bash(npx usabl check --self-check)
+---
+
+Run \`npx usabl check --self-check\` from the repository root.
+
+Report:
+
+1. The verdict.
+2. The affected accessibility behavior.
+3. The first finding and suggested repair, when present.
+4. Any missing coverage.
+
+This is an on-demand self-check the assistant runs during implementation. It is
+advisory. Do not call the work verified from this command alone. The usabl Stop hook
+decides whether Claude can finish.
+`;
+
 function memoryFs(files: Record<string, string>): InstallFs & { store: Record<string, string> } {
   const store = { ...files };
   return {
@@ -57,8 +78,13 @@ describe('CLAUDE_SKILL_CONTENTS', () => {
     const expected = `---
 name: usabl-check
 description: Run the advisory usabl accessibility check during implementation and explain the current result.
-allowed-tools: Bash(npx usabl check --self-check)
+allowed-tools: Bash(npx usabl check --self-check), Bash(npx usabl brief --json --files:*)
 ---
+
+Before you start a task, run \`npx usabl brief --json --files <paths>\` from the repository
+root, with the paths of the files the task will edit. Keep the screens it says the task
+reaches and its \`done\` list in view while you work. The brief is a plan. Only the gate
+decides a verdict.
 
 Run \`npx usabl check --self-check\` from the repository root.
 
@@ -74,6 +100,30 @@ advisory. Do not call the work verified from this command alone. The usabl Stop 
 decides whether Claude can finish.
 `;
     expect(CLAUDE_SKILL_CONTENTS).toBe(expected);
+  });
+
+  it('starts with the task brief and lets the skill run it', () => {
+    expect(CLAUDE_SKILL_CONTENTS).toContain(
+      'allowed-tools: Bash(npx usabl check --self-check), Bash(npx usabl brief --json --files:*)\n',
+    );
+    const body = CLAUDE_SKILL_CONTENTS.split('---\n')[2] ?? '';
+    // On a clean tree the brief with no files has nothing to check, so the step names the files.
+    expect(body.trimStart().startsWith('Before you start a task, run `npx usabl brief --json --files <paths>`')).toBe(
+      true,
+    );
+    expect(body).toContain('the files the task will edit');
+    expect(body).toContain('`done` list');
+    expect(body).toContain('The brief is a plan. Only the gate\ndecides a verdict.');
+    expect(body).not.toContain('not a verdict');
+  });
+
+  it('refuses to overwrite the skill an earlier version wrote, and names the manual step', async () => {
+    const fs = memoryFs({ [CLAUDE_SKILL_PATH]: PREVIOUS_CHECK_SKILL });
+    const result = await installClaudeSkills(fs);
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain(`Refusing to overwrite ${CLAUDE_SKILL_PATH}`);
+    expect(result.message).toContain('delete it and re-run "usabl install --claude-skill"');
+    expect(fs.store[CLAUDE_SKILL_PATH]).toBe(PREVIOUS_CHECK_SKILL);
   });
 });
 

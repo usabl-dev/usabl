@@ -283,6 +283,7 @@ src/
   docs/             alt-text-manifest.ts announcement-snippets.ts keyboard-paths.ts evidence-binding.ts source-map.ts
   output/           conformance.ts summary.ts
   doctor/           index.ts
+  brief/            index.ts   (usabl brief: the task-start brief; measurement only, section 11.5)
   drift/            routes.ts
   floor/            prune.ts
   init/             index.ts docs/index.ts docs/asciidoc-modular.ts docs/asciibinder.ts
@@ -2479,10 +2480,10 @@ establish an evidence floor, then turn on the stop hook and CI. It is scanner-sh
 invocation, not scanner semantics: output is a full `Result` with verdict, differential,
 coverage honesty, and optional receipt minting.
 
-**Command surface.** `main` recognizes exactly twelve commands: `check`, `comment`,
-`bypass`, `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`,
-`doctor`, `docs`, plus `help`. `check` is the default when no command is given, so `usabl`
-alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
+**Command surface.** `main` recognizes these commands: `check`, `brief`, `comment`, `bypass`,
+`init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`, `doctor`, `docs`,
+`session`, `debt`, `history`, `serve-build`, `extract-build`, and `help`. `check` is the default
+when no command is given, so `usabl` alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
 `usabl help <command>` print help and exit 0 before anything else runs: no config is read, no
 browser opens, stdin is not read, and no file is written. The top-level help lists every
 command with one line each. A command's help lists every flag it takes. Both come from one
@@ -2564,6 +2565,9 @@ lines.
   `routes` is the only subcommand; anything else exits 2.
 - Health check: `usabl doctor` is a read-only projection over the wired surfaces and always
   exits 0 (see section 11.9).
+- Task brief: `usabl brief [--files <path> ...] [--json]` prints what an agent reads before it
+  starts a task (see section 11.5). With no `--files` it uses the changed files git reports, the
+  same way a local `usabl check` does.
 - CI: the workflow invokes `usabl check --ci --trusted-ref <base>`. On `check`, `--ci` is
   the CI-mode boolean and forces `--trusted-ref` (without it, `check --ci` refuses with
   exit 2). The same `--ci` token is the CI *install target* under `usabl install`; the two
@@ -2885,6 +2889,35 @@ reliable agent self-correction needs it. If MCP is added, it is for discoverabil
 not because the loop requires it.
 
 The gate stays at Stop. Neither path lets the agent grade its own work.
+
+**Task brief (`usabl brief`).** Before it starts a task, the agent runs
+`npx usabl brief --json --files <paths>` with the files the task will edit. At that point the
+tree is usually clean, so a brief of the changed files would have nothing to check. The
+installed `/usabl-check` skill and the Cursor rule open with that step, and the skill's
+`allowed-tools` lists `Bash(npx usabl brief --json --files:*)`. The brief
+names the screens the task's files reach and how each is reached, one entry per check the scan
+would run on each screen, and what counts as done. A check entry says whether it applies and,
+when that is not plain, why: an intake requirement applies only to the screen it names, the
+docs rulepack only to docs pages, an engine only when the config turns it on, and a check that
+can only tell on a live page, such as the PatternFly rulepack looking for its marker, says
+"decided on the page". The screens come from the planners `run()` calls, with the inputs a local
+run gives them and joined in the same order, so for the same changed files the brief names
+exactly the screens a local `usabl check` scans. Like a local run, it checks the guarded files
+against HEAD and reads a `usabl.routes.json` or `usabl.docs.json` that differs from HEAD as
+missing, and it adds a disclosure line for each such manifest. The checks come from the provider list the check runner is built with. The done list
+restates the gate rules (section 9): no new deterministic failure, no new deterministic finding
+usabl could not confirm, no coverage gap, approval for any changed policy file, and a live scan
+when a screen needs one. When nothing is left to check, it says the scan gives no verdict and
+points at the approvals line, because a changed policy file still makes the result
+`approval_required`.
+
+The brief is measurement. It opens no browser, so no page text is involved, mints no verdict and
+no receipt, never calls the gate, and never reads a verdict. It reads policy from the working
+tree and takes no trusted ref. CI judges a pull request on the trusted ref (section 10), so when
+a task edits policy the brief can differ from what the gate decides. Every string it prints goes
+through `scrub.ts` and loses credentials, query strings, and fragments. It exits 0 whenever it
+printed a brief; a config or requirements file it cannot read fails the command with the reason,
+the same way `usabl check` does.
 
 ### 11.6 Playwright helper (seam)
 

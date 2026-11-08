@@ -24,6 +24,24 @@ import {
   writeCursor,
 } from '../../src/install/cursor.js';
 
+// The UI rule as the version before the task brief wrote it, for the default globs.
+const PREVIOUS_RULE = `---
+description: Run usabl accessibility self-checks while editing UI and before claiming work is done
+globs: src/**/*.{tsx,jsx,css}
+alwaysApply: false
+---
+
+# usabl accessibility workflow
+
+When changing user interface code:
+
+- After a meaningful UI change, run \`/usabl-check\` or \`npx usabl check --self-check\` from the repository root.
+- Treat usabl findings as the source of truth for machine-checkable barriers.
+- Explain verdicts honestly: \`verified\`, \`regression\`, \`not_covered\`, or \`approval_required\`.
+- Do not call work verified from the self-check alone. The gate (\`usabl check\` / CI) decides proof.
+- Prefer fixing source over query-parameter previews or disabling checks.
+`;
+
 function memoryFs(files: Record<string, string>): InstallFs & { store: Record<string, string> } {
   const store = { ...files };
   return {
@@ -65,6 +83,27 @@ describe('CURSOR assistant contents', () => {
     expect(cursorRuleGlobs(['src/**', 'src/demo/scenarios.ts'])).toBe(
       'src/**/*.{tsx,jsx,css},src/demo/scenarios.ts',
     );
+  });
+
+  it('starts the rule with the task brief', () => {
+    const body = CURSOR_RULE_CONTENTS.split('# usabl accessibility workflow\n')[1] ?? '';
+    expect(body.trimStart().startsWith('Before you start a task, run `npx usabl brief --json --files <paths>`')).toBe(
+      true,
+    );
+    expect(body).toContain('the files the task will edit');
+    expect(body).toContain('`done` list');
+    expect(body).toContain('The brief is a plan. Only the gate decides a verdict.');
+    expect(body).not.toContain('not a verdict');
+  });
+
+  it('refuses to overwrite the rule an earlier version wrote, and names the manual step', async () => {
+    const fs = memoryFs({ [CURSOR_RULE_PATH]: PREVIOUS_RULE });
+    const plan = await planCursor(fs, DEFAULT_CURSOR_UI_FILE_GLOBS);
+    expect(plan).toMatchObject({ action: 'refuse', path: CURSOR_RULE_PATH });
+    const result = await writeCursor(fs, plan);
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain('delete the file and re-run "usabl install --cursor"');
+    expect(fs.store[CURSOR_RULE_PATH]).toBe(PREVIOUS_RULE);
   });
 
   it('states the command is advisory and that the gate decides proof', () => {

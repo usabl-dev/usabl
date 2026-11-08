@@ -48,6 +48,7 @@ import {
   type InstalledPackage,
   type ModuleLoader,
 } from './shared.js';
+import { ENGINE_PREVIEW } from '../applicability.js';
 
 export const EVINCED_PACKAGE = '@evinced/js-playwright-sdk';
 export const EVINCED_PROVIDER_ID = 'evinced';
@@ -377,6 +378,7 @@ export function makeEvincedProvider(config: EvincedEngineConfig, options: Evince
     id: EVINCED_PROVIDER_ID,
     layer: EVINCED_LAYER,
     capabilities: evincedCapabilities(config),
+    appliesBeforeScan: () => ({ applies: true, why: ENGINE_PREVIEW }),
     async run(ctx: ProviderContext): Promise<ProviderOutput> {
       // Seeded with every Evinced credential in the environment, whichever mode is on, before
       // anything can fail, so no path out of this provider carries a credential value. Each value

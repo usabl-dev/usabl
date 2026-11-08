@@ -12,6 +12,7 @@ import type {
   FlowAssertion,
   FocusUnreadable,
   Page,
+  PlannedApplicability,
   Provider,
   Requirement,
   RequirementBundle,
@@ -175,14 +176,23 @@ async function runFlowStep(page: Page, step: Step): Promise<void> {
   }
 }
 
+// The one rule for which screen a requirement checks. Both runs below read it, so a brief that says
+// a requirement is off on a screen cannot disagree with what the scan does there.
+function requirementPlan(requirement: Requirement, screenId: string): PlannedApplicability {
+  return screenId === requirement.surface
+    ? { applies: true }
+    : { applies: false, why: 'the requirement names another screen' };
+}
+
 function toContentProvider(requirement: Requirement, assertion: ContentAssertion): Provider {
   return {
     id: `intake:${requirement.id}`,
     layer: 'intake-content',
     capabilities: ['live'],
+    appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id),
     async run(ctx) {
       // Wrong surface is out of scope for this scan. Coverage wiring decides this later.
-      if (ctx.screen.id !== requirement.surface) {
+      if (!requirementPlan(requirement, ctx.screen.id).applies) {
         return [];
       }
 
@@ -254,9 +264,10 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
     id: `intake:${requirement.id}`,
     layer: 'intake-flow',
     capabilities: ['live'],
+    appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id),
     async run(ctx) {
       // Wrong surface is out of scope for this scan. Coverage wiring decides this later.
-      if (ctx.screen.id !== requirement.surface) {
+      if (!requirementPlan(requirement, ctx.screen.id).applies) {
         return [];
       }
 

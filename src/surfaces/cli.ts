@@ -63,6 +63,9 @@ export interface CliOptions {
   // check-only: run the judge's browser. Chromium's sandbox required, service workers blocked, and
   // every request outside the trusted origins aborted, so a blocked screen is a coverage gap.
   isolatedBrowser: boolean;
+  // brief-only: the task's files from `--files <path> [<path> ...]`. Null when the flag was not
+  // given, which means the changed files git reports.
+  files: string[] | null;
 }
 
 // The value flags of serve-build and extract-build. Those commands parse their own arguments.
@@ -138,6 +141,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let docsCi = false;
   let branchRule = false;
   let isolatedBrowser = false;
+  let files: string[] | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -278,6 +282,24 @@ export function parseCliArgs(argv: string[]): CliOptions {
       index += 1;
       continue;
     }
+    if (token === '--files') {
+      // brief-only: every path up to the next flag is a file of the task. A path is never taken for
+      // a command name or a subcommand.
+      const values: string[] = [];
+      while (index + 1 < argv.length) {
+        const value = argv[index + 1];
+        if (value === undefined || isFlag(value)) {
+          break;
+        }
+        values.push(value);
+        index += 1;
+      }
+      if (values.length === 0) {
+        throw new Error('--files requires at least one path, such as --files src/App.tsx');
+      }
+      files = [...(files ?? []), ...values];
+      continue;
+    }
     if (token === '--out') {
       const value = argv[index + 1];
       if (value === undefined || isFlag(value)) {
@@ -335,6 +357,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     installTarget,
     cursorStopHook,
     isolatedBrowser,
+    files,
   };
 }
 

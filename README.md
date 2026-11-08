@@ -84,6 +84,7 @@ npx usabl install --cursor        # Cursor stop hook, command, and rule
 npx usabl install --ci            # pull request gate and debt history for GitHub Actions
 npx usabl session                 # sign in once, for screens behind a login
 npx usabl doctor                  # reports what is set up and what is missing
+npx usabl brief                   # lists the screens a task reaches, its checks, and what done means
 ```
 
 In a webpack app, `install --overlay` does not edit your config. It prints the two lines

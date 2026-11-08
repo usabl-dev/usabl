@@ -984,8 +984,23 @@ export interface Provider {
   // Set when the provider's evidence only holds on the page as it loaded, such as a walk of the
   // real focus order. Running it on a changed page yields thin or empty results that read as clean.
   requiresPristinePage?: boolean;
+  // What this provider decides about a screen before any page opens, from the screen id and
+  // profile alone. `usabl brief` prints it. The provider's run must agree: when this says the
+  // provider does not apply, run reports nothing on that screen. Absent means the answer is only
+  // known on the page.
+  appliesBeforeScan?(screen: PlannedScreen): PlannedApplicability;
   run(ctx: ProviderContext): Promise<Draft[] | ProviderOutput>;
 }
+
+// A screen as the planner knows it before any page opens.
+export interface PlannedScreen {
+  id: string;
+  profile: ProfileName;
+}
+
+// Whether a provider will check a screen, as far as that is known before the page opens. `why`
+// is required when it does not apply, and says what decides it when it does.
+export type PlannedApplicability = { applies: true; why?: string } | { applies: false; why: string };
 
 // A provider that knows which rules applied returns them beside its drafts, from the same run.
 // The union keeps providers with nothing to report on the plain Draft[] return, and it keeps

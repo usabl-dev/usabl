@@ -74,3 +74,44 @@ export function makeScanProviders(
   }
   return providers;
 }
+
+/**
+ * One plain sentence per provider on what it checks, keyed by provider id. `usabl brief` prints
+ * these so an agent knows what each check proves before it starts a task. A test builds every
+ * provider a run can have and fails when one has no sentence here, so a new provider cannot reach
+ * the brief without one.
+ */
+export const PROVIDER_PROVES: Readonly<Record<string, string>> = {
+  'axe-core':
+    'Runs the axe-core rules on the rendered page: names, roles, states, contrast, labels, and structure.',
+  'pf-rulepack':
+    'Checks PatternFly components for barriers axe misses, such as icon buttons with no name, kebab menus with no expanded state, and table headers with no scope or id to tie cells to them.',
+  'rhds-rulepack':
+    'Checks Red Hat Design System elements are put together as their documentation requires, such as buttons with a label and tabs paired with panels.',
+  'docs-rulepack': 'Checks heading order on the rendered documentation page.',
+  'keyboard-walk':
+    'Tabs through the screen as it loaded and checks that each focus stop has a name and that focus is not trapped.',
+  deque: 'Runs the rules of Deque axe DevTools that axe-core does not have. Its findings are preview.',
+  evinced: 'Runs the Evinced issue checks on the rendered page. Its findings are preview.',
+};
+
+// Intake providers are one per design requirement, so their ids are the requirement ids. Their
+// sentence comes from the kind of requirement, which is the provider layer.
+const INTAKE_PROVES: Readonly<Record<string, string>> = {
+  'intake-content':
+    'content requirement: the element the requirement names has the accessible text or name the requirement states.',
+  'intake-flow':
+    'flow requirement: after the steps the requirement lists, the expected announcement is heard on focus or in a live region.',
+};
+
+/** The sentence for one provider, or null when this table does not know it. */
+export function providerProves(provider: Provider): string | null {
+  const own = PROVIDER_PROVES[provider.id];
+  if (own !== undefined) {
+    return own;
+  }
+  if (provider.id.startsWith('intake:')) {
+    return INTAKE_PROVES[provider.layer] ?? null;
+  }
+  return null;
+}
