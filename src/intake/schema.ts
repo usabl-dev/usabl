@@ -49,14 +49,54 @@ const flowAssertionSchema = z
   })
   .strict();
 
+// A voice step is one the contract step runner can run, with the field it needs. A step it cannot
+// run would only fail when the scan reaches it, so it is refused here, where the message can say
+// what to write. Each kind takes only the fields it uses.
+function voiceStepSchema<Shape extends z.ZodRawShape>(kind: string, shape: Shape, write: string) {
+  return z
+    .object(shape, {
+      errorMap: (issue, ctx) =>
+        issue.code === z.ZodIssueCode.unrecognized_keys
+          ? { message: `${issue.keys.join(', ')} is not a field of a ${kind} step; write only ${write}` }
+          : { message: ctx.defaultError },
+    })
+    .strict();
+}
+
+const requiredText = (message: string) =>
+  z.string({ required_error: message, invalid_type_error: message }).trim().min(1, message);
+
+const PRESS_KEY_MESSAGE = 'a press step needs a key, such as key: Escape';
+const CLICK_SELECTOR_MESSAGE = "a click step needs a selector, such as selector: '#delete'";
+
+const voiceStepsSchema = z.discriminatedUnion(
+  'do',
+  [
+    voiceStepSchema('tab', { do: z.literal('tab') }, 'do: tab'),
+    voiceStepSchema('activate', { do: z.literal('activate') }, 'do: activate'),
+    voiceStepSchema('press', { do: z.literal('press'), key: requiredText(PRESS_KEY_MESSAGE) }, 'do: press and key'),
+    voiceStepSchema('click', { do: z.literal('click'), selector: requiredText(CLICK_SELECTOR_MESSAGE) }, 'do: click and selector'),
+  ],
+  {
+    errorMap: (issue, ctx) =>
+      issue.code === z.ZodIssueCode.invalid_union_discriminator
+        ? { message: 'do must be tab, activate, press, or click; to press another key, write do: press with key, such as key: Escape' }
+        : { message: ctx.defaultError },
+  },
+);
+
 const voiceObligationSchema = z
   .object({
-    class: z.string().min(1, 'class is required; name the kind of obligation, such as live-polite'),
+    class: z.string().trim().min(1, 'class is required; name the kind of obligation, such as live-polite'),
     afterStep: z.number(),
     requiredTokens: z
       .array(z.string())
       .min(1, 'requiredTokens must list at least one word a screen reader user must hear'),
-    focusedRole: z.string().optional(),
+    focusedRole: z
+      .string()
+      .trim()
+      .min(1, 'focusedRole must not be empty; name a role such as button, or leave it out')
+      .optional(),
     mustAnnounce: z.boolean(),
   })
   .strict();
@@ -65,7 +105,7 @@ const voiceAssertionSchema = z
   .object({
     type: z.literal('voice'),
     steps: z
-      .array(flowStepSchema)
+      .array(voiceStepsSchema)
       .min(1, 'voice steps must list at least one step, such as a click on the control under test'),
     obligations: z
       .array(voiceObligationSchema)

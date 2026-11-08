@@ -38,6 +38,14 @@ async function executeStep(page: Page, step: Step): Promise<void> {
     case 'activate':
       await page.press('Enter');
       return;
+    case 'press': {
+      // A press with no key would press nothing and read the window as if the key had been pressed.
+      if (typeof step.key !== 'string' || step.key.trim().length === 0) {
+        throw new Error('a press step needs a key');
+      }
+      await page.press(step.key);
+      return;
+    }
     case 'click': {
       const selector = typeof step.selector === 'string' ? step.selector : '';
       await page.click(selector);

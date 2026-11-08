@@ -328,4 +328,76 @@ describe('parseBundle voice requirements', () => {
       'kind must match assertion.type',
     );
   });
+
+  describe('steps', () => {
+    function stepReason(step: Record<string, unknown>): string {
+      return reasonFor(voiceRequirement({ steps: [step], obligations: [obligation] }));
+    }
+
+    it('accepts tab, activate, press with a key, and click with a selector', () => {
+      const result = parseBundle(
+        voiceRequirement({
+          steps: [{ do: 'tab' }, { do: 'activate' }, { do: 'press', key: 'Escape' }, { do: 'click', selector: '#delete' }],
+          obligations: [obligation],
+        }),
+      );
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('refuses a step kind it cannot run, and says which kinds it can', () => {
+      expect(stepReason({ do: 'clik', selector: '#delete' })).toMatch(
+        /requirements\[0\]\.assertion\.steps\[0\]\.do: do must be tab, activate, press, or click/,
+      );
+    });
+
+    it.each([
+      ['missing', {}],
+      ['empty', { key: '  ' }],
+    ])('refuses a press step whose key is %s', (_label, extra) => {
+      expect(stepReason({ do: 'press', ...extra })).toMatch(
+        /requirements\[0\]\.assertion\.steps\[0\]\.key: a press step needs a key, such as key: Escape/,
+      );
+    });
+
+    it.each([
+      ['missing', {}],
+      ['empty', { selector: '' }],
+    ])('refuses a click step whose selector is %s', (_label, extra) => {
+      expect(stepReason({ do: 'click', ...extra })).toMatch(
+        /requirements\[0\]\.assertion\.steps\[0\]\.selector: a click step needs a selector, such as selector: '#delete'/,
+      );
+    });
+
+    it('refuses a field a step does not use, and names it', () => {
+      expect(stepReason({ do: 'tab', selector: '#delete' })).toMatch(
+        /requirements\[0\]\.assertion\.steps\[0\]: selector is not a field of a tab step; write only do: tab/,
+      );
+    });
+  });
+
+  describe('trimmed names', () => {
+    it.each([
+      ['class', { class: '   ' }, /obligations\[0\]\.class: class is required/],
+      ['focusedRole', { focusedRole: '  ' }, /obligations\[0\]\.focusedRole: focusedRole must not be empty/],
+    ])('refuses a %s of only spaces', (_label, extra, pattern) => {
+      expect(reasonFor(voiceRequirement({ steps, obligations: [{ ...obligation, ...extra }] }))).toMatch(pattern);
+    });
+
+    it('stores class and focusedRole trimmed', () => {
+      const result = parseBundle(
+        voiceRequirement({ steps, obligations: [{ ...obligation, class: ' live-polite ', focusedRole: ' button ' }] }),
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok || result.bundle.requirements[0]?.assertion.type !== 'voice') {
+        return;
+      }
+      expect(result.bundle.requirements[0].assertion.obligations[0]).toMatchObject({ class: 'live-polite', focusedRole: 'button' });
+    });
+
+    it('accepts a required token in a non-Latin script', () => {
+      expect(parseBundle(voiceRequirement({ steps, obligations: [{ ...obligation, requiredTokens: ['削除'] }] })).ok).toBe(true);
+    });
+  });
 });

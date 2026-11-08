@@ -186,6 +186,22 @@ describe('the step runner for interaction contracts', () => {
     expect(calls).toContain('settle');
   });
 
+  it('runs a press step with its key, and refuses one without a key', async () => {
+    const pressed: string[] = [];
+    const { page } = recordingPage({
+      press: async (key) => {
+        pressed.push(key);
+      },
+    });
+
+    await makeStepRunner({ settleAfterEachStep: true }).run(page, [{ do: 'press', key: 'Escape' }]);
+
+    expect(pressed).toEqual(['Escape']);
+    await expect(makeStepRunner({ settleAfterEachStep: true }).run(page, [{ do: 'press' }])).rejects.toThrow(
+      'a press step needs a key',
+    );
+  });
+
   it('settles a fake page at once by default', async () => {
     await expect(makeFakePage().settleAfterAction()).resolves.toEqual({ settled: true, waitedMs: 0 });
   });
