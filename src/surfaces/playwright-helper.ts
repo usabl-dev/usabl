@@ -307,8 +307,9 @@ export function requirementGapsForPage(
  * - It is not a merge gate. Its verdict is advisory test output. The gate that runs on a pull
  *   request is the only verdict authority.
  * - It acts on the caller's page. The keyboard walk presses Tab, the PatternFly probes open and
- *   close dialogs and menus, and each flow requirement on this surface runs its authored steps:
- *   clicks and key presses. Hand it a page you no longer need in its current state.
+ *   close dialogs and menus, and each flow and voice requirement on this surface runs its authored
+ *   steps: clicks and key presses. A voice requirement also waits up to a few seconds after each
+ *   step for the page to settle. Hand it a page you no longer need in its current state.
  */
 export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}): Promise<PageCheckResult> {
   // The caller's id is checked before anything reads the project or touches the page, against the

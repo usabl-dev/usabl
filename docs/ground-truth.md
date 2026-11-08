@@ -975,30 +975,53 @@ The voicing lane lives under `src/voicing/` and is exported from the library
 reader user must hear after each one, on a live page. A team writes a contract as a `voice`
 requirement in the requirements folder (section 13). Each voice requirement becomes one
 provider named `intake:<id>`, built where the flow providers are built, so the CLI scan and
-`checkPage` both run it, in the same group as the flow providers.
+`checkPage` both run it. Like a flow provider it is flagged as changing the page, because it
+clicks and presses keys, so it runs after every provider that reads the page as loaded,
+the PatternFly rulepack included.
 
-What it proves. The structural tier checks each obligation window: focus reached the step,
-the focused control has a name and the `focusedRole` when one is given, a live region was
-updated when `mustAnnounce` is true, and the task took no more focus stops than `maxTabPath`.
-The voicing tier checks that the window's announcement holds every `requiredTokens` word,
-compared without case or punctuation. It does not prove what a real screen reader says; the
-transcript comes from the accessibility tree and the live-region capture (section 26).
+What it proves. The runner records one stop for each step, after the step and the settle wait.
+At the stop named by an obligation's `afterStep`, the structural tier checks that the focused
+control has an accessible name, that it has the `focusedRole` when one is given, and that a
+live region received some text when `mustAnnounce` is true. The voicing tier checks that the
+words of that stop, the focused control's name, role, and states and the live text, hold every
+`requiredTokens` word, compared without case or punctuation in any script. Two checks prove
+less than their names suggest. Because there is always one stop per step, the "focus did not
+reach the window" draft never fires on a scan; it fires only for a hand-built transcript. And
+`maxTabPath` is compared with the number of stops, which is the number of steps the contract
+lists, so it checks the length of the contract, not how many Tab presses a user would need.
+None of this proves what a real screen reader says; the transcript comes from the
+accessibility tree and the live-region capture (section 26).
 
 Preview by default. Both tiers emit `preview` drafts, with confidence `unverified`, unless the
-obligation's `class` is listed in `promotedObligations` in the trusted config. A draft about
+obligation's `class` is listed in `promotedObligations` in the trusted config. Preview never
+moves a verdict: the gate ignores it, and `checkPage` lists it as `advisory` (section 11.6). A draft about
 the whole contract, such as no stops at all or an over-long tab path, is deterministic only
 when every obligation class in the contract is promoted. No class has met the promotion bar,
 so nothing from this lane blocks a run until a person promotes a class. Under a trusted ref,
 `promotedObligations` is read from the trusted config like every other field, so a pull
-request cannot promote a class for its own run.
+request cannot promote a class for its own run, and when the trusted config is missing or
+unparseable no class is promoted.
 
-Settling. After each contract step the runner waits for the page to settle, by the same
-element-count and network-quiet signals readiness uses, under its own cap of 2 seconds, and
-only then reads focus and drains the live record. Before the first step it drops what earlier
-checks left in the record. A window where the page was still changing at the cap, or whose
-drain cannot say what a screen reader heard (section 11.6), decides nothing: each obligation in
-it becomes one `voicing/window-undecided` draft, `unverified`, that names the contract, the
-step, and the cause, never a miss and never a pass. The draft carries no wait time, so the
+Rule ids. The tiers emit `voicing/` rules, such as `voicing/missing-name`. A provider built
+from a voice requirement replaces `voicing/` with the requirement, as in
+`intake:delete-row-announces/missing-name`. A finding's identity is its screen, its rule, and
+its element, so without the requirement in the rule two contracts with a miss on the same
+control would share one identity, and a waiver or floor entry written for one would cover the
+other.
+
+Settling. After each contract step the runner waits for the page to settle, and only then
+reads focus and drains the live record. Settled means three things at once: five equal element
+counts in a row, 500 ms apart, so at least 2 seconds; no network request in flight for 500 ms;
+and no text recorded by the live-region capture for 500 ms, read without draining it. The third
+signal catches a live region whose text changes late with no element added and no request sent.
+The wait has its own cap of 6 seconds, far below the page-load budget; a page that settles
+returns as soon as it does, so only a page that never settles pays the whole cap. Before the
+first step the runner drops what earlier checks left in the record. A window where the page
+was still changing at the cap, or whose drain cannot say what a screen reader heard (section
+11.6), decides nothing: each obligation in it becomes one `window-undecided` draft,
+`unverified`, that names the contract, the step, and the cause, never a miss and never a pass.
+It is preview unless the obligation class is promoted; promoted, it is a deterministic
+`unverified` draft, so the run reads `not_covered`. The draft carries no wait time, so the
 result does not depend on how long the wait took. The keyboard walk does not wait this way.
 
 Static-only runs. A static-only run grants no live capability, so each voice provider becomes a
@@ -2977,8 +3000,16 @@ whose ref is that file, the same ref `usabl check` gives it.
 
 `checkPage` is not a merge gate. Its verdict is advisory output for a test suite; the gate is
 the only verdict authority. It also acts on the caller's page: the keyboard walk presses Tab,
-the PatternFly probes open and close dialogs and menus, and each flow requirement on the page's
-surface runs its authored steps, clicks and key presses, on that page.
+the PatternFly probes open and close dialogs and menus, and each flow and voice requirement on
+the page's surface runs its authored steps, clicks and key presses, on that page. A voice
+requirement also waits for the page to settle after each step (section 7.5).
+
+Only deterministic drafts decide the page verdict, as in the gate: a deterministic `fail` is in
+`failures`, and a deterministic `unverified` is in `needsReview`. Any other draft, such as a voice
+requirement's preview finding, is listed in `advisory` and never counted. `advisory` and its
+summary line, `advisory: N preview finding(s), shown for review and never counted in the
+verdict`, appear only when there is at least one such draft, so a page with only deterministic
+drafts gets the result it got before.
 
 The result's `notes` holds the provider notes for the page, such as design-system markup a
 rulepack did not read. They are disclosure only and do not change the verdict. A page that
@@ -3429,16 +3460,18 @@ requirements:
 ```
 
 The requirement id becomes the contract id, the surface the contract surface, and the
-description the contract task. A step is `tab`, `activate` (Enter), `press-escape`, or `click`
-with a `selector`; any other step makes the provider fail, which is a `not-covered` gap. Each
-obligation names a `class`, the step window it is checked in (`afterStep`), the
-`requiredTokens` the announcement must hold, an optional `focusedRole`, and `mustAnnounce`.
-Parsing refuses the file, as `approval_required` with a message that names the field, when:
-`steps` is empty; `obligations` is empty; an `afterStep` is not a whole number from 0 to one
-less than the number of steps; `requiredTokens` is empty, or a token has no letter or digit,
-because such a token compares as empty and would match any announcement; `class` is empty;
-`focusedRole` is not a string; `maxTabPath` is not a positive whole number; `kind` does not
-match `assertion.type`; or any field is unknown.
+description the contract task. A step is `tab`, `activate` (Enter), `press` with a `key`, or
+`click` with a `selector`, and takes no other field. Each obligation names a `class`, the step
+window it is checked in (`afterStep`), the `requiredTokens` the announcement must hold, an
+optional `focusedRole`, and `mustAnnounce`. `class` and `focusedRole` are stored trimmed.
+Parsing refuses the file, as `approval_required` with a message that names the field and what
+to write, when: `steps` is empty; a step is another kind, a `press` has no key, a `click` has no
+selector, or a step has a field it does not use; `obligations` is empty; an `afterStep` is not a
+whole number from 0 to one less than the number of steps; `requiredTokens` is empty, or a token
+has no letter or digit in any script, because such a token compares as empty and would match
+any announcement; `class` is empty after trimming; `focusedRole` is not a string or is empty
+after trimming; `maxTabPath` is not a positive whole number; `kind` does not match
+`assertion.type`; or any field is unknown.
 
 A `content`, `flow`, or `voice` requirement runs only on a screen whose id is its surface. When a run
 scans anything, each such requirement whose surface matches no configured surface, no screen
@@ -3453,7 +3486,8 @@ Content and flow Drafts carry `evidenceClass: 'deterministic'` (the assertion is
 repeatable). `mapRequirementsToProviders` emits deterministic drafts with rule id
 `intake:<id>` for content and flow requirements; there is no code path that marks an intake
 draft as model-judgment. Voice requirement drafts carry the `voicing/` rule ids of the two
-tiers and are `preview` unless their obligation class is promoted (section 7.5).
+tiers, with the requirement in place of `voicing/`, and are `preview` unless their obligation
+class is promoted (section 7.5).
 
 ### Requirement ids are waiver identities
 

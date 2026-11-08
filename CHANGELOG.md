@@ -31,10 +31,18 @@
   after each step before they read it. Its findings are preview, unless the obligation class
   is listed in `promotedObligations` in the trusted config. Preview findings never move a
   verdict: the gate ignores them, and `checkPage` lists them in a new `advisory` field with
-  its own summary line, which appears only when there is at least one. A window where the
-  page never settled is a gap, never a miss. A static-only run reports each voice requirement as
-  a gap, and parsing refuses a contract with no steps, no obligations, a step window that does
-  not exist, or a required word with no letter or digit.
+  its own summary line, which appears only when there is at least one. A step window where
+  the page never settled within 6 seconds is reported as undecided, never as a miss or a
+  pass; that draft is preview too, and becomes a gap only for a promoted class. Each voice
+  rule names its requirement, as in `intake:<id>/missing-name`, so two contracts never share
+  a finding identity or a waiver. A static-only run reports each voice requirement as a gap.
+  Parsing refuses a contract with no steps, a step other than `tab`, `activate`, `press` with
+  a key, or `click` with a selector, no obligations, a step window that does not exist, or a
+  required word with no letter or digit.
+
+- `Page` gained a required method, `settleAfterAction()`, which waits for the page to react to
+  one action and returns whether it settled and how long it waited. Code that implements the
+  exported `Page` type itself must add it.
 
 - Automatic debt tracking. `usabl install --ci` now also writes
   `.github/workflows/usabl-history.yml`, which scans main after each merge and once a day
@@ -133,6 +141,10 @@
   `checkPage` does not run the engines.
 
 ### Fixed
+
+- Flow requirements now run after every check that reads the page as loaded. They click and
+  press keys but were not marked as changing the page, so the PatternFly rulepack ran after a
+  flow had already changed it and could miss a barrier the flow had removed from view.
 
 - `usabl check` no longer reads a dependency bump as nothing to check. A pull request that
   bumped the UI component library in the app's `package.json` and the lockfile matched no
