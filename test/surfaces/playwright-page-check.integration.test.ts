@@ -423,8 +423,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage runs the desig
         const scan = await deps.checkRunner.scan({ id: 'clusters', url: `${baseUrl}/clusters` });
         const voicing = scan.drafts.filter((d) => d.layer === 'voicing');
         expect(voicing.map((d) => [d.rule, d.evidenceClass, d.confidence]).sort()).toEqual([
-          ['voicing/missing-announcement', 'preview', 'unverified'],
-          ['voicing/missing-live-announcement', 'preview', 'unverified'],
+          ['intake:save-voices/missing-announcement', 'preview', 'unverified'],
+          ['intake:save-voices/missing-live-announcement', 'preview', 'unverified'],
         ]);
       } finally {
         await deps.browser.close();
@@ -437,8 +437,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('checkPage runs the desig
         expect(result.failures.filter((d) => d.layer === 'voicing')).toEqual([]);
         expect(result.needsReview.filter((d) => d.layer === 'voicing')).toEqual([]);
         expect((result.advisory ?? []).map((d) => d.rule).sort()).toEqual([
-          'voicing/missing-announcement',
-          'voicing/missing-live-announcement',
+          'intake:save-voices/missing-announcement',
+          'intake:save-voices/missing-live-announcement',
         ]);
         expect(result.gaps).toEqual([]);
         expect(result.verdict).toBe('verified');

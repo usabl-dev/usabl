@@ -11,6 +11,21 @@ export interface VirtualSrProviderOptions {
   // The provider id, which names the provider in a gap. A scan builds one provider per voice
   // requirement and names it intake:<id>, so a denied or failed run names the requirement.
   id?: string;
+  // What replaces the voicing/ part of each rule the tiers emit, so a rule names its contract. A
+  // finding's identity is its screen, its rule, and its element, so two contracts with a miss on the
+  // same control would otherwise share one identity, and one waiver or floor entry written for one
+  // contract would cover the other. A scan sets intake:<id>, so the rule reads
+  // intake:<id>/missing-name. Left out, the tiers' voicing/ rules are kept.
+  rulePrefix?: string;
+}
+
+const TIER_RULE_PREFIX = 'voicing/';
+
+function scopeRule(draft: Draft, rulePrefix: string | undefined): Draft {
+  if (rulePrefix === undefined || !draft.rule.startsWith(TIER_RULE_PREFIX)) {
+    return draft;
+  }
+  return { ...draft, rule: `${rulePrefix}/${draft.rule.slice(TIER_RULE_PREFIX.length)}` };
 }
 
 export function makeVirtualSrProvider(
@@ -42,7 +57,7 @@ export function makeVirtualSrProvider(
         drafts.push(...runVoicingTier(contract, stops, ctx.screen.id, promotedObligations));
       }
 
-      return drafts;
+      return drafts.map((draft) => scopeRule(draft, options.rulePrefix));
     },
   };
 }

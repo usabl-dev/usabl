@@ -373,6 +373,9 @@ describe('a voice provider run with fake pages', () => {
 
     const drafts = draftsOf(await provider!.run({ page, screen: SCREEN, config: testConfig() }));
 
-    expect(drafts.map((draft) => draft.rule)).toEqual(['voicing/missing-live-announcement', 'voicing/missing-announcement']);
+    expect(drafts.map((draft) => draft.rule)).toEqual([
+      'intake:delete-row-announces/missing-live-announcement',
+      'intake:delete-row-announces/missing-announcement',
+    ]);
   });
 });

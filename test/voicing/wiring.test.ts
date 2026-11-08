@@ -14,6 +14,7 @@ import type { BrowserDriver, Capability, Draft, Page, Provider, Requirement, Req
 import { buildDeps } from '../../src/deps/build.js';
 import { makeFakeDeps, makeFakePage } from '../../src/deps/fakes.js';
 import { validateId } from '../../src/intake/id-grammar.js';
+import { computeIdentity, identityKey } from '../../src/primitives/identity.js';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
 import { makeCheckRunner } from '../../src/providers/check-runner.js';
 import { makeScanProviders } from '../../src/providers/core-stack.js';
@@ -174,8 +175,8 @@ describe('voice requirements become providers', () => {
 
     expect(clicks).toEqual([DELETE_SELECTOR]);
     expect(drafts.map((draft) => [draft.rule, draft.evidenceClass, draft.confidence])).toEqual([
-      ['voicing/missing-live-announcement', 'preview', 'unverified'],
-      ['voicing/missing-announcement', 'preview', 'unverified'],
+      ['intake:delete-row-announces/missing-live-announcement', 'preview', 'unverified'],
+      ['intake:delete-row-announces/missing-announcement', 'preview', 'unverified'],
     ]);
   });
 
@@ -267,7 +268,7 @@ describe('a voice requirement on a run', () => {
     const voicing = result.findings.filter((finding) => finding.layer === 'voicing');
 
     expect(voicing.map((finding) => [finding.rule, finding.evidenceClass])).toEqual([
-      ['voicing/missing-announcement', 'preview'],
+      ['intake:delete-row-announces/missing-announcement', 'preview'],
     ]);
     expect(result.accessibilityVerdict).not.toBe('regression');
     const published = JSON.stringify(scrubPublishedResult(result).findings);
@@ -314,8 +315,8 @@ describe('promotion is trusted policy', () => {
       const drafts = await voicingDrafts(repo, 'HEAD');
 
       expect(drafts.map((draft) => draft.rule).sort()).toEqual([
-        'voicing/missing-announcement',
-        'voicing/missing-live-announcement',
+        'intake:delete-row-announces/missing-announcement',
+        'intake:delete-row-announces/missing-live-announcement',
       ]);
       expect(drafts.every((draft) => draft.evidenceClass === 'preview')).toBe(true);
     } finally {
@@ -329,11 +330,36 @@ describe('promotion is trusted policy', () => {
       const drafts = await voicingDrafts(repo, undefined);
 
       expect(drafts.map((draft) => [draft.rule, draft.evidenceClass, draft.confidence]).sort()).toEqual([
-        ['voicing/missing-announcement', 'deterministic', 'fail'],
-        ['voicing/missing-live-announcement', 'deterministic', 'fail'],
+        ['intake:delete-row-announces/missing-announcement', 'deterministic', 'fail'],
+        ['intake:delete-row-announces/missing-live-announcement', 'deterministic', 'fail'],
       ]);
     } finally {
       await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('identity across contracts', () => {
+  it('gives two contracts with a miss on the same control two identities, so one waiver cannot cover both', async () => {
+    const page = silentDeletePage();
+    const providers = mapRequirementsToProviders(
+      bundle(voiceRequirement('delete-row-announces'), voiceRequirement('delete-row-confirms')),
+    );
+    const drafts: Draft[] = [];
+    for (const provider of providers) {
+      drafts.push(...draftsOf(await provider.run({ page, screen: SCREEN, config: testConfig() })));
+    }
+    const live = drafts.filter((draft) => draft.rule.endsWith('/missing-live-announcement'));
+    const keys = new Set(live.map((draft) => identityKey({ screenId: draft.screenId, rule: draft.rule, elementKey: computeIdentity(draft).elementKey })));
+
+    expect(live.map((draft) => draft.rule)).toEqual([
+      'intake:delete-row-announces/missing-live-announcement',
+      'intake:delete-row-confirms/missing-live-announcement',
+    ]);
+    expect(live[0]?.elementPath).toBe(live[1]?.elementPath);
+    expect(keys.size).toBe(2);
+    for (const draft of drafts) {
+      expect(validateId(draft.rule)).toEqual({ ok: true });
     }
   });
 });
@@ -360,6 +386,9 @@ describe('voicing rule ids', () => {
       ...runStructuralTier(contract, [], SCREEN.id).map((draft) => draft.rule),
       ...runStructuralTier(contract, [{ index: 0, elementPath: 'body', announcement: [] }], SCREEN.id).map((draft) => draft.rule),
       ...runVoicingTier(contract, stops, SCREEN.id).map((draft) => draft.rule),
+      ...runStructuralTier(contract, [{ index: 0, elementPath: 'body', announcement: [], unsettled: { waitedMs: 6000 } }], SCREEN.id).map(
+        (draft) => draft.rule,
+      ),
     ]);
 
     expect([...rules].sort()).toEqual([
@@ -370,9 +399,12 @@ describe('voicing rule ids', () => {
       'voicing/missing-role',
       'voicing/over-long-tab-path',
       'voicing/unreachable-focus',
+      'voicing/window-undecided',
     ]);
     for (const rule of rules) {
       expect(validateId(rule)).toEqual({ ok: true });
+      // The form a scan emits, with the requirement in place of voicing/.
+      expect(validateId(rule.replace('voicing/', 'intake:delete-row-announces/'))).toEqual({ ok: true });
     }
   });
 });

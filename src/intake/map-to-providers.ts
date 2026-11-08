@@ -373,7 +373,10 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
       const contract = toVoiceContract({ ...requirement, assertion: requirement.assertion });
       const stepRunner = makeStepRunner({ settleAfterEachStep: true });
       providers.push({
-        ...makeVirtualSrProvider([contract], stepRunner, { id: `intake:${requirement.id}` }),
+        ...makeVirtualSrProvider([contract], stepRunner, {
+          id: `intake:${requirement.id}`,
+          rulePrefix: `intake:${requirement.id}`,
+        }),
         // The contract clicks and presses keys, so it changes the page, the same as a flow.
         mutatesPageState: true,
       });
