@@ -4,6 +4,22 @@
 
 ### Added
 
+- `usabl install --ci` writes workflows that run as written. The build records the commit it
+  came from in `dist/build-info.json`, which the package carries, and `install --ci` and
+  `install --docs-ci` pin the engine to that commit when it is a full SHA from a clean tree. A
+  build outside git or from a tree with changes keeps the `PIN_TO_A_TRUSTED_USABL_COMMIT`
+  placeholder, and the report says why and names the line to edit in each file. A placeholder
+  or a commit that is not on `usabl-dev/usabl` fails the engine checkout, so the gate blocks.
+  Running the install again fills the pin into its own unedited placeholder draft and never
+  moves a pin someone set. The history workflow now starts the app on the host and port of
+  `appBaseUrl` in main's `usabl.config.json` instead of port 5173, and fails closed when that
+  is not an http loopback origin with a port. The install report reads the same origin, or
+  before `usabl init` the port from the dev script, the Vite config, or the webpack dev
+  config, and never guesses one. It ends with only the steps still needed: commit, add the
+  branch rule, and open a pull request, with a pin, init, or dev script step in front when one
+  is needed. No workflow needs a secret, and every action stays pinned to a full commit SHA.
+  The written workflows have not yet run on a GitHub runner with no edits.
+
 - `usabl brief` prints what an agent reads before it starts a task: the screens the task's
   files reach and how each is reached, the checks that apply to each screen, the ones that do
   not and why, and what counts as done. `--files <path> ...` names the task's files; with no
