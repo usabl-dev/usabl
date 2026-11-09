@@ -1,0 +1,284 @@
+/**
+ * The sensitivity runner: for one catalog entry on one screen, scan the page clean, scan it again
+ * with the entry's mutation, and say whether the real checks and the real gate caught the defect.
+ *
+ * Both scans go through the real check runner. Both results go through the real gate(), as a
+ * library call: the clean scan once against an empty floor, and the mutated scan against a floor
+ * made from what the clean scan found, so only what the mutation added can be new. The outcome is
+ * read from what the gate returned. This unit decides no verdict, mints no receipt, and writes
+ * nothing; its result is a measurement of the engine, not a judgment of a screen.
+ */
+import type {
+  CheckRunner,
+  Coverage,
+  EvidenceFloor,
+  FloorEntry,
+  Finding,
+  GateOutput,
+  ProfileName,
+  RequirementBundle,
+  ScreenScan,
+} from '../../contracts/index.js';
+import { markUnseenScreens } from '../../coverage/unseen.js';
+import { deterministicCountsByIdentity, findingKey, gate, renderEvidenceOf } from '../../gate/index.js';
+import { computeIdentity, identityKey } from '../../primitives/identity.js';
+import type { CatalogEntry, ReportedOn } from './catalog.js';
+import type { MutatingBrowser } from './browser.js';
+import type { ElementPlace } from './edits.js';
+import { ruleMatches } from './rules.js';
+
+export type SensitivityOutcome =
+  | 'caught'
+  | 'caught by another rule'
+  | 'missed'
+  | 'preview only'
+  | 'not applicable'
+  | 'unreadable';
+
+export const SENSITIVITY_OUTCOMES: readonly SensitivityOutcome[] = [
+  'caught',
+  'caught by another rule',
+  'missed',
+  'preview only',
+  'not applicable',
+  'unreadable',
+];
+
+export interface SensitivityScreen {
+  id: string;
+  url: string;
+  profile?: ProfileName;
+}
+
+export interface EntryMeasurement {
+  entry: string;
+  screen: string;
+  outcome: SensitivityOutcome;
+  // The rules that reported the defect: the expected ones for caught, the others otherwise. Empty
+  // when nothing new was reported.
+  rules: string[];
+  // Why, for every outcome other than caught. Engine words, and rule ids and screen ids.
+  reason: string | null;
+}
+
+export interface SensitivityRunnerDeps {
+  checkRunner: CheckRunner;
+  browser: MutatingBrowser;
+  requirements: RequirementBundle;
+  // The gate reads a time for waiver expiry. No waiver is passed, so it decides nothing here.
+  now: string;
+}
+
+// The gate's current floor version: it keys a control in a keyed table row per row.
+const FLOOR_VERSION = 3;
+
+function coverageOf(scan: ScreenScan): Coverage {
+  return {
+    changedFiles: [],
+    affected: [{ screenId: scan.screenId, url: scan.url, provenance: 'manual' }],
+    unresolvedFiles: [],
+    gaps: scan.gaps,
+    nothingToCheck: false,
+  };
+}
+
+function gateScan(scan: ScreenScan, floor: EvidenceFloor, now: string): GateOutput {
+  return gate({
+    coverage: coverageOf(scan),
+    guardDivergedPaths: [],
+    drafts: scan.drafts,
+    floor,
+    waivers: [],
+    now,
+    cleanlyScannedScreens: new Set(scan.gaps.length === 0 ? [scan.screenId] : []),
+    renderEvidence: renderEvidenceOf([scan]),
+  });
+}
+
+/**
+ * The floor that accepts everything the clean scan found, at the counts it found. The identities
+ * and the chosen representative come from the gate's own findings; the counts come from the gate's
+ * own tally. So the mutated scan's new findings are exactly what the gate calls new against it.
+ */
+function floorFrom(clean: ScreenScan, gated: GateOutput): EvidenceFloor {
+  const counts = deterministicCountsByIdentity(clean.drafts);
+  const entries: FloorEntry[] = gated.findings
+    .filter((finding) => finding.evidenceClass === 'deterministic' && finding.status === 'new')
+    .map((finding) => ({
+      screenId: finding.screenId,
+      layer: finding.layer,
+      rule: finding.rule,
+      elementKey: finding.elementKey,
+      identityBasis: finding.identityBasis,
+      count: counts.get(identityKey(finding)) ?? 1,
+    }));
+  return { version: FLOOR_VERSION, entries };
+}
+
+/** The element paths of the scan's deterministic drafts, by the identity the gate gives them. */
+function draftPathsByIdentity(scan: ScreenScan): Map<string, string[]> {
+  const paths = new Map<string, string[]>();
+  for (const draft of scan.drafts) {
+    if (draft.evidenceClass !== 'deterministic') continue;
+    const key = identityKey({ screenId: draft.screenId, rule: draft.rule, elementKey: computeIdentity(draft).elementKey });
+    paths.set(key, [...(paths.get(key) ?? []), draft.elementPath]);
+  }
+  return paths;
+}
+
+function seen(scan: ScreenScan): ScreenScan {
+  return markUnseenScreens([scan]).screens[0] ?? scan;
+}
+
+function gapReasons(scan: ScreenScan): string {
+  return scan.gaps.map((gap) => gap.reason).join(' ');
+}
+
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+const PLACES_FOR: Readonly<Record<ReportedOn, readonly ElementPlace[]>> = {
+  target: ['target'],
+  'inside-target': ['target', 'inside'],
+  'around-target': ['target', 'around'],
+  screen: ['target', 'inside', 'around', 'elsewhere', 'unresolved'],
+};
+
+function expectedText(entry: CatalogEntry): string {
+  return entry.expectedRules.length === 0 ? 'no shipped rule claims this defect' : `expected ${entry.expectedRules.join(' or ')}`;
+}
+
+/** Why a screen cannot carry this entry's defect at all, before anything is loaded. */
+export function precondition(entry: CatalogEntry, screen: SensitivityScreen, requirements: RequirementBundle): string | null {
+  const needs = entry.needs;
+  if (needs?.profile === 'docs' && screen.profile !== 'docs') {
+    return 'the defect is checked on documentation pages, and this screen is not one';
+  }
+  if (needs?.requirement === 'flow') {
+    const has = requirements.requirements.some(
+      (requirement) =>
+        requirement.surface === screen.id &&
+        requirement.assertion.type === 'flow' &&
+        requirement.assertion.expectedAnnouncement !== undefined,
+    );
+    if (!has) return 'no flow requirement with an expected announcement names this screen';
+  }
+  if (needs?.requirement === 'voice') {
+    const has = requirements.requirements.some(
+      (requirement) =>
+        requirement.surface === screen.id &&
+        requirement.assertion.type === 'voice' &&
+        requirement.assertion.obligations.some((obligation) => obligation.mustAnnounce),
+    );
+    if (!has) return 'no voice requirement that must hear a live region names this screen';
+  }
+  return null;
+}
+
+function result(entry: CatalogEntry, screen: SensitivityScreen, outcome: SensitivityOutcome, rules: string[], reason: string | null): EntryMeasurement {
+  return { entry: entry.id, screen: screen.id, outcome, rules, reason };
+}
+
+export async function measureEntry(
+  deps: SensitivityRunnerDeps,
+  entry: CatalogEntry,
+  screen: SensitivityScreen,
+): Promise<EntryMeasurement> {
+  const unmet = precondition(entry, screen, deps.requirements);
+  if (unmet !== null) {
+    return result(entry, screen, 'not applicable', [], unmet);
+  }
+
+  const target = { id: screen.id, url: screen.url, ...(screen.profile === undefined ? {} : { profile: screen.profile }) };
+  const clean = seen(await deps.checkRunner.scan(target));
+  if (clean.gaps.length > 0) {
+    return result(entry, screen, 'unreadable', [], `the clean scan had a coverage gap, so it proves nothing: ${gapReasons(clean)}`);
+  }
+
+  const armed = deps.browser.arm(entry.mutation);
+  try {
+    const mutated = seen(await deps.checkRunner.scan(target));
+    if (mutated.gaps.length > 0) {
+      return result(entry, screen, 'unreadable', [], `the mutated scan had a coverage gap, so it proves nothing: ${gapReasons(mutated)}`);
+    }
+    const record = armed.record();
+    if (record.kind === 'no-target') {
+      return result(entry, screen, 'not applicable', [], record.reason);
+    }
+    if (record.kind !== 'applied') {
+      return result(entry, screen, 'unreadable', [], `the mutation was not made: ${record.reason}`);
+    }
+
+    const cleanGate = gateScan(clean, { version: FLOOR_VERSION, entries: [] }, deps.now);
+    const mutatedGate = gateScan(mutated, floorFrom(clean, cleanGate), deps.now);
+
+    const newGating: Finding[] =
+      mutatedGate.accessibilityVerdict === 'verified'
+        ? []
+        : mutatedGate.findings.filter((finding) => finding.status === 'new' && finding.evidenceClass === 'deterministic');
+    if (mutatedGate.accessibilityVerdict !== 'verified' && newGating.length === 0) {
+      return result(entry, screen, 'unreadable', [], `the gate did not verify the mutated scan, and no new finding explains it: ${mutatedGate.summary}`);
+    }
+
+    if (newGating.length > 0) {
+      // The gate collapses every draft at one identity into one finding, and its representative can
+      // be another element than the mutated one. So each finding is located by every draft of the
+      // mutated scan behind it.
+      const pathsByIdentity = draftPathsByIdentity(mutated);
+      const pathsOf = newGating.map((finding) => pathsByIdentity.get(identityKey(finding)) ?? [finding.elementPath]);
+      const places = await record.edit.locate(pathsOf.flat());
+      const allowed = PLACES_FOR[entry.reportedOn];
+      let next = 0;
+      const onTargetFlags = pathsOf.map((paths) => {
+        const own = places.slice(next, next + paths.length);
+        next += paths.length;
+        return own.some((place) => allowed.includes(place));
+      });
+      const onTarget = newGating.filter((_finding, index) => onTargetFlags[index] === true);
+      const expected = onTarget.filter((finding) => entry.expectedRules.some((pattern) => ruleMatches(pattern, finding.rule)));
+      if (expected.length > 0) {
+        return result(entry, screen, 'caught', sortedUnique(expected.map((finding) => finding.rule)), null);
+      }
+      if (onTarget.length > 0) {
+        const rules = sortedUnique(onTarget.map((finding) => finding.rule));
+        return result(entry, screen, 'caught by another rule', rules, `reported by ${rules.join(', ')}; ${expectedText(entry)}`);
+      }
+      const rules = sortedUnique(newGating.map((finding) => finding.rule));
+      return result(
+        entry,
+        screen,
+        'caught by another rule',
+        rules,
+        `a new finding gated, but not on the element the mutation changed: ${rules.join(', ')}; ${expectedText(entry)}`,
+      );
+    }
+
+    const cleanPreview = new Set(cleanGate.findings.filter((finding) => finding.evidenceClass === 'preview').map(findingKey));
+    const newPreview = mutatedGate.findings.filter(
+      (finding) => finding.evidenceClass === 'preview' && !cleanPreview.has(findingKey(finding)),
+    );
+    if (newPreview.length > 0) {
+      const rules = sortedUnique(newPreview.map((finding) => finding.rule));
+      return result(entry, screen, 'preview only', rules, `only preview findings were new, and preview never gates: ${rules.join(', ')}`);
+    }
+
+    return result(entry, screen, 'missed', [], `nothing new gated; ${expectedText(entry)}`);
+  } finally {
+    await armed.release();
+  }
+}
+
+/** Every entry on every screen it is measured on, in catalog order, then screen order. */
+export async function measureCatalog(
+  deps: SensitivityRunnerDeps,
+  plan: ReadonlyArray<{ entry: CatalogEntry; screens: readonly SensitivityScreen[] }>,
+): Promise<EntryMeasurement[]> {
+  const measurements: EntryMeasurement[] = [];
+  for (const { entry, screens } of plan) {
+    for (const screen of screens) {
+      measurements.push(await measureEntry(deps, entry, screen));
+    }
+  }
+  return measurements;
+}
