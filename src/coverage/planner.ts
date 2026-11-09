@@ -320,11 +320,11 @@ export async function computeCoverage(
 
   if (dependencyReason !== null) {
     // A dependency change reaches every screen, so every configured surface is queued too, not
-    // only the ones that list a changed file.
+    // only the ones that list a changed file. Each is queued by its screen id, never skipped for a
+    // url a route or another surface already has: a surface carries its own readiness signal and
+    // requirements, and a url does not determine which screen renders. A surface that overrides a
+    // discovered route has that route's id, so addAffected keeps one entry for the two.
     for (const surface of config.surfaces) {
-      if (hasAffectedUrl(affectedByScreen, surface.url)) {
-        continue;
-      }
       addAffected(affectedByScreen, { screenId: surface.id, url: surface.url, provenance: 'wide-blast', reason: dependencyReason });
     }
     // With no route and no surface there is no screen to check, which is not the same as nothing
