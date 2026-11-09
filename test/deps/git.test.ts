@@ -90,6 +90,77 @@ describe('makeGitReader', () => {
   });
 });
 
+// Git quotes a path with a byte above 0x7f, a newline, a tab, or a double quote unless the
+// listing uses -z. A quoted name matches no glob, so a changed screen could read as nothing to
+// check. A name that ends in a space is valid too and must not be trimmed away.
+describe('makeGitReader with names git would quote or trim', { timeout: 30_000 }, () => {
+  const UMLAUT = 'src/pages/Über.tsx';
+  const TRAILING_SPACE = 'src/pages/Trailing.tsx ';
+  const NEWLINE = 'src/pages/new\nline.tsx';
+  const RENAMED_FROM = 'src/pages/Old.tsx';
+  const RENAMED_TO = 'src/pages/Renamed.tsx';
+  let repoPath = '';
+  let base = '';
+
+  beforeEach(async () => {
+    repoPath = await mkdtemp(join(tmpdir(), 'usabl-git-names-'));
+    await runGit(repoPath, ['init', '--initial-branch=main']);
+    await runGit(repoPath, ['config', 'user.name', 'Test User']);
+    await runGit(repoPath, ['config', 'user.email', 'test@example.com']);
+    // The default, set on purpose: git quotes non-ASCII bytes in every listing without -z.
+    await runGit(repoPath, ['config', 'core.quotePath', 'true']);
+    await mkdir(join(repoPath, 'src/pages'), { recursive: true });
+    await writeFile(join(repoPath, RENAMED_FROM), 'export const Old = 1;\n', 'utf8');
+    await runGit(repoPath, ['add', '-A']);
+    await runGit(repoPath, ['commit', '-m', 'seed']);
+    base = await runGit(repoPath, ['rev-parse', 'HEAD']);
+  });
+
+  afterEach(async () => {
+    await rm(repoPath, { recursive: true, force: true });
+  });
+
+  async function commitAwkwardNames(): Promise<void> {
+    for (const name of [UMLAUT, TRAILING_SPACE, NEWLINE]) {
+      await writeFile(join(repoPath, name), 'export const Page = 1;\n', 'utf8');
+    }
+    await runGit(repoPath, ['mv', RENAMED_FROM, RENAMED_TO]);
+    await runGit(repoPath, ['add', '-A']);
+    await runGit(repoPath, ['commit', '-m', 'awkward names']);
+  }
+
+  it('lists every changed name from the merge base as git stores it', async () => {
+    await commitAwkwardNames();
+    const changed = await makeGitReader({ cwd: repoPath }).diffNameOnly(base);
+    expect([...changed].sort()).toEqual([NEWLINE, RENAMED_TO, TRAILING_SPACE, UMLAUT].sort());
+  });
+
+  it('lists every changed name in the working tree as git stores it, with the new name of a rename', async () => {
+    for (const name of [UMLAUT, TRAILING_SPACE, NEWLINE]) {
+      await writeFile(join(repoPath, name), 'export const Page = 1;\n', 'utf8');
+    }
+    await runGit(repoPath, ['mv', RENAMED_FROM, RENAMED_TO]);
+    await runGit(repoPath, ['add', '-A']);
+    const paths = (await makeGitReader({ cwd: repoPath }).statusZ()).map((entry) => entry.path);
+    expect([...paths].sort()).toEqual([NEWLINE, RENAMED_TO, TRAILING_SPACE, UMLAUT].sort());
+  });
+
+  it('lists committed names under a prefix as git stores them', async () => {
+    await commitAwkwardNames();
+    const files = await makeGitReader({ cwd: repoPath }).lsFiles('HEAD', 'src/pages');
+    expect(files).toEqual([NEWLINE, RENAMED_TO, TRAILING_SPACE, UMLAUT].sort());
+  });
+
+  it('reads the blob of a committed name git would quote', async () => {
+    await commitAwkwardNames();
+    const blobs = await makeGitReader({ cwd: repoPath }).lsTree('HEAD', [UMLAUT, TRAILING_SPACE, NEWLINE]);
+    expect(Object.keys(blobs).sort()).toEqual([NEWLINE, TRAILING_SPACE, UMLAUT].sort());
+    for (const sha of Object.values(blobs)) {
+      expect(sha).toMatch(/^[0-9a-f]{40}$/);
+    }
+  });
+});
+
 describe('makeGitReader in a repository with no commits', () => {
   let emptyRepo = '';
 

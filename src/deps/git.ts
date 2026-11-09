@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 import type { GitReader } from '../contracts/index.js';
 
 const execFileAsync = promisify(execFile);
-const STATUS_ENTRY_SEPARATOR = '\0';
+const NUL = '\0';
 const MISSING_SHOW_PATTERNS = [
   /does not exist in/i,
   /exists on disk, but not in/i,
@@ -57,74 +57,60 @@ function missingRefError(ref: string, stderr: string): Error | null {
   );
 }
 
+// Every listing runs with -z. Without it git quotes and escapes a name that holds a byte above
+// 0x7f, a newline, a tab, or a double quote, and a quoted name matches no glob, so a changed
+// screen could read as nothing to check. Names are split on NUL and never trimmed: a name may
+// start or end with a space, and it is still the file git stores.
+function splitNul(output: string): string[] {
+  return output.split(NUL).filter((entry) => entry.length > 0);
+}
+
+// `git status --porcelain -z` prints a rename or copy as "XY NEW\0OLD\0": the new name comes
+// first and the old one follows as its own entry. The new name is the file in the tree, so it is
+// the one reported, and the old name is skipped.
 function parseStatus(output: string): Array<{ code: string; path: string }> {
   const parsed: Array<{ code: string; path: string }> = [];
-  const entries = output.split(STATUS_ENTRY_SEPARATOR).filter((entry) => entry.length > 0);
+  const entries = splitNul(output);
 
   for (let i = 0; i < entries.length; i += 1) {
     const entry = entries[i] ?? '';
     const status = entry.slice(0, 2);
     const statusCode = status.trim();
-    const sourcePath = entry.slice(3);
+    const path = entry.slice(3);
     if (statusCode.length === 0) {
       continue;
     }
-
-    const renameOrCopy = status.includes('R') || status.includes('C');
-    if (renameOrCopy) {
-      const targetPath = entries[i + 1];
-      if (typeof targetPath === 'string' && targetPath.length > 0) {
-        parsed.push({ code: statusCode, path: targetPath });
-        i += 1;
-        continue;
-      }
+    parsed.push({ code: statusCode, path });
+    if (status.includes('R') || status.includes('C')) {
+      i += 1;
     }
-
-    parsed.push({ code: statusCode, path: sourcePath });
   }
 
   return parsed;
 }
 
+// `git ls-tree -z` prints "MODE TYPE SHA\tNAME\0". The name is everything after the first tab.
 function parseLsTree(output: string): Record<string, string> {
   const blobs: Record<string, string> = {};
-  for (const line of output.split('\n')) {
-    if (line.trim().length === 0) {
+  for (const entry of splitNul(output)) {
+    const tab = entry.indexOf('\t');
+    if (tab < 0) {
       continue;
     }
-    const [meta, path] = line.split('\t');
-    if (meta === undefined || path === undefined) {
-      continue;
-    }
-    const parts = meta.trim().split(/\s+/);
-    const sha = parts[2];
+    const sha = entry.slice(0, tab).split(' ')[2];
     if (sha !== undefined) {
-      blobs[path] = sha;
+      blobs[entry.slice(tab + 1)] = sha;
     }
   }
   return blobs;
 }
 
 function parseLsFiles(output: string): string[] {
-  const files = new Set<string>();
-  for (const line of output.split('\n')) {
-    const path = line.trim();
-    if (path.length > 0) {
-      files.add(path);
-    }
-  }
-  return [...files].sort();
+  return [...new Set(splitNul(output))].sort();
 }
 
 function parseNameOnly(output: string): string[] {
-  const names = new Set<string>();
-  for (const line of output.split('\n')) {
-    const path = line.trim();
-    if (path.length > 0) {
-      names.add(path);
-    }
-  }
-  return [...names];
+  return [...new Set(splitNul(output))];
 }
 
 async function runGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
@@ -147,7 +133,7 @@ export function makeGitReader(options: { cwd?: string } = {}): GitReader {
     },
     async diffNameOnly(ref) {
       // Triple-dot compares merge-base..HEAD so CI sees PR-impact files even when status is clean.
-      const output = await runGit(cwd, ['diff', '--name-only', `${ref}...HEAD`]);
+      const output = await runGit(cwd, ['diff', '--name-only', '-z', `${ref}...HEAD`]);
       return parseNameOnly(output);
     },
     async show(ref, path) {
@@ -167,11 +153,11 @@ export function makeGitReader(options: { cwd?: string } = {}): GitReader {
       if (paths.length === 0) {
         return {};
       }
-      const output = await runGit(cwd, ['ls-tree', ref, '--', ...paths]);
+      const output = await runGit(cwd, ['ls-tree', '-z', ref, '--', ...paths]);
       return parseLsTree(output);
     },
     async lsFiles(ref, prefix) {
-      const output = await runGit(cwd, ['ls-tree', '-r', '--name-only', ref, '--', prefix]);
+      const output = await runGit(cwd, ['ls-tree', '-r', '--name-only', '-z', ref, '--', prefix]);
       return parseLsFiles(output);
     },
     async writeTree() {

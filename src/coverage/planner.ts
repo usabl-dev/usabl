@@ -24,6 +24,19 @@ function isTestFile(file: string): boolean {
   return /(^|\/)(test|tests|__tests__)(\/|$)/u.test(file) || /\.(test|spec)\.[^/]+$/u.test(file);
 }
 
+// Every git listing usabl reads runs with -z, which never quotes a name. A changed path that still
+// starts with a double quote most likely came from a listing that quoted it, and then usabl cannot
+// tell which file it names. Reading it as a file outside the UI globs would let a changed screen
+// pass as nothing to check, so it is a gap instead.
+function looksQuoted(file: string): boolean {
+  return file.startsWith('"');
+}
+
+const QUOTED_PATH_REASON =
+  'This changed path starts with a double quote, which is how git prints a name it quoted, so ' +
+  'usabl cannot tell which file it names and did not check it. List changed files with git -z, ' +
+  'which never quotes a name, or pass the file names as git stores them.';
+
 function routeUrl(baseUrl: string, routePath: string): string {
   const joinBaseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
   const expectedOrigin = new URL(baseUrl).origin;
@@ -165,13 +178,15 @@ export async function computeCoverage(
   const docs = docsManifest === undefined ? await parseDocsManifest(fs) : docsManifest;
   assertScreenIdsAreUnambiguous(config, manifest, (docs?.pages ?? []).map((page) => page.pageId));
 
-  const uiFiles = changedFiles.filter(
+  const quotedFiles = changedFiles.filter(looksQuoted);
+  const listedFiles = changedFiles.filter((file) => !looksQuoted(file));
+  const uiFiles = listedFiles.filter(
     (file) => !isTestFile(file) && config.uiFileGlobs.some((glob) => matchGlob(glob, file)),
   );
   // In a monorepo, a change in a workspace package the app depends on matches none of the app's
   // uiFileGlobs, while the app may render it. It is written down as a gap, so it never reads as
   // idle. See workspace-packages.ts for why it is not mapped to screens.
-  const otherFiles = changedFiles.filter((file) => !isTestFile(file) && !uiFiles.includes(file));
+  const otherFiles = listedFiles.filter((file) => !isTestFile(file) && !uiFiles.includes(file));
   const workspaceGaps = await workspaceDependencyGaps(fs, config, otherFiles, trustedRead);
   // A bump of the UI component library touches the app's package.json and the lockfile, and
   // neither matches uiFileGlobs, while the new version can change every screen. Such a change is
@@ -179,11 +194,12 @@ export async function computeCoverage(
   const dependencies = await dependencyChanges(fs, config, otherFiles, trustedRead);
   const dependencyReason = dependencies.length === 0 ? null : [...dependencies.map((change) => change.why), EVERY_SCREEN].join(' ');
   // No UI-touching files means idle. That is not the same claim as "covered".
-  if (uiFiles.length === 0 && workspaceGaps.length === 0 && dependencyReason === null) {
+  if (uiFiles.length === 0 && quotedFiles.length === 0 && workspaceGaps.length === 0 && dependencyReason === null) {
     return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
   }
-  const unresolvedFiles: string[] = workspaceGaps.map((gap) => gap.ref);
-  const gaps: CoverageGap[] = [...workspaceGaps];
+  const quotedGaps: CoverageGap[] = quotedFiles.map((file) => ({ ref: file, state: 'unresolved', reason: QUOTED_PATH_REASON }));
+  const unresolvedFiles: string[] = [...quotedFiles, ...workspaceGaps.map((gap) => gap.ref)];
+  const gaps: CoverageGap[] = [...quotedGaps, ...workspaceGaps];
   if (uiFiles.length === 0 && dependencyReason === null) {
     return { changedFiles, affected: [], unresolvedFiles, gaps, nothingToCheck: false };
   }
