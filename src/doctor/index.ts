@@ -653,10 +653,10 @@ async function collectCi(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'ci',
       label: CI_LABEL,
       state: 'drifted',
-      // Do not tell the operator to run "usabl install --ci" here. On an existing unpinned
-      // draft that command hits its already-wired path and prints "No change" without
-      // reprinting the pin step, so it would not do what this instruction implies. The edit is
-      // self-contained: replace the placeholder in place.
+      // Do not tell the operator to run "usabl install --ci" here. That command fills the pin
+      // only when this usabl has a clean build commit; without one it changes nothing and
+      // reprints this same edit. The edit is self-contained and always works: replace the
+      // placeholder in place.
       nextStep: `The gate workflow is present but the engine ref is still the placeholder. Edit ${USABL_GATE_WORKFLOW_PATH} and replace PIN_TO_A_TRUSTED_USABL_COMMIT (it appears once, in the usabl-engine job) with a full 40-character commit SHA you trust.`,
     };
   }

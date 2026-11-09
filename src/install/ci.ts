@@ -1062,20 +1062,19 @@ export function engineRefFor(pin: EnginePin): string | null {
   return pin.kind === 'filled' ? pin.sha : null;
 }
 
-/**
- * What the report says about the engine pin. With a commit, it names it and what happens if it is
- * not on usabl-dev/usabl. Without one, it says why and names the line to edit in each file.
- */
-export function pinReport(pin: EnginePin, placeholderFiles: ReadonlyArray<{ path: string; draft: string }>): string {
-  if (pin.kind === 'filled') {
-    return `The engine is pinned to usabl-dev/usabl commit ${pin.sha}, the commit this usabl ${pin.version} was built from. That commit must be on usabl-dev/usabl. If it is not, the usabl-engine job fails and the gate blocks.`;
-  }
+/** The fact the report states when the engine is pinned to this build's commit. */
+function pinNote(pin: EnginePin & { kind: 'filled' }): string {
+  return `The engine is pinned to usabl-dev/usabl commit ${pin.sha}, the commit this usabl ${pin.version} was built from. That commit must be on usabl-dev/usabl. If it is not, the usabl-engine job fails and the gate blocks.`;
+}
+
+/** The step the report lists when files still hold the placeholder: why, and the line in each. */
+function pinStep(reason: string, placeholderFiles: ReadonlyArray<{ path: string; draft: string }>): string {
   const where = placeholderFiles.map((file) => `line ${engineRefLineNumber(file.draft)} of ${file.path}`).join(' and ');
-  return `The engine pin is still the placeholder ${ENGINE_REF_PLACEHOLDER}, because ${pin.reason}. Until you pin a commit, the usabl-engine job fails and the gate blocks. Edit ${where}: replace ${ENGINE_REF_PLACEHOLDER} with a full 40-character commit SHA from usabl-dev/usabl that you trust.`;
+  return `Pin the engine. The engine ref is still the placeholder ${ENGINE_REF_PLACEHOLDER}, because ${reason}. Until you pin a commit, the usabl-engine job fails and the gate blocks. Edit ${where}: replace ${ENGINE_REF_PLACEHOLDER} with a full 40-character commit SHA from usabl-dev/usabl that you trust.`;
 }
 
 // What the report says about a file left alone because someone already pinned it.
-export function keptPinReport(path: string, pinnedTo: string, pin: EnginePin, draft: string): string {
+function keptPinReport(path: string, pinnedTo: string, pin: EnginePin, draft: string): string {
   const built = pin.kind === 'filled' ? ` This usabl was built from ${pin.sha}.` : '';
   return `${path} already matches the usabl draft, pinned to engine commit ${pinnedTo}. No change.${built} usabl never moves a pin you chose. To move it, edit line ${engineRefLineNumber(draft)}.`;
 }
@@ -1089,71 +1088,156 @@ const WORKFLOW_BOUNDARY =
   'and every guarded path to .github/CODEOWNERS, and on the protected branch require review from code owners, at least one approval, and dismissal of ' +
   'stale approvals on push. "usabl install --branch-rule" prints and checks the full setting.';
 
-function writtenReport(pin: EnginePin, app: AppOrigin): string {
-  const origin = appOriginReport(app);
-  return [
-    `Wrote ${USABL_GATE_WORKFLOW_PATH}. Review this draft before you merge it.`,
-    pinReport(pin, [{ path: USABL_GATE_WORKFLOW_PATH, draft: USABL_GATE_WORKFLOW }]),
-    'The engine comes from the public usabl-dev/usabl repository, so the gate needs no secret, and a pull request from a fork runs it the same way. A fork cannot write to its pull request, so its usabl comment appears in the run summary instead.',
-    'The app is built by the untrusted build-app job with "npm run build" into dist. If yours differs, set the repository variables USABL_APP_BUILD_COMMAND and USABL_APP_BUILD_DIR.',
-    'note' in origin ? origin.note : origin.step,
-    `Make "${REQUIRED_GATE_JOB}" the required status check on your protected branch. It is the only job that checks every gate job and the judge's verdict together, so requiring any other job lets an accessibility regression merge. Run "usabl install --branch-rule" for the exact setting.`,
-    WORKFLOW_BOUNDARY,
-  ].join('\n');
+const PUBLIC_ENGINE =
+  'The engine comes from the public usabl-dev/usabl repository, so the gate needs no secret, and a pull request from a fork runs it the same way. A fork cannot write to its pull request, so its usabl comment appears in the run summary instead.';
+
+const REQUIRED_CHECK_NOTE = `"${REQUIRED_GATE_JOB}" is the only job that checks every gate job and the judge's verdict together, so requiring any other job lets an accessibility regression merge.`;
+
+const BRANCH_RULE_STEP = `Add the branch rule. Run "usabl install --branch-rule": it prints the CODEOWNERS lines and the branch setting that make "${REQUIRED_GATE_JOB}" the required check. Apply them, then run it again to verify.`;
+
+const OPEN_PR_STEP = `Open a pull request. The gate runs on it, and "${REQUIRED_GATE_JOB}" reports the result.`;
+
+/** One workflow file after its plan was applied: the outcome, and whether it holds the placeholder. */
+export interface AppliedWorkflow {
+  result: InstallResult;
+  draft: string;
+  holdsPlaceholder: boolean;
 }
 
-function docsWrittenReport(pin: EnginePin): string {
-  return [
-    `Wrote ${USABL_DOCS_GATE_WORKFLOW_PATH}. Review this draft before you merge it.`,
-    pinReport(pin, [{ path: USABL_DOCS_GATE_WORKFLOW_PATH, draft: USABL_DOCS_GATE_WORKFLOW }]),
-    'The engine comes from the public usabl-dev/usabl repository, so the gate needs no secret, and a pull request from a fork runs it the same way. A fork cannot write to its pull request, so its usabl comment appears in the run summary instead.',
-    `Make "${REQUIRED_GATE_JOB}" the required status check on your protected branch. It is the only job that checks every gate job and the judge's verdict together, so requiring any other job lets an accessibility regression merge. Run "usabl install --branch-rule" for the exact setting.`,
-    'Set three repository variables the docs gate reads: USABL_DOCS_BUILD_COMMAND (for example "ccutil compile"), USABL_DOCS_BUILT_ROOT (the directory the build renders HTML into), and USABL_DOCS_SERVE_PORT (a free port).',
-    'Point usabl.docs.json docsBaseUrl at http://127.0.0.1:<USABL_DOCS_SERVE_PORT> so the scan targets the served docs. The judge serves the built HTML itself with usabl serve-build.',
-    WORKFLOW_BOUNDARY,
-  ].join('\n');
-}
-
-// writeCi and writeDocsCi share every branch except the written-message text, so the write
-// logic lives here once and each surface supplies its own report for the write case.
-async function writeWorkflow(
+/**
+ * Apply one plan. The result message is the one-line outcome for this file; composeCiReport adds
+ * what the run means and what is left to do. label names the workflow in the no-change line.
+ */
+export async function applyWorkflowPlan(
   fs: InstallFs,
   plan: CiPlan,
-  onWritten: () => string | Promise<string>,
   pin: EnginePin,
   draft: string,
-): Promise<InstallResult> {
+  label: string,
+): Promise<AppliedWorkflow> {
   if (plan.action === 'write') {
     await fs.writeFile(plan.path, plan.contents);
-    return { exitCode: 0, action: 'written', path: plan.path, message: await onWritten() };
+    return {
+      result: { exitCode: 0, action: 'written', path: plan.path, message: `Wrote ${plan.path}.` },
+      draft,
+      holdsPlaceholder: plan.contents.split('\n').includes(ENGINE_REF_LINE),
+    };
   }
   if (plan.action === 'already-wired') {
     return {
-      exitCode: 0,
-      action: 'already-wired',
-      path: plan.path,
-      message:
-        plan.pinnedTo === undefined
-          ? `${plan.path} already matches the usabl gate workflow. No change.`
-          : keptPinReport(plan.path, plan.pinnedTo, pin, draft),
+      result: {
+        exitCode: 0,
+        action: 'already-wired',
+        path: plan.path,
+        message:
+          plan.pinnedTo === undefined
+            ? `${plan.path} already matches the usabl ${label}. No change.`
+            : keptPinReport(plan.path, plan.pinnedTo, pin, draft),
+      },
+      draft,
+      // Identical to the draft this run planned, which holds the placeholder only without a commit.
+      holdsPlaceholder: plan.pinnedTo === undefined && pin.kind === 'placeholder',
     };
   }
   return {
-    exitCode: 2,
-    action: 'refused',
-    path: plan.path,
-    message: `Refusing to overwrite ${plan.path}: it differs from the usabl draft, and ${plan.difference}. Reconcile it by hand; usabl never overwrites a hand-tuned security workflow.`,
+    result: {
+      exitCode: 2,
+      action: 'refused',
+      path: plan.path,
+      message: `Refusing to overwrite ${plan.path}: it differs from the usabl draft, and ${plan.difference}. Reconcile it by hand; usabl never overwrites a hand-tuned security workflow.`,
+    },
+    draft,
+    holdsPlaceholder: false,
   };
+}
+
+/**
+ * The report for one install run. It states each file's outcome, then the facts that matter for
+ * what was written, then only the steps still needed: the pin when a file holds the placeholder,
+ * the setup steps the caller found, and, when anything was written, commit, the branch rule, and a
+ * pull request. The result exits 2 when any file was refused.
+ */
+export function composeCiReport(input: {
+  applied: readonly AppliedWorkflow[];
+  pin: EnginePin;
+  notes: readonly string[];
+  setupSteps: readonly string[];
+}): InstallResult {
+  const results = input.applied.map((entry) => entry.result);
+  const written = results.filter((result) => result.action === 'written');
+  const placeholderFiles = input.applied
+    .filter((entry) => entry.holdsPlaceholder)
+    .map((entry) => ({ path: entry.result.path, draft: entry.draft }));
+
+  const steps: string[] = [];
+  if (placeholderFiles.length > 0 && input.pin.kind === 'placeholder') {
+    steps.push(pinStep(input.pin.reason, placeholderFiles));
+  }
+  steps.push(...input.setupSteps);
+  if (written.length > 0) {
+    steps.push(`Review and commit ${written.map((result) => result.path).join(' and ')}.`, BRANCH_RULE_STEP, OPEN_PR_STEP);
+  }
+
+  const notes = written.length > 0 ? [...(input.pin.kind === 'filled' ? [pinNote(input.pin)] : []), ...input.notes] : [];
+  const sections = [results.map((result) => result.message).join('\n')];
+  if (notes.length > 0) sections.push(notes.join('\n'));
+  if (steps.length > 0) sections.push(['Next steps:', ...steps.map((step, index) => `${index + 1}. ${step}`)].join('\n'));
+
+  const refused = results.some((result) => result.action === 'refused');
+  const first = results[0];
+  return {
+    exitCode: refused ? 2 : 0,
+    action: refused ? 'refused' : written.length > 0 ? 'written' : 'already-wired',
+    path: first?.path ?? '',
+    message: sections.join('\n\n'),
+  };
+}
+
+/** The facts the app gate report states once something is written. */
+export function appGateNotes(app: AppOrigin): string[] {
+  const origin = appOriginReport(app);
+  return [
+    PUBLIC_ENGINE,
+    'The untrusted build-app job builds the app with "npm run build" into dist. If yours differs, set the repository variables USABL_APP_BUILD_COMMAND and USABL_APP_BUILD_DIR.',
+    ...('note' in origin ? [origin.note] : []),
+    REQUIRED_CHECK_NOTE,
+    WORKFLOW_BOUNDARY,
+  ];
+}
+
+/** The setup step the app origin needs, when appBaseUrl is not one the judge can serve yet. */
+export function appGateSetupSteps(app: AppOrigin): string[] {
+  const origin = appOriginReport(app);
+  return 'step' in origin ? [origin.step] : [];
 }
 
 // pin is the engine pin this run planned with, so the report says what was written. The default is
 // the placeholder, which is what a plan made without a commit writes.
 export async function writeCi(fs: InstallFs, plan: CiPlan, pin: EnginePin = NO_BUILD_RECORD): Promise<InstallResult> {
-  return writeWorkflow(fs, plan, async () => writtenReport(pin, await readAppOrigin(fs)), pin, USABL_GATE_WORKFLOW);
+  const app = await readAppOrigin(fs);
+  return composeCiReport({
+    applied: [await applyWorkflowPlan(fs, plan, pin, USABL_GATE_WORKFLOW, 'gate workflow')],
+    pin,
+    notes: appGateNotes(app),
+    setupSteps: appGateSetupSteps(app),
+  });
 }
 
 export async function writeDocsCi(fs: InstallFs, plan: CiPlan, pin: EnginePin = NO_BUILD_RECORD): Promise<InstallResult> {
-  return writeWorkflow(fs, plan, () => docsWrittenReport(pin), pin, USABL_DOCS_GATE_WORKFLOW);
+  return composeCiReport({
+    applied: [await applyWorkflowPlan(fs, plan, pin, USABL_DOCS_GATE_WORKFLOW, 'docs gate workflow')],
+    pin,
+    notes: [
+      PUBLIC_ENGINE,
+      'The judge serves the built HTML itself with usabl serve-build.',
+      REQUIRED_CHECK_NOTE,
+      WORKFLOW_BOUNDARY,
+    ],
+    setupSteps: [
+      'Set three repository variables the docs gate reads: USABL_DOCS_BUILD_COMMAND (for example "ccutil compile"), USABL_DOCS_BUILT_ROOT (the directory the build renders HTML into), and USABL_DOCS_SERVE_PORT (a free port).',
+      'Point docsBaseUrl in usabl.docs.json at http://127.0.0.1:<USABL_DOCS_SERVE_PORT> so the scan targets the served docs, and commit it.',
+    ],
+  });
 }
 
 // A pin-aware recognizer for `usabl doctor`, additive to the install plan above and next to
