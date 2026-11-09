@@ -92,6 +92,14 @@ describe('findTargets', () => {
     });
   });
 
+  it('counts every qualifying element against atLeast, and still takes only the first', async () => {
+    const page = makeFakeDomPage(dom());
+    expect(await findTargets(page, { selector: 'button', tree: { named: true }, atLeast: 2 })).toEqual({
+      kind: 'found',
+      paths: ['#save'],
+    });
+  });
+
   it('only reads the page', async () => {
     const writes: string[] = [];
     const page = makeFakeDomPage(dom(), {

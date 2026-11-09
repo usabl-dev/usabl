@@ -58,7 +58,8 @@ export async function findTargets(page: Page, finder: TargetFinder): Promise<Tar
       continue;
     }
     kept.push(path);
-    if (finder.every !== true) {
+    // The first match is enough unless the defect needs several elements to exist.
+    if (finder.every !== true && kept.length >= atLeast) {
       break;
     }
   }
@@ -72,5 +73,5 @@ export async function findTargets(page: Page, finder: TargetFinder): Promise<Tar
       reason: `${count(kept.length, 'element')} on the page can carry the defect, and it needs at least ${atLeast}`,
     };
   }
-  return { kind: 'found', paths: kept };
+  return { kind: 'found', paths: finder.every === true ? kept : kept.slice(0, 1) };
 }
