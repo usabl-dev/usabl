@@ -2,11 +2,17 @@
  * The silent change rule in real Chromium. The rule compares two reads of the whole accessibility
  * tree around one action step, so this file first proves what that read covers: the main frame,
  * and open shadow roots, because the browser builds the tree from the flat tree. The docs claim
- * that only because this test holds it.
+ * that only because this test holds it. Then each fixture in the pass criteria runs as a flow
+ * requirement in fixtures/live/silent-change.html, and the rule's drafts are checked.
  */
+import { readFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AxTreeNode, BrowserDriver, Page } from '../../src/contracts/index.js';
+import type { AxTreeNode, BrowserDriver, Draft, Page, Step } from '../../src/contracts/index.js';
 import { makeRealBrowserDriver } from '../../src/deps/real.js';
+import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
+import { draftsOf, testConfig } from '../helpers.js';
 
 // Each test opens a fresh page, under a second when the machine is idle, and some wait up to the
 // settle cap after a step. The budget is set well above that, so machine load cannot decide the
@@ -36,6 +42,10 @@ const TREE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8" />
   </script>
 </body></html>`;
 
+const OTHER_PAGE = '<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Other</title></head><body><main><h1>Next page</h1></main></body></html>';
+
+const SCREEN = { id: 'accounts', url: 'http://127.0.0.1/accounts' };
+
 function named(nodes: AxTreeNode[], role: string, name: string): AxTreeNode | undefined {
   return nodes.find((node) => !node.ignored && node.role === role && node.name?.trim() === name);
 }
@@ -43,12 +53,27 @@ function named(nodes: AxTreeNode[], role: string, name: string): AxTreeNode | un
 describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule in Chromium', { timeout: BROWSER_BUDGET_MS }, () => {
   let driver: BrowserDriver;
 
-  beforeAll(() => {
+  let server: Server;
+  let baseUrl: string;
+
+  beforeAll(async () => {
     driver = makeRealBrowserDriver();
+    const html = await readFile(fileURLToPath(new URL('../../fixtures/live/silent-change.html', import.meta.url)), 'utf8');
+    server = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(req.url?.startsWith('/other.html') ? OTHER_PAGE : html);
+    });
+    await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('test server has no port');
+    }
+    baseUrl = `http://127.0.0.1:${address.port}/silent-change.html`;
   });
 
   afterAll(async () => {
     await driver.close();
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
   });
 
   async function withPage<T>(html: string, use: (page: Page) => Promise<T>): Promise<T> {
@@ -174,6 +199,131 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
         expect(await page.controlNodeId('#missing')).toBeNull();
         expect(await page.controlNodeId('text=Save')).toBeNull();
       });
+    });
+  });
+  // Runs one flow requirement on a fresh page of the fixture and returns every draft it made.
+  async function flow(which: string, steps: Step[], expectedAnnouncement?: string): Promise<Draft[]> {
+    const page = await driver.open(`${baseUrl}?case=${which}`);
+    try {
+      await page.gotoReady();
+      const [provider] = mapRequirementsToProviders({
+        version: 1,
+        requirements: [
+          {
+            id: 'accounts-flow',
+            kind: 'flow',
+            surface: SCREEN.id,
+            description: 'An action on the accounts screen',
+            approved: true,
+            assertion: { type: 'flow', steps, ...(expectedAnnouncement === undefined ? {} : { expectedAnnouncement }) },
+          },
+        ],
+      });
+      if (provider === undefined) throw new Error('no flow provider');
+      return draftsOf(await provider.run({ page, screen: SCREEN, config: testConfig() }));
+    } finally {
+      await page.close();
+    }
+  }
+
+  function outcome(drafts: Draft[]): unknown[] {
+    return drafts
+      .filter((draft) => draft.rule === 'voicing/silent-change')
+      .map((draft) => (draft.confidence === 'fail' ? 'finding' : draft.evidence.extra?.reason));
+  }
+
+  const click = (selector: string): Step[] => [{ do: 'click', selector }];
+
+  describe('the pass criteria fixtures', () => {
+    it('reports a silent Save as a preview finding', async () => {
+      const drafts = await flow('silent-save', click('#save'));
+      expect(outcome(drafts)).toEqual(['finding']);
+      expect(drafts[0]).toMatchObject({
+        rule: 'voicing/silent-change',
+        evidenceClass: 'preview',
+        severity: 'serious',
+        confidence: 'fail',
+        elementPath: '#save',
+        role: 'button',
+        evidence: { extra: { step: { do: 'click', selector: '#save' }, removed: {}, addedNames: ['Saved'] } },
+      });
+    });
+
+    it('reports a silent Save reached with Tab and activated with Enter, on the focused control', async () => {
+      const drafts = await flow('silent-save', [{ do: 'tab' }, { do: 'activate' }]);
+      expect(outcome(drafts)).toEqual(['finding']);
+      expect(drafts[0]?.elementPath).toBe('#save');
+    });
+
+    it('finds nothing for a Save that writes a shown polite region', async () => {
+      expect(await flow('polite-save', click('#save'))).toEqual([]);
+    });
+
+    it('finds nothing for a Delete that moves focus to "Delete row 2, button"', async () => {
+      expect(await flow('delete-focus', click('#delete-1'))).toEqual([]);
+    });
+
+    it('reports a Delete that removes the row and leaves focus on the body, with no email in the draft', async () => {
+      const drafts = await flow('delete-body', click('#delete-1'));
+      expect(outcome(drafts)).toEqual(['finding']);
+      expect(drafts[0]?.evidence.extra).toMatchObject({ removed: expect.objectContaining({ row: 1 }), addedNames: [] });
+      expect(JSON.stringify(drafts)).not.toContain('alice');
+      expect(JSON.stringify(drafts)).not.toContain('example.com');
+    });
+
+    it('reports a Save that writes into a region inside a dialog it closes in the same step', async () => {
+      expect(outcome(await flow('dialog-save', click('#save')))).toEqual(['finding']);
+    });
+
+    it('finds nothing for a disclosure, a tab, or a sort header: each speaks for itself', async () => {
+      expect(await flow('disclosure', click('#toggle'))).toEqual([]);
+      expect(await flow('tabs', click('#tab-2'))).toEqual([]);
+      expect(await flow('sort', click('#sort'))).toEqual([]);
+    });
+
+    it('finds nothing for a step that changes only CSS classes', async () => {
+      expect(await flow('css', click('#highlight'))).toEqual([]);
+    });
+
+    it('reports a link that loads a new document as a gap, navigated', async () => {
+      const drafts = await flow('link', click('#next'));
+      expect(outcome(drafts)).toEqual(['navigated']);
+      expect(drafts[0]?.confidence).toBe('unverified');
+    });
+
+    it('reports a step whose drain is undecidable as a gap', async () => {
+      expect(outcome(await flow('closed-modal', click('#save')))).toEqual(['announcements undecidable']);
+    });
+
+    it('reports a Save button drawn again with the same name as a gap', async () => {
+      expect(outcome(await flow('rerender', click('#save')))).toEqual(['replaced focus']);
+    });
+
+    it('never hears a toast line that dismissed itself, because the record holds only a removal', async () => {
+      expect(outcome(await flow('toast', click('#save')))).toEqual(['finding']);
+    });
+  });
+
+  describe('determinism', () => {
+    it('gives the same findings and the same evidence on two runs of a known interaction', async () => {
+      for (const which of ['silent-save', 'delete-body']) {
+        const selector = which === 'silent-save' ? '#save' : '#delete-1';
+        const first = await flow(which, click(selector));
+        const second = await flow(which, click(selector));
+        expect(first.length).toBeGreaterThan(0);
+        expect(second).toEqual(first);
+      }
+    });
+  });
+
+  describe('the flow requirement itself', () => {
+    it('still passes a flow that announces on step 1, with each step drained on its own', async () => {
+      expect(await flow('polite-save', [{ do: 'click', selector: '#save' }, { do: 'tab' }], 'Saved')).toEqual([]);
+    });
+
+    it('still fails a silent Save, and the rule adds nothing for the step the flow fails on', async () => {
+      const drafts = await flow('silent-save', click('#save'), 'Saved');
+      expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['intake:accounts-flow', 'fail']]);
     });
   });
 });

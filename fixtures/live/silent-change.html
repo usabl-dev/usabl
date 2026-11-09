@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>usabl silent change fixture</title>
+    <style>
+      .active { color: #a00; outline: 2px solid #a00; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Accounts</h1>
+      <div id="app"></div>
+      <div aria-live="polite" id="status"></div>
+      <div id="out"></div>
+    </main>
+    <script>
+      // The query string picks one case. Each case draws its controls into #app and wires one
+      // action. The silent change rule reads the step that clicks or activates the control.
+      //   silent-save    Save writes "Saved" into a plain paragraph. Nothing announces it.
+      //   polite-save    Save writes "Saved" into the shown polite region.
+      //   delete-focus   Deleting row 1 removes it and moves focus to "Delete row 2".
+      //   delete-body    Deleting row 1 removes it, with the email in it, and focus falls to the body.
+      //   dialog-save    Save writes "Saved" into a polite region inside the dialog it closes in the
+      //                  same task, so no screen reader speaks it.
+      //   disclosure     A button shows the panel its aria-controls names and sets aria-expanded.
+      //   tabs           A tab is selected and shows its panel; the other tab and panel are hidden.
+      //   sort           A sort header sets aria-sort and re-orders its rows.
+      //   css            A button changes only its own CSS classes.
+      //   link           A link loads a new document.
+      //   closed-modal   Save shows an aria-modal dialog inside a closed shadow root and writes the
+      //                  polite region, so the drain cannot say what was heard.
+      //   rerender       Save is drawn again with the same name and the new button takes focus.
+      //   toast          Save writes a plain paragraph, and one line of a toast already shown dismisses
+      //                  itself, so the record holds only a removal.
+      const params = new URLSearchParams(location.search);
+      const which = params.get('case') ?? 'silent-save';
+      const app = document.getElementById('app');
+      const status = document.getElementById('status');
+      const out = document.getElementById('out');
+      const say = (text) => {
+        const paragraph = document.createElement('p');
+        paragraph.textContent = text;
+        out.append(paragraph);
+      };
+      const draw = (html) => {
+        const template = document.createElement('template');
+        template.innerHTML = html;
+        app.replaceChildren(template.content);
+      };
+      const on = (id, handler) => document.getElementById(id).addEventListener('click', handler);
+
+      if (which === 'silent-save') {
+        draw('<button type="button" id="save">Save</button>');
+        on('save', () => say('Saved'));
+      } else if (which === 'polite-save') {
+        draw('<button type="button" id="save">Save</button>');
+        on('save', () => {
+          status.textContent = 'Saved';
+        });
+      } else if (which === 'delete-focus' || which === 'delete-body') {
+        draw(
+          '<table><thead><tr><th>Email</th><th>Action</th></tr></thead><tbody>' +
+            '<tr id="row-1"><td>alice@example.com</td><td><button type="button" id="delete-1" aria-label="Delete alice@example.com">Delete</button></td></tr>' +
+            '<tr id="row-2"><td>bob</td><td><button type="button" id="delete-2">Delete row 2</button></td></tr>' +
+            '</tbody></table>',
+        );
+        on('delete-1', () => {
+          document.getElementById('row-1').remove();
+          if (which === 'delete-focus') document.getElementById('delete-2').focus();
+        });
+      } else if (which === 'dialog-save') {
+        draw('<dialog open id="edit"><p>Edit account</p><div aria-live="polite" id="dialog-status"></div><button type="button" id="save">Save</button></dialog>');
+        on('save', () => {
+          document.getElementById('dialog-status').textContent = 'Saved';
+          document.getElementById('edit').close();
+        });
+      } else if (which === 'disclosure') {
+        draw('<button type="button" id="toggle" aria-expanded="false" aria-controls="details">Shipping details</button><div id="details" hidden><p>Orders ship in three days.</p></div>');
+        on('toggle', () => {
+          document.getElementById('toggle').setAttribute('aria-expanded', 'true');
+          document.getElementById('details').hidden = false;
+        });
+      } else if (which === 'tabs') {
+        draw(
+          '<div role="tablist" aria-label="Account">' +
+            '<button type="button" role="tab" id="tab-1" aria-selected="true" aria-controls="panel-1">Profile</button>' +
+            '<button type="button" role="tab" id="tab-2" aria-selected="false" aria-controls="panel-2" tabindex="-1">Billing</button>' +
+            '</div>' +
+            '<div role="tabpanel" id="panel-1" aria-labelledby="tab-1"><p>Name and email</p></div>' +
+            '<div role="tabpanel" id="panel-2" aria-labelledby="tab-2" hidden><p>Card on file</p></div>',
+        );
+        on('tab-2', () => {
+          document.getElementById('tab-1').setAttribute('aria-selected', 'false');
+          document.getElementById('tab-1').tabIndex = -1;
+          document.getElementById('tab-2').setAttribute('aria-selected', 'true');
+          document.getElementById('tab-2').removeAttribute('tabindex');
+          document.getElementById('panel-1').hidden = true;
+          document.getElementById('panel-2').hidden = false;
+        });
+      } else if (which === 'sort') {
+        draw(
+          '<table><thead><tr><th aria-sort="none"><button type="button" id="sort">Name</button></th></tr></thead>' +
+            '<tbody id="rows"><tr><td>Carol</td></tr><tr><td>Alice</td></tr><tr><td>Bob</td></tr></tbody></table>',
+        );
+        on('sort', (event) => {
+          event.currentTarget.closest('th').setAttribute('aria-sort', 'ascending');
+          const rows = document.getElementById('rows');
+          const sorted = [...rows.children].sort((left, right) => left.textContent.localeCompare(right.textContent));
+          for (const row of sorted) rows.append(row);
+        });
+      } else if (which === 'css') {
+        draw('<button type="button" id="highlight">Highlight</button>');
+        on('highlight', (event) => event.currentTarget.classList.toggle('active'));
+      } else if (which === 'link') {
+        draw('<a id="next" href="/other.html">Next page</a>');
+      } else if (which === 'closed-modal') {
+        draw('<button type="button" id="save">Save</button><x-closed-modal id="host"></x-closed-modal>');
+        customElements.define(
+          'x-closed-modal',
+          class extends HTMLElement {
+            constructor() {
+              super();
+              const root = this.attachShadow({ mode: 'closed' });
+              root.innerHTML = '<div role="dialog" aria-modal="true" aria-label="Saving" hidden><p>Saving your changes</p></div>';
+              this.show = () => {
+                root.querySelector('[role="dialog"]').hidden = false;
+              };
+            }
+          },
+        );
+        on('save', () => {
+          document.getElementById('host').show();
+          status.textContent = 'Saved';
+        });
+      } else if (which === 'rerender') {
+        const drawSave = () => {
+          draw('<button type="button" id="save">Save</button>');
+          on('save', () => {
+            drawSave();
+            document.getElementById('save').focus();
+          });
+        };
+        drawSave();
+      } else if (which === 'toast') {
+        // The toast is drawn while the page is parsed, which the capture does not record. Removing
+        // one of its lines leaves the other, so the record holds a removal and the text left.
+        draw('<button type="button" id="save">Save</button><div role="status" id="toast"><p id="signed-in">Signed in</p><p>Welcome back</p></div>');
+        on('save', () => {
+          say('Saved');
+          document.getElementById('signed-in').remove();
+        });
+      }
+    </script>
+  </body>
+</html>
