@@ -237,6 +237,12 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     flags: [],
   },
   {
+    name: 'verify',
+    usage: 'usabl verify sensitivity [--json]',
+    summary: 'Inject declared defects and record which ones the checks catch.',
+    flags: [{ name: '--json', help: 'Print the attestation as JSON instead of a summary.' }],
+  },
+  {
     name: 'help',
     usage: 'usabl help [command]',
     summary: 'Print this help, or the help for one command.',

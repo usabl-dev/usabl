@@ -16,7 +16,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { run } from './run.js';
 import type { Result, UsablConfig } from './contracts/index.js';
-import { buildDeps } from './deps/build.js';
+import { buildDeps, readCoreVersions } from './deps/build.js';
 import { makeFsGlob } from './deps/fs.js';
 import { gitIgnoreState, readStorageStateEnv } from './deps/session.js';
 import { openSessionBrowser, runSession, waitForPerson } from './session/index.js';
@@ -340,6 +340,35 @@ async function runHistory(opts: CliOptions): Promise<number> {
   }
 }
 
+/**
+ * `usabl verify sensitivity`. The measurement modules are loaded here and nowhere else in the CLI, by
+ * a dynamic import, so no other command's code path can reach the mutation browser.
+ */
+async function runVerify(opts: CliOptions): Promise<number> {
+  if (opts.verifySubcommand !== 'sensitivity') {
+    process.stderr.write('usabl: verify has one subcommand: usabl verify sensitivity. Run "usabl verify --help".\n');
+    return 2;
+  }
+  const [{ runVerifySensitivity }, { runLevel1 }] = await Promise.all([
+    import('./measure/sensitivity/command.js'),
+    import('./measure/sensitivity/level1.js'),
+  ]);
+  return runVerifySensitivity(
+    { json: opts.json },
+    {
+      now: () => new Date().toISOString(),
+      versions: readCoreVersions,
+      level1: (now) => runLevel1({ now }),
+      writeAttestation: async (path, text) => {
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, text, 'utf8');
+      },
+      stdout: (text) => process.stdout.write(text),
+      stderr: (text) => process.stderr.write(text),
+    },
+  );
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   // Help and unknown flags are answered before anything runs, so asking how to use a command
   // never loads config, opens a browser, reads stdin, or writes a file.
@@ -380,7 +409,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     opts.command !== 'debt' &&
     opts.command !== 'session' &&
     opts.command !== 'serve-build' &&
-    opts.command !== 'extract-build'
+    opts.command !== 'extract-build' &&
+    opts.command !== 'verify'
   ) {
     // The command table names a command this dispatch does not run. Refuse it the same way.
     process.stderr.write('usabl: unknown command. Run "usabl help" to list the commands.\n');
@@ -397,6 +427,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   if (opts.command === 'install') {
     return runInstall(opts);
+  }
+
+  if (opts.command === 'verify') {
+    return runVerify(opts);
   }
 
   // serve-build and extract-build handle a pull request's untrusted build for the CI judge. Each

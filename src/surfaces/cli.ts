@@ -66,6 +66,8 @@ export interface CliOptions {
   // brief-only: the task's files from `--files <path> [<path> ...]`. Null when the flag was not
   // given, which means the changed files git reports.
   files: string[] | null;
+  // verify-only: the subcommand, such as `sensitivity`. Null when none was given.
+  verifySubcommand: string | null;
 }
 
 // The value flags of serve-build and extract-build. Those commands parse their own arguments.
@@ -142,6 +144,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let branchRule = false;
   let isolatedBrowser = false;
   let files: string[] | null = null;
+  let verifySubcommand: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -170,6 +173,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
         historyFile = token;
         continue;
       }
+      if (command === 'verify' && verifySubcommand === null) {
+        // Any word, so an unknown subcommand is refused by name instead of read as a command.
+        verifySubcommand = token;
+        continue;
+      }
       command = token;
       if (command !== 'enforce') {
         enforceCheck = null;
@@ -183,6 +191,9 @@ export function parseCliArgs(argv: string[]): CliOptions {
       if (command !== 'history') {
         historySubcommand = null;
         historyFile = null;
+      }
+      if (command !== 'verify') {
+        verifySubcommand = null;
       }
       continue;
     }
@@ -358,6 +369,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     cursorStopHook,
     isolatedBrowser,
     files,
+    verifySubcommand,
   };
 }
 
