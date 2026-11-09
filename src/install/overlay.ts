@@ -94,7 +94,7 @@ function configFlagOf(command: string): string | null {
   return path.replace(/^\.\//, '');
 }
 
-interface BundlerEvidence {
+export interface BundlerEvidence {
   viteConfigs: string[];
   viteScripts: string[];
   webpackConfigs: string[];
@@ -124,7 +124,7 @@ async function readScripts(fs: InstallFs): Promise<Array<[string, string]>> {
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-async function collectEvidence(fs: InstallFs): Promise<BundlerEvidence> {
+export async function collectEvidence(fs: InstallFs): Promise<BundlerEvidence> {
   const viteConfigs: string[] = [];
   for (const candidate of OVERLAY_CONFIG_CANDIDATES) {
     if ((await fs.readFile(candidate)) !== null) {
@@ -169,7 +169,7 @@ function describeEvidence(evidence: BundlerEvidence): string[] {
 
 // The webpack config the overlay belongs in: the one the dev server script names, then a config
 // whose name says dev, then webpack.config.*, then the first one found.
-function webpackDevConfig(evidence: BundlerEvidence): string | null {
+export function webpackDevConfig(evidence: BundlerEvidence): string | null {
   const configs = evidence.webpackConfigs;
   const base = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
   return (

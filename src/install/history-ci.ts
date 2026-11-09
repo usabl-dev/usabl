@@ -5,8 +5,9 @@
  *
  * Three jobs, so the job that runs the application never holds write access:
  * - usabl-engine builds the pinned engine, with the same job the pull request gate uses.
- * - history-scan checks out main, starts the application, runs `usabl history record`, and uploads
- *   the record. It runs application code, so it reads only.
+ * - history-scan checks out main, starts the application on the origin of appBaseUrl in main's
+ *   usabl.config.json, runs `usabl history record`, and uploads the record. It runs application
+ *   code, so it reads only.
  * - history-append downloads the record, adds it to the history branch with `usabl history append`,
  *   and pushes without force. It runs only the engine archive it checked against the engine job's
  *   digest, so it is the one job that writes. It needs `contents: write`, the one permission
@@ -119,20 +120,55 @@ ${ENGINE_CHECK}
       - name: Install application dependencies
         run: npm ci --ignore-scripts
 
+      - name: Read the app origin from usabl.config.json
+        run: |
+          # The scan reads appBaseUrl from this checkout of main, so the app starts on that origin,
+          # never on a port this file assumes. Only an http origin on loopback with an explicit port
+          # is taken, the same shape the judge needs. Anything else stops here.
+          node <<'NODE'
+          const fs = require('node:fs');
+          const fail = (why) => {
+            console.error('usabl-history: ' + why + '; failing closed');
+            process.exit(1);
+          };
+          let config;
+          try {
+            config = JSON.parse(fs.readFileSync('usabl.config.json', 'utf8'));
+          } catch {
+            fail('usabl.config.json is missing or is not JSON');
+          }
+          const base = config !== null && typeof config === 'object' ? config.appBaseUrl : undefined;
+          if (typeof base !== 'string') fail('usabl.config.json has no appBaseUrl string');
+          let url;
+          try {
+            url = new URL(base);
+          } catch {
+            fail('appBaseUrl in usabl.config.json is not a URL');
+          }
+          if (url.protocol !== 'http:') fail('appBaseUrl in usabl.config.json must use http');
+          if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
+            fail('appBaseUrl in usabl.config.json must be a loopback host (127.0.0.1, localhost, or [::1])');
+          }
+          if (url.port === '') fail('appBaseUrl in usabl.config.json must name an explicit port');
+          const host = url.hostname === '[::1]' ? '::1' : url.hostname;
+          fs.appendFileSync(process.env.GITHUB_ENV, 'USABL_APP_HOST=' + host + '\\n' + 'USABL_APP_PORT=' + url.port + '\\n' + 'USABL_APP_ORIGIN=' + url.origin + '\\n');
+          console.log('usabl-history: the app starts on ' + url.origin + ', the origin of appBaseUrl');
+          NODE
+
       - name: Start application on localhost
         run: |
-          npm run dev -- --host 127.0.0.1 --port 5173 > "\${RUNNER_TEMP}/usabl-vite.log" 2>&1 &
+          npm run dev -- --host "\${USABL_APP_HOST}" --port "\${USABL_APP_PORT}" > "\${RUNNER_TEMP}/usabl-vite.log" 2>&1 &
           echo "VITE_PID=$!" >> "$GITHUB_ENV"
 
       - name: Wait for application readiness
         run: |
           for _ in $(seq 1 60); do
-            if curl -fsS "http://127.0.0.1:5173" > /dev/null; then
+            if curl -fsS "\${USABL_APP_ORIGIN}" > /dev/null; then
               exit 0
             fi
             sleep 1
           done
-          echo "application did not start on 127.0.0.1:5173"
+          echo "application did not start on \${USABL_APP_ORIGIN}"
           cat "\${RUNNER_TEMP}/usabl-vite.log"
           exit 1
 

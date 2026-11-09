@@ -17,6 +17,7 @@
  */
 import type { InstallFs, InstallResult } from './index.js';
 import { NO_BUILD_RECORD, type EnginePin } from './build-info.js';
+import { appOriginReport, readAppOrigin, type AppOrigin } from './app-origin.js';
 import {
   ARTIFACT_MAX_BYTES,
   ENGINE_CHECK,
@@ -1088,12 +1089,14 @@ const WORKFLOW_BOUNDARY =
   'and every guarded path to .github/CODEOWNERS, and on the protected branch require review from code owners, at least one approval, and dismissal of ' +
   'stale approvals on push. "usabl install --branch-rule" prints and checks the full setting.';
 
-function writtenReport(pin: EnginePin): string {
+function writtenReport(pin: EnginePin, app: AppOrigin): string {
+  const origin = appOriginReport(app);
   return [
     `Wrote ${USABL_GATE_WORKFLOW_PATH}. Review this draft before you merge it.`,
     pinReport(pin, [{ path: USABL_GATE_WORKFLOW_PATH, draft: USABL_GATE_WORKFLOW }]),
     'The engine comes from the public usabl-dev/usabl repository, so the gate needs no secret, and a pull request from a fork runs it the same way. A fork cannot write to its pull request, so its usabl comment appears in the run summary instead.',
-    'The app is built by the untrusted build-app job with "npm run build" into dist. If yours differs, set the repository variables USABL_APP_BUILD_COMMAND and USABL_APP_BUILD_DIR. The judge serves that build on the appBaseUrl of usabl.config.json at the base branch, which must be a loopback http origin with an explicit port, such as http://127.0.0.1:5173.',
+    'The app is built by the untrusted build-app job with "npm run build" into dist. If yours differs, set the repository variables USABL_APP_BUILD_COMMAND and USABL_APP_BUILD_DIR.',
+    'note' in origin ? origin.note : origin.step,
     `Make "${REQUIRED_GATE_JOB}" the required status check on your protected branch. It is the only job that checks every gate job and the judge's verdict together, so requiring any other job lets an accessibility regression merge. Run "usabl install --branch-rule" for the exact setting.`,
     WORKFLOW_BOUNDARY,
   ].join('\n');
@@ -1116,13 +1119,13 @@ function docsWrittenReport(pin: EnginePin): string {
 async function writeWorkflow(
   fs: InstallFs,
   plan: CiPlan,
-  onWritten: () => string,
+  onWritten: () => string | Promise<string>,
   pin: EnginePin,
   draft: string,
 ): Promise<InstallResult> {
   if (plan.action === 'write') {
     await fs.writeFile(plan.path, plan.contents);
-    return { exitCode: 0, action: 'written', path: plan.path, message: onWritten() };
+    return { exitCode: 0, action: 'written', path: plan.path, message: await onWritten() };
   }
   if (plan.action === 'already-wired') {
     return {
@@ -1146,7 +1149,7 @@ async function writeWorkflow(
 // pin is the engine pin this run planned with, so the report says what was written. The default is
 // the placeholder, which is what a plan made without a commit writes.
 export async function writeCi(fs: InstallFs, plan: CiPlan, pin: EnginePin = NO_BUILD_RECORD): Promise<InstallResult> {
-  return writeWorkflow(fs, plan, () => writtenReport(pin), pin, USABL_GATE_WORKFLOW);
+  return writeWorkflow(fs, plan, async () => writtenReport(pin, await readAppOrigin(fs)), pin, USABL_GATE_WORKFLOW);
 }
 
 export async function writeDocsCi(fs: InstallFs, plan: CiPlan, pin: EnginePin = NO_BUILD_RECORD): Promise<InstallResult> {
