@@ -160,6 +160,42 @@ function pages(crossOrigin: string): Record<string, string> {
       '<button type="button">First</button><object data="/frame" type="text/html" aria-label="Form" width="300" height="80"></object>' +
         '<button type="button" id="trailing"></button>',
     ),
+    // Pages for the end of the walk: what one more Tab after the body does.
+    '/end-three': page('<button type="button" id="one">One</button><a href="#x" id="two">Two</a><input id="three" aria-label="Three" />'),
+    '/end-one': page('<button type="button" id="only">Only</button>'),
+    '/end-none': page('<p>Nothing here can take focus.</p>'),
+    // A focus handler that blurs its control, so focus falls to the body in the middle of the page.
+    '/end-blur': page(
+      '<button type="button">One</button><button type="button" id="blurs">Two</button><button type="button">Three</button>' +
+        `<script>document.getElementById('blurs').addEventListener('focus', (event) => event.target.blur());</script>`,
+    ),
+    // The same on the first control, so the walk reaches no stop before focus falls to the body.
+    '/end-blur-first': page(
+      '<button type="button" id="blurs">One</button><button type="button">Two</button>' +
+        `<script>document.getElementById('blurs').addEventListener('focus', (event) => event.target.blur());</script>`,
+    ),
+    // A keydown handler that swallows Tab on the second control and drops focus to the body.
+    '/end-swallow': page(
+      '<button type="button">One</button><button type="button" id="swallows">Two</button><button type="button">Three</button>' +
+        `<script>document.addEventListener('keydown', (event) => { const swallows = document.getElementById('swallows');` +
+        ` if (event.key === 'Tab' && document.activeElement === swallows) { event.preventDefault(); swallows.blur(); } });</script>`,
+    ),
+    // A banner whose dismiss control is the first stop and goes away during the walk, as a timed
+    // banner does. Removing it shifts the position of every control after it.
+    '/end-banner': page(
+      '<div id="banner"><button type="button">Dismiss</button></div><button type="button">One</button><button type="button" id="last">Two</button>' +
+        `<script>document.getElementById('last').addEventListener('focus', () => document.getElementById('banner')?.remove());</script>`,
+    ),
+    // A list that re-renders while it is walked: a new item is put first, so every item moves down.
+    '/end-rerender': page(
+      '<ul id="list"><li><button type="button">A</button></li><li><button type="button">B</button></li><li><button type="button" id="last">C</button></li></ul>' +
+        `<script>document.getElementById('last').addEventListener('focus', () => { const item = document.createElement('li');` +
+        ` item.innerHTML = '<button type="button">New</button>'; document.getElementById('list').prepend(item); }, { once: true });</script>`,
+    ),
+    // A skip link before the content it skips to.
+    '/end-skip-link': `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Walk</title></head><body>` +
+      '<a href="#content">Skip to content</a><nav><a href="#home">Home</a></nav>' +
+      '<main id="content" tabindex="-1"><button type="button">Save</button></main></body></html>',
     // Light markup only, with ids that name one element and ids that do not.
     '/light-only': page(
       '<nav><a href="#a" id="nav-link">Home</a></nav><div><span><button type="button">One</button></span>' +
@@ -539,6 +575,74 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('keyboard walk through sh
       await opened.close();
     }
   });
+
+  // What Chromium does when Tab is pressed after the last tabbable control. The walk confirms its
+  // end with one more Tab, so this records the browser behaviour that rule rests on. Each entry is
+  // the path of the focused element, or 'BODY' when the body has focus.
+  async function tabTrail(page: Page, tabs: number): Promise<string[]> {
+    await page.focusBody();
+    const trail: string[] = [];
+    for (let i = 0; i < tabs; i += 1) {
+      await page.tab();
+      trail.push((await page.activeElementIs('body')) ? 'BODY' : await page.activePath());
+    }
+    return trail;
+  }
+
+  it('Chromium: after the last of three controls, Tab goes to the body, and the next Tab goes back to the first control', async () => {
+    const opened = await open('/end-three');
+    try {
+      expect(await tabTrail(opened, 6)).toEqual(['#one', '#two', '#three', 'BODY', '#one', '#two']);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('Chromium: with one control, Tab goes to the body, and the next Tab goes back to that control', async () => {
+    const opened = await open('/end-one');
+    try {
+      expect(await tabTrail(opened, 4)).toEqual(['#only', 'BODY', '#only', 'BODY']);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('Chromium: with no control, every Tab leaves focus on the body', async () => {
+    const opened = await open('/end-none');
+    try {
+      expect(await tabTrail(opened, 3)).toEqual(['BODY', 'BODY', 'BODY']);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  // The end of the walk is confirmed by one more Tab, which must land on a stop already walked.
+  // Focus that falls to the body in the middle of the page fails that check.
+  for (const path of ['/end-blur', '/end-blur-first', '/end-swallow']) {
+    it(`ends with a truncation gap when a handler drops focus to the body mid page (${path})`, async () => {
+      const opened = await open(path);
+      try {
+        const drafts = await walk(opened);
+        expect(summary(drafts)).toEqual([['keyboard-walk-truncated', '']]);
+        expect(drafts[0]?.confidence).toBe('unverified');
+        expect(drafts[0]?.why).toContain('one more Tab');
+      } finally {
+        await opened.close();
+      }
+    });
+  }
+
+  // Ordinary pages whose walk must still end complete.
+  for (const path of ['/end-three', '/end-one', '/end-none', '/end-banner', '/end-rerender', '/end-skip-link']) {
+    it(`ends complete on an ordinary page (${path})`, async () => {
+      const opened = await open(path);
+      try {
+        expect(await walk(opened)).toEqual([]);
+      } finally {
+        await opened.close();
+      }
+    });
+  }
 
   it('keeps the path of every element outside shadow roots and frames as it was', async () => {
     const opened = await open('/light-only');

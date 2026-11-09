@@ -2251,6 +2251,12 @@ function wrapPage(
     async activePath(): Promise<string> {
       return stablePathForActiveElement(cdp);
     },
+    async activeElementKey(): Promise<string | null> {
+      // The browser's own id for the node, read over CDP. It does not change while the node is in
+      // the document, so a control keeps its key when the controls before it go away.
+      const focus = await readFocus(cdp);
+      return focus.kind === 'element' ? `node-${focus.backendNodeId}` : null;
+    },
     async activeFocusUnreadable(): Promise<FocusUnreadable | null> {
       const focus = await readFocus(cdp);
       return focus.kind === 'unreadable' ? focus.reason : null;

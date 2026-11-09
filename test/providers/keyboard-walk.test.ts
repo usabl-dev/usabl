@@ -16,6 +16,9 @@ interface ScriptedPageSpec {
   // The stop at which focus is on the document body. A real browser moves focus there after the
   // last control on the page, and that ends the walk.
   bodyAt?: number;
+  // Where the Tab after the body stop lands, when it is not the first stop, as on a page whose script
+  // dropped focus to the body in the middle of the page.
+  afterBody?: string;
   // The paths of the open modal dialogs that hold the focused element, at each stop.
   modals?: string[][];
   onTab?: () => void;
@@ -58,8 +61,16 @@ function rules(drafts: Array<{ rule: string }>): string[] {
   return drafts.map((draft) => draft.rule);
 }
 
-function currentIndex(cursor: number): number {
-  return cursor < 0 ? 0 : cursor;
+function currentIndex(cursor: number, bodyAt?: number): number {
+  if (cursor < 0) {
+    return 0;
+  }
+  // Chromium moves focus to the body after the last control, and the next Tab goes back to the first
+  // control. The scripted page does the same after the body stop.
+  if (bodyAt !== undefined && cursor > bodyAt) {
+    return (cursor - bodyAt - 1) % (bodyAt + 1);
+  }
+  return cursor;
 }
 
 function readAt<T>(values: T[], index: number, fallback: T): T {
@@ -85,11 +96,14 @@ async function makeScriptedPage(spec: ScriptedPageSpec): Promise<Page> {
     click: async () => {
       advance();
     },
-    activePath: async () => readAt(spec.activePaths, currentIndex(cursor), ''),
-    activeNode: async () => readAt(spec.activeNodes, currentIndex(cursor), null),
-    drainAnnouncements: async () => readAt(spec.announcements, currentIndex(cursor), []),
-    activeFocusUnreadable: async () => readAt(spec.unreadable ?? [], currentIndex(cursor), null),
-    activeModalDialogs: async () => readAt(spec.modals ?? [], currentIndex(cursor), []),
+    activePath: async () =>
+      spec.afterBody !== undefined && spec.bodyAt !== undefined && cursor > spec.bodyAt
+        ? spec.afterBody
+        : readAt(spec.activePaths, currentIndex(cursor, spec.bodyAt), ''),
+    activeNode: async () => readAt(spec.activeNodes, currentIndex(cursor, spec.bodyAt), null),
+    drainAnnouncements: async () => readAt(spec.announcements, currentIndex(cursor, spec.bodyAt), []),
+    activeFocusUnreadable: async () => readAt(spec.unreadable ?? [], currentIndex(cursor, spec.bodyAt), null),
+    activeModalDialogs: async () => readAt(spec.modals ?? [], currentIndex(cursor, spec.bodyAt), []),
     activeElementIs: async (selector: string) => selector === 'body' && spec.bodyAt !== undefined && cursor === spec.bodyAt,
   });
 }
@@ -355,6 +369,44 @@ describe('makeKeyboardWalkProvider', () => {
     const drafts = draftsOf(await provider.run(makeContext(page)));
 
     expect(drafts).toEqual([]);
+  });
+
+  it('confirms the end of the walk when one more Tab lands on any stop already walked', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', '#b', '#c', BODY_PATH]), bodyAt: 3, afterBody: '#b' });
+
+    expect(draftsOf(await provider.run(makeContext(page)))).toEqual([]);
+  });
+
+  it('discloses truncation when one more Tab after the body lands on a control not yet walked', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', BODY_PATH]), bodyAt: 1, afterBody: '#c' });
+
+    const drafts = draftsOf(await provider.run(makeContext(page)));
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
+    expect(drafts[0]).toMatchObject({ confidence: 'unverified', evidenceClass: 'deterministic', elementPath: '' });
+    expect(drafts[0]?.why).toBe(
+      'After 1 tab stop(s), focus moved to the document body, but one more Tab did not go back to a control the keyboard walk had already reached. A script may have moved focus away from a control or stopped the Tab key, so the controls after that point may never have been walked.',
+    );
+  });
+
+  it('discloses truncation when one more Tab after the body leaves focus on the body', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage(['#a', BODY_PATH]), bodyAt: 1, afterBody: BODY_PATH });
+    page.activeElementIs = async (selector) => selector === 'body' && (await page.activePath()) === BODY_PATH;
+
+    expect(rules(draftsOf(await provider.run(makeContext(page))))).toEqual(['keyboard-walk-truncated']);
+  });
+
+  it('discloses truncation when no stop was walked and one more Tab lands on a control', async () => {
+    const provider = makeKeyboardWalkProvider({ tabCap: 10 });
+    const page = await makeScriptedPage({ ...namedButtonPage([BODY_PATH]), bodyAt: 0, afterBody: '#second' });
+
+    const drafts = draftsOf(await provider.run(makeContext(page)));
+
+    expect(rules(drafts)).toEqual(['keyboard-walk-truncated']);
+    expect(drafts[0]?.why).toContain('After 0 tab stop(s)');
   });
 
   // A closed shadow root or a frame from another origin gives every control inside it the path of

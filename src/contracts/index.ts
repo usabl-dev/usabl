@@ -759,6 +759,11 @@ export interface Page {
   // boundary, the path of each tree is joined by ' >> ' for a shadow root and by
   // ' >> internal:control=enter-frame >> ' for a frame, so each control has its own path.
   activePath(): Promise<string>;
+  // A key for the element that has focus. It stays the same while that element stays in the
+  // document, even when elements around it are added or removed and its path changes. Null when no
+  // element has focus or it cannot be read. The key holds no page text and means something only on
+  // this page while it is open, so nothing stores it or compares it across pages or runs.
+  activeElementKey(): Promise<string | null>;
   // Why the element that has focus cannot be read, or null when it can. See FocusUnreadable.
   activeFocusUnreadable(): Promise<FocusUnreadable | null>;
   // The paths of the open modal dialogs that hold the element that has focus, nearest first, in the

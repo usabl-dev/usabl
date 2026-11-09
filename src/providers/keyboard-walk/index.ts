@@ -124,9 +124,11 @@ function keyboardTrapDraft(screenId: string, cycle: readonly string[]): Draft {
   };
 }
 
-// One stop of the walk: its path and the paths of the open modal dialogs that hold it.
+// One stop of the walk: its path, the page's key for its element, and the paths of the open modal
+// dialogs that hold it.
 interface WalkedStop {
   path: string;
+  key: string | null;
   modals: readonly string[];
 }
 
@@ -142,11 +144,20 @@ function cycleInsideOneModal(cycle: readonly WalkedStop[]): boolean {
 }
 
 // Why the walk stopped. Only 'complete' means the focus order itself ended, by handing focus to the
-// body after the last control. 'focus-trap' and 'modal-dialog' mean focus went back to a stop it had
-// already reached without passing through the body, so the walk never reached the rest of the page.
-// The others mean evidence is missing: the budget ran out, or focus moved somewhere the walk cannot
-// tell one control from another.
-type StopReason = 'complete' | 'wall-clock' | 'tab-cap' | 'focus-trap' | 'modal-dialog' | FocusUnreadable;
+// body after the last control, and one more Tab confirmed it. 'focus-trap' and 'modal-dialog' mean
+// focus went back to a stop it had already reached without passing through the body, so the walk
+// never reached the rest of the page. 'end-unconfirmed' means focus reached the body, but one more
+// Tab did not go back to the start of the focus order, so a script dropped focus in the middle of the
+// page. The others mean evidence is missing: the budget ran out, or focus moved somewhere the walk
+// cannot tell one control from another.
+type StopReason =
+  | 'complete'
+  | 'wall-clock'
+  | 'tab-cap'
+  | 'focus-trap'
+  | 'modal-dialog'
+  | 'end-unconfirmed'
+  | FocusUnreadable;
 
 const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number) => string> = {
   'wall-clock': (stops) =>
@@ -163,6 +174,8 @@ const TRUNCATION_WHY: Record<Exclude<StopReason, 'complete'>, (stops: number) =>
     `After ${stops} tab stop(s), focus went back to a control the keyboard walk had already reached, without reaching the end of the page, so the controls after the trap were never walked.`,
   'modal-dialog': (stops) =>
     `After ${stops} tab stop(s), focus went back to a control it had already reached, and every control in that cycle is inside one open modal dialog. Focus stayed inside the dialog, and the rest of the page was not walked.`,
+  'end-unconfirmed': (stops) =>
+    `After ${stops} tab stop(s), focus moved to the document body, but one more Tab did not go back to a control the keyboard walk had already reached. A script may have moved focus away from a control or stopped the Tab key, so the controls after that point may never have been walked.`,
 };
 
 const BUDGET_FIX = 'Raise the keyboard walk budget for this screen, or split the screen so its focus order fits one walk.';
@@ -178,6 +191,8 @@ const TRUNCATION_FIX: Record<Exclude<StopReason, 'complete'>, string> = {
   'focus-trap': 'Fix the keyboard trap reported on this screen so Tab can reach the rest of the page, then check the screen again.',
   'modal-dialog':
     'Point this screen at a state where no modal dialog is open when the page loads, so the walk covers the page, and check the dialog on a screen of its own.',
+  'end-unconfirmed':
+    'Find the script on this screen that blurs a control when it gets focus or stops the Tab key, so Tab moves through every control to the end of the page, then check the screen again.',
 };
 
 function truncatedWalkDraft(
@@ -201,6 +216,31 @@ function truncatedWalkDraft(
     evidence: {},
     confidence: 'unverified',
   };
+}
+
+/**
+ * Whether focus on the body is the end of the focus order. In Chromium, Tab after the last control
+ * moves focus to the body, and the next Tab goes back to the first control. So one more Tab must land
+ * on a stop the walk already reached. Any walked stop counts, not only the first, and a stop counts
+ * when the element or the path is the same. A first control that went away during the walk, such as
+ * a timed banner, moves every control after it, so the control the Tab lands on has a new path and
+ * is still the same element. A list that re-rendered puts a new element at a path already walked.
+ * A walk that reached no stop has nothing to wrap to, and on a page with nothing to focus the next
+ * Tab leaves focus on the body. That walk is left to the body-only detector, which reads the
+ * transcript. If the next Tab lands on a control instead, a script dropped focus before the walk
+ * reached it.
+ */
+async function endConfirmed(page: Page, walked: readonly WalkedStop[]): Promise<boolean> {
+  await page.tab();
+  if (walked.length === 0) {
+    return page.activeElementIs('body');
+  }
+  if ((await page.activeFocusUnreadable()) !== null || (await page.activeElementIs('body'))) {
+    return false;
+  }
+  const path = await page.activePath();
+  const key = await page.activeElementKey();
+  return walked.some((stop) => stop.path === path || (key !== null && stop.key === key));
 }
 
 export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = {}): Provider {
@@ -270,14 +310,15 @@ export function makeKeyboardWalkProvider(options: KeyboardWalkProviderOptions = 
 
         // Browsers move focus to the document body after the last Tab stop and
         // before cycling to the first control. That ends the walk. It is not an
-        // unnamed focusable element.
+        // unnamed focusable element. A script that blurs a control, or stops Tab and drops focus,
+        // also leaves focus on the body, in the middle of the page, so one more Tab confirms it.
         if (await ctx.page.activeElementIs('body')) {
-          stopReason = 'complete';
+          stopReason = (await endConfirmed(ctx.page, walked)) ? 'complete' : 'end-unconfirmed';
           break;
         }
 
         stopsWalked += 1;
-        walked.push({ path, modals: await ctx.page.activeModalDialogs() });
+        walked.push({ path, key: await ctx.page.activeElementKey(), modals: await ctx.page.activeModalDialogs() });
 
         const node = await ctx.page.activeNode();
         if (node === null) {
