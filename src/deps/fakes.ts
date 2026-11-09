@@ -78,6 +78,11 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     async drainAnnouncementRecord(this: Page) {
       return { texts: await this.drainAnnouncements(), undecidable: null };
     },
+    // A fake page cannot say which region wrote a text, so the sources are unknown. It drains
+    // through the page's own drainAnnouncementRecord, so a test that scripts that one scripts this.
+    async drainAnnouncementSources(this: Page) {
+      return { ...(await this.drainAnnouncementRecord()), sources: null };
+    },
     activeNode: async () => null,
     activePath: async () => 'body',
     // A fake page has no shadow roots or frames, so focus is always where its path says.

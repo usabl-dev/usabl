@@ -576,6 +576,21 @@ export interface AnnouncementDrain {
   undecidable: AnnouncementUndecidable | null;
 }
 
+// Where one drained text came from. region names the live region that wrote it, the same number
+// for the same region on every drain of one document. removalOnly is true when the change was only
+// a removal inside the region, which is how a toast that dismisses itself shows up: the record
+// then holds the text the region has left, which no one announced.
+export interface AnnouncementSource {
+  region: number;
+  removalOnly: boolean;
+}
+
+// A drain with the source of each text, in the same order as texts. sources is null when the page
+// cannot say, so a check that needs the sources reads that as unknown, never as heard.
+export interface AnnouncementSourcesDrain extends AnnouncementDrain {
+  sources: AnnouncementSource[] | null;
+}
+
 export interface AxNode {
   name: string | null;
   role: string | null;
@@ -776,6 +791,8 @@ export interface Page {
   // The same drain, with the reason the texts cannot be trusted to be what a screen reader heard,
   // or null when they can. See AnnouncementDrain.
   drainAnnouncementRecord(): Promise<AnnouncementDrain>;
+  // The same drain, with where each text came from. See AnnouncementSourcesDrain.
+  drainAnnouncementSources(): Promise<AnnouncementSourcesDrain>;
   // The accessibility node of the element that has focus, followed into open shadow roots and
   // same-origin frames. Null when the node is missing or ignored, and null when activeFocusUnreadable
   // reports a reason, because the node read then would be the host or the frame, not the control.

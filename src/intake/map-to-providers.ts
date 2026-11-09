@@ -7,6 +7,9 @@
  * obligation class is promoted in config.
  */
 import type {
+  ActionSettle,
+  AnnouncementDrain,
+  AnnouncementSourcesDrain,
   AnnouncementUndecidable,
   AxNode,
   ContentAssertion,
@@ -17,6 +20,7 @@ import type {
   Page,
   PlannedApplicability,
   Provider,
+  ProviderOutput,
   Requirement,
   RequirementBundle,
   Step,
@@ -24,7 +28,9 @@ import type {
 } from '../contracts/index.js';
 import { ANNOUNCEMENT_UNDECIDABLE_FIX, announcementUndecidableCause } from '../primitives/announcement-undecidable.js';
 import { FOCUS_UNREADABLE_FIX, focusUnreadableCause } from '../primitives/focus-unreadable.js';
+import { ProviderRunFailed } from '../providers/index.js';
 import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
+import { isActionStep, makeSilentChangeWatch, type SilentChangeWatch } from '../voicing/silent-change.js';
 import { makeVirtualSrProvider } from '../voicing/virtual-sr-provider.js';
 
 function hasNonEmptyName(name: string | null): boolean {
@@ -155,25 +161,53 @@ function flowUndecidableDraft(
   };
 }
 
-async function runFlowStep(page: Page, step: Step): Promise<void> {
+// Whether the flow driver runs a step. A kind it does not know, a click with no selector, and a
+// press with no key are not run.
+function flowRuns(step: Step): boolean {
+  return (
+    step.do === 'tab' ||
+    step.do === 'activate' ||
+    (step.do === 'click' && typeof step.selector === 'string') ||
+    (step.do === 'press' && typeof step.key === 'string')
+  );
+}
+
+// Runs one flow step. Returns false for a step the driver does not run, so the caller can report
+// it rather than read the page as if the step had happened.
+async function runFlowStep(page: Page, step: Step): Promise<boolean> {
   if (step.do === 'tab') {
     await page.tab();
-    return;
+    return true;
   }
 
   if (step.do === 'activate') {
     await page.press('Enter');
-    return;
+    return true;
   }
 
   if (step.do === 'click' && typeof step.selector === 'string') {
     await page.click(step.selector);
-    return;
+    return true;
   }
 
   if (step.do === 'press' && typeof step.key === 'string') {
     await page.press(step.key);
+    return true;
   }
+  return false;
+}
+
+// The drains of every step, read as the one drain the flow used to take after its last step: the
+// texts in step order, and the first reason any of them could not be trusted.
+function unionOfDrains(drains: readonly AnnouncementSourcesDrain[]): AnnouncementDrain {
+  return {
+    texts: drains.flatMap((drain) => drain.texts),
+    undecidable: drains.find((drain) => drain.undecidable !== null)?.undecidable ?? null,
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 // The one rule for which screen a requirement checks. The content and flow runs read it, and the
@@ -276,54 +310,134 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
         return [];
       }
 
-      await ctx.page.armAnnouncementCapture();
-      for (const step of assertion.steps) {
-        await runFlowStep(ctx.page, step);
+      // The silent change rule watches each action step this loop drives. It only reads, never
+      // throws, and never drives a step, so the flow runs exactly the steps it always ran.
+      const watch = makeSilentChangeWatch();
+      let drafts: Draft[];
+      try {
+        drafts = await runFlow(ctx.page, requirement, assertion, watch);
+      } catch (error) {
+        // The flow fails the way it always did, with the same message. The rule's drafts for the
+        // steps that ran, and the gap for the step that threw, go with the failure.
+        throw new ProviderRunFailed(errorMessage(error), watch.drafts(ctx.screen.id));
       }
-
-      if (assertion.expectedAnnouncement === undefined) {
-        return [];
-      }
-      const expectedAnnouncement = assertion.expectedAnnouncement;
-
-      const node = await ctx.page.activeNode();
-      const drain = await ctx.page.drainAnnouncementRecord();
-      const announcements = drain.texts;
-      const heardOnFocus = trimEqual(node?.name ?? null, expectedAnnouncement);
-      if (heardOnFocus) {
-        return [];
-      }
-      // The focused control's name does not depend on the drain. Past this point the answer does,
-      // so a drain that cannot say what was heard decides nothing, either way.
-      if (drain.undecidable !== null) {
-        return [
-          flowUndecidableDraft(requirement, node, await ctx.page.activePath(), expectedAnnouncement, announcements, drain.undecidable),
-        ];
-      }
-      const heardInAnnouncements = announcements.some((announcement) =>
-        trimEqual(announcement, expectedAnnouncement),
-      );
-
-      if (heardInAnnouncements) {
-        return [];
-      }
-
-      const unreadable = await ctx.page.activeFocusUnreadable();
-      if (unreadable !== null) {
-        return [flowUnreadableDraft(requirement, await ctx.page.activePath(), expectedAnnouncement, announcements, unreadable)];
-      }
-
-      return [
-        flowFailureDraft(
-          requirement,
-          node,
-          await ctx.page.activePath(),
-          expectedAnnouncement,
-          announcements,
-        ),
-      ];
+      return [...drafts, ...watch.drafts(ctx.screen.id)];
     },
   };
+}
+
+async function runFlow(page: Page, requirement: Requirement, assertion: FlowAssertion, watch: SilentChangeWatch): Promise<Draft[]> {
+  await page.armAnnouncementCapture();
+  // Each step's drain is kept. The flow's verdict reads them all in step order, with the drain
+  // taken before the first step leading, so it reads what the one drain after the last step read.
+  // A drain that fails is kept as an error: the verdict needs every one, and fails with the first
+  // failure, the way the one drain did. A flow with no expected announcement never needed one.
+  const drains: AnnouncementSourcesDrain[] = [];
+  const drainFailures: unknown[] = [];
+  const takeDrain = async (): Promise<AnnouncementSourcesDrain | null> => {
+    try {
+      const drain = await page.drainAnnouncementSources();
+      drains.push(drain);
+      return drain;
+    } catch (error) {
+      drainFailures.push(error);
+      return null;
+    }
+  };
+
+  watch.start(await takeDrain());
+  for (const [index, step] of assertion.steps.entries()) {
+    const action = isActionStep(step) && flowRuns(step);
+    if (action) {
+      await watch.before(page, step, index);
+    }
+    let ran: boolean;
+    try {
+      ran = await runFlowStep(page, step);
+    } catch (error) {
+      watch.threw(step, index, error);
+      throw error;
+    }
+    if (!ran) {
+      watch.notRun(step, index);
+      continue;
+    }
+    // An action step waits for the page to react before its window is read. A wait that fails
+    // leaves the step unjudged by the rule and changes nothing for the flow.
+    let settle: ActionSettle | null = null;
+    if (action) {
+      try {
+        settle = await page.settleAfterAction();
+      } catch {
+        settle = null;
+      }
+    }
+    const drain = await takeDrain();
+    if (action) {
+      await watch.after(page, step, index, { settle, drain });
+    }
+  }
+
+  if (assertion.expectedAnnouncement === undefined) {
+    return [];
+  }
+  const expectedAnnouncement = assertion.expectedAnnouncement;
+
+  const node = await page.activeNode();
+  if (drainFailures.length > 0) {
+    throw drainFailures[0];
+  }
+  const drain = unionOfDrains(drains);
+  const own = await flowVerdict(page, requirement, expectedAnnouncement, node, drain);
+  // The flow's own draft already says whether its last step was heard. A second draft for that step
+  // would be a second finding for one barrier, so the rule emits nothing for it.
+  if (own.length > 0) {
+    watch.quiet(assertion.steps.length - 1);
+  }
+  return own;
+}
+
+async function flowVerdict(
+  page: Page,
+  requirement: Requirement,
+  expectedAnnouncement: string,
+  node: AxNode | null,
+  drain: AnnouncementDrain,
+): Promise<Draft[]> {
+  const announcements = drain.texts;
+  const heardOnFocus = trimEqual(node?.name ?? null, expectedAnnouncement);
+  if (heardOnFocus) {
+    return [];
+  }
+  // The focused control's name does not depend on the drain. Past this point the answer does,
+  // so a drain that cannot say what was heard decides nothing, either way.
+  if (drain.undecidable !== null) {
+    return [
+      flowUndecidableDraft(requirement, node, await page.activePath(), expectedAnnouncement, announcements, drain.undecidable),
+    ];
+  }
+  const heardInAnnouncements = announcements.some((announcement) =>
+    trimEqual(announcement, expectedAnnouncement),
+  );
+
+  if (heardInAnnouncements) {
+    return [];
+  }
+
+  const unreadable = await page.activeFocusUnreadable();
+  if (unreadable !== null) {
+    return [flowUnreadableDraft(requirement, await page.activePath(), expectedAnnouncement, announcements, unreadable)];
+  }
+
+  return [
+    flowFailureDraft(
+      requirement,
+      node,
+      await page.activePath(),
+      expectedAnnouncement,
+      announcements,
+    ),
+  ];
 }
 
 /** A requirement whose assertion is a voice assertion. */
@@ -372,15 +486,27 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
   for (const requirement of bundle.requirements) {
     if (requirement.assertion.type === 'voice') {
       const contract = toVoiceContract({ ...requirement, assertion: requirement.assertion });
-      const stepRunner = makeStepRunner({ settleAfterEachStep: true });
+      const options = { id: `intake:${requirement.id}`, rulePrefix: `intake:${requirement.id}` };
       providers.push({
-        ...makeVirtualSrProvider([contract], stepRunner, {
-          id: `intake:${requirement.id}`,
-          rulePrefix: `intake:${requirement.id}`,
-        }),
+        ...makeVirtualSrProvider([contract], makeStepRunner({ settleAfterEachStep: true }), options),
         appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id),
         // The contract clicks and presses keys, so it changes the page, the same as a flow.
         mutatesPageState: true,
+        // Each run gets its own silent change watch, which the step runner calls around each step
+        // it drives. Its drafts keep the rule's own id, voicing/silent-change, because the rule is
+        // not part of the contract.
+        async run(ctx) {
+          const watch = makeSilentChangeWatch();
+          const provider = makeVirtualSrProvider([contract], makeStepRunner({ settleAfterEachStep: true, observer: watch }), options);
+          let output: Draft[] | ProviderOutput;
+          try {
+            output = await provider.run(ctx);
+          } catch (error) {
+            throw new ProviderRunFailed(errorMessage(error), watch.drafts(ctx.screen.id));
+          }
+          const drafts = Array.isArray(output) ? output : output.drafts;
+          return [...drafts, ...watch.drafts(ctx.screen.id)];
+        },
       });
     }
   }
