@@ -144,6 +144,27 @@
 
 ### Fixed
 
+- A CI run no longer reads a change to a file with a non-ASCII name as nothing to check. Git
+  quoted such a name in the merge-base diff, so `src/pages/Über.tsx` matched no `uiFileGlobs`
+  and the run exited 0. Every git listing now uses `-z`, keeps names untrimmed, and reports the
+  new name of a rename. A changed path that still starts with a double quote is an unresolved
+  gap. Gate effect: such a run now scans the file, or reports it as not covered.
+
+- A trusted requirement file with a non-ASCII name, such as `requirements/Über.yaml`, is now
+  loaded under a trusted ref. Before, it was left out with nothing said. Gate effect: its
+  requirements are checked.
+
+- A UI file in a folder named `test`, `tests`, or `__tests__` is now checked when a screen
+  imports it or a surface lists it. Before, every file in such a folder was dropped, so a real
+  screen kept there read as nothing to check. A file there that no screen reaches is listed in
+  `coverage.excludedFiles` and in the summary as not blocking, and is not a gap. Files named
+  `*.test.*` or `*.spec.*` stay excluded. Gate effect: a reachable UI file in such a folder is
+  now scanned.
+
+- A dependency change now queues every configured surface by its screen id. Before, a surface
+  whose url a route or another surface already had was skipped, with its own readiness signal
+  and requirements. Gate effect: more screens are checked on a dependency change.
+
 - Flow requirements now run after every check that reads the page as loaded. They click and
   press keys but were not marked as changing the page, so the PatternFly rulepack ran after a
   flow had already changed it and could miss a barrier the flow had removed from view.
