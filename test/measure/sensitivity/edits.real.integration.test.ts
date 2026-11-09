@@ -1,0 +1,161 @@
+/**
+ * Every edit kind in real Chromium: the target finder picks the element through the engine's own
+ * reads, the real editor changes it in the scan browser, and the change is read back through the
+ * same Page reads the checks use. Gated behind USABL_INTEGRATION=1 because it launches Chromium.
+ */
+import { createServer, type Server } from 'node:http';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { BrowserDriver, Page } from '../../../src/contracts/index.js';
+import { makeRealBrowserDriver } from '../../../src/deps/real.js';
+import type { Edit, TargetFinder } from '../../../src/measure/sensitivity/catalog.js';
+import type { AppliedEdit } from '../../../src/measure/sensitivity/edits.js';
+import { makeRealMutationEditor } from '../../../src/measure/sensitivity/real-editor.js';
+import { findTargets } from '../../../src/measure/sensitivity/targets.js';
+import { REAL_PROCESS_BUDGET_MS } from '../../support/timing.js';
+
+const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Edits</title></head><body><main id="main">
+<h1>Edits</h1>
+<p id="intro">Some text to read.</p>
+<button type="button" id="first">First</button>
+<button type="button" id="second"><span>Second</span></button>
+<label for="email">Email</label><input id="email" type="email">
+<label id="wrap">Name <input id="name" type="text"></label>
+<img id="logo" alt="Company logo" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+<div id="dialog" role="dialog" aria-label="Settings" hidden><button type="button" id="inside">Inside</button></div>
+<button type="button" id="last">Last</button>
+<button type="button" id="jump">Jump</button>
+</main>
+<script>
+  document.getElementById('first').addEventListener('click', () => { document.body.dataset.clicked = 'yes'; });
+  document.getElementById('jump').addEventListener('click', () => { document.getElementById('last').focus(); });
+</script>
+</body></html>`;
+
+describe.skipIf(process.env.USABL_INTEGRATION !== '1')('sensitivity edits in Chromium', { timeout: REAL_PROCESS_BUDGET_MS }, () => {
+  let server: Server;
+  let url: string;
+  let driver: BrowserDriver;
+  const editor = makeRealMutationEditor();
+
+  beforeAll(async () => {
+    server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(PAGE);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('test server has no port');
+    url = `http://127.0.0.1:${address.port}/`;
+    driver = makeRealBrowserDriver();
+  });
+
+  afterAll(async () => {
+    await driver.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  async function withEdit(finder: TargetFinder, edit: Edit, check: (page: Page, applied: AppliedEdit, paths: string[]) => Promise<void>): Promise<void> {
+    const page = await driver.open(url);
+    try {
+      await page.gotoReady();
+      const found = await findTargets(page, finder);
+      if (found.kind !== 'found') throw new Error(`no target: ${found.reason}`);
+      const outcome = await editor.apply(page, found.paths, edit);
+      if (outcome.kind !== 'applied') throw new Error(`edit failed: ${outcome.reason}`);
+      try {
+        await check(page, outcome.edit, found.paths);
+      } finally {
+        await outcome.edit.release();
+      }
+    } finally {
+      await page.close();
+    }
+  }
+
+  it('removes every text name from a button, and the tree reports no name', async () => {
+    await withEdit({ selector: 'button', tree: { roles: ['button'], named: true } }, { kind: 'remove-text-name' }, async (page, _applied, paths) => {
+      expect(paths).toEqual(['#first']);
+      expect((await page.axAt('#first'))?.name ?? '').toBe('');
+    });
+    await withEdit({ selector: '#second' }, { kind: 'remove-text-name' }, async (page) => {
+      expect((await page.axAt('#second'))?.name ?? '').toBe('');
+    });
+  });
+
+  it('removes the label of a field, for a label that points at it and one that wraps it', async () => {
+    await withEdit({ selector: '#email', tree: { named: true } }, { kind: 'remove-text-name' }, async (page) => {
+      expect((await page.axAt('#email'))?.name ?? '').toBe('');
+    });
+    await withEdit({ selector: '#name', tree: { named: true } }, { kind: 'remove-text-name' }, async (page) => {
+      expect((await page.axAt('#name'))?.name ?? '').toBe('');
+      expect(await page.queryAll('#name')).toHaveLength(1);
+    });
+  });
+
+  it('removes and sets attributes and the role', async () => {
+    await withEdit({ selector: 'img[alt]', tree: { named: true } }, { kind: 'remove-attribute', names: ['alt'] }, async (page) => {
+      expect(await page.getAttribute('#logo', 'alt')).toBeNull();
+    });
+    await withEdit({ selector: '#last' }, { kind: 'set-attribute', name: 'tabindex', value: '-1' }, async (page) => {
+      expect(await page.getAttribute('#last', 'tabindex')).toBe('-1');
+    });
+    await withEdit({ selector: '#last' }, { kind: 'replace-role', role: 'buton' }, async (page) => {
+      expect(await page.getAttribute('#last', 'role')).toBe('buton');
+    });
+  });
+
+  it('sets an inline style that wins over the page', async () => {
+    await withEdit({ selector: 'main p', text: 'some' }, { kind: 'set-style', styles: { color: '#999999' } }, async (page) => {
+      expect(await page.getComputedStyle('#intro', 'color')).toBe('rgb(153, 153, 153)');
+    });
+  });
+
+  it('removes an element and stands its parent in for it', async () => {
+    await withEdit({ selector: 'h1', every: true }, { kind: 'remove-element' }, async (page, applied) => {
+      expect(await page.queryAll('h1')).toEqual([]);
+      expect(await applied.locate(['#main', '#first', 'html'])).toEqual(['target', 'inside', 'around']);
+    });
+  });
+
+  it('cancels one key on the element: Tab stays on it, Enter does not click it', async () => {
+    await withEdit({ selector: '#first' }, { kind: 'swallow-key', key: 'Tab' }, async (page) => {
+      await page.focusBody();
+      await page.tab();
+      expect(await page.activeElementIs('#first')).toBe(true);
+      await page.tab();
+      expect(await page.activeElementIs('#first')).toBe(true);
+    });
+    await withEdit({ selector: '#first' }, { kind: 'swallow-key', key: 'Enter' }, async (page) => {
+      await page.focusBody();
+      await page.tab();
+      await page.press('Enter');
+      expect(await page.getAttribute('body', 'data-clicked')).toBeNull();
+      await page.click('#first');
+      expect(await page.getAttribute('body', 'data-clicked')).toBe('yes');
+    });
+  });
+
+  it('makes a focus() call do nothing on the element and inside it, while Tab still reaches it', async () => {
+    await withEdit({ selector: '[role="dialog"]' }, { kind: 'ignore-focus-calls' }, async (page, applied) => {
+      expect(await applied.locate(['#inside', '#dialog', '#first'])).toEqual(['inside', 'target', 'elsewhere']);
+    });
+    await withEdit({ selector: '#last' }, { kind: 'ignore-focus-calls' }, async (page) => {
+      await page.click('#jump');
+      expect(await page.activeElementIs('#last')).toBe(false);
+      await page.focusBody();
+      for (let stop = 0; stop < 5; stop += 1) await page.tab();
+      expect(await page.activeElementIs('#last')).toBe(true);
+    });
+  });
+
+  it('fails when the page does not keep the change', async () => {
+    const page = await driver.open(url);
+    try {
+      await page.gotoReady();
+      const outcome = await editor.apply(page, ['#no-such-element'], { kind: 'remove-text-name' });
+      expect(outcome).toEqual({ kind: 'failed', reason: 'a target element could not be found again as one element' });
+    } finally {
+      await page.close();
+    }
+  });
+});
