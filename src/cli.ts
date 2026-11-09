@@ -48,8 +48,9 @@ import { planOverlay, writeOverlay } from './install/overlay.js';
 import { planClaude, writeClaude } from './install/claude.js';
 import { installClaudeSkills } from './install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs, writeCursor } from './install/cursor.js';
-import { planDocsCi, writeDocsCi } from './install/ci.js';
+import { engineRefFor, planDocsCi, writeDocsCi } from './install/ci.js';
 import { installCi } from './install/history-ci.js';
+import { readEnginePin } from './install/build-info.js';
 import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { generateDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
@@ -281,10 +282,12 @@ async function runInstall(opts: CliOptions): Promise<number> {
     const uiFileGlobs = await readCursorUiFileGlobs(installFs, opts.configPath);
     result = await writeCursor(installFs, await planCursor(installFs, uiFileGlobs));
   } else if (opts.installTarget === 'docs-ci') {
-    result = await writeDocsCi(installFs, await planDocsCi(installFs));
+    // The engine pin comes from this usabl's build record, or stays the placeholder without one.
+    const pin = await readEnginePin();
+    result = await writeDocsCi(installFs, await planDocsCi(installFs, engineRefFor(pin)), pin);
   } else {
     // The pull request gate and the default-branch history workflow that turns on debt tracking.
-    result = await installCi(installFs);
+    result = await installCi(installFs, await readEnginePin());
   }
 
   // Exit 0 (written or already wired) goes to stdout; a refusal (exit 2) goes to stderr,

@@ -7,12 +7,16 @@
  * once from the public repository at a pinned commit, and every other job checks it against a
  * digest output. usabl-required is the aggregate an
  * operator makes their required status check, and it is red unless every job has the right shape
- * for the event and the judge's verdict passes. The engine SHA is a security pin the operator
- * must choose, so this draft carries a documented sentinel instead of a fabricated value.
- * Workflows are security-critical, so this writes only when absent, no-ops when identical, and
- * refuses when a hand-tuned workflow differs rather than overwrite it.
+ * for the event and the judge's verdict passes. The engine SHA is a security pin. The draft
+ * constants carry a documented sentinel, and the installer replaces it with the commit this usabl
+ * was built from, read from the build record, only when that is a full commit SHA from a clean tree.
+ * Otherwise the sentinel stays, the engine checkout fails on it, and the gate blocks.
+ * Workflows are security-critical, so this writes only when absent, no-ops when identical, fills
+ * the pin only in its own unedited draft, never moves a pin someone chose, and refuses when a
+ * hand-tuned workflow differs rather than overwrite it.
  */
 import type { InstallFs, InstallResult } from './index.js';
+import { NO_BUILD_RECORD, type EnginePin } from './build-info.js';
 import {
   ARTIFACT_MAX_BYTES,
   ENGINE_CHECK,
@@ -172,10 +176,37 @@ const EMBEDDED_GATE_SCRIPT = indentScript(REQUIRED_GATE_SCRIPT, '          ');
 
 // The gate checks the engine out from the public usabl-dev/usabl repository at a commit the
 // operator trusts, so the engine that judges a pull request is code the operator chose, never the
-// pull request's. We cannot know that commit, so the draft carries a documented sentinel the
-// operator must replace before the gate can run. Fabricating a SHA would be dishonest and could
-// pin the gate to code no one vetted.
+// pull request's. The draft constants carry a documented sentinel. The installer replaces it with
+// the commit this usabl was built from, when its build record names one from a clean tree. It never
+// invents a SHA, and it never reads the network for one: the sentinel stays, and the engine
+// checkout fails on it, so the gate blocks until the operator pins a commit.
 export const ENGINE_REF_PLACEHOLDER = 'PIN_TO_A_TRUSTED_USABL_COMMIT';
+
+// The one engine ref line every draft carries, at the depth of a step's `with:` block.
+const ENGINE_REF_LINE = `          ref: ${ENGINE_REF_PLACEHOLDER}`;
+
+/**
+ * The draft with its engine ref pinned to `sha`. Only a full 40-character lowercase commit SHA is
+ * accepted, so a branch or a tag, which can move, is never written as the pin. The draft must hold
+ * exactly one placeholder ref line, so a pinned or reshaped draft is never pinned again.
+ */
+export function pinEngineRef(draft: string, sha: string): string {
+  if (!/^[0-9a-f]{40}$/.test(sha)) {
+    throw new Error('the engine pin must be a full 40-character lowercase commit SHA');
+  }
+  const lines = draft.split('\n');
+  const at = lines.flatMap((line, index) => (line === ENGINE_REF_LINE ? [index] : []));
+  if (at.length !== 1 || countDraftEngineRefLines(draft) !== 1) {
+    throw new Error('the draft must hold exactly one placeholder engine ref line');
+  }
+  lines[at[0] ?? 0] = `          ref: ${sha}`;
+  return lines.join('\n');
+}
+
+/** The one-based line of the engine ref in a placeholder draft, for the report that names it. */
+export function engineRefLineNumber(draft: string): number {
+  return draft.split('\n').indexOf(ENGINE_REF_LINE) + 1;
+}
 
 // Check one downloaded artifact before anything reads it. The expected digest is a job output,
 // which only the producing job's own steps can set, passed in through env and format-checked
@@ -962,7 +993,9 @@ export const USABL_DOCS_GATE_WORKFLOW = gateWorkflow({
 
 export type CiPlan =
   | { action: 'write'; path: string; contents: string }
-  | { action: 'already-wired'; path: string }
+  // pinnedTo is set when the file on disk is the usabl draft pinned to a commit other than the one
+  // this run would write. usabl leaves that pin alone, because someone chose it.
+  | { action: 'already-wired'; path: string; pinnedTo?: string }
   | { action: 'refuse'; path: string; difference: string };
 
 function describeDifference(actual: string, expected: string): string {
@@ -979,10 +1012,16 @@ function describeDifference(actual: string, expected: string): string {
   return `the existing file has ${actualLines.length} lines and the usabl draft has ${expectedLines.length} lines`;
 }
 
-// planCi and planDocsCi answer the same question against different targets: given the
-// draft for a gate workflow and its path, may usabl write, or must it refuse? The logic is
-// identical, so it lives here once and both surfaces pass their own path and draft.
-async function planWorkflow(fs: InstallFs, path: string, draft: string): Promise<CiPlan> {
+// planCi, planDocsCi, and planHistoryCi answer the same question against different targets: given
+// the placeholder draft for a workflow, its path, and the engine commit to pin (or null to keep the
+// placeholder), may usabl write, or must it refuse? The logic is identical, so it lives here once.
+export async function planWorkflow(
+  fs: InstallFs,
+  path: string,
+  placeholderDraft: string,
+  engineRef: string | null,
+): Promise<CiPlan> {
+  const draft = engineRef === null ? placeholderDraft : pinEngineRef(placeholderDraft, engineRef);
   const raw = await fs.readFile(path);
   if (raw === null) {
     return { action: 'write', path, contents: draft };
@@ -990,7 +1029,17 @@ async function planWorkflow(fs: InstallFs, path: string, draft: string): Promise
   if (raw === draft) {
     return { action: 'already-wired', path };
   }
-  // A hand-tuned gate is security-critical. We never overwrite it; we describe the gap
+  // usabl's own draft, unedited, with the placeholder still in it. Filling the pin there changes
+  // only the line the operator was told to edit, so nothing anyone wrote is lost.
+  if (engineRef !== null && raw === placeholderDraft) {
+    return { action: 'write', path, contents: draft };
+  }
+  // The draft pinned to some other commit. Someone chose that pin, so it stays.
+  if (classifyWorkflow(raw, placeholderDraft) === 'wired') {
+    const line = raw.split('\n')[engineRefLineNumber(placeholderDraft) - 1] ?? '';
+    return { action: 'already-wired', path, pinnedTo: line.trim().slice('ref: '.length) };
+  }
+  // A hand-tuned workflow is security-critical. We never overwrite it; we describe the gap
   // at a high level and tell the operator to reconcile by hand.
   return {
     action: 'refuse',
@@ -999,12 +1048,35 @@ async function planWorkflow(fs: InstallFs, path: string, draft: string): Promise
   };
 }
 
-export async function planCi(fs: InstallFs): Promise<CiPlan> {
-  return planWorkflow(fs, USABL_GATE_WORKFLOW_PATH, USABL_GATE_WORKFLOW);
+export async function planCi(fs: InstallFs, engineRef: string | null = null): Promise<CiPlan> {
+  return planWorkflow(fs, USABL_GATE_WORKFLOW_PATH, USABL_GATE_WORKFLOW, engineRef);
 }
 
-export async function planDocsCi(fs: InstallFs): Promise<CiPlan> {
-  return planWorkflow(fs, USABL_DOCS_GATE_WORKFLOW_PATH, USABL_DOCS_GATE_WORKFLOW);
+export async function planDocsCi(fs: InstallFs, engineRef: string | null = null): Promise<CiPlan> {
+  return planWorkflow(fs, USABL_DOCS_GATE_WORKFLOW_PATH, USABL_DOCS_GATE_WORKFLOW, engineRef);
+}
+
+/** The commit to pin for this build, or null to keep the placeholder. */
+export function engineRefFor(pin: EnginePin): string | null {
+  return pin.kind === 'filled' ? pin.sha : null;
+}
+
+/**
+ * What the report says about the engine pin. With a commit, it names it and what happens if it is
+ * not on usabl-dev/usabl. Without one, it says why and names the line to edit in each file.
+ */
+export function pinReport(pin: EnginePin, placeholderFiles: ReadonlyArray<{ path: string; draft: string }>): string {
+  if (pin.kind === 'filled') {
+    return `The engine is pinned to usabl-dev/usabl commit ${pin.sha}, the commit this usabl ${pin.version} was built from. That commit must be on usabl-dev/usabl. If it is not, the usabl-engine job fails and the gate blocks.`;
+  }
+  const where = placeholderFiles.map((file) => `line ${engineRefLineNumber(file.draft)} of ${file.path}`).join(' and ');
+  return `The engine pin is still the placeholder ${ENGINE_REF_PLACEHOLDER}, because ${pin.reason}. Until you pin a commit, the usabl-engine job fails and the gate blocks. Edit ${where}: replace ${ENGINE_REF_PLACEHOLDER} with a full 40-character commit SHA from usabl-dev/usabl that you trust.`;
+}
+
+// What the report says about a file left alone because someone already pinned it.
+export function keptPinReport(path: string, pinnedTo: string, pin: EnginePin, draft: string): string {
+  const built = pin.kind === 'filled' ? ` This usabl was built from ${pin.sha}.` : '';
+  return `${path} already matches the usabl draft, pinned to engine commit ${pinnedTo}. No change.${built} usabl never moves a pin you chose. To move it, edit line ${engineRefLineNumber(draft)}.`;
 }
 
 // Any pull request, from a branch or a fork, runs this workflow as it changed it. So the required
@@ -1016,10 +1088,10 @@ const WORKFLOW_BOUNDARY =
   'and every guarded path to .github/CODEOWNERS, and on the protected branch require review from code owners, at least one approval, and dismissal of ' +
   'stale approvals on push. "usabl install --branch-rule" prints and checks the full setting.';
 
-function writtenReport(): string {
+function writtenReport(pin: EnginePin): string {
   return [
     `Wrote ${USABL_GATE_WORKFLOW_PATH}. Review this draft before you merge it.`,
-    `Set the trusted engine ref: replace ${ENGINE_REF_PLACEHOLDER} (it appears once, in the usabl-engine job) with a full 40-character commit SHA from usabl-dev/usabl that you trust.`,
+    pinReport(pin, [{ path: USABL_GATE_WORKFLOW_PATH, draft: USABL_GATE_WORKFLOW }]),
     'The engine comes from the public usabl-dev/usabl repository, so the gate needs no secret, and a pull request from a fork runs it the same way. A fork cannot write to its pull request, so its usabl comment appears in the run summary instead.',
     'The app is built by the untrusted build-app job with "npm run build" into dist. If yours differs, set the repository variables USABL_APP_BUILD_COMMAND and USABL_APP_BUILD_DIR. The judge serves that build on the appBaseUrl of usabl.config.json at the base branch, which must be a loopback http origin with an explicit port, such as http://127.0.0.1:5173.',
     `Make "${REQUIRED_GATE_JOB}" the required status check on your protected branch. It is the only job that checks every gate job and the judge's verdict together, so requiring any other job lets an accessibility regression merge. Run "usabl install --branch-rule" for the exact setting.`,
@@ -1027,10 +1099,10 @@ function writtenReport(): string {
   ].join('\n');
 }
 
-function docsWrittenReport(): string {
+function docsWrittenReport(pin: EnginePin): string {
   return [
     `Wrote ${USABL_DOCS_GATE_WORKFLOW_PATH}. Review this draft before you merge it.`,
-    `Set the trusted engine ref: replace ${ENGINE_REF_PLACEHOLDER} (it appears once, in the usabl-engine job) with a full 40-character commit SHA from usabl-dev/usabl that you trust.`,
+    pinReport(pin, [{ path: USABL_DOCS_GATE_WORKFLOW_PATH, draft: USABL_DOCS_GATE_WORKFLOW }]),
     'The engine comes from the public usabl-dev/usabl repository, so the gate needs no secret, and a pull request from a fork runs it the same way. A fork cannot write to its pull request, so its usabl comment appears in the run summary instead.',
     `Make "${REQUIRED_GATE_JOB}" the required status check on your protected branch. It is the only job that checks every gate job and the judge's verdict together, so requiring any other job lets an accessibility regression merge. Run "usabl install --branch-rule" for the exact setting.`,
     'Set three repository variables the docs gate reads: USABL_DOCS_BUILD_COMMAND (for example "ccutil compile"), USABL_DOCS_BUILT_ROOT (the directory the build renders HTML into), and USABL_DOCS_SERVE_PORT (a free port).',
@@ -1045,6 +1117,8 @@ async function writeWorkflow(
   fs: InstallFs,
   plan: CiPlan,
   onWritten: () => string,
+  pin: EnginePin,
+  draft: string,
 ): Promise<InstallResult> {
   if (plan.action === 'write') {
     await fs.writeFile(plan.path, plan.contents);
@@ -1055,7 +1129,10 @@ async function writeWorkflow(
       exitCode: 0,
       action: 'already-wired',
       path: plan.path,
-      message: `${plan.path} already matches the usabl gate workflow. No change.`,
+      message:
+        plan.pinnedTo === undefined
+          ? `${plan.path} already matches the usabl gate workflow. No change.`
+          : keptPinReport(plan.path, plan.pinnedTo, pin, draft),
     };
   }
   return {
@@ -1066,12 +1143,14 @@ async function writeWorkflow(
   };
 }
 
-export async function writeCi(fs: InstallFs, plan: CiPlan): Promise<InstallResult> {
-  return writeWorkflow(fs, plan, writtenReport);
+// pin is the engine pin this run planned with, so the report says what was written. The default is
+// the placeholder, which is what a plan made without a commit writes.
+export async function writeCi(fs: InstallFs, plan: CiPlan, pin: EnginePin = NO_BUILD_RECORD): Promise<InstallResult> {
+  return writeWorkflow(fs, plan, () => writtenReport(pin), pin, USABL_GATE_WORKFLOW);
 }
 
-export async function writeDocsCi(fs: InstallFs, plan: CiPlan): Promise<InstallResult> {
-  return writeWorkflow(fs, plan, docsWrittenReport);
+export async function writeDocsCi(fs: InstallFs, plan: CiPlan, pin: EnginePin = NO_BUILD_RECORD): Promise<InstallResult> {
+  return writeWorkflow(fs, plan, () => docsWrittenReport(pin), pin, USABL_DOCS_GATE_WORKFLOW);
 }
 
 // A pin-aware recognizer for `usabl doctor`, additive to the install plan above and next to

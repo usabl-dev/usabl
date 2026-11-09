@@ -22,10 +22,14 @@
  */
 import type { InstallFs, InstallResult } from './index.js';
 import { ARTIFACT_MAX_BYTES, ENGINE_CHECK, fetchArtifactStep } from './artifact-fetch.js';
+import { NO_BUILD_RECORD, type EnginePin } from './build-info.js';
 import {
   ENGINE_JOB,
-  ENGINE_REF_PLACEHOLDER,
+  engineRefFor,
+  keptPinReport,
+  pinReport,
   planCi,
+  planWorkflow,
   TRUSTED_ENGINE_STEP,
   trustedEngineSteps,
   UNPACK_ENGINE_IN_TEMP,
@@ -209,49 +213,55 @@ ${ENGINE_CHECK}
           exit 1
 `;
 
-export async function planHistoryCi(fs: InstallFs): Promise<CiPlan> {
-  const raw = await fs.readFile(USABL_HISTORY_WORKFLOW_PATH);
-  if (raw === null) return { action: 'write', path: USABL_HISTORY_WORKFLOW_PATH, contents: USABL_HISTORY_WORKFLOW };
-  if (raw === USABL_HISTORY_WORKFLOW) return { action: 'already-wired', path: USABL_HISTORY_WORKFLOW_PATH };
-  return {
-    action: 'refuse',
-    path: USABL_HISTORY_WORKFLOW_PATH,
-    difference: 'it differs from the usabl draft',
-  };
+export async function planHistoryCi(fs: InstallFs, engineRef: string | null = null): Promise<CiPlan> {
+  return planWorkflow(fs, USABL_HISTORY_WORKFLOW_PATH, USABL_HISTORY_WORKFLOW, engineRef);
 }
 
-function historyWrittenReport(): string {
+function historyWrittenReport(pin: EnginePin): string {
   return [
     `Wrote ${USABL_HISTORY_WORKFLOW_PATH}. Review this draft before you merge it.`,
-    `It scans main after each merge and once a day, and records what it saw on the usabl/history branch, so a fixed barrier closes its slot in the accepted debt on its own. Replace ${ENGINE_REF_PLACEHOLDER} (it appears once, in the usabl-engine job) with the same commit SHA you pin in the gate.`,
+    'It scans main after each merge and once a day, and records what it saw on the usabl/history branch, so a fixed accessibility barrier closes its slot in the accepted debt on its own.',
+    pin.kind === 'filled'
+      ? 'It pins the same engine commit as the gate.'
+      : pinReport(pin, [{ path: USABL_HISTORY_WORKFLOW_PATH, draft: USABL_HISTORY_WORKFLOW }]),
     'Its history-append job needs contents: write, the one permission tracking needs. It runs no application code. To keep that write on the history branch only, add a ruleset for usabl/history that blocks force pushes and deletion. If you cannot grant the permission, leave this file out: every run then says tracking is off and keeps today\'s behavior.',
   ].join('\n');
 }
 
-async function writeHistoryCi(fs: InstallFs, plan: CiPlan): Promise<InstallResult> {
+async function writeHistoryCi(fs: InstallFs, plan: CiPlan, pin: EnginePin): Promise<InstallResult> {
   if (plan.action === 'write') {
     await fs.writeFile(plan.path, plan.contents);
-    return { exitCode: 0, action: 'written', path: plan.path, message: historyWrittenReport() };
+    return { exitCode: 0, action: 'written', path: plan.path, message: historyWrittenReport(pin) };
   }
   if (plan.action === 'already-wired') {
-    return { exitCode: 0, action: 'already-wired', path: plan.path, message: `${plan.path} already matches the usabl history workflow. No change.` };
+    return {
+      exitCode: 0,
+      action: 'already-wired',
+      path: plan.path,
+      message:
+        plan.pinnedTo === undefined
+          ? `${plan.path} already matches the usabl history workflow. No change.`
+          : keptPinReport(plan.path, plan.pinnedTo, pin, USABL_HISTORY_WORKFLOW),
+    };
   }
   return {
     exitCode: 2,
     action: 'refused',
     path: plan.path,
-    message: `Refusing to overwrite ${plan.path}: ${plan.difference}. Reconcile it by hand; usabl never overwrites a hand-tuned workflow.`,
+    message: `Refusing to overwrite ${plan.path}: it differs from the usabl draft, and ${plan.difference}. Reconcile it by hand; usabl never overwrites a hand-tuned workflow.`,
   };
 }
 
 /**
  * `usabl install --ci`: the pull request gate and the default-branch history workflow. Each file is
  * planned on its own, so a hand-tuned gate does not stop the history workflow from being written,
- * and the run exits 2 when either one was refused.
+ * and the run exits 2 when either one was refused. pin is the engine pin from this usabl's build
+ * record. Both files get the same one, and with no commit both keep the placeholder.
  */
-export async function installCi(fs: InstallFs): Promise<InstallResult> {
-  const gate = await writeCi(fs, await planCi(fs));
-  const history = await writeHistoryCi(fs, await planHistoryCi(fs));
+export async function installCi(fs: InstallFs, pin: EnginePin = NO_BUILD_RECORD): Promise<InstallResult> {
+  const engineRef = engineRefFor(pin);
+  const gate = await writeCi(fs, await planCi(fs, engineRef), pin);
+  const history = await writeHistoryCi(fs, await planHistoryCi(fs, engineRef), pin);
   const refused = gate.exitCode !== 0 || history.exitCode !== 0;
   return {
     exitCode: refused ? 2 : 0,

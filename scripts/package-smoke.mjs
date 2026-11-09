@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -143,6 +143,30 @@ try {
   );
   assert.doesNotMatch(commented.stdout, /verified/i);
   assert.doesNotMatch(commented.stdout, /No receipt/);
+
+  // The build record ships in the package, and the installed CLI pins the engine from it. With a
+  // clean commit the workflows carry that commit; without one they keep the placeholder. Either
+  // way the pin in the written gate is exactly what the record says, never a guess.
+  const buildInfoPath = join(consumer, 'node_modules', 'usabl', 'dist', 'build-info.json');
+  assert.equal(existsSync(buildInfoPath), true, 'dist/build-info.json is missing from the package');
+  const buildInfo = JSON.parse(await readFile(buildInfoPath, 'utf8'));
+  assert.equal(buildInfo.schemaVersion, 'usabl.build-info.v1');
+  assert.equal(buildInfo.version, JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')).version);
+  assert.ok(buildInfo.commit === null || /^[0-9a-f]{40}$/.test(buildInfo.commit), 'build-info.json commit is not a full SHA or null');
+  const installedCi = run(process.execPath, [cli, 'install', '--ci'], { cwd: consumer });
+  assert.equal(installedCi.status, 0, failure('installed usabl install --ci', installedCi));
+  const pinned = buildInfo.commit !== null && buildInfo.clean === true;
+  const expectedRef = pinned ? buildInfo.commit : 'PIN_TO_A_TRUSTED_USABL_COMMIT';
+  for (const workflow of ['usabl-gate.yml', 'usabl-history.yml']) {
+    const text = await readFile(join(consumer, '.github', 'workflows', workflow), 'utf8');
+    const refs = text.split('\n').filter((line) => /^\s+ref: (?!\$)/.test(line));
+    assert.deepEqual(refs, [`          ref: ${expectedRef}`], `${workflow} does not pin the engine to ${expectedRef}`);
+  }
+  if (pinned) {
+    assert.match(installedCi.stdout, new RegExp(`commit ${buildInfo.commit}`));
+  } else {
+    assert.match(installedCi.stdout, /still the placeholder/);
+  }
 
   const refused = run(process.execPath, [cli, 'check', '--ci'], { cwd: consumer });
   assert.equal(refused.status, 2, failure('installed usabl CI refusal', refused));
