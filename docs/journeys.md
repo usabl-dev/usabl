@@ -137,8 +137,9 @@ and `usabl floor prune` show progress rather than shame.
 receipt: the barrier is no longer observed above the floor.
 Deterministic evidence is what gates; human assistive-technology review by Alex (SME) is
 still required, and usabl states that plainly rather than claiming to speak for James. A
-spoken-output preview module exists in the codebase but is dormant: it is not in the run
-or gate path and does not affect any verdict.
+spoken-output preview module runs only the voice requirements a team writes, and its
+findings are preview: they do not affect any verdict unless a person promotes an
+obligation class in the trusted config.
 
 **Recordings:** Any spoken-output preview shown in the loop is labeled as a dev-time aid, not as evidence and not as James's approval.
 

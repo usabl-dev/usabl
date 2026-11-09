@@ -72,6 +72,28 @@ requirements:
 `;
 }
 
+function voiceRequirement(id: string, surface: string): string {
+  return `
+version: 1
+requirements:
+  - id: ${id}
+    kind: voice
+    surface: ${surface}
+    description: Deleting a row announces the deletion.
+    assertion:
+      type: voice
+      steps:
+        - do: click
+          selector: '#delete'
+      obligations:
+        - class: live-polite
+          afterStep: 0
+          requiredTokens: [deleted]
+          mustAnnounce: true
+    approved: true
+`;
+}
+
 function docRequirement(id: string, surface: string): string {
   return `
 version: 1
@@ -130,6 +152,14 @@ describe('run with a requirement for a surface usabl does not know', () => {
     expect(result.verdict).toBe('not_covered');
     expect(requirementGaps(result).map((gap) => gap.ref)).toEqual(['requirement:save-announces']);
     expect(requirementGaps(result)[0]?.reason).toContain('setings');
+  });
+
+  it('discloses a voice requirement whose surface matches no screen', async () => {
+    const result = await run(depsWith({ 'requirements/voice.yaml': voiceRequirement('delete-row-announces', 'clustrs') }), config);
+
+    expect(result.verdict).toBe('not_covered');
+    expect(requirementGaps(result).map((gap) => gap.ref)).toEqual(['requirement:delete-row-announces']);
+    expect(requirementGaps(result)[0]?.reason).toContain('clustrs');
   });
 
   it('gives each such requirement its own gap, in a stable order', async () => {

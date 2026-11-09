@@ -262,8 +262,9 @@ export async function buildDeps(
   const loadedRequirements = await loadRequirements(intakeFs, intakeConfig);
   // Engines come from the config intake trusts: under a trusted ref that is the committed policy,
   // so a branch cannot turn on vendor code that holds credentials or reaches the network for its
-  // own run. The Playwright helper does not run them: it reads the working tree's config, and its
-  // page verdict counts every failing draft, so preview vendor findings would block there.
+  // own run. The Playwright helper does not run them: it reads the working tree's config, so a
+  // branch could turn on vendor code for its own page checks. Their findings are preview, which
+  // the helper lists as advisory and never counts in its verdict.
   const engines = intakeConfig.engines;
   const allowedCapabilities = grantCapabilities(
     options.allowedCapabilities ?? ["live"],

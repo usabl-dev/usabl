@@ -13,7 +13,10 @@ import type {
   FlowAssertion,
   Requirement,
   RequirementBundle,
+  SpeechObligation,
+  VoiceAssertion,
 } from '../contracts/index.js';
+import { normalizeToken } from '../voicing/normalize.js';
 import { describeRequirementIdProblem } from './requirement-ids.js';
 
 export type ParseBundleResult =
@@ -46,6 +49,109 @@ const flowAssertionSchema = z
   })
   .strict();
 
+// A voice step is one the contract step runner can run, with the field it needs. A step it cannot
+// run would only fail when the scan reaches it, so it is refused here, where the message can say
+// what to write. Each kind takes only the fields it uses.
+function voiceStepSchema<Shape extends z.ZodRawShape>(kind: string, shape: Shape, write: string) {
+  return z
+    .object(shape, {
+      errorMap: (issue, ctx) =>
+        issue.code === z.ZodIssueCode.unrecognized_keys
+          ? { message: `${issue.keys.join(', ')} is not a field of a ${kind} step; write only ${write}` }
+          : { message: ctx.defaultError },
+    })
+    .strict();
+}
+
+const requiredText = (message: string) =>
+  z.string({ required_error: message, invalid_type_error: message }).trim().min(1, message);
+
+const PRESS_KEY_MESSAGE = 'a press step needs a key, such as key: Escape';
+const CLICK_SELECTOR_MESSAGE = "a click step needs a selector, such as selector: '#delete'";
+
+const voiceStepsSchema = z.discriminatedUnion(
+  'do',
+  [
+    voiceStepSchema('tab', { do: z.literal('tab') }, 'do: tab'),
+    voiceStepSchema('activate', { do: z.literal('activate') }, 'do: activate'),
+    voiceStepSchema('press', { do: z.literal('press'), key: requiredText(PRESS_KEY_MESSAGE) }, 'do: press and key'),
+    voiceStepSchema('click', { do: z.literal('click'), selector: requiredText(CLICK_SELECTOR_MESSAGE) }, 'do: click and selector'),
+  ],
+  {
+    errorMap: (issue, ctx) =>
+      issue.code === z.ZodIssueCode.invalid_union_discriminator
+        ? { message: 'do must be tab, activate, press, or click; to press another key, write do: press with key, such as key: Escape' }
+        : { message: ctx.defaultError },
+  },
+);
+
+const voiceObligationSchema = z
+  .object({
+    class: z.string().trim().min(1, 'class is required; name the kind of obligation, such as live-polite'),
+    afterStep: z.number(),
+    requiredTokens: z
+      .array(z.string())
+      .min(1, 'requiredTokens must list at least one word a screen reader user must hear'),
+    focusedRole: z
+      .string()
+      .trim()
+      .min(1, 'focusedRole must not be empty; name a role such as button, or leave it out')
+      .optional(),
+    mustAnnounce: z.boolean(),
+  })
+  .strict();
+
+const voiceAssertionSchema = z
+  .object({
+    type: z.literal('voice'),
+    steps: z
+      .array(voiceStepsSchema)
+      .min(1, 'voice steps must list at least one step, such as a click on the control under test'),
+    obligations: z
+      .array(voiceObligationSchema)
+      .min(1, 'voice obligations must list at least one obligation, saying what a screen reader user must hear'),
+    maxTabPath: z.number().optional(),
+  })
+  .strict();
+
+// Rules for a voice assertion that need more than one field at a time, so they cannot live in the
+// object schema. The discriminated union needs plain object schemas, so these run from the
+// requirement refinement, with paths under assertion.
+function refineVoiceAssertion(assertion: z.infer<typeof voiceAssertionSchema>, ctx: z.RefinementCtx): void {
+  // An obligation is checked in the window after one step, so afterStep has to name a step that
+  // exists. A window past the last step would never be reached, and the obligation would only
+  // ever report that focus did not get there.
+  const lastStep = assertion.steps.length - 1;
+  assertion.obligations.forEach((obligation, index) => {
+    if (!Number.isInteger(obligation.afterStep) || obligation.afterStep < 0 || obligation.afterStep > lastStep) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['assertion', 'obligations', index, 'afterStep'],
+        message: `afterStep must be a whole number from 0 to ${lastStep}, the position of a step in steps counted from 0`,
+      });
+    }
+    // The matcher compares letters and digits only. A token with none of them compares as empty,
+    // and an empty token is found in every announcement, so it would pass on silence.
+    obligation.requiredTokens.forEach((token, tokenIndex) => {
+      if (normalizeToken(token).length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['assertion', 'obligations', index, 'requiredTokens', tokenIndex],
+          message:
+            'each requiredTokens entry must contain a letter or digit; a token of only spaces or punctuation would match any announcement',
+        });
+      }
+    });
+  });
+  if (assertion.maxTabPath !== undefined && (!Number.isInteger(assertion.maxTabPath) || assertion.maxTabPath < 1)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['assertion', 'maxTabPath'],
+      message: 'maxTabPath must be a positive whole number, the most focus stops the task may take, or left out',
+    });
+  }
+}
+
 const docAssertionSchema = z
   .object({
     type: z.literal('doc'),
@@ -57,12 +163,13 @@ const assertionSchema = z.discriminatedUnion('type', [
   contentAssertionSchema,
   flowAssertionSchema,
   docAssertionSchema,
+  voiceAssertionSchema,
 ]);
 
 const requirementSchema = z
   .object({
     id: z.string(),
-    kind: z.enum(['content', 'flow', 'doc']),
+    kind: z.enum(['content', 'flow', 'doc', 'voice']),
     surface: z.string(),
     description: z.string().min(1, 'description is required'),
     assertion: assertionSchema,
@@ -93,6 +200,10 @@ const requirementSchema = z
         path: ['kind'],
         message: 'kind must match assertion.type',
       });
+    }
+
+    if (requirement.assertion.type === 'voice') {
+      refineVoiceAssertion(requirement.assertion, ctx);
     }
   });
 
@@ -165,6 +276,35 @@ function toDocAssertion(assertion: z.infer<typeof docAssertionSchema>): DocAsser
   };
 }
 
+function toVoiceObligation(obligation: z.infer<typeof voiceObligationSchema>): SpeechObligation {
+  const normalized: SpeechObligation = {
+    class: obligation.class,
+    afterStep: obligation.afterStep,
+    requiredTokens: [...obligation.requiredTokens],
+    mustAnnounce: obligation.mustAnnounce,
+  };
+
+  if (obligation.focusedRole !== undefined) {
+    normalized.focusedRole = obligation.focusedRole;
+  }
+
+  return normalized;
+}
+
+function toVoiceAssertion(assertion: z.infer<typeof voiceAssertionSchema>): VoiceAssertion {
+  const normalized: VoiceAssertion = {
+    type: 'voice',
+    steps: assertion.steps,
+    obligations: assertion.obligations.map((obligation) => toVoiceObligation(obligation)),
+  };
+
+  if (assertion.maxTabPath !== undefined) {
+    normalized.maxTabPath = assertion.maxTabPath;
+  }
+
+  return normalized;
+}
+
 function toAssertion(assertion: z.infer<typeof assertionSchema>): Requirement['assertion'] {
   switch (assertion.type) {
     case 'content':
@@ -173,6 +313,8 @@ function toAssertion(assertion: z.infer<typeof assertionSchema>): Requirement['a
       return toFlowAssertion(assertion);
     case 'doc':
       return toDocAssertion(assertion);
+    case 'voice':
+      return toVoiceAssertion(assertion);
   }
 }
 

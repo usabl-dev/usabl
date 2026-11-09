@@ -99,7 +99,7 @@ export interface AppSourceMapping {
   candidates: string[];
 }
 
-// ---- announcement / transcript (voicing lane; unused until that lane is wired) ----
+// ---- announcement / transcript (keyboard walk transcript and the voicing lane) ----
 export interface AnnouncementToken {
   kind: 'name' | 'role' | 'state' | 'live';
   text: string | null;
@@ -114,6 +114,14 @@ export interface TranscriptStop {
   // host or the frame, and the announcement holds no name, role, or state of the control, so a
   // check must not read their absence as a barrier.
   focusUnreadable?: FocusUnreadable;
+  // Set only by a runner that waits for the page to settle after each step, when the page was still
+  // changing at the end of that wait. Focus and announcements were then read on a page that had not
+  // finished reacting, so a check must not decide anything from this stop. waitedMs is for people
+  // reading a transcript; no draft carries it, because it is wall-clock time.
+  unsettled?: { waitedMs: number };
+  // Set only by that runner, when its drain cannot say which announcements a screen reader heard.
+  // See AnnouncementUndecidable.
+  drainUndecidable?: AnnouncementUndecidable;
 }
 // ---- applicability (what a rule did on a screen, recorded and never judged) ----
 // Silence from a check has two meanings that look identical in a findings list: the rule ran
@@ -461,7 +469,7 @@ export interface WaiverLedger {
   waivers: Waiver[];
 }
 
-// ---- interaction contracts (frozen now; voicing lane consumes later) ----
+// ---- interaction contracts (frozen shapes; voice requirements become these) ----
 export interface Step {
   do: string;
   [key: string]: unknown;
@@ -486,7 +494,7 @@ export interface InteractionContract {
 }
 
 // ---- design intake + docs output (producers wired; reachable via `usabl docs` and the usabl/docs export) ----
-export type RequirementKind = 'content' | 'flow' | 'doc';
+export type RequirementKind = 'content' | 'flow' | 'doc' | 'voice';
 export interface ContentAssertion {
   type: 'content';
   selector: string;
@@ -502,12 +510,20 @@ export interface DocAssertion {
   type: 'doc';
   artifact: 'alt-text-manifest' | 'announcement-snippets' | 'keyboard-paths';
 }
+// An interaction contract written in the requirements folder. The requirement id becomes the
+// contract id, its surface the contract surface, and its description the contract task.
+export interface VoiceAssertion {
+  type: 'voice';
+  steps: Step[];
+  obligations: SpeechObligation[];
+  maxTabPath?: number;
+}
 export interface Requirement {
   id: string;
   kind: RequirementKind;
   surface: string;
   description: string;
-  assertion: ContentAssertion | FlowAssertion | DocAssertion;
+  assertion: ContentAssertion | FlowAssertion | DocAssertion | VoiceAssertion;
   owner?: string;
   approved: boolean;
 }
@@ -548,6 +564,12 @@ export type FocusUnreadable = 'closed-shadow-root' | 'frame-unreadable' | 'focus
 // 'changed-element-removed': a modal dialog is open now, and a change was recorded on an element
 // that is no longer in the document, so whether the modal hid it cannot be read.
 export type AnnouncementUndecidable = 'closed-shadow-modal' | 'changed-element-removed';
+
+// How a wait for the page to react to one action ended, and how long it waited.
+export interface ActionSettle {
+  settled: boolean;
+  waitedMs: number;
+}
 
 export interface AnnouncementDrain {
   texts: string[];
@@ -720,6 +742,10 @@ export interface Page {
   activeElementIs(selector: string): Promise<boolean>;
   activeElementWithin(selector: string): Promise<boolean>;
   armAnnouncementCapture(): Promise<void>;
+  // Waits for the page to react to one action: the element count holds and the network is quiet,
+  // by the same signals gotoReady reads, under a cap of its own that is far shorter than the
+  // page-load budget. It never throws for a page that keeps changing; it returns settled false.
+  settleAfterAction(): Promise<ActionSettle>;
   drainAnnouncements(): Promise<string[]>;
   // The same drain, with the reason the texts cannot be trusted to be what a screen reader heard,
   // or null when they can. See AnnouncementDrain.

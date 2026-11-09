@@ -1,9 +1,12 @@
 /**
  * Structural voicing checks for interaction contract windows.
- * This unit emits deterministic Draft observations only.
+ * This unit emits preview Draft observations by default, and deterministic ones only for obligation
+ * classes the caller lists as promoted. Every class measured below the promotion bar, so nothing
+ * from this tier may block a run until a person promotes the class in the trusted config.
  * It must never mint a verdict and must never perform word-level obligation matching.
  */
 import type { AnnouncementToken, Draft, InteractionContract, SpeechObligation, TranscriptStop } from '../contracts/index.js';
+import { ANNOUNCEMENT_UNDECIDABLE_FIX, announcementUndecidableCause } from '../primitives/announcement-undecidable.js';
 import { FOCUS_UNREADABLE_FIX, focusUnreadableCause } from '../primitives/focus-unreadable.js';
 
 function nonEmptyText(text: string | null): text is string {
@@ -26,6 +29,7 @@ function hasFocusedRole(tokens: AnnouncementToken[], focusedRole: string): boole
 
 function makeDraft(
   rule: string,
+  counted: boolean,
   screenId: string,
   elementPath: string,
   whatUserExperiences: string,
@@ -39,7 +43,9 @@ function makeDraft(
     rule,
     layer: 'voicing',
     severity: 'serious',
-    evidenceClass: 'deterministic',
+    // Only a promoted class gates. A preview draft never carries fail, so it cannot read as a
+    // blocking barrier on any surface that counts failures.
+    evidenceClass: counted ? 'deterministic' : 'preview',
     screenId,
     elementPath,
     elementName: nameToken?.text ?? null,
@@ -55,17 +61,79 @@ function makeDraft(
         ? { role: { value: roleToken.text, fromTree: roleToken.fromTree, source: roleToken.source } }
         : {}),
     },
-    confidence: 'fail',
+    confidence: counted ? 'fail' : 'unverified',
+  };
+}
+
+/**
+ * Whether a window decides nothing: the page was still changing when the runner stopped waiting,
+ * or the drain cannot say what a screen reader heard. Both tiers skip such a window, and this tier
+ * reports each obligation in it as a gap.
+ */
+export function isUndecidedWindow(stop: TranscriptStop): boolean {
+  return stop.unsettled !== undefined || stop.drainUndecidable !== undefined;
+}
+
+// The same shape the flow requirement uses for its undecidable drain: unverified, naming the cause,
+// so it is a gap and never a miss or a pass. It carries no wall-clock value, so two runs that waited
+// for different times produce the same draft.
+function undecidedWindowDraft(
+  contract: InteractionContract,
+  obligation: SpeechObligation,
+  stop: TranscriptStop,
+  screenId: string,
+  counted: boolean,
+): Draft {
+  const step = obligation.afterStep;
+  const causes: string[] = [];
+  if (stop.unsettled !== undefined) {
+    causes.push('the page was still changing when usabl stopped waiting for it to settle, so focus and announcements were read before the page finished reacting');
+  }
+  if (stop.drainUndecidable !== undefined) {
+    causes.push(`usabl cannot tell which live-region announcements a screen reader spoke: ${announcementUndecidableCause(stop.drainUndecidable)}`);
+  }
+  const fix =
+    stop.drainUndecidable !== undefined
+      ? ANNOUNCEMENT_UNDECIDABLE_FIX
+      : 'Check this step by hand. To let usabl check it, make sure the page stops changing soon after the action, for example by ending animations and polling that the action starts.';
+  return {
+    ...makeDraft(
+      'voicing/window-undecided',
+      counted,
+      screenId,
+      stop.elementPath,
+      `Whether users hear what obligation "${obligation.class}" needs after step ${step} is unknown.`,
+      `In contract "${contract.contractId}", after step ${step}, ${causes.join('; and ')}.`,
+      fix,
+    ),
+    severity: 'moderate',
+    evidence: {
+      extra: {
+        contractId: contract.contractId,
+        step,
+        obligation: obligation.class,
+        ...(stop.unsettled !== undefined ? { unsettled: true } : {}),
+        ...(stop.drainUndecidable !== undefined ? { undecidable: stop.drainUndecidable } : {}),
+      },
+    },
+    confidence: 'unverified',
   };
 }
 
 // Name and role checks run only at obligation windows. Nameless targets outside these windows
 // can be legitimate navigation waypoints, and blanket checks here would duplicate walk findings.
-function pushNameAndRoleDrafts(drafts: Draft[], obligation: SpeechObligation, windowStop: TranscriptStop, screenId: string): void {
+function pushNameAndRoleDrafts(
+  drafts: Draft[],
+  obligation: SpeechObligation,
+  windowStop: TranscriptStop,
+  screenId: string,
+  counted: boolean,
+): void {
   if (!hasNonEmptyToken(windowStop.announcement, 'name')) {
     drafts.push(
       makeDraft(
         'voicing/missing-name',
+        counted,
         screenId,
         windowStop.elementPath,
         `After step ${obligation.afterStep}, focus landed on an element without an accessible name.`,
@@ -80,6 +148,7 @@ function pushNameAndRoleDrafts(drafts: Draft[], obligation: SpeechObligation, wi
     drafts.push(
       makeDraft(
         'voicing/missing-role',
+        counted,
         screenId,
         windowStop.elementPath,
         `After step ${obligation.afterStep}, focus did not expose the required "${obligation.focusedRole}" role.`,
@@ -91,13 +160,24 @@ function pushNameAndRoleDrafts(drafts: Draft[], obligation: SpeechObligation, wi
   }
 }
 
-export function runStructuralTier(contract: InteractionContract, stops: TranscriptStop[], screenId: string): Draft[] {
+export function runStructuralTier(
+  contract: InteractionContract,
+  stops: TranscriptStop[],
+  screenId: string,
+  promotedObligations: readonly string[] = [],
+): Draft[] {
   const drafts: Draft[] = [];
+  // Promotion is caller-provided policy, read only. A window draft gates when its own obligation
+  // class is promoted. A draft about the whole contract gates only when every obligation class in
+  // the contract is promoted, because a person has then opted the whole contract in.
+  const promoted = new Set(promotedObligations);
+  const wholeContractCounted = contract.obligations.every((obligation) => promoted.has(obligation.class));
 
   if (stops.length === 0) {
     drafts.push(
       makeDraft(
         'voicing/unreachable-focus',
+        wholeContractCounted,
         screenId,
         contract.surfaceId,
         'Keyboard focus never reached the interaction target.',
@@ -109,12 +189,14 @@ export function runStructuralTier(contract: InteractionContract, stops: Transcri
   }
 
   for (const obligation of contract.obligations) {
+    const counted = promoted.has(obligation.class);
     const windowStop = stops.find((stop) => stop.index === obligation.afterStep);
     if (!windowStop) {
       // A missing stop at the claimed obligation step means the contract window was not exercisable.
       drafts.push(
         makeDraft(
           'voicing/unreachable-focus',
+          counted,
           screenId,
           `step-${obligation.afterStep}`,
           `Keyboard focus did not reach the expected step ${obligation.afterStep} window.`,
@@ -125,6 +207,11 @@ export function runStructuralTier(contract: InteractionContract, stops: Transcri
       continue;
     }
 
+    if (isUndecidedWindow(windowStop)) {
+      drafts.push(undecidedWindowDraft(contract, obligation, windowStop, screenId, counted));
+      continue;
+    }
+
     // When the focused element cannot be read, the stop holds no name or role of the control, so
     // their absence proves nothing. The window is a gap, never a missing-name or missing-role fail.
     // The live check below still runs: what the capture heard does not depend on the focus read.
@@ -132,6 +219,7 @@ export function runStructuralTier(contract: InteractionContract, stops: Transcri
       drafts.push({
         ...makeDraft(
           'voicing/focus-unreadable',
+          counted,
           screenId,
           windowStop.elementPath,
           `After step ${obligation.afterStep}, usabl could not read the focused control, so whether it has a name and role is unknown.`,
@@ -142,7 +230,7 @@ export function runStructuralTier(contract: InteractionContract, stops: Transcri
         confidence: 'unverified',
       });
     } else {
-      pushNameAndRoleDrafts(drafts, obligation, windowStop, screenId);
+      pushNameAndRoleDrafts(drafts, obligation, windowStop, screenId, counted);
     }
 
     // mustAnnounce is structural here: a live token proves AT received any update.
@@ -151,6 +239,7 @@ export function runStructuralTier(contract: InteractionContract, stops: Transcri
       drafts.push(
         makeDraft(
           'voicing/missing-live-announcement',
+          counted,
           screenId,
           windowStop.elementPath,
           `After step ${obligation.afterStep}, no live announcement reached assistive technology.`,
@@ -166,6 +255,7 @@ export function runStructuralTier(contract: InteractionContract, stops: Transcri
     drafts.push(
       makeDraft(
         'voicing/over-long-tab-path',
+        wholeContractCounted,
         screenId,
         contract.surfaceId,
         `Keyboard users needed ${stops.length} focus stops before the target window.`,

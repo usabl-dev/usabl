@@ -60,9 +60,10 @@ export function makeCoreProviders(options: CoreProviderOptions = {}): Provider[]
  * requirement. This is the one place that list is built. The CLI and the Playwright helper both
  * call it, so a page cannot pass one of them and regress in the other because a deterministic
  * provider was wired into only one. buildDeps adds the trusted engines after this list. Their
- * findings are preview and never move the verdict, so the helper leaving them out cannot make the
- * two disagree on a regression. Null means the requirements could not be loaded; the caller must
- * disclose that, because the core stack alone does not check them.
+ * findings are preview, and preview never moves a verdict: the gate ignores it and the helper lists
+ * it as advisory. So the helper leaving the engines out cannot make the two disagree, and neither
+ * can the preview drafts of a voice requirement, which both run. Null means the requirements could
+ * not be loaded; the caller must disclose that, because the core stack alone does not check them.
  */
 export function makeScanProviders(
   requirements: RequirementBundle | null,
@@ -102,6 +103,8 @@ const INTAKE_PROVES: Readonly<Record<string, string>> = {
     'content requirement: the element the requirement names has the accessible text or name the requirement states.',
   'intake-flow':
     'flow requirement: after the steps the requirement lists, the expected announcement is heard on focus or in a live region.',
+  voicing:
+    'voice requirement: after each step the requirement lists, the focused control has a name and role, and the words each obligation requires are heard. Its findings are preview unless the trusted config promotes the obligation class.',
 };
 
 /** The sentence for one provider, or null when this table does not know it. */

@@ -3,6 +3,8 @@
  * Intake drafts are direct observations against authored strings and actions, but they still
  * never mint a verdict because the gate remains the only verdict authority.
  * Documentation requirements emit no Provider because they define output artifacts, not checks.
+ * Voice requirements become virtual screen reader providers, whose drafts are preview unless the
+ * obligation class is promoted in config.
  */
 import type {
   AnnouncementUndecidable,
@@ -11,14 +13,19 @@ import type {
   Draft,
   FlowAssertion,
   FocusUnreadable,
+  InteractionContract,
   Page,
   PlannedApplicability,
   Provider,
   Requirement,
   RequirementBundle,
   Step,
+  VoiceAssertion,
 } from '../contracts/index.js';
+import { ANNOUNCEMENT_UNDECIDABLE_FIX, announcementUndecidableCause } from '../primitives/announcement-undecidable.js';
 import { FOCUS_UNREADABLE_FIX, focusUnreadableCause } from '../primitives/focus-unreadable.js';
+import { makeStepRunner } from '../providers/keyboard-walk/steps.js';
+import { makeVirtualSrProvider } from '../voicing/virtual-sr-provider.js';
 
 function hasNonEmptyName(name: string | null): boolean {
   return name !== null && name.trim().length > 0;
@@ -121,13 +128,6 @@ function flowUnreadableDraft(
   };
 }
 
-const UNDECIDABLE_CAUSE: Record<AnnouncementUndecidable, string> = {
-  'closed-shadow-modal':
-    'a modal dialog is open inside a closed shadow root, so usabl cannot tell which live regions it hides from assistive technology',
-  'changed-element-removed':
-    'a modal dialog is open, and a live region that changed was removed before usabl could check whether the modal hid it',
-};
-
 // The drain cannot say which announcements a screen reader heard, so the flow is neither a pass
 // nor a fail. It is a gap that names the cause.
 function flowUndecidableDraft(
@@ -148,8 +148,8 @@ function flowUndecidableDraft(
     elementName: node?.name ?? null,
     role: node?.role ?? null,
     whatUserExperiences: `Whether users hear "${expectedAnnouncement}" is unknown.`,
-    why: `usabl cannot tell which live-region announcements a screen reader spoke: ${UNDECIDABLE_CAUSE[reason]}.`,
-    fix: 'Check this announcement by hand. To let usabl check it, keep modal dialogs out of closed shadow roots, and keep the live region in the document until the step ends.',
+    why: `usabl cannot tell which live-region announcements a screen reader spoke: ${announcementUndecidableCause(reason)}.`,
+    fix: ANNOUNCEMENT_UNDECIDABLE_FIX,
     evidence: evidenceFromNode(node, { expectedAnnouncement, announcements, undecidable: reason }),
     confidence: 'unverified',
   };
@@ -176,8 +176,9 @@ async function runFlowStep(page: Page, step: Step): Promise<void> {
   }
 }
 
-// The one rule for which screen a requirement checks. Both runs below read it, so a brief that says
-// a requirement is off on a screen cannot disagree with what the scan does there.
+// The one rule for which screen a requirement checks. The content and flow runs read it, and the
+// voice run skips a contract whose surfaceId is not the screen, which is the same test. So a brief
+// that says a requirement is off on a screen cannot disagree with what the scan does there.
 function requirementPlan(requirement: Requirement, screenId: string): PlannedApplicability {
   return screenId === requirement.surface
     ? { applies: true }
@@ -265,6 +266,10 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
     layer: 'intake-flow',
     capabilities: ['live'],
     appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id),
+    // A flow clicks and presses keys, so it changes the page. Flagged, it runs after every provider
+    // that reads the page as loaded, such as the PatternFly rulepack, which would otherwise check a
+    // page where the flow had already removed or opened something.
+    mutatesPageState: true,
     async run(ctx) {
       // Wrong surface is out of scope for this scan. Coverage wiring decides this later.
       if (!requirementPlan(requirement, ctx.screen.id).applies) {
@@ -321,6 +326,31 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
   };
 }
 
+/** A requirement whose assertion is a voice assertion. */
+export type VoiceRequirement = Requirement & { assertion: VoiceAssertion };
+
+/**
+ * The interaction contract a voice requirement describes. The requirement id names the contract,
+ * so a draft or a gap can point back at the file a team wrote. The arrays are copied so a later
+ * change to the bundle cannot change a contract that is already running.
+ */
+export function toVoiceContract(requirement: VoiceRequirement): InteractionContract {
+  const contract: InteractionContract = {
+    contractId: requirement.id,
+    surfaceId: requirement.surface,
+    task: requirement.description,
+    steps: requirement.assertion.steps.map((step) => ({ ...step })),
+    obligations: requirement.assertion.obligations.map((obligation) => ({
+      ...obligation,
+      requiredTokens: [...obligation.requiredTokens],
+    })),
+  };
+  if (requirement.assertion.maxTabPath !== undefined) {
+    contract.maxTabPath = requirement.assertion.maxTabPath;
+  }
+  return contract;
+}
+
 export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[] {
   const providers: Provider[] = [];
 
@@ -332,6 +362,26 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
 
     if (requirement.assertion.type === 'flow') {
       providers.push(toFlowProvider(requirement, requirement.assertion));
+    }
+  }
+
+  // Voice contracts drive the page the way flow requirements do, so they run in the same group,
+  // after every provider that reads the page as loaded, with the same flags. Each contract is
+  // its own provider named by its requirement id, so a static-only run, or a contract whose step
+  // fails, is a gap that names the requirement, and one failing contract does not hide another.
+  for (const requirement of bundle.requirements) {
+    if (requirement.assertion.type === 'voice') {
+      const contract = toVoiceContract({ ...requirement, assertion: requirement.assertion });
+      const stepRunner = makeStepRunner({ settleAfterEachStep: true });
+      providers.push({
+        ...makeVirtualSrProvider([contract], stepRunner, {
+          id: `intake:${requirement.id}`,
+          rulePrefix: `intake:${requirement.id}`,
+        }),
+        appliesBeforeScan: (screen) => requirementPlan(requirement, screen.id),
+        // The contract clicks and presses keys, so it changes the page, the same as a flow.
+        mutatesPageState: true,
+      });
     }
   }
 

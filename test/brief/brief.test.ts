@@ -248,6 +248,21 @@ requirements:
         - do: tab
       expectedAnnouncement: Cluster deleted
     approved: true
+  - id: delete-voices
+    kind: voice
+    surface: clusters
+    description: deleting a row is heard
+    approved: true
+    assertion:
+      type: voice
+      steps:
+        - do: click
+          selector: '#delete'
+      obligations:
+        - class: live-polite
+          afterStep: 0
+          requiredTokens: [deleted]
+          mustAnnounce: true
 `;
 
   it('has one entry per provider id the check runner gets, in its order, plus the engines that are off', async () => {
@@ -264,6 +279,7 @@ requirements:
       'docs-rulepack',
       'keyboard-walk',
       'intake:delete-row',
+      'intake:delete-voices',
       'deque',
       'evinced',
     ]);
@@ -273,6 +289,7 @@ requirements:
     expect(byId('pf-rulepack')).toMatchObject({ applies: true, why: 'decided on the page' });
     expect(byId('docs-rulepack')).toMatchObject({ applies: false, why: 'runs on docs pages only' });
     expect(byId('intake:delete-row')).toMatchObject({ applies: true, proves: expect.stringMatching(/^flow requirement: /u) });
+    expect(byId('intake:delete-voices')).toMatchObject({ applies: true, proves: expect.stringMatching(/^voice requirement: /u) });
     expect(byId('deque')).toMatchObject({ applies: true, why: expect.stringMatching(/preview/u) });
     expect(byId('evinced')).toMatchObject({ applies: false, why: 'not enabled in config' });
     for (const check of clusters?.checks ?? []) {
@@ -281,6 +298,10 @@ requirements:
     expect(clusters?.needsLiveScan).toBe(true);
 
     expect(alerts?.checks.find((check) => check.id === 'intake:delete-row')).toMatchObject({
+      applies: false,
+      why: 'the requirement names another screen',
+    });
+    expect(alerts?.checks.find((check) => check.id === 'intake:delete-voices')).toMatchObject({
       applies: false,
       why: 'the requirement names another screen',
     });

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>usabl voice contract fixture</title>
+  </head>
+  <body>
+    <main>
+      <h1>Rows</h1>
+      <table>
+        <tbody>
+          <tr data-row="a">
+            <td>Row A</td>
+            <td><button type="button" aria-label="Delete">X</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <button type="button" id="undo">Undo delete</button>
+      <button type="button" id="close">Close</button>
+      <div role="status" id="message"></div>
+      <ul id="log"></ul>
+    </main>
+    <script>
+      // Deleting a row moves focus to the undo control at once. The query string decides the rest:
+      //   delay=N    announce "Row deleted" in the polite region N ms after the click (0 when absent).
+      //              Writing text into the existing region adds no element, so only the live record
+      //              sees it.
+      //   remove=N   remove the row N ms after the click, the way a page does when a slow delete
+      //              request answers, and announce at the same moment.
+      //   churn=1    after the click, add an element every 200 ms and never stop.
+      (() => {
+        const params = new URLSearchParams(location.search);
+        const delay = Number(params.get('delay') ?? '0');
+        const remove = params.get('remove');
+        const churn = params.get('churn') === '1';
+        const announce = () => {
+          document.getElementById('message').textContent = 'Row deleted';
+        };
+        document.querySelector('[data-row="a"] button').addEventListener('click', () => {
+          document.getElementById('undo').focus();
+          if (remove !== null) {
+            setTimeout(() => {
+              document.querySelector('[data-row="a"]').remove();
+              announce();
+            }, Number(remove));
+          } else if (delay > 0) {
+            setTimeout(announce, delay);
+          } else {
+            announce();
+          }
+          if (churn) {
+            setInterval(() => {
+              const item = document.createElement('li');
+              item.textContent = 'tick';
+              document.getElementById('log').appendChild(item);
+            }, 200);
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FsGlob, GitReader } from '../../src/contracts/index.js';
 import { loadRequirements } from '../../src/intake/load.js';
+import { toVoiceContract } from '../../src/intake/map-to-providers.js';
 import { overlayRequirementsFs } from '../../src/intake/overlay-fs.js';
 import { matchGlob } from '../../src/primitives/match-glob.js';
 import { testConfig } from '../helpers.js';
@@ -102,6 +103,51 @@ requirements:
     ]);
     expect(result.bundle.requirements.map((requirement) => requirement.id)).not.toContain('requirement-softened-pr');
     expect(result.bundle.requirements.map((requirement) => requirement.id)).not.toContain('requirement-added-pr');
+  });
+
+  it('judges a voice requirement on the trusted ref bytes when the pull request edits it', async () => {
+    // The pull request softens the voice requirement and changes the page in the same change. With a
+    // trusted ref set, the contract the scan runs must be the base one, as for every other kind.
+    const config = testConfig({ requirements: 'requirements/' });
+    const voiceYaml = (tokens: string, mustAnnounce: boolean) => `
+version: 1
+requirements:
+  - id: delete-row-announces
+    kind: voice
+    surface: clusters
+    description: Deleting a row announces the deletion
+    approved: true
+    assertion:
+      type: voice
+      steps:
+        - do: click
+          selector: '[data-row="a"] button[aria-label="Delete"]'
+      obligations:
+        - class: live-polite
+          afterStep: 0
+          requiredTokens: [${tokens}]
+          mustAnnounce: ${mustAnnounce}
+`;
+    const fs = scriptedFs({
+      'requirements/voice.yaml': voiceYaml('removed', false),
+      'fixtures/app/src/ClustersPage.tsx': 'export const page = "changed in the pull request";',
+    });
+    const git = scriptedGit({ 'origin/main': { 'requirements/voice.yaml': voiceYaml('deleted', true) } });
+
+    const result = await loadRequirements(overlayRequirementsFs(fs, git, config, 'origin/main'), config);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const [requirement] = result.bundle.requirements;
+    expect(requirement?.kind).toBe('voice');
+    if (requirement === undefined || requirement.assertion.type !== 'voice') {
+      return;
+    }
+    expect(toVoiceContract({ ...requirement, assertion: requirement.assertion }).obligations).toEqual([
+      { class: 'live-polite', afterStep: 0, requiredTokens: ['deleted'], mustAnnounce: true },
+    ]);
   });
 
   it('uses trusted glob and readFile under requirements root only', async () => {

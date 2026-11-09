@@ -13,7 +13,10 @@ export function normalizeToken(raw: string | null): string {
     return '';
   }
 
-  return raw.toLowerCase().replace(/[^\w\s]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // Letters, digits, and combining marks in every script are kept, so a token in any language
+  // compares as itself. An ASCII-only rule removed every non-Latin letter, a token such as 削除
+  // compared as empty, and an empty token is found in every announcement.
+  return raw.toLowerCase().replace(/[^\p{L}\p{N}\p{M}\s]+/gu, ' ').replace(/\s+/gu, ' ').trim();
 }
 
 export function obligationSatisfied(required: string[], announcements: Array<{ text: string | null }>): boolean {

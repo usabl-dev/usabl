@@ -8,6 +8,7 @@
 import type { AnnouncementToken, Draft, InteractionContract, SpeechObligation, TranscriptStop } from '../contracts/index.js';
 import { focusUnreadableCause } from '../primitives/focus-unreadable.js';
 import { obligationSatisfied } from './normalize.js';
+import { isUndecidedWindow } from './structural.js';
 
 function nonEmptyText(text: string | null): text is string {
   return text !== null && text.trim().length > 0;
@@ -94,6 +95,12 @@ export function runVoicingTier(
       // Structural checks already report unreachable focus. This advisory draft records that
       // the obligation's word-level evidence is absent because the expected window was missing.
       drafts.push(makeMissingAnnouncementDraft(obligation, screenId, `step-${obligation.afterStep}`, isPromoted));
+      continue;
+    }
+
+    // The structural tier reports an undecided window as a gap for each obligation in it. Matching
+    // words there would read a page that had not settled, or a drain that cannot be trusted.
+    if (isUndecidedWindow(windowStop)) {
       continue;
     }
 

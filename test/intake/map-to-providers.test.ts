@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AxNode, ProviderContext, RequirementBundle } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
-import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
+import { mapRequirementsToProviders, toVoiceContract } from '../../src/intake/map-to-providers.js';
 import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = {
@@ -525,5 +525,47 @@ describe('mapRequirementsToProviders', () => {
 
       await expect(provider!.run(context)).resolves.toEqual([]);
     });
+  });
+});
+
+describe('toVoiceContract', () => {
+  it('maps a voice requirement to an interaction contract with the same id, surface, steps, and obligations', () => {
+    const steps = [{ do: 'click', selector: '[data-row="a"] button[aria-label="Delete"]' }];
+    const obligations = [{ class: 'live-polite', afterStep: 0, requiredTokens: ['deleted'], mustAnnounce: true }];
+
+    expect(
+      toVoiceContract({
+        id: 'delete-row-announces',
+        kind: 'voice',
+        surface: 'clusters',
+        description: 'Deleting a row announces the deletion',
+        approved: true,
+        assertion: { type: 'voice', steps, obligations, maxTabPath: 20 },
+      }),
+    ).toEqual({
+      contractId: 'delete-row-announces',
+      surfaceId: 'clusters',
+      task: 'Deleting a row announces the deletion',
+      steps,
+      obligations,
+      maxTabPath: 20,
+    });
+  });
+
+  it('leaves maxTabPath off when the requirement does not set it', () => {
+    const contract = toVoiceContract({
+      id: 'delete-row-announces',
+      kind: 'voice',
+      surface: 'clusters',
+      description: 'Deleting a row announces the deletion',
+      approved: true,
+      assertion: {
+        type: 'voice',
+        steps: [{ do: 'tab' }],
+        obligations: [{ class: 'focus-name', afterStep: 0, requiredTokens: ['delete'], mustAnnounce: false }],
+      },
+    });
+
+    expect('maxTabPath' in contract).toBe(false);
   });
 });

@@ -82,8 +82,10 @@ describe('runStructuralTier', () => {
     expect(drafts).toHaveLength(0);
   });
 
-  it('emits missing-name with deterministic fail evidence', () => {
-    const drafts = runStructuralTier(contract([dialogObligation]), [stopAt(1, '/dialog', [role('dialog')])], 'screen-1');
+  it('emits missing-name with deterministic fail evidence when the class is promoted', () => {
+    const drafts = runStructuralTier(contract([dialogObligation]), [stopAt(1, '/dialog', [role('dialog')])], 'screen-1', [
+      'dialog-name',
+    ]);
     const hit = drafts.find((draft) => draft.rule === 'voicing/missing-name');
 
     expect(hit).toBeDefined();
@@ -99,7 +101,9 @@ describe('runStructuralTier', () => {
   });
 
   it('emits missing-live-announcement when mustAnnounce is true and no live token is present', () => {
-    const drafts = runStructuralTier(contract([toastObligation]), [stopAt(1, '/toast', [name('Saved')])], 'screen-1');
+    const drafts = runStructuralTier(contract([toastObligation]), [stopAt(1, '/toast', [name('Saved')])], 'screen-1', [
+      'toast-announced',
+    ]);
     const hit = drafts.find((draft) => draft.rule === 'voicing/missing-live-announcement');
 
     expect(hit).toBeDefined();
@@ -153,11 +157,59 @@ describe('runStructuralTier', () => {
 
   it('still checks the live announcement at a window where focus cannot be read', () => {
     const unreadable: TranscriptStop = { ...stopAt(1, 'iframe', []), focusUnreadable: 'frame-unreadable' };
-    const drafts = runStructuralTier(contract([toastObligation]), [unreadable], 'screen-1');
+    const drafts = runStructuralTier(contract([toastObligation]), [unreadable], 'screen-1', ['toast-announced']);
 
     expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([
       ['voicing/focus-unreadable', 'unverified'],
       ['voicing/missing-live-announcement', 'fail'],
     ]);
+  });
+
+  describe('preview by default', () => {
+    // Every obligation class measured below the promotion bar, so nothing from this tier may block
+    // until a person lists the class in promotedObligations.
+    it('emits a window draft as preview and unverified when its class is not promoted', () => {
+      const drafts = runStructuralTier(
+        contract([dialogObligation, toastObligation]),
+        [stopAt(1, '/dialog', [])],
+        'screen-1',
+        ['toast-announced'],
+      );
+
+      expect(drafts.map((draft) => [draft.rule, draft.evidenceClass, draft.confidence])).toEqual([
+        ['voicing/missing-name', 'preview', 'unverified'],
+        ['voicing/missing-role', 'preview', 'unverified'],
+        ['voicing/missing-name', 'deterministic', 'fail'],
+        ['voicing/missing-live-announcement', 'deterministic', 'fail'],
+      ]);
+    });
+
+    it('keeps every draft preview when no class is promoted', () => {
+      const drafts = [
+        ...runStructuralTier(contract([dialogObligation, toastObligation], 0), [stopAt(1, '/dialog', [])], 'screen-1'),
+        ...runStructuralTier(contract([dialogObligation]), [], 'screen-1'),
+        ...runStructuralTier(contract([dialogObligation]), [stopAt(0, '/main', [])], 'screen-1'),
+      ];
+
+      expect(drafts.length).toBeGreaterThan(0);
+      expect(drafts.every((draft) => draft.evidenceClass === 'preview' && draft.confidence !== 'fail')).toBe(true);
+    });
+
+    it('gates a draft about the whole contract only when every obligation class in it is promoted', () => {
+      const twoClasses = contract([dialogObligation, toastObligation]);
+      const onlyOne = runStructuralTier(twoClasses, [], 'screen-1', ['dialog-name']);
+      const both = runStructuralTier(twoClasses, [], 'screen-1', ['dialog-name', 'toast-announced']);
+
+      expect(onlyOne.map((draft) => [draft.rule, draft.evidenceClass])).toEqual([['voicing/unreachable-focus', 'preview']]);
+      expect(both.map((draft) => [draft.rule, draft.evidenceClass])).toEqual([['voicing/unreachable-focus', 'deterministic']]);
+    });
+
+    it('gates a missing obligation window by that obligation class', () => {
+      const drafts = runStructuralTier(contract([dialogObligation]), [stopAt(0, '/main', [])], 'screen-1', ['dialog-name']);
+
+      expect(drafts.map((draft) => [draft.rule, draft.evidenceClass, draft.confidence])).toEqual([
+        ['voicing/unreachable-focus', 'deterministic', 'fail'],
+      ]);
+    });
   });
 });
