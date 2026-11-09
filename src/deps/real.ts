@@ -910,6 +910,68 @@ export async function backendNodeIdInShadowRoot(cdp: CDPSession, hostSelector: s
   }
 }
 
+// The element a click step's selector names, looked up in the document and in every open shadow
+// root, or null. The click pierces open shadow roots, and document.querySelector does not, so a
+// lookup in the document alone would miss a control the click reaches. A selector the browser
+// cannot parse is null, never a guess. Matches in the document and in a shadow root together are
+// null too, because the click's order across them is its own. Returned as an object, not a value,
+// so its node can be described.
+const CONTROL_ELEMENT_FUNCTION = `function (query) {
+  const scopes = [document];
+  let first = null;
+  let count = 0;
+  let inShadow = false;
+  for (let index = 0; index < scopes.length; index += 1) {
+    const scope = scopes[index];
+    let matches;
+    try {
+      matches = scope.querySelectorAll(query);
+    } catch (_error) {
+      return null;
+    }
+    if (matches.length > 0) {
+      if (first === null) first = matches[0];
+      count += matches.length;
+      if (scope !== document) inShadow = true;
+    }
+    for (const element of scope.querySelectorAll('*')) {
+      if (element.shadowRoot) scopes.push(element.shadowRoot);
+    }
+  }
+  return count === 0 || (inShadow && count > 1) ? null : first;
+}`;
+
+const CONTROL_NODE_GROUP = 'usabl-control-node';
+
+/**
+ * The backend node of the element a click step's selector names, found in the read world so page
+ * script cannot answer for it. Null when the selector names no one element; see Page.controlNodeId.
+ */
+async function backendNodeIdForControl(cdp: CDPSession, selector: string): Promise<number | null> {
+  const contextId = await isolatedWorldContextId(cdp, READ_WORLD, 'read the control a step acts on');
+  try {
+    const evaluated: unknown = await cdp.send('Runtime.evaluate', {
+      expression: `(${CONTROL_ELEMENT_FUNCTION})(${JSON.stringify(selector)})`,
+      contextId,
+      objectGroup: CONTROL_NODE_GROUP,
+      includeCommandLineAPI: false,
+    });
+    const exception = getProp(evaluated, 'exceptionDetails');
+    if (exception !== undefined) {
+      const description = readString(getProp(getProp(exception, 'exception'), 'description'))?.split('\n')[0];
+      throw new Error(`the browser could not read the control a step acts on: ${description ?? readString(getProp(exception, 'text')) ?? 'unknown error'}`);
+    }
+    const objectId = readString(getProp(getProp(evaluated, 'result'), 'objectId'));
+    if (objectId === null) {
+      return null;
+    }
+    const described: unknown = await cdp.send('DOM.describeNode', { objectId });
+    return readNumber(getProp(getProp(described, 'node'), 'backendNodeId'));
+  } finally {
+    await cdp.send('Runtime.releaseObjectGroup', { objectGroup: CONTROL_NODE_GROUP }).catch(() => undefined);
+  }
+}
+
 // Reads a HostMarkup the read world returned, keeping only well-formed fields.
 function readHostMarkup(value: unknown): HostMarkup | null {
   if (value === null || typeof value !== 'object') {
@@ -2259,6 +2321,9 @@ function wrapPage(
     async focusedNodeId(): Promise<number | null> {
       const focus = await readFocus(cdp);
       return focus.kind === 'element' ? focus.backendNodeId : null;
+    },
+    async controlNodeId(selector: string): Promise<number | null> {
+      return backendNodeIdForControl(cdp, selector);
     },
     async fullAxTree(): Promise<AxTreeRead> {
       return readFullAxTree((method, params) => cdp.send(method as never, params as never));

@@ -168,4 +168,8 @@ describe('a fake page', () => {
     expect(await page.fullAxTree()).toEqual({ kind: 'tree', documentNodeId: null, nodes: [] });
     expect(await page.focusedNodeId()).toBeNull();
   });
+
+  it('cannot resolve the control a click step names, because it has no DOM', async () => {
+    expect(await makeFakePage().controlNodeId('#save')).toBeNull();
+  });
 });

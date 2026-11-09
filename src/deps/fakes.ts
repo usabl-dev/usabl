@@ -86,6 +86,8 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     activeModalDialogs: async () => [],
     // A fake page has no DOM, so no element has a backend node id to report.
     focusedNodeId: async () => null,
+    // Nor one for the control a click step names.
+    controlNodeId: async () => null,
     // Nor an accessibility tree. The empty tree never changes on its own, so two reads around an
     // action compare equal unless a test scripts a change.
     fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: [] }),

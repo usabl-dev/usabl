@@ -119,4 +119,61 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
       });
     });
   });
+
+  describe('the acted control of a click step', () => {
+    const CONTROLS_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Controls</title></head><body>
+      <main>
+        <button type="button" id="save">Save</button>
+        <button type="button" class="row-action">Delete row 1</button>
+        <button type="button" class="row-action">Delete row 2</button>
+        <x-card></x-card>
+      </main>
+      <script>
+        customElements.define('x-card', class extends HTMLElement {
+          constructor() {
+            super();
+            this.attachShadow({ mode: 'open' }).innerHTML =
+              '<button type="button" id="inner">Inside the card</button><button type="button" class="row-action">Delete row 3</button>';
+          }
+        });
+      </script>
+    </body></html>`;
+
+    // The click lands where the resolution points: a mouse click focuses the button it lands on.
+    async function clickedIsResolved(page: Page, selector: string): Promise<void> {
+      const resolved = await page.controlNodeId(selector);
+      expect(resolved).not.toBeNull();
+      await page.click(selector);
+      expect(await page.focusedNodeId()).toBe(resolved);
+    }
+
+    it('resolves a control in the document to the node the click lands on', async () => {
+      await withPage(CONTROLS_PAGE, (page) => clickedIsResolved(page, '#save'));
+    });
+
+    it('resolves a control inside an open shadow root, which the click reaches too', async () => {
+      await withPage(CONTROLS_PAGE, (page) => clickedIsResolved(page, '#inner'));
+    });
+
+    it('resolves the first of several matches in the document, the one the click takes', async () => {
+      await withPage(CONTROLS_PAGE, async (page) => {
+        const read = await page.fullAxTree();
+        if (read.kind !== 'tree') throw new Error('the read was over budget');
+        expect(await page.controlNodeId('main > button.row-action')).toBe(named(read.nodes, 'button', 'Delete row 1')?.nodeId);
+      });
+    });
+
+    it('cannot say which control is meant when matches sit both in the document and in a shadow root', async () => {
+      await withPage(CONTROLS_PAGE, async (page) => {
+        expect(await page.controlNodeId('.row-action')).toBeNull();
+      });
+    });
+
+    it('cannot resolve a selector that matches nothing, or one only Playwright can parse', async () => {
+      await withPage(CONTROLS_PAGE, async (page) => {
+        expect(await page.controlNodeId('#missing')).toBeNull();
+        expect(await page.controlNodeId('text=Save')).toBeNull();
+      });
+    });
+  });
 });

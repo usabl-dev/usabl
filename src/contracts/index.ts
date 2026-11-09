@@ -798,6 +798,13 @@ export interface Page {
   // same-origin frames. Null when nothing has focus, and null when activeFocusUnreadable reports a
   // reason, because the element read then would be the host or the frame, not the control.
   focusedNodeId(): Promise<number | null>;
+  // The DOM backend node id of the element a click step's CSS selector names, read in an isolated
+  // world, so page script cannot answer for it. The query looks in the document and in every open
+  // shadow root, as the click does. Null when nothing matches, when the selector is not CSS the
+  // browser parses, and when matches sit both in the document and in a shadow root, because the
+  // click's own order across those cannot be read. Several matches in the document alone resolve
+  // to the first, which is the one the click takes.
+  controlNodeId(selector: string): Promise<number | null>;
   // The whole accessibility tree of the main frame, read from the browser over
   // Accessibility.getFullAXTree. It covers open shadow roots, because the browser builds the tree
   // from the flat tree, and it does not cover child frames. See AxTreeRead for the budget.
