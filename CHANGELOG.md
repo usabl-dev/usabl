@@ -4,6 +4,18 @@
 
 ### Added
 
+- The silent change rule, `voicing/silent-change`, an additional check in the voicing lane. It
+  watches each `click` and `activate` step that a flow requirement or a voice requirement already
+  drives, reads the whole accessibility tree before the step and after its settle window, and
+  reports a preview finding, severity serious, when the page changed, nothing was announced, and
+  focus did not move to a named control. A disclosure, a tab, and a sort header speak for
+  themselves. A step it cannot judge, such as one that navigates, never settles, or names no one
+  control, is an `unverified` preview gap that names the reason. It drives no step of its own,
+  makes no network call, never shows a value or a removed node's name, and never changes a
+  verdict. With no flow or voice requirement it does not run. The flow driver now reports a step
+  kind it does not run instead of skipping it, and a flow waits for the page to settle after each
+  click or activate step; its verdict still reads every announcement the step drains.
+
 - `usabl brief` prints what an agent reads before it starts a task: the screens the task's
   files reach and how each is reached, the checks that apply to each screen, the ones that do
   not and why, and what counts as done. `--files <path> ...` names the task's files; with no
