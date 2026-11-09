@@ -349,16 +349,20 @@ async function runVerify(opts: CliOptions): Promise<number> {
     process.stderr.write('usabl: verify has one subcommand: usabl verify sensitivity. Run "usabl verify --help".\n');
     return 2;
   }
-  const [{ runVerifySensitivity }, { runLevel1 }] = await Promise.all([
+  const [{ runVerifySensitivity }, { runLevel1 }, { runLevel2 }] = await Promise.all([
     import('./measure/sensitivity/command.js'),
     import('./measure/sensitivity/level1.js'),
+    import('./measure/sensitivity/level2.js'),
   ]);
+  const cwd = process.cwd();
   return runVerifySensitivity(
-    { json: opts.json },
+    { app: opts.verifyApp, screens: opts.screens, json: opts.json },
     {
       now: () => new Date().toISOString(),
       versions: readCoreVersions,
       level1: (now) => runLevel1({ now }),
+      loadConfig: () => loadConfig(opts.configPath),
+      level2: (config, screens, now) => runLevel2({ config, cwd, screens, now }),
       writeAttestation: async (path, text) => {
         await mkdir(dirname(path), { recursive: true });
         await writeFile(path, text, 'utf8');

@@ -238,9 +238,22 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
   },
   {
     name: 'verify',
-    usage: 'usabl verify sensitivity [--json]',
+    usage: 'usabl verify sensitivity [--app] [--screen <id> ...] [--json]',
     summary: 'Inject declared defects and record which ones the checks catch.',
-    flags: [{ name: '--json', help: 'Print the attestation as JSON instead of a summary.' }],
+    flags: [
+      {
+        name: '--app',
+        help: 'Also run the catalog on the surfaces in usabl.config.json. Slow.',
+      },
+      {
+        name: '--screen',
+        value: '<id> [<id> ...]',
+        manyValues: true,
+        help: 'With --app: only these surface ids. Default: every surface.',
+      },
+      { name: '--json', help: 'Print the attestation as JSON instead of a summary.' },
+      CONFIG_FLAG,
+    ],
   },
   {
     name: 'help',

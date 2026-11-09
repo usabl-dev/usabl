@@ -68,6 +68,11 @@ export interface CliOptions {
   files: string[] | null;
   // verify-only: the subcommand, such as `sensitivity`. Null when none was given.
   verifySubcommand: string | null;
+  // verify-only: --app, which also runs the catalog on the configured surfaces. On init, --app takes
+  // a folder instead and is read into `app`.
+  verifyApp: boolean;
+  // verify-only: the surface ids from `--screen <id> [<id> ...]`. Null when the flag was not given.
+  screens: string[] | null;
 }
 
 // The value flags of serve-build and extract-build. Those commands parse their own arguments.
@@ -145,6 +150,8 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let isolatedBrowser = false;
   let files: string[] | null = null;
   let verifySubcommand: string | null = null;
+  let verifyApp = false;
+  let screens: string[] | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -274,6 +281,28 @@ export function parseCliArgs(argv: string[]): CliOptions {
       force = true;
       continue;
     }
+    if (token === '--app' && command === 'verify') {
+      // verify-only: also run the catalog on the app's own screens. It takes no value here.
+      verifyApp = true;
+      continue;
+    }
+    if (token === '--screen') {
+      // verify-only: every id up to the next flag is a surface id to measure.
+      const values: string[] = [];
+      while (index + 1 < argv.length) {
+        const value = argv[index + 1];
+        if (value === undefined || isFlag(value)) {
+          break;
+        }
+        values.push(value);
+        index += 1;
+      }
+      if (values.length === 0) {
+        throw new Error('--screen requires at least one surface id, such as --screen settings');
+      }
+      screens = [...(screens ?? []), ...values];
+      continue;
+    }
     if (token === '--app') {
       // init-only: draft the config for one app folder in a repository that holds several.
       const value = argv[index + 1];
@@ -370,6 +399,8 @@ export function parseCliArgs(argv: string[]): CliOptions {
     isolatedBrowser,
     files,
     verifySubcommand,
+    verifyApp,
+    screens,
   };
 }
 
