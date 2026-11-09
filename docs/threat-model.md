@@ -868,6 +868,39 @@ Not yet run on a licensed SDK.
 
 ---
 
+## Threat 17: A measurement mutation reaching a normal run
+
+**Attack:** `usabl verify sensitivity` changes pages on purpose: it removes names, cancels keys,
+and stops focus calls, to see whether the checks notice. If that step could run during `usabl
+check`, the stop hook, the CI judge, or checkPage, a scan would measure a page usabl broke, and a
+pull request or page text that could switch it on would control what the gate sees.
+
+**Controls:**
+
+- Mutations run only in the scan browser, only from the measure command, and never from page text.
+  The catalog is engine data. An entry picks one of eight fixed edit kinds; the two page functions
+  that carry them out are written once in the engine, and an entry's values reach the page only as
+  JSON arguments. Nothing a page says becomes code.
+- The mutation browser is built only by `usabl verify sensitivity`, which the CLI loads by a dynamic
+  import inside that command. No config field and no environment variable selects it. `buildDeps`
+  never builds it, and no module that run(), the gate, the stop hook, the overlay, the CI judge, the
+  pull request comment, checkPage, or the library entry imports reaches it.
+- The command mints no verdict and no receipt. Its file, `.usabl/sensitivity.json`, is read by no
+  verdict path, and the file being present changes no Result.
+- What it writes and prints goes through `scrubOutboundData` and `scrubString`, because a gap reason
+  can carry a URL or page words.
+
+**Tests:** `test/measure/sensitivity/isolation.test.ts` (no verdict entry point imports the
+measurement, the CLI names it only inside the verify command, the composition root's browser has no
+mutation hook, run() never reads the file and returns the same Result with it there),
+`test/measure/sensitivity/command.test.ts` (the file is scrubbed and deterministic).
+
+**What stays open:** the edits run in the page's own world, so page script on the measured page can
+see them and could undo one. That changes a measurement, never a verdict. Level 2 loads the team's
+app in the scan browser with the team's session, as `usabl check` does.
+
+---
+
 ## Decision: Stop hook fail-open on exit 4
 
 After the guard runs before any coverage, floor, or waiver parse, a diverged

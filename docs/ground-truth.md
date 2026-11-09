@@ -293,6 +293,7 @@ src/
   history/          record.ts read.ts track.ts tracking.ts append.ts git.ts record-run.ts report.ts
   voicing/          voicing.ts structural.ts virtual-sr-provider.ts normalize.ts   (runs voice requirements; section 7.5)
   measure/          fleet-insights.ts   (measurement-only; not in the run/gate path; section 25)
+    sensitivity/    catalog.ts rules.ts targets.ts edits.ts browser.ts runner.ts level1.ts level2.ts attestation.ts command.ts   (usabl verify sensitivity; measurement only; section 25)
   surfaces/
     cli.ts pr-comment.ts policy-enforce.ts scrub.ts receipt-store.ts
     stop-hook.ts stop-hook-runner.ts stop-hook-bin.ts
@@ -2541,7 +2542,7 @@ coverage honesty, and optional receipt minting.
 
 **Command surface.** `main` recognizes these commands: `check`, `brief`, `comment`, `bypass`,
 `init`, `baseline`, `floor`, `drift`, `enforce`, `install`, `stop-hook`, `doctor`, `docs`,
-`session`, `debt`, `history`, `serve-build`, `extract-build`, and `help`. `check` is the default
+`session`, `debt`, `history`, `serve-build`, `extract-build`, `verify`, and `help`. `check` is the default
 when no command is given, so `usabl` alone runs a check. `usabl --help`, `usabl -h`, `usabl help`, `usabl <command> --help`, and
 `usabl help <command>` print help and exit 0 before anything else runs: no config is read, no
 browser opens, stdin is not read, and no file is written. The top-level help lists every
@@ -2627,6 +2628,10 @@ lines.
 - Task brief: `usabl brief [--files <path> ...] [--json]` prints what an agent reads before it
   starts a task (see section 11.5). With no `--files` it uses the changed files git reports, the
   same way a local `usabl check` does.
+- Sensitivity evidence: `usabl verify sensitivity [--app] [--screen <id> ...] [--json]` puts each
+  declared defect in its catalog on a page in the scan browser and records whether the real checks
+  and the real gate catch it, in `.usabl/sensitivity.json` (see section 25). It is measurement: it
+  mints no verdict and no receipt, and it exits 0 whenever it ran and wrote the file.
 - CI: the workflow invokes `usabl check --ci --trusted-ref <base>`. On `check`, `--ci` is
   the CI-mode boolean and forces `--trusted-ref` (without it, `check --ci` refuses with
   exit 2). The same `--ci` token is the CI *install target* under `usabl install`; the two
@@ -4132,6 +4137,84 @@ screens surfaced draft findings and how many drafts in total. This harness never
 mints a verdict, writes a receipt, or gates, and it is deliberately not a `usabl`
 subcommand, so measurement can never be mistaken for a proof. The later fleet view
 aggregates this measurement across repos; verdict authority stays with the gate.
+
+### Sensitivity evidence (`usabl verify sensitivity`)
+
+**What it measures.** Whether the shipped checks and the gate catch a declared set of defects, on
+pages where usabl put each defect itself. It answers "does usabl see this kind of barrier when it
+is there", one defect at a time. It says nothing about any other defect, and nothing about whether
+a screen is accessible.
+
+**The catalog.** `src/measure/sensitivity/catalog.ts` is a typed, versioned list. Each entry has a
+stable id, one plain sentence, the WCAG 2.2 success criterion it breaks, the rule ids expected to
+report it, the evidence class expected (deterministic or preview), where the rule is expected to
+report it (on the changed element, inside it, around it, or anywhere on the screen), and a
+mutation. A mutation is data: a target finder and one edit. The target finder reads the page only
+through `Page.queryAll`, `Page.axAt`, and `Page.hostMarkup`, the reads the checks use. The edit is
+one of eight fixed kinds: remove attribute, set attribute, remove text name, set style, remove
+element, replace role, swallow a key, and make `focus()` calls do nothing. The two page functions
+that carry them out are written once in `edits.ts`, and an entry's values reach the page only as
+JSON arguments. They run in the page's own world, because two kinds change how the page's script
+behaves. An edit that changes markup reads its change back, so one the page did not keep is
+reported as unreadable, not measured. An entry that no shipped rule claims carries the place where a claim to catch it is made.
+
+**The run.** For each entry and screen: load the page and scan it with the real provider stack,
+then gate the scan with the real `gate()` against an empty floor. Load the page again, make the
+edit after readiness and before the transcript walk and every provider, scan it, and gate it
+against a floor of what the clean scan found. Each finding the gate calls `new` and deterministic
+is located on the mutated page, through every draft the gate collapsed into it, against the
+elements the edit changed. The outcome, in this order:
+
+- `not applicable`: the screen cannot carry the defect. No element matches the target finder, the
+  defect needs more elements than the page has (one toolbar needs no label), or the entry needs a
+  flow requirement, a voice requirement, or a documentation page the screen does not have.
+- `unreadable`: either scan had a coverage gap, including a screen marked unseen, or the edit was
+  not made. A gapped scan proves nothing in either direction.
+- `caught`: a new gating finding from an expected rule, where the entry says it reports.
+- `caught by another rule`: a new gating finding from another rule, or from any rule somewhere
+  else on the screen. Counted apart from caught.
+- `preview only`: nothing new gates, and a preview finding is new.
+- `missed`: nothing new gates.
+
+**Two levels.** Level 1 runs each entry on its own fixture page, served on loopback from strings
+in `level1.ts`, with no app and no config. The flow and voice pages bring their own requirements.
+The RHDS page defines small stand-in elements with the tag names and shadow structure the RHDS rules
+read; it does not load `@rhds/elements`. Level 2, only with `--app`, runs every entry on every
+surface in `usabl.config.json` (or the ones `--screen` names), through `buildDeps`, so the provider
+stack, the requirements, and the session are the team's own. It needs the app running and the
+`live` capability, and it says before it starts that it loads each screen twice per entry. Both
+levels go into one file, kept apart.
+
+**The attestation.** `.usabl/sensitivity.json` holds the schema version, the engine version and
+scanner versions a receipt binds, the catalog version and hash, the date (an input), each entry's
+outcome, rules, screen, and reason per level, the totals per outcome, and every shipped rule the
+catalog does not exercise with the reason. The same tree, versions, and pages give the same bytes
+apart from the date. It is scrubbed on the way out. The terminal summary says "caught N of M catalog
+defects" per level, where M counts the entries that were made and read, lists every outcome other
+than caught by name with what was expected, and reports a level where nothing could be made and read
+as measuring nothing, not as a pass.
+
+**Isolation.** The mutation browser is built only by the verify command, which the CLI loads by a
+dynamic import inside that command. No config field or environment variable selects it. `buildDeps`
+never builds it; Level 2 hands it in through the `browserFor` option. No module that run(), the gate,
+the stop hook, the overlay, the CI judge, the pull request comment, checkPage, or the library entry
+imports reaches it, and nothing on those paths reads the attestation.
+`test/measure/sensitivity/isolation.test.ts` pins both.
+
+**Level 1, measured.** On the fixture pages the catalog caught 25 of 28 defects. Two were missed:
+`control-out-of-tab-order` (a visible button with `tabindex="-1"`; no shipped rule reports a
+control Tab never reaches) and `menu-does-not-open-on-enter` (the menu probe opens a menu with a
+click, never with Enter). `voice-live-region-broken` was preview only, as voice findings are until
+a class is promoted. `test/measure/sensitivity/level1.real.integration.test.ts` pins every outcome.
+
+**Limits.** A catch on the fixture pages is a catch on that markup. On a team's app, a mutation
+can land on an element where it creates no barrier for users, for example a live region the flow
+does not use, and that reads as missed; read a Level 2 miss with the screen in hand. The edits run
+in the page's own world, so page script can see them and could undo one; the read-back catches a
+change the page did not keep at once, not one it changed back later, and the two script kinds have
+no read-back. Edits reach the top document only. A
+defect the catalog does not declare is not measured, and every shipped rule no entry expects is
+listed in the file.
 
 ---
 
