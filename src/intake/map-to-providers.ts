@@ -390,7 +390,7 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
   const drain = unionOfDrains(drains);
   const own = await flowVerdict(page, requirement, expectedAnnouncement, node, drain);
   // The flow's own draft already says whether its last step was heard. A second draft for that step
-  // would be a second finding for one barrier, so the rule emits nothing for it.
+  // would be a second finding for one accessibility barrier, so the rule emits nothing for it.
   if (own.length > 0) {
     watch.quiet(assertion.steps.length - 1);
   }

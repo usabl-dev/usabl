@@ -602,6 +602,11 @@ outside every table as the control in an accepted row. Either way a new barrier 
   requirement through the browser's own DOM read over CDP, and asked in the live world whether it
   is open. While one is open, the flow requirement is an `unverified` gap, never a pass.
 
+- Voicing lane: the silent change rule drives no step of its own, reads the accessibility tree the
+  browser computes over CDP and resolves a click step's control in an isolated world, and shows no
+  values and no removed node's name, so page script cannot answer for it and a deleted row's data
+  does not reach output.
+
 **Not handled:** the interaction contract tiers drain through the keyboard step runner, which does
 not run the closed shadow root check, so a change outside a modal there can still count as heard.
 One page operation still runs in the page's own world: the element count that
