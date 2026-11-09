@@ -265,6 +265,10 @@ the tool errored, not because the page is accessible.
   that is not HTML. A selector, or recovery alone, never stands it down. See ground-truth
   section 8.
 
+- Every git listing of changed or committed files runs with `-z` and keeps each name as git
+  stores it, so a non-ASCII name is not quoted into a path that matches no UI glob, and a changed
+  path that still looks quoted is a gap. See ground-truth section 8.
+
 - In a monorepo, a change in a workspace package the configured app depends on is a coverage
   gap, never nothing to check. Before, a config drafted for one app folder matched none of the
   shared package's files, so a change to a component the app renders exited 0 with nothing
