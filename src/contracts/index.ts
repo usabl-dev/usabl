@@ -114,6 +114,9 @@ export interface TranscriptStop {
   // host or the frame, and the announcement holds no name, role, or state of the control, so a
   // check must not read their absence as a barrier.
   focusUnreadable?: FocusUnreadable;
+  // Set only when the document body had focus at this stop, as read from the page. The path cannot
+  // say so: a body with an id has that id as its path. The blank-page detector reads this field.
+  onBody?: true;
   // Set only by a runner that waits for the page to settle after each step, when the page was still
   // changing at the end of that wait. Focus and announcements were then read on a page that had not
   // finished reacting, so a check must not decide anything from this stop. waitedMs is for people

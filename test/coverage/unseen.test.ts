@@ -28,6 +28,8 @@ function draft(screenId: string, overrides: Partial<Draft> = {}): Draft {
 }
 
 const stop = (elementPath: string): TranscriptStop => ({ index: 0, elementPath, announcement: [] });
+// A stop where the step runner read that the body had focus, as it does on a live blank page.
+const bodyStop = (elementPath: string): TranscriptStop => ({ ...stop(elementPath), onBody: true });
 
 function scan(overrides: Partial<ScreenScan> & { screenId: string; url: string }): ScreenScan {
   return {
@@ -47,9 +49,27 @@ function applicability(screenId: string, rule: string, outcome: RuleOutcome): Ru
 describe('markUnseenScreens', () => {
   it('reads the nth-child ancestry a live page reports for the document body', () => {
     const pass = markUnseenScreens([
-      scan({ screenId: 'overview', url: 'http://app/overview', stops: [stop('html > body:nth-child(2)')] }),
+      scan({ screenId: 'overview', url: 'http://app/overview', stops: [bodyStop('html > body:nth-child(2)')] }),
     ]);
     expect(pass.unseenScreenIds).toEqual(['overview']);
+  });
+
+  // The path of a body with an id is the id, so a blank page whose body is <body id="app"> never
+  // read as body-only when the detector read the path tail.
+  it('reads a body that has an id as the body, from what the stop recorded', () => {
+    const pass = markUnseenScreens([
+      scan({ screenId: 'overview', url: 'http://app/overview', stops: [bodyStop('#app'), bodyStop('#app')], drafts: [draft('overview')] }),
+    ]);
+    expect(pass.unseenScreenIds).toEqual(['overview']);
+    expect(pass.screens[0]?.drafts).toEqual([]);
+  });
+
+  it('reads a page whose body has an id as seen when focus reached a control', () => {
+    const pass = markUnseenScreens([
+      scan({ screenId: 'overview', url: 'http://app/overview', stops: [stop('#app > main:nth-child(1) > button:nth-child(1)'), bodyStop('#app')], drafts: [draft('overview')] }),
+    ]);
+    expect(pass.unseenScreenIds).toEqual([]);
+    expect(pass.screens[0]?.drafts).toHaveLength(1);
   });
 
   it('does not read a body-prefixed tag as the body', () => {
@@ -152,7 +172,7 @@ describe('markUnseenScreens', () => {
 
   it('lets isBodyOnly still fire when reachability is null', () => {
     const pass = markUnseenScreens([
-      scan({ screenId: 'overview', url: 'http://app/overview', stops: [stop('html > body:nth-child(2)')] }),
+      scan({ screenId: 'overview', url: 'http://app/overview', stops: [bodyStop('html > body:nth-child(2)')] }),
     ]);
     expect(pass.unseenScreenIds).toEqual(['overview']);
     const gap = pass.screens[0]?.gaps.find((g) => g.state === 'not-covered');
@@ -164,7 +184,7 @@ describe('markUnseenScreens', () => {
       scan({
         screenId: 'overview',
         url: 'http://app/overview',
-        stops: [stop('html > body:nth-child(2)')],
+        stops: [bodyStop('html > body:nth-child(2)')],
         drafts: [draft('overview')],
         reachedSelectorPresent: false,
         reachedWhenSelector: '#app-root',
@@ -187,7 +207,7 @@ describe('markUnseenScreens', () => {
       scan({
         screenId: 'overview',
         url: 'http://app/overview',
-        stops: [stop('html > body:nth-child(2)')],
+        stops: [bodyStop('html > body:nth-child(2)')],
         drafts: [draft('overview')],
         reachedSelectorPresent: true,
       }),
@@ -203,7 +223,7 @@ describe('markUnseenScreens', () => {
       scan({
         screenId: 'overview',
         url: 'http://app/overview',
-        stops: [stop('html > body:nth-child(2)')],
+        stops: [bodyStop('html > body:nth-child(2)')],
         drafts: [draft('overview')],
         applicability: [
           applicability('overview', 'video-caption', 'inapplicable'),
@@ -220,7 +240,7 @@ describe('markUnseenScreens', () => {
   it('strips notes as well as drafts from a screen it cannot claim it saw, and keeps them on one it did', () => {
     const note = { ref: 'provider:rhds-rulepack/out-of-document', reason: '1 RHDS element(s) sit inside frames.' };
     const unseen = markUnseenScreens([
-      scan({ screenId: 'overview', url: 'http://app/overview', stops: [stop('html > body:nth-child(2)')], drafts: [draft('overview')], notes: [note] }),
+      scan({ screenId: 'overview', url: 'http://app/overview', stops: [bodyStop('html > body:nth-child(2)')], drafts: [draft('overview')], notes: [note] }),
     ]);
     expect(unseen.unseenScreenIds).toEqual(['overview']);
     expect(unseen.screens[0]?.notes).toEqual([]);
@@ -305,7 +325,7 @@ describe('markUnseenScreens', () => {
       scan({
         screenId: 'overview',
         url: 'http://app/overview',
-        stops: [stop('html > body:nth-child(2)')],
+        stops: [bodyStop('html > body:nth-child(2)')],
         gaps: [{ ref: 'provider:walk', state: 'capability-denied', reason: 'provider walk denied capability: live' }],
       }),
     ]);
@@ -317,7 +337,7 @@ describe('markUnseenScreens and page images', () => {
   it('drops the images of a screen it did not see, and keeps them on a screen it did', () => {
     const images = [{ elementPath: '#logo', name: 'Company logo', role: 'img', decorative: false }];
     const pass = markUnseenScreens([
-      scan({ screenId: 'blank', url: 'http://app/blank', stops: [stop('body')], images, imagesNotListed: 2 }),
+      scan({ screenId: 'blank', url: 'http://app/blank', stops: [bodyStop('body')], images, imagesNotListed: 2 }),
       scan({ screenId: 'seen', url: 'http://app/seen', stops: [stop('#save')], images }),
     ]);
 

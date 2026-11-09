@@ -714,6 +714,29 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('real browser driver inte
     });
   });
 
+  // The path of a body with an id is the id, so the blank-page detector never read <body id="app">
+  // as the body when it read the path tail, and a screen that crashed on mount read as seen.
+  for (const [name, body, unseen] of [
+    ['a blank page whose body has an id', '<body id="app"><div id="root"></div></body>', true],
+    ['a page whose body has an id and a control', '<body id="app"><main><button type="button">Save</button></main></body>', false],
+  ] as const) {
+    it(`reads ${name} as ${unseen ? 'unseen' : 'seen'}`, async () => {
+      const html = `<!doctype html><html lang="en"><head><title>App</title></head>${body}</html>`;
+      const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+      const runner = makeCheckRunner({
+        browser: driver,
+        providers: [],
+        config: testConfig({ surfaces: [] }),
+        allowedCapabilities: ['live'],
+        stepRunner: makeStepRunner(),
+        transcriptTabCap: 3,
+      });
+      const scan = await runner.scan({ id: 'body-id-screen', url });
+      expect(scan.stops.some((stop) => stop.elementPath === '#app')).toBe(true);
+      expect(markUnseenScreens([scan]).unseenScreenIds).toEqual(unseen ? ['body-id-screen'] : []);
+    });
+  }
+
   it('adds a capability-denied gap when provider capabilities are disallowed', async () => {
     const deniedProviderRun = vi.fn(async () => []);
     const deniedProvider: Provider = {

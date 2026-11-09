@@ -173,6 +173,18 @@ describe('keyboard walk StepRunner', () => {
     expect(stops).toEqual([{ index: 0, elementPath: 'x-host', announcement: [], focusUnreadable: 'closed-shadow-root' }]);
   });
 
+  it('records on the stop that the body has focus, whatever the path of the body is', async () => {
+    const runner = makeStepRunner();
+    const page = await makeScriptedPage({ activePaths: ['#save', '#app'], activeNodes: [null, null], announcements: [[], []], bodyAt: 1 });
+
+    const stops = await runner.run(page, [{ do: 'tab' }, { do: 'tab' }]);
+
+    expect(stops.map((stop) => [stop.elementPath, stop.onBody])).toEqual([
+      ['#save', undefined],
+      ['#app', true],
+    ]);
+  });
+
   it('throws when a step kind is unknown', async () => {
     const runner = makeStepRunner();
     const page = await makeScriptedPage({
