@@ -84,6 +84,11 @@ export function makeFakePage(overrides: Partial<Page> = {}): Page {
     activeFocusUnreadable: async () => null,
     // Nor any modal dialog, so no dialog holds focus.
     activeModalDialogs: async () => [],
+    // A fake page has no DOM, so no element has a backend node id to report.
+    focusedNodeId: async () => null,
+    // Nor an accessibility tree. The empty tree never changes on its own, so two reads around an
+    // action compare equal unless a test scripts a change.
+    fullAxTree: async () => ({ kind: 'tree', documentNodeId: null, nodes: [] }),
     axAt: async () => null,
     // A fake page has no shadow roots and no markup, so neither read finds an element.
     axInShadowRoot: async () => null,

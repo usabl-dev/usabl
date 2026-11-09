@@ -581,6 +581,32 @@ export interface AxNode {
   role: string | null;
   states: Record<string, unknown>;
 }
+// One node of the whole accessibility tree, as Page.fullAxTree reads it. The browser computes the
+// tree, so no page script world takes part. Values are never read: a field's value, and the text
+// inside an editable field, are left out, so they cannot reach evidence.
+export interface AxTreeNode {
+  // The DOM backend node id, which names the same node across two reads of one document.
+  nodeId: number;
+  // The nearest ancestor that has a DOM node, or null at the top.
+  parentId: number | null;
+  role: string | null;
+  // Null for an ignored node, which assistive technology does not perceive.
+  name: string | null;
+  // Ignored nodes are kept so the parent chain stays whole. Comparisons skip them.
+  ignored: boolean;
+  // Only the states a change is judged on: checked, expanded, pressed, selected, invalid, and sort,
+  // each as text. A state the node does not have is absent.
+  states: Record<string, string>;
+  // aria-busy is true on this node.
+  busy: boolean;
+  // The nodes its aria-controls names that the browser exposes, by backend node id.
+  controls: number[];
+}
+// What one read of the whole accessibility tree returned. A read that needs more than the budget
+// in time or in nodes is not a tree: a check that compares trees cannot use it, and says so.
+export type AxTreeRead =
+  | { kind: 'tree'; documentNodeId: number | null; nodes: AxTreeNode[] }
+  | { kind: 'over-budget'; limit: 'time' | 'nodes' };
 export interface ElementRef {
   selector: string;
 }
@@ -768,6 +794,14 @@ export interface Page {
   // holds the content slotted into it, and it climbs out of same-origin frames. Empty when no such
   // dialog holds focus, and when nothing has focus.
   activeModalDialogs(): Promise<string[]>;
+  // The DOM backend node id of the element that has focus, followed into open shadow roots and
+  // same-origin frames. Null when nothing has focus, and null when activeFocusUnreadable reports a
+  // reason, because the element read then would be the host or the frame, not the control.
+  focusedNodeId(): Promise<number | null>;
+  // The whole accessibility tree of the main frame, read from the browser over
+  // Accessibility.getFullAXTree. It covers open shadow roots, because the browser builds the tree
+  // from the flat tree, and it does not cover child frames. See AxTreeRead for the budget.
+  fullAxTree(): Promise<AxTreeRead>;
   axAt(selector: string): Promise<AxNode | null>;
   // The accessibility node of the first element innerSelector matches inside the open shadow root
   // of the first element hostSelector matches in the document. A web component's inner control,
