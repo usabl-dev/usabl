@@ -2819,8 +2819,7 @@ matched only among bot-authored comments (keyed by `<!-- usabl-report -->`). On
 
 **Two shapes.** `usabl install --ci` and `usabl install --docs-ci` *generate* a six-job
 workflow in the consuming repo. `usabl-engine` checks out the public `usabl-dev/usabl` at the
-`PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel (the operator replaces it with a full 40-char SHA),
-with no token, builds it, and hands it on as an archive with an `engine_digest` output.
+engine pin (see "The engine pin and the install report" below), with no token, builds it, and hands it on as an archive with an `engine_digest` output.
 `build-app`, fenced to `pull_request`, is the only job that runs head code and holds no secret;
 it packs the build output (repository variables `USABL_APP_BUILD_COMMAND`, default
 `npm run build`, and `USABL_APP_BUILD_DIR`, default `dist`) with a `build_digest` output.
@@ -2832,6 +2831,28 @@ Result, or writes it to the run summary on a pull request from a fork. `usabl-po
 `usabl enforce policy --trusted-ref <base SHA>` with the head read only as git objects.
 `usabl-required` (`if: always()`, needs all five) sets the required status. Serving, scanning,
 policy, and the comment all read the one base commit the event names, never a branch ref.
+
+**The engine pin and the install report.** `npm run build` ends with
+`scripts/write-build-info.mjs`, which writes `dist/build-info.json`: the package version, the
+commit (`git rev-parse HEAD`, or null outside git), and whether the tree was clean (no
+uncommitted change and no untracked file). The package carries the file. `install --ci` and
+`install --docs-ci` read it next to the running code (`src/install/build-info.ts`) and write the
+commit as the engine ref only when it is a full 40-character lowercase SHA and the tree was
+clean. Otherwise the ref is the `PIN_TO_A_TRUSTED_USABL_COMMIT` sentinel, the report says why,
+and it names the line to edit in each file. Nothing reads the network. A sentinel, or a commit
+that is not on `usabl-dev/usabl`, makes the engine checkout fail, so the gate blocks. Each
+workflow file is written when absent, left alone when identical, filled in when it is the
+unedited sentinel draft and the build has a commit, left alone with its commit named when it is
+the draft pinned to another commit, and refused when anything else differs. `usabl doctor`
+still reads a workflow that holds the sentinel as not wired. The report lists the outcome for
+each file, then the facts once, then the steps still needed: pin the engine (only with the
+sentinel), run `usabl init` or fix `appBaseUrl` (only when `usabl.config.json` has no loopback
+http `appBaseUrl` with a port), add a `dev` script (`install --ci` only, when `package.json` has
+none), and, when a file was written, commit, add the branch rule, and open a pull request. Before
+init, the report reads the port from a `--port` in the `dev` script, `server.port` in the Vite
+config, or `devServer.port` in the webpack dev config (a literal, a module-level binding to one,
+or `process.env.NAME || <literal>`), and otherwise lists every place it looked. No workflow takes
+a port from the installer.
 
 No trusted job extracts an artifact with `actions/download-artifact`, whose zip extraction
 follows a `..` in the middle of an entry name. Each writes usabl's own fetcher
@@ -2915,8 +2936,10 @@ the default-branch workflow that feeds the debt history (section 9). It runs on 
 once a day, and by hand, one run at a time. It builds the engine with the same `usabl-engine` job
 as the gate, and each later job fetches the archive and the record with usabl's own fetcher,
 checks the archive against `engine_digest`, and checks the unpacked tree before each engine run. Its
-`history-scan` job checks out main, starts the application, runs `usabl history record`, and
-uploads the record. It runs application code, so it reads only. Its `history-append` job needs
+`history-scan` job checks out main, reads `appBaseUrl` from main's `usabl.config.json`, starts
+the application with `npm run dev -- --host <host> --port <port>` on that origin, runs
+`usabl history record`, and uploads the record. An `appBaseUrl` that is missing, unreadable, or
+not an http loopback origin with an explicit port fails the job before the application starts. It runs application code, so it reads only. Its `history-append` job needs
 the scan, runs only the checked engine and no npm, appends the record with
 `usabl history append`, and pushes `usabl/history` without force, fetching and trying again when
 a push loses a race. It is the one job that holds `contents: write`, the one permission tracking
