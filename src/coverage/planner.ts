@@ -4,7 +4,7 @@
  * `run()` calls this planner directly, so unmapped UI must stay explicit evidence.
  * Unmapped UI becomes a written gap so the gate can return not_covered.
  */
-import type { AffectedScreen, Coverage, CoverageGap, FsGlob, UsablConfig } from '../contracts/index.js';
+import type { AffectedScreen, Coverage, CoverageGap, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
 import { loadAliasConfig } from './alias-config.js';
 import { buildUnresolvedReason } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports } from './import-graph.js';
@@ -20,9 +20,26 @@ function isWideBlastFile(file: string, globs: string[]): boolean {
   return globs.some((glob) => matchGlob(glob, file));
 }
 
-function isTestFile(file: string): boolean {
-  return /(^|\/)(test|tests|__tests__)(\/|$)/u.test(file) || /\.(test|spec)\.[^/]+$/u.test(file);
+// A file named like a test, such as Button.test.tsx or Button.spec.tsx, is never a UI file.
+function isTestNamedFile(file: string): boolean {
+  return /\.(test|spec)\.[^/]+$/u.test(file);
 }
+
+// A folder named test, tests, or __tests__ usually holds test helpers, but a screen component can
+// live there too. A file in such a folder counts as a UI file only when a screen reaches it.
+function isInTestFolder(file: string): boolean {
+  return /(^|\/)(test|tests|__tests__)(\/|$)/u.test(file);
+}
+
+function isTestFile(file: string): boolean {
+  return isInTestFolder(file) || isTestNamedFile(file);
+}
+
+const TEST_FOLDER_REASON =
+  'This file is in a test folder (test, tests, or __tests__) and no screen imports it, so usabl ' +
+  'reads it as test code and did not check it. This does not block. If a screen renders it, ' +
+  'import it from the route entry file of that screen, or add it to the files of a surface in ' +
+  'usabl.config.json.';
 
 // Every git listing usabl reads runs with -z, which never quotes a name. A changed path that still
 // starts with a double quote most likely came from a listing that quoted it, and then usabl cannot
@@ -150,6 +167,27 @@ function importClosure(graph: { get(file: string): string[] }, entryFile: string
   return seen;
 }
 
+interface RouteGraph {
+  graph: Awaited<ReturnType<typeof buildImportGraph>>;
+  aliasConfig: Awaited<ReturnType<typeof loadAliasConfig>>;
+  // The import closure of each route entry file, keyed by screen id.
+  closures: Map<string, Set<string>>;
+}
+
+async function buildRouteGraph(
+  fs: FsGlob,
+  attributedRoutes: ReadonlyArray<{ screenId: string; entryFile: string }>,
+): Promise<RouteGraph> {
+  const routeEntries = [...new Set(attributedRoutes.map((route) => route.entryFile))];
+  const aliasConfig = await loadAliasConfig(fs);
+  const graph = await buildImportGraph(fs, routeEntries, aliasConfig);
+  const closures = new Map<string, Set<string>>();
+  for (const route of attributedRoutes) {
+    closures.set(route.screenId, importClosure(graph, route.entryFile));
+  }
+  return { graph, aliasConfig, closures };
+}
+
 /**
  * `docsManifest` is the parsed usabl.docs.json, when the caller has already read it. run() reads
  * it once and passes it here and to the docs planner, so the file is parsed once per run and both
@@ -180,9 +218,44 @@ export async function computeCoverage(
 
   const quotedFiles = changedFiles.filter(looksQuoted);
   const listedFiles = changedFiles.filter((file) => !looksQuoted(file));
-  const uiFiles = listedFiles.filter(
-    (file) => !isTestFile(file) && config.uiFileGlobs.some((glob) => matchGlob(glob, file)),
+  const globbedFiles = listedFiles.filter(
+    (file) => !isTestNamedFile(file) && config.uiFileGlobs.some((glob) => matchGlob(glob, file)),
   );
+
+  const attributedRoutes = manifest.routes.filter(
+    // Router fallback routes have entryFile: null, so they cannot truthfully
+    // participate in route-graph closure matching.
+    (route): route is { screenId: string; url: string; entryFile: string } => route.entryFile !== null,
+  );
+  // The graph is built once, and only when something needs it: a file in a test folder asks
+  // whether a screen reaches it, and the screen mapping below asks which screens do.
+  let routeGraph: Promise<RouteGraph> | null = null;
+  const loadRouteGraph = (): Promise<RouteGraph> => {
+    routeGraph ??= buildRouteGraph(fs, attributedRoutes);
+    return routeGraph;
+  };
+
+  // A file in a test folder that a screen reaches is a UI file like any other. One no screen
+  // reaches is disclosed as excluded, not a gap, so a change to test helpers alone stays nothing
+  // to check. A surface that lists the file in its files reaches it by the operator's word.
+  const testFolderFiles = globbedFiles.filter(isInTestFolder);
+  const reachedTestFolderFiles = new Set<string>();
+  if (testFolderFiles.length > 0) {
+    const { closures } = await loadRouteGraph();
+    for (const file of testFolderFiles) {
+      const listedBySurface = config.surfaces.some((surface) => surface.files.includes(file));
+      if (listedBySurface || [...closures.values()].some((closure) => closure.has(file))) {
+        reachedTestFolderFiles.add(file);
+      }
+    }
+  }
+  const uiFiles = globbedFiles.filter((file) => !isInTestFolder(file) || reachedTestFolderFiles.has(file));
+  const excludedFiles: ExcludedFile[] = testFolderFiles
+    .filter((file) => !reachedTestFolderFiles.has(file))
+    .sort()
+    .map((file) => ({ ref: file, reason: TEST_FOLDER_REASON }));
+  // Omitted when empty, so a Coverage with nothing excluded has the same shape it always had.
+  const excluded = excludedFiles.length === 0 ? {} : { excludedFiles };
   // In a monorepo, a change in a workspace package the app depends on matches none of the app's
   // uiFileGlobs, while the app may render it. It is written down as a gap, so it never reads as
   // idle. See workspace-packages.ts for why it is not mapped to screens.
@@ -195,13 +268,13 @@ export async function computeCoverage(
   const dependencyReason = dependencies.length === 0 ? null : [...dependencies.map((change) => change.why), EVERY_SCREEN].join(' ');
   // No UI-touching files means idle. That is not the same claim as "covered".
   if (uiFiles.length === 0 && quotedFiles.length === 0 && workspaceGaps.length === 0 && dependencyReason === null) {
-    return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
+    return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true, ...excluded };
   }
   const quotedGaps: CoverageGap[] = quotedFiles.map((file) => ({ ref: file, state: 'unresolved', reason: QUOTED_PATH_REASON }));
   const unresolvedFiles: string[] = [...quotedFiles, ...workspaceGaps.map((gap) => gap.ref)];
   const gaps: CoverageGap[] = [...quotedGaps, ...workspaceGaps];
   if (uiFiles.length === 0 && dependencyReason === null) {
-    return { changedFiles, affected: [], unresolvedFiles, gaps, nothingToCheck: false };
+    return { changedFiles, affected: [], unresolvedFiles, gaps, nothingToCheck: false, ...excluded };
   }
   const affectedByScreen = new Map<string, AffectedScreen>();
   const wideBlastReason = dependencyReason === null ? {} : { reason: dependencyReason };
@@ -270,20 +343,9 @@ export async function computeCoverage(
     }
   }
 
-  const attributedRoutes = manifest.routes.filter(
-    // Router fallback routes have entryFile: null, so they cannot truthfully
-    // participate in route-graph closure matching.
-    (route): route is { screenId: string; url: string; entryFile: string } => route.entryFile !== null,
-  );
-  const routeEntries = [...new Set(attributedRoutes.map((route) => route.entryFile))];
-  const aliasConfig = await loadAliasConfig(fs);
-  const graph = await buildImportGraph(fs, routeEntries, aliasConfig);
   // Graph unresolvable entries are diagnostics about discovery fidelity.
   // They are not coverage gaps unless a changed UI file maps to no screen.
-  const routeClosures = new Map<string, Set<string>>();
-  for (const route of attributedRoutes) {
-    routeClosures.set(route.screenId, importClosure(graph, route.entryFile));
-  }
+  const { graph, aliasConfig, closures: routeClosures } = await loadRouteGraph();
 
   for (const file of uiFiles) {
     const isWideBlastMatch = isWideBlastFile(file, config.discovery.wideBlastGlobs);
@@ -364,5 +426,6 @@ export async function computeCoverage(
     unresolvedFiles,
     gaps,
     nothingToCheck: false,
+    ...excluded,
   };
 }

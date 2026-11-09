@@ -100,6 +100,39 @@ function renderNotes(result: Result): string[] {
   ];
 }
 
+/**
+ * The changed files the planner left out on purpose, such as test helpers no screen imports. They
+ * are not gaps and never change the verdict, so the heading says they do not block, and they
+ * print under any run, an idle one included, so a reader can see what usabl did not look at.
+ * Files that share a reason are printed together, then the reason once. A Result built outside
+ * the engine may carry anything here, so an entry whose fields are not strings is skipped.
+ */
+function renderExcludedFiles(result: Result): string[] {
+  const listed: unknown = result.coverage.excludedFiles;
+  if (!Array.isArray(listed)) {
+    return [];
+  }
+  const byReason = new Map<string, string[]>();
+  for (const entry of listed as Array<{ ref?: unknown; reason?: unknown }>) {
+    if (typeof entry?.ref !== 'string' || typeof entry.reason !== 'string') {
+      continue;
+    }
+    byReason.set(entry.reason, [...(byReason.get(entry.reason) ?? []), entry.ref]);
+  }
+  const count = [...byReason.values()].reduce((sum, refs) => sum + refs.length, 0);
+  if (count === 0) {
+    return [];
+  }
+  const lines = [`  excluded files, not checked: ${count} (${NOTES_HEADING})`];
+  for (const reason of [...byReason.keys()].sort()) {
+    for (const ref of [...(byReason.get(reason) ?? [])].sort()) {
+      lines.push(`    ${boundField(neutralizePrintedText(ref), 'gapRef')}`);
+    }
+    lines.push(`    why: ${boundField(neutralizePrintedText(reason), 'gapReason')}`);
+  }
+  return lines;
+}
+
 function renderOtherUnplacedFiles(gaps: readonly CoverageGap[]): string[] {
   const unplaced = gaps.filter((gap) => gap.state === 'unresolved');
   if (unplaced.length < 2) {
@@ -377,6 +410,7 @@ export function formatSummary(result: Result): string {
   lines.push(...renderFloorUnconfirmed(result));
   lines.push(...renderNotEvaluated(result));
   lines.push(...renderNotes(result));
+  lines.push(...renderExcludedFiles(result));
   lines.push(...renderBrowserSandbox(result));
   if (result.dirtyGuardedPaths.length > 0) {
     lines.push(`  guarded paths changed: ${result.dirtyGuardedPaths.join(', ')}`);

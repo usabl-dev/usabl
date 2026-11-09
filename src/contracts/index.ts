@@ -308,6 +308,15 @@ export interface Coverage {
   unresolvedFiles: string[];
   gaps: CoverageGap[]; // in-scope surfaces or checks that could not be exercised, each with a reason
   nothingToCheck: boolean; // no UI-touching files; not a verdict
+  // Changed files that match uiFileGlobs but that the planner left out on purpose, each with why.
+  // Today these are files under a test folder that no screen imports. Disclosure only: an excluded
+  // file is not a gap, the gate never reads this list, and it never moves a verdict. Optional so a
+  // Result written before it existed still reads; absent and empty both mean nothing was excluded.
+  excludedFiles?: ExcludedFile[];
+}
+export interface ExcludedFile {
+  ref: string; // the repository path of the changed file
+  reason: string; // why the planner did not count it as a UI file, and what would make it count
 }
 // The gate treats unresolved files and coverage gaps as not-covered evidence.
 
