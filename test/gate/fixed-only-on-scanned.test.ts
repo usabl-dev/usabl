@@ -155,3 +155,32 @@ describe('fixed is only claimed for a screen that was measured this run', () => 
     expect(out.verdict).toBe('verified');
   });
 });
+
+describe('a floor entry with count 0', () => {
+  // A count of 0 accepts no barrier, so there is nothing at that identity to pay down. Reading its
+  // absence as "fixed" claimed a paydown that never happened.
+  const zeroFloor = (): EvidenceFloor => {
+    const floor = floorWith('clusters', 'zero-rule');
+    return { ...floor, entries: floor.entries.map((entry) => ({ ...entry, count: 0 })) };
+  };
+  const rendered = new Map([['clusters', { signalHeld: true, elementSlots: new Set(['name:save']) }]]);
+
+  it('yields no fixed finding when nothing is observed there', () => {
+    const out = gate(
+      gateInput({ floor: zeroFloor(), drafts: [], cleanlyScannedScreens: new Set(['clusters']), renderEvidence: rendered }),
+    );
+    expect(find(out.findings, 'zero-rule')).toEqual([]);
+  });
+
+  it('still reads a barrier observed there as new', () => {
+    const findings = buildFindings(
+      gateInput({
+        floor: zeroFloor(),
+        drafts: [d({ rule: 'zero-rule' })],
+        cleanlyScannedScreens: new Set(['clusters']),
+        renderEvidence: rendered,
+      }),
+    );
+    expect(find(findings, 'zero-rule').map((f) => f.status)).toEqual(['new']);
+  });
+});
