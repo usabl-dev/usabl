@@ -123,8 +123,8 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
   },
   {
     name: 'drift',
-    usage: 'usabl drift routes [options]',
-    summary: 'Compare usabl.routes.json with the routes in the app router.',
+    usage: 'usabl drift routes|design [options]',
+    summary: 'Compare routes with the router, or requirements with the design.',
     flags: [CONFIG_FLAG],
   },
   {

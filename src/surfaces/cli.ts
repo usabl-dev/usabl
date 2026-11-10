@@ -48,7 +48,7 @@ export interface CliOptions {
   // Floor-prune-only: also remove absent floor entries this run cannot confirm were fixed, because
   // nothing shows their part of the page rendered. Every other command ignores this.
   unconfirmed: boolean;
-  driftSubcommand: 'routes' | null;
+  driftSubcommand: 'routes' | 'design' | null;
   // `usabl history record` scans main and writes a record to --out; `usabl history append <file>`
   // adds that record to the local history branch. Every other command ignores these three.
   historySubcommand: 'record' | 'append' | null;
@@ -145,7 +145,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let floorSubcommand: 'prune' | null = null;
   let partial = false;
   let unconfirmed = false;
-  let driftSubcommand: 'routes' | null = null;
+  let driftSubcommand: 'routes' | 'design' | null = null;
   let historySubcommand: 'record' | 'append' | null = null;
   let historyFile: string | null = null;
   let outPath: string | null = null;
@@ -178,8 +178,8 @@ export function parseCliArgs(argv: string[]): CliOptions {
         floorSubcommand = 'prune';
         continue;
       }
-      if (command === 'drift' && token === 'routes') {
-        driftSubcommand = 'routes';
+      if (command === 'drift' && (token === 'routes' || token === 'design')) {
+        driftSubcommand = token;
         continue;
       }
       if (command === 'import') {

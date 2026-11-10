@@ -702,12 +702,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   if (opts.command === 'drift') {
-    if (opts.driftSubcommand !== 'routes') {
-      process.stderr.write('usabl: drift supports only the routes subcommand\n');
+    if (opts.driftSubcommand !== 'routes' && opts.driftSubcommand !== 'design') {
+      process.stderr.write('usabl: drift supports the routes and design subcommands\n');
       return 2;
     }
     const config = await loadConfig(opts.configPath);
-    const outcome = await runRoutesDrift(makeFsGlob(), config.discovery.routerFile);
+    // drift design calls the Figma API. Its code is loaded only here, by a dynamic import, so no
+    // check, gate, or hook path can reach it.
+    const outcome =
+      opts.driftSubcommand === 'design'
+        ? await (await import('./drift/design.js')).runDesignDrift(makeFsGlob(), config, process.env)
+        : await runRoutesDrift(makeFsGlob(), config.discovery.routerFile);
     if (outcome.stdout) {
       process.stdout.write(outcome.stdout);
     }

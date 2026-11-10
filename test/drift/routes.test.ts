@@ -487,7 +487,7 @@ describe('drift command parsing', () => {
     try {
       const exitCode = await main(['drift']);
       expect(exitCode).toBe(2);
-      expect(stderr.join('')).toContain('drift supports only the routes subcommand');
+      expect(stderr.join('')).toContain('drift supports the routes and design subcommands');
     } finally {
       writeSpy.mockRestore();
     }
