@@ -35,6 +35,7 @@ import type {
   DocsSourceMapping,
   Draft,
   EvidenceFacts,
+  ExcludedFile,
   Fact,
   Finding,
   FloorHeadroom,
@@ -388,15 +389,28 @@ function affectedScreen(value: unknown, field: string): AffectedScreen {
   return out;
 }
 
-function coverage(value: unknown, field: string): Coverage {
+function excludedFile(value: unknown, field: string): ExcludedFile {
   const source = record(value, field);
   return {
+    ref: text(source['ref'], at(field, 'ref')),
+    reason: text(source['reason'], at(field, 'reason')),
+  };
+}
+
+function coverage(value: unknown, field: string): Coverage {
+  const source = record(value, field);
+  const out: Coverage = {
     changedFiles: texts(source['changedFiles'], at(field, 'changedFiles')),
     affected: list(source['affected'], at(field, 'affected'), affectedScreen),
     unresolvedFiles: texts(source['unresolvedFiles'], at(field, 'unresolvedFiles')),
     gaps: list(source['gaps'], at(field, 'gaps'), gap),
     nothingToCheck: flag(source['nothingToCheck'], at(field, 'nothingToCheck')),
   };
+  // Absent in a Result from an engine that never excluded a file. Disclosure only, never a gap.
+  if (has(source, 'excludedFiles')) {
+    out.excludedFiles = list(source['excludedFiles'], at(field, 'excludedFiles'), excludedFile);
+  }
+  return out;
 }
 
 // The engine id to installed version map a receipt carries when an optional engine was on. Each

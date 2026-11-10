@@ -9,6 +9,7 @@
  */
 import { parseUsablConfig } from '../intake/config.js';
 import type { InstallFs, InstallResult } from './index.js';
+import { LEGACY_USABL_RUN, USABL_MISSING_GUIDANCE, USABL_NOT_INSTALLED_LINE, USABL_RUN } from './usabl-command.js';
 
 export const CURSOR_HOOKS_JSON_PATH = '.cursor/hooks.json';
 export const CURSOR_STOP_SCRIPT_PATH = '.cursor/hooks/usabl-stop.sh';
@@ -23,17 +24,25 @@ export const DEFAULT_CURSOR_UI_FILE_GLOBS = ['src/**'];
 const STOP_LOOP_LIMIT = 3;
 
 // The canonical stop script. It pipes Cursor's stdin (with status and loop_count) through
-// `npx usabl stop-hook --cursor`, which emits the Cursor-native followup_message protocol.
+// `npm exec --no -- usabl stop-hook --cursor`, which emits the Cursor-native followup_message
+// protocol. npm's own error output is silenced, so when usabl cannot run the only stderr line is
+// the plain one. The exit code is then 1, never 2, because Cursor reads 2 as a block.
 // All gate logic stays inside the engine's stop-hook runner; this script is a thin adapter.
 export const CURSOR_STOP_SCRIPT = `#!/usr/bin/env bash
 # Cursor stop hook adapter for usabl.
 # Pipes Cursor's stdin through the engine and emits followup_message to loop on block.
+# It runs the usabl installed in this project with npm exec --no, which never downloads a package.
+# When usabl cannot run, it prints one line on stderr and exits 1. Cursor treats an exit other
+# than 0 and 2 as a failed hook and lets the agent finish. Nothing was checked on that stop.
 # This script is managed by "usabl install --cursor". Manual edits will be detected.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
-cat | npx usabl stop-hook --cursor
+if ! cat | npm_config_loglevel=silent ${USABL_RUN} stop-hook --cursor; then
+  echo "${USABL_NOT_INSTALLED_LINE}" >&2
+  exit 1
+fi
 `;
 
 // The hooks.json content. Written as a string so byte-identical comparison works for
@@ -56,7 +65,9 @@ export function buildCursorHooksJson(existingHooks: Record<string, unknown> | nu
 
 export const CURSOR_COMMAND_CONTENTS = `# usabl-check
 
-Run \`npx usabl check --self-check\` from the repository root.
+Run \`${USABL_RUN} check --self-check\` from the repository root.
+
+${USABL_MISSING_GUIDANCE}
 
 Report:
 
@@ -122,6 +133,61 @@ alwaysApply: false
 
 # usabl accessibility workflow
 
+Before you start a task, run \`${USABL_RUN} brief --json --files <paths>\` from the repository root, with the paths of the files the task will edit. Keep the screens it says the task reaches and its \`done\` list in view while you work. The brief is a plan. Only the gate decides a verdict.
+
+When changing user interface code:
+
+- After a meaningful UI change, run \`/usabl-check\` or \`${USABL_RUN} check --self-check\` from the repository root.
+- ${USABL_MISSING_GUIDANCE}
+- Treat usabl findings as the source of truth for machine-checkable accessibility barriers.
+- Explain verdicts honestly: \`verified\`, \`regression\`, \`not_covered\`, or \`approval_required\`.
+- Do not call work verified from the self-check alone. The gate (\`usabl check\` / CI) decides proof.
+- Prefer fixing source over query-parameter previews or disabling checks.
+`;
+}
+
+export const CURSOR_RULE_CONTENTS = buildCursorRuleContents(DEFAULT_CURSOR_UI_FILE_GLOBS);
+
+// The files the previous release wrote, byte for byte. They ran "npx usabl", which downloads a
+// package when usabl is not installed. A file that holds exactly these bytes is usabl's own, so a
+// reinstall rewrites it and doctor reports it as a security drift. Any other difference is still
+// refused.
+const LEGACY_CURSOR_STOP_SCRIPT = `#!/usr/bin/env bash
+# Cursor stop hook adapter for usabl.
+# Pipes Cursor's stdin through the engine and emits followup_message to loop on block.
+# This script is managed by "usabl install --cursor". Manual edits will be detected.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+cat | npx usabl stop-hook --cursor
+`;
+
+const LEGACY_CURSOR_COMMAND_CONTENTS = `# usabl-check
+
+Run \`npx usabl check --self-check\` from the repository root.
+
+Report:
+
+1. The verdict.
+2. The affected accessibility behavior.
+3. The first finding and suggested repair, when present.
+4. Any missing coverage.
+
+This is an on-demand self-check the assistant runs during implementation. It is
+advisory. Do not call the work verified from this command alone. The accessibility
+gate (\`usabl check\` / CI) decides proof.
+`;
+
+function buildLegacyCursorRuleContents(uiFileGlobs: string[]): string {
+  return `---
+description: Run usabl accessibility self-checks while editing UI and before claiming work is done
+globs: ${cursorRuleGlobs(uiFileGlobs)}
+alwaysApply: false
+---
+
+# usabl accessibility workflow
+
 Before you start a task, run \`npx usabl brief --json --files <paths>\` from the repository root, with the paths of the files the task will edit. Keep the screens it says the task reaches and its \`done\` list in view while you work. The brief is a plan. Only the gate decides a verdict.
 
 When changing user interface code:
@@ -133,8 +199,6 @@ When changing user interface code:
 - Prefer fixing source over query-parameter previews or disabling checks.
 `;
 }
-
-export const CURSOR_RULE_CONTENTS = buildCursorRuleContents(DEFAULT_CURSOR_UI_FILE_GLOBS);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -151,13 +215,14 @@ function isUsablStopEntry(entry: unknown): boolean {
 // Simple whole-file drafts (command and rule).
 function simpleFiles(uiFileGlobs: string[]) {
   return [
-    { path: CURSOR_COMMAND_PATH, draft: CURSOR_COMMAND_CONTENTS },
-    { path: CURSOR_RULE_PATH, draft: buildCursorRuleContents(uiFileGlobs) },
+    { path: CURSOR_COMMAND_PATH, draft: CURSOR_COMMAND_CONTENTS, legacy: LEGACY_CURSOR_COMMAND_CONTENTS },
+    { path: CURSOR_RULE_PATH, draft: buildCursorRuleContents(uiFileGlobs), legacy: buildLegacyCursorRuleContents(uiFileGlobs) },
   ] as const;
 }
 
+// `rewrites` names the files written over an old npx form, which doctor reports as a security drift.
 export type CursorPlan =
-  | { action: 'write'; files: Array<{ path: string; draft: string }> }
+  | { action: 'write'; files: Array<{ path: string; draft: string }>; rewrites: string[] }
   | { action: 'already-wired'; paths: string[] }
   | { action: 'refuse'; path: string; reason: string };
 
@@ -232,7 +297,8 @@ export async function planCursor(fs: InstallFs, uiFileGlobs: string[]): Promise<
   }
 
   const existingScript = await fs.readFile(CURSOR_STOP_SCRIPT_PATH);
-  if (existingScript !== null && existingScript !== CURSOR_STOP_SCRIPT) {
+  const scriptIsLegacy = existingScript === LEGACY_CURSOR_STOP_SCRIPT;
+  if (existingScript !== null && existingScript !== CURSOR_STOP_SCRIPT && !scriptIsLegacy) {
     return {
       action: 'refuse',
       path: CURSOR_STOP_SCRIPT_PATH,
@@ -246,13 +312,13 @@ export async function planCursor(fs: InstallFs, uiFileGlobs: string[]): Promise<
 
   // Plan the simple whole-file drafts (command and rule).
   const files = simpleFiles(uiFileGlobs);
-  const existing: Array<{ path: string; draft: string; contents: string | null }> = [];
+  const existing: Array<{ path: string; draft: string; legacy: string; contents: string | null }> = [];
   for (const file of files) {
     existing.push({ ...file, contents: await fs.readFile(file.path) });
   }
 
   for (const file of existing) {
-    if (file.contents !== null && file.contents !== file.draft) {
+    if (file.contents !== null && file.contents !== file.draft && file.contents !== file.legacy) {
       return {
         action: 'refuse',
         path: file.path,
@@ -263,15 +329,22 @@ export async function planCursor(fs: InstallFs, uiFileGlobs: string[]): Promise<
 
   // Collect all files that need writing.
   const toWrite: Array<{ path: string; draft: string }> = [];
+  const rewrites: string[] = [];
   if (hooksPlan.action === 'write') {
     toWrite.push({ path: CURSOR_HOOKS_JSON_PATH, draft: hooksPlan.draft });
   }
-  if (existingScript === null) {
+  if (existingScript === null || scriptIsLegacy) {
     toWrite.push({ path: CURSOR_STOP_SCRIPT_PATH, draft: CURSOR_STOP_SCRIPT });
+    if (scriptIsLegacy) {
+      rewrites.push(CURSOR_STOP_SCRIPT_PATH);
+    }
   }
   for (const file of existing) {
-    if (file.contents === null) {
+    if (file.contents === null || file.contents === file.legacy) {
       toWrite.push({ path: file.path, draft: file.draft });
+      if (file.contents !== null) {
+        rewrites.push(file.path);
+      }
     }
   }
 
@@ -280,7 +353,7 @@ export async function planCursor(fs: InstallFs, uiFileGlobs: string[]): Promise<
     return { action: 'already-wired', paths: allPaths };
   }
 
-  return { action: 'write', files: toWrite };
+  return { action: 'write', files: toWrite, rewrites };
 }
 
 function cursorRefusalMessage(path: string): string {
@@ -301,11 +374,16 @@ export async function writeCursor(fs: InstallFs, plan: CursorPlan): Promise<Inst
     const chmodHint = hasStopScript
       ? `\nMake the stop script executable: chmod +x ${CURSOR_STOP_SCRIPT_PATH}`
       : '';
+    const rewriteNote =
+      plan.rewrites.length === 0
+        ? ''
+        : `\nRewrote ${plan.rewrites.join(', ')}: the old files ran "${LEGACY_USABL_RUN}", which downloads a package when usabl is not installed. ` +
+          `They now run "${USABL_RUN}", which never downloads.`;
     return {
       exitCode: 0,
       action: 'written',
       path: plan.files[0]?.path ?? CURSOR_HOOKS_JSON_PATH,
-      message: `Wrote ${paths}. Review these drafts before you merge them.${chmodHint}`,
+      message: `Wrote ${paths}. Review these drafts before you merge them.${rewriteNote}${chmodHint}`,
     };
   }
   if (plan.action === 'already-wired') {

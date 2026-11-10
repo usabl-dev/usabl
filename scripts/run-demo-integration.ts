@@ -28,11 +28,12 @@
  * - The lock has one three-way race: a third run that creates a lock while a
  *   second is moving a displaced live lock back leaves two runs believing they
  *   hold it. See demo-integration-lock.ts.
- * - The 30-minute ceiling on the Vitest step assumes Vitest runs the two suites in
- *   parallel. Their worst-case envelopes are 1,350 s (hero-bug-flip) and 720 s
- *   (fixture-clean) with the app's default 60 s readiness budget: 1,350 s in
- *   parallel, 2,070 s in sequence. A serial run (for example one forced through
- *   forwarded Vitest arguments) must raise the ceiling or run one suite at a time.
+ * - The 30-minute ceiling on the Vitest step assumes Vitest runs the three suites
+ *   in parallel. Their worst-case envelopes are 1,350 s (hero-bug-flip), 720 s
+ *   (fixture-clean), and 1,140 s (sensitivity-level2) with the app's default 60 s
+ *   readiness budget: 1,350 s in parallel, 3,210 s in sequence. A serial run (for
+ *   example one forced through forwarded Vitest arguments) must raise the ceiling
+ *   or run one suite at a time.
  *
  * Usage: USABL_FIXTURE_APP_CWD=/path/to/usabl-app npm run test:demo-integration
  * Extra arguments are passed to Vitest (for example one test file path).
@@ -49,7 +50,7 @@ const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const lockPath = join(repoRoot, '.demo-integration.lock');
 const BUILD_TIMEOUT_MS = 5 * 60_000;
 // The suites bound their own waits; this is only a ceiling for a hung runner, and
-// it assumes the two suites run in parallel (see the header).
+// it assumes the suites run in parallel (see the header).
 const TEST_TIMEOUT_MS = 30 * 60_000;
 const GRACE_MS = 5_000;
 // Removing a stopped run's clones may wait for each clone's server group; two clones

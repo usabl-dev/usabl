@@ -12,6 +12,8 @@ choose one of the eight systems to work on.
   accessibility barrier on the sample app.
 - [Test and report](test-and-report.md): test with keyboard, assistive technology,
   and product judgment, then file a report that someone else can reproduce.
+- [How sensitive is usabl](how-sensitive-is-usabl.md): put declared defects on pages and
+  see which ones the checks catch, with `usabl verify sensitivity`.
 - [Set up the CI gate](ci-gate.md): what `usabl install --ci` writes and fills in, and
   the steps it leaves to you.
 - [How usabl is developed](make-a-contribution.md): setup, commands, and review

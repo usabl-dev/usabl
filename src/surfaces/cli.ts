@@ -66,6 +66,13 @@ export interface CliOptions {
   // brief-only: the task's files from `--files <path> [<path> ...]`. Null when the flag was not
   // given, which means the changed files git reports.
   files: string[] | null;
+  // verify-only: the subcommand, such as `sensitivity`. Null when none was given.
+  verifySubcommand: string | null;
+  // verify-only: --app, which also runs the catalog on the configured surfaces. On init, --app takes
+  // a folder instead and is read into `app`.
+  verifyApp: boolean;
+  // verify-only: the surface ids from `--screen <id> [<id> ...]`. Null when the flag was not given.
+  screens: string[] | null;
 }
 
 // The value flags of serve-build and extract-build. Those commands parse their own arguments.
@@ -142,6 +149,9 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let branchRule = false;
   let isolatedBrowser = false;
   let files: string[] | null = null;
+  let verifySubcommand: string | null = null;
+  let verifyApp = false;
+  let screens: string[] | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -170,6 +180,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
         historyFile = token;
         continue;
       }
+      if (command === 'verify' && verifySubcommand === null) {
+        // Any word, so an unknown subcommand is refused by name instead of read as a command.
+        verifySubcommand = token;
+        continue;
+      }
       command = token;
       if (command !== 'enforce') {
         enforceCheck = null;
@@ -183,6 +198,9 @@ export function parseCliArgs(argv: string[]): CliOptions {
       if (command !== 'history') {
         historySubcommand = null;
         historyFile = null;
+      }
+      if (command !== 'verify') {
+        verifySubcommand = null;
       }
       continue;
     }
@@ -261,6 +279,28 @@ export function parseCliArgs(argv: string[]): CliOptions {
     if (token === '--force') {
       // Init-only overwrite of draft policy files. This is not a gate bypass.
       force = true;
+      continue;
+    }
+    if (token === '--app' && command === 'verify') {
+      // verify-only: also run the catalog on the app's own screens. It takes no value here.
+      verifyApp = true;
+      continue;
+    }
+    if (token === '--screen') {
+      // verify-only: every id up to the next flag is a surface id to measure.
+      const values: string[] = [];
+      while (index + 1 < argv.length) {
+        const value = argv[index + 1];
+        if (value === undefined || isFlag(value)) {
+          break;
+        }
+        values.push(value);
+        index += 1;
+      }
+      if (values.length === 0) {
+        throw new Error('--screen requires at least one surface id, such as --screen settings');
+      }
+      screens = [...(screens ?? []), ...values];
       continue;
     }
     if (token === '--app') {
@@ -358,6 +398,9 @@ export function parseCliArgs(argv: string[]): CliOptions {
     cursorStopHook,
     isolatedBrowser,
     files,
+    verifySubcommand,
+    verifyApp,
+    screens,
   };
 }
 

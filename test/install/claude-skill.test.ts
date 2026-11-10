@@ -57,11 +57,12 @@ function memoryFs(files: Record<string, string>): InstallFs & { store: Record<st
 describe('CLAUDE_SKILL_CONTENTS', () => {
   it('declares the usabl-check skill and pins the advisory self-check command', () => {
     // The frontmatter must name the skill and restrict its one tool to the advisory self-check
-    // flag, so the installed command can never run anything but "npx usabl check --self-check".
+    // flag, so the installed command can never run anything but
+    // "npm exec --no -- usabl check --self-check".
     expect(CLAUDE_SKILL_PATH).toBe('.claude/skills/usabl-check/SKILL.md');
     expect(CLAUDE_SKILL_CONTENTS).toContain('name: usabl-check');
-    expect(CLAUDE_SKILL_CONTENTS).toContain('allowed-tools: Bash(npx usabl check --self-check)');
-    expect(CLAUDE_SKILL_CONTENTS).toContain('npx usabl check --self-check');
+    expect(CLAUDE_SKILL_CONTENTS).toContain('allowed-tools: Bash(npm exec --no -- usabl check --self-check)');
+    expect(CLAUDE_SKILL_CONTENTS).toContain('npm exec --no -- usabl check --self-check');
   });
 
   it('states the skill is advisory and that the Stop hook is the gate', () => {
@@ -78,15 +79,17 @@ describe('CLAUDE_SKILL_CONTENTS', () => {
     const expected = `---
 name: usabl-check
 description: Run the advisory usabl accessibility check during implementation and explain the current result.
-allowed-tools: Bash(npx usabl check --self-check), Bash(npx usabl brief --json --files:*)
+allowed-tools: Bash(npm exec --no -- usabl check --self-check), Bash(npm exec --no -- usabl brief --json --files:*)
 ---
 
-Before you start a task, run \`npx usabl brief --json --files <paths>\` from the repository
+Before you start a task, run \`npm exec --no -- usabl brief --json --files <paths>\` from the repository
 root, with the paths of the files the task will edit. Keep the screens it says the task
 reaches and its \`done\` list in view while you work. The brief is a plan. Only the gate
 decides a verdict.
 
-Run \`npx usabl check --self-check\` from the repository root.
+Run \`npm exec --no -- usabl check --self-check\` from the repository root.
+
+If npm says it could not determine the executable to run, or that npx canceled due to missing packages, usabl is not installed in this project. Tell the user. Do not install or download a package named usabl to work around it.
 
 Report:
 
@@ -104,11 +107,11 @@ decides whether Claude can finish.
 
   it('starts with the task brief and lets the skill run it', () => {
     expect(CLAUDE_SKILL_CONTENTS).toContain(
-      'allowed-tools: Bash(npx usabl check --self-check), Bash(npx usabl brief --json --files:*)\n',
+      'allowed-tools: Bash(npm exec --no -- usabl check --self-check), Bash(npm exec --no -- usabl brief --json --files:*)\n',
     );
     const body = CLAUDE_SKILL_CONTENTS.split('---\n')[2] ?? '';
     // On a clean tree the brief with no files has nothing to check, so the step names the files.
-    expect(body.trimStart().startsWith('Before you start a task, run `npx usabl brief --json --files <paths>`')).toBe(
+    expect(body.trimStart().startsWith('Before you start a task, run `npm exec --no -- usabl brief --json --files <paths>`')).toBe(
       true,
     );
     expect(body).toContain('the files the task will edit');
@@ -134,7 +137,7 @@ describe('CLAUDE_FIX_SKILL_CONTENTS', () => {
     expect(CLAUDE_FIX_SKILL_PATH).toBe('.claude/skills/usabl-fix/SKILL.md');
     expect(CLAUDE_FIX_SKILL_CONTENTS).toContain('name: usabl-fix');
     expect(CLAUDE_FIX_SKILL_CONTENTS).toContain(
-      'allowed-tools: Bash(npx usabl check --self-check), Read, Edit, Write',
+      'allowed-tools: Bash(npm exec --no -- usabl check --self-check), Read, Edit, Write',
     );
   });
 

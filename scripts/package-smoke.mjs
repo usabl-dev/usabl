@@ -229,7 +229,9 @@ try {
     input: '{invalid-json}',
   });
   assert.equal(directHook.status, 0, failure('installed Stop hook', directHook));
-  assert.match(directHook.stderr, /NOT verified - invalid stop hook input JSON/);
+  assert.match(directHook.stderr, /NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked/);
+  // Claude Code does not show that stderr on exit 0, so the same line goes out as a systemMessage.
+  assert.equal(JSON.parse(directHook.stdout.trim()).systemMessage, directHook.stderr.trim());
 
   const linkedPackage = join(consumer, 'linked-usabl');
   await symlink(installedPackage, linkedPackage, 'dir');
@@ -238,7 +240,7 @@ try {
     input: '{invalid-json}',
   });
   assert.equal(linkedHook.status, 0, failure('linked Stop hook', linkedHook));
-  assert.match(linkedHook.stderr, /NOT verified - invalid stop hook input JSON/);
+  assert.match(linkedHook.stderr, /NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked/);
 
   // The stable command wired into .claude/settings.json is `usabl stop-hook`. Prove it
   // resolves through the installed CLI and stays always-exit-0 with the same disclosure as
@@ -248,16 +250,16 @@ try {
     input: '{invalid-json}',
   });
   assert.equal(stopHookCommand.status, 0, failure('installed usabl stop-hook', stopHookCommand));
-  assert.match(stopHookCommand.stderr, /NOT verified - invalid stop hook input JSON/);
+  assert.match(stopHookCommand.stderr, /NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked/);
 
-  // The draft prefers `npx usabl stop-hook` so it works without a global install. Prove that
-  // form resolves the local bin and behaves identically.
-  const stopHookNpx = run('npx', ['--no-install', 'usabl', 'stop-hook'], {
+  // The generated hooks run `npm exec --no -- usabl stop-hook`, which runs the local bin and never
+  // downloads a package. Prove that form resolves the local bin and behaves identically.
+  const stopHookNpmExec = run('npm', ['exec', '--no', '--', 'usabl', 'stop-hook'], {
     cwd: consumer,
     input: '{invalid-json}',
   });
-  assert.equal(stopHookNpx.status, 0, failure('installed npx usabl stop-hook', stopHookNpx));
-  assert.match(stopHookNpx.stderr, /NOT verified - invalid stop hook input JSON/);
+  assert.equal(stopHookNpmExec.status, 0, failure('installed npm exec --no -- usabl stop-hook', stopHookNpmExec));
+  assert.match(stopHookNpmExec.stderr, /NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked/);
 
   process.stdout.write(
     'usabl package smoke: installed CLI, stop-hook command, and direct or linked Stop hooks executed.\n',

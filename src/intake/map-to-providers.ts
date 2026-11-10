@@ -161,44 +161,170 @@ function flowUndecidableDraft(
   };
 }
 
-// Whether the flow driver runs a step. A kind it does not know, a click with no selector, and a
-// press with no key are not run.
-function flowRuns(step: Step): boolean {
-  return (
-    step.do === 'tab' ||
-    step.do === 'activate' ||
-    (step.do === 'click' && typeof step.selector === 'string') ||
-    (step.do === 'press' && typeof step.key === 'string')
-  );
+// The expected text was announced only before the flow's first step, which the flow does not count,
+// and its own steps did not announce it. An earlier check may have changed the page, such as by
+// saving once already, so whether these steps announce it is unknown. That is a gap, never a fail.
+function flowHeardBeforeDraft(
+  requirement: Requirement,
+  node: AxNode | null,
+  elementPath: string,
+  expectedAnnouncement: string,
+  announcements: string[],
+): Draft {
+  return {
+    rule: `intake:${requirement.id}`,
+    layer: 'intake-flow',
+    severity: 'moderate',
+    evidenceClass: 'deterministic',
+    screenId: requirement.surface,
+    elementPath,
+    elementName: node?.name ?? null,
+    role: node?.role ?? null,
+    whatUserExperiences: `Whether the flow's steps make users hear "${expectedAnnouncement}" is unknown.`,
+    why: "The text was announced before the flow's first step, which the flow does not count, and its own steps did not announce it. An earlier check may have changed the page, so usabl cannot tell whether these steps announce it.",
+    fix: 'Check this flow by hand with a screen reader, on the page as it first loads.',
+    evidence: evidenceFromNode(node, { expectedAnnouncement, announcements, heardBeforeFirstStep: true }),
+    confidence: 'unverified',
+  };
 }
 
-// Runs one flow step. Returns false for a step the driver does not run, so the caller can report
-// it rather than read the page as if the step had happened.
-async function runFlowStep(page: Page, step: Step): Promise<boolean> {
+// The focused control is named with the expected text, but focus did not change during the flow,
+// or what had focus before it could not be read. Focus an earlier check left there is not evidence
+// of anything the flow's steps did, so this is a gap, never a pass and never a fail.
+function flowFocusUnchangedDraft(
+  requirement: Requirement,
+  node: AxNode | null,
+  elementPath: string,
+  expectedAnnouncement: string,
+  announcements: string[],
+  readBefore: boolean,
+): Draft {
+  return {
+    rule: `intake:${requirement.id}`,
+    layer: 'intake-flow',
+    severity: 'moderate',
+    evidenceClass: 'deterministic',
+    screenId: requirement.surface,
+    elementPath,
+    elementName: node?.name ?? null,
+    role: node?.role ?? null,
+    whatUserExperiences: `Whether the flow's steps make users hear "${expectedAnnouncement}" is unknown.`,
+    why: readBefore
+      ? "The focused control is named with the expected text, but focus was already on that control before the flow ran, with the same name, and no step announced the text. Its name is not evidence of anything the flow's steps did."
+      : "The focused control is named with the expected text, but what had focus could not be read before the flow ran, so usabl cannot tell whether the flow's steps moved focus there.",
+    fix: 'Write the flow so its own steps move focus to that control or announce the text, or check this flow by hand with a screen reader.',
+    evidence: evidenceFromNode(node, readBefore ? { expectedAnnouncement, announcements, focusUnchanged: true } : { expectedAnnouncement, announcements, focusBeforeUnreadable: true }),
+    confidence: 'unverified',
+  };
+}
+
+// What had focus: its DOM backend node id and its trimmed accessible name. Null when a read failed.
+interface FocusMark {
+  nodeId: number | null;
+  name: string;
+}
+
+async function focusedNodeIdOrUnknown(page: Page): Promise<number | null | undefined> {
+  try {
+    return await page.focusedNodeId();
+  } catch {
+    return undefined;
+  }
+}
+
+function focusMark(nodeId: number | null | undefined, node: AxNode | null): FocusMark | null {
+  return nodeId === undefined ? null : { nodeId, name: node?.name?.trim() ?? '' };
+}
+
+async function readFocusMark(page: Page): Promise<FocusMark | null> {
+  const nodeId = await focusedNodeIdOrUnknown(page);
+  try {
+    return focusMark(nodeId, await page.activeNode());
+  } catch {
+    return null;
+  }
+}
+
+// Whether the flow's steps changed what has focus: another node, or the same node with another
+// name. Unknown, when either read failed, is not a change.
+function focusChanged(before: FocusMark | null, after: FocusMark | null): boolean {
+  if (before === null || after === null) return false;
+  return before.nodeId !== after.nodeId || before.name !== after.name;
+}
+
+function hasText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/**
+ * The fields each step kind uses, exactly what runFlowStep reads for it. A test runs the driver on
+ * each kind and checks that it reads these fields and no others, so the two cannot drift apart.
+ * Exported for tests.
+ */
+export const FLOW_STEP_FIELDS: ReadonlyMap<string, readonly string[]> = new Map([
+  ['tab', ['do']],
+  ['activate', ['do']],
+  ['press', ['do', 'key']],
+  ['click', ['do', 'selector']],
+]);
+
+function listOf(names: readonly string[]): string {
+  if (names.length <= 2) return names.join(' and ');
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
+}
+
+function withArticle(kind: string): string {
+  return /^[aeiou]/u.test(kind) ? `an ${kind}` : `a ${kind}`;
+}
+
+// What stops the flow driver from running a step as written, or an empty list when it can run it.
+// A click needs a selector and a press needs a key; a missing, empty, or blank value is no value.
+// An activate step presses Enter on the focused control and needs nothing more. A field the kind
+// does not use would be ignored, so the step would run as something other than what was written.
+// Any other kind is not run.
+function problemsForFlow(step: Step): string[] {
+  const fields = FLOW_STEP_FIELDS.get(step.do);
+  if (fields === undefined) {
+    return ['the flow does not run this kind of step, so write do as tab, activate, press with a key, or click with a selector'];
+  }
+  const problems: string[] = [];
+  if (step.do === 'click' && !hasText(step.selector)) {
+    problems.push("a click step needs a selector, such as selector: '#delete'");
+  }
+  if (step.do === 'press' && !hasText(step.key)) {
+    problems.push('a press step needs a key, such as key: Escape');
+  }
+  const extra = Object.keys(step)
+    .filter((field) => !fields.includes(field))
+    .sort();
+  if (extra.length > 0) {
+    const what = extra.length === 1 ? 'is not a field' : 'are not fields';
+    const hint = extra.includes('expectedAnnouncement') ? ' (write expectedAnnouncement on the flow assertion, beside steps)' : '';
+    problems.push(`${listOf(extra)} ${what} of ${withArticle(step.do)} step, which takes only ${listOf(fields)}${hint}`);
+  }
+  return problems;
+}
+
+/**
+ * Runs one flow step the driver can run. The caller checked every step with problemsForFlow first.
+ * It reads only the fields FLOW_STEP_FIELDS lists for the step's kind. Exported for tests.
+ */
+export async function runFlowStep(page: Page, step: Step): Promise<void> {
   if (step.do === 'tab') {
     await page.tab();
-    return true;
-  }
-
-  if (step.do === 'activate') {
+  } else if (step.do === 'activate') {
     await page.press('Enter');
-    return true;
-  }
-
-  if (step.do === 'click' && typeof step.selector === 'string') {
+  } else if (step.do === 'click' && typeof step.selector === 'string') {
     await page.click(step.selector);
-    return true;
-  }
-
-  if (step.do === 'press' && typeof step.key === 'string') {
+  } else if (step.do === 'press' && typeof step.key === 'string') {
     await page.press(step.key);
-    return true;
+  } else {
+    throw new Error(`the flow cannot run step kind ${step.do}`);
   }
-  return false;
 }
 
-// The drains of every step, read as the one drain the flow used to take after its last step: the
-// texts in step order, and the first reason any of them could not be trusted.
+// The drains taken after the flow's steps, read as one drain: the texts in step order, and the
+// first reason any of them could not be trusted.
 function unionOfDrains(drains: readonly AnnouncementSourcesDrain[]): AnnouncementDrain {
   return {
     texts: drains.flatMap((drain) => drain.texts),
@@ -327,21 +453,40 @@ function toFlowProvider(requirement: Requirement, assertion: FlowAssertion): Pro
 }
 
 async function runFlow(page: Page, requirement: Requirement, assertion: FlowAssertion, watch: SilentChangeWatch): Promise<Draft[]> {
+  // A step the driver cannot run would run as nothing, and one with a field its kind does not use
+  // would run as something other than what was written. Either way the flow would judge a page its
+  // steps did not touch as written. So every step is checked before any runs. One that cannot run
+  // as written makes the flow a not-covered gap that names it, and the silent change rule reports
+  // it as a step not run.
+  const missing: string[] = [];
+  for (const [index, step] of assertion.steps.entries()) {
+    const problems = problemsForFlow(step);
+    if (problems.length > 0) {
+      missing.push(`step ${index} (${step.do}): ${problems.join(', and ')}`);
+      watch.notRun(step, index);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `the flow ran none of its steps, because it cannot run ${missing.join('; ')}. Steps are counted from 0.`,
+    );
+  }
+
   await page.armAnnouncementCapture();
-  // Each step's drain is kept. The flow's verdict reads them all in step order, with the drain
-  // taken before the first step leading, so it reads what the one drain after the last step read.
-  // A drain that fails is kept as an error: the verdict needs every one, and fails with the first
-  // failure, the way the one drain did. A flow with no expected announcement never needed one.
+  // Each step's drain is kept. The flow's verdict reads them all in step order. A drain that fails
+  // is kept as an error: the verdict needs every one, and fails with the first failure. A flow with
+  // no expected announcement never needed one.
   const drains: AnnouncementSourcesDrain[] = [];
-  // The step each kept drain was taken after, in the same order, or null for the drain before the
-  // first step.
-  const drainSteps: (number | null)[] = [];
+  // The step each kept drain was taken after, in the same order.
+  const drainSteps: number[] = [];
   const drainFailures: unknown[] = [];
   const takeDrain = async (stepIndex: number | null): Promise<AnnouncementSourcesDrain | null> => {
     try {
       const drain = await page.drainAnnouncementSources();
-      drains.push(drain);
-      drainSteps.push(stepIndex);
+      if (stepIndex !== null) {
+        drains.push(drain);
+        drainSteps.push(stepIndex);
+      }
       return drain;
     } catch (error) {
       drainFailures.push(error);
@@ -349,22 +494,44 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
     }
   };
 
-  watch.start(await takeDrain(null));
+  // An earlier check can leave speech in flight, such as a status message that lands after its
+  // click. So the flow first waits for the page to go quiet, with the same wait a click step uses,
+  // and that speech lands before the drain below.
+  let quiet: ActionSettle | null;
+  try {
+    quiet = await page.settleAfterAction();
+  } catch {
+    quiet = null;
+  }
+  // The capture runs for the life of the page, so the drain before the first step holds every
+  // announcement since the last drain, such as one an earlier check caused. The verdict never
+  // reads it: the flow is judged only on what was announced after its first step ran. The silent
+  // change rule takes it as background speech. A failure of this drain still fails the flow,
+  // because the speech it should have cleared could then land in the first step's drain.
+  const drainBefore = await takeDrain(null);
+  watch.start(drainBefore);
+  // A page that did not go quiet may still speak for an earlier check during the first step. A flow
+  // that judges speech cannot tell that speech from its own, so it runs none of its steps.
+  if (assertion.expectedAnnouncement !== undefined && (quiet === null || !quiet.settled)) {
+    throw new Error(
+      quiet === null
+        ? 'the wait for the page to go quiet before the flow failed, so speech an earlier check started could be counted as the flow\'s own. The flow ran none of its steps.'
+        : 'the page did not go quiet before the flow started, so speech an earlier check started could be counted as the flow\'s own. The flow ran none of its steps.',
+    );
+  }
+  // What had focus before the first step. The focused control's name counts as the flow's evidence
+  // only when the flow's steps changed the focused node or its name.
+  const focusBefore = assertion.expectedAnnouncement === undefined ? null : await readFocusMark(page);
   for (const [index, step] of assertion.steps.entries()) {
-    const action = isActionStep(step) && flowRuns(step);
+    const action = isActionStep(step);
     if (action) {
       await watch.before(page, step, index);
     }
-    let ran: boolean;
     try {
-      ran = await runFlowStep(page, step);
+      await runFlowStep(page, step);
     } catch (error) {
       watch.threw(step, index, error);
       throw error;
-    }
-    if (!ran) {
-      watch.notRun(step, index);
-      continue;
     }
     // An action step waits for the page to react before its window is read. A wait that fails
     // leaves the step unjudged by the rule and changes nothing for the flow.
@@ -388,11 +555,16 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
   const expectedAnnouncement = assertion.expectedAnnouncement;
 
   const node = await page.activeNode();
+  const focusAfter = focusMark(await focusedNodeIdOrUnknown(page), node);
   if (drainFailures.length > 0) {
     throw drainFailures[0];
   }
   const drain = unionOfDrains(drains);
-  const own = await flowVerdict(page, requirement, expectedAnnouncement, node, drain);
+  const own = await flowVerdict(page, requirement, expectedAnnouncement, node, drain, {
+    textsBefore: drainBefore?.texts ?? [],
+    focusBefore,
+    focusMoved: focusChanged(focusBefore, focusAfter),
+  });
   // The rule stays quiet only where it would repeat the flow's own draft for the same step. A flow
   // that fails says its last step was not heard, so the rule emits nothing for that step: a second
   // draft would be a second finding for one accessibility barrier. A flow gap about an undecidable
@@ -400,12 +572,22 @@ async function runFlow(page: Page, requirement: Requirement, assertion: FlowAsse
   if (own.some((draft) => draft.confidence === 'fail')) {
     watch.quiet(assertion.steps.length - 1);
   } else if (own.length > 0 && drain.undecidable !== null) {
-    const undecidableStep = drainSteps[drains.findIndex((entry) => entry.undecidable !== null)] ?? null;
-    if (undecidableStep !== null) {
+    const undecidableStep = drainSteps[drains.findIndex((entry) => entry.undecidable !== null)];
+    if (undecidableStep !== undefined) {
       watch.dropGap(undecidableStep, 'announcements undecidable');
     }
   }
   return own;
+}
+
+// What the flow knows about the page before its first step. None of it passes the flow.
+interface FlowStart {
+  // The texts of the drain taken before the first step. They never pass the flow and never fail it.
+  textsBefore: readonly string[];
+  // What had focus before the first step, or null when it could not be read.
+  focusBefore: FocusMark | null;
+  // Whether the flow's steps changed what has focus.
+  focusMoved: boolean;
 }
 
 async function flowVerdict(
@@ -414,10 +596,12 @@ async function flowVerdict(
   expectedAnnouncement: string,
   node: AxNode | null,
   drain: AnnouncementDrain,
+  before: FlowStart,
 ): Promise<Draft[]> {
   const announcements = drain.texts;
   const heardOnFocus = trimEqual(node?.name ?? null, expectedAnnouncement);
-  if (heardOnFocus) {
+  // The focused control's name counts only when the flow's steps changed what has focus.
+  if (heardOnFocus && before.focusMoved) {
     return [];
   }
   // The focused control's name does not depend on the drain. Past this point the answer does,
@@ -435,9 +619,19 @@ async function flowVerdict(
     return [];
   }
 
+  if (heardOnFocus) {
+    return [
+      flowFocusUnchangedDraft(requirement, node, await page.activePath(), expectedAnnouncement, announcements, before.focusBefore !== null),
+    ];
+  }
+
   const unreadable = await page.activeFocusUnreadable();
   if (unreadable !== null) {
     return [flowUnreadableDraft(requirement, await page.activePath(), expectedAnnouncement, announcements, unreadable)];
+  }
+
+  if (before.textsBefore.some((text) => trimEqual(text, expectedAnnouncement))) {
+    return [flowHeardBeforeDraft(requirement, node, await page.activePath(), expectedAnnouncement, announcements)];
   }
 
   return [

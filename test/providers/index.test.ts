@@ -8,7 +8,7 @@ import type {
   RuleApplicability,
 } from '../../src/contracts/index.js';
 import { makeFakeDeps, makeFakePage } from '../../src/deps/fakes.js';
-import { runProviders } from '../../src/providers/index.js';
+import { ProviderRunFailed, runProviders } from '../../src/providers/index.js';
 import { makeKeyboardWalkProvider } from '../../src/providers/keyboard-walk/index.js';
 import { makeRulepackProvider } from '../../src/providers/rulepack/index.js';
 import { SEL } from '../../src/providers/rulepack/selectors.js';
@@ -119,6 +119,29 @@ describe('runProviders', () => {
       state: 'capability-denied',
     });
     expect(result.gaps[0]?.reason).toContain('live');
+  });
+
+  it('keeps only the first line of the message of a provider that threw ProviderRunFailed', async () => {
+    // A browser error's later lines can be its call log, which can quote the element's markup.
+    const message = [
+      'click timed out on #delete after 5000ms',
+      'Call log:',
+      '  - locator resolved to <button id="delete" aria-label="Delete alice@example.com">Delete</button>',
+    ].join('\n');
+    const provider: Provider = {
+      id: 'intake:flow-delete',
+      layer: 'intake-flow',
+      capabilities: ['live'],
+      run: async () => {
+        throw new ProviderRunFailed(message, []);
+      },
+    };
+
+    const result = await runProviders([provider], await makeContext(), ['live']);
+
+    expect(result.gaps).toEqual([
+      { ref: 'provider:intake:flow-delete', state: 'not-covered', reason: 'provider intake:flow-delete failed: click timed out on #delete after 5000ms' },
+    ]);
   });
 
   it('runs an allowed provider and returns its drafts', async () => {

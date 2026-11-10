@@ -15,6 +15,7 @@ import { planOverlay } from '../install/overlay.js';
 import { planClaude } from '../install/claude.js';
 import { planClaudeSkill, CLAUDE_SKILLS, type ClaudeSkillDescriptor } from '../install/claude-skill.js';
 import { planCursor, readCursorUiFileGlobs } from '../install/cursor.js';
+import { legacyDownloadDrift } from '../install/usabl-command.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { classifyHistoryWorkflow, USABL_HISTORY_WORKFLOW_PATH } from '../install/history-ci.js';
 import { verifyBranchRule, REQUIRED_CHECK, type GhReader } from '../install/branch-rule.js';
@@ -532,6 +533,8 @@ async function collectStopHook(deps: DoctorDeps): Promise<SurfaceReport> {
   //     the surface is absent, not merely drifted.
   //   update + normalize -> drifted: a usabl Stop hook is present but is not the stable
   //     command (a bare or retired form), so it needs normalizing. No claim about which form.
+  //   update + remove-download -> drifted, reported as a security drift: the hook is the old
+  //     npx form, which downloads a package when usabl is not installed.
   //   write -> missing: the file itself is absent.
   //   refuse -> unknown: an unparseable, foreign, or ambiguous Stop hook usabl cannot
   //     recognize. Doctor cannot positively confirm, so unknown, never wired.
@@ -548,12 +551,20 @@ async function collectStopHook(deps: DoctorDeps): Promise<SurfaceReport> {
         nextStep: '.claude/settings.json exists but has no usabl Stop hook. Run "usabl install --claude" to add it.',
       };
     }
+    if (plan.reason === 'remove-download') {
+      return {
+        id: 'stop-hook',
+        label: STOP_HOOK_LABEL,
+        state: 'drifted',
+        nextStep: legacyDownloadDrift('the usabl Stop hook in .claude/settings.json', 'usabl install --claude'),
+      };
+    }
     return {
       id: 'stop-hook',
       label: STOP_HOOK_LABEL,
       state: 'drifted',
       nextStep:
-        'A usabl Stop hook is present but is not the canonical "npx usabl stop-hook" command. Run "usabl install --claude" to normalize it.',
+        'A usabl Stop hook is present but is not the canonical "npm exec --no -- usabl stop-hook" command. Run "usabl install --claude" to normalize it.',
     };
   }
   if (plan.action === 'write') {
@@ -589,6 +600,14 @@ async function collectClaudeSkill(
   if (plan.action === 'already-wired') {
     return { id, label, state: 'wired', nextStep: '' };
   }
+  if (plan.action === 'rewrite') {
+    return {
+      id,
+      label,
+      state: 'drifted',
+      nextStep: legacyDownloadDrift(`the ${skill.humanName} skill in ${plan.path}`, 'usabl install --claude-skill'),
+    };
+  }
   if (plan.action === 'refuse') {
     return {
       id,
@@ -610,6 +629,14 @@ async function collectCursor(deps: DoctorDeps): Promise<SurfaceReport> {
   const plan = await planCursor(deps.fs, uiFileGlobs);
   if (plan.action === 'already-wired') {
     return { id: 'cursor', label: CURSOR_LABEL, state: 'wired', nextStep: '' };
+  }
+  if (plan.action === 'write' && plan.rewrites.length > 0) {
+    return {
+      id: 'cursor',
+      label: CURSOR_LABEL,
+      state: 'drifted',
+      nextStep: legacyDownloadDrift(`the usabl Cursor wiring in ${plan.rewrites.join(', ')}`, 'usabl install --cursor'),
+    };
   }
   if (plan.action === 'refuse') {
     return {

@@ -86,7 +86,8 @@ describe('usabl install command wiring', () => {
     expect(code).toBe(0);
     // The nested .claude folder must be created by the install filesystem before the write.
     const written = await readFile(join(workspace, CLAUDE_SETTINGS_PATH), 'utf8');
-    expect(written).toContain('npx usabl stop-hook');
+    expect(written).toContain('npm exec --no -- usabl stop-hook');
+    expect(written).not.toContain('npx usabl');
   });
 
   it('routes --claude-skill to the claude-skill generator and writes the usabl-check skill file', async () => {
