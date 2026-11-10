@@ -352,9 +352,10 @@ interface GateVariant {
 }
 
 const APP_BUILD_STEPS = `${buildEngineSteps(
-  `          # For now the lockfile pins usabl as file:../usabl, and Actions has no sibling folder.
-          # Later: npm ci installs usabl from the registry. Drop this step.
-          mkdir "\${GITHUB_WORKSPACE}/../usabl"
+  `          # This places the engine in ../usabl for an app whose lockfile installs usabl from file:../usabl.
+          # An app that does not use that path never reads the folder, so for that app this step does
+          # not change what npm ci installs or what the build makes.
+          mkdir -p "\${GITHUB_WORKSPACE}/../usabl"
           tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"`,
 )}
 
