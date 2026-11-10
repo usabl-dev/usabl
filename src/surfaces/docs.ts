@@ -2,8 +2,9 @@
  * Docs-output projection for a gated Result plus the design-intake requirement bundle.
  * This unit assembles read-only doc artifacts; it never recomputes findings or mints a verdict.
  * generateDocs runs the engine to get that Result, and only chooses which files it plans from.
- * It scrubs page-derived transcript text with the published scrub before egress, because artifacts
- * leave the trust boundary and are written to be published.
+ * It scrubs the Result with the published scrub before generation, and every string in the
+ * artifacts again after it, because artifacts leave the trust boundary and are written to be
+ * published.
  */
 import type { Deps, DocArtifact, FsGlob, RequirementBundle, Result, UsablConfig } from '../contracts/index.js';
 import { parseDocsManifest } from '../coverage/docs-manifest.js';
@@ -12,7 +13,7 @@ import { generateAnnouncementSnippets } from '../docs/announcement-snippets.js';
 import { markStale, reportSourceTree } from '../docs/evidence-binding.js';
 import { generateKeyboardPaths } from '../docs/keyboard-paths.js';
 import { run } from '../run.js';
-import { scrubPublishedResult } from './scrub.js';
+import { scrubOutboundData, scrubPublishedResult } from './scrub.js';
 
 /** The trees a report is made from and listed against. */
 export interface DocsTrees {
@@ -47,7 +48,7 @@ export function collectDocArtifacts(
   // page repeats, as the CLI, the JSON Result, and the pull request comment do.
   const safe = scrubPublishedResult(result);
 
-  const artifacts: DocArtifact[] = [
+  const generated: DocArtifact[] = [
     ...generateAnnouncementSnippets(safe),
     ...generateKeyboardPaths(safe),
   ];
@@ -61,15 +62,22 @@ export function collectDocArtifacts(
   ].sort();
 
   for (const surface of contentSurfaces) {
-    artifacts.push(generateAltTextManifest(safe, bundle, surface));
+    generated.push(generateAltTextManifest(safe, bundle, surface));
   }
 
   const drafted = safe.screens
     .filter((screen) => screen.images !== undefined && !contentSurfaces.includes(screen.screenId))
     .sort((a, b) => (a.screenId < b.screenId ? -1 : a.screenId > b.screenId ? 1 : 0));
   for (const screen of drafted) {
-    artifacts.push(generatePageAltTextManifest(safe, screen));
+    generated.push(generatePageAltTextManifest(safe, screen));
   }
+
+  // Then every string in the artifacts takes the published scrub again, with no identity exception.
+  // The published Result keeps URLs in element paths as written so floor and waiver keys still
+  // match, but nothing matches keys against a docs report. So a URL query or fragment inside an
+  // element path is dropped here too, and so is one in a content requirement's selector or
+  // expected text, which come from the requirements file and not from the Result.
+  const artifacts = scrubOutboundData(generated);
 
   const startTree = options.sourceTree ?? null;
   const sourceTree = reportSourceTree(safe, startTree);

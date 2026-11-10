@@ -2084,10 +2084,16 @@ Configured surface URLs are not page text. `gap.ref`, `ScreenScan.url`, and
 Result, and from there into the overlay and the stop hook. That is deliberate: the overlay
 attributes a gap to a screen by comparing these values exactly, so rewriting one would silently
 orphan the gap it belongs to. The surfaces CI publishes are different. The CLI text, the JSON
-Result that `usabl check --json` writes, the pull request comment, and the `usabl docs` report
-(JSON and `--html`) drop the userinfo, the query, and the fragment from every URL in the Result,
-the same way `checkPage` output does. Nothing reads those surfaces back to match a gap to a
-screen, so dropping them costs no match.
+Result that `usabl check --json` writes, and the pull request comment drop the userinfo, the
+query, and the fragment from every URL in the Result outside its identity fields, the same way
+`checkPage` output does. Nothing reads those surfaces back to match a gap to a screen, so
+dropping them costs no match. The identity fields (`screenId`, `layer`, `rule`, `rules`,
+`elementKey`, `elementPath`, and `surfaces`) keep their URLs as written, because floor and waiver
+keys are matched against them byte for byte. The `usabl docs` report (JSON and `--html`) has no
+such exception: nothing matches keys against it, so after generation every string in every docs
+artifact, element paths included, loses the userinfo, the query, and the fragment of each URL in
+it, and so does a content requirement's `selector` and `expectedText`. A docs element path that
+held a URL is therefore not a working selector.
 
 So the loader keeps the value and refuses what must not be published. A `surfaces[].url` or an
 `appBaseUrl` that carries userinfo (`https://user:pass@host/screen`, or a user name alone) is
@@ -4045,7 +4051,7 @@ image's element path and the text it has now. An image with no name reads `Marke
 decorative on the page.` when its own `alt` is empty or its role is `none` or
 `presentation`, and `No text alternative on the page.` otherwise.
 That text is untrusted page text. It passes the published scrub, which also drops the query and
-the fragment of any URL the page repeats, each string is cut to a
+the fragment of any URL the page repeats, element paths included, each string is cut to a
 fixed length and marked `(shortened)` when cut, and at most 200 images are listed per
 screen, with one more entry that counts the rest. Every drafted entry has `origin:
 'page'` and `status: 'draft'`, and never an `evidenceRef`. It never becomes a check, a

@@ -328,4 +328,58 @@ describe('docs output uses the published scrub', () => {
     expect(json).not.toContain('SECRETPOISON');
     expect(json).toContain('http://127.0.0.1:5173/clusters');
   });
+
+  // Nothing matches keys against a docs report, so element paths lose URL queries and fragments
+  // too, unlike the identity fields of the published Result.
+  it('drops the query and the fragment of a URL inside a stop or image element path', () => {
+    const result = resultFixture({
+      screens: [
+        {
+          ...screenFixture('clusters', [
+            {
+              index: 0,
+              elementPath: 'main > a[href="https://app.test/share?preview=SECRETPOISON#state=FRAGPOISON"]',
+              announcement: [{ kind: 'name', text: 'Share', fromTree: true, source: 'ax-tree' }],
+            },
+          ]),
+          images: [{ elementPath: 'img[src="https://cdn.test/a.png?sig=IMGPOISON"]', name: 'Logo', role: 'img', decorative: false }],
+        },
+      ],
+    });
+
+    const { json } = projectDocs(result, { version: 1, requirements: [] });
+
+    expect(json).not.toContain('SECRETPOISON');
+    expect(json).not.toContain('FRAGPOISON');
+    expect(json).not.toContain('IMGPOISON');
+    expect(json).toContain('https://app.test/share');
+    expect(json).toContain('https://cdn.test/a.png');
+  });
+
+  it('puts a content requirement selector and expected text through the same scrub', () => {
+    const bundle: RequirementBundle = {
+      version: 1,
+      requirements: [
+        {
+          id: 'alt-qr',
+          kind: 'content',
+          surface: 'clusters',
+          description: 'QR alt text',
+          assertion: {
+            type: 'content',
+            selector: 'img[src="https://cdn.test/qr.png?sig=SELPOISON"]',
+            expectedText: 'Scan to open https://app.test/join?invite=TEXTPOISON#f',
+          },
+          approved: true,
+        },
+      ],
+    };
+
+    const { json } = projectDocs(resultFixture(), bundle);
+
+    expect(json).not.toContain('SELPOISON');
+    expect(json).not.toContain('TEXTPOISON');
+    expect(json).toContain('https://cdn.test/qr.png');
+    expect(json).toContain('Scan to open https://app.test/join');
+  });
 });
