@@ -19,10 +19,6 @@ const ALWAYS_GUARDED = [
 export type SessionPins = Record<string, string>;
 type GuardConfigSource = Pick<UsablConfig, 'guardedPaths' | 'requirements'>;
 
-function normalizePrefix(prefix: string): string {
-  return prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -82,45 +78,77 @@ export function buildGuardedSet(config: GuardConfigSource): string[] {
 // groups, so these two characters are the only ones that make an entry a pattern.
 const GLOB_CHARACTERS = /[*{]/;
 
-function isGlobEntry(entry: string): boolean {
-  return GLOB_CHARACTERS.test(normalizePrefix(entry));
+/**
+ * The canonical form of a guardedPaths entry, the form git prints a path in: no leading `./`, no
+ * repeated or trailing `/`, and no `.` segment. A `..` segment takes away the segment before it,
+ * as git does with a pathspec. `.` alone is the whole tree, written as the empty string. Every step
+ * below reads this form and never the raw entry text, because git output never holds `./` or `//`,
+ * and an entry compared as written would match nothing.
+ */
+function canonicalEntry(entry: string): string {
+  const segments: string[] = [];
+  for (const segment of entry.split('/')) {
+    if (segment === '' || segment === '.') {
+      continue;
+    }
+    if (segment === '..') {
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.join('/');
+}
+
+interface GuardedEntry {
+  // The canonical form. The empty string is the whole tree.
+  path: string;
+  glob: boolean;
+}
+
+function readGuardedEntry(entry: string): GuardedEntry {
+  const path = canonicalEntry(entry);
+  return { path, glob: GLOB_CHARACTERS.test(path) };
 }
 
 // The folder a git listing must cover to find every file an entry can match: the entry itself
 // when it is a literal path, or the literal segments before its first glob segment. An empty
 // result is the whole tree.
-function listingPrefix(entry: string): string {
-  const prefix = normalizePrefix(entry);
-  if (!GLOB_CHARACTERS.test(prefix)) {
-    return prefix;
+function listingPrefix(entry: GuardedEntry): string {
+  if (!entry.glob) {
+    return entry.path;
   }
-  const segments = prefix.split('/');
+  const segments = entry.path.split('/');
   return segments.slice(0, segments.findIndex((segment) => GLOB_CHARACTERS.test(segment))).join('/');
 }
 
 /**
  * The one matcher for a guardedPaths entry, used on the working tree and on every ref, by the
  * local guard and by the CI policy check. A literal entry matches itself and every file under it,
- * as a folder. A glob entry matches the files the glob matches and every file under a folder it
- * matches, with Node's dot rule, so a ref listing selects what fs.glob selects on the working tree.
+ * as a folder, and the whole tree matches every file. A glob entry matches the files the glob
+ * matches and every file under a folder it matches, with Node's dot rule.
  */
-function guardedEntryMatcher(entry: string): (path: string) => boolean {
-  const prefix = normalizePrefix(entry);
-  const under = prefix + '/';
-  if (!GLOB_CHARACTERS.test(prefix)) {
-    return (path) => path === prefix || path.startsWith(under);
+function guardedEntryMatcher(entry: GuardedEntry): (path: string) => boolean {
+  if (entry.path === '') {
+    return () => true;
   }
-  const matchesFile = globMatcher(prefix, { dot: false });
-  const matchesBeneath = globMatcher(prefix + '/**', { dot: false });
-  return (path) => path === prefix || path.startsWith(under) || matchesFile(path) || matchesBeneath(path);
+  const exact = entry.path;
+  const under = exact + '/';
+  if (!entry.glob) {
+    return (path) => path === exact || path.startsWith(under);
+  }
+  const matchesFile = globMatcher(exact, { dot: false });
+  const matchesBeneath = globMatcher(exact + '/**', { dot: false });
+  return (path) => path === exact || path.startsWith(under) || matchesFile(path) || matchesBeneath(path);
 }
 
 /**
  * The files the entries match among the listed paths. A literal entry that matches nothing is
- * kept as its own path, so a guarded file absent everywhere is still compared. A glob entry is
- * never kept as a path: no file has that name, and git show reads such a name as empty text.
+ * kept as its own path, in canonical form, so a guarded file absent everywhere is still compared.
+ * A glob entry is never kept as a path: no file has that name. The whole tree is never kept either:
+ * git show reads the root as a folder listing, not as a file.
  */
-function selectGuarded(entries: string[], listed: Iterable<string>, alsoByEntry: string[][] = []): string[] {
+function selectGuarded(entries: GuardedEntry[], listed: Iterable<string>, alsoByEntry: string[][] = []): string[] {
   const paths = [...new Set(listed)];
   const selected = new Set<string>();
   entries.forEach((entry, index) => {
@@ -136,15 +164,21 @@ function selectGuarded(entries: string[], listed: Iterable<string>, alsoByEntry:
       selected.add(path);
       found = true;
     }
-    if (!found && !isGlobEntry(entry)) {
-      selected.add(entry);
+    if (!found && !entry.glob && entry.path !== '') {
+      selected.add(entry.path);
     }
   });
   return [...selected].sort();
 }
 
-function listingPrefixes(entries: string[]): string[] {
+function listingPrefixes(entries: GuardedEntry[]): string[] {
   return [...new Set(entries.map(listingPrefix))].sort();
+}
+
+// fs.glob patterns for one entry. fs.glob returns files only, so a folder entry expands to the
+// files beneath it and a file entry matches itself.
+function workingTreeGlobs(entry: GuardedEntry): string[] {
+  return entry.path === '' ? ['**'] : [entry.path, entry.path + '/**'];
 }
 
 /**
@@ -160,22 +194,16 @@ export async function expandGuardedSet(
   guardedPaths: string[],
   trustedRef = 'HEAD',
 ): Promise<string[]> {
-  const prefixes = listingPrefixes(guardedPaths);
+  const entries = guardedPaths.map(readGuardedEntry);
+  const prefixes = listingPrefixes(entries);
   const refs = trustedRef === 'HEAD' ? ['HEAD'] : [trustedRef, 'HEAD'];
   const [refListings, status, workingByEntry] = await Promise.all([
     Promise.all(refs.map((ref) => deps.git.lsFilesUnder(ref, prefixes))),
     deps.git.statusZ(),
-    Promise.all(
-      guardedPaths.map((entry) => {
-        const prefix = normalizePrefix(entry);
-        // fs.glob returns files only, so a folder entry expands to the files beneath it and a
-        // file entry matches itself.
-        return deps.fs.glob([prefix, prefix + '/**']);
-      }),
-    ),
+    Promise.all(entries.map((entry) => deps.fs.glob(workingTreeGlobs(entry)))),
   ]);
   const listed = [...refListings.flat(), ...status.map((entry) => entry.path)];
-  return selectGuarded(guardedPaths, listed, workingByEntry);
+  return selectGuarded(entries, listed, workingByEntry);
 }
 
 /**
@@ -242,7 +270,7 @@ export async function listDivergedGuardedPathsAtRefs(
 
   // Each ref is listed once, and the same matcher the local guard uses selects the guarded files,
   // so a glob entry lists its files at both refs and a file the head deleted is still compared.
-  const entries = buildGuardedSet(scopeConfig ?? { guardedPaths: [] });
+  const entries = buildGuardedSet(scopeConfig ?? { guardedPaths: [] }).map(readGuardedEntry);
   const prefixes = listingPrefixes(entries);
   const [trustedFiles, workingFiles] = await Promise.all([
     git.lsFilesUnder(trustedRef, prefixes),
