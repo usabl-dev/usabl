@@ -62,6 +62,7 @@ import { BYPASS_ONCE_PATH, RECEIPT_DIR, saveReceipt, type ReceiptFs } from './su
 import { runRoutesDrift } from './drift/routes.js';
 import { runDoctor, type DoctorDeps } from './doctor/index.js';
 import { probePlaywrightChromium } from './doctor/playwright-bootstrap.js';
+import { readScannerVersions } from './deps/scanner-versions.js';
 import { probeChromiumSandbox } from './doctor/sandbox-probe.js';
 import { appendRecord } from './history/append.js';
 import { makeHistoryGit } from './history/git.js';
@@ -678,6 +679,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       configPath: opts.configPath,
       env: process.env,
       probePlaywrightChromium,
+      // The same read "usabl check" binds into a receipt, so doctor reports what the run would see.
+      readScannerVersions,
       probeChromiumSandbox: () => probeChromiumSandbox(),
       // Read-only: git ls-files and check-ignore, and a stat for the permission bits.
       sessionFile: {

@@ -34,6 +34,7 @@ import { gate, renderEvidenceOf } from './gate/index.js';
 import {
   earliestAppliedWaiverExpiry,
   mintReceipt,
+  scannerVersionGaps,
   summarizeApplicability,
   treeChangedDuringCheckGap,
 } from './evidence/receipt.js';
@@ -205,6 +206,9 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
       gaps: [
         // First, because it explains why nothing this run measured can be bound to one tree.
         ...(treeChangedDuringCheck ? [treeChangedDuringCheckGap()] : []),
+        // A scanner version usabl cannot read cannot be bound, so no receipt could stand for this
+        // run. The gap makes that not covered, never verified. An idle run binds nothing.
+        ...(nothingToCheck ? [] : scannerVersionGaps(deps.scannerVersions)),
         // First, so the surfaces that name one example per gap state name this one. It explains
         // why no app screen appears on this run. Docs screens can still appear below it.
         ...(scanConfigResolution.unreadable === null ? [] : [scanConfigResolution.unreadable]),

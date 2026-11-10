@@ -52,6 +52,82 @@ export interface ReceiptArgs {
   historyHead?: string | null;
 }
 
+/** The value a scanner version reader returns when it cannot read the version. */
+export const UNREADABLE_SCANNER_VERSION = "unknown";
+
+const SCANNER_NAMES = [
+  ["axeCore", "axe-core"],
+  ["playwright", "Playwright"],
+  ["chromium", "Chromium"],
+] as const;
+
+/**
+ * The names of the core scanners whose version could not be read, in a fixed order. A receipt
+ * binds these versions so a changed scanner cannot reuse an old result. A version that reads as
+ * "unknown", or as nothing, would match itself after the scanner changed, so it binds nothing.
+ */
+export function unreadableScanners(versions: ScannerVersions): string[] {
+  return SCANNER_NAMES.filter(([key]) => {
+    const value: unknown = versions[key];
+    return typeof value !== "string" || value.trim().length === 0 || value.trim() === UNREADABLE_SCANNER_VERSION;
+  }).map(([, name]) => name);
+}
+
+/** Scanner names as one phrase: "Chromium", "axe-core and Playwright", "a, b and c". */
+export function scannerNamesText(names: readonly string[]): string {
+  return joinNames(names);
+}
+
+function joinNames(names: readonly string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * What to do about scanner versions usabl could not read. The run's gap and doctor both use it, so
+ * the two always name the same fix.
+ */
+export function scannerVersionFix(names: readonly string[]): string {
+  const packages = names.filter((name) => name !== "Chromium");
+  const steps: string[] = [];
+  if (packages.length > 0) {
+    steps.push(
+      `For ${joinNames(packages)}, reinstall your dependencies (for example "npm ci") so each package has a ` +
+        "package.json with a version.",
+    );
+  }
+  if (names.includes("Chromium")) {
+    steps.push(
+      'For Chromium, run "npx playwright install chromium" from your app root. If PLAYWRIGHT_BROWSERS_PATH ' +
+        "points Playwright at a browser you placed there yourself, such as a system Chromium, make sure that " +
+        "browser prints its version when run with --version, or keep the folder name Playwright gives it, " +
+        "such as chromium-1234.",
+    );
+  }
+  return steps.join(" ");
+}
+
+/**
+ * The gap owed when a scanner version cannot be read, or none. A receipt without a real version
+ * could verify after that scanner changed, so such a run mints no receipt. The gate ranks the gap
+ * as not_covered, so the run never reads as verified.
+ */
+export function scannerVersionGaps(versions: ScannerVersions): CoverageGap[] {
+  const names = unreadableScanners(versions);
+  if (names.length === 0) return [];
+  return [
+    {
+      ref: "scanner versions",
+      state: "not-covered",
+      reason:
+        `usabl could not read the version of ${joinNames(names)}. A receipt records every scanner version so ` +
+        "that a changed scanner cannot reuse an old result, and a version usabl cannot read could change " +
+        `without anyone seeing it. So this run cannot verify accessibility and mints no receipt. ${scannerVersionFix(names)} ` +
+        'Then run "usabl doctor" to confirm the version reads, and run usabl again.',
+    },
+  ];
+}
+
 function isIso8601Utc(value: unknown): value is string {
   if (typeof value !== "string") return false;
   try {
@@ -201,7 +277,7 @@ function assertList(field: string, value: unknown): asserts value is unknown[] {
  * The grammar governs screen and surface ids only. Receipt `surfaces` are output channels such as
  * "cli" and `notCovered` holds file paths, so neither is checked here.
  */
-function checkReceiptInput(config: UsablConfig, args: ReceiptArgs): void {
+function checkReceiptInput(deps: Deps, config: UsablConfig, args: ReceiptArgs): void {
   const checked: unknown = args.checked;
   assertList("args.checked", checked);
   checked.forEach((id, index) => assertIdField(MINT_SOURCE, `args.checked[${index}]`, id));
@@ -244,6 +320,13 @@ function checkReceiptInput(config: UsablConfig, args: ReceiptArgs): void {
       `${MINT_SOURCE} args.waiverExpiresAt must be null or an ISO-8601 UTC timestamp (YYYY-MM-DDTHH:mm:ss.sssZ).`,
     );
   }
+  const unreadable = unreadableScanners(deps.scannerVersions);
+  if (unreadable.length > 0) {
+    throw new InputRefusedError(
+      "deps.scannerVersions",
+      `${MINT_SOURCE} cannot bind the version of ${joinNames(unreadable)}, because it could not be read.`,
+    );
+  }
   if (args.activeWaivers !== 0 && expiry === null) {
     throw new InputRefusedError(
       "args.waiverExpiresAt",
@@ -257,7 +340,7 @@ export async function mintReceipt(
   config: UsablConfig,
   args: ReceiptArgs,
 ): Promise<Receipt> {
-  checkReceiptInput(config, args);
+  checkReceiptInput(deps, config, args);
   // Mint uses the same expanded guarded input as verify so an engine-minted receipt
   // can re-verify without relying on caller-side pre-expansion conventions.
   const expandedGuardedPaths = await expandGuardedSet(
@@ -441,7 +524,11 @@ export async function verifyReceipt(
     mintedScanners.axeCore !== currentScanners.axeCore ||
     mintedScanners.playwright !== currentScanners.playwright ||
     mintedScanners.chromium !== currentScanners.chromium ||
-    !sameEngines(mintedScanners.engines, currentScanners.engines)
+    !sameEngines(mintedScanners.engines, currentScanners.engines) ||
+    // A version that could not be read matches itself after the scanner changed, so it never
+    // counts as a match, on either side.
+    unreadableScanners(mintedScanners).length > 0 ||
+    unreadableScanners(currentScanners).length > 0
   ) {
     failedFields.push("scannerVersions");
   }
