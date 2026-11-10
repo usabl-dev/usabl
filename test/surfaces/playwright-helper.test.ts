@@ -296,6 +296,24 @@ describe('requirementGapsForPage', () => {
     ]);
   });
 
+  it('reports a design check whose surface matches nothing, approved or not', () => {
+    const heading: Requirement = {
+      id: 'figma-users-heading-1',
+      kind: 'heading',
+      surface: 'usrs',
+      description: 'The heading "Users" is level 1, as in the design.',
+      assertion: { type: 'heading', name: 'Users', level: 1 },
+      approved: true,
+    };
+    // An unapproved one is a gap too: nothing checked it, even as a preview.
+    const draftOnly: Requirement = { ...heading, id: 'figma-users-heading-2', approved: false };
+    expect(requirementGapsForPage(bundle(heading, draftOnly), 'clusters', known).map((gap) => gap.ref)).toEqual([
+      'requirement:figma-users-heading-1',
+      'requirement:figma-users-heading-2',
+    ]);
+    expect(requirementGapsForPage(bundle({ ...heading, surface: 'clusters' }), 'clusters', known)).toEqual([]);
+  });
+
   it('treats a page labeled with a requirement surface as known even when config does not list it', () => {
     // The page is the requirement's surface, so the requirement runs here and nothing is a guess.
     expect(requirementGapsForPage(bundle(content('heading', 'settings')), 'settings', known)).toEqual([]);

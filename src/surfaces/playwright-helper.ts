@@ -244,7 +244,7 @@ export async function loadProjectIntake(projectRoot: string, rootWasPassed: bool
  * Which design requirements a single page check cannot account for. Pure so the rule is testable
  * without a browser or a project on disk. A null screenId is an unlabeled page.
  *
- * Each runtime requirement (content, flow, or voice) lands in one of three places:
+ * Each runtime requirement (any kind but doc) lands in one of three places:
  * - Its surface is this page's surface, so its provider checks it on this page.
  * - Its surface is a different surface the project names, and this page is a surface the project
  *   or a requirement names. It belongs to that other screen, so it is out of scope here.
@@ -309,7 +309,8 @@ export function requirementGapsForPage(
  * - It acts on the caller's page. The keyboard walk presses Tab, the PatternFly probes open and
  *   close dialogs and menus, and each flow and voice requirement on this surface runs its authored
  *   steps: clicks and key presses. A voice requirement also waits up to a few seconds after each
- *   step for the page to settle. Hand it a page you no longer need in its current state.
+ *   step for the page to settle. A focus order check also presses Tab. Hand it a page you no
+ *   longer need in its current state.
  */
 export async function checkPage(pwPage: PwPage, options: CheckPageOptions = {}): Promise<PageCheckResult> {
   // The caller's id is checked before anything reads the project or touches the page, against the

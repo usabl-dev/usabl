@@ -339,9 +339,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// The one rule for which screen a requirement checks. The content and flow runs read it, and the
-// voice run skips a contract whose surfaceId is not the screen, which is the same test. So a brief
-// that says a requirement is off on a screen cannot disagree with what the scan does there.
+// The one rule for which screen a requirement checks. The content, flow, and design check runs read
+// it, and the voice run skips a contract whose surfaceId is not the screen, which is the same test.
+// So a brief that says a requirement is off on a screen cannot disagree with what the scan does.
 function requirementPlan(requirement: Requirement, screenId: string): PlannedApplicability {
   return screenId === requirement.surface
     ? { applies: true }
