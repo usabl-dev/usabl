@@ -1,7 +1,9 @@
 /**
  * The ledger is measurement only. No verdict path may import it: the gate, the run, the stop hook,
- * the CI enforce step, and checkPage. This walks the static imports of each one through the source
- * tree and checks that no ledger module is reached.
+ * the CI enforce step, and checkPage. This walks the imports of each one through the source tree and
+ * checks that no ledger module is reached, and that none of them, nor the overlay host, loads the
+ * CLI. The CLI itself, which CI runs for check and enforce, may load the ledger only by a dynamic
+ * import inside the debt ledger command.
  */
 import { readFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -21,8 +23,13 @@ const VERDICT_PATHS = [
 
 // Static imports and re-exports, with or without "type", and dynamic imports of a literal path.
 const IMPORT = /(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\sfrom\s+)?['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/gu;
+// Static imports and re-exports only. A dynamic import runs only on the code path that calls it.
+const STATIC_IMPORT = /(?:import|export)\s+(?:type\s+)?(?:[^'";(]*?\sfrom\s+)?['"]([^'"]+)['"]/gu;
 
-async function reachable(entry: string): Promise<Set<string>> {
+// Surfaces that are not verdict paths but must not load the whole CLI either.
+const LIGHT_SURFACES = ['src/surfaces/overlay-host.ts'];
+
+async function reachable(entry: string, pattern: RegExp = IMPORT): Promise<Set<string>> {
   const seen = new Set<string>();
   const queue = [entry];
   while (queue.length > 0) {
@@ -37,7 +44,7 @@ async function reachable(entry: string): Promise<Set<string>> {
       continue;
     }
     seen.add(file);
-    for (const match of source.matchAll(IMPORT)) {
+    for (const match of source.matchAll(pattern)) {
       const spec = match[1] ?? match[2] ?? '';
       if (!spec.startsWith('.')) continue;
       const target = relative(ROOT, resolve(dirname(join(ROOT, file)), spec)).replace(/\.js$/u, '.ts');
@@ -56,9 +63,17 @@ describe('the ledger stays off every verdict path', () => {
     expect(fromRun.has('src/gate/index.ts')).toBe(true);
   });
 
-  it('walks real imports: the CLI, which is not a verdict path, reaches the ledger', async () => {
+  it('walks real imports: the CLI, which is not a verdict path, reaches the ledger by a dynamic import', async () => {
     const fromCli = await reachable('src/cli.ts');
     for (const module of LEDGER_MODULES) expect(fromCli.has(module), module).toBe(true);
+  });
+
+  it('the CLI loads the ledger only inside the debt ledger command, never by a static import', async () => {
+    // CI runs check and enforce through this file, so a static import would load the ledger in the
+    // process that decides the CI verdict.
+    const statically = await reachable('src/cli.ts', STATIC_IMPORT);
+    expect(statically.has('src/run.ts')).toBe(true);
+    for (const module of LEDGER_MODULES) expect(statically.has(module), `src/cli.ts statically reaches ${module}`).toBe(false);
   });
 
   it.each(VERDICT_PATHS)('%s does not import the ledger', async (entry) => {
@@ -66,5 +81,9 @@ describe('the ledger stays off every verdict path', () => {
     for (const module of LEDGER_MODULES) {
       expect(graph.has(module), `${entry} reaches ${module}`).toBe(false);
     }
+  });
+
+  it.each([...VERDICT_PATHS, ...LIGHT_SURFACES])('%s does not import the CLI', async (entry) => {
+    expect((await reachable(entry)).has('src/cli.ts'), `${entry} reaches src/cli.ts`).toBe(false);
   });
 });

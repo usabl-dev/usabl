@@ -68,8 +68,6 @@ import { makeHistoryGit } from './history/git.js';
 import { serializeRecord } from './history/record.js';
 import { recordMainScan } from './history/record-run.js';
 import { runDebt } from './history/report.js';
-import { makeLedgerGit } from './history/ledger-git.js';
-import { runLedger } from './history/ledger-report.js';
 import { runServeBuild } from './judge/serve-build.js';
 import { runExtractBuild } from './judge/extract-build.js';
 import { prepareJudge, withoutRuntimeSettings } from './judge/prepare.js';
@@ -631,6 +629,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // Measurement only: how long accessibility barriers stay open, read from committed objects.
     // It scans nothing, decides no verdict, and writes a file only when --out names one.
     const ref = opts.trustedRef ?? 'HEAD';
+    // Loaded here and nowhere else in the CLI, by a dynamic import, so the process that runs check
+    // or enforce in CI never loads the ledger.
+    const [{ makeLedgerGit }, { runLedger }] = await Promise.all([import('./history/ledger-git.js'), import('./history/ledger-report.js')]);
     // No clock: open rows are counted to the commit the ref names, so the same repository state
     // always prints the same bytes.
     const outcome = await runLedger(makeLedgerGit(), makeHistoryGit(), ref);
