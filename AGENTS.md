@@ -33,7 +33,7 @@ returns one gate-owned verdict, or an honest gap when it could not check.
 | `src/brief/`                                               | The `brief` command: the screens a task reaches, their checks, and what done means. Measurement only.                                                                                                    |
 | `src/docs/`, `src/app/`                                    | Reports artifacts and finding-to-source mapping. Presentation only.                                                                                                                                      |
 | `src/voicing/`                                             | The voice lane. Runs the interaction contract in each voice requirement, and the silent change rule inside the flow and contract step loops. Preview unless an obligation class is promoted.             |
-| `src/measure/`                                             | Built but dormant. Not in the run or gate path.                                                                                                                                                          |
+| `src/measure/`                                             | Measurement only. Not in the run or gate path. `usabl verify sensitivity` runs `sensitivity/`.                                                                                                           |
 | `test/`                                                    | Vitest tests. The layout mirrors `src/`.                                                                                                                                                                 |
 | `fixtures/`                                                | Fixture pages and golden outputs used by tests.                                                                                                                                                          |
 | `docs/`                                                    | Product docs, the ground truth, the threat model, and the published HTML pages.                                                                                                                          |
@@ -52,6 +52,7 @@ Run these before you say a change is done:
 ```bash
 npm run check             # typecheck, unit tests, build, package smoke test
 npm run test:integration  # real Chromium; run when you touch scanning or readiness
+npm run test:sensitivity  # real Chromium; run when you touch src/measure/sensitivity or the checks
 npm run docs:linkcheck    # when you touch docs
 npm run docs:a11y         # when you touch HTML under docs/
 npm run docs:badges       # when you touch the README or the version
@@ -59,6 +60,9 @@ npm run docs:badges       # when you touch the README or the version
 
 Report the real output, including counts. If a test times out, run it again and report
 both runs.
+
+`npm run test:sensitivity` runs the sensitivity catalog in real Chromium. CI does not run it
+yet, so run it by hand until the workflow gains a job for it.
 
 ## Hard rules
 

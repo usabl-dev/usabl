@@ -140,6 +140,20 @@ async function readRunnerVersion(): Promise<string> {
 }
 
 /**
+ * The engine version and the core scanner versions, the same values buildDeps puts in Deps and a
+ * receipt binds, without any optional engine. For a measurement that runs without a config.
+ */
+export async function readCoreVersions(): Promise<{
+  runnerVersion: string;
+  scannerVersions: { axeCore: string; playwright: string; chromium: string };
+}> {
+  return {
+    runnerVersion: await readRunnerVersion(),
+    scannerVersions: await readScannerVersions(),
+  };
+}
+
+/**
  * The capabilities a run grants. An engine the trusted config turns on adds what it declares, but
  * only on a run that grants live scanning at all: a static-only run grants nothing, so every live
  * provider, engine or not, is disclosed as a capability-denied gap.

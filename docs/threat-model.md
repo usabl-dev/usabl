@@ -78,8 +78,14 @@ re-baseline to green.
   after the waiver ended, so the stop hook said VERIFIED for an accessibility barrier the gate
   would now block. The receipt binds the earliest end among the waivers the run applied
   (`waiverExpiresAt`), and stops verifying at that moment (Threat 4).
+- Limit, stated plainly: a user with a shell on the same machine can write a local receipt
+  that verifies. Every binding the receipt carries (tree, policy hash, engine and scanner
+  versions, history head) can be computed again by that user, and `mintReceipt()` is exported.
+  Receipt signing is not built. So the Stop hook's fast path says on its first line that the
+  result comes from a stored receipt and was not re-scanned. CI never reads a local receipt;
+  the CI gate scans the pull request itself.
 
-**Status:** [x] Documented in ground-truth.
+**Status:** [x] Documented in ground-truth. [ ] Receipt signing is not built.
 
 ---
 
@@ -164,9 +170,26 @@ passing bundle from another run.
   drifted file paths, the session id from the hook input, the pin store's reasons and fixes
   (which name directories from the environment), and error text. A guarded file name with a
   line break and an instruction in it is printed as data, never as usabl's own words.
-- Future: signed attestation on the receipt (engineering §7).
+- A receipt is not signed. A user with a shell on the same machine can write a receipt that
+  verifies: each binding can be computed again by the same user, and `mintReceipt()` is
+  exported. The bindings stop a receipt lifted from another run, not one written on purpose on
+  this machine. The fast path line therefore reads "VERIFIED (exit 0, stored receipt, not
+  re-scanned)" and says usabl did not scan the change again on that stop.
+- The receipt file sits in the work tree, so a committed symbolic link at `.usabl` or at
+  `.usabl/receipt.json` could redirect a receipt write to another file the user can write; in
+  CI the pull request head would pick the target. The receipt store refuses a link at either
+  place, writes a temp file opened with no-follow and exclusive create, and renames it into
+  place. `usabl check --ci` saves no receipt.
+- Residual: the store checks `.usabl` with `lstat`, then opens the temp file by its full path.
+  No-follow covers only the last part of that path. A process running as the same user that
+  swaps `.usabl` for a link between the check and the open puts the temp file, and then
+  `receipt.json`, in the link's target folder. Only the same user, at the same moment, can do
+  this, and a committed link is refused before the write, so the risk is low. A save that
+  fails for any reason changes no verdict.
+- Future: signed attestation on the receipt (engineering §7). Signing is not built.
 
-**Status:** Receipt bindings ship and re-verify; cross-run signing is still open.
+**Status:** Receipt bindings ship and re-verify. Receipt signing is not built, so a same-machine
+shell user can write a receipt that verifies.
 
 ---
 
@@ -198,6 +221,24 @@ awareness.
 - When an optional commercial engine is on, its installed package version is recorded in
   `scannerVersions.engines`, so a vendor upgrade, or an engine turned on or off, fails
   `verifyReceipt` the same way. usabl cannot pin a vendor package; the operator installs it.
+- Generated hooks, skills, and Cursor files run `npm exec --no -- usabl`, never `npx usabl`.
+  With usabl not installed, `npx usabl` downloads and runs whatever package holds the npm name
+  usabl, with no prompt when stdin is piped, as it is for a hook. `npm exec --no` runs a local
+  or global install, or a copy of usabl already in npm's own cache, and otherwise fails. It never
+  downloads a package. The hooks then print one line that
+  says usabl did not run and how to install it, and exit 1, which Claude Code and Cursor treat
+  as a failed hook that does not block. The skills and the Cursor files tell the assistant not to
+  install or download a package named usabl to work around it. A reinstall rewrites a file an
+  earlier release wrote with `npx usabl`, and `usabl doctor` reports such a file as a security
+  drift. Residual: a person who types `npx usabl` by hand in a project without usabl still
+  downloads whatever holds the name. Reserving the npm name closes that, and it is a maintainer
+  action, not code.
+- Residual: with usabl not installed, `npm exec --no` still asks the registry for the usabl
+  package manifest, so each stop makes one registry request. If npm's cache already holds a copy
+  that matches the latest version on the registry, from an earlier `npx usabl` for example, `npm
+  exec --no` runs that copy without a download. That copy is whatever held the name when it was
+  cached. Today the npm name holds a placeholder with no command, so the risk is low. Installing
+  usabl in the project closes it, because a local install is found first and npm asks nothing.
 
 **Status:** [x] Lockfile pins and receipt `scannerVersions` ship. [ ] The maintainer review rule
 for scanner bumps is process, not code.
@@ -917,21 +958,70 @@ Not yet run on a licensed SDK.
 
 ---
 
+## Threat 17: A measurement mutation reaching a normal run
+
+**Attack:** `usabl verify sensitivity` changes pages on purpose: it removes names, cancels keys,
+and stops focus calls, to see whether the checks notice. If that step could run during `usabl
+check`, the stop hook, the CI judge, or checkPage, a scan would measure a page usabl broke, and a
+pull request or page text that could switch it on would control what the gate sees.
+
+**Controls:**
+
+- Mutations run only in the scan browser, only from the measure command, and never from page text.
+  The catalog is engine data. An entry picks one of eight fixed edit kinds; the two page functions
+  that carry them out are written once in the engine, and an entry's values reach the page only as
+  JSON arguments. Nothing a page says becomes code.
+- The mutation browser is built only by `usabl verify sensitivity`, which the CLI loads by a dynamic
+  import inside that command. No config field and no environment variable selects it. `buildDeps`
+  never builds it, and no module that run(), the gate, the stop hook, the overlay, the CI judge, the
+  pull request comment, checkPage, or the library entry imports reaches it.
+- The command mints no verdict and no receipt. Its file, `.usabl/sensitivity.json`, is read by no
+  verdict path, and the file being present changes no Result.
+- What it writes and prints goes through `scrubOutboundData` and `scrubString`, because a gap reason
+  can carry a URL or page words.
+
+**Tests:** `test/measure/sensitivity/isolation.test.ts` (no verdict entry point imports the
+measurement, the CLI names it only inside the verify command, the composition root's browser has no
+mutation hook, run() never reads the file and returns the same Result with it there),
+`test/measure/sensitivity/command.test.ts` (the file is scrubbed and deterministic).
+
+**What stays open:** the edits run in the page's own world, so page script on the measured page can
+see them and could undo one. That changes a measurement, never a verdict. Level 2 loads the team's
+app in the scan browser with the team's session, as `usabl check` does, but many more times: two
+loads per catalog entry per screen. On each load the dialog and menu probes click every dialog
+trigger and menu toggle. For the flow and voice entries, the screen's flow and voice steps run on
+each of their loads, so a step that saves or deletes data runs that many times against the team's
+backend. Every other entry scans without the requirements, so their steps do not run. The command
+prints the real counts for the screens chosen before it starts.
+
+---
+
 ## Decision: Stop hook fail-open on exit 4
 
 After the guard runs before any coverage, floor, or waiver parse, a diverged
 guarded policy file (including corrupt JSON) is `approval_required` and the Stop
-hook blocks. Remaining `run()` exit 4 is an unhandled crash: git, filesystem,
-browser launch, or a parse failure of policy bytes that still match the trusted
-ref (so the guard does not short-circuit).
+hook blocks. The Stop hook compares the raw bytes of `usabl.config.json` at the
+repository root with HEAD before it parses anything, so a config that differs,
+is missing, cannot be read, or does not parse blocks as approval required
+instead of ending in a stop hook error. Remaining `run()` exit 4 is an unhandled
+crash (git, filesystem, browser launch, or a parse failure of other policy bytes
+that still match the trusted ref) or a run where every screen was unseen.
 
 **Attack if we blocked on exit 4:** a wedged Stop hook traps the operator in the
 session. They cannot continue, cannot easily recover, and may disable the hook
 entirely. That is a worse integrity outcome than an honest unverified allow.
 
-**Decision:** keep fail-open with disclosure.
+**Decision:** keep fail-open with disclosure. The disclosure reaches the person: in Claude
+Code, an allow writes its text as a `systemMessage`, which Claude Code shows, because it does
+not show the stderr of a Stop hook that exits 0. It is shown for every allow except a verified
+stop and an idle stop that carry no notice. Cursor shows the
+notice only in its hook output log, not in the chat.
 
-- `evaluateStopDecision` allows when `exitCode === 4`.
+- `evaluateStopDecision` allows when `exitCode === 4`, the verdict is null, and no guarded
+  file diverged. Diverged guarded policy blocks whatever the exit code: the hook counts the
+  paths the run carries and the ones its own guard found before the run, because a run where
+  every screen was unseen still carries them and a crash carries none. Like every block, it
+  lets one continuation through.
 - The operator sees `NO VERDICT: RUN FAILED (exit 4)`, the note that usabl is not
   blocking the stop but proved nothing about the change, and the crash summary inside
   the untrusted frame. This is not idle and not `verified`. No receipt is minted.
@@ -941,10 +1031,11 @@ entirely. That is a worse integrity outcome than an honest unverified allow.
   this policy.
 
 **Not this decision:** `regression`, `not_covered`, and `approval_required` still
-block. Diverged guarded policy still blocks. Exit 4 still cannot mint `verified`. A verdict the
-hook does not recognize, and a null verdict on a run that was neither idle nor exit 4, block: they
-are not a crash the operator needs to escape, and allowing them would read an unknown answer as a
-pass.
+block. Diverged guarded policy still blocks, on exit 4 too. Exit 4 still cannot mint `verified`. A
+verdict the hook does not recognize, on any exit code, and a null verdict on a run that was neither
+idle nor exit 4, block: they are not a crash the operator needs to escape, and allowing them would
+read an unknown answer as a pass. A repository with no usabl config in the working tree or at HEAD
+is not set up for usabl: the hook allows with a plain "usabl is not configured here" note.
 
 **Status:** [x] Recorded. Matches the shipped Stop hook and runner error paths.
 

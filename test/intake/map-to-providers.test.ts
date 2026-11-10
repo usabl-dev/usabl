@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AxNode, ProviderContext, RequirementBundle } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
-import { mapRequirementsToProviders, toVoiceContract } from '../../src/intake/map-to-providers.js';
+import { FLOW_STEP_FIELDS, mapRequirementsToProviders, runFlowStep, toVoiceContract } from '../../src/intake/map-to-providers.js';
+import { parseBundle } from '../../src/intake/schema.js';
+import { runProviders } from '../../src/providers/index.js';
 import { draftsOf, testConfig } from '../helpers.js';
 
 const SCREEN = {
@@ -465,20 +467,427 @@ describe('mapRequirementsToProviders', () => {
       expectedAnnouncement: 'Saved',
     });
     const provider = mapRequirementsToProviders(bundle)[0];
+    // Focus starts on the body and the Tab moves it to the control, so the name is the flow's own.
+    let tabbed = false;
     const context = await makeContext({
       page: makeFakePage({
-        tab: vi.fn(async () => {}),
+        tab: vi.fn(async () => {
+          tabbed = true;
+        }),
         press: vi.fn(async () => {}),
-        activeNode: vi.fn(async () => ({
-          name: '  Saved ',
-          role: 'status',
-          states: {},
-        })),
+        activeNode: vi.fn(async () =>
+          tabbed
+            ? {
+                name: '  Saved ',
+                role: 'status',
+                states: {},
+              }
+            : null,
+        ),
         drainAnnouncements: vi.fn(async () => []),
       }),
     });
 
     await expect(provider!.run(context)).resolves.toEqual([]);
+  });
+
+  it('is a gap, never a pass or a fail, when the expected text was heard only before its first step', async () => {
+    // The capture runs for the life of the page, so the first drain holds what earlier checks
+    // caused. The flow's own steps announce nothing. An earlier check may have changed the page, so
+    // whether these steps announce the text is unknown.
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const drains = [['Saved']];
+    const context = await makeContext({
+      page: makeFakePage({
+        activeNode: vi.fn(async () => axNode('Save')),
+        activePath: vi.fn(async () => '#save'),
+        drainAnnouncements: vi.fn(async () => drains.shift() ?? []),
+      }),
+    });
+
+    const drafts = draftsOf(await provider!.run(context));
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ rule: 'intake:flow-save', evidenceClass: 'deterministic', confidence: 'unverified', elementPath: '#save' });
+    expect(drafts[0]?.why).toContain('announced before the flow\'s first step');
+    expect(drafts[0]?.evidence.extra).toMatchObject({ expectedAnnouncement: 'Saved', announcements: [], heardBeforeFirstStep: true });
+  });
+
+  it('still fails when the drain taken before its first step does not hold the expected text either', async () => {
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const drains = [['Deleted', 'Status: Saved successfully']];
+    const context = await makeContext({
+      page: makeFakePage({
+        activeNode: vi.fn(async () => axNode('Save')),
+        activePath: vi.fn(async () => '#save'),
+        drainAnnouncements: vi.fn(async () => drains.shift() ?? []),
+      }),
+    });
+
+    const drafts = draftsOf(await provider!.run(context));
+
+    expect(drafts.map((draft) => [draft.rule, draft.confidence])).toEqual([['intake:flow-save', 'fail']]);
+    expect(drafts[0]?.evidence.extra?.announcements).toEqual([]);
+  });
+
+  it('is not a gap when only the drain taken before its first step is undecidable', async () => {
+    // That drain is not read for the verdict, so its reason cannot decide it either way.
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const drains = [
+      { texts: ['Saved'], undecidable: 'closed-shadow-modal' as const },
+      { texts: ['Saved'], undecidable: null },
+    ];
+    const context = await makeContext({
+      page: makeFakePage({
+        drainAnnouncementRecord: vi.fn(async () => drains.shift() ?? { texts: [], undecidable: null }),
+      }),
+    });
+
+    await expect(provider!.run(context)).resolves.toEqual([]);
+  });
+
+  describe('focus that was already there before the flow is not evidence', () => {
+    // A page whose focus is scripted: the node id and name before the flow, and what each step does.
+    function focusPage(start: { id: number | null; name: string | null }, step: (focus: { id: number | null; name: string | null }) => void) {
+      const focus = { ...start };
+      const node = (): AxNode | null => (focus.name === null ? null : { name: focus.name, role: 'button', states: {} });
+      return makeFakePage({
+        tab: vi.fn(async () => step(focus)),
+        press: vi.fn(async () => step(focus)),
+        click: vi.fn(async () => step(focus)),
+        focusedNodeId: vi.fn(async () => focus.id),
+        activeNode: vi.fn(async () => node()),
+        activePath: vi.fn(async () => (focus.id === null ? 'body' : `#node-${focus.id}`)),
+      });
+    }
+
+    it('is a gap when a press of Shift leaves focus on the control an earlier check focused, named with the text', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'press', key: 'Shift' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext({ page: focusPage({ id: 7, name: 'Saved' }, () => {}) });
+
+      const drafts = draftsOf(await provider!.run(context));
+
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]).toMatchObject({ rule: 'intake:flow-save', evidenceClass: 'deterministic', confidence: 'unverified', elementPath: '#node-7' });
+      expect(drafts[0]?.why).toContain('focus was already on that control before the flow ran');
+      expect(drafts[0]?.evidence.extra).toMatchObject({ expectedAnnouncement: 'Saved', focusUnchanged: true });
+    });
+
+    it('passes a flow that moves focus to a control with the expected name', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const page = focusPage({ id: 3, name: 'Cancel' }, (focus) => Object.assign(focus, { id: 7, name: 'Saved' }));
+
+      await expect(provider!.run(await makeContext({ page }))).resolves.toEqual([]);
+    });
+
+    it('passes a flow whose step changes the focused control\'s name to the expected text', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'click', selector: '#save' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const page = focusPage({ id: 3, name: 'Save' }, (focus) => Object.assign(focus, { name: 'Saved' }));
+
+      await expect(provider!.run(await makeContext({ page }))).resolves.toEqual([]);
+    });
+
+    it('still passes on the expected text in a step\'s announcement, wherever focus is', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const drains = [[], ['Saved']];
+      const page = makeFakePage({
+        ...focusPage({ id: 7, name: 'Saved' }, () => {}),
+        drainAnnouncements: vi.fn(async () => drains.shift() ?? []),
+      });
+
+      await expect(provider!.run(await makeContext({ page }))).resolves.toEqual([]);
+    });
+
+    it('is a gap when focus could not be read before the flow, so whether it moved is unknown', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      let reads = 0;
+      const page = makeFakePage({
+        ...focusPage({ id: 7, name: 'Saved' }, () => {}),
+        focusedNodeId: vi.fn(async () => {
+          reads += 1;
+          if (reads === 1) throw new Error('DOM.describeNode failed');
+          return 7;
+        }),
+      });
+
+      const drafts = draftsOf(await provider!.run(await makeContext({ page })));
+
+      expect(drafts.map((draft) => draft.confidence)).toEqual(['unverified']);
+      expect(drafts[0]?.why).toContain('could not be read before the flow ran');
+    });
+  });
+
+  it('shows one line of the error when a flow step throws, never the call log', async () => {
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'click', selector: '#delete' }], expectedAnnouncement: 'Deleted' });
+    const provider = mapRequirementsToProviders(bundle)[0];
+    const context = await makeContext({
+      page: makeFakePage({
+        click: vi.fn(async () => {
+          throw new Error('click timed out on #delete after 5000ms\nCall log:\n  - locator resolved to <button aria-label="Delete alice@example.com">Delete</button>');
+        }),
+      }),
+    });
+
+    const result = await runProviders([provider!], context, ['live']);
+
+    expect(result.gaps.map((gap) => gap.reason)).toEqual(['provider intake:flow-save failed: click timed out on #delete after 5000ms']);
+    expect(JSON.stringify(result)).not.toContain('alice');
+  });
+
+  describe('before its first step, the flow waits for the page to go quiet', () => {
+    const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }], expectedAnnouncement: 'Saved' });
+
+    it('does not count an announcement an earlier check started that lands during that wait', async () => {
+      // "Saved" is still in flight from an earlier check. It lands at the first moment the page is
+      // given time: the wait, or else the flow's first step.
+      const live: string[] = [];
+      const inFlight = ['Saved'];
+      const land = (): void => {
+        live.push(...inFlight.splice(0, inFlight.length));
+      };
+      const calls: string[] = [];
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext({
+        page: makeFakePage({
+          settleAfterAction: vi.fn(async () => {
+            calls.push('settle');
+            land();
+            return { settled: true, waitedMs: 0 };
+          }),
+          tab: vi.fn(async () => {
+            calls.push('tab');
+            land();
+          }),
+          drainAnnouncements: vi.fn(async () => {
+            calls.push('drain');
+            return live.splice(0, live.length);
+          }),
+          activeNode: vi.fn(async () => axNode('Save')),
+          activePath: vi.fn(async () => '#save'),
+        }),
+      });
+
+      const drafts = draftsOf(await provider!.run(context));
+
+      expect(drafts.map((draft) => draft.rule)).toEqual(['intake:flow-save']);
+      expect(drafts[0]?.evidence.extra?.announcements).toEqual([]);
+      expect(calls).toEqual(['settle', 'drain', 'tab', 'drain']);
+    });
+
+    it('is a gap that says so when the page does not go quiet, and runs no step', async () => {
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const tab = vi.fn(async () => {});
+      const context = await makeContext({
+        page: makeFakePage({ tab, settleAfterAction: vi.fn(async () => ({ settled: false, waitedMs: 3000 })) }),
+      });
+
+      await expect(provider!.run(context)).rejects.toThrow('the page did not go quiet before the flow');
+      expect(tab).not.toHaveBeenCalled();
+    });
+
+    it('is a gap that says so when the wait itself fails', async () => {
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const tab = vi.fn(async () => {});
+      const context = await makeContext({
+        page: makeFakePage({
+          tab,
+          settleAfterAction: vi.fn(async () => {
+            throw new Error('Execution context was destroyed');
+          }),
+        }),
+      });
+
+      await expect(provider!.run(context)).rejects.toThrow('the wait for the page to go quiet before the flow failed');
+      expect(tab).not.toHaveBeenCalled();
+    });
+
+    it('still runs a flow that expects no announcement on a page that does not go quiet', async () => {
+      // Such a flow judges no speech, so the wait decides nothing for it.
+      const provider = mapRequirementsToProviders(flowBundle({ type: 'flow', steps: [{ do: 'tab' }] }))[0];
+      const tab = vi.fn(async () => {});
+      const context = await makeContext({
+        page: makeFakePage({ tab, settleAfterAction: vi.fn(async () => ({ settled: false, waitedMs: 3000 })) }),
+      });
+
+      await expect(provider!.run(context)).resolves.toEqual([]);
+      expect(tab).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('a flow step the driver cannot run', () => {
+    // Each step the driver cannot run as written, with what the gap must say about it.
+    const cases: Array<[string, Record<string, unknown>, string]> = [
+      ['a click with no selector', { do: 'click' }, 'step 1 (click): a click step needs a selector'],
+      ['a click with an empty selector', { do: 'click', selector: '' }, 'step 1 (click): a click step needs a selector'],
+      ['a click with a blank selector', { do: 'click', selector: '   ' }, 'step 1 (click): a click step needs a selector'],
+      ['a click whose selector is not text', { do: 'click', selector: 7 }, 'step 1 (click): a click step needs a selector'],
+      ['a press with no key', { do: 'press' }, 'step 1 (press): a press step needs a key'],
+      ['a press with an empty key', { do: 'press', key: '' }, 'step 1 (press): a press step needs a key'],
+      ['a press with a blank key', { do: 'press', key: ' ' }, 'step 1 (press): a press step needs a key'],
+      ['a step of a kind the driver does not know', { do: 'hover', selector: '#save' }, 'step 1 (hover): the flow does not run this kind of step'],
+    ];
+
+    for (const [name, step, said] of cases) {
+      it(`makes the flow a gap for ${name}, and runs no step`, async () => {
+        const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }, step as { do: string }], expectedAnnouncement: 'Saved' });
+        const provider = mapRequirementsToProviders(bundle)[0];
+        const tab = vi.fn(async () => {});
+        const press = vi.fn(async () => {});
+        const click = vi.fn(async () => {});
+        const drainAnnouncements = vi.fn(async () => ['Saved']);
+        const context = await makeContext({
+          page: makeFakePage({ tab, press, click, drainAnnouncements, activeNode: vi.fn(async () => axNode('Saved')) }),
+        });
+
+        const run = provider!.run(context);
+
+        await expect(run).rejects.toThrow(said);
+        await expect(run).rejects.toThrow('counted from 0');
+        expect(tab).not.toHaveBeenCalled();
+        expect(press).not.toHaveBeenCalled();
+        expect(click).not.toHaveBeenCalled();
+        expect(drainAnnouncements).not.toHaveBeenCalled();
+      });
+    }
+
+    // Each step that carries a field its kind does not use, with what the gap must say about it.
+    const unused: Array<[string, Record<string, unknown>, string]> = [
+      ['a selector on activate', { do: 'activate', selector: '#delete' }, 'step 1 (activate): selector is not a field of an activate step, which takes only do'],
+      ['a key on click', { do: 'click', selector: '#save', key: 'Enter' }, 'step 1 (click): key is not a field of a click step, which takes only do and selector'],
+      ['times on tab', { do: 'tab', times: 3 }, 'step 1 (tab): times is not a field of a tab step, which takes only do'],
+      ['shift on press', { do: 'press', key: 'Tab', shift: true }, 'step 1 (press): shift is not a field of a press step, which takes only do and key'],
+      ['a selector on press', { do: 'press', key: 'Escape', selector: '#menu' }, 'step 1 (press): selector is not a field of a press step'],
+      ['text on click', { do: 'click', selector: '#name', text: 'Ada' }, 'step 1 (click): text is not a field of a click step'],
+      ['a note on tab', { do: 'tab', note: 'to Save' }, 'step 1 (tab): note is not a field of a tab step'],
+      ['two fields on tab', { do: 'tab', times: 3, count: 3 }, 'step 1 (tab): count and times are not fields of a tab step, which takes only do'],
+      [
+        'expectedAnnouncement inside a step',
+        { do: 'click', selector: '#save', expectedAnnouncement: 'Saved' },
+        'step 1 (click): expectedAnnouncement is not a field of a click step, which takes only do and selector (write expectedAnnouncement on the flow assertion, beside steps)',
+      ],
+      [
+        'a missing selector and a key on click',
+        { do: 'click', key: 'Enter' },
+        "step 1 (click): a click step needs a selector, such as selector: '#delete', and key is not a field of a click step",
+      ],
+    ];
+
+    for (const [name, step, said] of unused) {
+      it(`makes the flow a gap for ${name}, and runs no step`, async () => {
+        const bundle = flowBundle({ type: 'flow', steps: [{ do: 'tab' }, step as { do: string }], expectedAnnouncement: 'Saved' });
+        const provider = mapRequirementsToProviders(bundle)[0];
+        const tab = vi.fn(async () => {});
+        const press = vi.fn(async () => {});
+        const click = vi.fn(async () => {});
+        const drainAnnouncements = vi.fn(async () => ['Saved']);
+        const context = await makeContext({
+          page: makeFakePage({ tab, press, click, drainAnnouncements, activeNode: vi.fn(async () => axNode('Saved')) }),
+        });
+
+        const run = provider!.run(context);
+
+        await expect(run).rejects.toThrow(said);
+        expect(tab).not.toHaveBeenCalled();
+        expect(press).not.toHaveBeenCalled();
+        expect(click).not.toHaveBeenCalled();
+        expect(drainAnnouncements).not.toHaveBeenCalled();
+      });
+    }
+
+    it('reports an expectation written on a step, which the loader accepts', async () => {
+      // The flow assertion has no expectedAnnouncement of its own, so it would check nothing.
+      const parsed = parseBundle({
+        version: 1,
+        requirements: [
+          {
+            id: 'flow-save',
+            kind: 'flow',
+            surface: SCREEN.id,
+            description: 'Save action announces completion',
+            approved: true,
+            assertion: { type: 'flow', steps: [{ do: 'click', selector: '#save', expectedAnnouncement: 'Saved' }] },
+          },
+        ],
+      });
+      if (!parsed.ok) throw new Error(parsed.reason);
+      const provider = mapRequirementsToProviders(parsed.bundle)[0];
+
+      await expect(provider!.run(await makeContext())).rejects.toThrow('step 0 (click): expectedAnnouncement is not a field of a click step');
+    });
+
+    it('reads exactly the fields its table lists for each step kind', async () => {
+      // A step that records every field the driver reads, run through the driver with a fake page.
+      const values: Record<string, string> = { selector: '#save', key: 'Escape' };
+      for (const [kind, fields] of FLOW_STEP_FIELDS) {
+        const read = new Set<string>();
+        const target: Record<string, unknown> = { do: kind };
+        for (const field of fields) if (field !== 'do') target[field] = values[field];
+        const step = new Proxy(target, {
+          get(object, property, receiver) {
+            if (typeof property === 'string') read.add(property);
+            return Reflect.get(object, property, receiver);
+          },
+        }) as { do: string };
+        await runFlowStep(makeFakePage(), step);
+        expect([...read].sort(), kind).toEqual([...fields].sort());
+      }
+      expect([...FLOW_STEP_FIELDS.keys()].sort()).toEqual(['activate', 'click', 'press', 'tab']);
+    });
+
+    it('runs no step kind its table does not list', async () => {
+      await expect(runFlowStep(makeFakePage(), { do: 'hover', selector: '#save' })).rejects.toThrow('cannot run step kind hover');
+      await expect(runFlowStep(makeFakePage(), { do: 'constructor' })).rejects.toThrow('cannot run step kind constructor');
+    });
+
+    it('separates steps with one semicolon and uses none inside a step', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'hover' }, { do: 'click', key: 'Enter' }, { do: 'tab', times: 2 }] });
+      const provider = mapRequirementsToProviders(bundle)[0];
+
+      const error = await provider!.run(await makeContext()).then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+
+      const message = error instanceof Error ? error.message : '';
+      const parts = message.split('; ');
+      expect(parts).toHaveLength(3);
+      expect(parts[0]).toMatch(/step 0 \(hover\): the flow does not run this kind of step, so write do as /u);
+      expect(parts[1]).toMatch(/^step 1 \(click\): /u);
+      expect(parts[2]).toMatch(/^step 2 \(tab\): /u);
+    });
+
+    it('names every step it cannot run, in step order', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'press' }, { do: 'tab' }, { do: 'click' }] });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const context = await makeContext();
+
+      await expect(provider!.run(context)).rejects.toThrow(/step 0 \(press\): a press step needs a key.*step 2 \(click\): a click step needs a selector/u);
+    });
+
+    it('is a gap even for a flow that expects no announcement', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'click' }] });
+      const provider = mapRequirementsToProviders(bundle)[0];
+
+      await expect(provider!.run(await makeContext())).rejects.toThrow('step 0 (click)');
+    });
+
+    it('runs an activate step with no selector: it presses Enter on the focused control', async () => {
+      const bundle = flowBundle({ type: 'flow', steps: [{ do: 'activate' }, { do: 'press', key: 'Escape' }], expectedAnnouncement: 'Saved' });
+      const provider = mapRequirementsToProviders(bundle)[0];
+      const press = vi.fn(async () => {});
+      const context = await makeContext({ page: makeFakePage({ press, drainAnnouncements: vi.fn(async () => ['Saved']) }) });
+
+      await expect(provider!.run(context)).resolves.toEqual([]);
+      expect(press.mock.calls).toEqual([['Enter'], ['Escape']]);
+    });
   });
 
   describe('when the drain cannot say what a screen reader heard', () => {
@@ -516,9 +925,14 @@ describe('mapRequirementsToProviders', () => {
 
     it('still passes when the focused control itself says the text', async () => {
       const provider = mapRequirementsToProviders(bundle)[0];
+      // The Tab moves focus from the body to the control, so its name is the flow's own evidence.
+      let tabbed = false;
       const context = await makeContext({
         page: makeFakePage({
-          activeNode: vi.fn(async () => axNode('Saved')),
+          tab: vi.fn(async () => {
+            tabbed = true;
+          }),
+          activeNode: vi.fn(async () => (tabbed ? axNode('Saved') : null)),
           drainAnnouncementRecord: vi.fn(async () => ({ texts: [], undecidable: 'closed-shadow-modal' as const })),
         }),
       });
