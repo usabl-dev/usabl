@@ -835,8 +835,8 @@ const BOX_LIMITS: readonly BoxLimit[] = ['rotated-or-skewed', 'clip-path', 'mask
 // clipped, which only ever asks for review. Each check fails closed: a value it cannot read counts.
 // A fixed element can escape an ancestor that clips; it is still read as clipped. Last, a hit test
 // scrolls the element into view and asks the browser what is at five points of its box. The size
-// and fragments returned are always those of the first read, before any scroll.
-const BOUNDING_BOX_FUNCTION = `function (query) {
+// and fragments returned are always those of the first read, before any scroll. Exported for tests.
+export const BOUNDING_BOX_FUNCTION = `function (query) {
   const element = document.querySelector(query);
   if (!(element instanceof Element)) {
     return null;
@@ -940,10 +940,23 @@ const BOUNDING_BOX_FUNCTION = `function (query) {
   // answer is the element or an element inside it; null (outside the viewport) is a miss. Any
   // error is a miss. Every scroll position the scroll changed is put back before the function
   // returns, and nothing here waits.
+  //
+  // scrollIntoView also scrolls a box whose overflow is hidden or clip, which a person cannot
+  // scroll: it has no scroll bar and takes no wheel. A control such a scroll reveals is not one a
+  // pointer user meets there, so a scroll on an axis like that counts as clipped. The overflow of
+  // each box is read before the scroll, and a value that is not one usabl knows counts as hidden.
+  const scrollable = (value) => value === 'visible' || value === 'auto' || value === 'scroll' || value === 'overlay';
   const saved = [];
   for (let node = parentOf(element); node !== null; node = parentOf(node)) {
-    saved.push([node, node.scrollLeft, node.scrollTop]);
+    const style = getComputedStyle(node);
+    saved.push([node, node.scrollLeft, node.scrollTop, scrollable(style.overflowX), scrollable(style.overflowY)]);
   }
+  // The window scrolls the viewport, which takes its overflow from the root or, failing that, the
+  // body. Either one hiding an axis counts.
+  const rootStyle = getComputedStyle(root);
+  const bodyStyle = document.body === null ? null : getComputedStyle(document.body);
+  const windowScrollsX = scrollable(rootStyle.overflowX) && (bodyStyle === null || scrollable(bodyStyle.overflowX));
+  const windowScrollsY = scrollable(rootStyle.overflowY) && (bodyStyle === null || scrollable(bodyStyle.overflowY));
   const windowX = window.scrollX;
   const windowY = window.scrollY;
   let missed = false;
@@ -968,10 +981,16 @@ const BOUNDING_BOX_FUNCTION = `function (query) {
   } catch {
     missed = true;
   } finally {
-    for (const [node, left, top] of saved) {
+    for (const [node, left, top, scrollsX, scrollsY] of saved) {
+      if ((node.scrollLeft !== left && !scrollsX) || (node.scrollTop !== top && !scrollsY)) {
+        limits.add('overflow-clipped');
+      }
       if (node.scrollLeft !== left || node.scrollTop !== top) {
         node.scrollTo({ left, top, behavior: 'instant' });
       }
+    }
+    if ((window.scrollX !== windowX && !windowScrollsX) || (window.scrollY !== windowY && !windowScrollsY)) {
+      limits.add('overflow-clipped');
     }
     if (window.scrollX !== windowX || window.scrollY !== windowY) {
       window.scrollTo({ left: windowX, top: windowY, behavior: 'instant' });

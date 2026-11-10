@@ -75,7 +75,8 @@ const SHAPES_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 // Controls whose box is at least 24 CSS pixels each way, but part of which a pointer cannot hit.
 // None of them may pass. Each sits in a row of its own, so no case covers another. The two scaled
 // cases are the shapes the named limits miss: the clip edge is read in layout pixels while the box
-// is scaled, so only the hit test sees that half of the button is cut off.
+// is scaled, so only the hit test sees that half of the button is cut off. The last one is hidden
+// below a scaled box that hides its overflow: only a scroll a person cannot make shows it.
 const ROW = 'height:80px';
 const MISSED_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Missed</title></head><body style="margin:0"><main>
   <div style="${ROW}"><div style="height:40px;overflow:hidden;transform:scale(0.5);transform-origin:0 0"><button id="scaled-clip" aria-label="Scaled clip" style="width:60px;height:60px;padding:0;border:0"></button></div></div>
@@ -84,16 +85,20 @@ const MISSED_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
   <div style="${ROW};position:relative"><button id="off-left" aria-label="Off left" style="${BUTTON};position:absolute;left:-30px;top:0"></button></div>
   <div style="${ROW}"><button id="no-pointer" aria-label="No pointer" style="${BUTTON};pointer-events:none"></button></div>
   <div style="${ROW};position:relative"><button id="covered" aria-label="Covered" style="${BUTTON}"></button><div style="position:absolute;left:22px;top:0;width:22px;height:44px;background:#fff"></div></div>
+  <div style="${ROW}"><div style="transform:scale(0.5);transform-origin:0 0"><div style="height:80px;overflow:hidden"><div style="height:100px"></div><button id="hidden-scroll" aria-label="Hidden scroll" style="width:60px;height:60px;padding:0;border:0"></button></div></div></div>
 </main></body></html>`;
 
 // Controls a pointer can hit in full, which must still pass: a plain button, a round one, one in a
 // box that scrolls without cutting it off, and one far down a long page, so the read must scroll to
-// it. The page starts scrolled, and a key press writes every scroll position to the body, so the
-// test can show that the read puts each one back.
+// it. The read scrolls the box that holds the inner button too, a scroll a person can make. The
+// page starts scrolled, and a key press writes every scroll position to the body, so the test can
+// show that the read puts each one back. The deep button sits past the bottom of a box that
+// scrolls; the overflow limit asks for review of it before any scroll.
 const HIT_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Hit</title></head><body style="margin:0"><main>
   <div style="${ROW}"><button id="plain" aria-label="Plain" style="${BUTTON}"></button></div>
   <div style="${ROW}"><button id="round" aria-label="Round" style="${BUTTON};border-radius:50%"></button></div>
   <div id="scroller" style="height:200px;overflow:auto"><div style="height:80px"></div><button id="inner" aria-label="Inner" style="${BUTTON}"></button><div style="height:600px"></div></div>
+  <div style="height:200px;overflow:auto"><div style="height:600px"></div><button id="deep" aria-label="Deep" style="${BUTTON}"></button></div>
   <div style="height:3000px"></div>
   <button id="far" aria-label="Far" style="${BUTTON}"></button>
   <div style="${ROW}"></div>
@@ -287,6 +292,17 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
     });
   });
 
+  it('asks for review, never a pass, when only a scroll a person cannot make shows the control', async () => {
+    await withPage('/missed.html', async (page) => {
+      // Before the scroll the button sits wholly below the visible part of its box. The read's own
+      // scroll would bring it up, and then every point would hit.
+      const box = await page.boundingBox('#hidden-scroll');
+      expect((box?.width ?? 0) >= 24 && (box?.height ?? 0) >= 24).toBe(true);
+      expect(box?.unmeasurable).toContain('overflow-clipped');
+      expect(await targetSizeConfidence(page, 'Hidden scroll', '/missed.html')).toEqual(['unverified']);
+    });
+  });
+
   it('passes a control a pointer can hit in full, and puts back every scroll position it moved', async () => {
     await withPage('/hit.html', async (page) => {
       const scroll = async () => {
@@ -306,6 +322,15 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
         expect({ selector, confidence: await targetSizeConfidence(page, name, '/hit.html') }).toEqual({ selector, confidence: [] });
         expect({ selector, scroll: await scroll() }).toEqual({ selector, scroll: before });
       }
+    });
+  });
+
+  it('asks for review of a button far down in a box that scrolls, as the overflow limit already does', async () => {
+    await withPage('/hit.html', async (page) => {
+      // A person can make this scroll, so the scroll rule adds nothing. The button reaches past its
+      // box before the read scrolls, and the overflow limit read before the scroll says so.
+      expect(await page.boundingBox('#deep')).toEqual({ width: 44, height: 44, fragments: 1, unmeasurable: ['overflow-clipped'] });
+      expect(await targetSizeConfidence(page, 'Deep', '/hit.html')).toEqual(['unverified']);
     });
   });
 
