@@ -3,6 +3,7 @@ import type { DocArtifact, Receipt, RequirementBundle, Result, UsablConfig } fro
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import { collectDocArtifacts, generateDocs, markStaleDocArtifacts, projectDocs } from '../../src/surfaces/docs.js';
 import { renderDocsHtml } from '../../src/surfaces/docs-html.js';
+import { run } from '../../src/run.js';
 
 // The docs promise: a report is bound to the code it was made from, and a report made from a
 // different tree than the current one is marked as needing regeneration. These tests hold that
@@ -243,6 +244,55 @@ describe('a report made from another tree is marked stale wherever it is listed 
     // never saw one whole tree.
     const read = markStaleDocArtifacts(JSON.parse(projected.json).artifacts, 'tree-after');
     expect(read.every((artifact) => artifact.stale === true)).toBe(true);
+  });
+
+  it('never shows a clean page as verified when a file was saved during the scan', async () => {
+    const config: UsablConfig = {
+      appBaseUrl: 'http://127.0.0.1:5173',
+      uiFileGlobs: ['app/src/**'],
+      discovery: { routerFile: 'app/src/App.tsx', wideBlastGlobs: [] },
+      surfaces: [{ id: 'clusters', url: 'http://127.0.0.1:5173/clusters', files: ['app/src/ClustersPage.tsx'] }],
+      guardedPaths: ['usabl.config.json'],
+    };
+    // No finding, and a file is saved while the scan is in progress: every tree read after the
+    // scan sees another tree. The run's two reads differ, so it is not covered and mints no
+    // receipt, and the report it makes is out of date.
+    const savedDuringScan = () => {
+      const deps = makeFakeDeps({
+        changed: [{ code: 'M', path: 'app/src/ClustersPage.tsx' }],
+        files: { 'usabl.config.json': '{}', 'app/src/ClustersPage.tsx': 'export const Clusters = () => null;' },
+        headContents: { 'usabl.config.json': '{}' },
+        writeTree: 'tree-before',
+        scans: { clusters: result().screens[0]! },
+      });
+      let saved = false;
+      const writeTree = deps.git.writeTree.bind(deps.git);
+      deps.git.writeTree = async () => (saved ? 'tree-after' : writeTree());
+      const scan = deps.checkRunner.scan.bind(deps.checkRunner);
+      deps.checkRunner.scan = async (screen) => {
+        const scanned = await scan(screen);
+        saved = true;
+        return scanned;
+      };
+      return deps;
+    };
+
+    const checked = await run(savedDuringScan(), config);
+    expect(checked.verdict).toBe('not_covered');
+    expect(checked.receipt).toBeNull();
+    expect(checked.coverage.gaps.some((gap) => gap.ref === 'working tree')).toBe(true);
+
+    const projected = await generateDocs(savedDuringScan(), config, { all: false });
+    expect(projected.artifacts.length).toBeGreaterThan(0);
+    for (const artifact of projected.artifacts) {
+      expect(artifact.boundToReceipt).toBeUndefined();
+      expect(artifact.sourceTree).toBe('tree-before');
+      expect(artifact.stale).toBe(true);
+      expect(artifact.staleReason).toContain('tree-after');
+    }
+    const html = renderDocsHtml(projected.artifacts);
+    expect(html).toContain('Out of date.');
+    expect(html).not.toContain('<span class="status__label">Verified.</span>');
   });
 
   it('records the start tree when it differs from the receipt tree, and stays stale against both', () => {
