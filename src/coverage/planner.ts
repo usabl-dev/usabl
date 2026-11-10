@@ -72,10 +72,6 @@ function addAffected(target: Map<string, AffectedScreen>, candidate: AffectedScr
   }
 }
 
-function hasAffectedUrl(target: Map<string, AffectedScreen>, url: string): boolean {
-  return [...target.values()].some((screen) => screen.url === url);
-}
-
 function manualUrlOverride(config: UsablConfig, file: string, screenId: string): string | null {
   for (const surface of config.surfaces) {
     if (surface.id === screenId && surface.files.includes(file)) {
@@ -355,9 +351,11 @@ export async function computeCoverage(
     // discovery did not find and those URLs still need scans.
     // An empty route list is not coverage evidence, so this branch only applies
     // when wide-blast actually attributed at least one discovered route.
+    // A surface that lists the file is queued by its screen id, never skipped for a url a route or
+    // another surface already has: it carries its own readiness signal and requirements.
     if (isWideBlastMatch && wideBlastAttributedAnyScreen) {
       for (const surface of config.surfaces) {
-        if (!surface.files.includes(file) || hasAffectedUrl(affectedByScreen, surface.url)) {
+        if (!surface.files.includes(file)) {
           continue;
         }
         addAffected(affectedByScreen, {

@@ -443,3 +443,36 @@ describe('surfaces that share a url on a dependency change', () => {
     expect([...scanned].sort()).toEqual(['clusters', 'clusters-empty', 'deployments', 'settings', 'settings-dialog']);
   });
 });
+
+// The same rule holds when a wide-blast file changes. A surface that lists the changed file is
+// queued under its own id even when a route or another surface already has its url, because a
+// url does not determine which screen renders.
+describe('surfaces that share a url on a wide-blast file change', () => {
+  const shellChange = async (config: UsablConfig) =>
+    computeCoverage(fsOf(appTree({ 'src/App.tsx': 'export default function App() {}' })), config, ['src/App.tsx']);
+
+  it('queues a surface that lists the file and shares a url with a discovered route', async () => {
+    const config: UsablConfig = {
+      ...appConfig,
+      surfaces: [{ id: 'clusters-dialog', url: 'http://localhost:3000/clusters', files: ['src/App.tsx'], reachedWhen: '[role="dialog"]' }],
+    };
+    const coverage = await shellChange(config);
+    expect(coverage.affected.map(({ screenId, url }) => ({ screenId, url }))).toEqual([
+      { screenId: 'clusters', url: 'http://localhost:3000/clusters' },
+      { screenId: 'deployments', url: 'http://localhost:3000/deployments' },
+      { screenId: 'clusters-dialog', url: 'http://localhost:3000/clusters' },
+    ]);
+  });
+
+  it('queues two surfaces that list the file and share one url, each under its own id', async () => {
+    const config: UsablConfig = {
+      ...appConfig,
+      surfaces: [
+        { id: 'settings', url: 'http://localhost:3000/settings', files: ['src/App.tsx'] },
+        { id: 'settings-dialog', url: 'http://localhost:3000/settings', files: ['src/App.tsx'] },
+      ],
+    };
+    const coverage = await shellChange(config);
+    expect(coverage.affected.map((screen) => screen.screenId)).toEqual(['clusters', 'deployments', 'settings', 'settings-dialog']);
+  });
+});
