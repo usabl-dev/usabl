@@ -26,6 +26,7 @@ import {
   writeFetcherStep,
 } from './artifact-fetch.js';
 import { FIND_BUILD_RUN_SCRIPT, gateRunName } from './build-run.js';
+import { isSafeBranchName, workflowTriggerBranch } from './repo-git.js';
 
 export const USABL_GATE_WORKFLOW_PATH = '.github/workflows/usabl-gate.yml';
 
@@ -351,13 +352,22 @@ interface GateVariant {
   serveStep: string;
 }
 
-const APP_BUILD_STEPS = `${buildEngineSteps(
-  `          # This places the engine in ../usabl for an app whose lockfile installs usabl from file:../usabl.
+// Place the engine at ../usabl, beside the app checkout. build-app and the history scan both run
+// these bytes. Actions checks a repository out into <name>/<name>, so in a repository named usabl
+// ../usabl is the checkout itself, and the engine must never be unpacked over it.
+export const PLACE_ENGINE_BESIDE_APP = `          # This places the engine in ../usabl for an app whose lockfile installs usabl from file:../usabl.
           # An app that does not use that path never reads the folder, so for that app this step does
           # not change what npm ci installs or what the build makes.
-          mkdir -p "\${GITHUB_WORKSPACE}/../usabl"
-          tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"`,
-)}
+          # When this repository is itself named usabl, ../usabl is this checkout, so the step
+          # unpacks nothing and leaves the checkout as it is.
+          if [ "$(realpath -m "\${GITHUB_WORKSPACE}/../usabl")" = "$(realpath -m "\${GITHUB_WORKSPACE}")" ]; then
+            echo "usabl: ../usabl is this checkout, because this repository is named usabl. The engine is not unpacked there, so the checkout is left as it is. If your app installs usabl from file:../usabl, it cannot build here, because ../usabl holds this checkout and not the engine. Rename the repository to fix that. An app that does not install usabl from that path needs no change."
+          else
+            mkdir -p "\${GITHUB_WORKSPACE}/../usabl"
+            tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"
+          fi`;
+
+const APP_BUILD_STEPS = `${buildEngineSteps(PLACE_ENGINE_BESIDE_APP)}
 
       - name: Install app dependencies
         run: npm ci --ignore-scripts
@@ -474,7 +484,13 @@ const VALIDATE_RESULT_SCRIPT = `          node <<'NODE'
           }
           NODE`;
 
-function gateWorkflow(variant: GateVariant): string {
+// The gate for an app whose default branch is `branch`. The name goes into the pull request trigger
+// and nowhere else, so only a plain name is taken: letters, digits, and . _ - /. It is written
+// quoted, so YAML reads it as text even when it looks like a number.
+function gateWorkflow(variant: GateVariant, branch: string): string {
+  if (!isSafeBranchName(branch)) {
+    throw new Error('the gate workflow branch must be letters, digits, and . _ - / only');
+  }
   return `name: ${variant.name}
 # Each run is named after the event, pull request, head, and base that started it, so a review can
 # find the build of this exact pull request even when another pull request has the same head.
@@ -482,8 +498,8 @@ run-name: ${gateRunName(variant.name)}
 
 on:
   pull_request:
-    branches: [main]
-    # Retargeting onto main must re-run trusted-ref policy checks.
+    branches: ["${branch}"]
+    # Retargeting onto the default branch must re-run trusted-ref policy checks.
     types: [opened, synchronize, reopened, edited]
   pull_request_review:
     # Use the event payload so a review still knows the base branch and head SHA.
@@ -749,7 +765,7 @@ ${VALIDATE_RESULT_SCRIPT}
         run: |
           # Never exit 2 here. Guarded-file approval lives on usabl-policy.
           if [ "\${VERDICT}" != "pass" ]; then
-            echo "accessibility verdict is \${VERDICT:-missing}; see the usabl comment for the barriers"
+            echo "accessibility verdict is \${VERDICT:-missing}; see the usabl comment for the accessibility barriers"
             exit 1
           fi
 
@@ -969,13 +985,21 @@ ${EMBEDDED_GATE_SCRIPT}
 // command and output directory are repository variables (USABL_APP_BUILD_COMMAND, default
 // "npm run build"; USABL_APP_BUILD_DIR, default "dist"), so the file stays byte-stable and the
 // engine ref remains the only value classifyGateWorkflow must reason about.
-export const USABL_GATE_WORKFLOW = gateWorkflow({
+const APP_GATE: GateVariant = {
   name: 'usabl-gate',
   workflowFile: 'usabl-gate.yml',
   buildSteps: APP_BUILD_STEPS,
   buildNeedsEngine: true,
   serveStep: APP_SERVE_STEP,
-});
+};
+
+/** The app gate for pull requests into `branch`. */
+export function gateWorkflowFor(branch: string): string {
+  return gateWorkflow(APP_GATE, branch);
+}
+
+/** The app gate for an app whose default branch is main. */
+export const USABL_GATE_WORKFLOW = gateWorkflowFor('main');
 
 export const USABL_DOCS_GATE_WORKFLOW_PATH = '.github/workflows/usabl-docs-gate.yml';
 
@@ -985,16 +1009,72 @@ export const USABL_DOCS_GATE_WORKFLOW_PATH = '.github/workflows/usabl-docs-gate.
 // command, the built-HTML directory, and the serve port are repository variables
 // (USABL_DOCS_BUILD_COMMAND, USABL_DOCS_BUILT_ROOT, USABL_DOCS_SERVE_PORT), so this file stays
 // byte-stable. usabl.docs.json docsBaseUrl at the trusted ref must point at that port.
-export const USABL_DOCS_GATE_WORKFLOW = gateWorkflow({
+const DOCS_GATE: GateVariant = {
   name: 'usabl-docs-gate',
   workflowFile: 'usabl-docs-gate.yml',
   buildSteps: DOCS_BUILD_STEPS,
   buildNeedsEngine: false,
   serveStep: DOCS_SERVE_STEP,
-});
+};
+
+/** The docs gate for pull requests into `branch`. */
+export function docsGateWorkflowFor(branch: string): string {
+  return gateWorkflow(DOCS_GATE, branch);
+}
+
+/** The docs gate for a repository whose default branch is main. */
+export const USABL_DOCS_GATE_WORKFLOW = docsGateWorkflowFor('main');
+
+const VERDICT_HINT = 'see the usabl comment for the accessibility barriers"';
+
+// What an earlier 0.3.0 build wrote in place of these parts of the draft: a trigger that names
+// main unquoted, comments that said main for the default branch, a shorter verdict line, and the engine
+// step with no guard for a repository named usabl. Those files are usabl's own text, so install
+// recognises them, unedited, and rewrites them to this draft. Nothing else is recognised this way.
+const EARLIER_PLACE_ENGINE_BESIDE_APP = `          # This places the engine in ../usabl for an app whose lockfile installs usabl from file:../usabl.
+          # An app that does not use that path never reads the folder, so for that app this step does
+          # not change what npm ci installs or what the build makes.
+          mkdir -p "\${GITHUB_WORKSPACE}/../usabl"
+          tar --extract --gzip --no-same-owner --file "\${DOWNLOAD_DIR}/usabl-engine.tgz" --directory "\${GITHUB_WORKSPACE}/../usabl"`;
+
+/** The earlier text for each part of a draft that changed, as [this draft, earlier build]. */
+export type EarlierText = ReadonlyArray<readonly [string, string]>;
+
+export const EARLIER_ENGINE_TEXT: EarlierText = [[PLACE_ENGINE_BESIDE_APP, EARLIER_PLACE_ENGINE_BESIDE_APP]];
+
+const EARLIER_GATE_TEXT: EarlierText = [
+  ['  pull_request:\n    branches: ["main"]\n', '  pull_request:\n    branches: [main]\n'],
+  [
+    '    # Retargeting onto the default branch must re-run trusted-ref policy checks.\n',
+    '    # Retargeting onto main must re-run trusted-ref policy checks.\n',
+  ],
+  // The earlier build wrote this line without the word "accessibility". This text is only compared
+  // with a file on disk; it is never written or printed.
+  [VERDICT_HINT, VERDICT_HINT.replace('accessibility ', '')],
+  ...EARLIER_ENGINE_TEXT,
+];
+
+/** A draft with each changed part put back to the text an earlier build wrote. */
+export function earlierForm(draft: string, text: EarlierText): string {
+  return text.reduce((form, [now, before]) => form.split(now).join(before), draft);
+}
+
+/** The gate an earlier 0.3.0 build wrote. It could only name main. */
+export const EARLIER_GATE_WORKFLOW = earlierForm(USABL_GATE_WORKFLOW, EARLIER_GATE_TEXT);
+
+/** The docs gate an earlier 0.3.0 build wrote. It could only name main. */
+export const EARLIER_DOCS_GATE_WORKFLOW = earlierForm(USABL_DOCS_GATE_WORKFLOW, EARLIER_GATE_TEXT);
 
 export type CiPlan =
-  | { action: 'write'; path: string; contents: string }
+  // replacesEarlier is set when the file on disk is the unedited draft an earlier 0.3.0 build wrote,
+  // with keptPin the engine commit it held, if any, and moved set when the rewrite names another
+  // branch in its trigger than the earlier draft did.
+  | {
+      action: 'write';
+      path: string;
+      contents: string;
+      replacesEarlier?: { keptPin: string | null; moved: { from: string; to: string; line: number } | null };
+    }
   // pinnedTo is set when the file on disk is the usabl draft pinned to a commit other than the one
   // this run would write. usabl leaves that pin alone, because someone chose it.
   | { action: 'already-wired'; path: string; pinnedTo?: string }
@@ -1014,6 +1094,20 @@ function describeDifference(actual: string, expected: string): string {
   return `the existing file has ${actualLines.length} lines and the usabl draft has ${expectedLines.length} lines`;
 }
 
+// The branch a usabl workflow's trigger names and the one-based line it is on: the branch filter
+// straight after the pull_request or push line, quoted as this version writes it or unquoted as an
+// earlier 0.3.0 gate wrote it. Only read from usabl's own drafts, to say where a rewrite moved it.
+const DRAFT_TRIGGER_BRANCH = /^ {4}branches: \[("?)([A-Za-z0-9._/-]+)\1\]$/;
+function triggerBranchOf(raw: string): { name: string; line: number } | null {
+  const lines = raw.split('\n');
+  for (const event of ['pull_request', 'push']) {
+    const at = lines.indexOf(`  ${event}:`);
+    const match = at === -1 ? null : DRAFT_TRIGGER_BRANCH.exec(lines[at + 1] ?? '');
+    if (match?.[2] !== undefined) return { name: match[2], line: at + 2 };
+  }
+  return null;
+}
+
 // planCi, planDocsCi, and planHistoryCi answer the same question against different targets: given
 // the placeholder draft for a workflow, its path, and the engine commit to pin (or null to keep the
 // placeholder), may usabl write, or must it refuse? The logic is identical, so it lives here once.
@@ -1022,6 +1116,7 @@ export async function planWorkflow(
   path: string,
   placeholderDraft: string,
   engineRef: string | null,
+  earlierDraft: string | null = null,
 ): Promise<CiPlan> {
   const draft = engineRef === null ? placeholderDraft : pinEngineRef(placeholderDraft, engineRef);
   const raw = await fs.readFile(path);
@@ -1035,6 +1130,23 @@ export async function planWorkflow(
   // only the line the operator was told to edit, so nothing anyone wrote is lost.
   if (engineRef !== null && raw === placeholderDraft) {
     return { action: 'write', path, contents: draft };
+  }
+  // The unedited draft an earlier 0.3.0 build wrote, pinned or not. It is usabl's own text, so it is
+  // rewritten to this draft, and a pin it held stays.
+  if (earlierDraft !== null) {
+    const earlier = matchWorkflow(raw, earlierDraft);
+    if (earlier.state === 'wired' || earlier.state === 'unpinned') {
+      const keptPin = earlier.state === 'wired' ? earlier.ref : null;
+      const ref = keptPin ?? engineRef;
+      const from = triggerBranchOf(raw);
+      const to = triggerBranchOf(placeholderDraft);
+      return {
+        action: 'write',
+        path,
+        contents: ref === null ? placeholderDraft : pinEngineRef(placeholderDraft, ref),
+        replacesEarlier: { keptPin, moved: from !== null && to !== null && from.name !== to.name ? { from: from.name, to: to.name, line: to.line } : null },
+      };
+    }
   }
   // The draft pinned to some other commit. Someone chose that pin, so it stays.
   const onDisk = matchWorkflow(raw, placeholderDraft);
@@ -1050,12 +1162,12 @@ export async function planWorkflow(
   };
 }
 
-export async function planCi(fs: InstallFs, engineRef: string | null = null): Promise<CiPlan> {
-  return planWorkflow(fs, USABL_GATE_WORKFLOW_PATH, USABL_GATE_WORKFLOW, engineRef);
+export async function planCi(fs: InstallFs, engineRef: string | null = null, branch = 'main'): Promise<CiPlan> {
+  return planWorkflow(fs, USABL_GATE_WORKFLOW_PATH, gateWorkflowFor(branch), engineRef);
 }
 
-export async function planDocsCi(fs: InstallFs, engineRef: string | null = null): Promise<CiPlan> {
-  return planWorkflow(fs, USABL_DOCS_GATE_WORKFLOW_PATH, USABL_DOCS_GATE_WORKFLOW, engineRef);
+export async function planDocsCi(fs: InstallFs, engineRef: string | null = null, branch = 'main'): Promise<CiPlan> {
+  return planWorkflow(fs, USABL_DOCS_GATE_WORKFLOW_PATH, docsGateWorkflowFor(branch), engineRef);
 }
 
 /** The commit to pin for this build, or null to keep the placeholder. */
@@ -1118,8 +1230,19 @@ export async function applyWorkflowPlan(
 ): Promise<AppliedWorkflow> {
   if (plan.action === 'write') {
     await fs.writeFile(plan.path, plan.contents);
+    const earlier = plan.replacesEarlier;
+    // The branch only moves when the earlier draft named main and git records another default
+    // branch. origin/HEAD can be stale after a rename, so the line says how to put main back.
+    const moved =
+      earlier?.moved == null
+        ? ''
+        : ` Its trigger moved from ${earlier.moved.from} to ${earlier.moved.to}, the default branch git records for origin. If ${earlier.moved.from} is still your default branch, put ${earlier.moved.from} back in place of ${earlier.moved.to} on line ${earlier.moved.line}.`;
+    const message =
+      earlier === undefined
+        ? `Wrote ${plan.path}.`
+        : `Rewrote ${plan.path}. It held the unedited draft an earlier 0.3.0 build wrote, which this version does not recognise.${moved}${earlier.keptPin === null ? '' : ` The engine pin ${earlier.keptPin} is kept.`} Review the file and commit it: the change is only on disk until you do.`;
     return {
-      result: { exitCode: 0, action: 'written', path: plan.path, message: `Wrote ${plan.path}.` },
+      result: { exitCode: 0, action: 'written', path: plan.path, message },
       draft,
       holdsPlaceholder: plan.contents.split('\n').includes(ENGINE_REF_LINE),
     };
@@ -1224,20 +1347,28 @@ export async function writeCi(fs: InstallFs, plan: CiPlan, pin: EnginePin = NO_B
   });
 }
 
+/** The facts the docs gate report states once something is written. */
+export const DOCS_GATE_NOTES: readonly string[] = [
+  PUBLIC_ENGINE,
+  'The judge serves the built HTML itself with usabl serve-build.',
+  REQUIRED_CHECK_NOTE,
+  WORKFLOW_BOUNDARY,
+];
+
+/** The setup steps every docs gate needs: its repository variables and the docs origin. */
+export const DOCS_GATE_SETUP_STEPS: readonly string[] = [
+  'Set three repository variables the docs gate reads: USABL_DOCS_BUILD_COMMAND (for example "ccutil compile"), USABL_DOCS_BUILT_ROOT (the directory the build renders HTML into), and USABL_DOCS_SERVE_PORT (a free port).',
+  'Point docsBaseUrl in usabl.docs.json at http://127.0.0.1:<USABL_DOCS_SERVE_PORT> so the scan targets the served docs, and commit it.',
+];
+
+// The docs gate for main, without reading git. `usabl install --docs-ci` runs installDocsCi, which
+// takes the default branch from git and adds the steps that depend on it.
 export async function writeDocsCi(fs: InstallFs, plan: CiPlan, pin: EnginePin = NO_BUILD_RECORD): Promise<InstallResult> {
   return composeCiReport({
     applied: [await applyWorkflowPlan(fs, plan, pin, USABL_DOCS_GATE_WORKFLOW, 'docs gate workflow')],
     pin,
-    notes: [
-      PUBLIC_ENGINE,
-      'The judge serves the built HTML itself with usabl serve-build.',
-      REQUIRED_CHECK_NOTE,
-      WORKFLOW_BOUNDARY,
-    ],
-    setupSteps: [
-      'Set three repository variables the docs gate reads: USABL_DOCS_BUILD_COMMAND (for example "ccutil compile"), USABL_DOCS_BUILT_ROOT (the directory the build renders HTML into), and USABL_DOCS_SERVE_PORT (a free port).',
-      'Point docsBaseUrl in usabl.docs.json at http://127.0.0.1:<USABL_DOCS_SERVE_PORT> so the scan targets the served docs, and commit it.',
-    ],
+    notes: DOCS_GATE_NOTES,
+    setupSteps: DOCS_GATE_SETUP_STEPS,
   });
 }
 
@@ -1353,10 +1484,25 @@ function classifyWorkflowLines(raw: string | null, draft: string): { state: Gate
   return drifted;
 }
 
+/**
+ * The state of a workflow whose draft names a branch in its trigger. The branch the file names is
+ * the one it is checked against, so usabl's own draft for any plain branch is recognised. A file
+ * whose trigger is not in usabl's exact form names no branch usabl can read, so it is drifted.
+ */
+export function classifyBranchedWorkflow(
+  raw: string | null,
+  event: 'pull_request' | 'push',
+  draftFor: (branch: string) => string,
+): GateWorkflowState {
+  if (raw === null) return 'missing';
+  const branch = workflowTriggerBranch(raw, event);
+  return branch === null ? 'drifted' : classifyWorkflow(raw, draftFor(branch));
+}
+
 export function classifyGateWorkflow(raw: string | null): GateWorkflowState {
-  return classifyWorkflow(raw, USABL_GATE_WORKFLOW);
+  return classifyBranchedWorkflow(raw, 'pull_request', gateWorkflowFor);
 }
 
 export function classifyDocsGateWorkflow(raw: string | null): GateWorkflowState {
-  return classifyWorkflow(raw, USABL_DOCS_GATE_WORKFLOW);
+  return classifyBranchedWorkflow(raw, 'pull_request', docsGateWorkflowFor);
 }

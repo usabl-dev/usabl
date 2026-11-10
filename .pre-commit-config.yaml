@@ -36,7 +36,9 @@ repos:
       - id: prettier
         types_or: [markdown, yaml]
         # Product docs are founder-owned prose. Auto-reflow would rewrite the corpus.
-        exclude: ^docs/
+        # The install fixtures hold workflow files byte for byte as an earlier build wrote
+        # them, so a reformat would break the comparison they exist for.
+        exclude: ^(docs/|fixtures/install/)
 
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.2.0
