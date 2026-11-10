@@ -289,11 +289,11 @@ describe('Stop hook reads the config at the repository root, through the real po
     await rm(repo, { recursive: true, force: true });
   });
 
-  function realPorts(startDir: string) {
+  function realPorts(startDir: string, env: Record<string, string | undefined> = {}) {
     const stdout: string[] = [];
     const stderr: string[] = [];
     const configs: UsablConfig[] = [];
-    const base = makeStopHookRunnerPorts({ startDir, env: {} });
+    const base = makeStopHookRunnerPorts({ startDir, env });
     const ports: StopHookRunnerPorts = {
       ...base,
       pins: memoryPinStore(),
@@ -355,15 +355,65 @@ describe('Stop hook reads the config at the repository root, through the real po
     expect(h.configs).toEqual([]);
   });
 
-  it('allows with the not-configured note in a folder that is in no repository and has no config', async () => {
+  // Outside a work tree the hook could not look, so it says that, and never that the folder has
+  // no config. The folder is a path from the environment, so it is printed only inside the frame.
+  it('says it could not find the repository in a folder that is in no repository', async () => {
     const outside = await realpath(await mkdtemp(join(tmpdir(), 'usabl-hook-norepo-')));
     try {
       const h = realPorts(outside);
-      expect(await h.base.readConfigBytes()).toEqual({ working: missing, head: missing });
+      expect(await h.base.readConfigBytes()).toEqual({ working: missing, head: { status: 'no-work-tree' } });
       await runStopHookFromStdin('{}', h.ports);
-      expect(h.stderr()).toContain('usabl is not configured here');
+      expect(h.stdout()).not.toContain('"decision":"block"');
+      const stderr = h.stderr();
+      expect(stderr).toContain('outside any git work tree');
+      expect(stderr).toContain('could not find the repository and checked nothing on this stop');
+      expect(stderr).toContain('run usabl check from the project root');
+      expect(stderr).not.toContain('usabl is not configured here');
+      const frameStart = stderr.indexOf('[BEGIN UNTRUSTED TEXT');
+      expect(frameStart).toBeGreaterThan(0);
+      expect(stderr.indexOf(`folder: ${outside}`)).toBeGreaterThan(frameStart);
+      expect(stderr.slice(0, frameStart)).not.toContain(outside);
     } finally {
       await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('says it could not find the repository when it starts inside .git and CLAUDE_PROJECT_DIR is unset', async () => {
+    await writeFile(join(repo, 'usabl.config.json'), CORRUPT);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+
+    const h = realPorts(join(repo, '.git'));
+    await runStopHookFromStdin(stopInput(false), h.ports);
+    expect(h.stdout()).not.toContain('"decision":"block"');
+    expect(h.stderr()).toContain('outside any git work tree');
+    expect(h.stderr()).not.toContain('usabl is not configured here');
+  });
+
+  it('starts at CLAUDE_PROJECT_DIR when it names a folder, so a stop inside .git still blocks', async () => {
+    await writeFile(join(repo, 'usabl.config.json'), CORRUPT);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+
+    const h = realPorts(join(repo, '.git'), { CLAUDE_PROJECT_DIR: repo });
+    expect(h.base.cwd()).toBe(repo);
+    await runStopHookFromStdin(stopInput(false), h.ports);
+    const reason = blockReason(h.stdout());
+    expect(reason).toContain('approval required');
+    expect(reason).toContain('does not parse');
+  });
+
+  it('ignores a CLAUDE_PROJECT_DIR that does not name a folder', async () => {
+    await writeFile(join(repo, 'usabl.config.json'), COMMITTED);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+
+    for (const projectDir of [join(repo, 'no-such-folder'), join(repo, 'packages', 'web', 'index.ts'), '']) {
+      const h = realPorts(join(repo, 'packages', 'web'), { CLAUDE_PROJECT_DIR: projectDir });
+      expect(h.base.cwd()).toBe(repo);
+      await runStopHookFromStdin('{}', h.ports);
+      expect(h.stdout()).not.toContain('"decision":"block"');
+      expect(h.stderr()).toContain('VERIFIED');
     }
   });
 

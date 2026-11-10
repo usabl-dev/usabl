@@ -12,6 +12,7 @@
  *                          maps to stopHookActive to prevent recursive loops.
  */
 import { execFileSync } from 'node:child_process';
+import { statSync } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -53,10 +54,16 @@ export interface StopHookRunnerFs extends ReceiptFs {
 /** What a read of one file found: its text, nothing at the path, or an error that stopped the read. */
 export type FileBytes = { status: 'found'; text: string } | { status: 'missing' } | { status: 'unreadable'; reason: string };
 
+/**
+ * What the hook found at the last commit. `no-work-tree` means the hook found no git work tree from
+ * the folder it started in, so it could not look at a last commit at all.
+ */
+export type HeadBytes = FileBytes | { status: 'no-work-tree' };
+
 /** usabl.config.json as the working tree holds it and as the last commit holds it, as raw bytes. */
 export interface ConfigBytes {
   working: FileBytes;
-  head: FileBytes;
+  head: HeadBytes;
 }
 
 export interface StopHookRunnerPorts {
@@ -343,8 +350,26 @@ const NOT_CONFIGURED_MESSAGE =
   'NOT verified - usabl is not configured here: this repository has no usabl.config.json in the working tree or in the last commit, so usabl checked nothing on this stop. ' +
   'Next: run usabl init to set usabl up in this repository, or ignore this note if the repository does not use usabl.';
 
+/**
+ * The note for a stop that started in a folder outside any git work tree. The hook could not find
+ * the repository, so it could not tell whether usabl is set up there. The folder comes from the
+ * environment, so it is printed only inside the frame.
+ */
+function outsideWorkTreeMessage(folder: string): string {
+  return framedMessage(
+    [
+      'NOT verified - the stop hook ran in a folder outside any git work tree, or git could not run there ' +
+        '(the folder is under "folder" in the untrusted text below), so it could not find the repository and ' +
+        'checked nothing on this stop. usabl is not blocking this stop.',
+      'Next: run usabl check from the project root before you call this change accessible.',
+    ],
+    [`folder: ${folder}`],
+  );
+}
+
 type ConfigStep =
   | { kind: 'parse'; text: string }
+  | { kind: 'outside-work-tree' }
   | { kind: 'not-configured' }
   | { kind: 'block'; problem: ConfigProblem; error: string | null }
   | { kind: 'error'; reason: string };
@@ -363,6 +388,9 @@ type ConfigStep =
  */
 function configStep(bytes: ConfigBytes): ConfigStep {
   const { working, head } = bytes;
+  if (head.status === 'no-work-tree') {
+    return { kind: 'outside-work-tree' };
+  }
   if (head.status === 'unreadable') {
     return { kind: 'error', reason: `git could not read ${CONFIG_FILE} at the last commit: ${head.reason}` };
   }
@@ -438,7 +466,8 @@ function errorMessage(err: unknown): string {
 /**
  * The repository root for the folder the hook starts in. The assistant can change directory
  * during a session, so the hook's own folder can be any subfolder, or a folder outside every
- * repository. A folder in no repository is its own root, and has no last commit.
+ * work tree, such as `.git`. A folder in no work tree is its own root, and the hook does not look
+ * for a last commit there.
  */
 export function findRepositoryRoot(startDir: string): { root: string; inRepository: boolean } {
   try {
@@ -468,9 +497,9 @@ async function readWorkingConfig(root: string): Promise<FileBytes> {
   }
 }
 
-async function readHeadConfig(root: string, inRepository: boolean): Promise<FileBytes> {
+async function readHeadConfig(root: string, inRepository: boolean): Promise<HeadBytes> {
   if (!inRepository) {
-    return { status: 'missing' };
+    return { status: 'no-work-tree' };
   }
   try {
     // A repository with no commits has no HEAD, so it has no committed config either.
@@ -510,14 +539,34 @@ export interface StopHookRunnerPortOptions {
   // so a host setting never moves the pins they inspect.
   env?: Record<string, string | undefined>;
   // The folder the hook starts in. Absent means the process working directory. The hook works in
-  // the repository root above it.
+  // the repository root above it. CLAUDE_PROJECT_DIR, when it names a folder, comes first.
   startDir?: string;
+}
+
+/**
+ * The folder CLAUDE_PROJECT_DIR names, or null. Claude Code sets it to the project root, so the
+ * hook starts there and does not follow the assistant into a folder outside the work tree. A value
+ * that is empty, or that names no folder, is ignored.
+ */
+function claudeProjectDir(env: Record<string, string | undefined>): string | null {
+  const value = env['CLAUDE_PROJECT_DIR'];
+  if (value === undefined || value.length === 0) {
+    return null;
+  }
+  try {
+    const path = resolve(value);
+    return statSync(path).isDirectory() ? path : null;
+  } catch {
+    return null;
+  }
 }
 
 export function makeStopHookRunnerPorts(options: StopHookRunnerPortOptions = {}): StopHookRunnerPorts {
   const uid = options.uid === undefined ? currentUid() : options.uid;
-  const dir = resolveSessionPinDir({ env: options.env ?? process.env, tmpDir: tmpdir(), uid });
-  const { root, inRepository } = findRepositoryRoot(options.startDir ?? process.cwd());
+  const env = options.env ?? process.env;
+  const dir = resolveSessionPinDir({ env, tmpDir: tmpdir(), uid });
+  const startDir = claudeProjectDir(env) ?? options.startDir ?? process.cwd();
+  const { root, inRepository } = findRepositoryRoot(startDir);
   return {
     fs: defaultFs(root),
     pins: makeFsSessionPinStore({ dir, uid }),
@@ -599,6 +648,10 @@ export async function runStopHook(
     const step = configStep(await ports.readConfigBytes());
     if (step.kind === 'error') {
       throw new Error(step.reason);
+    }
+    if (step.kind === 'outside-work-tree') {
+      await emitProtocolAllow(ports, outsideWorkTreeMessage(ports.cwd()), options);
+      return 0;
     }
     if (step.kind === 'not-configured') {
       // Pins for this session and root mean an earlier stop here read a committed config, so a
