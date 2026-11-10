@@ -213,14 +213,19 @@ awareness.
 - The bound Chromium version is the version of the binary that scans. A run launches Chromium
   headless with no channel, so Playwright starts its headless shell (`chrome-headless-shell`,
   in the `chromium_headless_shell-<revision>` folder), not the full browser that
-  `chromium.executablePath()` names. usabl finds the headless shell beside the full browser, in
-  the same browsers folder with the same revision and Playwright's file layout, checks that the
-  file exists, and binds what it prints for `--version`. So replacing the headless shell moves
-  the version, for Playwright's download and for a custom `PLAYWRIGHT_BROWSERS_PATH`. When the
-  headless shell prints no version (Chrome on Windows prints none), the revision in its folder
-  name is bound as `revision-1234`, a form no real version has. When the headless shell cannot be
-  found, the version is unreadable; the full browser's version is never bound in its place.
-  A browser placed at the full browser's path does not scan in a headless run, so it is not read.
+  `chromium.executablePath()` names. usabl finds the headless shell in the full browser's
+  browsers folder, at the revision that the `chromium-headless-shell` entry of the installed
+  `playwright-core` package's `browsers.json` names, with Playwright's file layout. It checks
+  that the file exists and binds what it prints for `--version`. So replacing the headless shell
+  moves the version, for Playwright's download and for a custom `PLAYWRIGHT_BROWSERS_PATH`. The
+  revision never comes from the full browser's folder, because Playwright gives each browser its
+  own revision, and an older shell folder can stay on disk beside the one Playwright launches.
+  When the headless shell prints no version (Chrome on Windows prints none), the revision in its
+  folder name is bound as `revision-1234`, a form no real version has. When the list cannot be
+  read, names no single revision, or gives the entry a per-platform override (usabl cannot tell
+  which one applies), or when the folder is missing, the version is unreadable. Neither the full
+  browser's version nor any other shell folder is bound in its place. A browser placed at the
+  full browser's path does not scan in a headless run, so it is not read.
 - Before, the version was the first `chromium-<number>` or `chromium_<number>` anywhere in the
   full browser's path, read as `revision-<number>`. Playwright's download read its folder
   revision. A different browser placed at that path read the same revision as the build it

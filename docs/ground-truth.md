@@ -3026,12 +3026,15 @@ Five bindings are compared on re-verification, plus the waiver end below:
   The Chromium version is that of Playwright's headless shell (`chrome-headless-shell`),
   because a run launches Chromium headless with no channel and Playwright starts the headless
   shell for that, not the full browser `chromium.executablePath()` names. usabl finds the
-  headless shell beside the full browser (same browsers folder, same revision, Playwright's
-  layout), checks the file exists, and binds what it prints for `--version` (for example
-  `151.0.7922.34`). This holds for Playwright's download and a custom
-  `PLAYWRIGHT_BROWSERS_PATH`. When the headless shell prints none, it is the revision in the
-  name of its folder (`revision-1234` from `chromium_headless_shell-1234`), a form no real
-  version has. When the headless shell cannot be found, or neither read gives a value, the
+  headless shell in the full browser's browsers folder, at the revision the
+  `chromium-headless-shell` entry names in the `browsers.json` of the installed `playwright-core`
+  package, with Playwright's layout. It checks the file exists and binds what it prints for
+  `--version` (for example `151.0.7922.34`). This holds for Playwright's download and a custom
+  `PLAYWRIGHT_BROWSERS_PATH`. The revision never comes from the full browser's folder name, and
+  no other shell folder on disk is used. When the headless shell prints none, it is the revision
+  in the name of its folder (`revision-1234` from `chromium_headless_shell-1234`), a form no real
+  version has. When the list cannot be read, names no single revision, or gives the entry a
+  per-platform override, or the shell's folder is missing, or neither read gives a value, the
   version is `unknown`; the full browser's version is never bound in its place. Such a run carries a not-covered gap (ref `scanner versions`) that names the fix,
   mints no receipt, and `usabl doctor` reports the browser as drifted with the same fix. An
   unreadable version never matches on verify, on either side.
