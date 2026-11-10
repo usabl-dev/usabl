@@ -4,6 +4,29 @@
 
 ### Added
 
+- `usabl debt ledger`, the ledger of how long accessibility barriers stay open. For every
+  identity that was ever in the evidence floor on the trusted ref (default `HEAD`), it shows when
+  it was first seen, its state, and its days open, from the floor file's first-parent history and
+  the `usabl/history` records, read as committed objects. History records are replayed in commit
+  order, never in the order they were appended. A row is fixed only when two full scans of main in
+  a row see none there; a row that only left the floor is "left the floor", because a fix, a floor
+  reset, a prune, and a renamed screen look the same without the history. A row that closed and
+  came back is reopened, and its text follows how its last span ended. Every row says which way
+  its days can be wrong: `mayBeMore` (it was there at the first floor for its screen, in the
+  oldest floor of a shallow clone, or entered or ended at a gap) and `mayBeLess` (no usable
+  history, no scan saw it during a span, or a record touching it could not be placed), each with
+  its reasons. Leaving the floor and commit dates that go backwards set both. The table prints "N
+  days", "at least N", "at most N", or "not known (N by the floor)", and the median and longest
+  in the totals line are over exact rows only. Open rows count to the committer date of the
+  commit the ref names, and the output names it; the command reads no clock, so the same
+  repository state prints the same bytes. The git readers pin their output against the person's
+  git config, each floor is cut to its identities as it is read, and a history past the limits is
+  refused with the limit and what to do. `--json` prints the full ledger and `--out <file>` writes
+  it. Every printed string goes through the scrub. It is measurement only: no verdict, no receipt,
+  and the CLI loads it only by a dynamic import inside the command, so no verdict path loads it.
+  `usabl debt --out` is refused, because plain `usabl debt` writes no file. The stop hook and the
+  overlay host now read the config through `src/intake/load-config.ts`, where `loadConfig` and
+  `parseConfigText` live, instead of loading the whole CLI.
 - The gate works on any default branch. `usabl install --ci` and `usabl install --docs-ci` read
   the default branch from the clone's `origin/HEAD` and write it, quoted, into the pull request
   trigger of the gate and the docs gate, the same way the history workflow already took it. When
