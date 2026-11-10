@@ -27,6 +27,8 @@ import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
+import { scannerNamesText, scannerVersionFix, unreadableScanners } from '../evidence/receipt.js';
+import type { ScannerVersions } from '../contracts/index.js';
 import { EVIDENCE_FLOOR_PATH } from '../baseline/index.js';
 import { parseDocsManifest } from '../coverage/docs-manifest.js';
 import { parseWaiverLedger } from '../run.js';
@@ -133,6 +135,9 @@ export interface DoctorDeps {
   // Probes the Playwright Chromium install that "usabl check" uses for browser scans. Injected
   // in tests so doctor never reaches the real environment.
   probePlaywrightChromium: () => Promise<PlaywrightBootstrapProbe>;
+  // Reads the scanner versions a receipt binds, the way "usabl check" reads them. The CLI always
+  // passes it. A caller that leaves it out gets no version check in the browser report.
+  readScannerVersions?: () => Promise<Pick<ScannerVersions, 'axeCore' | 'playwright' | 'chromium'>>;
   // Starts Chromium with its sandbox to learn whether this system can provide one. Injected in
   // tests so doctor never starts a browser there.
   probeChromiumSandbox: () => Promise<ChromiumSandboxProbe>;
@@ -827,6 +832,19 @@ async function readBranchLabels(deps: DoctorDeps): Promise<BranchLabels> {
 async function collectPlaywrightChromium(deps: DoctorDeps): Promise<SurfaceReport> {
   const state = await deps.probePlaywrightChromium();
   if (state === 'wired') {
+    // Installed is not enough: a scanner version usabl cannot read makes every run not covered
+    // with no receipt. The fix is the one the run's gap names.
+    const unreadable = deps.readScannerVersions === undefined ? [] : unreadableScanners(await deps.readScannerVersions());
+    if (unreadable.length > 0) {
+      return {
+        id: 'playwright-chromium',
+        label: PLAYWRIGHT_CHROMIUM_LABEL,
+        state: 'drifted',
+        nextStep:
+          `usabl could not read the version of ${scannerNamesText(unreadable)}, ` +
+          `so "usabl check" reports every run as not covered and mints no receipt. ${scannerVersionFix(unreadable)}`,
+      };
+    }
     return { id: 'playwright-chromium', label: PLAYWRIGHT_CHROMIUM_LABEL, state: 'wired', nextStep: '' };
   }
   if (state === 'missing') {

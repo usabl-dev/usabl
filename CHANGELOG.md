@@ -313,6 +313,61 @@
 
 ### Fixed
 
+- A receipt now ends when a waiver it used ends. It binds `waiverExpiresAt`, the earliest
+  expiry among the waivers the run applied, and stops verifying once the clock reaches it.
+  Before, a receipt minted while a waiver was live kept verifying after the waiver ended, and
+  the stop hook said VERIFIED for an accessibility barrier the gate would block. The fast path
+  still skips the scan until that moment. A stored receipt from before this change verifies only
+  if it counted no waived finding; one that did runs one full check. The receipt finds the
+  waivers it binds with the gate's own match rule. Gate effect: the stop hook runs a full check
+  after a waiver ends, where it allowed on the stored receipt.
+
+- When a stored receipt for an unchanged tree does not verify, the Stop hook's notice after the
+  decision line now says why, one plain reason per failed binding, such as "a waiver this receipt
+  relied on ended at ...". Before, the reason was dropped. The notice appears only when the full
+  check that follows reaches a verdict. A receipt that failed only because the files changed adds
+  no notice, so a verified stop after an edit stays quiet, and an idle or failed run adds none,
+  so those stops read as they would with no stored receipt. Gate effect: none; the hook runs the
+  full check as before, and the person sees why.
+
+- A run now reads the tree before it plans and again after it scans, and the receipt binds the
+  first read. Before, the receipt bound the tree read after the scan, so a file written during a
+  check was bound into a receipt that never saw it. Two reads cannot see an edit undone before
+  the second read, or a dev server that still serves an older build than the tree; both stay
+  verified. Gate effect: a run whose files changed during the check is not covered, with a gap
+  on `working tree`, and mints no receipt.
+
+- A repository with no commits now gets a plain message. Every run reads the working tree
+  first, and without HEAD that read failed with git's raw error text. The summary now says git
+  cannot read HEAD and to make a first commit. Gate effect: none; the run still ends with no
+  verdict and exit 4.
+
+- The Chromium version a receipt binds is now the version of the binary that scans:
+  Playwright's headless shell (`chrome-headless-shell`), which a headless run launches, not the
+  full browser `chromium.executablePath()` names. usabl finds the headless shell in the same
+  browsers folder, at the revision the `chromium-headless-shell` entry names in the
+  `browsers.json` of the installed `playwright-core`, never at the full browser's revision or in
+  another shell folder left on disk. It binds what the shell prints for `--version`, or the
+  revision in its folder name as `revision-<number>` when it prints none. Before, the version was
+  the revision in the full browser's folder name, so a replaced headless shell, or a different
+  browser placed at the full browser's path, read the same value as before. A stored receipt that holds a Chromium revision
+  does not verify once after the upgrade, and the stop hook runs one full check. Gate effect: a
+  stored receipt stops verifying when the headless shell changes, so the stop hook runs a full
+  check where it allowed.
+
+- A scanner version usabl cannot read is no longer bound into a receipt as `unknown`. When the
+  headless shell cannot be found, because Playwright's `browsers.json` cannot be read, names no
+  single shell revision, or gives it a per-platform override, or because the shell's folder is
+  missing, the Chromium version is unreadable; the full browser's version is never bound in its
+  place. `usabl doctor` reports an unreadable version with the fix. Gate
+  effect: a run with a version usabl cannot read is not covered, with a gap on `scanner versions`
+  that names the fix, and mints no receipt.
+
+- A Result document read by `usabl enforce`, `usabl comment`, or a library caller keeps the
+  receipt's `waiverExpiresAt`, read as null or a strict ISO-8601 UTC time. Before, the field was
+  dropped, so a Result sent through JSON lost a receipt that verifies. Gate effect: a document
+  whose receipt carries any other `waiverExpiresAt` value is refused, naming the field.
+
 - The pull request comment now stays under 65,536 however GitHub counts it. GitHub refuses a
   body over that, and the required check then failed with no comment. The body is bounded at
   60,000 UTF-8 bytes, which are never fewer than characters or UTF-16 code units. Every carried
@@ -336,9 +391,11 @@
 - A `usabl docs` report now records the git tree it was made from (`sourceTree`), and a report
   made from another tree is marked `stale: true` with a `staleReason` that names both trees and
   says to run `usabl docs` again. `usabl docs` reads the tree before and after the run, so a file
-  saved during the scan marks the report stale, with or without a receipt. With a receipt, whose
-  tree is read after the scan, the report also records the tree read before in `startTree`, and
-  a report whose two trees differ is stale against every tree. On the HTML page a stale card
+  saved during the scan marks the report stale. Such a run also mints no receipt, because the
+  run itself reads the tree before it plans and after it scans. A receipt binds the tree the run
+  read before it planned; if that differs from the tree `usabl docs` read before the run, the
+  report also records the earlier tree in `startTree`, and a report whose two trees differ is
+  stale against every tree. On the HTML page a stale card
   reads "Out of date" and never "Verified", and says it may not match the current code.
   `markStaleDocArtifacts` from `usabl/docs` checks a saved report against the current tree,
   which the ground truth says how to compute. An edit to a file git ignores does not mark a

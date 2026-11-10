@@ -58,6 +58,7 @@ import {
 const IDLE_EXIT_CODE = NO_VERDICT_EXIT_CODES[0];
 import { InputRefusedError } from './input-refusal.js';
 import { isJudgeDisclosure } from '../judge/disclosure.js';
+import { assertIso8601Utc } from '../primitives/iso8601.js';
 
 type Json = Record<string, unknown>;
 
@@ -469,8 +470,24 @@ function receipt(value: unknown, field: string): Receipt {
     activeWaivers: whole(source['activeWaivers'], at(field, 'activeWaivers')),
     mintedAt: text(source['mintedAt'], at(field, 'mintedAt')),
   };
+  // Absent in a receipt minted before the waiver end was bound. Such a receipt verifies only when it
+  // counted no waived finding, so it is left absent rather than read as null.
+  if (has(source, 'waiverExpiresAt')) {
+    out.waiverExpiresAt = isoUtcOrNull(source['waiverExpiresAt'], at(field, 'waiverExpiresAt'));
+  }
   if (has(source, 'signature')) out.signature = text(source['signature'], at(field, 'signature'));
   return out;
+}
+
+function isoUtcOrNull(value: unknown, field: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string') refuse(field, 'must be an ISO-8601 UTC time or null');
+  try {
+    assertIso8601Utc(value, field);
+  } catch {
+    refuse(field, 'must be an ISO-8601 UTC time (YYYY-MM-DDTHH:mm:ss.sssZ) or null');
+  }
+  return value;
 }
 
 function headroom(value: unknown, field: string): FloorHeadroom {

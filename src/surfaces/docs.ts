@@ -81,8 +81,9 @@ export function collectDocArtifacts(
 
   const startTree = options.sourceTree ?? null;
   const sourceTree = reportSourceTree(safe, startTree);
-  // The receipt reads its tree after the scan. When that differs from the tree read before the
-  // run, a file changed while the run scanned, so the start tree is kept and the report is stale.
+  // The receipt binds the tree the run read before it planned. When that differs from the tree
+  // read before the run started, a file changed in between, so the start tree is kept and the
+  // report is stale.
   const moved = sourceTree !== null && startTree !== null && startTree !== sourceTree ? { startTree } : {};
   const recorded =
     sourceTree === null ? artifacts : artifacts.map((artifact) => ({ ...artifact, sourceTree, ...moved }));
@@ -153,8 +154,9 @@ export async function generateDocs(
   // The tree is read before the run and again after it. A file saved while the run was scanning
   // leaves the report describing code that is already gone, so the report is marked stale as soon
   // as it is printed. With no receipt, the report records the tree read before, which differs from
-  // the tree read after. With a receipt, whose tree is read after the scan, the report records
-  // both the receipt's tree and the tree read before, and two different trees mark it stale.
+  // the tree read after. A run whose files changed during the scan mints no receipt, so that is
+  // the usual case. A receipt binds the tree the run read before it planned. If that differs
+  // from the tree read here, the report records both, and two different trees mark it stale.
   const sourceTree = await readTree(deps);
   const result = opts.all
     ? await run(deps, config, { changedFiles: await wholeAppFiles(deps.fs, config) })
