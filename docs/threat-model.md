@@ -36,8 +36,15 @@ re-baseline to green.
   `accessibilityExitCode` (never 2). The policy required check passes only
   when a CODEOWNERS user who is not the PR author has `APPROVED` the current
   head SHA for each dirty guarded path. CODEOWNERS is read from `--trusted-ref`, never the PR tree.
-  Org team entries fail closed. The PR comment stays loud after the policy
-  check is green.
+  Owners come from the last rule that matches each dirty guarded path. That path fails closed
+  when no rule matches it, when its last rule names no owner, or when its last rule names an org
+  team or an email, because usabl cannot resolve team membership or match an email to a login. A
+  pattern or an owner usabl cannot read, or a `#` inside a pattern, fails the whole file closed,
+  because the last match is then unknown. A pattern GitHub's documentation leaves open, where the
+  readings disagree for a dirty guarded path and the rule could be its last match, fails that
+  path closed for the same reason. A team or email line that is not the last match for a dirty
+  guarded path does not block. `usabl doctor` reports the same limits in the same words. The PR comment stays loud
+  after the policy check is green.
 - Stop hook session pins are private to the user. On a shared host another local
   user could precreate a pin file or a symlink at the pin path, to cause false
   drift blocks, poison the pins so a later tamper is not seen, or overwrite
@@ -70,8 +77,14 @@ re-baseline to green.
   ledger's waiver parser (including ISO-8601 UTC dates), `guardDivergedPaths` as a list of
   strings, `now` as an ISO-8601 UTC timestamp, and `cleanlyScannedScreens` as a real `Set`,
   copied before use. `mintReceipt()` checks the screen and surface ids it is handed. Both check
-  every screen and surface id against the shared id grammar. A refusal is a typed
+  every screen and surface id against the shared id grammar. `mintReceipt()` also refuses a
+  receipt that counts a waived finding but binds no waiver end, a waiver end that is not an
+  ISO-8601 UTC timestamp, and a scanner version that could not be read. A refusal is a typed
   `InputRefusedError` that names the field and its position and never repeats the value.
+- A waiver ends by the clock. A receipt minted while a waiver was live used to keep verifying
+  after the waiver ended, so the stop hook said VERIFIED for an accessibility barrier the gate
+  would now block. The receipt binds the earliest end among the waivers the run applied
+  (`waiverExpiresAt`), and stops verifying at that moment (Threat 4).
 - Limit, stated plainly: a user with a shell on the same machine can write a local receipt
   that verifies. Every binding the receipt carries (tree, policy hash, engine and scanner
   versions, history head) can be computed again by that user, and `mintReceipt()` is exported.
@@ -131,12 +144,34 @@ passing bundle from another run.
 - A minted receipt binds five values re-checked on verify: `sourceTree` (the working-tree
   `git write-tree`), `policyHash` (HEAD blob shas over the guarded set), `runnerVersion`,
   `scannerVersions` (axe-core, Playwright, Chromium), and `historyHead` (the debt history
-  commit, see Threat 13). It also records `baseRevision`
+  commit, see Threat 13). It also binds `waiverExpiresAt`, the earliest end among the waivers
+  the run applied, or null when it applied none. It records `baseRevision`
   and `mintedAt`. A receipt exists only for a `verified` run.
+- `sourceTree` is the tree the run read before it planned. The run reads the tree again after
+  the scan and every policy read, before the gate. If the two reads differ, a file changed
+  while the check ran, so the scan may have seen code that is neither the planned tree nor the
+  current one. The run then carries a not-covered gap (ref `working tree`), is never
+  verified, and mints no receipt. An edit after the second read moves the tree away from the
+  bound one, so the stored receipt does not stand for it. An idle run (no UI files changed) is
+  left idle, since it scanned nothing.
+- Known limits of comparing two tree reads. It sees only the tree at the two moments it reads.
+  An edit made during the scan and undone before the second read leaves both reads equal, so
+  the run is verified and the receipt binds a tree the scan did not see as it was. And the tree
+  is not what the browser loads: a dev server that still serves an older build than the tree
+  gets scanned, and the receipt binds the newer tree. Both cases stay verified today. Neither
+  can be closed by comparing tree reads.
 - `verifyReceipt` re-derives `sourceTree` and `policyHash` from the current tree and HEAD
   and compares all five bindings. A bundle lifted from another run fails because its
   bindings do not match this tree, policy, runner, and scanners. The stop-hook fast path
   re-checks the stored receipt the same way before it trusts a green.
+- `verifyReceipt` also fails a receipt once the injected clock reaches `waiverExpiresAt`,
+  because the gate would then count the waived accessibility barrier again. The fast path keeps
+  skipping the scan until that one moment, and runs the full check from then on. A receipt
+  that counts a waived finding but binds no end, or binds a value that is not a time, does not
+  verify. A receipt from before this binding has no `waiverExpiresAt`; it verifies only if it
+  counted no waived finding, which is the same fact. The schema version stays 2.
+- A scanner version usabl cannot read never matches, on either side of the comparison. Before,
+  a version that read as `unknown` matched itself after the scanner changed (Threat 5).
 - A receipt minted under a weakened policy matches that policy. If the weakening was
   committed during a session, the only binding that sees it is the session pins, so the stop
   hook compares pins before it reads the stored receipt. Detected drift prevents a VERIFIED
@@ -182,6 +217,32 @@ awareness.
   4.13.0, Playwright 1.62.1).
 - Record `scannerVersions` (axe-core, Playwright, Chromium) in the receipt so a scanner
   swap moves the fingerprint and fails `verifyReceipt`.
+- The bound Chromium version is the version of the binary that scans. A run launches Chromium
+  headless with no channel, so Playwright starts its headless shell (`chrome-headless-shell`,
+  in the `chromium_headless_shell-<revision>` folder), not the full browser that
+  `chromium.executablePath()` names. usabl finds the headless shell in the full browser's
+  browsers folder, at the revision that the `chromium-headless-shell` entry of the installed
+  `playwright-core` package's `browsers.json` names, with Playwright's file layout. It checks
+  that the file exists and binds what it prints for `--version`. So replacing the headless shell
+  moves the version, for Playwright's download and for a custom `PLAYWRIGHT_BROWSERS_PATH`. The
+  revision never comes from the full browser's folder, because Playwright gives each browser its
+  own revision, and an older shell folder can stay on disk beside the one Playwright launches.
+  When the headless shell prints no version (Chrome on Windows prints none), the revision in its
+  folder name is bound as `revision-1234`, a form no real version has. When the list cannot be
+  read, names no single revision, or gives the entry a per-platform override (usabl cannot tell
+  which one applies), or when the folder is missing, the version is unreadable. Neither the full
+  browser's version nor any other shell folder is bound in its place. A browser placed at the
+  full browser's path does not scan in a headless run, so it is not read.
+- Before, the version was the first `chromium-<number>` or `chromium_<number>` anywhere in the
+  full browser's path, read as `revision-<number>`. Playwright's download read its folder
+  revision. A different browser placed at that path read the same revision as the build it
+  replaced, a stable wrong value. A browsers path whose own name looked like a browser folder,
+  such as `/srv/chromium_2024/...`, read that fixed wrong revision. A platform build in a
+  `chromium_<platform>_special-<number>` folder, and a platform where `executablePath()` throws,
+  read `unknown`.
+- A version usabl still cannot read is never bound. The run carries a not-covered gap (ref
+  `scanner versions`) that names the fix, mints no receipt, and `usabl doctor` reports the same
+  fix in its browser line.
 - Dependabot bumps require explicit maintainer review for policy impact.
 
 - When an optional commercial engine is on, its installed package version is recorded in
@@ -315,6 +376,61 @@ the tool errored, not because the page is accessible.
   guarded file with a non-ASCII name, such as `policy/Über.yaml`, is now seen and needs approval.
   Before, the listing quoted that name, `git show` found no file under it on either ref, and the
   change was skipped.
+
+- The local guard and `usabl enforce policy` select guarded files from git listings with the same
+  matcher. Each ref is listed once, with `-z`. The local guard also adds what `fs.glob` finds on
+  the working tree, so a new file no commit holds is listed too. Every entry is read in one
+  canonical form (no leading `./`, no repeated or trailing `/`, `.` for the whole tree), so
+  `./src/gate/` and `src/gate//` guard what `src/gate/` guards. A literal entry matches itself and
+  every file under it. A glob entry matches the files it names and every file under a folder it
+  names, with Node's dot rule: a wildcard skips a name that starts with a dot, as `fs.glob` does.
+  Before, the CI check listed each entry with a literal git pathspec, so a glob entry listed
+  nothing at either ref and an edited guarded file printed "no policy change". The local guard
+  listed a glob entry from the working tree only, so a guarded file deleted under it was compared
+  as the pattern text. An entry written as `./src/gate/`, `src/gate//`, or `.` was compared as
+  written with git output, which never holds that form, so it matched nothing. Now an edited,
+  added, or deleted file under an entry in any form config load accepts needs approval in both
+  places, except a dot-named file under a glob entry (see the known limit below). Config load
+  refuses the forms Node's glob reads another way: a brace range such as `{1..3}`, `?`, `[ ]`,
+  `( )`, a `\` escape, and a nested or unbalanced brace. It also refuses a `guardedPaths` entry
+  with white space at either end, one that starts with `/`, one with a `..` that leaves the root
+  or comes after a wildcard, and one with a `.` or `..` segment inside a brace alternative, and
+  says how to write it. The guard expands a brace group first and reads each expansion on its own,
+  so `{.,b}/y.json` guards the root `y.json`. The guard never throws on what an entry says and
+  never guards less because it cannot read one. An expansion in a form the matcher cannot evaluate
+  guards the literal folder above the first segment it cannot evaluate; one that starts with `/`,
+  has a `..` that leaves the root, or has a `..` anywhere after a wildcard guards the whole tree.
+  This holds wherever the guard reads an entry: a loaded config, an older config, or a trusted
+  ref's config. A change there needs a code owner's approval, which a review can give, so the pull
+  request that repairs the entry can merge. `usabl enforce policy` and `usabl doctor` name each
+  entry read this way and say how to write it. The `requirements` folder is read as a literal
+  path; a `guardedPaths` entry with the same text is read both as that path and as a glob.
+
+- The Stop hook blocks once when the guard or the session pin computation fails, because it then
+  cannot tell whether guarded policy changed, and lets the continuation through marked NOT
+  verified. Before, the hook's catch allowed with "stop hook error", so a guard that threw let a
+  session stop with a waiver edit unchecked. A stored receipt that cannot be read or checked only
+  loses its fast allow: the hook runs the full check, and the decision is the run's. A folder
+  outside any work tree and a repository with no commits keep their honest allow.
+
+- `usabl enforce policy` matches a `CODEOWNERS` pattern the way GitHub's documentation says for
+  the forms it shows. A wildcard in the last segment of a pattern with a slash does not match
+  through a parent folder, so `src/* @alice` after `/src/gate/ @org/gate-team` does not make alice
+  the owner of `src/gate/index.ts`. Before, it did, and alice's approval passed a change GitHub
+  gives to the team. A form the documentation does not show, such as `*.js` against a folder
+  named `lib.js`, is read both ways; when the readings disagree for a changed guarded path and the
+  rule could be its last match, the match is unknown and the check refuses the path. A `#` inside a
+  pattern refuses the whole file: the check used to cut the line there, so
+  `/src/file#1.ts @org/team` read as an ownerless rule for `/src/file`.
+
+- Known limit: a dot-named file under a glob entry, such as `policy/.override.json` under
+  `policy/*.json`, is not guarded, locally or in CI, because the guard follows Node's dot rule. List
+  such a file as its own entry, or guard its folder with a literal entry, to guard it.
+
+- Known limit: a guarded entry that is a valid path but names nothing, such as a typo, a wrong
+  letter case, or a look-alike letter, guards nothing, locally and in CI. `usabl doctor` is where
+  it shows: it reports a literal entry that matches no file in the last commit as guarding nothing
+  today.
 
 - In a monorepo, a change in a workspace package the configured app depends on is a coverage
   gap, never nothing to check. Before, a config drafted for one app folder matched none of the
@@ -1308,7 +1424,8 @@ required where applicable.
 
 ## Open actions
 
-Receipt bindings (`sourceTree`, `policyHash`, `runnerVersion`, `scannerVersions`), the
+Receipt bindings (`sourceTree`, `policyHash`, `runnerVersion`, `scannerVersions`,
+`historyHead`, `waiverExpiresAt`), the
 `not_covered` gap path, and exit-4 fail-open already ship, so they are no longer open.
 Remaining items:
 

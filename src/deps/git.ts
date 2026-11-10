@@ -39,6 +39,11 @@ function isMissingShow(stderr: string): boolean {
   return MISSING_SHOW_PATTERNS.some((pattern) => pattern.test(stderr));
 }
 
+/** The error for a repository with no last commit, such as a new one or an orphan branch. */
+export const NO_HEAD_MESSAGE =
+  'git cannot read HEAD. If this repository has no commits yet, make a first commit, then run ' +
+  'usabl again. usabl compares policy files with the last commit.';
+
 // The ref itself does not exist. Still an error, never a missing file: reading no policy at all
 // as "no policy" would let a run pass against nothing. The message names the fix, because a new
 // repository with no commits and a CI checkout without the trusted ref both land here.
@@ -47,10 +52,7 @@ function missingRefError(ref: string, stderr: string): Error | null {
     return null;
   }
   if (ref === 'HEAD') {
-    return new Error(
-      'git cannot read HEAD. If this repository has no commits yet, make a first commit, then run ' +
-        'usabl again. usabl compares policy files with the last commit.',
-    );
+    return new Error(NO_HEAD_MESSAGE);
   }
   return new Error(
     `git cannot read ${operatorText(ref)}. usabl reads trusted policy from that ref. Check its name, ` +
@@ -67,6 +69,19 @@ function fetchExample(ref: string): string {
     return `for example git fetch ${remoteBranch[1]} ${remoteBranch[2]}`;
   }
   return 'git remote show origin prints the default branch as HEAD branch; fetch it with git fetch origin <branch>';
+}
+
+// HEAD does not exist, so the working tree cannot be read against it. A new repository with no
+// commits, or an orphan branch with none yet, lands here. git's own text is left out: the message
+// says what happened and the step that clears it.
+function noHeadForTreeError(stderr: string): Error | null {
+  if (!/not a valid object name|invalid object name/i.test(stderr)) {
+    return null;
+  }
+  return new Error(
+    'git cannot read HEAD, so usabl cannot read the working tree to check it. This repository has ' +
+      'no commits yet, or the branch has none. Make a first commit, then run usabl again.',
+  );
 }
 
 // Every listing runs with -z. Without it git quotes and escapes a name that holds a byte above
@@ -151,18 +166,34 @@ async function runGit(
   return stdout;
 }
 
+// What to do when a change listing is too long: it most often holds a large folder of new files.
+const CHANGED_FILES_ADVICE =
+  'This most often means a large folder of new files that .gitignore does not cover. Add that folder to ' +
+  '.gitignore, or commit it, then run usabl again.';
+
+// What to do when the guarded path listing is too long. It lists committed files, so .gitignore
+// does not shorten it. A guarded glob that starts with a wildcard, such as **/x.json, lists every file.
+const GUARDED_LISTING_ADVICE =
+  'A guarded glob lists too many files: a guardedPaths entry that starts with a wildcard, such as ' +
+  '**/x.json, lists every file in the repository. Start the entry with a folder name, such as ' +
+  'policy/**/x.json, then run usabl again.';
+
 // A listing longer than the buffer makes execFile throw with a terse message. usabl then cannot
 // know which files changed, so the run must stop with an error a person can act on. It never
 // reads a cut-off list as the whole list.
-async function runListing(cwd: string, args: string[], maxBuffer: number): Promise<string> {
+async function runListing(
+  cwd: string,
+  args: string[],
+  maxBuffer: number,
+  advice: string = CHANGED_FILES_ADVICE,
+): Promise<string> {
   try {
     return await runGit(cwd, args, undefined, maxBuffer);
   } catch (err) {
     if (typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
       throw new Error(
         `git ${args[0] ?? ''} printed more than usabl reads, so usabl could not list the files it needs ` +
-          'and checked nothing. This most often means a large folder of new files that .gitignore does not ' +
-          'cover. Add that folder to .gitignore, or commit it, then run usabl again.',
+          `and checked nothing. ${advice}`,
       );
     }
     throw err;
@@ -211,11 +242,28 @@ export function makeGitReader(options: { cwd?: string; maxBuffer?: number } = {}
       const output = await runListing(cwd, ['ls-tree', '-r', '--name-only', '-z', ref, '--', prefix], maxBuffer);
       return parseLsFiles(output);
     },
+    async lsFilesUnder(ref, prefixes) {
+      // One listing for every prefix, so a ref is read once however many guarded entries share it.
+      // ls-tree matches each prefix as a path or a folder, never as a pattern.
+      if (prefixes.length === 0) {
+        return [];
+      }
+      const unique = [...new Set(prefixes)].sort();
+      const args = ['ls-tree', '-r', '--name-only', '-z', ref];
+      if (!unique.includes('')) {
+        args.push('--', ...unique);
+      }
+      return parseLsFiles(await runListing(cwd, args, maxBuffer, GUARDED_LISTING_ADVICE));
+    },
     async writeTree() {
       const tempDir = await mkdtemp(join(tmpdir(), 'usabl-index-'));
       const env = { GIT_INDEX_FILE: join(tempDir, 'index') };
       try {
-        await runGit(cwd, ['read-tree', 'HEAD'], env);
+        try {
+          await runGit(cwd, ['read-tree', 'HEAD'], env);
+        } catch (err) {
+          throw noHeadForTreeError(readErrorStderr(err)) ?? err;
+        }
         await runGit(cwd, ['add', '-A', '--', '.'], env);
         return (await runGit(cwd, ['write-tree'], env)).trim();
       } finally {

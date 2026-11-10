@@ -232,3 +232,23 @@ describe('the verdict does not depend on draft arrival order', () => {
     expect(JSON.parse(answer.findings)[0].status).toBe('carried');
   });
 });
+
+/**
+ * The tie-breaks compare UTF-16 code units, never the process locale. A locale compare sorts "a"
+ * before "B" where code units put "B" first, and it reads two spellings of one accented letter as
+ * equal, which hands the choice back to arrival order.
+ */
+describe('the gate tie-breaks do not depend on the locale', () => {
+  it('picks the representative by code-unit order, where a locale compare would disagree', () => {
+    const answer = oneAnswerForEveryOrder([dialog(1, { why: 'a lower-case reason' }), dialog(1, { why: 'B upper-case reason' })]);
+    expect(JSON.parse(answer.findings)[0].why).toBe('B upper-case reason');
+  });
+
+  it('gives the same finding bytes for two spellings a locale compare reads as equal', () => {
+    const composed = 'café';
+    const decomposed = 'café';
+    expect(composed.localeCompare(decomposed)).toBe(0);
+    const answer = oneAnswerForEveryOrder([dialog(1, { why: composed }), dialog(1, { why: decomposed })]);
+    expect(JSON.parse(answer.findings)[0].why).toBe(decomposed);
+  });
+});

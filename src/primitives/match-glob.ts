@@ -15,6 +15,30 @@
  * classifies files the same way discovery does.
  */
 
+/**
+ * Characters this unit cannot evaluate the way Node's glob does: a character class, an extglob
+ * group, a single-character wildcard, and an escape. Node reads `\x` as `x`, while this unit reads
+ * the backslash as text. Config load refuses a glob that holds one, and the guard refuses such an
+ * entry read at a trusted ref.
+ */
+export const UNSUPPORTED_GLOB_CHARACTERS: readonly string[] = ['[', ']', '(', ')', '?', '\\'];
+
+/**
+ * The first brace range in a pattern, such as `{1..3}` or `{a..c}`, or null when there is none.
+ * Node's glob expands a comma-less brace whose body is a range, while expandBraces keeps every
+ * comma-less brace as text. So a range would select files at discovery that this unit never
+ * matches. A comma-less body with `..` in it counts as a range, so no range form slips through.
+ */
+export function braceRangeIn(pattern: string): string | null {
+  for (const match of pattern.matchAll(/\{([^{}]*)\}/g)) {
+    const body = match[1] ?? '';
+    if (!body.includes(',') && body.includes('..')) {
+      return match[0];
+    }
+  }
+  return null;
+}
+
 // Expand one level of {a,b} groups into every literal combination. A comma-less {...} is
 // literal, so its braces stay in the output. Returns null when a brace is nested or
 // unbalanced, which signals the caller to leave the pattern alone.
@@ -75,10 +99,60 @@ function compileToRegExp(pattern: string): RegExp {
   );
 }
 
-export function matchGlob(pattern: string, file: string): boolean {
+export interface GlobOptions {
+  // False: a wildcard never matches a name that starts with a dot, the rule Node's fs.glob uses.
+  // A dot written in the pattern itself still matches. The default, true, is the planner's rule.
+  dot?: boolean;
+}
+
+// A path segment a wildcard may match when dot names are excluded: any name that does not start
+// with a dot.
+const NON_DOT_NAME = '(?!\\.)[^/]+';
+
+function segmentWithoutDotMatch(segment: string): string {
+  const body = segment.replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/\*+/g, '[^/]*');
+  return segment.startsWith('.') ? body : `(?!\\.)${body}`;
+}
+
+// The same dialect with Node's dot rule, built one segment at a time so `**` can skip only
+// segments that do not start with a dot. A `**` segment matches zero or more whole segments, and
+// a trailing `**` matches every file beneath.
+function compileWithoutDotMatch(pattern: string): RegExp {
+  const segments = pattern.split('/');
+  let source = '';
+  let slash = false;
+  segments.forEach((segment, index) => {
+    const separator = slash ? '/' : '';
+    if (segment === '**') {
+      if (index === segments.length - 1) {
+        source += `${separator}${NON_DOT_NAME}(?:/${NON_DOT_NAME})*`;
+        slash = true;
+      } else {
+        source += `${separator}(?:${NON_DOT_NAME}/)*`;
+        slash = false;
+      }
+      return;
+    }
+    source += separator + segmentWithoutDotMatch(segment);
+    slash = true;
+  });
+  return new RegExp(`^${source}$`);
+}
+
+/**
+ * A compiled matcher for one pattern, for callers that test many files against it. It gives the
+ * same answers as matchGlob.
+ */
+export function globMatcher(pattern: string, options: GlobOptions = {}): (file: string) => boolean {
   const expansions = pattern.includes('{') ? expandBraces(pattern) : [pattern];
   // A pattern this unit cannot expand falls back to literal-brace matching, which is the
   // prior behavior. The config-load guard refuses such patterns before a run reaches here.
   const patterns = expansions ?? [pattern];
-  return patterns.some((expanded) => compileToRegExp(expanded).test(file));
+  const compile = options.dot === false ? compileWithoutDotMatch : compileToRegExp;
+  const compiled = patterns.map(compile);
+  return (file: string): boolean => compiled.some((rx) => rx.test(file));
+}
+
+export function matchGlob(pattern: string, file: string, options: GlobOptions = {}): boolean {
+  return globMatcher(pattern, options)(file);
 }

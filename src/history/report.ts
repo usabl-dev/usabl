@@ -13,6 +13,7 @@
 import type { DebtStatus, EvidenceFloor, HistoryReader } from '../contracts/index.js';
 import { parseEvidenceFloor } from '../evidence/floor.js';
 import { identityKey } from '../primitives/identity.js';
+import { compareCodeUnits } from '../primitives/sortKey.js';
 import { trackingOffSentence } from '../output/debt.js';
 import { scrubString } from '../surfaces/scrub.js';
 import { debtStatusOf, loadDebtTracking, type DebtTracking } from './tracking.js';
@@ -72,7 +73,8 @@ export function debtReport(tracking: DebtTracking, now: string): DebtReport {
     const trend: DebtTrend = !observed ? 'no data' : last < first ? 'falling' : last > first ? 'rising' : 'steady';
     return { ...row, ageDays, trend };
   });
-  rows.sort((a, b) => (a.screenId === b.screenId ? a.rule.localeCompare(b.rule) : a.screenId.localeCompare(b.screenId)));
+  // Code units, not the locale, so the printed order is the same on every machine.
+  rows.sort((a, b) => (a.screenId === b.screenId ? compareCodeUnits(a.rule, b.rule) : compareCodeUnits(a.screenId, b.screenId)));
   return { status, rows };
 }
 

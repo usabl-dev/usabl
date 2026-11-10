@@ -368,6 +368,11 @@ export interface Receipt {
   verdict: 'verified';
   findingsSummary: { new: number; carried: number; fixed: number; unverified: number };
   activeWaivers: number;
+  // The earliest expiry among the waivers the run applied, or null when it applied none. Once the
+  // clock reaches it the gate would count the waived accessibility barrier again, so the receipt stops
+  // verifying then. Every receipt minted now carries it. A receipt minted before it existed has no
+  // such field and verifies only when its activeWaivers is 0.
+  waiverExpiresAt?: string | null;
   signature?: string; // reserved for later signed attestation; unused today
   mintedAt: string;
 }
@@ -934,6 +939,9 @@ export interface GitReader {
   diffNameOnly(ref: string): Promise<string[]>;
   lsTree(ref: string, paths: string[]): Promise<Record<string, string>>;
   lsFiles(ref: string, prefix: string): Promise<string[]>;
+  // Every file at a ref that is one of the prefixes or under one, in one listing. An empty prefix
+  // stands for the whole tree. No prefixes lists nothing.
+  lsFilesUnder(ref: string, prefixes: readonly string[]): Promise<string[]>;
   headRef(): Promise<string>;
 }
 export interface FsGlob {

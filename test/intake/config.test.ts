@@ -555,6 +555,83 @@ describe('parseUsablConfig glob syntax', () => {
     expect(message).toMatch(/brace/);
   });
 
+  it('refuses a brace range in every glob list, names the entry, and asks for commas', () => {
+    // Node's glob expands {1..3} and {a..c}; matchGlob reads a comma-less brace as text. A range
+    // would select files at discovery that usabl never matches, and a guarded file that only the
+    // range names would read as unguarded in CI.
+    const lists: Array<[string, (glob: string) => Record<string, unknown>]> = [
+      ['uiFileGlobs', (glob) => ({ uiFileGlobs: [glob] })],
+      ['discovery.wideBlastGlobs', (glob) => ({ discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [glob] } })],
+      ['guardedPaths', (glob) => ({ guardedPaths: [glob] })],
+    ];
+    for (const [label, shape] of lists) {
+      for (const glob of ['policy/rule{1..3}.json', 'policy/{a..c}.json']) {
+        let message = '';
+        try {
+          parseUsablConfig(configJson(shape(glob)));
+        } catch (err) {
+          message = err instanceof Error ? err.message : String(err);
+        }
+        expect(message, `${label} ${glob}`).toContain(label);
+        expect(message, `${label} ${glob}`).toContain(glob);
+        expect(message, `${label} ${glob}`).toMatch(/commas/);
+      }
+    }
+  });
+
+  it('refuses a guardedPaths entry with white space at the start or end, and shows it in quotes', () => {
+    // No file is named "src/gate/ ", so such an entry guards nothing, in CI and locally.
+    for (const entry of ['src/gate/ ', ' src/gate/', 'src/gate\t']) {
+      let message = '';
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message, JSON.stringify(entry)).toContain('guardedPaths');
+      expect(message, JSON.stringify(entry)).toContain('white space');
+      expect(message, JSON.stringify(entry)).toMatch(new RegExp(`"\\s*${entry.trim()}\\s*"`));
+    }
+  });
+
+  // The guard can read these forms only as a wider folder or the whole tree, so config load refuses
+  // them and says how to write the entry.
+  it('refuses a guardedPaths entry the guard can only read wide, and says how to write it', () => {
+    const refused: Array<[string, RegExp]> = [
+      ['/src/gate/', /starts with \/.*"src\/gate\/"/],
+      ['../outside', /leaves the repository root/],
+      ['src/../../outside', /leaves the repository root/],
+      ['policy/*/../x.json', /\.\. after a wildcard/],
+      ['policy/*/sub/../x.json', /\.\. after a wildcard/],
+      ['{policy,b/..}/rules.json', /inside a brace alternative/],
+      ['{.,b}/y.json', /inside a brace alternative/],
+      ['policy/{a,./b}/x.json', /inside a brace alternative/],
+      ['{,a}{.,b}/x.json', /inside a brace alternative/],
+      ['{/policy,b}/x.json', /brace alternative that starts the path with \//],
+    ];
+    for (const [entry, reason] of refused) {
+      let message = '';
+      try {
+        parseUsablConfig(configJson({ guardedPaths: [entry] }));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message, entry).toContain(`guardedPaths entry "${entry}"`);
+      expect(message, entry).toMatch(reason);
+    }
+  });
+
+  it('loads the guardedPaths forms that loaded and worked before', () => {
+    for (const entry of ['./src/gate/', 'src/gate//', '.', 'a/../b', 'src/a/../gate/*.ts', 'policy/{a,b}.json', './{a,b}/x']) {
+      expect(() => parseUsablConfig(configJson({ guardedPaths: [entry] })), entry).not.toThrow();
+    }
+  });
+
+  it('refuses a backslash, which Node reads as an escape and usabl reads as text', () => {
+    expect(() => parseUsablConfig(configJson({ guardedPaths: ['policy/\\x.json'] }))).toThrow(/guardedPaths/);
+    expect(() => parseUsablConfig(configJson({ uiFileGlobs: ['src/\\*.tsx'] }))).toThrow(/uiFileGlobs/);
+  });
+
   it('loads a config with a comma-less brace, which is a literal pattern', () => {
     // A comma-less {tsx} is not a group. Node glob treats it as literal text and matchGlob
     // now agrees, so it is a valid pattern and must load, not be refused.

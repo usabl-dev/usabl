@@ -31,7 +31,13 @@ import { markUnseenScreens } from './coverage/unseen.js';
 import { mapFindingToSource, type DocsPageClosure } from './docs/source-map.js';
 import { enrichAppFindings } from './app/source-map.js';
 import { gate, renderEvidenceOf } from './gate/index.js';
-import { mintReceipt, summarizeApplicability } from './evidence/receipt.js';
+import {
+  earliestAppliedWaiverExpiry,
+  mintReceipt,
+  scannerVersionGaps,
+  summarizeApplicability,
+  treeChangedDuringCheckGap,
+} from './evidence/receipt.js';
 import { parseEvidenceFloor } from './evidence/floor.js';
 import { parseWaiver } from './evidence/waivers.js';
 import { parseUsablConfig } from './intake/config.js';
@@ -102,6 +108,9 @@ export async function runWithFloorGaps(
 
 async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorGapSink: CoverageGap[]): Promise<Result> {
   try {
+    // The tree this run plans from. It is read again after the scan, and the receipt binds it, so a
+    // file written while the check runs can never be bound into a receipt that did not see it.
+    const treeBeforePlanning = await deps.git.writeTree();
     const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
     const guardDivergedPaths = await checkGuard(deps, config, opts.trustedRef ?? 'HEAD');
     const scanConfigResolution = await scanConfigForCoverage(deps, config, guardDivergedPaths, opts.trustedRef);
@@ -183,6 +192,11 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
     // identity the floor does not, nor a count above the floor's, and it is the floor itself when
     // there is no usable history. See src/history/.
     const debt = await loadDebtTracking(deps.history, floor, opts.trustedRef ?? 'HEAD');
+    // The second read, after the scan and every policy read, and before the gate. A different tree
+    // means the scan may have seen files that are not the ones planned or the ones there now. That
+    // is a not-covered gap the gate weighs, never a verified result. An idle run plans nothing and
+    // scans nothing, so it is left as it is.
+    const treeChangedDuringCheck = !nothingToCheck && (await deps.git.writeTree()) !== treeBeforePlanning;
 
     const coverage: Coverage = {
       ...discoveredCoverage,
@@ -190,8 +204,14 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
       nothingToCheck,
       unresolvedFiles: [...discoveredCoverage.unresolvedFiles, ...docsCoverage.unresolvedFiles],
       gaps: [
-        // First, so the surfaces that name one example per gap state name this one. It explains
-        // why no app screen appears on this run. Docs screens can still appear below it.
+        // First, because it explains why nothing this run measured can be bound to one tree.
+        ...(treeChangedDuringCheck ? [treeChangedDuringCheckGap()] : []),
+        // A scanner version usabl cannot read cannot be bound, so no receipt could stand for this
+        // run. The gap makes that not covered, never verified. An idle run binds nothing.
+        ...(nothingToCheck ? [] : scannerVersionGaps(deps.scannerVersions)),
+        // After the tree and scanner version gaps, so the surfaces that name one example per gap
+        // state name this one when neither of those is present. It explains why no app screen
+        // appears on this run. Docs screens can still appear below it.
         ...(scanConfigResolution.unreadable === null ? [] : [scanConfigResolution.unreadable]),
         // Next, because it explains why no screen at all was scanned on this run.
         ...(intakeGap === null ? [] : [intakeGap]),
@@ -277,6 +297,12 @@ async function runCore(deps: Deps, config: UsablConfig, opts: RunOptions, floorG
             applicability: summarizeApplicability(screens),
             findingsSummary: summarize(gated.findings),
             activeWaivers: gated.findings.filter((f) => f.status === 'waived').length,
+            // When the first waiver this verdict leaned on ends, the gate counts its accessibility
+            // barrier again, so the receipt must stop standing for this tree at that moment.
+            waiverExpiresAt: earliestAppliedWaiverExpiry(gated.findings, waivers, now),
+            // The tree read before planning, which the read after the scan matched. A later edit
+            // moves the tree, so this receipt does not stand for it.
+            sourceTree: treeBeforePlanning,
             historyHead: debt.read.head,
           })
         : null;

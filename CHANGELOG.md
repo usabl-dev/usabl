@@ -308,6 +308,179 @@
   An image button's browser default name is not drafted as page text, and shortened text is
   never cut inside a character.
 
+- A change to a file under a glob entry in `guardedPaths`, such as `policy/*.json`, now needs
+  approval in CI, whether the pull request edits, adds, or deletes it. Before,
+  `usabl enforce policy` listed each entry with a literal git pathspec, so a glob entry listed
+  nothing and the check printed "no policy change". The local guard and the CI check now list
+  each ref once with `-z` and select from those listings with the same matcher, with Node's dot
+  rule for wildcards.
+  The local guard also adds what `fs.glob` finds on the working tree. A file deleted locally under
+  a glob entry is now named in the local check. Before, the pattern text was compared, read as
+  absent on both sides, and nothing was named. A dot-named file under a glob entry is not guarded,
+  in both places. For a clean tree with plain ASCII names, the receipt policy hash is unchanged.
+  Gate effect: such a change is `approval_required` in CI where it passed, and locally where a
+  deletion passed.
+
+- A `guardedPaths` entry written as `./src/gate/`, `src/gate//`, or `.` now guards what
+  `src/gate/` or the whole tree guards. Every entry is read in one canonical form: no leading
+  `./`, no repeated or trailing `/`, no `.` segment, and `.` alone for the whole tree. Before, the
+  entry was compared as written with git output, which never holds that form, so it matched
+  nothing: a change under `.` or `src/gate//` printed "no policy change" in CI, a file deleted
+  locally under any of them was not named, and `./src/gate/` refused every pull request with no
+  CODEOWNERS rule that could clear it. An empty entry is the whole tree; before, it crashed every
+  run. Gate effect: such a change is `approval_required` where it passed, and an unrelated pull
+  request passes the policy check where it was refused.
+
+- Config load refuses a brace range such as `{1..3}` or `{a..c}`, and a `\`, in every glob list,
+  and names the entry. For a range it says to list the alternatives with commas. Node's glob
+  expands a range and reads `\` as an escape, while usabl's matcher reads both as text, so a
+  guarded file that only a range named passed in CI with "no policy change". Config load also
+  refuses a `guardedPaths` entry with white space at either end, which named no file and guarded
+  nothing, and shows it in quotes. It also refuses a `guardedPaths` entry that starts with `/`
+  (and shows the same path without it), one with a `..` that leaves the root, one with a `..`
+  after a wildcard, and one with a `.` or `..` segment inside a brace alternative, and says how to
+  write each. `./src/gate/`, `src/gate//`, `.`, and `a/../b` before any wildcard still load. Gate
+  effect: a config with such an entry no longer loads.
+
+- The guard expands a brace group in a `guardedPaths` entry before anything else and reads each
+  expansion on its own, in canonical form. Before, a `.` or `..` inside a brace alternative stayed
+  in the pattern, so `{.,b}/y.json` and `{policy,b/..}/rules.json` never matched the root
+  `y.json` or `rules.json` in CI. Gate effect: a change to such a file is `approval_required`
+  where it passed.
+
+- The guard reads a `guardedPaths` entry it cannot evaluate wide, where an older config or a
+  trusted ref's config holds one. A range, `?`, `[ ]`, `( )`, `\`, or a nested or unbalanced brace
+  guards the literal folder above the first segment the matcher cannot evaluate, so
+  `policy/rule{1..3}.json` guards `policy/`. An entry that starts with `/`, has a `..` that leaves
+  the root, or has a `..` anywhere after a wildcard guards the whole tree, so
+  `policy/*/../../x.json` guards the root `x.json`. The same reading holds at the trusted ref, at
+  HEAD, and on the working tree. `usabl enforce policy` names each such entry in its output and
+  says how to write it, and `usabl doctor` does too. The `requirements` folder and the
+  always-guarded ledgers are read as literal paths, and a `guardedPaths` entry with the same text
+  as `requirements` is read both as that path and as a glob. Gate effect: a change under that
+  folder is `approval_required` where it could pass, a code owner's approval clears it, and the
+  pull request that repairs the entry can merge with one.
+
+- The Stop hook blocks once when the guard or the session pin computation fails, with the reason
+  and the first line of the error, and lets the continuation through marked NOT verified. Before,
+  such a failure, for example a guarded listing past the read limit, allowed with "NOT verified -
+  stop hook error". A stored receipt that cannot be read or checked does not block: the hook drops
+  the fast path and runs the full check, and the decision is the run's. A folder outside any work
+  tree and a repository with no commits still allow with their own notes. Gate effect: the Stop
+  hook blocks where it allowed.
+
+- `usabl enforce policy` now reads code owners from the last `CODEOWNERS` rule that matches each
+  changed guarded path. Before, any team, email, or owner-less line anywhere in the file refused
+  the whole check, while `usabl doctor` read those lines as fine. Now such a line refuses only when
+  it is the last match for a changed guarded path. A path with no owner, and a pattern or owner
+  usabl cannot read, still refuse. `usabl doctor` reports the same limits under policy scope, in
+  the same words, so a repository whose guarded paths lack a user owner now reads as drifted
+  there. Gate effect: the policy check can pass where an unrelated team line made it refuse.
+
+- A `CODEOWNERS` pattern with a slash whose last segment holds a wildcard no longer matches
+  through a parent folder, as GitHub documents for `docs/*`: it matches `docs/a.md` and not
+  `docs/b/c.md`. Before, `src/* @alice` after `/src/gate/ @org/gate-team` made alice the owner of
+  `src/gate/index.ts`, and her approval passed a change GitHub gives to the team. A form the
+  documentation does not show is read both ways: an inner slash with no leading slash, a slash-free
+  pattern with no trailing slash (a name such as `gate`, or a wildcard such as `*.js` against a
+  folder named `lib.js`), and `?`. When the readings disagree for a changed guarded path and the
+  rule could be its last match, the match is unknown and the check refuses that path. A wildcard
+  before the last segment now refuses the whole file. `usabl doctor` reports the same limits, and
+  reads a workflow file whose last match is unknown as unknown. Gate effect: the policy check
+  refuses where it passed on the wrong owner's approval, and a repository with a wildcard before
+  the last segment of a rule is refused until that rule is rewritten.
+
+- A `#` inside a `CODEOWNERS` pattern or owner, one that does not follow whitespace, now refuses
+  the whole file. Before, the line was cut at that `#`, so `/src/file#1.ts @org/team` read as an
+  ownerless rule for `/src/file`, and an earlier user rule stayed the last match. A `#` at the
+  start of a line or after whitespace is still a comment. Gate effect: the policy check refuses
+  where it passed.
+
+- `usabl enforce accessibility` exits 4 for a Result with no accessibility verdict and exit 0
+  unless the Result says nothing was to check. Before, it read that pair as idle and exited 0,
+  even when the changed UI files were never checked. Gate effect: the accessibility check blocks
+  where it passed; an idle run still passes.
+
+- The gate breaks ties between drafts at one identity, and the debt history orders its
+  identities, by UTF-16 code units. Before, both used the machine's locale, which sorted
+  differently on different machines and read two spellings of one accented letter as equal, so
+  the finding bytes could follow arrival order. `usabl debt` now prints its rows in code unit order
+  too, so `Zones` comes before `apps` on every machine. Gate effect: none on a verdict; the finding
+  that stands for an identity can now be a different draft of the same identity.
+
+- A floor entry with count 0 no longer yields a `fixed` finding. It accepts no accessibility
+  barrier, so its absence pays nothing down. Such an entry is also no longer listed in
+  `floorUnconfirmed` when it is absent on a scanned screen without render confirmation. Gate
+  effect: such an entry no longer adds to the paid-down count; the verdict and the summary count
+  do not change.
+
+- `usabl doctor` reports a `guardedPaths` glob that matches no file yet as not checkable yet, and
+  says the first file added under it needs a `CODEOWNERS` rule. Before, policy scope read as wired,
+  while the policy check refused the pull request that added that file. Doctor now reads each
+  entry the way the guard does, so `./src/gate/` is no longer reported as drift, and it reports a
+  literal entry that matches no file in the last commit as guarding nothing today, which is where
+  a typo, a wrong letter case, or a look-alike letter shows. That remains a limit: such an entry
+  guards nothing in the checks. Doctor reads `CODEOWNERS` with the policy check's line reader,
+  including the `#` refusal. When the guarded path
+  listing passes the read limit, the message now says the guarded glob lists too many files and to
+  start the entry with a folder name, not to edit `.gitignore`. The guard no longer runs
+  `git status` to list guarded files, which added nothing to the listing. Gate effect: none.
+
+- A receipt now ends when a waiver it used ends. It binds `waiverExpiresAt`, the earliest
+  expiry among the waivers the run applied, and stops verifying once the clock reaches it.
+  Before, a receipt minted while a waiver was live kept verifying after the waiver ended, and
+  the stop hook said VERIFIED for an accessibility barrier the gate would block. The fast path
+  still skips the scan until that moment. A stored receipt from before this change verifies only
+  if it counted no waived finding; one that did runs one full check. The receipt finds the
+  waivers it binds with the gate's own match rule. Gate effect: the stop hook runs a full check
+  after a waiver ends, where it allowed on the stored receipt.
+
+- When a stored receipt for an unchanged tree does not verify, the Stop hook's notice after the
+  decision line now says why, one plain reason per failed binding, such as "a waiver this receipt
+  relied on ended at ...". Before, the reason was dropped. The notice appears only when the full
+  check that follows reaches a verdict. A receipt that failed only because the files changed adds
+  no notice, so a verified stop after an edit stays quiet, and an idle or failed run adds none,
+  so those stops read as they would with no stored receipt. Gate effect: none; the hook runs the
+  full check as before, and the person sees why.
+
+- A run now reads the tree before it plans and again after it scans, and the receipt binds the
+  first read. Before, the receipt bound the tree read after the scan, so a file written during a
+  check was bound into a receipt that never saw it. Two reads cannot see an edit undone before
+  the second read, or a dev server that still serves an older build than the tree; both stay
+  verified. Gate effect: a run whose files changed during the check is not covered, with a gap
+  on `working tree`, and mints no receipt.
+
+- A repository with no commits now gets a plain message. Every run reads the working tree
+  first, and without HEAD that read failed with git's raw error text. The summary now says git
+  cannot read HEAD and to make a first commit. Gate effect: none; the run still ends with no
+  verdict and exit 4.
+
+- The Chromium version a receipt binds is now the version of the binary that scans:
+  Playwright's headless shell (`chrome-headless-shell`), which a headless run launches, not the
+  full browser `chromium.executablePath()` names. usabl finds the headless shell in the same
+  browsers folder, at the revision the `chromium-headless-shell` entry names in the
+  `browsers.json` of the installed `playwright-core`, never at the full browser's revision or in
+  another shell folder left on disk. It binds what the shell prints for `--version`, or the
+  revision in its folder name as `revision-<number>` when it prints none. Before, the version was
+  the revision in the full browser's folder name, so a replaced headless shell, or a different
+  browser placed at the full browser's path, read the same value as before. A stored receipt that holds a Chromium revision
+  does not verify once after the upgrade, and the stop hook runs one full check. Gate effect: a
+  stored receipt stops verifying when the headless shell changes, so the stop hook runs a full
+  check where it allowed.
+
+- A scanner version usabl cannot read is no longer bound into a receipt as `unknown`. When the
+  headless shell cannot be found, because Playwright's `browsers.json` cannot be read, names no
+  single shell revision, or gives it a per-platform override, or because the shell's folder is
+  missing, the Chromium version is unreadable; the full browser's version is never bound in its
+  place. `usabl doctor` reports an unreadable version with the fix. Gate
+  effect: a run with a version usabl cannot read is not covered, with a gap on `scanner versions`
+  that names the fix, and mints no receipt.
+
+- A Result document read by `usabl enforce`, `usabl comment`, or a library caller keeps the
+  receipt's `waiverExpiresAt`, read as null or a strict ISO-8601 UTC time. Before, the field was
+  dropped, so a Result sent through JSON lost a receipt that verifies. Gate effect: a document
+  whose receipt carries any other `waiverExpiresAt` value is refused, naming the field.
+
 - The pull request comment now stays under 65,536 however GitHub counts it. GitHub refuses a
   body over that, and the required check then failed with no comment. The body is bounded at
   60,000 UTF-8 bytes, which are never fewer than characters or UTF-16 code units. Every carried
@@ -331,9 +504,11 @@
 - A `usabl docs` report now records the git tree it was made from (`sourceTree`), and a report
   made from another tree is marked `stale: true` with a `staleReason` that names both trees and
   says to run `usabl docs` again. `usabl docs` reads the tree before and after the run, so a file
-  saved during the scan marks the report stale, with or without a receipt. With a receipt, whose
-  tree is read after the scan, the report also records the tree read before in `startTree`, and
-  a report whose two trees differ is stale against every tree. On the HTML page a stale card
+  saved during the scan marks the report stale. Such a run also mints no receipt, because the
+  run itself reads the tree before it plans and after it scans. A receipt binds the tree the run
+  read before it planned; if that differs from the tree `usabl docs` read before the run, the
+  report also records the earlier tree in `startTree`, and a report whose two trees differ is
+  stale against every tree. On the HTML page a stale card
   reads "Out of date" and never "Verified", and says it may not match the current code.
   `markStaleDocArtifacts` from `usabl/docs` checks a saved report against the current tree,
   which the ground truth says how to compute. An edit to a file git ignores does not mark a

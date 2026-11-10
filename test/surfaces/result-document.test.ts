@@ -276,6 +276,22 @@ describe('parseResultJson validates the whole Result against the contract', () =
     expect('engines' in (parseResultJson(validResult()).receipt?.scannerVersions ?? {})).toBe(false);
   });
 
+  it('keeps the waiver end a receipt binds, as a time or null, and leaves an absent one absent', () => {
+    const end = '2026-06-01T00:00:00.000Z';
+    expect(parseResultJson(withValue(['receipt', 'waiverExpiresAt'], end)).receipt?.waiverExpiresAt).toBe(end);
+    expect(parseResultJson(withValue(['receipt', 'waiverExpiresAt'], null)).receipt?.waiverExpiresAt).toBeNull();
+    expect('waiverExpiresAt' in (parseResultJson(validResult()).receipt ?? {})).toBe(false);
+  });
+
+  it('refuses a receipt waiver end that is not an ISO-8601 UTC time, naming the field and never the value', () => {
+    for (const value of [LEAK, '2026-06-01', '2026-06-01T00:00:00Z', '2026-06-01T02:00:00.000+02:00', 5, false, {}]) {
+      const err = refusal(withValue(['receipt', 'waiverExpiresAt'], value));
+      expect(err.field).toBe('receipt.waiverExpiresAt');
+      expect(err.message).toContain('receipt.waiverExpiresAt');
+      expect(err.message).not.toContain('leak-me');
+    }
+  });
+
   it('refuses malformed receipt engine versions, naming the field and never the value', () => {
     for (const engines of [[LEAK], { deque: LEAK.length }, LEAK]) {
       const err = refusal(withValue(['receipt', 'scannerVersions', 'engines'], engines));

@@ -13,7 +13,7 @@
  */
 import type { AccessibilityExitCode, AccessibilityVerdict, Coverage, CoverageGap, Draft, EvidenceFacts, EvidenceFloor, Finding, FloorEntry, FloorHeadroom, FloorUnconfirmed, GateInput, GateOutput, RenderEvidence, ScreenScan, Waiver } from '../contracts/index.js';
 import { coverageIncomplete, decideAccessibilityVerdict, notEvaluatedCounts } from '../coverage/completeness.js';
-import { sortBy } from '../primitives/sortKey.js';
+import { compareCodeUnits, sortBy } from '../primitives/sortKey.js';
 import { computeIdentity, elementSlots, identityKey, identitySchemeFor, identitySlot, readRowScope, type IdentityScheme } from '../primitives/identity.js';
 import { canonicalize } from '../primitives/canonical.js';
 import { checkGateInput } from './input.js';
@@ -332,9 +332,11 @@ function byPreference(a: Finding, b: Finding): number {
   if (byClass !== 0) return byClass;
   const byLayer = Number(b.layer === 'pf') - Number(a.layer === 'pf');
   if (byLayer !== 0) return byLayer;
-  const byPath = a.elementPath.localeCompare(b.elementPath);
+  // Code-unit compares, never localeCompare: a locale compare changes with the machine and reads
+  // some distinct strings as equal, which would hand the choice back to arrival order.
+  const byPath = compareCodeUnits(a.elementPath, b.elementPath);
   if (byPath !== 0) return byPath;
-  const byLayerName = a.layer.localeCompare(b.layer);
+  const byLayerName = compareCodeUnits(a.layer, b.layer);
   if (byLayerName !== 0) return byLayerName;
   // Worst severity wins the presentation. A reader who sees one row standing for several barriers
   // should see the most serious of them, not whichever the scanner happened to report first.
@@ -344,7 +346,7 @@ function byPreference(a: Finding, b: Finding): number {
   // every field above but differ in prose, evidence or confidence still collapsed to whichever
   // arrived first, so the finding BYTES moved with arrival order even where the verdict did not.
   // Only drafts identical on every field compared here can tie now, and those are interchangeable.
-  return tieBreakKey(a).localeCompare(tieBreakKey(b));
+  return compareCodeUnits(tieBreakKey(a), tieBreakKey(b));
 }
 
 /**
@@ -385,14 +387,17 @@ function collapse(group: Finding[]): Finding {
   return { ...winner, evidence, confidence: aggregateConfidence(group, winner.evidenceClass) };
 }
 
+/** Whether a waiver covers a finding: same rule, same screen, and a scope of '*' or its element key. */
+export function waiverMatchesFinding(w: Waiver, f: Finding): boolean {
+  return w.rule === f.rule && w.surface === f.screenId && (w.scope === '*' || w.scope === f.elementKey);
+}
+
 /** Expired waivers are inert. Fixed findings are never rewritten to waived. */
 function applyWaivers(findings: Finding[], waivers: Waiver[], now: string): Finding[] {
   const active = waivers.filter((w) => w.expires > now);
   return findings.map((f) => {
     if (f.status === 'fixed') return f;
-    const matched = active.some((w) =>
-      w.rule === f.rule && w.surface === f.screenId && (w.scope === '*' || w.scope === f.elementKey),
-    );
+    const matched = active.some((w) => waiverMatchesFinding(w, f));
     return matched ? { ...f, status: 'waived' } : f;
   });
 }
@@ -544,6 +549,8 @@ function differential(input: GateInput): Differential {
   // and is disclosed in floorUnconfirmed. Both tests are presence tests on sets, so the result does
   // not depend on order.
   for (const e of floorByKey.values()) {
+    // A count of 0 accepts no accessibility barrier, so its absence pays nothing down and is never fixed.
+    if (e.count === 0) continue;
     if (!floorEntryAbsent(e, countByGroup)) continue;
     if (!input.cleanlyScannedScreens.has(e.screenId)) continue;
     if (!paydownConfirmed(e, input.renderEvidence?.get(e.screenId))) {

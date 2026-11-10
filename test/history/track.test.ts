@@ -252,6 +252,17 @@ describe('intermittent', () => {
   });
 });
 
+describe('the order of tracked identities', () => {
+  it('sorts by code-unit order, never the process locale', () => {
+    // A locale compare puts "apps" before "Zones". Code units put "Z" (90) before "a" (97).
+    const floor = floorOf([
+      entryFor(dialogAt(1, { screenId: 'apps' }), 1),
+      entryFor(dialogAt(1, { screenId: 'Zones' }), 1),
+    ]);
+    expect(trackDebt(floor, []).identities.map((identity) => identity.entry.screenId)).toEqual(['Zones', 'apps']);
+  });
+});
+
 describe('first seen', () => {
   it('is the time of the first record that saw a barrier there', () => {
     const track = trackDebt(DIALOG_FLOOR, [
