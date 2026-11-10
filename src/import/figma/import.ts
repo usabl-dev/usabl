@@ -92,6 +92,9 @@ type NameRead = { ok: true; name: string } | { ok: false; reason: string };
 
 // Why a stamp linked to a Button Details card whose name usabl cannot read gives no name.
 const UNREAD_CARD = 'its Button Details card gives no accessible name usabl can read, and the layer text is not used in its place';
+// Why a stamp whose note number is on a readable card and on an unreadable one gives no name.
+const UNCLEAR_CARD =
+  'its note number is on more than one Button Details card, and usabl cannot read the name on one of them, so which name the designer meant is unknown';
 
 // Design text read as an accessible name. The characters that make a display lie are removed, and
 // white space is collapsed with the same rule the page match uses: ASCII white space only. So a
@@ -331,26 +334,38 @@ export function importFigmaFile(file: FigmaFile, options: FigmaImportOptions): F
     // The note numbers of cards whose name usabl cannot read. A stamp with one of them and no
     // readable card is listed, because its layer text is not the name the designer gave.
     const unreadNotes = new Set<string>();
-    for (const stamp of usable) {
-      if (stamp.kind !== 'button-details') {
-        continue;
+    // The note numbers that a readable card and an unreadable card share. Which name the designer
+    // meant is a guess, so neither card is used, and the stamp is listed.
+    const unclearNotes = new Set<string>();
+    const cards = usable
+      .filter((stamp) => stamp.kind === 'button-details')
+      .map((stamp) => ({
+        stamp,
+        note: propertyValue(stamp.node, 'Note number')?.trim() ?? '',
+        read: propertyIsSlot(stamp.node, 'Accessible Name')
+          ? ({ ok: false, reason: 'its Accessible Name is a slot, which holds a layer and not text, so usabl cannot read the name' } as const)
+          : readName(propertyValue(stamp.node, 'Accessible Name') ?? undefined),
+      }));
+    for (const { note, read } of cards) {
+      if (!read.ok && note !== '') {
+        unreadNotes.add(note);
       }
-      const note = propertyValue(stamp.node, 'Note number')?.trim() ?? '';
-      const read: NameRead = propertyIsSlot(stamp.node, 'Accessible Name')
-        ? { ok: false, reason: 'its Accessible Name is a slot, which holds a layer and not text, so usabl cannot read the name' }
-        : readName(propertyValue(stamp.node, 'Accessible Name') ?? undefined);
+    }
+    for (const { stamp, note, read } of cards) {
       if (!read.ok) {
         const reason = read.reason === 'empty' ? 'it has no accessible name' : read.reason;
         notes.push(notConverted(`Button Details in layer ${quote(stamp.node.name)}`, reason));
-        if (note !== '') {
-          unreadNotes.add(note);
-        }
         continue;
       }
       const card = `Button Details for "${read.name}"`;
       const used = detailNames.get(note);
       if (note === '') {
         notes.push(notConverted(card, 'it has no note number, so it matches no Button Stamp'));
+      } else if (unreadNotes.has(note)) {
+        unclearNotes.add(note);
+        notes.push(
+          notConverted(card, `note number ${quote(note)} is also on a Button Details card whose name usabl cannot read, so which name the designer meant is unknown`),
+        );
       } else if (used !== undefined) {
         notes.push(notConverted(card, `note number ${quote(note)} is already used by Button Details for "${used}"`));
       } else if (!stampNotes.has(note)) {
@@ -375,13 +390,15 @@ export function importFigmaFile(file: FigmaFile, options: FigmaImportOptions): F
       const note = propertyValue(stamp.node, 'Note number')?.trim();
       const detail = note === undefined ? undefined : detailNames.get(note);
       const read: NameRead =
-        detail !== undefined
-          ? { ok: true, name: detail }
-          : note !== undefined && unreadNotes.has(note)
-            ? { ok: false, reason: UNREAD_CARD }
-            : coveredName(stamp);
+        note !== undefined && unclearNotes.has(note)
+          ? { ok: false, reason: UNCLEAR_CARD }
+          : detail !== undefined
+            ? { ok: true, name: detail }
+            : note !== undefined && unreadNotes.has(note)
+              ? { ok: false, reason: UNREAD_CARD }
+              : coveredName(stamp);
       stampNames.set(stamp.node, read);
-      if (stamp.covers !== null && (read.ok || read.reason === UNREAD_CARD)) {
+      if (stamp.covers !== null && (read.ok || read.reason === UNREAD_CARD || read.reason === UNCLEAR_CARD)) {
         buttonNames.set(stamp.covers.id, read);
       }
     }

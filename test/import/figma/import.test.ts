@@ -387,7 +387,8 @@ describe('importFigmaFile Button Details and Figma notes', () => {
         stampOn('1'),
         details('d1', { 'Note number#9:1': '1', 'Accessible Name#9:2': 'Close' }),
         details('d2', { 'Accessible Name#9:2': 'Save' }),
-        details('d3', { 'Note number#9:1': '1', 'Accessible Name#9:2': ' ' }, 'Empty card'),
+        // Its own note number: a readable and an unreadable card that share one is a case of its own.
+        details('d3', { 'Note number#9:1': '2', 'Accessible Name#9:2': ' ' }, 'Empty card'),
         details('d4', { 'Note number#9:1': '1', 'Accessible Name#9:2': 'Dismiss' }),
       ]),
       screenOptions,
@@ -398,6 +399,25 @@ describe('importFigmaFile Button Details and Figma notes', () => {
       'Button Details in layer "Empty card" was not turned into a check: it has no accessible name.',
       'Button Details for "Dismiss" was not turned into a check: note number "1" is already used by Button Details for "Close".',
     ]);
+  });
+
+  it('drafts nothing from two Button Details cards with one note number when one cannot be read, and lists both', () => {
+    // Which card the designer meant is a guess, whichever card comes first in the layers.
+    const readable = details('d1', { 'Note number#9:1': '1', 'Accessible Name#9:2': 'Reload' });
+    const unreadable = details('d2', { 'Note number#9:1': '1', 'Accessible Name#9:2': ' ' }, 'Empty card');
+    const expected = [
+      'Button Details in layer "Empty card" was not turned into a check: it has no accessible name.',
+      'Button Details for "Reload" was not turned into a check: note number "1" is also on a Button Details card whose name usabl cannot read, so which name the designer meant is unknown.',
+      'Button stamp on "close-icon" was not turned into a check: its note number is on more than one Button Details card, and usabl cannot read the name on one of them, so which name the designer meant is unknown.',
+    ];
+    for (const cards of [
+      [readable, unreadable],
+      [unreadable, readable],
+    ]) {
+      const result = importFigmaFile(screen([icon, stampOn('1'), ...cards]), screenOptions);
+      expect(result.bundle.requirements).toEqual([]);
+      expect([...result.notes].sort()).toEqual([...expected].sort());
+    }
   });
 
   it('lists a Button Details card whose Accessible Name is a slot, and never uses the layer text in its place', () => {
