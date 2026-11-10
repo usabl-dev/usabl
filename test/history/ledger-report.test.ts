@@ -112,6 +112,28 @@ describe('usabl debt ledger', () => {
     expect(unseenRow).toMatchObject({ mayBeMore: false, mayBeMoreReasons: [], mayBeLess: true, mayBeLessReasons: ['not-seen'], lastSeen: null });
   });
 
+  it('says how the last span of a reopened row ended', async () => {
+    const one = floorOf([FIXED]);
+    const empty = floorOf([]);
+    const stateOf = async (floors: Record<number, EvidenceFloor | null>, history = makeFakeHistory({}).writer) => {
+      const outcome = await runLedger(fakeGit(floors), history, 'main', NOW);
+      const lines = outcome.text.split('\n');
+      const row = lines[lines.findIndex((line) => line.startsWith('Days open')) + 1] ?? '';
+      return row.split(/ {2,}/u)[1];
+    };
+    // Left the floor, came back, then the floor file was deleted: a deletion is not a fix.
+    expect(await stateOf({ 0: one, 4: empty, 10: one, 12: null })).toBe('reopened, open until a gap');
+    expect(await stateOf({ 0: one, 4: empty, 10: one, 20: empty })).toBe('reopened, left the floor again');
+    expect(await stateOf({ 0: one, 4: empty, 10: one })).toBe('reopened, open now');
+    // Left the floor, came back, and two clean scans showed it gone: fixed again.
+    const scan = (day: number) => recordOf(one, [fullScreen('clusters', [[FIXED, 0]])], { commit: commitAt(day), sourceTree: `tree-${day}` });
+    const history = makeFakeHistory({
+      refs: { 'origin/usabl/history': 'h1' },
+      commits: { h1: { '2026-01.jsonl': [scan(14), scan(16)].map((record) => `${serializeRecord(record)}\n`).join('') } },
+    }).writer;
+    expect(await stateOf({ 0: one, 4: empty, 10: one }, history)).toBe('reopened, fixed again');
+  });
+
   it('puts every printed string through the scrub, in the table and in the JSON', async () => {
     const outcome = await runLedger(fakeGit({ 0: BASE }), historyWith(BASE), 'main', NOW);
 

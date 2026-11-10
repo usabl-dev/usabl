@@ -37,7 +37,14 @@ export function daysCell(row: Pick<LedgerRow, 'daysOpen' | 'mayBeMore' | 'mayBeL
 }
 
 function stateCell(row: LedgerRow): string {
-  if (row.state === 'reopened') return openNow(row) ? 'reopened, open now' : 'reopened, fixed again';
+  if (row.state === 'reopened') {
+    // The words follow how the last span ended. Only a fix the history showed is "fixed again".
+    const by = row.spans[row.spans.length - 1]?.end?.by ?? null;
+    if (by === null) return 'reopened, open now';
+    if (by === 'history') return 'reopened, fixed again';
+    if (by === 'floor') return 'reopened, left the floor again';
+    return 'reopened, open until a gap';
+  }
   if (row.state === 'open' && !openNow(row)) return 'open until a gap';
   if (row.state === 'left-the-floor') return 'left the floor';
   return row.state;
