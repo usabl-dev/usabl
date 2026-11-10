@@ -11,7 +11,7 @@
  */
 import type { HistoryReader } from '../contracts/index.js';
 import { scrubOutboundData, scrubString } from '../surfaces/scrub.js';
-import { buildLedger, type Ledger, type LedgerRow, type LedgerState, type LedgerStateTotals } from './ledger.js';
+import { buildLedger, LedgerInvariantError, type Ledger, type LedgerRow, type LedgerState, type LedgerStateTotals } from './ledger.js';
 import { readLedgerSources, type LedgerGit } from './ledger-git.js';
 
 export interface LedgerCommandOutcome {
@@ -148,7 +148,13 @@ export async function runLedger(git: LedgerGit, history: HistoryReader, trustedR
       return refusal(read.reason === 'no-floor' ? 2 : 4, read.message);
     }
     ledger = buildLedger({ ...read.input, now });
-  } catch {
+  } catch (err) {
+    if (err instanceof LedgerInvariantError) {
+      return refusal(
+        4,
+        `the ledger stopped because its own count broke a rule (${err.message}). It printed no numbers, because they would be wrong. This is a bug in usabl.`,
+      );
+    }
     return refusal(4, `git could not read the history of ${trustedRef}, so the ledger could not run.`);
   }
   const safe = scrubOutboundData(ledger);

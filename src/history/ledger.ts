@@ -139,9 +139,20 @@ export interface Ledger {
   totals: Record<LedgerState, LedgerStateTotals>;
 }
 
+// A point with its place on the first-parent line. The place orders events; the date only counts days.
+type Placed = LedgerPoint & { position: number };
+
 interface OpenSpan {
-  start: LedgerPoint;
-  end: LedgerSpanEnd | null;
+  start: Placed;
+  end: (LedgerSpanEnd & { position: number }) | null;
+}
+
+/** The ledger broke one of its own rules. That is a bug in usabl, never a number to print. */
+export class LedgerInvariantError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LedgerInvariantError';
+  }
 }
 
 interface RowState {
@@ -161,7 +172,7 @@ interface RowState {
 
 interface FloorBreak {
   cause: 'floor-rewritten' | 'floor-unreadable' | 'floor-deleted';
-  at: LedgerPoint;
+  at: Placed;
   leave: string;
   enter: string;
 }
@@ -188,6 +199,45 @@ function addGap(row: RowState, gap: LedgerGap, lowerBound: boolean): void {
   if (lowerBound) row.lowerBound = true;
 }
 
+function slotOf(screenId: string, id: string, rule: string, basis: string): string {
+  return JSON.stringify([screenId, id, rule, basis]);
+}
+
+function point(at: Placed): LedgerPoint {
+  return { commit: at.commit, date: at.date };
+}
+
+/**
+ * Spans must follow each other on the first-parent line, and a row's days can never be more than
+ * the days from its first sighting to the end of its last span. A row that breaks either rule is a
+ * bug in the replay, so the ledger stops instead of printing it.
+ */
+export function checkSpans(spans: ReadonlyArray<Pick<OpenSpan, 'start' | 'end'>>, endDate: string): void {
+  let previousEnd = -Infinity;
+  for (const span of spans) {
+    const stop = span.end?.position ?? Infinity;
+    if (span.start.position < previousEnd || stop < span.start.position) {
+      throw new LedgerInvariantError('the ledger built spans that overlap or run backwards on the first-parent line');
+    }
+    previousEnd = stop;
+  }
+  const first = spans[0];
+  if (first === undefined) return;
+  const ordered = spans.every((span, index) => {
+    const stopDate = span.end?.date ?? endDate;
+    const before = spans[index - 1];
+    const startOk = before === undefined || Date.parse(span.start.date) >= Date.parse(before.end?.date ?? endDate);
+    return startOk && Date.parse(stopDate) >= Date.parse(span.start.date);
+  });
+  // Commit dates that go backwards are a fact of the repository, not a bug, so only ordered dates are checked.
+  if (!ordered) return;
+  const lastStop = spans[spans.length - 1]?.end?.date ?? endDate;
+  const total = spans.reduce((sum, span) => sum + daysBetween(span.start.date, span.end?.date ?? endDate), 0);
+  if (total > daysBetween(first.start.date, lastStop)) {
+    throw new LedgerInvariantError('the ledger counted more days for a row than have passed since it was first seen');
+  }
+}
+
 function median(values: readonly number[]): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
@@ -202,6 +252,8 @@ export function buildLedger(input: LedgerInput): Ledger {
   let previous: { version: number } | null = null;
   let seenReadable = false;
   let pendingBreak: FloorBreak | null = null;
+  // The identities that a record the ledger could not place in time observes.
+  const unplacedSlots = new Set<string>();
 
   function rowFor(entry: FloorEntry): RowState {
     const key = identityKey(entry);
@@ -231,7 +283,7 @@ export function buildLedger(input: LedgerInput): Ledger {
     return row;
   }
 
-  function closeLeaving(row: RowState, at: LedgerPoint, cause: FloorBreak | null): void {
+  function closeLeaving(row: RowState, at: Placed, cause: FloorBreak | null): void {
     row.inFloor = false;
     row.pendingZero = null;
     const last = row.spans[row.spans.length - 1];
@@ -240,12 +292,12 @@ export function buildLedger(input: LedgerInput): Ledger {
       last.end = { ...at, by: 'floor' };
       return;
     }
-    last.end = { commit: cause.at.commit, date: cause.at.date, by: 'gap' };
+    last.end = { ...cause.at, by: 'gap' };
     addGap(row, { cause: cause.cause, detail: cause.leave }, true);
   }
 
   function applySnapshot(snapshot: FloorSnapshot): void {
-    const at: LedgerPoint = { commit: snapshot.commit, date: snapshot.date };
+    const at: Placed = { commit: snapshot.commit, date: snapshot.date, position: snapshot.position };
     if (snapshot.unreadable !== null) {
       pendingBreak ??= {
         cause: 'floor-unreadable',
@@ -325,7 +377,7 @@ export function buildLedger(input: LedgerInput): Ledger {
     pendingBreak = null;
   }
 
-  function observe(row: RowState, record: HistoryRecord, count: number, at: LedgerPoint): void {
+  function observe(row: RowState, record: HistoryRecord, count: number, at: Placed): void {
     const seenOnTree = row.countsByTree.get(record.sourceTree) ?? new Set<number>();
     const differs = [...seenOnTree].some((seen) => seen !== count);
     seenOnTree.add(count);
@@ -344,7 +396,7 @@ export function buildLedger(input: LedgerInput): Ledger {
     if (isOpen(row)) {
       if (count > 0) {
         row.pendingZero = null;
-      } else if (row.pendingZero === record.floorHash) {
+      } else if (row.pendingZero === record.floorHash && !unplacedSlots.has(slotOf(row.entry.screenId, row.id, row.entry.rule, row.entry.identityBasis))) {
         const last = row.spans[row.spans.length - 1];
         if (last !== undefined) last.end = { ...at, by: 'history' };
         row.pendingZero = null;
@@ -396,20 +448,28 @@ export function buildLedger(input: LedgerInput): Ledger {
   }
 
   const unplaced: HistoryRecord[] = [];
+  const inOrder: Array<{ record: HistoryRecord; at: Placed }> = [];
   if (input.history.kind === 'on') {
     for (const placed of input.history.records) {
-      if (placed.at === null) {
-        // It cannot be placed in time, so it may sit between two absences. It breaks a pending pair.
-        unplaced.push(placed.record);
-        observedRows(placed.record, (row) => {
-          row.pendingZero = null;
-        });
-        continue;
-      }
-      applyUpTo(placed.at.position);
-      const at: LedgerPoint = { commit: placed.at.commit, date: placed.at.date };
-      observedRows(placed.record, (row, count) => observe(row, placed.record, count, at));
+      if (placed.at === null) unplaced.push(placed.record);
+      else inOrder.push({ record: placed.record, at: placed.at });
     }
+  }
+  // A record that cannot be placed in time may sit between any two scans, so no pair of scans
+  // confirms a fix for an identity it observes. Collected first, so append order decides nothing.
+  for (const record of unplaced) {
+    for (const screen of record.screens) {
+      if (screen.coverage !== 'full') continue;
+      for (const identity of screen.identities) unplacedSlots.add(slotOf(screen.screenId, identity.id, identity.rule, identity.basis));
+    }
+  }
+  // Replayed in the order of the commits they scanned on the first-parent line, never in the order
+  // they were appended. The sort is stable, so two records of one commit keep their append order.
+  inOrder.sort((a, b) => a.at.position - b.at.position);
+  for (const placed of inOrder) {
+    applyUpTo(placed.at.position);
+    const at: Placed = placed.at;
+    observedRows(placed.record, (row, count) => observe(row, placed.record, count, at));
   }
   applyUpTo(Infinity);
   // Named after the whole floor history is known, so a row it touches is named even when the
@@ -461,9 +521,10 @@ export function buildLedger(input: LedgerInput): Ledger {
   const built = [...rows.values()]
     .filter((row) => row.spans.length > 0)
     .map((row): LedgerRow => {
+      checkSpans(row.spans, input.now);
       const spans: LedgerSpan[] = row.spans.map((span) => ({
-        start: span.start,
-        end: span.end,
+        start: point(span.start),
+        end: span.end === null ? null : { commit: span.end.commit, date: span.end.date, by: span.end.by },
         days: daysBetween(span.start.date, span.end?.date ?? input.now),
       }));
       const first = spans[0] as LedgerSpan;

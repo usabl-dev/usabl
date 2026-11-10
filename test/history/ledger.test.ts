@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { EvidenceFloor, FloorEntry } from '../../src/contracts/index.js';
-import { buildLedger, type FloorSnapshot, type LedgerHistory, type LedgerInput, type LedgerRecord } from '../../src/history/ledger.js';
+import { buildLedger, checkSpans, LedgerInvariantError, type FloorSnapshot, type LedgerHistory, type LedgerInput, type LedgerRecord } from '../../src/history/ledger.js';
 import type { HistoryRecord } from '../../src/history/record.js';
 import { dialogAt, entryFor, floorOf, fullScreen, recordOf, rowButton } from './helpers.js';
 
@@ -208,6 +208,43 @@ describe('buildLedger', () => {
       fixed: { rows: 2, medianDays: 25, longestDays: 30 },
       reopened: { rows: 0, medianDays: null, longestDays: null },
     });
+  });
+
+  it('replays history records in commit order, whatever order they were appended in', () => {
+    const floor = floorOf([A]);
+    // Appended as c3 none, c5 none, c4 one. In commit order: c3 none, c4 one, c5 none. Only one
+    // clean scan follows the sighting at c4, so no fix is confirmed and A is still open.
+    const ledger = buildLedger(
+      input([snap(0, floor)], historyOn([scanAt(3, floor, [[A, 0]]), scanAt(5, floor, [[A, 0]]), scanAt(4, floor, [[A, 1]])])),
+    );
+    const row = rowFor(ledger, A);
+    expect(row.spans).toEqual([{ start: { commit: commitAt(0), date: dayAt(0) }, end: null, days: 41 }]);
+    expect(row).toMatchObject({ state: 'open', daysOpen: 41 });
+    for (const each of ledger.rows) {
+      expect(each.daysOpen).toBeLessThanOrEqual(Math.floor((Date.parse(dayAt(41)) - Date.parse(each.firstSeen.date)) / DAY));
+    }
+
+    // With two clean scans after the sighting, appended before it, the fix is dated at c6.
+    const fixed = buildLedger(
+      input(
+        [snap(0, floor)],
+        historyOn([scanAt(5, floor, [[A, 0]]), scanAt(6, floor, [[A, 0]]), scanAt(3, floor, [[A, 0]]), scanAt(4, floor, [[A, 1]])]),
+      ),
+    );
+    expect(rowFor(fixed, A).spans).toEqual([
+      { start: { commit: commitAt(0), date: dayAt(0) }, end: { commit: commitAt(6), date: dayAt(6), by: 'history' }, days: 6 },
+    ]);
+    expect(rowFor(fixed, A).state).toBe('fixed');
+  });
+
+  it('stops with a bug when spans overlap or count more days than have passed since first seen', () => {
+    const at = (position: number) => ({ commit: commitAt(position), date: dayAt(position), position });
+    const overlapping = [
+      { start: at(0), end: { ...at(5), by: 'history' as const } },
+      { start: at(4), end: null },
+    ];
+    expect(() => checkSpans(overlapping, dayAt(41))).toThrow(LedgerInvariantError);
+    expect(() => checkSpans([{ start: at(0), end: { ...at(5), by: 'history' as const } }, { start: at(8), end: null }], dayAt(41))).not.toThrow();
   });
 
   it('gives the same ledger for the same history and the same clock', () => {
