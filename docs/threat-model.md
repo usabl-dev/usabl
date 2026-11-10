@@ -964,9 +964,10 @@ inside the judge's Chromium.
 
 Two values the installer reads reach these files: the engine pin, only as a full commit SHA, and
 the default branch, read from the clone's `refs/remotes/origin/HEAD`. The branch is written only
-when it is letters, digits, and `. _ - /`, and always quoted, into the `pull_request` trigger and
-nowhere else (the history workflow also names it in its scan job's `if:`). Any other name is not
-written: the file names `main` and the report prints a step to check it.
+when it is letters, digits, and `. _ - /`, and always quoted, into each workflow's trigger and
+nowhere else: the `pull_request` trigger of the gate and the docs gate, and the `push` trigger of
+the history workflow, which also names it in its scan job's `if:`. Any other name is not written:
+the file names `main` and the report prints a step to check it.
 
 What runs where, and what each job holds:
 
