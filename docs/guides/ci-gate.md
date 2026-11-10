@@ -17,6 +17,10 @@ It writes a file when it is absent, or fills the pin when the file is this versi
 unedited draft. It never overwrites a workflow you edited; it says where the file differs
 and stops with exit 2.
 
+For a repository of rendered documentation, `npx usabl install --docs-ci` writes
+`.github/workflows/usabl-docs-gate.yml` the same way. It takes the default branch the same
+way too.
+
 ## What it fills in for you
 
 **The engine pin.** Each workflow builds the usabl engine from the public
@@ -37,12 +41,24 @@ closed, never open.
 pinned to another commit, it reports that commit and changes nothing. It writes a file when
 it is absent, or fills the pin when the file is this version's unedited draft.
 
-**The default branch.** The history workflow runs on pushes to your default branch. The
-command reads its name from git (`refs/remotes/origin/HEAD`, which a clone sets) and says
+**The default branch.** The gate and the docs gate run on pull requests into your default
+branch, and the history workflow runs on pushes to it. The command reads its name from git
+(`refs/remotes/origin/HEAD`, which a clone sets), writes it quoted into each trigger, and says
 which branch it wrote. If git cannot name it, or the name has a character other than
-letters, digits, `.`, `_`, `-`, or `/`, the command writes `main` and prints a step to change
-it if your default branch has another name. Running the command again keeps the branch the
-file already names.
+letters, digits, `.`, `_`, `-`, or `/`, the command writes `main` and prints one step that
+names the line to change in each file, if your default branch has another name. Running the
+command again keeps the branch each file already names. After install, the branch in each
+file is the one that counts. Nothing else in the files changes with the branch.
+
+When the files name different branches, for example a gate on `main` and a history workflow
+on `trunk`, the command prints one step that names each file and its branch. It does not
+change a file to make them agree.
+
+**A repository named usabl.** The app gate's build job and the history scan place the engine
+at `../usabl`, for an app whose lockfile installs usabl from `file:../usabl`. GitHub checks a
+repository out into `<name>/<name>`, so in a repository named usabl, `../usabl` is the
+checkout itself. The step then prints one line and skips the unpack, so the engine is never
+unpacked over your code.
 
 **No secrets.** The engine repository is public, so no job needs a token to fetch it. The
 only token any job reads is the run's own `GITHUB_TOKEN`. A pull request from a fork runs
@@ -70,6 +86,8 @@ The command ends with a numbered list of the steps still needed. When the pin is
 1. Merge `usabl.config.json` (and `usabl.routes.json` when you use it) to your default
    branch first, in their own pull request. The judge reads them at the base commit of each
    pull request, so a pull request that adds them together with the workflows cannot pass.
+   For `install --docs-ci` the files are `usabl.config.json` and `usabl.docs.json` (and
+   `usabl.routes.json` when you use it).
 2. Review and commit the two workflow files.
 3. Add the branch rule. `usabl install --branch-rule` prints the `CODEOWNERS` lines and
    the branch setting, then checks them when you run it again.
@@ -80,14 +98,30 @@ the same bytes of those files as your working tree. When it cannot find the defa
 or git cannot answer, it prints the step.
 
 Each other thing the run could not settle adds one step in front: pin the engine, run
-`usabl init` and set `appBaseUrl`, add a `dev` script for the history scan, or check the
-branch name the history workflow runs on. The `dev` script must start the server directly
+`usabl init` and set `appBaseUrl`, add a `dev` script for the history scan, check the
+branch name the workflows run on, or make the workflows name the same branch. The `dev` script must start the server directly
 and accept `--host` and `--port`, for example `webpack serve --config webpack.dev.js`. A
 script that calls another npm script, such as `npm run start:dev`, does not pass them on.
 
 The branch rule matters. Any pull request runs the workflow as that pull request changed
 it, so a pull request that edits `.github/workflows/` can make `usabl-required` pass. Code
 owner review on `.github/workflows/` is what stops it.
+
+`usabl install --branch-rule` and `usabl doctor` check the protection on the branch the gate
+workflow names in its trigger. With no gate workflow, or a trigger usabl cannot read, they
+check `main` and say they assumed it. When GitHub reports another default branch, they say so
+in one line: the gate then covers only pull requests into the branch it names.
+
+## After an earlier 0.3.0 build
+
+An earlier build of 0.3.0 wrote the gates with `branches: [main]` in the trigger, unquoted,
+and with some comments and step names that said "main". This version does not read those
+files as its own draft, so `usabl doctor` reports them as drifted. Run `usabl install --ci`
+again (and `usabl install --docs-ci` if you use the docs gate). When a file is that earlier
+draft with no edits, the command rewrites it to this draft, keeps the engine pin it held,
+and says so. An earlier gate, which could only name `main`, gets the default branch git
+names. Review the change and commit it. A file you edited is still refused: reconcile it by
+hand.
 
 ## Settings you may need
 
@@ -98,7 +132,9 @@ owner review on `.github/workflows/` is what stops it.
 
 ## What has been proven
 
-The pin fill, the port read, and the printed steps are covered by unit tests. The package
-smoke test installs the packed usabl and runs `install --ci` from it, and checks that the
-written pin matches the build record. The workflows as this version writes them have not
-yet run on a GitHub runner with no hand edits.
+The pin fill, the port read, the branch read, and the printed steps are covered by unit
+tests. The package smoke test installs the packed usabl and runs `install --ci` from it, and
+checks that the written pin matches the build record. The gate an earlier 0.3.0 build wrote
+ran with no hand edits on a GitHub runner for a fixture app, and its engine and build jobs
+passed. The changes since then (the branch in each trigger, and the guard for a repository
+named usabl) are covered by unit tests and have not yet run on a GitHub runner.
