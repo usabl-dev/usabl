@@ -52,7 +52,7 @@ import { installCi } from './install/history-ci.js';
 import { installDocsCi } from './install/docs-ci.js';
 import { readEnginePin } from './install/build-info.js';
 import { gitRunner } from './install/repo-git.js';
-import { verifyBranchRule, type GhReader } from './install/branch-rule.js';
+import { gateBranchTarget, verifyBranchRule, type GhReader } from './install/branch-rule.js';
 import { generateDocs } from './surfaces/docs.js';
 import { renderDocsHtml } from './surfaces/docs-html.js';
 import { projectPrComment } from './surfaces/pr-comment.js';
@@ -253,7 +253,8 @@ async function runInstall(opts: CliOptions): Promise<number> {
   // branch-rule is read-only. It writes nothing and only verifies through a read-only gh
   // GET, so it takes the gh reader rather than a filesystem port.
   if (opts.installTarget === 'branch-rule') {
-    const outcome = await verifyBranchRule(makeGhReader());
+    // The branch to check is the one the gate workflow on disk runs on, read without writing.
+    const outcome = await verifyBranchRule(makeGhReader(), await gateBranchTarget(makeFsGlob().readFile));
     const stream = outcome.exitCode === 0 ? process.stdout : process.stderr;
     stream.write(formatInstallReport(outcome));
     return outcome.exitCode;

@@ -153,7 +153,7 @@ describe('verifyBranchRule', () => {
     expect(result.message).toContain('classic branch protection and ruleset "Reviews"');
   });
 
-  it('reports verified when the aggregate is a required check, using one read-only GET', async () => {
+  it('reports verified when the aggregate is a required check, using two read-only GETs', async () => {
     const gh = recordingGh(() => ({ code: 0, stdout: protectionJson([REQUIRED_CHECK]), stderr: '' }));
     const result = await verifyBranchRule(gh.reader);
 
@@ -161,10 +161,10 @@ describe('verifyBranchRule', () => {
     expect(result.action).toBe('verified');
     expect(result.message.toLowerCase()).toContain('verified');
 
-    // Read-only proof: exactly one getJson to the protection endpoint. The port exposes no
-    // method or body, so it cannot mutate; the endpoint it was asked for is exact.
-    expect(gh.calls).toHaveLength(1);
-    expect(gh.calls[0]).toBe(`repos/{owner}/{repo}/branches/${PROTECTED_BRANCH}/protection`);
+    // Read-only proof: exactly one getJson to the protection endpoint and one to the repository,
+    // which says whether the gate's branch is the default branch. The port exposes no method or
+    // body, so it cannot mutate; the endpoints it was asked for are exact.
+    expect(gh.calls).toEqual([`repos/{owner}/{repo}/branches/${PROTECTED_BRANCH}/protection`, 'repos/{owner}/{repo}']);
   });
 
   it('reports not applied when the check is absent, and prints the exact setting', async () => {

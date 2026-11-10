@@ -17,7 +17,7 @@ import { planClaudeSkill, CLAUDE_SKILLS, type ClaudeSkillDescriptor } from '../i
 import { planCursor, readCursorUiFileGlobs } from '../install/cursor.js';
 import { classifyGateWorkflow, USABL_GATE_WORKFLOW_PATH } from '../install/ci.js';
 import { classifyHistoryWorkflow, USABL_HISTORY_WORKFLOW_PATH } from '../install/history-ci.js';
-import { verifyBranchRule, REQUIRED_CHECK, type GhReader } from '../install/branch-rule.js';
+import { gateBranchTarget, verifyBranchRule, REQUIRED_CHECK, type GhReader } from '../install/branch-rule.js';
 import { compileCodeownersPattern } from '../primitives/match-codeowners.js';
 import { parseConfiguredManifest } from '../coverage/route-manifest.js';
 import { parseUsablConfig } from '../intake/config.js';
@@ -755,7 +755,9 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
   // verified is the only wired mapping. not-applied is a confident absence (missing).
   // cannot-verify (gh missing, ambiguous 404, unreadable response) is unknown, because
   // doctor cannot positively confirm the setting and must not guess it is present or absent.
-  const result = await verifyBranchRule(deps.gh);
+  // The branch the gate workflow on disk runs on, or main, assumed, when no gate names one.
+  const target = await gateBranchTarget((path) => deps.fs.readFile(path));
+  const result = await verifyBranchRule(deps.gh, target);
   if (result.action === 'verified') {
     return { id: 'branch-rule', label: BRANCH_RULE_LABEL, state: 'wired', nextStep: '' };
   }
@@ -764,7 +766,7 @@ async function collectBranchRule(deps: DoctorDeps): Promise<SurfaceReport> {
       id: 'branch-rule',
       label: BRANCH_RULE_LABEL,
       state: 'missing',
-      nextStep: `The main branch does not require all of: the ${REQUIRED_CHECK} check, review from code owners, at least one approving review, and dismissal of stale approvals on push. Without them an accessibility regression, or a pull request that edits the gate, can still merge. Run "usabl install --branch-rule" for the exact setting.`,
+      nextStep: `The ${target.name} branch does not require all of: the ${REQUIRED_CHECK} check, review from code owners, at least one approving review, and dismissal of stale approvals on push. Without them an accessibility regression, or a pull request that edits the gate, can still merge. Run "usabl install --branch-rule" for the exact setting.`,
     };
   }
   return {

@@ -19,20 +19,58 @@
  * the check pass, and the earlier approval still counts. Only an organization-required workflow,
  * an Enterprise feature, takes the workflow out of the pull request's hands.
  */
-import { REQUIRED_GATE_JOB } from './ci.js';
+import { REQUIRED_GATE_JOB, USABL_GATE_WORKFLOW_PATH } from './ci.js';
+import { workflowTriggerBranch } from './repo-git.js';
 
-// The gate triggers on pull requests into main, so main is the branch to protect. The check
-// to require is the aggregate job, taken from the workflow generator rather than restated
-// here, so the name an operator is told to require and the job that decides the merge can
-// never drift apart. Requiring usabl-policy alone is not enough: it returns success whenever
-// no guarded path diverged, so an accessibility regression satisfies it.
+// The gate triggers on pull requests into the branch its workflow file names, so that is the
+// branch to protect. main is the branch usabl checks when no gate workflow names one, and it
+// says so. The check to require is the aggregate job, taken from the workflow generator rather
+// than restated here, so the name an operator is told to require and the job that decides the
+// merge can never drift apart. Requiring usabl-policy alone is not enough: it returns success
+// whenever no guarded path diverged, so an accessibility regression satisfies it.
 export const PROTECTED_BRANCH = 'main';
 export const REQUIRED_CHECK = REQUIRED_GATE_JOB;
 
+/**
+ * The branch the check reads. source is gate when the gate workflow on disk names it, and assumed
+ * when usabl checks main because it could not read one, with the reason.
+ */
+export type BranchTarget = { name: string; source: 'gate' } | { name: string; source: 'assumed'; reason: string };
+
+const ASSUMED_MAIN: BranchTarget = { name: PROTECTED_BRANCH, source: 'assumed', reason: 'no gate workflow was read' };
+
+// A branch git itself would allow, read one segment at a time, so the name can never form a "."
+// or ".." path segment or an empty one in the api path it goes into.
+function isPathSafeBranch(name: string): boolean {
+  return name.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}
+
+/**
+ * The branch the gate workflow on disk runs on, read from its pull request trigger in the one form
+ * usabl writes. With no gate workflow, or a trigger in another form, it is main, assumed.
+ */
+export async function gateBranchTarget(readFile: (path: string) => Promise<string | null>): Promise<BranchTarget> {
+  const raw = await readFile(USABL_GATE_WORKFLOW_PATH);
+  if (raw === null) return { name: PROTECTED_BRANCH, source: 'assumed', reason: `${USABL_GATE_WORKFLOW_PATH} is missing` };
+  const name = workflowTriggerBranch(raw, 'pull_request');
+  if (name === null || !isPathSafeBranch(name)) {
+    return {
+      name: PROTECTED_BRANCH,
+      source: 'assumed',
+      reason: `the trigger in ${USABL_GATE_WORKFLOW_PATH} does not name one branch in the form usabl writes`,
+    };
+  }
+  return { name, source: 'gate' };
+}
+
 // The read-only gh call. {owner}/{repo} are resolved by gh from the current repo context,
-// so no repository slug is interpolated from any external input.
-const PROTECTION_ENDPOINT = `repos/{owner}/{repo}/branches/${PROTECTED_BRANCH}/protection`;
-// The repository itself, read only for its default branch when a ruleset targets ~DEFAULT_BRANCH.
+// so no repository slug is interpolated from any external input. The branch is one encoded path
+// segment, so a branch with a slash still names one branch.
+function protectionEndpoint(branch: string): string {
+  return `repos/{owner}/{repo}/branches/${encodeURIComponent(branch)}/protection`;
+}
+// The repository itself, read for its default branch: for a ruleset that targets ~DEFAULT_BRANCH,
+// and to say when the gate runs on another branch.
 const REPOSITORY_ENDPOINT = 'repos/{owner}/{repo}';
 
 export interface GhResult {
@@ -90,9 +128,9 @@ export function isRequiredCheckPresent(parsed: unknown): boolean {
   return contexts.includes(REQUIRED_CHECK);
 }
 
-export function branchRuleSetting(): string {
+export function branchRuleSetting(branch: string = PROTECTED_BRANCH): string {
   return [
-    `Apply this branch protection on the "${PROTECTED_BRANCH}" branch:`,
+    `Apply this branch protection on the "${branch}" branch:`,
     '  - Require status checks to pass before merging.',
     `  - Required status check context: ${REQUIRED_CHECK} (the aggregate job in .github/workflows/usabl-gate.yml).`,
     `    ${REQUIRED_CHECK} is red unless the accessibility verdict and the policy verdict both pass.`,
@@ -144,21 +182,25 @@ function isRulesetShape(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && typeof value['enforcement'] === 'string' && Array.isArray(value['rules']);
 }
 
-// Whether a single ref target names the protected branch. "covers" only for targets this code can
-// evaluate exactly: ~ALL, refs/heads/main, and ~DEFAULT_BRANCH when the repository says main is its
-// default branch. "unknown" for anything usabl cannot evaluate without replicating GitHub's
-// fnmatch, and for ~DEFAULT_BRANCH when the default branch could not be read. "no" for another
-// literal branch, and for ~DEFAULT_BRANCH when another branch is the default. Unknowns never become
-// a confident answer.
+// Whether a single ref target names the branch being checked. "covers" only for targets this code
+// can evaluate exactly: ~ALL, refs/heads/<branch>, and ~DEFAULT_BRANCH when the repository says
+// that branch is its default branch. "unknown" for anything usabl cannot evaluate without
+// replicating GitHub's fnmatch, and for ~DEFAULT_BRANCH when the default branch could not be read.
+// "no" for another literal branch, and for ~DEFAULT_BRANCH when another branch is the default.
+// Unknowns never become a confident answer.
 type TargetMatch = 'covers' | 'no' | 'unknown';
-// Whether main is the repository's default branch: true, false, or null when it was not read.
-type DefaultIsMain = boolean | null;
-function refTargetMatchesProtected(token: string, defaultIsMain: DefaultIsMain): TargetMatch {
-  if (token === '~ALL' || token === `refs/heads/${PROTECTED_BRANCH}`) {
+// The branch being checked, and whether it is the repository's default branch: true, false, or
+// null when the default branch was not read.
+interface CheckedBranch {
+  name: string;
+  isDefault: boolean | null;
+}
+function refTargetMatchesProtected(token: string, branch: CheckedBranch): TargetMatch {
+  if (token === '~ALL' || token === `refs/heads/${branch.name}`) {
     return 'covers';
   }
   if (token === '~DEFAULT_BRANCH') {
-    return defaultIsMain === null ? 'unknown' : defaultIsMain ? 'covers' : 'no';
+    return branch.isDefault === null ? 'unknown' : branch.isDefault ? 'covers' : 'no';
   }
   if (/[*?[\]]/.test(token)) {
     return 'unknown';
@@ -166,10 +208,10 @@ function refTargetMatchesProtected(token: string, defaultIsMain: DefaultIsMain):
   return 'no';
 }
 
-function verifyByHand(): string {
+function verifyByHand(branch: string): string {
   return [
     'Verify by hand (read-only):',
-    `  gh api ${PROTECTION_ENDPOINT} --jq '.required_status_checks'`,
+    `  gh api ${protectionEndpoint(branch)} --jq '.required_status_checks'`,
     '  gh api repos/{owner}/{repo}/rulesets   # a ruleset can require the check instead of classic protection',
     '  or open Settings > Branches (and Settings > Rules) in the GitHub web UI.',
   ].join('\n');
@@ -229,10 +271,10 @@ export function isStaleReviewDismissed(parsed: unknown): boolean | 'unknown' {
 }
 
 // The classic protection body, or 'absent' (the branch has no classic rule) or 'unreadable'.
-async function readClassicProtection(gh: GhReader): Promise<{ body: unknown } | 'absent' | 'unreadable'> {
+async function readClassicProtection(gh: GhReader, branch: string): Promise<{ body: unknown } | 'absent' | 'unreadable'> {
   let outcome: GhResult | null;
   try {
-    outcome = await gh.getJson(PROTECTION_ENDPOINT);
+    outcome = await gh.getJson(protectionEndpoint(branch));
   } catch {
     return 'unreadable';
   }
@@ -260,12 +302,13 @@ function classicState(
   return answer === 'unknown' ? 'unreadable' : answer ? 'present' : 'absent';
 }
 
-// How a ruleset's branch conditions relate to the protected branch. "covers" and "no" are confident;
-// "ambiguous" means usabl cannot tell (a glob or ~DEFAULT_BRANCH in the include, or any target in the
-// exclude it cannot evaluate), so it must not be read as either protecting or not protecting main.
+// How a ruleset's branch conditions relate to the branch being checked. "covers" and "no" are
+// confident; "ambiguous" means usabl cannot tell (a glob or ~DEFAULT_BRANCH in the include, or any
+// target in the exclude it cannot evaluate), so it must not be read as either protecting or not
+// protecting the branch.
 type Coverage = 'covers' | 'no' | 'ambiguous';
 // A string array, or absent. A present value that is not a clean string array is malformed, and
-// silently dropping a non-string entry (an exclusion, say) could turn a real exclude of main into a
+// silently dropping a non-string entry (an exclusion, say) could turn a real exclude of the branch into a
 // false verified. So malformed conditions are reported ambiguous, never confidently covered or not.
 function stringListOrNull(value: unknown): string[] | null {
   if (value === undefined) {
@@ -276,7 +319,7 @@ function stringListOrNull(value: unknown): string[] | null {
   }
   return null;
 }
-function conditionCoverage(conditions: unknown, defaultIsMain: DefaultIsMain): Coverage {
+function conditionCoverage(conditions: unknown, branch: CheckedBranch): Coverage {
   if (!isRecord(conditions)) {
     return 'ambiguous';
   }
@@ -289,18 +332,18 @@ function conditionCoverage(conditions: unknown, defaultIsMain: DefaultIsMain): C
   if (includeList === null || excludeList === null) {
     return 'ambiguous';
   }
-  const include = includeList.map((token) => refTargetMatchesProtected(token, defaultIsMain));
-  const exclude = excludeList.map((token) => refTargetMatchesProtected(token, defaultIsMain));
+  const include = includeList.map((token) => refTargetMatchesProtected(token, branch));
+  const exclude = excludeList.map((token) => refTargetMatchesProtected(token, branch));
 
-  // Exclusions first. A confident exclusion of main means this ruleset does not protect it. An
-  // exclusion usabl cannot evaluate might exclude main, so the whole ruleset is ambiguous.
+  // Exclusions first. A confident exclusion of the branch means this ruleset does not protect it.
+  // An exclusion usabl cannot evaluate might exclude it, so the whole ruleset is ambiguous.
   if (exclude.includes('covers')) {
     return 'no';
   }
   if (exclude.includes('unknown')) {
     return 'ambiguous';
   }
-  // No exclusion touches main. Now the include list decides.
+  // No exclusion touches the branch. Now the include list decides.
   if (include.includes('covers')) {
     return 'covers';
   }
@@ -398,17 +441,18 @@ function rulesetNamesRequiredCheck(fullRuleset: Record<string, unknown>): boolea
   return false;
 }
 
-// Coverage of the protected branch by an active branch ruleset that requires the check: 'covers',
+// Coverage of the checked branch by an active branch ruleset that requires the check: 'covers',
 // 'ambiguous', or 'no'. A ruleset that is not active, not branch-scoped, or does not name the check
-// is 'no'.
-export function rulesetCheckCoverage(fullRuleset: unknown, defaultIsMain: DefaultIsMain = null): Coverage {
-  return rulesetCoverage(fullRuleset, rulesetNamesRequiredCheck, defaultIsMain);
+// is 'no'. defaultIsBranch says whether the checked branch is the repository's default branch, or
+// null when that was not read.
+export function rulesetCheckCoverage(fullRuleset: unknown, defaultIsBranch: boolean | null = null, branch: string = PROTECTED_BRANCH): Coverage {
+  return rulesetCoverage(fullRuleset, rulesetNamesRequiredCheck, { name: branch, isDefault: defaultIsBranch });
 }
 
 // A requirement read off one ruleset: set, not set, or present but unreadable.
 type RulesetRequirement = (ruleset: Record<string, unknown>) => boolean | 'unknown';
 
-function rulesetCoverage(fullRuleset: unknown, requires: RulesetRequirement, defaultIsMain: DefaultIsMain): Coverage {
+function rulesetCoverage(fullRuleset: unknown, requires: RulesetRequirement, branch: CheckedBranch): Coverage {
   if (!isRecord(fullRuleset)) {
     return 'no';
   }
@@ -419,8 +463,8 @@ function rulesetCoverage(fullRuleset: unknown, requires: RulesetRequirement, def
   if (required === false) {
     return 'no';
   }
-  const coverage = conditionCoverage(fullRuleset['conditions'], defaultIsMain);
-  // A setting usabl cannot read, on a ruleset that might protect main, is never a confident answer.
+  const coverage = conditionCoverage(fullRuleset['conditions'], branch);
+  // A setting usabl cannot read, on a ruleset that might protect the branch, is never a confident answer.
   return required === 'unknown' && coverage !== 'no' ? 'ambiguous' : coverage;
 }
 
@@ -460,27 +504,15 @@ async function listAllRulesets(gh: GhReader): Promise<unknown[] | 'unreadable'> 
 
 type RulesetOutcome = { name: string } | 'ambiguous' | null | 'unreadable';
 
-// The active branch rulesets, and whether main is the default branch for any that target
-// ~DEFAULT_BRANCH.
+// The active branch rulesets, and the branch they are read against.
 interface ActiveRulesets {
   rulesets: Array<Record<string, unknown>>;
-  defaultIsMain: DefaultIsMain;
+  branch: CheckedBranch;
 }
 
-function targetsDefaultBranch(ruleset: Record<string, unknown>): boolean {
-  const conditions = ruleset['conditions'];
-  const refName = isRecord(conditions) ? conditions['ref_name'] : undefined;
-  if (!isRecord(refName)) {
-    return false;
-  }
-  return [refName['include'], refName['exclude']].some(
-    (list) => Array.isArray(list) && list.includes('~DEFAULT_BRANCH'),
-  );
-}
-
-// Whether main is the repository's default branch, or null when the repository could not be read.
-// null keeps a ~DEFAULT_BRANCH target unknown, so a failed read never confirms or rules out main.
-async function readDefaultIsMain(gh: GhReader): Promise<DefaultIsMain> {
+// The repository's default branch, or null when the repository could not be read. null keeps a
+// ~DEFAULT_BRANCH target unknown, so a failed read never confirms or rules out the branch.
+async function readDefaultBranch(gh: GhReader): Promise<string | null> {
   let res: GhResult | null;
   try {
     res = await gh.getJson(REPOSITORY_ENDPOINT);
@@ -493,21 +525,18 @@ async function readDefaultIsMain(gh: GhReader): Promise<DefaultIsMain> {
   try {
     const parsed: unknown = JSON.parse(res.stdout);
     const name = isRecord(parsed) ? parsed['default_branch'] : undefined;
-    return typeof name === 'string' && name.length > 0 ? name === PROTECTED_BRANCH : null;
+    return typeof name === 'string' && name.length > 0 ? name : null;
   } catch {
     return null;
   }
 }
 
-async function readActiveRulesets(gh: GhReader): Promise<ActiveRulesets | 'unreadable'> {
+async function readActiveRulesets(gh: GhReader, branch: CheckedBranch): Promise<ActiveRulesets | 'unreadable'> {
   const rulesets = await readActiveRulesetBodies(gh);
   if (rulesets === 'unreadable') {
     return 'unreadable';
   }
-  // The repository is read only when a ruleset needs it, so a repository without such a ruleset
-  // costs no extra call.
-  const defaultIsMain = rulesets.some(targetsDefaultBranch) ? await readDefaultIsMain(gh) : null;
-  return { rulesets, defaultIsMain };
+  return { rulesets, branch };
 }
 
 // Every active branch ruleset's detail body, or 'unreadable' when any read fails.
@@ -540,7 +569,7 @@ async function readActiveRulesetBodies(gh: GhReader): Promise<Array<Record<strin
     } catch {
       return 'unreadable';
     }
-    // A malformed detail body must not read as a valid ruleset that happens not to protect main.
+    // A malformed detail body must not read as a valid ruleset that happens not to protect the branch.
     if (!isRulesetShape(full)) {
       return 'unreadable';
     }
@@ -555,7 +584,7 @@ function findRulesetRequiring(active: ActiveRulesets | 'unreadable', requires: R
   }
   let sawAmbiguous = false;
   for (const full of active.rulesets) {
-    const coverage = rulesetCoverage(full, requires, active.defaultIsMain);
+    const coverage = rulesetCoverage(full, requires, active.branch);
     if (coverage === 'covers') {
       const name = typeof full['name'] === 'string' ? full['name'] : 'a ruleset';
       return { name };
@@ -583,15 +612,42 @@ function requirementState(classic: ClassicState, ruleset: RulesetOutcome): Requi
   return ruleset === 'ambiguous' ? 'ambiguous' : 'absent';
 }
 
-export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> {
-  const setting = branchRuleSetting();
+// The lines that say which branch was checked and why, when that is not plain: main was assumed, or
+// GitHub's default branch is another branch than the one the gate runs on.
+function branchFacts(target: BranchTarget, defaultBranch: string | null): string[] {
+  const facts: string[] = [];
+  if (target.source === 'assumed') {
+    facts.push(
+      `usabl checked ${target.name} because it could not read the branch your gate runs on: ${target.reason}. Run "usabl install --ci" first if your default branch is not ${target.name}.`,
+    );
+  }
+  if (defaultBranch !== null && defaultBranch !== target.name) {
+    facts.push(
+      `GitHub reports ${defaultBranch} as the default branch, but the gate runs on pull requests into ${target.name}, so it covers only pull requests into ${target.name}.`,
+    );
+  }
+  return facts;
+}
+
+/**
+ * Check the protection on the branch the gate runs on. target is that branch, from gateBranchTarget;
+ * without one, usabl checks main and says that it assumed it.
+ */
+export async function verifyBranchRule(gh: GhReader, target: BranchTarget = ASSUMED_MAIN): Promise<BranchRuleResult> {
+  const name = target.name;
+  const setting = branchRuleSetting(name);
   const checkLabel = `${REQUIRED_CHECK} as a required status check`;
   const reviewLabel = 'review from code owners';
   const approvalLabel = 'at least one approving review';
   const staleLabel = 'dismissal of stale approvals on push';
 
-  // Classic protection first, so a classic-protected repo still verifies in one read-only GET.
-  const classic = await readClassicProtection(gh);
+  // Classic protection first, so a classic-protected repo still verifies in one protection read.
+  const classic = await readClassicProtection(gh, name);
+  // The default branch decides ~DEFAULT_BRANCH, and the report says when it is another branch.
+  const defaultBranch = await readDefaultBranch(gh);
+  const branch: CheckedBranch = { name, isDefault: defaultBranch === null ? null : defaultBranch === name };
+  const facts = branchFacts(target, defaultBranch);
+  const withFacts = (first: string, rest: string[]): string => [first, ...facts, ...rest].join('\n');
   const parts: Array<{ label: string; classic: ClassicState; ruleset: RulesetRequirement }> = [
     { label: checkLabel, classic: classicState(classic, isRequiredCheckPresent), ruleset: rulesetNamesRequiredCheck },
     { label: reviewLabel, classic: classicState(classic, isCodeOwnerReviewRequired), ruleset: rulesetRequiresCodeOwnerReview },
@@ -602,8 +658,8 @@ export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> 
   // Rulesets are read only when classic protection did not confirm every part, since a ruleset
   // can set any of them instead.
   const rulesets: ActiveRulesets | 'unreadable' = parts.every((part) => part.classic === 'present')
-    ? { rulesets: [], defaultIsMain: null }
-    : await readActiveRulesets(gh);
+    ? { rulesets: [], branch }
+    : await readActiveRulesets(gh, branch);
   const states = parts.map((part) => ({
     label: part.label,
     state: requirementState(part.classic, part.classic === 'present' ? null : findRulesetRequiring(rulesets, part.ruleset)),
@@ -615,7 +671,7 @@ export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> 
     return {
       exitCode: 0,
       action: 'verified',
-      message: `verified: ${PROTECTED_BRANCH} requires ${checkLabel}, ${reviewLabel}, ${approvalLabel}, and ${staleLabel} (${where}).`,
+      message: withFacts(`verified: ${name} requires ${checkLabel}, ${reviewLabel}, ${approvalLabel}, and ${staleLabel} (${where}).`, []),
     };
   }
 
@@ -627,16 +683,16 @@ export async function verifyBranchRule(gh: GhReader): Promise<BranchRuleResult> 
     return {
       exitCode: 2,
       action: 'not-applied',
-      message: `not applied: ${PROTECTED_BRANCH} does not require ${missing.join(' or ')}, by classic branch protection or by an active ruleset.\n${setting}`,
+      message: withFacts(`not applied: ${name} does not require ${missing.join(' or ')}, by classic branch protection or by an active ruleset.`, [setting]),
     };
   }
   const reason =
     states.some((entry) => entry.state === 'ambiguous')
-      ? `a ruleset sets part of the protection but usabl cannot confirm it targets ${PROTECTED_BRANCH}`
-      : `could not read classic protection and rulesets for ${PROTECTED_BRANCH}`;
+      ? `a ruleset sets part of the protection but usabl cannot confirm it targets ${name}`
+      : `could not read classic protection and rulesets for ${name}`;
   return {
     exitCode: 2,
     action: 'cannot-verify',
-    message: `cannot verify: ${reason}.\n${setting}\n${verifyByHand()}`,
+    message: withFacts(`cannot verify: ${reason}.`, [setting, verifyByHand(name)]),
   };
 }
