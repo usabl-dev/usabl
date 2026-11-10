@@ -278,7 +278,9 @@ export const SENSITIVITY_CATALOG: readonly CatalogEntry[] = [
     id: 'menu-does-not-open-on-enter',
     description: 'A menu toggle opens its menu on a click but not on Enter.',
     criterion: { id: '2.1.1', name: 'Keyboard' },
-    expectedRules: ['pf-kebab-expanded-state'],
+    expectedRules: [],
+    noShippedRule:
+      'No shipped check presses Enter on a menu toggle. The PatternFly menu probe opens a menu with a click. The WCAG coverage map in docs/ground-truth.md section 28 says under 2.1.1 that the PatternFly rules cover kebabs.',
     expectedClass: 'deterministic',
     reportedOn: 'target',
     level1Screen: 'sensitivity-pf',
