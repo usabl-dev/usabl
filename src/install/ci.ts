@@ -1036,9 +1036,9 @@ export async function planWorkflow(
     return { action: 'write', path, contents: draft };
   }
   // The draft pinned to some other commit. Someone chose that pin, so it stays.
-  if (classifyWorkflow(raw, placeholderDraft) === 'wired') {
-    const line = raw.split('\n')[engineRefLineNumber(placeholderDraft) - 1] ?? '';
-    return { action: 'already-wired', path, pinnedTo: line.trim().slice('ref: '.length) };
+  const onDisk = matchWorkflow(raw, placeholderDraft);
+  if (onDisk.state === 'wired' && onDisk.ref !== null) {
+    return { action: 'already-wired', path, pinnedTo: onDisk.ref };
   }
   // A hand-tuned workflow is security-critical. We never overwrite it; we describe the gap
   // at a high level and tell the operator to reconcile by hand.
@@ -1283,18 +1283,31 @@ export function countDraftEngineRefLines(draft: string): number {
 // The recognizer is draft-relative: it compares the on-disk file against a specific draft,
 // so the app gate and the docs gate share one implementation and each passes its own draft.
 export function classifyWorkflow(raw: string | null, draft: string): GateWorkflowState {
+  return matchWorkflow(raw, draft).state;
+}
+
+// The classification, with the engine ref value the classifier itself read from the file. Callers
+// that report the pin take it from here, so the value they print is the value that was matched.
+export function matchWorkflow(raw: string | null, draft: string): { state: GateWorkflowState; ref: string | null } {
+  const state = classifyWorkflowLines(raw, draft);
+  if (state.refValues === null) return { state: state.state, ref: null };
+  return { state: state.state, ref: state.refValues[0] ?? null };
+}
+
+function classifyWorkflowLines(raw: string | null, draft: string): { state: GateWorkflowState; refValues: string[] | null } {
+  const drifted = { state: 'drifted' as const, refValues: null };
   // Recognition never fails toward success. Only a workflow that matches the draft line for
   // line, differing solely at the engine-ref lines and only to the same real 40-character
   // commit SHA, reads as wired. Everything less confident lands on missing, unpinned, or
   // drifted, never wired.
   if (raw === null) {
-    return 'missing';
+    return { state: 'missing', refValues: null };
   }
   const actualLines = raw.split('\n');
   const draftLines = draft.split('\n');
   // A different line count is a structural change, never just a pin: drifted.
   if (actualLines.length !== draftLines.length) {
-    return 'drifted';
+    return drifted;
   }
   const refValues: string[] = [];
   for (let i = 0; i < draftLines.length; i += 1) {
@@ -1304,7 +1317,7 @@ export function classifyWorkflow(raw: string | null, draft: string): GateWorkflo
     if (indent === null) {
       // A fixed line. It is correct only when it matches the draft exactly.
       if (draftLine !== actualLine) {
-        return 'drifted';
+        return drifted;
       }
       continue;
     }
@@ -1312,31 +1325,31 @@ export function classifyWorkflow(raw: string | null, draft: string): GateWorkflo
     // the same indent. Anything else here is a structural edit, not a pin: drifted.
     const actualMatch = /^(\s*)ref:\s*(\S+)\s*$/.exec(actualLine);
     if (actualMatch === null || actualMatch[1] !== indent) {
-      return 'drifted';
+      return drifted;
     }
     refValues.push(actualMatch[2] ?? '');
   }
   // The draft always carries exactly EXPECTED_ENGINE_REF_LINES engine-ref lines. If none matched, the draft itself
   // changed shape underneath us; treat that as drifted rather than guess.
   if (refValues.length === 0) {
-    return 'drifted';
+    return drifted;
   }
   const first = refValues[0] ?? '';
   const allSame = refValues.every((value) => value === first);
   if (!allSame) {
     // The engine-ref lines disagree, for example one pinned and one still the sentinel. That
     // is an inconsistent pin, not a confident wired.
-    return 'drifted';
+    return drifted;
   }
   if (/^[0-9a-f]{40}$/.test(first)) {
-    return 'wired';
+    return { state: 'wired', refValues };
   }
   if (first === ENGINE_REF_PLACEHOLDER) {
-    return 'unpinned';
+    return { state: 'unpinned', refValues };
   }
   // A single consistent ref that is neither a full commit SHA nor the sentinel: a branch, a
   // tag, or a short SHA. usabl cannot confirm that as a trusted pin, so: drifted.
-  return 'drifted';
+  return drifted;
 }
 
 export function classifyGateWorkflow(raw: string | null): GateWorkflowState {

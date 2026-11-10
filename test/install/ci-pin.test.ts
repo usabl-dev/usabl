@@ -125,6 +125,20 @@ describe('installCi with a build commit', () => {
     expect(result.message).toContain(`line ${engineRefLineNumber(USABL_GATE_WORKFLOW)}`);
   });
 
+  it('reports the full pin when the ref line has no space after the colon', async () => {
+    const lineIndex = engineRefLineNumber(USABL_GATE_WORKFLOW) - 1;
+    const lines = pinEngineRef(USABL_GATE_WORKFLOW, OTHER_SHA).split('\n');
+    lines[lineIndex] = `          ref:${OTHER_SHA}`;
+    const gate = lines.join('\n');
+    expect(classifyGateWorkflow(gate)).toBe('wired');
+    const fs = memoryFs({ [USABL_GATE_WORKFLOW_PATH]: gate });
+
+    const result = await installCi(fs, FILLED);
+
+    expect(fs.store[USABL_GATE_WORKFLOW_PATH]).toBe(gate);
+    expect(result.message).toContain(`pinned to engine commit ${OTHER_SHA}. No change.`);
+  });
+
   it('reads a pinned workflow as wired when this build has no commit, and leaves it alone', async () => {
     const gate = pinEngineRef(USABL_GATE_WORKFLOW, OTHER_SHA);
     const fs = memoryFs({ [USABL_GATE_WORKFLOW_PATH]: gate });
