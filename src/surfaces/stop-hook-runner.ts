@@ -345,8 +345,8 @@ function configBlockMessage(problem: ConfigProblem, continuation: boolean, error
 }
 
 /**
- * The message for a stop where the guard, the session pins, or the receipt check failed. Those
- * are what tell the hook whether guarded policy diverged, so the hook does not know, and it blocks
+ * The message for a stop where the guard or the session pins failed. Those are what tell the hook
+ * whether guarded policy diverged, so the hook does not know, and it blocks
  * once, as it does for diverged files. Only the error's first line is carried, inside the frame.
  */
 function guardFailureMessage(error: string, continuation: boolean): string {
@@ -364,7 +364,7 @@ function guardFailureMessage(error: string, continuation: boolean): string {
   return framedMessage(lines, [`error: ${firstLine(error)}`]);
 }
 
-/** Thrown inside the hook when the guard, the pins, or the receipt check failed. */
+/** Thrown inside the hook when the guard or the pins failed. */
 class GuardFailure extends Error {}
 
 async function guarded<T>(step: () => Promise<T>): Promise<T> {
@@ -833,12 +833,12 @@ export async function runStopHook(
 
     if (dirtyGuardedPaths.length === 0) {
       // Receipt trust binds committed state, while checkGuard catches local guarded edits before any fast allow.
-      const receiptCheck = await guarded(() =>
-        verifyStoredReceipt(ports, guardDeps, config, {
-          pinsCompared,
-          sessionDriftChecked: pinNotice?.driftChecked ?? true,
-        }),
-      );
+      // The stored receipt only offers a fast allow. A receipt the hook cannot read or check is no
+      // guard failure: the hook drops the fast path and runs the full check below.
+      const receiptCheck = await verifyStoredReceipt(ports, guardDeps, config, {
+        pinsCompared,
+        sessionDriftChecked: pinNotice?.driftChecked ?? true,
+      }).catch(() => ({ verified: false, details: 'the stored receipt could not be checked' }));
       if (receiptCheck.verified) {
         await emitProtocolAllow(
           ports,
