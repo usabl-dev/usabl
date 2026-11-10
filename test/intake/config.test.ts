@@ -555,6 +555,35 @@ describe('parseUsablConfig glob syntax', () => {
     expect(message).toMatch(/brace/);
   });
 
+  it('refuses a brace range in every glob list, names the entry, and asks for commas', () => {
+    // Node's glob expands {1..3} and {a..c}; matchGlob reads a comma-less brace as text. A range
+    // would select files at discovery that usabl never matches, and a guarded file that only the
+    // range names would read as unguarded in CI.
+    const lists: Array<[string, (glob: string) => Record<string, unknown>]> = [
+      ['uiFileGlobs', (glob) => ({ uiFileGlobs: [glob] })],
+      ['discovery.wideBlastGlobs', (glob) => ({ discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [glob] } })],
+      ['guardedPaths', (glob) => ({ guardedPaths: [glob] })],
+    ];
+    for (const [label, shape] of lists) {
+      for (const glob of ['policy/rule{1..3}.json', 'policy/{a..c}.json']) {
+        let message = '';
+        try {
+          parseUsablConfig(configJson(shape(glob)));
+        } catch (err) {
+          message = err instanceof Error ? err.message : String(err);
+        }
+        expect(message, `${label} ${glob}`).toContain(label);
+        expect(message, `${label} ${glob}`).toContain(glob);
+        expect(message, `${label} ${glob}`).toMatch(/commas/);
+      }
+    }
+  });
+
+  it('refuses a backslash, which Node reads as an escape and usabl reads as text', () => {
+    expect(() => parseUsablConfig(configJson({ guardedPaths: ['policy/\\x.json'] }))).toThrow(/guardedPaths/);
+    expect(() => parseUsablConfig(configJson({ uiFileGlobs: ['src/\\*.tsx'] }))).toThrow(/uiFileGlobs/);
+  });
+
   it('loads a config with a comma-less brace, which is a literal pattern', () => {
     // A comma-less {tsx} is not a group. Node glob treats it as literal text and matchGlob
     // now agrees, so it is a valid pattern and must load, not be refused.

@@ -5,7 +5,8 @@
  */
 import type { Deps, GitReader, UsablConfig } from '../contracts/index.js';
 import { sha256 } from '../primitives/canonical.js';
-import { globMatcher } from '../primitives/match-glob.js';
+import { configError } from '../intake/config-error.js';
+import { braceRangeIn, expandBraces, globMatcher, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 
 const CONFIG_PATH = 'usabl.config.json';
 const ALWAYS_GUARDED = [
@@ -86,18 +87,49 @@ const GLOB_CHARACTERS = /[*{]/;
  * and an entry compared as written would match nothing.
  */
 function canonicalEntry(entry: string): string {
+  if (entry.startsWith('/')) {
+    throw unmatchableEntry(entry, 'it starts with /, so it does not name a path from the repository root');
+  }
   const segments: string[] = [];
   for (const segment of entry.split('/')) {
     if (segment === '' || segment === '.') {
       continue;
     }
     if (segment === '..') {
-      segments.pop();
+      const parent = segments.pop();
+      if (parent === undefined) {
+        throw unmatchableEntry(entry, 'a .. segment leaves the repository root');
+      }
+      if (GLOB_CHARACTERS.test(parent)) {
+        throw unmatchableEntry(entry, 'a .. segment follows a wildcard');
+      }
       continue;
     }
     segments.push(segment);
   }
   return segments.join('/');
+}
+
+// Why the matcher cannot evaluate an entry the way Node's glob does, or null when it can. Config
+// load refuses these forms, but the guard also reads the trusted ref's config, which config load
+// never checked, so it must not read such an entry as matching nothing.
+function unmatchableForm(path: string): string | null {
+  const character = UNSUPPORTED_GLOB_CHARACTERS.find((candidate) => path.includes(candidate));
+  if (character !== undefined) {
+    return `it uses "${character}", which the guard cannot match`;
+  }
+  if (path.includes('{') && expandBraces(path) === null) {
+    return 'it uses a nested or unbalanced brace';
+  }
+  const range = braceRangeIn(path);
+  if (range !== null) {
+    return `it uses the brace range ${range}, which the guard cannot match; list the alternatives with commas, such as {1,2,3}`;
+  }
+  return null;
+}
+
+function unmatchableEntry(entry: string, reason: string): Error {
+  return configError`usabl cannot read the guardedPaths entry "${entry}": ${reason}. So usabl cannot tell which guarded files changed, and it checked none. Correct the entry in usabl.config.json at the trusted ref (HEAD for a local run).`;
 }
 
 interface GuardedEntry {
@@ -108,6 +140,10 @@ interface GuardedEntry {
 
 function readGuardedEntry(entry: string): GuardedEntry {
   const path = canonicalEntry(entry);
+  const problem = unmatchableForm(path);
+  if (problem !== null) {
+    throw unmatchableEntry(entry, problem);
+  }
   return { path, glob: GLOB_CHARACTERS.test(path) };
 }
 

@@ -460,6 +460,120 @@ describe('a guardedPaths entry that is not in canonical form', REAL_GIT, () => {
   }
 });
 
+/**
+ * Config load refuses these forms, but the guard reads the trusted ref's config without config
+ * load. Node's glob expands a brace range and `?`, and the guard's matcher does not, so such an
+ * entry used to match nothing in CI and an edited file under it printed "no policy change". A
+ * path from outside the repository root has no meaning in a git listing. The guard now refuses
+ * each of them and names the entry.
+ */
+describe('a guardedPaths entry the guard cannot match', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const files = { 'policy/rule1.json': '{}\n', 'policy/rule2.json': '{}\n', 'src/App.tsx': 'export {}\n' };
+
+  for (const entry of ['policy/rule{1..3}.json', 'policy/{q..s}ule1.json', 'policy/rule?.json', '/policy/rule1.json', '../policy/rule1.json', 'policy/*/../rule1.json']) {
+    const config = configWith([entry]);
+
+    it(`refuses in CI and names ${entry}`, async () => {
+      root = await repoWith(config, files);
+      await git(root, ['checkout', '-b', 'feature']);
+      await write(root, 'policy/rule1.json', '{"changed":true}\n');
+      await git(root, ['commit', '-am', 'change a rule']);
+      await expect(policyCheckAt(root)).rejects.toThrow(`guardedPaths entry "${entry}"`);
+    });
+
+    it(`refuses in the local guard and names ${entry}`, async () => {
+      root = await repoWith(config, files);
+      await write(root, 'policy/rule1.json', '{"changed":true}\n');
+      const result = await run(realDeps(root), config);
+      expect(result.verdict).toBeNull();
+      expect(result.exitCode).toBe(4);
+      expect(result.summary).toContain(`guardedPaths entry "${entry}"`);
+    });
+  }
+});
+
+/**
+ * For each form config load accepts, the guard's matcher, reading a git listing, selects the same
+ * files Node's fs.glob selects on the working tree. A literal entry also selects the dot-named
+ * files under it, as git lists them and as the guard always has; under a glob entry a dot-named
+ * file is not guarded, in both places.
+ */
+describe('the guard matcher and Node fs.glob agree on every accepted form', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const tree = [
+    'policy/a.json',
+    'policy/b.json',
+    'policy/.dot.json',
+    'policy/readme.md',
+    'policy/{x}.json',
+    'policy/sub/c.json',
+    'policy/sub/.d.json',
+    'policy/sub/deep/e.json',
+    'policy/.hidden/f.json',
+    'rules/x.yml',
+    'rules/y.yaml',
+    'rules/.private/z.yml',
+    'src/gate/index.ts',
+    'src/gate/Über.ts',
+    'src/run.ts',
+    'top.json',
+    '.github/w.yml',
+  ];
+
+  // [form, pattern, true when the entry is literal]
+  const forms: Array<[string, string, boolean]> = [
+    ['a star at the root', '*', false],
+    ['a double star alone', '**', false],
+    ['a star in a file name', 'policy/*.json', false],
+    ['a double star at the end', 'policy/**', false],
+    ['a double star in the middle', 'policy/**/*.json', false],
+    ['a double star at the start', '**/*.json', false],
+    ['a brace group', 'policy/{a,b}.json', false],
+    ['a brace group of folders', '{policy,rules}/**', false],
+    ['a brace group of extensions', 'rules/*.{yml,yaml}', false],
+    ['a comma-less brace, read as text', 'policy/{x}.json', false],
+    ['a star folder', 'policy/*/deep', false],
+    ['a nested mix', 'po*/**/{c,e}.json', false],
+    ['a star that names a folder', 'src/*', false],
+    ['a literal folder', 'policy', true],
+    ['a literal folder with a trailing slash', 'src/gate/', true],
+    ['a literal file', 'src/run.ts', true],
+    ['a literal file with a non-ASCII name', 'src/gate/Über.ts', true],
+  ];
+
+  it('selects the same files for each form', async () => {
+    root = await repoWith(configWith([]), Object.fromEntries(tree.map((path) => [path, 'x\n'])));
+    const node = makeFsGlob({ cwd: root });
+    // Only the git listing at HEAD feeds the matcher here: the working tree glob is switched off.
+    const deps: Deps = { ...realDeps(root), fs: { ...node, glob: async () => [] } };
+    for (const [form, pattern, literal] of forms) {
+      const prefix = pattern.endsWith('/') ? pattern.slice(0, -1) : pattern;
+      const byNode = (await node.glob([prefix, prefix + '/**'])).filter((path) => tree.includes(path));
+      const byGuard = (await expandGuardedSet(deps, [pattern])).filter((path) => tree.includes(path));
+      const isDotNamed = (path: string): boolean => path.split('/').some((segment) => segment.startsWith('.'));
+      if (literal) {
+        expect(byGuard.filter((path) => !isDotNamed(path)), form).toEqual(byNode);
+        expect(byGuard.filter(isDotNamed), form).toEqual(
+          tree.filter((path) => isDotNamed(path) && (path === prefix || path.startsWith(prefix + '/'))).sort(),
+        );
+      } else {
+        expect(byGuard, form).toEqual(byNode);
+      }
+    }
+  });
+});
+
 describe("this repository's own config", REAL_GIT, () => {
   it('lists every file the previous expansion listed, with the same policy hash', async () => {
     const repoRoot = fileURLToPath(new URL('../..', import.meta.url));

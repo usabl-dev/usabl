@@ -15,7 +15,7 @@ import type {
 } from '../contracts/index.js';
 import { assertSurfaceIds } from './surface-ids.js';
 import { configError } from './config-error.js';
-import { expandBraces } from '../primitives/match-glob.js';
+import { braceRangeIn, expandBraces, UNSUPPORTED_GLOB_CHARACTERS } from '../primitives/match-glob.js';
 import { parseNoiseBudgetConfig } from '../output/noise-budget.js';
 import { carriesUserinfo } from '../primitives/url-userinfo.js';
 
@@ -44,11 +44,10 @@ function expectStringArray(value: unknown, label: string): string[] {
 // glob, which supports more. A glob usabl cannot match the same way discovery does would
 // select files at discovery and then drop them at enforcement, a silent mismatch that can
 // pass a run that should gate. Refuse such a glob here, at config load, before any run
-// launches. These are the characters matchGlob cannot faithfully evaluate after braces.
-const UNSUPPORTED_GLOB_CHARS = ['[', ']', '(', ')', '?'];
-
+// launches. UNSUPPORTED_GLOB_CHARACTERS lists the characters matchGlob cannot faithfully evaluate
+// after braces.
 function checkGlobSupported(pattern: string, label: string): void {
-  for (const char of UNSUPPORTED_GLOB_CHARS) {
+  for (const char of UNSUPPORTED_GLOB_CHARACTERS) {
     if (pattern.includes(char)) {
       throw configError`${label} pattern "${pattern}" uses unsupported glob character "${char}". usabl globs support only *, **, and {a,b} brace groups.`;
     }
@@ -57,6 +56,12 @@ function checkGlobSupported(pattern: string, label: string): void {
   // as literal text while discovery would not. Refuse it for the same reason.
   if (pattern.includes('{') && expandBraces(pattern) === null) {
     throw configError`${label} pattern "${pattern}" uses an unsupported brace form. usabl globs support only *, **, and single-level {a,b} brace groups.`;
+  }
+  // Node's glob expands a brace range such as {1..3}, and matchGlob reads it as text, so the two
+  // would select different files. Refuse it and ask for the alternatives with commas.
+  const range = braceRangeIn(pattern);
+  if (range !== null) {
+    throw configError`${label} pattern "${pattern}" uses the brace range ${range}, which usabl cannot match. List the alternatives with commas instead, such as {1,2,3}.`;
   }
 }
 

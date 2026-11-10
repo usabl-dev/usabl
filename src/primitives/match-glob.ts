@@ -15,6 +15,30 @@
  * classifies files the same way discovery does.
  */
 
+/**
+ * Characters this unit cannot evaluate the way Node's glob does: a character class, an extglob
+ * group, a single-character wildcard, and an escape. Node reads `\x` as `x`, while this unit reads
+ * the backslash as text. Config load refuses a glob that holds one, and the guard refuses such an
+ * entry read at a trusted ref.
+ */
+export const UNSUPPORTED_GLOB_CHARACTERS: readonly string[] = ['[', ']', '(', ')', '?', '\\'];
+
+/**
+ * The first brace range in a pattern, such as `{1..3}` or `{a..c}`, or null when there is none.
+ * Node's glob expands a comma-less brace whose body is a range, while expandBraces keeps every
+ * comma-less brace as text. So a range would select files at discovery that this unit never
+ * matches. A comma-less body with `..` in it counts as a range, so no range form slips through.
+ */
+export function braceRangeIn(pattern: string): string | null {
+  for (const match of pattern.matchAll(/\{([^{}]*)\}/g)) {
+    const body = match[1] ?? '';
+    if (!body.includes(',') && body.includes('..')) {
+      return match[0];
+    }
+  }
+  return null;
+}
+
 // Expand one level of {a,b} groups into every literal combination. A comma-less {...} is
 // literal, so its braces stay in the output. Returns null when a brace is nested or
 // unbalanced, which signals the caller to leave the pattern alone.
