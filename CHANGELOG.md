@@ -4,6 +4,30 @@
 
 ### Added
 
+- The gate works on any default branch. `usabl install --ci` and `usabl install --docs-ci` read
+  the default branch from the clone's `origin/HEAD` and write it, quoted, into the pull request
+  trigger of the gate and the docs gate, the same way the history workflow already took it. When
+  git cannot name a plain branch they write main and print one step that names the line to change
+  in each file. A re-run keeps the branch each file names, and doctor recognises usabl's own draft
+  for whichever branch its trigger names. When the gate, the docs gate, and the history workflow
+  name different branches, the report says so in one step and changes no file.
+  `usabl install --branch-rule` and the doctor branch rule check the protection on the branch the
+  gate names, for classic protection, ruleset includes and excludes, and `~DEFAULT_BRANCH`. With
+  no gate workflow they check main and say they assumed it, and they say in one line when
+  GitHub's default branch is another branch. `install --docs-ci` now says to merge
+  `usabl.config.json` and `usabl.docs.json` to the default branch first, unless git shows they are
+  there. Doctor reports the docs gate on its own line, and each workflow label names its branch.
+  Comments and step names in the workflows say "the default branch", and the gate says
+  "accessibility barriers". In a repository named usabl, the step that places the engine at
+  `../usabl` prints one line and skips the unpack, so it never unpacks over the checkout.
+
+  If you ran `usabl install --ci` or `--docs-ci` from an earlier 0.3.0 build, run it again. Those
+  builds wrote the gates with `branches: [main]` and older comment text, so this version reads
+  them as drifted. When a file is that earlier draft with no edits, the command rewrites it to
+  this draft, keeps the engine pin it held, and gives an earlier gate the default branch git
+  names. Review and commit the change. A file you edited is refused as before: reconcile it by
+  hand.
+
 - The silent change rule, `voicing/silent-change`, an additional check in the voicing lane. It
   watches each `click` and `activate` step that a flow requirement or a voice requirement already
   drives, reads the whole accessibility tree before the step and after its settle window, and
