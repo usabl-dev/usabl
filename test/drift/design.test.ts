@@ -9,6 +9,7 @@ import { computeDesignDrift, formatDesignDriftReport, runDesignDrift } from '../
 import { parseCliArgs } from '../../src/surfaces/cli.js';
 import { testConfig } from '../helpers.js';
 import { MOCK_TOKEN, startMockFigma, type MockFigma } from '../import/figma/mock-server.js';
+import { usersScreen } from '../import/figma/users-screen.fixture.js';
 
 const nodes = (...ids: string[]): ReadonlySet<string> => new Set(ids);
 
@@ -142,6 +143,16 @@ requirements:
     expect(outcome.stdout).not.toContain('figma-users-name-1');
     const onlyDraft = await runDesignDrift(fsWith(yaml.replace('approved: true', 'approved: false')), config, env());
     expect(onlyDraft).toEqual({ exitCode: 0, stdout: 'No approved requirement records a design source.\n' });
+  });
+
+  it('passes the drift report through the token replacement too, so the token never prints', async () => {
+    // A token that happens to be text the report holds: here, the file key.
+    const answer = (): Promise<Response> =>
+      Promise.resolve(new Response(JSON.stringify(usersScreen), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const drifted = await runDesignDrift(fsWith(yaml), config, { FIGMA_TOKEN: 'MOCKKEY' }, answer);
+    expect(drifted.exitCode).toBe(1);
+    expect(drifted.stdout).not.toContain('MOCKKEY');
+    expect(drifted.stdout).toContain('The design file [token] changed');
   });
 
   it('says so when no requirements folder is configured, and makes no network call', async () => {

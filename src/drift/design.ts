@@ -129,17 +129,24 @@ export async function runDesignDrift(
   fetchImpl: typeof fetch = fetch,
 ): Promise<DesignDriftOutcome> {
   const token = env['FIGMA_TOKEN'] ?? '';
-  // Every message passes through here, so no path can print the token or a control sequence.
-  const fail = (message: string): DesignDriftOutcome => {
-    const hidden = token === '' ? message : message.split(token).join('[token]');
-    return { exitCode: 2, stderr: `${scrubString(`usabl drift design: ${hidden} ${NOT_CHECKED}`)}\n` };
-  };
+  // Every line the command prints, the report included, passes through here, so no path can print
+  // the token or a control sequence. Each line is scrubbed on its own, so the report keeps its lines.
+  const clean = (text: string): string =>
+    (token === '' ? text : text.split(token).join('[token]'))
+      .split('\n')
+      .map((line) => scrubString(line))
+      .join('\n');
+  const fail = (message: string): DesignDriftOutcome => ({
+    exitCode: 2,
+    stderr: `${clean(`usabl drift design: ${message.replace(/\n/gu, ' ')} ${NOT_CHECKED}`)}\n`,
+  });
 
   if (config.requirements === undefined) {
     return {
       exitCode: 0,
-      stdout:
+      stdout: clean(
         'No requirements folder is configured: usabl.config.json has no "requirements" path, so no requirement records a design source.\n',
+      ),
     };
   }
   const loaded = await loadRequirements(fs, config);
@@ -154,7 +161,7 @@ export async function runDesignDrift(
     }
   }
   if (sources.length === 0) {
-    return { exitCode: 0, stdout: 'No approved requirement records a design source.\n' };
+    return { exitCode: 0, stdout: clean('No approved requirement records a design source.\n') };
   }
   if (token === '') {
     return fail('Set FIGMA_TOKEN to a Figma personal access token that can read the design files.');
@@ -180,7 +187,7 @@ export async function runDesignDrift(
 
   const drift = computeDesignDrift(sources, current);
   if (drift.unchecked.length > 0) {
-    return { exitCode: 2, stderr: formatDesignDriftReport(drift) };
+    return { exitCode: 2, stderr: clean(formatDesignDriftReport(drift)) };
   }
-  return { exitCode: drift.hasDrift ? 1 : 0, stdout: formatDesignDriftReport(drift) };
+  return { exitCode: drift.hasDrift ? 1 : 0, stdout: clean(formatDesignDriftReport(drift)) };
 }
