@@ -158,6 +158,12 @@ passing bundle from another run.
   CI the pull request head would pick the target. The receipt store refuses a link at either
   place, writes a temp file opened with no-follow and exclusive create, and renames it into
   place. `usabl check --ci` saves no receipt.
+- Residual: the store checks `.usabl` with `lstat`, then opens the temp file by its full path.
+  No-follow covers only the last part of that path. A process running as the same user that
+  swaps `.usabl` for a link between the check and the open puts the temp file, and then
+  `receipt.json`, in the link's target folder. Only the same user, at the same moment, can do
+  this, and a committed link is refused before the write, so the risk is low. A save that
+  fails for any reason changes no verdict.
 - Future: signed attestation on the receipt (engineering §7). Signing is not built.
 
 **Status:** Receipt bindings ship and re-verify. Receipt signing is not built, so a same-machine
@@ -184,7 +190,8 @@ awareness.
 - Generated hooks, skills, and Cursor files run `npm exec --no -- usabl`, never `npx usabl`.
   With usabl not installed, `npx usabl` downloads and runs whatever package holds the npm name
   usabl, with no prompt when stdin is piped, as it is for a hook. `npm exec --no` runs a local
-  or global install and otherwise fails with no download. The hooks then print one line that
+  or global install, or a copy of usabl already in npm's own cache, and otherwise fails. It never
+  downloads a package. The hooks then print one line that
   says usabl did not run and how to install it, and exit 1, which Claude Code and Cursor treat
   as a failed hook that does not block. The skills and the Cursor files tell the assistant not to
   install or download a package named usabl to work around it. A reinstall rewrites a file an
@@ -192,6 +199,12 @@ awareness.
   drift. Residual: a person who types `npx usabl` by hand in a project without usabl still
   downloads whatever holds the name. Reserving the npm name closes that, and it is a maintainer
   action, not code.
+- Residual: with usabl not installed, `npm exec --no` still asks the registry for the usabl
+  package manifest, so each stop makes one registry request. If npm's cache already holds a copy
+  that matches the latest version on the registry, from an earlier `npx usabl` for example, `npm
+  exec --no` runs that copy without a download. That copy is whatever held the name when it was
+  cached. Today the npm name holds a placeholder with no command, so the risk is low. Installing
+  usabl in the project closes it, because a local install is found first and npm asks nothing.
 
 **Status:** [x] Lockfile pins and receipt `scannerVersions` ship. [ ] The maintainer review rule
 for scanner bumps is process, not code.

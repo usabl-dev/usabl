@@ -476,6 +476,60 @@ describe('Stop hook reads the config at the repository root, through the real po
     expect(h.stderr()).toContain('usabl is not configured here');
   });
 
+  // With no HEAD the guard cannot read the last commit, so the stop fails open with git's own
+  // "make a first commit" step. It does not block. These cases pin that outcome with real git and
+  // the real guard.
+  function realGuardPorts(startDir: string) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let engineRuns = 0;
+    const base = makeStopHookRunnerPorts({ startDir, env: {} });
+    const ports: StopHookRunnerPorts = {
+      ...base,
+      pins: memoryPinStore(),
+      stdoutWrite: async (text) => {
+        stdout.push(text);
+      },
+      stderrWrite: async (text) => {
+        stderr.push(text);
+      },
+      runEngine: async () => {
+        engineRuns += 1;
+        return verified();
+      },
+    };
+    return { ports, stdout: () => stdout.join(''), stderr: () => stderr.join(''), engineRuns: () => engineRuns };
+  }
+
+  function expectNoHeadFailOpen(h: ReturnType<typeof realGuardPorts>): void {
+    expect(h.stdout()).not.toContain('"decision":"block"');
+    const stderr = h.stderr();
+    expect(stderr.startsWith('NOT verified - stop hook error')).toBe(true);
+    const frameStart = stderr.indexOf('[BEGIN UNTRUSTED TEXT');
+    expect(frameStart).toBeGreaterThan(0);
+    expect(stderr.indexOf('make a first commit')).toBeGreaterThan(frameStart);
+    expect(h.engineRuns()).toBe(0);
+    const payload = JSON.parse(h.stdout().trim()) as { systemMessage?: string };
+    expect(payload.systemMessage).toContain('NOT verified - stop hook error');
+  }
+
+  it('fails open with the "make a first commit" disclosure in a repository with no commits', async () => {
+    await writeFile(join(repo, 'usabl.config.json'), COMMITTED);
+    const h = realGuardPorts(repo);
+    expect(await runStopHookFromStdin(stopInput(false), h.ports)).toBe(0);
+    expectNoHeadFailOpen(h);
+  });
+
+  it('fails open with the same disclosure on an orphan branch with no commit yet', async () => {
+    await writeFile(join(repo, 'usabl.config.json'), COMMITTED);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+    git('checkout', '-q', '--orphan', 'fresh');
+    const h = realGuardPorts(repo);
+    expect(await runStopHookFromStdin(stopInput(false), h.ports)).toBe(0);
+    expectNoHeadFailOpen(h);
+  });
+
   it('blocks a corrupt root config read from a subfolder, through the real ports', async () => {
     await writeFile(join(repo, 'usabl.config.json'), COMMITTED);
     git('add', '-A');

@@ -379,10 +379,15 @@ type ConfigStep =
  * byte for byte, or the stop blocks as approval required: a corrupt or edited config used to throw
  * at parse time and end in an allow with "stop hook error". When neither place holds a config,
  * usabl is not set up here, unless this session already recorded pins for this root: then the
- * config was removed and committed during the session, and runStopHook treats it as drift. A config only in the working tree is a new, uncommitted setup: the
- * guard reports it as a changed guarded file, so the run goes on and the guard holds it for
- * approval. Git failing to read the last commit is not one of these cases, so it stays an internal
- * error and fails open with disclosure.
+ * config was removed and committed during the session, and runStopHook treats it as drift.
+ *
+ * A config only in the working tree goes on to the run. When HEAD exists, this is a new,
+ * uncommitted setup: the guard reports the config as a changed guarded file, and the run ends
+ * approval required, which blocks. A repository with no commits, or an orphan branch with none
+ * yet, has no HEAD: the guard cannot read it and throws with git's "make a first commit" step, so
+ * the stop fails open with that disclosure and does not block. Git failing to read the last commit
+ * is not one of the block cases either, so it stays an internal error and fails open with
+ * disclosure. A folder outside any work tree has no repository to look at, and says so.
  */
 function configStep(bytes: ConfigBytes): ConfigStep {
   const { working, head } = bytes;

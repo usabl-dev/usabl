@@ -2891,9 +2891,10 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
 
 - The repository root, then the config, before anything is parsed. The hook finds the
   repository root with `git rev-parse --show-toplevel` from the folder it starts in, because
-  that folder follows the assistant when it changes directory. The config, the receipt, the
-  bypass file, the scan, and the session pin key all use the root. A folder in no repository is
-  its own root and has no last commit. The hook then compares the raw bytes of
+  that folder follows the assistant when it changes directory. When `CLAUDE_PROJECT_DIR` is set
+  and names a folder, the hook starts there; Claude Code sets it to the project root. The
+  config, the receipt, the bypass file, the scan, and the session pin key all use the root. The
+  hook then compares the raw bytes of
   `usabl.config.json` in the working tree with HEAD:
   - HEAD has the config and the working copy is the same bytes: the hook parses it and goes on.
   - HEAD has the config and the working copy differs, is missing, or cannot be read, or the
@@ -2903,13 +2904,27 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
     and names `usabl bypass`. Read and parse errors go inside the untrusted frame.
   - Neither HEAD nor the working tree has the config: allow with "NOT verified - usabl is not
     configured here: ..." and the step to run `usabl init`. Nothing runs.
-  - The working tree has the config and HEAD does not (a new, uncommitted setup): the guard
-    reports `usabl.config.json` as a changed guarded file, as it does for any new guarded file,
-    so the run goes on and ends `approval_required`, which blocks. A new config that does not
-    parse blocks as approval required before the run.
-  - A repository with no commits yet has no HEAD, so it counts as HEAD without a config.
+  - The working tree has the config and HEAD does not, but HEAD exists (a new, uncommitted
+    setup): the guard reports `usabl.config.json` as a changed guarded file, as it does for any
+    new guarded file, so the run goes on and ends `approval_required`, which blocks. A new
+    config that does not parse blocks as approval required before the run.
+  - A repository with no commits yet, or an orphan branch with no commit yet, has no HEAD. The
+    hook parses the working config and goes on, and the guard then fails to read HEAD. The stop
+    fails open with disclosure: "NOT verified - stop hook error: ...", with git's "make a first
+    commit" step inside the untrusted frame. It does not block.
+  - Neither HEAD nor the working tree has the config, but this session already recorded pins for
+    this repository root: an earlier stop read a committed config, so the config was removed and
+    committed during the session. That is drift, and the stop goes through the drift block, with
+    `drifted files: usabl.config.json` inside the frame.
+  - The hook found no git work tree from the folder it started in, for example `.git`: allow
+    with "NOT verified - the stop hook ran in a folder outside any git work tree, or git could
+    not run there ... so it could not find the repository and checked nothing on this stop.",
+    the folder inside the untrusted frame, and the step to run `usabl check` from the project
+    root. "usabl is not configured here" is only for a real repository with no config.
   Each of these blocks lets one continuation through while `stop_hook_active` is set (Cursor:
-  `loop_count` above 0), marked NOT verified, as every other block does.
+  `loop_count` above 0), marked NOT verified, as every other block does. A continuation that
+  goes through tells the model not to edit the file to make a later stop pass; only a block
+  speaks of clearing it.
 - Input that is not JSON: allow with "NOT verified - the stop hook got input it could not read, so the stop went through and nothing was checked on this stop.", then the step to check the hook command in `.claude/settings.json` or `.cursor/hooks.json`, run `usabl doctor`, and run `usabl check` before calling the change accessible.
 - An internal error: fail open with disclosure. The runner prints "NOT verified - stop hook error: ..." and allows, never a silent allow. Git failing to read the config at HEAD is such an error. A run that started and failed with no verdict, and with no diverged guarded file, prints "NO VERDICT: RUN FAILED (exit 4): usabl is not blocking this stop, but the run did not finish, so it proved nothing about this change." followed by "Next: run usabl check again, or check the change by hand, before you call this change accessible." and allows.
 - Where a person sees an allow's notice. Every allow writes its lines to stderr. Claude Code
@@ -2933,7 +2948,10 @@ Fires on the assistant's Stop lifecycle event. Behavior matrix:
   step and the guarded file lines, with the paths inside the untrusted frame. During an active
   continuation it allows once, marked NOT verified.
 - usabl not installed: the generated hooks run `npm exec --no -- usabl stop-hook`, which never
-  downloads a package. When usabl cannot run, the hook prints one line, "NOT verified - the
+  downloads a package. It runs a local or global install, or a copy already in npm's own cache,
+  and with none of those it makes one registry request and fails. The generated Claude command is
+  a POSIX shell line (`npm_config_loglevel=silent npm exec --no -- usabl stop-hook || { ...; exit
+  1; }`). On Windows it needs Git Bash, which is the shell Claude Code uses there by default. When usabl cannot run, the hook prints one line, "NOT verified - the
   usabl Stop hook did not run, so nothing was checked on this stop. ...", with how to install
   it, and exits 1. Claude Code treats exit 1 from a Stop hook as a hook error that does not
   block: the stop goes on and the user sees the line. Cursor treats it as a failed hook and lets

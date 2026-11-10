@@ -157,14 +157,17 @@ that, and what to do.
     bundlers or neither, it refuses and names what it saw.
 12. (automatic, `usabl install --claude`) Merges a Stop hook running
     `npm exec --no -- usabl stop-hook` into `.claude/settings.json`, so an assistant's first stop on a
-    blocking verdict is blocked unless a one-use bypass was issued. Its companion `usabl install --claude-skill`
+    blocking verdict is blocked unless a one-use bypass was issued. The hook command is a POSIX
+    shell line; on Windows it needs Git Bash, which is the shell Claude Code uses there by default.
+    Its companion `usabl install --claude-skill`
     writes the on-demand `/usabl-check` skill to `.claude/skills/usabl-check/SKILL.md`.
     Its first step runs `npm exec --no -- usabl brief --json --files <paths>` with the files the task
     will edit, so the assistant knows the screens the task reaches and what done means
     before it starts. Then the assistant can run the advisory self-check during work. The
     engine ships the skill body, so the installed command cannot drift from the CLI it calls.
     Every generated command runs `npm exec --no -- usabl`, which runs the usabl installed in the
-    project and never downloads a package. Earlier releases wrote `npx usabl`, which downloads
+    project or globally, or a copy already in npm's own cache, and never downloads a package.
+    With usabl not installed, each run still makes one request to the registry. Earlier releases wrote `npx usabl`, which downloads
     whatever holds the npm name usabl when usabl is not installed. A reinstall rewrites those
     files, and `usabl doctor` reports them as a security drift until then.
 13. (automatic, `usabl install --ci`) Writes the six-job
