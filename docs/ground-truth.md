@@ -1171,9 +1171,14 @@ are left out).
 
 Known limits. The capture covers the main frame and the light tree. The full tree read covers
 the main frame and, because the browser builds it from the flat tree, open shadow roots too; a
-real-Chromium fixture confirms this. Child frames are read by neither. A name the browser
-computes from a field, such as `aria-labelledby` pointing at a text box, can hold that field's
-value, and the rule does not take a name apart. Background announcements are found only from
+real-Chromium fixture confirms this. Child frames are read by neither. A node that holds an
+editable field, such as a row or a button with a text box inside, can take its name from its
+contents, and those contents include the field's value. When the browser says such a node's name
+comes from its contents, or does not say where it comes from, the read leaves that name out: it is
+never shown in evidence, a change of it never counts as a page change, and focus that moves to
+that node does not count as a move to a named control. An author-given name, such as
+`aria-label`, is kept. A name built through `aria-labelledby` from a field can still hold that
+field's value, and the rule does not take a name apart. Background announcements are found only from
 the drain taken before the first step: a ticker that first writes inside a step's window, or
 between two steps, reads as speech that step caused. A live region that is drawn again, as a new
 element, counts as a new region, so a ticker that draws its region again is not known as

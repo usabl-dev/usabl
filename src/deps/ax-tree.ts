@@ -50,12 +50,28 @@ function isTrue(value: unknown): boolean {
   return value === true || value === 1 || value === 'true';
 }
 
+// Whether a name may hold the value of a field the node holds. The browser lists where a name
+// comes from, and the first source with a value that is not superseded is the one it used. A name
+// built from the node's contents includes the field's value. A name that does not say where it
+// comes from may too. An author-given name, such as aria-label, does not.
+function nameMayHoldValue(rawName: unknown): boolean {
+  const sources = getProp(rawName, 'sources');
+  if (!Array.isArray(sources)) {
+    return true;
+  }
+  const used = sources.find((source) => getProp(source, 'value') !== undefined && getProp(source, 'superseded') !== true);
+  return used === undefined || getProp(used, 'type') === 'contents';
+}
+
 /**
  * The tree a getFullAXTree result describes. A node with no DOM node, such as an inline text box,
  * has no identity across two reads, so it is left out, and its children climb to the nearest
  * ancestor that has one. The content of an editable field is left out too: the text inside a
  * text box is its value, and a value is never read. The field itself is kept, with its name and
- * states. An ignored node is kept without a name, so the parent chain stays whole.
+ * states. A node that holds a field, such as a row or a button with a text box inside, has no name
+ * when the browser built its name from its contents or does not say where the name comes from,
+ * because that name can hold the field's value. An ignored node is kept without a name, so the
+ * parent chain stays whole.
  */
 export function axTreeFromCdp(result: unknown): { documentNodeId: number | null; nodes: AxTreeNode[] } {
   const rawNodes = getProp(result, 'nodes');
@@ -73,6 +89,22 @@ export function axTreeFromCdp(result: unknown): { documentNodeId: number | null;
     const parentAxId = readString(getProp(raw, 'parentId'));
     return parentAxId === null ? undefined : byAxId.get(parentAxId);
   };
+
+  // Every node that holds an editable field and is not editable itself. A field is the parent of
+  // its own inner editor, and the field keeps its own name.
+  const holdsField = new Set<unknown>();
+  for (const raw of rawNodes) {
+    if (!hasProperty(raw, 'editable')) {
+      continue;
+    }
+    const seen = new Set<unknown>();
+    for (let ancestor = parentOf(raw); ancestor !== undefined && !seen.has(ancestor); ancestor = parentOf(ancestor)) {
+      seen.add(ancestor);
+      if (!hasProperty(ancestor, 'editable')) {
+        holdsField.add(ancestor);
+      }
+    }
+  }
 
   let documentNodeId: number | null = null;
   const nodes: AxTreeNode[] = [];
@@ -138,7 +170,7 @@ export function axTreeFromCdp(result: unknown): { documentNodeId: number | null;
       nodeId,
       parentId,
       role,
-      name: ignored ? null : readString(getProp(getProp(raw, 'name'), 'value')),
+      name: ignored || (holdsField.has(raw) && nameMayHoldValue(getProp(raw, 'name'))) ? null : readString(getProp(getProp(raw, 'name'), 'value')),
       ignored,
       states: ignored ? {} : states,
       busy: !ignored && busy,

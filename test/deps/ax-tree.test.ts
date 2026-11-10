@@ -98,6 +98,55 @@ describe('axTreeFromCdp', () => {
     expect(JSON.stringify(tree)).not.toContain('alice@example.com');
   });
 
+  describe('a node that holds a field', () => {
+    // The browser can build such a node's name from its contents, and the contents include the
+    // field's value. Each name lists where it comes from; the first source with a value that is not
+    // superseded is the one the browser used.
+    const contents = (value: string): unknown => ({ value, sources: [{ type: 'attribute', attribute: 'aria-label' }, { type: 'contents', value: { value } }] });
+    const labelled = (value: string): unknown => ({ value, sources: [{ type: 'attribute', attribute: 'aria-label', value: { value } }, { type: 'contents', superseded: true, value: { value: 'x' } }] });
+    const FIELDS = {
+      nodes: [
+        { nodeId: '1', backendDOMNodeId: 1, ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Rows' }, childIds: ['10', '20', '30', '40'] },
+        // A row named from its contents, which hold a field with an email address in it.
+        { nodeId: '10', backendDOMNodeId: 10, ignored: false, role: { value: 'row' }, name: contents('alice@example.com'), parentId: '1', childIds: ['11'] },
+        { nodeId: '11', backendDOMNodeId: 11, ignored: false, role: { value: 'cell' }, name: contents('alice@example.com'), parentId: '10', childIds: ['12'] },
+        {
+          nodeId: '12',
+          backendDOMNodeId: 12,
+          ignored: false,
+          role: { value: 'textbox' },
+          name: labelled('Email'),
+          parentId: '11',
+          childIds: [],
+          properties: [prop('editable', 'plaintext', 'token')],
+        },
+        // A button with an author-given name keeps it, even though it holds a field.
+        { nodeId: '20', backendDOMNodeId: 20, ignored: false, role: { value: 'button' }, name: labelled('Delete row'), parentId: '1', childIds: ['21'] },
+        { nodeId: '21', backendDOMNodeId: 21, ignored: false, role: { value: 'textbox' }, name: { value: '' }, parentId: '20', childIds: [], properties: [prop('editable', 'plaintext', 'token')] },
+        // A name that does not say where it comes from may come from the field.
+        { nodeId: '30', backendDOMNodeId: 30, ignored: false, role: { value: 'option' }, name: { value: 'bob@example.com' }, parentId: '1', childIds: ['31'] },
+        { nodeId: '31', backendDOMNodeId: 31, ignored: false, role: { value: 'textbox' }, name: { value: '' }, parentId: '30', childIds: [], properties: [prop('editable', 'plaintext', 'token')] },
+        // A node with no field under it keeps a name from its contents.
+        { nodeId: '40', backendDOMNodeId: 40, ignored: false, role: { value: 'button' }, name: contents('Save'), parentId: '1', childIds: [] },
+      ],
+    };
+    const read = axTreeFromCdp(FIELDS);
+    const nameOf = (nodeId: number): string | null | undefined => read.nodes.find((node) => node.nodeId === nodeId)?.name;
+
+    it('drops a name built from contents, and one that does not say where it comes from', () => {
+      expect(nameOf(10)).toBeNull();
+      expect(nameOf(11)).toBeNull();
+      expect(nameOf(30)).toBeNull();
+      expect(JSON.stringify(read)).not.toContain('example.com');
+    });
+
+    it('keeps an author-given name, the field own name, and names away from any field', () => {
+      expect(nameOf(20)).toBe('Delete row');
+      expect(nameOf(12)).toBe('Email');
+      expect(nameOf(40)).toBe('Save');
+    });
+  });
+
   it('reads nothing from a response that is not a tree', () => {
     expect(axTreeFromCdp(null)).toEqual({ documentNodeId: null, nodes: [] });
     expect(axTreeFromCdp({ nodes: 'x' })).toEqual({ documentNodeId: null, nodes: [] });

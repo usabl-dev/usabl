@@ -39,6 +39,8 @@
       //   shadow-combinator  Two rows each hold a Delete button, the first inside an open shadow root.
       //                  The click engine can match ".row button" across the shadow boundary, and
       //                  the browser's own query matches only the document button.
+      //   field-row      Add row adds a row whose only cell holds a field with an email address as
+      //                  its value. Nothing announces it.
       //   dialog-heard   Save writes "Saved" into a polite region inside an open dialog. Close closes
       //                  the dialog in a later step.
       //   modal-outside  Delete opens a modal dialog and writes "Deleted" into the polite region
@@ -187,6 +189,11 @@
             '<div class="row"><button type="button" id="second">Delete second</button></div>',
         );
         on('second', () => say('Deleted second'));
+      } else if (which === 'field-row') {
+        draw('<button type="button" id="add">Add row</button><table><thead><tr><th>Email</th></tr></thead><tbody id="rows"></tbody></table>');
+        on('add', () => {
+          document.getElementById('rows').insertAdjacentHTML('beforeend', '<tr><td><input aria-label="Email" value="alice@example.com" /></td></tr>');
+        });
       } else if (which === 'dialog-heard') {
         draw(
           '<dialog open id="edit"><p>Edit account</p><div aria-live="polite" id="dialog-status"></div>' +

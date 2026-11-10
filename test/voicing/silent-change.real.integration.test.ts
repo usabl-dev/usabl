@@ -325,6 +325,14 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('the silent change rule i
     it('reports a click whose combinator selector also matches inside an open shadow root as a gap, unreadable control', async () => {
       expect(outcome(await flow('shadow-combinator', click('.row button')))).toEqual(['unreadable control']);
     });
+
+    it('never shows a field value through the name of an added row that holds the field', async () => {
+      const drafts = await flow('field-row', click('#add'));
+      expect(outcome(drafts)).toEqual(['finding']);
+      const shown = JSON.stringify(drafts);
+      expect(shown).not.toContain('alice');
+      expect(shown).not.toContain('example.com');
+    });
   });
 
   describe('determinism', () => {
