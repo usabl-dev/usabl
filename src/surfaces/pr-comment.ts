@@ -614,15 +614,15 @@ const CUT_LINES_RESERVE = 600;
 const CUT_LINE_RESERVE = 140;
 
 /**
- * Renders the parts within COMMENT_BODY_LIMIT, counted with the newline the CLI writes after the
- * body. A body that fits is returned exactly as it was assembled.
+ * Renders the parts within `limit` (COMMENT_BODY_LIMIT for the posted comment), counted with the
+ * newline the CLI writes after the body. A body that fits is returned exactly as it was assembled.
  *
  * A first pass works on line lengths, so a comment with thousands of items is not rendered once
  * per cut, and reserves room for the lines the cut adds. A second pass renders and checks the
  * real body, and cuts further while it is over.
  */
-function renderWithinLimit(parts: CommentPart[]): string {
-  const fits = (text: string): boolean => text.length + 1 <= COMMENT_BODY_LIMIT;
+function renderWithinLimit(parts: CommentPart[], limit: number): string {
+  const fits = (text: string): boolean => text.length + 1 <= limit;
   const whole = renderParts(parts);
   if (fits(whole)) {
     return whole;
@@ -630,7 +630,7 @@ function renderWithinLimit(parts: CommentPart[]): string {
   const cutOne = cutter(parts);
   const sections = parts.filter((part) => part.kind === 'section').length;
   let estimate = whole.length + 1 + CUT_LINES_RESERVE + sections * CUT_LINE_RESERVE;
-  while (estimate > COMMENT_BODY_LIMIT) {
+  while (estimate > limit) {
     const removed = cutOne();
     if (removed === null) {
       break;
@@ -966,6 +966,14 @@ function newSplit(summary: ConformanceSummary): string {
 }
 
 export function projectPrComment(result: Result, config?: UsablConfig): string {
+  return projectPrCommentWithin(result, config, COMMENT_BODY_LIMIT);
+}
+
+/**
+ * The comment cut to another bound. Only tests call it, to walk the cut order step by step on a
+ * small Result. The posted comment always uses COMMENT_BODY_LIMIT, through projectPrComment.
+ */
+export function projectPrCommentWithin(result: Result, config: UsablConfig | undefined, limit: number): string {
   // Scrub first because PR comments are public egress for page-derived text, and for the query
   // and the fragment of a configured screen url.
   const safe = scrubPublishedResult(result);
@@ -1021,5 +1029,5 @@ export function projectPrComment(result: Result, config?: UsablConfig): string {
     ...optional(renderNotes(safe)),
     blank,
     renderAnnouncements(safe),
-  ]);
+  ], limit);
 }

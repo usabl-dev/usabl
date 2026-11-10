@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { CoverageGap, Finding, Result, ScreenScan, TranscriptStop } from '../../src/contracts/index.js';
-import { COMMENT_BODY_LIMIT, GAPS_PER_STATE_CAP, projectPrComment } from '../../src/surfaces/pr-comment.js';
+import {
+  COMMENT_BODY_LIMIT,
+  GAPS_PER_STATE_CAP,
+  projectPrComment,
+  projectPrCommentWithin,
+} from '../../src/surfaces/pr-comment.js';
 import { UNTRUSTED_FRAME_END, UNTRUSTED_FRAME_START } from '../../src/surfaces/scrub.js';
 
 // GitHub refuses a comment body over 65,536 characters, and the required check then fails with no
@@ -142,8 +147,8 @@ describe('pull request comment size', () => {
     // Every list is long and every carried string is far over any sane length. The noise budget is
     // raised so far that nothing collapses. Whatever the document says, the body stays under the
     // limit and still opens with the verdict and the counts. Every string is longer than any field
-    // cap, and the first lines of the gating findings alone come to more than twice the limit, so every
-    // cut tier is reached, the last one included. The sizes are kept that small so the test stays
+    // cap, and the first lines of the gating findings alone come to about one and a half times the
+    // limit (about 96,000 characters), so every cut tier is reached, the last one included. The sizes are kept that small so the test stays
     // fast on a loaded machine.
     const huge = 'x'.repeat(700);
     const findings: Finding[] = [
@@ -301,6 +306,150 @@ describe('pull request comment size', () => {
     expect(cut).toBeGreaterThan(0);
     expect(markdown).toContain(`(${400 - cut} of 400 rule groups shown)`);
     expect(markdown).not.toContain('400 rule groups; some rules repeat');
+  });
+
+  it('cuts the tiers in order, from the end of the comment within a tier', () => {
+    // Two items of every tier, each with a word that appears only in it. The bound is lowered step
+    // by step from the whole body to nothing, and at every step a cut item must have every item of
+    // a lower tier cut before it, and every later item of its own tier.
+    const gatingWhy = (index: number): string => `why-gate-${index}`;
+    // The first pass reserves room for the cut lines, so it cuts a little more than it must. The
+    // announcements are made longer than that reserve, so the step where only they are cut exists.
+    const withNotes = (id: string, note: string): ScreenScan => ({
+      ...screen(id, Array.from({ length: 10 }, (_, index) => stop(index, `stop ${index} on ${id} `.repeat(8)))),
+      notes: [{ ref: note, reason: 'a check did not read a frame' }],
+    });
+    const everyTier = result({
+      findings: [
+        finding({ rule: 'gate-0', elementKey: 'g0', why: gatingWhy(0) }),
+        finding({ rule: 'gate-1', elementKey: 'g1', why: gatingWhy(1) }),
+        finding({ rule: 'rec-0', elementKey: 'r0', status: 'carried' }),
+        finding({ rule: 'rec-1', elementKey: 'r1', status: 'carried' }),
+        finding({ rule: 'adv-0', elementKey: 'a0', evidenceClass: 'preview' }),
+        finding({ rule: 'adv-1', elementKey: 'a1', evidenceClass: 'preview' }),
+      ],
+      floorUnconfirmed: [
+        { screenId: 'floor-0', rules: ['image-alt'], barriers: 1 },
+        { screenId: 'floor-1', rules: ['image-alt'], barriers: 1 },
+      ],
+      coverage: {
+        changedFiles: [],
+        affected: [],
+        unresolvedFiles: [],
+        gaps: [
+          { ref: 'gap-0', state: 'unresolved', reason: 'no route reaches it' },
+          { ref: 'gap-1', state: 'unresolved', reason: 'no route reaches it' },
+          { ref: 'gap-2', state: 'unresolved', reason: 'no route reaches it' },
+        ],
+        nothingToCheck: false,
+      },
+      screens: [withNotes('ann-0', 'note-0'), withNotes('ann-1', 'note-1')],
+    });
+    const config = { noiseBudget: { default: 1000 } } as never;
+    // Each tier, lowest priority first, with its items in the order the comment prints them.
+    const tiers: Array<{ name: string; items: string[] }> = [
+      { name: 'announcement', items: ['#### `ann-0`', '#### `ann-1`'] },
+      { name: 'note', items: ['ref: `note-0`', 'ref: `note-1`'] },
+      { name: 'advisory', items: ['`axe/adv-0`', '`axe/adv-1`'] },
+      { name: 'recorded', items: ['`axe/rec-0`', '`axe/rec-1`'] },
+      { name: 'floor-notice', items: ['floor-0', 'floor-1'] },
+      { name: 'gap', items: ['ref: `gap-1`', 'ref: `gap-2`'] },
+      { name: 'gating-detail', items: [gatingWhy(0), gatingWhy(1)] },
+      { name: 'gating', items: ['`axe/gate-0`', '`axe/gate-1`'] },
+    ];
+
+    const whole = projectPrCommentWithin(everyTier, config, Number.MAX_SAFE_INTEGER);
+    for (const tier of tiers) {
+      for (const marker of tier.items) {
+        expect(whole, `${tier.name} item ${marker} is in the whole comment`).toContain(marker);
+      }
+    }
+
+    // What the comment shows at one bound, checked against the order.
+    const stateAt = (limit: number): { markdown: string; shown: boolean[][] } => {
+      const markdown = projectPrCommentWithin(everyTier, config, limit);
+      const shown = tiers.map((tier) => tier.items.map((marker) => markdown.includes(marker)));
+
+      // Never cut: the verdict, the counts, and the first gap of each state.
+      expect(markdown.split('\n')[1]).toBe('## usabl report: REGRESSION');
+      expect(markdown).toContain('- not evaluated: unresolved files 0, gaps 3');
+      expect(markdown).toContain('ref: `gap-0`');
+
+      shown.forEach((items, tierIndex) => {
+        items.forEach((isShown, itemIndex) => {
+          if (isShown) return;
+          // A cut item: every lower tier is cut, and so is every later item of its own tier.
+          for (let lower = 0; lower < tierIndex; lower += 1) {
+            expect(shown[lower]!.every((lowerShown) => !lowerShown), `${tiers[lower]!.name} cut before ${tiers[tierIndex]!.name}`).toBe(true);
+          }
+          for (let later = itemIndex + 1; later < items.length; later += 1) {
+            expect(items[later], `${tiers[tierIndex]!.name} is cut from the end`).toBe(false);
+          }
+        });
+      });
+      return { markdown, shown };
+    };
+    const allCut = (shown: boolean[][], below: number): boolean =>
+      shown.slice(0, below).every((items) => items.every((isShown) => !isShown));
+    const allWhole = (shown: boolean[][], from: number): boolean =>
+      shown.slice(from).every((items) => items.every((isShown) => isShown));
+
+    // The order holds at evenly spaced bounds from the whole body down to nothing.
+    const steps = 40;
+    for (let step = 0; step <= steps; step += 1) {
+      stateAt(Math.round(((whole.length + 1) * (steps - step)) / steps));
+    }
+
+    // For each tier, the largest bound at which every lower tier is cut. There, this tier and every
+    // higher one must still be whole: each tier is reached on its own, in this order. The cut set
+    // only grows as the bound shrinks, so a binary search finds that bound.
+    expect(allWhole(stateAt(whole.length + 1).shown, 0)).toBe(true);
+    for (let tierIndex = 1; tierIndex < tiers.length; tierIndex += 1) {
+      let low = 0;
+      let high = whole.length + 1;
+      while (high - low > 1) {
+        const middle = Math.floor((low + high) / 2);
+        if (allCut(stateAt(middle).shown, tierIndex)) low = middle;
+        else high = middle;
+      }
+      const boundary = stateAt(low).shown;
+      expect(allCut(boundary, tierIndex), `every tier below ${tiers[tierIndex]!.name} is cut`).toBe(true);
+      expect(allWhole(boundary, tierIndex), `${tiers[tierIndex]!.name} and every higher tier are whole`).toBe(true);
+    }
+    const lowest = stateAt(0).markdown;
+
+    // The last tier: with no room at all, every item that can be cut is cut, and each section
+    // and the note under the verdict say what went.
+    for (const tier of tiers) {
+      for (const marker of tier.items) {
+        expect(lowest).not.toContain(marker);
+      }
+    }
+    expect(lowest).toContain('_This comment was shortened to stay under the size usabl posts, so 14 items are not shown. Each section says what it left out.');
+    expect(lowest).toContain('- 2 more gating findings not shown here, to keep this comment under the size usabl posts.');
+    expect(lowest).toContain('- 2 more findings not shown here, to keep this comment under the size usabl posts.');
+    expect(lowest).toContain('- 2 more notices not shown here');
+    expect(lowest).toContain('- 2 more gaps not shown here');
+    expect(lowest).toContain('- 2 more notes not shown here');
+    expect(lowest).toContain('- 2 more screens not shown here');
+    expect(lowest).toContain('usabl-result');
+    expect(lowest.split(UNTRUSTED_FRAME_START).length).toBe(lowest.split(UNTRUSTED_FRAME_END).length);
+  });
+
+  it('says how many gating findings show only their first line once their detail is cut', () => {
+    const long = 'y'.repeat(300);
+    const findings = Array.from({ length: 400 }, (_, index) =>
+      finding({ screenId: `${long}-${index}`, rule: `${long}${index}`, layer: long, elementKey: `n-${index}` }),
+    );
+    const markdown = projectPrComment(result({ findings }), { noiseBudget: { default: 1_000_000 } } as never);
+
+    const note = /_This comment was shortened to stay under the size usabl posts, so (\d+) items are not shown, and (\d+) gating findings show only their first line\./.exec(markdown);
+    expect(note).not.toBeNull();
+    const cut = Number(note![1]);
+    const firstLineOnly = Number(note![2]);
+    expect(cut + firstLineOnly).toBe(400);
+    expect(markdown).toContain(`- ${cut} more gating findings not shown here`);
+    expect(markdown).toContain('- deterministic: new 400 (400 failing, 0 unconfirmed)');
   });
 
   it('leaves an ordinary comment exactly as it was, with no note about cutting', () => {
