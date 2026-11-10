@@ -96,10 +96,13 @@ Once approved, each check gives one of these:
   focus away when it gets it; or no button has the name, so its size cannot be measured. usabl
   never guesses. A run with a needs review finding is not verified.
 
-The target size check measures the border box of a control laid out in one box that nothing
-clips. A control that wraps onto two lines, or that an element above it clips, for example with
-`overflow: hidden`, is needs review. The check does not measure overlap with other elements or the
-spacing between targets.
+The target size check measures the border box of a control laid out in one box. These shapes are
+needs review, with the reason, because the box can be larger than the area a pointer can hit: a
+control that wraps onto two lines; a control that it or an element above it rotates or skews; a
+`clip-path`, `clip`, or mask on it or above it; an element above it that hides or scrolls its
+overflow when the control reaches past its edges; and a fixed or sticky control that reaches past
+the viewport. A translate or a scale is measured. The check does not measure overlap with other
+elements or the spacing between targets.
 
 `checkPage` in a Playwright test runs the same checks when it reads the project from
 `projectRoot`.

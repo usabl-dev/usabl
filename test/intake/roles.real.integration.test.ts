@@ -53,11 +53,23 @@ function secondMatchPage(path: string): string | null {
 }
 
 // A link that wraps onto two lines, a 44 pixel button inside a 12 pixel box that hides its
-// overflow, and a button inside a box that scrolls, which a pointer can still reach in full.
+// overflow, a button inside a box that scrolls and holds it in full, and the shapes usabl does not
+// measure: a rotated button, a button cut by clip-path, a masked button, a button in a 12 pixel box
+// that scrolls, and a fixed button partly below the viewport. The moved and scaled buttons are
+// measured.
+const BUTTON = 'width:44px;height:44px;padding:0;border:0';
 const SHAPES_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Shapes</title></head><body><main>
   <p style="width:80px;font:16px/20px monospace">Go <a id="wraps" href="#x">to the user list now</a></p>
-  <div style="height:12px;overflow:hidden"><button id="clipped" style="width:44px;height:44px;padding:0;border:0">Save</button></div>
-  <div style="height:100px;overflow:auto"><button id="scrolls" style="width:44px;height:44px;padding:0;border:0">Edit</button></div>
+  <div style="height:12px;overflow:hidden"><button id="clipped" style="${BUTTON}">Save</button></div>
+  <div style="height:100px;overflow:auto"><button id="scrolls" style="${BUTTON}">Edit</button></div>
+  <button id="rotated" style="width:20px;height:20px;padding:0;border:0;transform:rotate(45deg)">Turn</button>
+  <div style="transform:skewX(20deg)"><button id="skewed-inside" style="${BUTTON}">Lean</button></div>
+  <button id="clip-path" style="${BUTTON};clip-path:inset(0 0 30px 0)">Cut</button>
+  <button id="masked" style="${BUTTON};mask-image:linear-gradient(black, transparent)">Fade</button>
+  <div style="height:12px;overflow:auto"><button id="short-scroll" style="${BUTTON}">Scroll</button></div>
+  <button id="moved" style="${BUTTON};transform:translate(5px, 5px)">Move</button>
+  <button id="scaled" style="width:22px;height:22px;padding:0;border:0;transform:scale(2)">Grow</button>
+  <button id="fixed-off" style="${BUTTON};position:fixed;bottom:-30px;left:0">Low</button>
 </main></body></html>`;
 
 // Three buttons in order. On the blur page, the second one drops focus when it gets it, so a Tab
@@ -151,8 +163,8 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
 
   it('reads the laid-out size of an element in CSS pixels', async () => {
     await withPage('/roles.html', async (page) => {
-      expect(await page.boundingBox('#refresh')).toEqual({ width: 32, height: 32, fragments: 1, clipped: false });
-      expect(await page.boundingBox('#tiny')).toEqual({ width: 16, height: 16, fragments: 1, clipped: false });
+      expect(await page.boundingBox('#refresh')).toEqual({ width: 32, height: 32, fragments: 1, unmeasurable: [] });
+      expect(await page.boundingBox('#tiny')).toEqual({ width: 16, height: 16, fragments: 1, unmeasurable: [] });
       expect(await page.boundingBox('#nothing-here')).toBeNull();
     });
   });
@@ -160,8 +172,40 @@ describe.skipIf(process.env.USABL_INTEGRATION !== '1')('design checks in Chromiu
   it('reads a box that wraps onto two lines and a box an element above clips', async () => {
     await withPage('/shapes.html', async (page) => {
       expect((await page.boundingBox('#wraps'))?.fragments ?? 0).toBeGreaterThan(1);
-      expect(await page.boundingBox('#clipped')).toMatchObject({ width: 44, height: 44, fragments: 1, clipped: true });
-      expect(await page.boundingBox('#scrolls')).toMatchObject({ fragments: 1, clipped: false });
+      expect(await page.boundingBox('#clipped')).toMatchObject({ width: 44, height: 44, fragments: 1, unmeasurable: ['overflow-clipped'] });
+      expect(await page.boundingBox('#scrolls')).toMatchObject({ fragments: 1, unmeasurable: [] });
+    });
+  });
+
+  it('names each shape it does not measure, and measures a moved or scaled box', async () => {
+    await withPage('/shapes.html', async (page) => {
+      const limits = async (selector: string) => (await page.boundingBox(selector))?.unmeasurable;
+      expect(await limits('#rotated')).toEqual(['rotated-or-skewed']);
+      expect(await limits('#skewed-inside')).toEqual(['rotated-or-skewed']);
+      expect(await limits('#clip-path')).toEqual(['clip-path']);
+      expect(await limits('#masked')).toEqual(['mask']);
+      expect(await limits('#short-scroll')).toEqual(['overflow-clipped']);
+      expect(await limits('#fixed-off')).toEqual(['outside-viewport']);
+      expect(await page.boundingBox('#moved')).toEqual({ width: 44, height: 44, fragments: 1, unmeasurable: [] });
+      expect(await page.boundingBox('#scaled')).toEqual({ width: 44, height: 44, fragments: 1, unmeasurable: [] });
+    });
+  });
+
+  it('asks for review of a rotated, a clip-path, and a scrolled button, never a pass', async () => {
+    await withPage('/shapes.html', async (page) => {
+      for (const name of ['Turn', 'Cut', 'Scroll']) {
+        const provider = designCheckProvider({
+          id: `size-${name.toLowerCase()}`,
+          kind: 'target-size',
+          surface: 'users',
+          description: `The ${name} button is at least 24 CSS pixels`,
+          assertion: { type: 'target-size', target: { role: 'button', name }, minCssPx: 24 },
+          approved: true,
+        });
+        if (provider === null) throw new Error('no target size provider');
+        const output = await provider.run({ page, screen: { id: 'users', url: `${baseUrl}/shapes.html` }, config: testConfig() });
+        expect({ name, confidence: draftsOf(output).map((draft) => draft.confidence) }).toEqual({ name, confidence: ['unverified'] });
+      }
     });
   });
 

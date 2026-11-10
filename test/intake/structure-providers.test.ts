@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AxNode, AxTreeNode, Draft, ElementRef, Page, Requirement } from '../../src/contracts/index.js';
+import type { AxNode, AxTreeNode, BoxLimit, Draft, ElementRef, Page, Requirement } from '../../src/contracts/index.js';
 import { makeFakePage } from '../../src/deps/fakes.js';
 import { designCheckProvider } from '../../src/intake/structure-providers.js';
 import { draftsOf, gapsOf, testConfig } from '../helpers.js';
@@ -484,11 +484,32 @@ describe('focus order requirement', () => {
 describe('target size requirement', () => {
   const r = req({ type: 'target-size', target: { role: 'button', name: 'Refresh' }, minCssPx: 24 });
 
-  // One unclipped box unless the case says otherwise.
-  function sized(box: { width: number; height: number; fragments?: number; clipped?: boolean } | null): Page {
-    const read = box === null ? null : { fragments: 1, clipped: false, ...box };
+  // One box with nothing that stops usabl measuring it, unless the case says otherwise.
+  function sized(box: { width: number; height: number; fragments?: number; unmeasurable?: BoxLimit[] } | null): Page {
+    const read = box === null ? null : { fragments: 1, unmeasurable: [], ...box };
     return pageWith({ '#r': button('Refresh') }, { boundingBox: async () => read });
   }
+
+  it.each([
+    ['rotated-or-skewed', 'rotated or skewed'],
+    ['clip-path', 'clip-path'],
+    ['mask', 'mask'],
+    ['overflow-clipped', 'hides or scrolls its overflow'],
+    ['outside-viewport', 'past the edge of the viewport'],
+  ] as const)('is unconfirmed, never a pass, when the box read says %s', async (limit, reason) => {
+    // A box large enough to pass, so only the limit can keep it from passing.
+    const drafts = await run(r, sized({ width: 44, height: 44, unmeasurable: [limit] }));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.confidence).toBe('unverified');
+    expect(drafts[0]?.why).toContain(reason);
+    expect(drafts[0]?.evidence.extra).toMatchObject({ unmeasurable: [limit] });
+  });
+
+  it('names every limit the box read found, in a fixed order', async () => {
+    const drafts = await run(r, sized({ width: 44, height: 44, unmeasurable: ['clip-path', 'rotated-or-skewed'] }));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.why).toMatch(/rotated or skewed.*clip-path/u);
+  });
 
   it('is unconfirmed, never a pass, when the element is laid out in more than one box', async () => {
     // An inline link that wraps onto two lines: the union of its boxes is large, each box may not be.
@@ -496,13 +517,6 @@ describe('target size requirement', () => {
     expect(drafts).toHaveLength(1);
     expect(drafts[0]?.confidence).toBe('unverified');
     expect(drafts[0]?.why).toContain('laid out in 2 boxes');
-  });
-
-  it('is unconfirmed, never a pass, when an element above it clips it', async () => {
-    const drafts = await run(r, sized({ width: 44, height: 44, clipped: true }));
-    expect(drafts).toHaveLength(1);
-    expect(drafts[0]?.confidence).toBe('unverified');
-    expect(drafts[0]?.why).toContain('clips it');
   });
 
   it('passes at or above the minimum in both directions', async () => {
@@ -532,7 +546,7 @@ describe('target size requirement', () => {
   });
 
   it('is unconfirmed when two elements have the name', async () => {
-    const page = pageWith({ '#a': button('Refresh'), '#b': button('Refresh') }, { boundingBox: async () => ({ width: 1, height: 1, fragments: 1, clipped: false }) });
+    const page = pageWith({ '#a': button('Refresh'), '#b': button('Refresh') }, { boundingBox: async () => ({ width: 1, height: 1, fragments: 1, unmeasurable: [] }) });
     const drafts = await run(r, page);
     expect(drafts).toHaveLength(1);
     expect(drafts[0]?.confidence).toBe('unverified');

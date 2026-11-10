@@ -735,16 +735,29 @@ export type AxTreeRead =
 export interface ElementRef {
   selector: string;
 }
+// Why the box Page.boundingBox read may not be the area a pointer can hit. Each one is read on the
+// element and on every element above it in the flat tree.
+// 'rotated-or-skewed': a transform, or the rotate property, turns or slants the element, so the
+// axis-aligned box around it is larger than the element. A translate or a scale alone does not.
+// 'clip-path': a clip-path, or the older clip property, cuts the element's shape.
+// 'mask': a mask image hides part of the element.
+// 'overflow-clipped': an element above it has overflow other than visible on an axis (hidden,
+// clip, auto, scroll, or overlay), or paint containment, and the element reaches past that
+// element's padding box on that axis, so only part of it can be on screen at once. On the root and
+// the body, only hidden and clip count, because their scrolling is the viewport's.
+// 'outside-viewport': the element, or an element above it, is fixed or sticky, and the element
+// reaches past the viewport, where scrolling cannot bring it into view.
+export type BoxLimit = 'rotated-or-skewed' | 'clip-path' | 'mask' | 'overflow-clipped' | 'outside-viewport';
 // What Page.boundingBox read about one element. `width` and `height` are the CSS pixel size of its
 // border box as the browser lays it out, transforms included. `fragments` is how many boxes the
 // element is laid out in: an inline element that wraps onto two lines has two, and its size is the
-// box around both. `clipped` is true when an element above it hides part of it through overflow
-// hidden or clip, or paint containment, so the area a pointer can hit may be smaller than the box.
+// box around both. `unmeasurable` lists each BoxLimit that holds, in the order of that type, and is
+// empty only when the box is the area a pointer can hit, as far as usabl reads it.
 export interface ElementBox {
   width: number;
   height: number;
   fragments: number;
-  clipped: boolean;
+  unmeasurable: BoxLimit[];
 }
 // Why a row an element sits in could not be told apart from other rows. See RowContextRead.
 export type RowAmbiguity =

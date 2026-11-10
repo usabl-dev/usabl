@@ -10,6 +10,7 @@
  */
 import type {
   AxNode,
+  BoxLimit,
   Draft,
   FocusOrderAssertion,
   FocusUnreadable,
@@ -469,6 +470,19 @@ async function checkFocusOrder(requirement: Requirement, assertion: FocusOrderAs
   return [];
 }
 
+// Why the box read cannot stand for the area a pointer can hit, one phrase per BoxLimit.
+const BOX_LIMIT_REASON: Readonly<Record<BoxLimit, string>> = {
+  'rotated-or-skewed': 'the control, or an element above it, is rotated or skewed, so the box around it is larger than the control',
+  'clip-path': 'the control, or an element above it, has a clip-path or clip that cuts its shape',
+  mask: 'the control, or an element above it, has a mask that hides part of it',
+  'overflow-clipped':
+    'an element above it hides or scrolls its overflow, and the control reaches past the edges of that element, so only part of it can be on screen at once',
+  'outside-viewport':
+    'the control is fixed or sticky and reaches past the edge of the viewport, where scrolling cannot bring it into view',
+};
+
+const BOX_LIMIT_ORDER: readonly BoxLimit[] = ['rotated-or-skewed', 'clip-path', 'mask', 'overflow-clipped', 'outside-viewport'];
+
 // One decimal, rounded down, so a size below the minimum never prints as the minimum.
 function shownSize(pixels: number): number {
   return Math.floor(pixels * 10) / 10;
@@ -507,9 +521,9 @@ async function checkTargetSize(requirement: Requirement, assertion: TargetSizeAs
       }),
     ];
   }
-  // usabl measures the border box of an element laid out in one box that nothing clips. For any
-  // other shape the box it reads can be larger than the area a pointer can hit, so it does not
-  // judge the size.
+  // usabl measures the border box of an element laid out in one box, and only when the box read
+  // found no BoxLimit. For any other shape the box it reads can be larger than the area a pointer
+  // can hit, so it does not judge the size.
   if (box.fragments !== 1) {
     return [
       draft(requirement, 'target-size', 'unverified', {
@@ -522,15 +536,17 @@ async function checkTargetSize(requirement: Requirement, assertion: TargetSizeAs
       }),
     ];
   }
-  if (box.clipped) {
+  // In the fixed order of BOX_LIMIT_ORDER, so the message never depends on the order of the read.
+  const limits = BOX_LIMIT_ORDER.filter((limit) => box.unmeasurable.includes(limit));
+  if (limits.length > 0) {
     return [
       draft(requirement, 'target-size', 'unverified', {
         elementPath: match.selector,
         node: match.node,
         whatUserExperiences: `Whether ${question} is unknown.`,
-        why: 'An element above this control clips it, for example with overflow: hidden, so the area a pointer can hit may be smaller than the control. usabl does not measure a clipped control.',
-        fix: 'Check the size of this control by hand, or let the element above it show the control in full.',
-        extra: { width: box.width, height: box.height, clipped: true },
+        why: `usabl does not measure this control, because the box it reads may be larger than the area a pointer can hit: ${limits.map((limit) => BOX_LIMIT_REASON[limit]).join('; ')}.`,
+        fix: 'Check the size of this control by hand.',
+        extra: { width: box.width, height: box.height, unmeasurable: limits },
       }),
     ];
   }

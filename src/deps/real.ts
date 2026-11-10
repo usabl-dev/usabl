@@ -6,7 +6,7 @@
  */
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page as PwPage } from 'playwright';
 import { readFullAxTree } from './ax-tree.js';
-import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BrowserDriver, ElementBox, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
+import type { ActionSettle, AncestorAttributesRead, AnnouncementDrain, AnnouncementSource, AnnouncementSourcesDrain, AnnouncementUndecidable, ApiResponse, AxNode, AxTreeRead, BoxLimit, BrowserDriver, ElementBox, ElementTarget, FocusUnreadable, HostMarkup, Page, ReadinessOutcome, ReadinessProbe, RowContextRead } from '../contracts/index.js';
 import { applyAxeTags, type AxeUncheckedFrame } from '../providers/axe/index.js';
 import { normalizeAxeResults, type AxeRunResultBuckets } from '../providers/axe/raw.js';
 import { carryPlaywrightPage, registerPlaywrightPage } from '../providers/engines/shared.js';
@@ -825,12 +825,15 @@ const COMPUTED_STYLE_FUNCTION = `function (query, cssProperty) {
   return getComputedStyle(element).getPropertyValue(cssProperty);
 }`;
 
+// The order BoxLimit values are reported in. The browser function below writes the same names.
+const BOX_LIMITS: readonly BoxLimit[] = ['rotated-or-skewed', 'clip-path', 'mask', 'overflow-clipped', 'outside-viewport'];
+
 // The laid-out box of the first element a selector matches, in CSS pixels, or null. The box
-// includes transforms. It also says how many boxes the element is laid out in, and whether an
-// element above it clips it. The walk up follows the flat tree, through slots and out of shadow
-// roots. An ancestor clips when its overflow is hidden or clip on an axis, or its contain value
-// holds paint, and the element reaches past that ancestor's padding box on that axis. A fixed
-// element can escape such an ancestor; it is still read as clipped, which only ever asks for review.
+// includes transforms. It also says how many boxes the element is laid out in, and each reason the
+// box may not be the area a pointer can hit (see BoxLimit). The walk up follows the flat tree,
+// through slots and out of shadow roots, and stops at 512 elements; a deeper element reads as
+// clipped, which only ever asks for review. Each check fails closed: a value it cannot read counts.
+// A fixed element can escape an ancestor that clips; it is still read as clipped.
 const BOUNDING_BOX_FUNCTION = `function (query) {
   const element = document.querySelector(query);
   if (!(element instanceof Element)) {
@@ -838,7 +841,6 @@ const BOUNDING_BOX_FUNCTION = `function (query) {
   }
   const box = element.getBoundingClientRect();
   const fragments = element.getClientRects().length;
-  const clips = (value) => value === 'hidden' || value === 'clip';
   const parentOf = (node) => {
     if (node.assignedSlot) {
       return node.assignedSlot;
@@ -850,43 +852,109 @@ const BOUNDING_BOX_FUNCTION = `function (query) {
     return root instanceof ShadowRoot ? root.host : null;
   };
   const epsilon = 0.01;
-  let clipped = false;
-  for (let above = parentOf(element), depth = 0; above !== null && depth < 512 && !clipped; above = parentOf(above), depth += 1) {
-    const style = getComputedStyle(above);
-    // Overflow and paint containment do not apply to an inline box or to an element with no box.
-    if (style.display === 'inline' || style.display === 'contents') {
+  const zero = (value) => Math.abs(value) < 1e-9;
+  // A transform turns or slants the element unless it is a translate, a scale, or both.
+  const turnsOrSlants = (transform) => {
+    if (transform === 'none' || transform === '') {
+      return false;
+    }
+    const flat = /^matrix\\(([^)]*)\\)$/.exec(transform);
+    if (flat !== null) {
+      const m = flat[1].split(',').map(Number);
+      return m.length !== 6 || m.some((value) => !Number.isFinite(value)) || !zero(m[1]) || !zero(m[2]);
+    }
+    const deep = /^matrix3d\\(([^)]*)\\)$/.exec(transform);
+    if (deep !== null) {
+      const m = deep[1].split(',').map(Number);
+      if (m.length !== 16 || m.some((value) => !Number.isFinite(value))) {
+        return true;
+      }
+      // Only a 2D scale and translate written as a 3D matrix is measured.
+      return ![1, 2, 3, 4, 6, 7, 8, 9, 11].every((index) => zero(m[index])) || !zero(m[10] - 1) || !zero(m[15] - 1);
+    }
+    return true;
+  };
+  const rotates = (rotate) => !(rotate === 'none' || rotate === '' || /^0(deg|rad|grad|turn)?$/.test(rotate));
+  const hides = (value) => value === 'hidden' || value === 'clip';
+  const limits = new Set();
+  const root = document.documentElement;
+  let pinned = false;
+  let depth = 0;
+  for (let node = element; node !== null; node = parentOf(node), depth += 1) {
+    if (depth >= 512) {
+      limits.add('overflow-clipped');
+      break;
+    }
+    const style = getComputedStyle(node);
+    if (turnsOrSlants(style.transform) || rotates(style.rotate)) {
+      limits.add('rotated-or-skewed');
+    }
+    if ((style.clipPath !== 'none' && style.clipPath !== '') || (style.clip !== 'auto' && style.clip !== '')) {
+      limits.add('clip-path');
+    }
+    const mask = style.maskImage || style.webkitMaskImage || 'none';
+    if (mask !== 'none') {
+      limits.add('mask');
+    }
+    if (style.position === 'fixed' || style.position === 'sticky') {
+      pinned = true;
+    }
+    // Overflow is about the elements above. It and paint containment do not apply to an inline box
+    // or to an element with no box.
+    if (node === element || style.display === 'inline' || style.display === 'contents') {
       continue;
     }
-    const paint =/\\b(paint|strict|content)\\b/.test(style.contain);
-    const clipsX = paint || clips(style.overflowX);
-    const clipsY = paint || clips(style.overflowY);
+    const viewportScroller = node === root || node === document.body;
+    const clipsAxis = (value) => (viewportScroller ? hides(value) : value !== 'visible');
+    const paint = /\\b(paint|strict|content)\\b/.test(style.contain);
+    const clipsX = paint || clipsAxis(style.overflowX);
+    const clipsY = paint || clipsAxis(style.overflowY);
     if (!clipsX && !clipsY) {
       continue;
     }
-    const outer = above.getBoundingClientRect();
-    const left = outer.left + above.clientLeft;
-    const top = outer.top + above.clientTop;
-    const right = left + above.clientWidth;
-    const bottom = top + above.clientHeight;
+    const outer = node.getBoundingClientRect();
+    const left = outer.left + node.clientLeft;
+    const top = outer.top + node.clientTop;
+    const right = left + node.clientWidth;
+    const bottom = top + node.clientHeight;
     if (clipsX && (box.left < left - epsilon || box.right > right + epsilon)) {
-      clipped = true;
+      limits.add('overflow-clipped');
     }
     if (clipsY && (box.top < top - epsilon || box.bottom > bottom + epsilon)) {
-      clipped = true;
+      limits.add('overflow-clipped');
     }
   }
-  return { width: box.width, height: box.height, fragments, clipped };
+  if (pinned) {
+    const width = root.clientWidth;
+    const height = root.clientHeight;
+    if (box.left < -epsilon || box.top < -epsilon || box.right > width + epsilon || box.bottom > height + epsilon) {
+      limits.add('outside-viewport');
+    }
+  }
+  const order = ${JSON.stringify(BOX_LIMITS)};
+  return { width: box.width, height: box.height, fragments, unmeasurable: order.filter((limit) => limits.has(limit)) };
 }`;
+
+function isBoxLimit(value: unknown): value is BoxLimit {
+  return typeof value === 'string' && (BOX_LIMITS as readonly string[]).includes(value);
+}
 
 function readBoundingBox(value: unknown): ElementBox | null {
   const width = readNumber(getProp(value, 'width'));
   const height = readNumber(getProp(value, 'height'));
   const fragments = readNumber(getProp(value, 'fragments'));
-  const clipped = getProp(value, 'clipped');
-  if (width === null || height === null || fragments === null || !Number.isInteger(fragments) || typeof clipped !== 'boolean') {
+  const unmeasurable = getProp(value, 'unmeasurable');
+  if (
+    width === null ||
+    height === null ||
+    fragments === null ||
+    !Number.isInteger(fragments) ||
+    !Array.isArray(unmeasurable) ||
+    !unmeasurable.every(isBoxLimit)
+  ) {
     return null;
   }
-  return { width, height, fragments, clipped };
+  return { width, height, fragments, unmeasurable: BOX_LIMITS.filter((limit) => unmeasurable.includes(limit)) };
 }
 
 
