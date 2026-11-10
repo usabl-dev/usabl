@@ -123,10 +123,11 @@ export interface GuardedEntry {
  * holds `./` or `//`, and an entry compared as written would match nothing.
  *
  * This never throws because of what an entry says, and never guards less because it cannot read
- * one. An entry in a form the matcher cannot evaluate (a brace range, `?`, `[ ]`, `( )`, `\`, a bad
- * brace, or a `..` after a wildcard) is read wide: it guards the literal folder above the first
- * segment the matcher cannot evaluate. An entry with no such folder (one that starts with `/`, or a
- * `..` that leaves the root) guards the whole tree. Config load refuses these forms, but the guard
+ * one. An entry in a form the matcher cannot evaluate (a brace range, `?`, `[ ]`, `( )`, `\`, or a
+ * bad brace) is read wide: it guards the literal folder above the first segment the matcher cannot
+ * evaluate. An entry with no such folder guards the whole tree: one that starts with `/`, one with a
+ * `..` that leaves the root, and one with a `..` anywhere after a wildcard, which can climb above
+ * any folder. Config load refuses these forms, but the guard
  * also reads a trusted ref's config, which config load never checked. A literal entry, such as the
  * requirements folder, is a path: no glob rule applies to it.
  */
@@ -136,19 +137,23 @@ export function readGuardedEntry(entry: string, literal = false): GuardedEntry {
     return wide('', 'it starts with /, so it names no path from the repository root');
   }
   const segments: string[] = [];
+  let afterPattern = false;
   for (const segment of entry.split('/')) {
     if (segment === '' || segment === '.') {
       continue;
     }
     if (segment === '..') {
-      const parent = segments.pop();
-      if (parent === undefined) {
+      // A wildcard can stand for any number of folders, so a later `..` can climb to any folder.
+      if (afterPattern) {
+        return wide('', 'a .. segment follows a wildcard, so it can name a path anywhere in the repository');
+      }
+      if (segments.pop() === undefined) {
         return wide('', 'a .. segment leaves the repository root');
       }
-      if (!literal && PATTERN_SEGMENT.test(parent)) {
-        return wide(literalFolder([...segments, parent]), 'a .. segment follows a wildcard');
-      }
       continue;
+    }
+    if (!literal && PATTERN_SEGMENT.test(segment)) {
+      afterPattern = true;
     }
     segments.push(segment);
   }

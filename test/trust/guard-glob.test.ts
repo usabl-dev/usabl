@@ -496,7 +496,7 @@ describe('a guardedPaths entry the guard cannot evaluate', REAL_GIT, () => {
     ['policy/rule{1..3}.json', 'policy'],
     ['policy/{q..s}ule1.json', 'policy'],
     ['policy/rule?.json', 'policy'],
-    ['policy/*/../rule1.json', 'policy'],
+    ['policy/*/../rule1.json', ''],
     ['/policy/rule1.json', ''],
     ['../policy/rule1.json', ''],
   ];
@@ -549,6 +549,51 @@ describe('a guardedPaths entry the guard cannot evaluate', REAL_GIT, () => {
     expect(refused.message).toContain('usabl.config.json');
     await expect(policyCheckWith(root, ['owner'])).resolves.toMatchObject({ exitCode: 0 });
   });
+});
+
+/**
+ * Some entries can name a path outside the folder their first segments name. A `..` after a
+ * wildcard can climb above it. The guard reads such an entry as the whole tree, so a change to the
+ * path it can name needs a code owner's approval, locally and in CI.
+ */
+describe('a guardedPaths entry that can name a path outside its folder', REAL_GIT, () => {
+  let root = '';
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const files = {
+    'policy/rule1.json': '{}\n',
+    'policy/sub/rule2.json': '{}\n',
+    'x.json': '{}\n',
+    'src/App.tsx': 'export {}\n',
+  };
+
+  // [entry, a file at the root the entry can name]
+  const cases: Array<[string, string]> = [['policy/*/../../x.json', 'x.json']];
+
+  for (const [entry, changed] of cases) {
+    const config = configWith([entry]);
+
+    it(`refuses an edit to ${changed} under ${entry} in CI`, async () => {
+      root = await repoWith(config, files);
+      await git(root, ['checkout', '-b', 'feature']);
+      await write(root, changed, '{"changed":true}\n');
+      await git(root, ['commit', '-am', 'change a root file']);
+      const out = await policyCheckAt(root);
+      expect(out.exitCode).toBe(2);
+      expect(out.message).toContain(changed);
+    });
+
+    it(`lists an edit to ${changed} under ${entry} in the local guard`, async () => {
+      root = await repoWith(config, files);
+      await write(root, changed, '{"changed":true}\n');
+      const result = await run(realDeps(root), config);
+      expect(result.verdict).toBe('approval_required');
+      expect(result.dirtyGuardedPaths).toContain(changed);
+    });
+  }
 });
 
 /**
