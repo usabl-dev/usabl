@@ -1141,7 +1141,7 @@ function renderedEntry(
   kinds: ReadonlyMap<string, RenderKind>,
 ): { component?: string; entryImport?: string } {
   const answers = new Map<string, { component?: string; entryImport?: string }>();
-  for (const [key, value] of [...renders.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [key, value] of [...renders.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     const kind = kinds.get(key);
     if (kind === 'element') {
       const name = jsxComponentName(unwrap(value));

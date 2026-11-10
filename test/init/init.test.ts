@@ -72,6 +72,22 @@ describe('inferInit', () => {
     },
   );
 
+  // When usabl cannot find or parse the exported config at all, saying the file "sets server.port
+  // and server.https with code" claims something usabl never saw.
+  it('says it could not read the exported config, not that the config sets the port with code', async () => {
+    for (const vite of ['export default makeConfig()\n', 'export default {\n']) {
+      const draft = await inferInit(memoryFs(fixtureFiles({ 'vite.config.ts': vite })));
+      const note = draft.notes.find((line) => line.includes('vite.config.ts')) ?? '';
+      expect(note).toMatch(/^Review: usabl could not read the config that vite\.config\.ts exports/);
+      expect(note).not.toContain('with code usabl does not run');
+      expect(note).toContain('Set appBaseUrl in usabl.config.json');
+    }
+    const byCode = await inferInit(
+      memoryFs(fixtureFiles({ 'vite.config.ts': 'export default { server: { port: Number(process.env.PORT) } }\n' })),
+    );
+    expect(byCode.notes.some((line) => line.includes('sets server.port with code usabl does not run'))).toBe(true);
+  });
+
   it('infers vite origin, proven React Router entry files, and skips catch-all routes', async () => {
     const fs = memoryFs(fixtureFiles());
     const draft = await inferInit(fs);

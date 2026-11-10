@@ -14,7 +14,7 @@ import { SESSION_STATE_PATH, STORAGE_STATE_ENV_VAR } from '../deps/session.js';
 import { APP_INIT_REFUSAL, unusableIdsError, type UnusableId } from './unusable-ids.js';
 import { loadAliasConfig, resolveAliasSpecifier, type AliasMapping } from '../coverage/alias-config.js';
 import { workspacePackageDirs } from '../coverage/workspace-packages.js';
-import { readViteServer } from './vite-server.js';
+import { readViteServer, viteConfigReadable } from './vite-server.js';
 
 // Init writes only these two drafts. Waivers stay human-authored judgment.
 const POLICY_FILES = ['usabl.config.json', 'usabl.routes.json'] as const;
@@ -415,7 +415,14 @@ function draftBaseUrl(viteFile: string | null, raw: string | null): { appBaseUrl
   const port = 'value' in server.port ? server.port.value : 5173;
   const https = 'value' in server.https && server.https.value;
   const appBaseUrl = `${https ? 'https' : 'http'}://127.0.0.1:${port}`;
-  if (unread.length > 0) {
+  if (unread.length > 0 && !viteConfigReadable(raw, viteFile)) {
+    // The file does not parse, or exports its config in a shape usabl does not read, such as the
+    // result of a call. usabl never saw the settings, so it does not say how they are set.
+    notes.push(
+      `Review: usabl could not read the config that ${viteFile} exports, so it could not read server.port ` +
+        `or server.https. Using ${appBaseUrl}. ${setIt}`,
+    );
+  } else if (unread.length > 0) {
     notes.push(
       `Review: ${viteFile} sets ${unread.join(' and ')} with code usabl does not run, so it could not read ` +
         `${unread.length === 1 ? 'it' : 'them'}. Using ${appBaseUrl}. ${setIt}`,

@@ -125,6 +125,16 @@ function usesBasicSsl(config: AstNode): boolean {
   });
 }
 
+/**
+ * Whether usabl can find the config object the file exports: the file parses and its default
+ * export is one of the shapes configObject reads. When it cannot, every setting reads as unread,
+ * and a message must say the config could not be read, not that it sets a value with code.
+ */
+export function viteConfigReadable(raw: string, file: string): boolean {
+  const parsed = parseSource(raw, syntaxForFile(file));
+  return parsed.ok && configObject(parsed.program) !== null;
+}
+
 export function readViteServer(raw: string, file: string): ViteServer {
   const parsed = parseSource(raw, syntaxForFile(file));
   if (!parsed.ok) return UNREAD;
