@@ -13,6 +13,7 @@ import { validateId } from '../intake/id-grammar.js';
 import { SESSION_STATE_PATH, STORAGE_STATE_ENV_VAR } from '../deps/session.js';
 import { APP_INIT_REFUSAL, unusableIdsError, type UnusableId } from './unusable-ids.js';
 import { loadAliasConfig, resolveAliasSpecifier, type AliasMapping } from '../coverage/alias-config.js';
+import { workspacePackageDirs } from '../coverage/workspace-packages.js';
 import { readViteServer } from './vite-server.js';
 
 // Init writes only these two drafts. Waivers stay human-authored judgment.
@@ -320,7 +321,10 @@ async function workspaceDependencyNotes(fs: InitFs, appDir: string): Promise<str
     if (typeof deps === 'object' && deps !== null) for (const name of Object.keys(deps)) depends.add(name);
   }
   const notes: string[] = [];
-  const manifests = await fs.glob(APP_PARENTS.map((parent) => `${parent}/*/package.json`));
+  // The packages the root workspaces list, wherever they sit, and the usual parent folders, which
+  // a repository with no workspaces field still uses.
+  const listed = (await workspacePackageDirs(fs)).map((dir) => `${dir}/package.json`);
+  const manifests = new Set([...(await fs.glob(APP_PARENTS.map((parent) => `${parent}/*/package.json`))), ...listed]);
   for (const manifest of [...manifests].sort()) {
     const dir = posix.dirname(manifest);
     if (dir === appDir || isSkippedPath(manifest)) continue;
@@ -429,6 +433,17 @@ export async function inferInit(fs: InitFs, options: InferInitOptions = {}): Pro
   const notes: string[] = [];
   const app = await chooseAppDir(fs, options.appDir);
   if (app.note !== null) notes.push(app.note);
+  if (options.appDir !== undefined && app.dir !== '') {
+    // The config checks this app only, so the other apps init can see are named. Without that, a
+    // reader can take one app's config to cover the whole repository.
+    const others = (await findAppDirs(fs)).filter((found) => found !== app.dir);
+    if (others.length > 0) {
+      notes.push(
+        `Review: this config checks only ${app.dir}. usabl init also found ${others.length === 1 ? 'this app' : 'these apps'}, ` +
+          `which it does not check: ${others.map((found) => operatorText(found)).join(', ')}.`,
+      );
+    }
+  }
   const appFile = (path: string): string => under(app.dir, path);
   if (app.dir !== '') notes.push(...(await workspaceDependencyNotes(fs, app.dir)));
 

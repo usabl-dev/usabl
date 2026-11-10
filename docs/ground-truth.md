@@ -3693,7 +3693,8 @@ looks below the root: a folder with a Vite config two levels down anywhere, or t
 `node_modules`, `dist`, `build`, `coverage`, and hidden folders. When it finds one app, it drafts
 that app and says so in a `Review:` note. When it finds more than one, it refuses, writes
 nothing, lists every app it found, sorted, and names the `--app` flag to use, because a config
-drafted for the wrong app checks the wrong files.
+drafted for the wrong app checks the wrong files. With `--app`, when `init` finds other apps the
+same way, a `Review:` note says the config checks only that app and names the others, sorted.
 
 Every path `init` writes stays relative to the repository root: `uiFileGlobs`, the router file,
 `wideBlastGlobs`, and each entry file carry the app folder, such as `packages/web/src/**/*.tsx`.
@@ -3701,7 +3702,8 @@ Every path `init` writes stays relative to the repository root: `uiFileGlobs`, t
 them there, so CODEOWNERS and the trusted-ref guard still match them. A config drafted for one
 app treats a change in another app as no UI change. A workspace package the app depends on is
 different, because the app may render components from it. When the app's `package.json` depends
-on a package found under `packages/` or `apps/`, a `Review:` note names it and says to add its
+on a package found under `packages/` or `apps/`, or in a folder the root `workspaces` field or
+`pnpm-workspace.yaml` lists, a `Review:` note names it and says to add its
 files to `uiFileGlobs`. `init` does not add them itself, because it cannot tell which of the
 package's files the app renders.
 
