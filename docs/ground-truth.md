@@ -4344,6 +4344,8 @@ command checks that the text it is about to write loads through the normal loade
 requirement unapproved, and writes it with an exclusive create, so it never overwrites a file. It
 refuses an unknown option, a frame given twice, a frame the file does not have, and an id a
 surface cannot have, before it writes anything. It exits 0 when it wrote the file and 2 otherwise.
+Both commands read an answer from Figma up to 256 MiB; an answer that states or reaches a larger
+size is a fetch failure that says so.
 
 `usabl drift design` loads the requirements, keeps the approved ones that have a `source`, and reads
 the current version of each of their files, once per file, in sorted order. It lists the

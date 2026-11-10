@@ -1003,7 +1003,9 @@ instruction to a model, and reach a terminal, a requirements file, or an agent.
 - Each command makes one GET per file, to `https://api.figma.com/v1/files/<key>`. The key must
   fit a fixed grammar before any request is made, and is encoded into the path. Redirects are not
   followed, because a redirect to another host would carry the header with it. A request times
-  out after 60 seconds.
+  out after 60 seconds. An answer is read up to 256 MiB, a chunk at a time, and one that states
+  or reaches a larger size is refused with a message that says so, so a hostile or broken answer
+  cannot fill memory.
 - `FIGMA_API_BASE` replaces the address, for tests and for a local mock. It must be https, or
   plain http to 127.0.0.1, localhost, or [::1], and it may not hold a user name, a password, a
   query, or a fragment. Whoever sets that variable chooses where the token goes: it is the same

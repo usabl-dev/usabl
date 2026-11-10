@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { figmaApiBase, FigmaFetchError, fetchFigmaFile } from '../../../src/import/figma/fetch.js';
+import { FIGMA_FILE_BYTE_LIMIT, figmaApiBase, FigmaFetchError, fetchFigmaFile } from '../../../src/import/figma/fetch.js';
 import { MOCK_TOKEN, startMockFigma, type MockFigma } from './mock-server.js';
 
 function baseOf(raw: string): URL {
@@ -120,6 +120,41 @@ describe('fetchFigmaFile', () => {
     expect(message).toContain('redirect');
     expect(message).not.toContain(MOCK_TOKEN);
     expect(elsewhereHits).toBe(0);
+  });
+
+  it('reads at most a fixed number of bytes, and says so when the answer is larger', async () => {
+    expect(FIGMA_FILE_BYTE_LIMIT).toBe(256 * 1024 * 1024);
+    const big = (): Promise<Response> =>
+      Promise.resolve(new Response(JSON.stringify({ name: 'x'.repeat(2000) }), { status: 200 }));
+    const message = await failure(fetchFigmaFile(baseOf(mock.base), 'MOCKKEY', MOCK_TOKEN, big, 1000));
+    expect(message).toBe(
+      'Figma returned a file larger than 1000 bytes, which is more than usabl reads. Import a smaller file, or split the design into files of fewer frames.',
+    );
+  });
+
+  it('refuses an answer whose stated length is over the limit, before it reads the body', async () => {
+    let pulled = 0;
+    // A high water mark of 0, so the stream is pulled only when something reads it.
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulled += 1;
+          controller.enqueue(new TextEncoder().encode('{}'));
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const stated = (): Promise<Response> =>
+      Promise.resolve(new Response(body, { status: 200, headers: { 'content-length': '5000' } }));
+    const message = await failure(fetchFigmaFile(baseOf(mock.base), 'MOCKKEY', MOCK_TOKEN, stated, 1000));
+    expect(message).toContain('larger than 1000 bytes');
+    expect(pulled).toBe(0);
+  });
+
+  it('reads a file under the limit in full', async () => {
+    const file = await fetchFigmaFile(baseOf(mock.base), 'MOCKKEY', MOCK_TOKEN, fetch, 10 * 1024 * 1024);
+    expect(file.version).toBe('4242');
   });
 
   it('names the address it could not reach, never the token', async () => {

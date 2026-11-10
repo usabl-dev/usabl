@@ -19,6 +19,10 @@ export const FIGMA_API_BASE = 'https://api.figma.com';
 // How long one request may take before it is given up. A large design file can take a while.
 const FETCH_TIMEOUT_MS = 60_000;
 
+// The most bytes one answer may hold. The answer comes from the network and is held in memory
+// whole, so a larger or endless answer is refused instead of read. A large design file fits.
+export const FIGMA_FILE_BYTE_LIMIT = 256 * 1024 * 1024;
+
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
 export class FigmaFetchError extends Error {
@@ -75,11 +79,46 @@ function statusMessage(status: number, fileKey: string): string {
   return `Figma answered ${status}. Try again later, or check Figma's status page.`;
 }
 
+function tooLarge(maxBytes: number): FigmaFetchError {
+  return new FigmaFetchError(
+    `Figma returned a file larger than ${maxBytes} bytes, which is more than usabl reads. Import a smaller file, or split the design into files of fewer frames.`,
+  );
+}
+
+// The answer's text, read a chunk at a time and given up as soon as it passes the limit.
+async function readBounded(response: Response, maxBytes: number): Promise<string> {
+  const stated = Number(response.headers.get('content-length') ?? Number.NaN);
+  if (Number.isFinite(stated) && stated > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw tooLarge(maxBytes);
+  }
+  if (response.body === null) {
+    return '';
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw tooLarge(maxBytes);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 export async function fetchFigmaFile(
   base: URL,
   fileKey: string,
   token: string,
   fetchImpl: typeof fetch = fetch,
+  maxBytes: number = FIGMA_FILE_BYTE_LIMIT,
 ): Promise<FigmaFile> {
   const keyProblem = describeFileKeyProblem(fileKey);
   if (keyProblem !== null) {
@@ -103,9 +142,18 @@ export async function fetchFigmaFile(
     await response.body?.cancel().catch(() => undefined);
     throw new FigmaFetchError(statusMessage(response.status, fileKey));
   }
+  let text: string;
+  try {
+    text = await readBounded(response, maxBytes);
+  } catch (error) {
+    if (error instanceof FigmaFetchError) {
+      throw error;
+    }
+    throw new FigmaFetchError('Figma returned a file usabl cannot read.');
+  }
   let body: unknown;
   try {
-    body = JSON.parse(await response.text());
+    body = JSON.parse(text);
   } catch {
     throw new FigmaFetchError('Figma returned a file usabl cannot read.');
   }
