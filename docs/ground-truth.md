@@ -1062,8 +1062,9 @@ What it reads, per action step:
    same budget. The control's own change is its own states, the states of its ancestors, and
    every node its `aria-controls` names, with everything under those nodes, when its own state
    changed in the same step. A tab that becomes selected also deselects the tab it replaces, a
-   node with the same parent and role, so that tab's state change, and the nodes its
-   `aria-controls` names, are the control's own change too. So a disclosure that shows its
+   node with the same parent and role that is still in the tree after the step, so that tab's
+   state change, and the nodes its `aria-controls` names, are the control's own change too. A tab
+   that was removed was not deselected, and the panel it controlled is not exempt. So a disclosure that shows its
    panel, a tab that shows its panel, and a sort header that re-orders its rows are the control
    speaking for itself, and the voicing tier already checks that speech. Values never count and
    are never read: a field's value, and the text inside an editable field, are left out of the

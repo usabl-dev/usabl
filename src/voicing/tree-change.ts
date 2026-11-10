@@ -86,8 +86,9 @@ function sortedCounts(counts: Map<string, number>): Record<string, number> {
  * that changed, on a node assistive technology perceives in that read. The control's own change is
  * left out: its own states, the states of its ancestors, and, when its own state changed in this
  * step, every node its aria-controls names and everything under those. A tab that becomes
- * selected deselects the tab it replaces, which shares its parent and role, so that tab's state,
- * and the nodes its aria-controls names, are the control's own change too. With no acted control,
+ * selected deselects the tab it replaces, which shares its parent and role and is still in the tree
+ * after the step, so that tab's state, and the nodes its aria-controls names, are the control's own
+ * change too. With no acted control,
  * nothing is left out.
  */
 export function compareAxTrees(beforeNodes: readonly AxTreeNode[], afterNodes: readonly AxTreeNode[], acted: number | null): TreeChange {
@@ -110,7 +111,10 @@ export function compareAxTrees(beforeNodes: readonly AxTreeNode[], afterNodes: r
       if (self !== undefined && selectedChanged) {
         for (const sibling of before.values()) {
           if (sibling.nodeId === acted || sibling.ignored || sibling.parentId !== self.parentId || sibling.role !== self.role) continue;
-          if (perceived(after, sibling.nodeId)?.states.selected === sibling.states.selected) continue;
+          // The sibling must still be there. A tab that was removed was not deselected, so it does
+          // not exempt the panel it controlled.
+          const siblingNow = perceived(after, sibling.nodeId);
+          if (siblingNow === undefined || siblingNow.states.selected === sibling.states.selected) continue;
           ownStates.add(sibling.nodeId);
           for (const controlled of controlsOf(before, after, sibling.nodeId)) ownSubtrees.add(controlled);
         }

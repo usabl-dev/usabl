@@ -127,6 +127,13 @@ describe('compareAxTrees', () => {
       expect(compareAxTrees(tabs(1), tabs(2), 4)).toEqual(NONE);
     });
 
+    it('does not exempt the panel of a tab that was removed, because only a tab still there was deselected', () => {
+      // Tab One and its panel are gone after the step, not deselected.
+      const after = tabs(2).filter((entry) => entry.nodeId !== 3);
+      const before = [...tabs(1)];
+      expect(compareAxTrees(before, after, 4)).toEqual({ ...NONE, removed: { StaticText: 1, tab: 1, tabpanel: 1 } });
+    });
+
     it('still counts a change outside both tabs and both panels', () => {
       const after = [...tabs(2), node(30, 1, 'status', 'Loaded')];
       expect(compareAxTrees(tabs(1), after, 4)).toEqual({ ...NONE, added: { status: 1 }, addedNames: ['Loaded'] });
