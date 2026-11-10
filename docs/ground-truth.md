@@ -1097,10 +1097,15 @@ not reach a pull request comment. Every string goes through the scrubber in the 
 text reads: announce the outcome in a live region that is shown and inside the open modal, or
 move focus to a control whose name states it.
 
-When the flow requirement itself reports its last step, as a fail because its expected
-announcement was not heard or as a gap because that could not be read, the rule emits nothing for
-that step. The flow's draft already says whether the step was heard, and the gate keys identity by
-rule, so a second draft would be a second finding for one accessibility barrier.
+The rule stays quiet only where it would repeat the flow requirement's own draft for the same
+step. When the flow fails because its expected announcement was not heard, the rule emits nothing
+for the last step, which is the step the flow judged: the flow's draft already says the step was
+silent, and the gate keys identity by rule, so a second draft would be a second finding for one
+accessibility barrier. When the flow is a gap because a drain could not say what was heard, the
+rule drops its own `announcements undecidable` gap on the step whose drain the flow's gap names,
+the first undecidable one, and on no other step. When a step's drain is undecidable, the rule
+names that reason before any other focus reason, so the flow's gap covers the step. A finding or a
+gap on any other step is always emitted.
 
 What is a gap, never a finding and never a pass. Each is an `unverified` preview draft on the
 step, with the reason in `evidence.extra.reason`:
