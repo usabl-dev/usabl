@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { loadAliasConfig, resolveAliasSpecifier } from '../../src/coverage/alias-config.js';
+import { aliasConfigDir, loadAliasConfig, resolveAliasSpecifier } from '../../src/coverage/alias-config.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 
 const fsOf = (files: Record<string, string>) => makeFakeDeps({ files }).fs;
@@ -127,6 +127,98 @@ export default {
       }),
     );
     expect(config.mappings.find((m) => m.prefix === '@/')?.target).toBe('src/');
+  });
+});
+
+// A monorepo app's compiler and bundler read the configs in the app folder, so the aliases come
+// from there, with targets written relative to the repository root.
+describe('loadAliasConfig for an app folder', () => {
+  it('reads the tsconfig and Vite config of the app folder, not the root ones', async () => {
+    const config = await loadAliasConfig(
+      fsOf({
+        'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '~/*': ['root/*'] } } }),
+        'packages/admin/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } } }),
+        'packages/admin/vite.config.ts': `export default { resolve: { alias: { '#lib': '/lib' } } };`,
+      }),
+      'packages/admin',
+    );
+    expect(config.mappings).toContainEqual({ prefix: '@/', target: 'packages/admin/src/' });
+    // A leading slash in a Vite alias is the Vite root, which is the app folder.
+    expect(config.mappings).toContainEqual({ prefix: '#lib/', target: 'packages/admin/lib/' });
+    expect(config.mappings.some((mapping) => mapping.target.startsWith('root'))).toBe(false);
+  });
+
+  it('finds the folder that holds the app configs by climbing from a file', async () => {
+    const fs = fsOf({
+      'tsconfig.json': '{}',
+      'packages/admin/tsconfig.json': '{}',
+      'packages/admin/src/App.tsx': '',
+    });
+    expect(await aliasConfigDir(fs, 'packages/admin/src/App.tsx')).toBe('packages/admin');
+    expect(await aliasConfigDir(fs, 'src/App.tsx')).toBe('');
+    expect(await aliasConfigDir(fsOf({ 'apps/web/vite.config.mts': '' }), 'apps/web/src/main.tsx')).toBe('apps/web');
+  });
+});
+
+describe('loadAliasConfig with extends and single-file paths', () => {
+  it('reads paths from the config a tsconfig extends, resolved from that config', async () => {
+    const config = await loadAliasConfig(
+      fsOf({
+        'tsconfig.base.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@shared/*': ['packages/shared/src/*'], '@/*': ['packages/admin/src/*'] } } }),
+        'packages/admin/tsconfig.json': JSON.stringify({ extends: '../../tsconfig.base' }),
+      }),
+      'packages/admin',
+    );
+    expect(config.hasAliasConfig).toBe(true);
+    expect(config.mappings).toContainEqual({ prefix: '@/', target: 'packages/admin/src/' });
+  });
+
+  it('reads an extends list, where a later config wins, and lets the child paths replace the parent ones', async () => {
+    const fs = fsOf({
+      'a.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['from-a/*'] } } }),
+      'b.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['from-b/*'] } } }),
+      'tsconfig.json': JSON.stringify({ extends: ['./a.json', './b.json'] }),
+    });
+    expect((await loadAliasConfig(fs)).mappings).toEqual([{ prefix: '@/', target: 'from-b/' }]);
+    const child = fsOf({
+      'base.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['base/*'] } } }),
+      'tsconfig.json': JSON.stringify({ extends: './base.json', compilerOptions: { paths: { '~/*': ['own/*'] } } }),
+    });
+    expect((await loadAliasConfig(child)).mappings).toEqual([{ prefix: '~/', target: 'own/' }]);
+  });
+
+  it('resolves inherited paths from the baseUrl the child sets', async () => {
+    const config = await loadAliasConfig(
+      fsOf({
+        'tsconfig.base.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } }),
+        'packages/admin/tsconfig.json': JSON.stringify({ extends: '../../tsconfig.base.json', compilerOptions: { baseUrl: '.' } }),
+      }),
+      'packages/admin',
+    );
+    expect(config.mappings).toEqual([{ prefix: '@/', target: 'packages/admin/src/' }]);
+  });
+
+  it('stops on an extends cycle and on a config it cannot read', async () => {
+    const fs = fsOf({
+      'a.json': JSON.stringify({ extends: './tsconfig.json' }),
+      'tsconfig.json': JSON.stringify({ extends: './a.json' }),
+    });
+    expect((await loadAliasConfig(fs)).mappings).toEqual([]);
+    const missing = fsOf({ 'tsconfig.json': JSON.stringify({ extends: './gone.json', compilerOptions: { paths: { '@/*': ['src/*'] } } }) });
+    expect((await loadAliasConfig(missing)).mappings).toEqual([{ prefix: '@/', target: 'src/' }]);
+  });
+
+  it('reads a single-file path, which matches only the exact specifier', async () => {
+    const config = await loadAliasConfig(
+      fsOf({
+        'tsconfig.json': JSON.stringify({
+          compilerOptions: { baseUrl: '.', paths: { '@/theme': ['src/styles/theme.ts'], '@/*': ['src/*'] } },
+        }),
+      }),
+    );
+    expect(resolveAliasSpecifier('@/theme', config.mappings)).toBe('src/styles/theme.ts');
+    expect(resolveAliasSpecifier('@/theme/dark', config.mappings)).toBe('src/theme/dark');
+    expect(resolveAliasSpecifier('@/Home', config.mappings)).toBe('src/Home');
   });
 });
 

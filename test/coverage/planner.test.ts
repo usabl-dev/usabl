@@ -673,6 +673,30 @@ describe('computeCoverage', () => {
     expect(orphan.gaps[0]?.reason).toContain('more than one file');
   });
 
+  // A monorepo app's own tsconfig sets its aliases. Reading only the root config resolved the
+  // app's @/ imports into the root src folder, so a changed component the app renders mapped to
+  // no screen.
+  it('resolves aliases from the app folder of the router file in a monorepo', async () => {
+    const fs = fsOf({
+      'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } } }),
+      'packages/admin/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } } }),
+      'usabl.routes.json': JSON.stringify({
+        routes: [{ screenId: 'home', url: '/home', entryFile: 'packages/admin/src/Home.tsx' }],
+      }),
+      'packages/admin/src/router.tsx': '',
+      'packages/admin/src/Home.tsx': `import { Card } from '@/components/Card';`,
+      'packages/admin/src/components/Card.tsx': `export const Card = 1;`,
+    });
+    const config: UsablConfig = {
+      ...baseConfig,
+      uiFileGlobs: ['packages/admin/src/**/*.tsx'],
+      discovery: { routerFile: 'packages/admin/src/router.tsx', wideBlastGlobs: [] },
+    };
+    const cov = await computeCoverage(fs, config, ['packages/admin/src/components/Card.tsx']);
+    expect(cov.unresolvedFiles).toEqual([]);
+    expect(cov.affected.map((screen) => screen.screenId)).toEqual(['home']);
+  });
+
   it('includes alias diagnostics when an unresolved file imports through a broken alias', async () => {
     const fs = fsOf({
       'usabl.routes.json': JSON.stringify({ routes: [] }),

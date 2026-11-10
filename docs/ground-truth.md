@@ -1549,7 +1549,19 @@ An import with an extension loads the file of that name when it exists. When it 
 `.js` import is read as the TypeScript file the compiler and the bundler load for it, `.ts` or
 `.tsx`, as is `.jsx` for `.tsx`, `.mjs` for `.mts`, and `.cjs` for `.cts`, at every depth of the
 graph. So `./Child.js` beside `Child.ts` links `Child.ts`. When both `.ts` and `.tsx` exist, the
-import links both and discloses the ambiguity, as above. One case is not disclosed: an extension outside
+import links both and discloses the ambiguity, as above.
+
+An `@/` or `~/` import resolves through the path aliases of the app folder: the first folder at
+or above the router file that holds a `tsconfig.json`, a `tsconfig.app.json`, or a Vite config,
+or the repository root when none below it does. Those are the configs the app's compiler and
+bundler read, and `init` reads the same ones. In a monorepo the root configs belong to no app, so
+they are not read for an app in `packages/admin`. A tsconfig `extends` chain is followed through
+relative paths, nearest config first: `paths` comes whole from the nearest config that sets it,
+and its targets are read from the nearest `baseUrl`, or from the config that sets `paths` when no
+config sets one. An extends that names a package, such as `@tsconfig/node20`, is not read,
+because it resolves through `node_modules`. A `paths` entry with no wildcard, such as
+`"@/theme": ["src/styles/theme.ts"]`, maps that one specifier and matches before a wildcard. An
+alias usabl does not read leaves its import unresolved, which is disclosed, never a silent pass. One case is not disclosed: an extension outside
 the list, such as `.web.tsx` added through `resolve.extensions`, is never probed, so a sibling
 with that extension is not seen and the file usabl did find is attributed.
 

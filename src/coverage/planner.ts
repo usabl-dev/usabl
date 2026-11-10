@@ -5,7 +5,7 @@
  * Unmapped UI becomes a written gap so the gate can return not_covered.
  */
 import type { AffectedScreen, Coverage, CoverageGap, ExcludedFile, FsGlob, UsablConfig } from '../contracts/index.js';
-import { loadAliasConfig } from './alias-config.js';
+import { aliasConfigDir, loadAliasConfig } from './alias-config.js';
 import { buildUnresolvedReason, UNPLACED_FILE_FIX } from './discovery-diagnostics.js';
 import { buildImportGraph, inspectDirectImports, type UnresolvableImport } from './import-graph.js';
 import { dependencyChanges, EVERY_SCREEN } from './dependency-changes.js';
@@ -214,9 +214,13 @@ interface RouteGraph {
 async function buildRouteGraph(
   fs: FsGlob,
   attributedRoutes: ReadonlyArray<{ screenId: string; entryFile: string }>,
+  routerFile: string,
 ): Promise<RouteGraph> {
   const routeEntries = [...new Set(attributedRoutes.map((route) => route.entryFile))];
-  const aliasConfig = await loadAliasConfig(fs);
+  // The aliases come from the app folder, the configs its compiler and bundler read, as init reads
+  // them. In a monorepo the root configs belong to no app, and reading them resolved an app's @/
+  // imports into the wrong folder.
+  const aliasConfig = await loadAliasConfig(fs, await aliasConfigDir(fs, routerFile));
   const graph = await buildImportGraph(fs, routeEntries, aliasConfig);
   const closures = new Map<string, Set<string>>();
   for (const route of attributedRoutes) {
@@ -268,7 +272,7 @@ export async function computeCoverage(
   // whether a screen reaches it, and the screen mapping below asks which screens do.
   let routeGraph: Promise<RouteGraph> | null = null;
   const loadRouteGraph = (): Promise<RouteGraph> => {
-    routeGraph ??= buildRouteGraph(fs, attributedRoutes);
+    routeGraph ??= buildRouteGraph(fs, attributedRoutes, config.discovery.routerFile);
     return routeGraph;
   };
 

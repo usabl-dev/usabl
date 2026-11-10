@@ -342,12 +342,8 @@ async function workspaceDependencyNotes(fs: InitFs, appDir: string): Promise<str
  * route unattributed, which is the safe direction.
  */
 async function appAliases(fs: InitFs, appDir: string): Promise<AliasMapping[]> {
-  if (appDir === '') return (await loadAliasConfig(fs)).mappings;
-  const scoped = { readFile: (path: string) => fs.readFile(under(appDir, path)), glob: fs.glob };
-  return (await loadAliasConfig(scoped)).mappings.map(({ prefix, target }) => {
-    const joined = posix.normalize(posix.join(appDir, target));
-    return { prefix, target: target.endsWith('/') && !joined.endsWith('/') ? `${joined}/` : joined };
-  });
+  // The same reader usabl check uses, so init and check resolve an app's aliases alike.
+  return (await loadAliasConfig(fs, appDir)).mappings;
 }
 
 function under(dir: string, path: string): string {
