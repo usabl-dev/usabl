@@ -47,7 +47,7 @@ function applicability(screenId: string, rule: string, outcome: RuleOutcome): Ru
 }
 
 describe('markUnseenScreens', () => {
-  it('reads the nth-child ancestry a live page reports for the document body', () => {
+  it('reads a screen whose every stop recorded focus on the body as unseen', () => {
     const pass = markUnseenScreens([
       scan({ screenId: 'overview', url: 'http://app/overview', stops: [bodyStop('html > body:nth-child(2)')] }),
     ]);
